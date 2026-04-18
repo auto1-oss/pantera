@@ -11,7 +11,8 @@
 package com.auto1.pantera.cooldown;
 
 import com.amihaiemil.eoyaml.YamlMapping;
-import com.auto1.pantera.cooldown.CooldownSettings.RepoTypeConfig;
+import com.auto1.pantera.cooldown.config.CooldownSettings;
+import com.auto1.pantera.cooldown.config.CooldownSettings.RepoTypeConfig;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Locale;

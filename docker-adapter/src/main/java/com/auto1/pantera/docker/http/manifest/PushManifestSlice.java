@@ -68,7 +68,7 @@ public class PushManifestSlice extends DockerActionSlice {
                     }
                     return sizeFuture.thenApply(size -> {
                         if (queue != null && ImageTag.valid(ref.digest())) {
-                            queue.add(
+                            queue.add( // ok: unbounded ConcurrentLinkedDeque (ArtifactEvent queue)
                                 new ArtifactEvent(
                                     "docker",
                                     docker.registryName(),

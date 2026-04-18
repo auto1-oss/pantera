@@ -10,10 +10,12 @@
  */
 package com.auto1.pantera.cooldown;
 
-import com.auto1.pantera.cooldown.NoopCooldownService;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownService;
+import com.auto1.pantera.cooldown.cache.CooldownCache;
+import com.auto1.pantera.cooldown.config.CooldownSettings;
+import com.auto1.pantera.cooldown.impl.NoopCooldownService;
 import com.auto1.pantera.cooldown.metadata.CooldownMetadataService;
-import com.auto1.pantera.cooldown.metadata.CooldownMetadataServiceImpl;
+import com.auto1.pantera.cooldown.metadata.MetadataFilterService;
 import com.auto1.pantera.cooldown.metadata.FilteredMetadataCache;
 import com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheConfig;
 import com.auto1.pantera.cooldown.metadata.NoopCooldownMetadataService;
@@ -87,6 +89,10 @@ public final class CooldownSupport {
     }
 
     public static CooldownService create(final Settings settings, final Executor executor) {
+        // Register all adapter bundles (parser/filter/rewriter/detector/responseFactory)
+        // into the global CooldownAdapterRegistry. This is idempotent and safe to call
+        // early -- the registry is a ConcurrentHashMap, and adapters are stateless.
+        CooldownWiring.registerAllAdapters();
         return settings.artifactsDatabase()
             .map(ds -> {
                 // Load DB-persisted cooldown config and apply over YAML defaults.
@@ -153,7 +159,7 @@ public final class CooldownSupport {
             .eventAction("metadata_service_init")
             .log();
         
-        final CooldownMetadataServiceImpl metadataService = new CooldownMetadataServiceImpl(
+        final MetadataFilterService metadataService = new MetadataFilterService(
             cooldownService,
             settings.cooldown(),
             jdbc.cache(),
@@ -181,6 +187,20 @@ public final class CooldownSupport {
             }
         });
         return metadataService;
+    }
+
+    /**
+     * Extract the CooldownCache from a CooldownService, if it is backed
+     * by JdbcCooldownService. Returns null for NoopCooldownService.
+     *
+     * @param cooldownService The cooldown service
+     * @return CooldownCache or null
+     */
+    public static CooldownCache extractCache(final CooldownService cooldownService) {
+        if (cooldownService instanceof JdbcCooldownService) {
+            return ((JdbcCooldownService) cooldownService).cache();
+        }
+        return null;
     }
 
     /**

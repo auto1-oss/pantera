@@ -13,11 +13,11 @@ package com.auto1.pantera.api.v1;
 import com.auto1.pantera.api.AuthzHandler;
 import com.auto1.pantera.api.ManageRepoSettings;
 import com.auto1.pantera.api.perms.ApiRolePermission;
-import com.auto1.pantera.cooldown.CooldownSettings;
+import com.auto1.pantera.cooldown.config.CooldownSettings;
 import com.auto1.pantera.db.dao.AuthProviderDao;
 import com.auto1.pantera.db.dao.SettingsDao;
 import com.auto1.pantera.http.client.HttpClientSettings;
-import com.auto1.pantera.http.trace.MdcPropagation;
+import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.misc.PanteraProperties;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.JwtSettings;
@@ -32,6 +32,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import javax.json.Json;
 import javax.sql.DataSource;
 import org.eclipse.jetty.http.HttpStatus;
@@ -190,17 +191,19 @@ public final class SettingsHandler {
      * @param ctx Routing context
      */
     private void getSettings(final RoutingContext ctx) {
-        ctx.vertx().<JsonObject>executeBlocking(
-            MdcPropagation.withMdc(() -> this.buildFullSettings()),
-            false
-        ).onSuccess(
-            result -> ctx.response()
-                .setStatusCode(HttpStatus.OK_200)
-                .putHeader("Content-Type", "application/json")
-                .end(result.encode())
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+        CompletableFuture.supplyAsync(
+            (java.util.function.Supplier<JsonObject>) this::buildFullSettings,
+            HandlerExecutor.get()
+        ).whenComplete((result, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
+                ctx.response()
+                    .setStatusCode(HttpStatus.OK_200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(result.encode());
+            }
+        });
     }
 
     /**
@@ -384,23 +387,21 @@ public final class SettingsHandler {
         }
         final String actor = ctx.user() != null
             ? ctx.user().principal().getString("sub", "system") : "system";
-        ctx.vertx().<Void>executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                // Convert vertx JsonObject to javax.json.JsonObject
-                final javax.json.JsonObject jobj = Json.createReader(
-                    new java.io.StringReader(body.encode())
-                ).readObject();
-                this.settingsDao.put(section, jobj, actor);
-                return null;
-            }),
-            false
-        ).onSuccess(
-            ignored -> ctx.response().setStatusCode(HttpStatus.OK_200)
-                .putHeader("Content-Type", "application/json")
-                .end(new JsonObject().put("status", "saved").encode())
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+        CompletableFuture.runAsync(() -> {
+            // Convert vertx JsonObject to javax.json.JsonObject
+            final javax.json.JsonObject jobj = Json.createReader(
+                new java.io.StringReader(body.encode())
+            ).readObject();
+            this.settingsDao.put(section, jobj, actor);
+        }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
+                ctx.response().setStatusCode(HttpStatus.OK_200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(new JsonObject().put("status", "saved").encode());
+            }
+        });
     }
 
     /**
@@ -426,45 +427,41 @@ public final class SettingsHandler {
             return;
         }
         final boolean enabled = body.getBoolean("enabled");
-        ctx.vertx().<Void>executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                // Refuse to disable protected providers (local, jwt-password).
-                // Enable is always allowed since it just restores the default.
-                if (!enabled) {
-                    final String type = this.authProviderDao.typeOf(providerId);
-                    if (type == null) {
-                        throw new IllegalArgumentException("not_found");
-                    }
-                    if (PROTECTED_PROVIDERS.contains(type)) {
-                        throw new IllegalArgumentException("protected:" + type);
-                    }
+        CompletableFuture.runAsync(() -> {
+            // Refuse to disable protected providers (local, jwt-password).
+            // Enable is always allowed since it just restores the default.
+            if (!enabled) {
+                final String type = this.authProviderDao.typeOf(providerId);
+                if (type == null) {
+                    throw new IllegalArgumentException("not_found");
                 }
-                if (enabled) {
-                    this.authProviderDao.enable(providerId);
-                } else {
-                    this.authProviderDao.disable(providerId);
+                if (PROTECTED_PROVIDERS.contains(type)) {
+                    throw new IllegalArgumentException("protected:" + type);
                 }
-                return null;
-            }),
-            false
-        ).onSuccess(
-            ignored -> {
+            }
+            if (enabled) {
+                this.authProviderDao.enable(providerId);
+            } else {
+                this.authProviderDao.disable(providerId);
+            }
+        }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
+            if (err == null) {
                 this.flushAuthCache();
                 ctx.response().setStatusCode(200)
                     .putHeader("Content-Type", "application/json")
                     .end(new JsonObject().put("status", "saved").encode());
-            }
-        ).onFailure(err -> {
-            final String msg = err.getCause() != null
-                ? err.getCause().getMessage() : err.getMessage();
-            if ("not_found".equals(msg)) {
-                ApiResponse.sendError(ctx, 404, "NOT_FOUND", "Auth provider not found");
-            } else if (msg != null && msg.startsWith("protected:")) {
-                ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
-                    "Cannot disable the '" + msg.substring("protected:".length())
-                        + "' provider — it is required for fallback access.");
             } else {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                final Throwable cause = err.getCause() != null ? err.getCause() : err;
+                final String msg = cause.getMessage();
+                if ("not_found".equals(msg)) {
+                    ApiResponse.sendError(ctx, 404, "NOT_FOUND", "Auth provider not found");
+                } else if (msg != null && msg.startsWith("protected:")) {
+                    ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                        "Cannot disable the '" + msg.substring("protected:".length())
+                            + "' provider — it is required for fallback access.");
+                } else {
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                }
             }
         });
     }
@@ -490,17 +487,15 @@ public final class SettingsHandler {
         final String type = body.getString("type").trim();
         final int priority = body.getInteger("priority", 100);
         final JsonObject config = body.getJsonObject("config", new JsonObject());
-        ctx.vertx().<Void>executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                final javax.json.JsonObject jcfg = Json.createReader(
-                    new java.io.StringReader(config.encode())
-                ).readObject();
-                this.authProviderDao.put(type, priority, jcfg);
-                return null;
-            }),
-            false
-        ).onSuccess(
-            ignored -> {
+        CompletableFuture.runAsync(() -> {
+            final javax.json.JsonObject jcfg = Json.createReader(
+                new java.io.StringReader(config.encode())
+            ).readObject();
+            this.authProviderDao.put(type, priority, jcfg);
+        }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
                 this.flushAuthCache();
                 ctx.response().setStatusCode(201)
                     .putHeader("Content-Type", "application/json")
@@ -509,9 +504,7 @@ public final class SettingsHandler {
                         .put("type", type)
                         .encode());
             }
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+        });
     }
 
     /**
@@ -532,35 +525,31 @@ public final class SettingsHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid provider ID");
             return;
         }
-        ctx.vertx().<Void>executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                final String type = this.authProviderDao.typeOf(providerId);
-                if (type == null) {
-                    throw new IllegalArgumentException("not_found");
-                }
-                if (PROTECTED_PROVIDERS.contains(type)) {
-                    throw new IllegalArgumentException("protected:" + type);
-                }
-                this.authProviderDao.delete(providerId);
-                return null;
-            }),
-            false
-        ).onSuccess(
-            ignored -> {
+        CompletableFuture.runAsync(() -> {
+            final String type = this.authProviderDao.typeOf(providerId);
+            if (type == null) {
+                throw new IllegalArgumentException("not_found");
+            }
+            if (PROTECTED_PROVIDERS.contains(type)) {
+                throw new IllegalArgumentException("protected:" + type);
+            }
+            this.authProviderDao.delete(providerId);
+        }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
+            if (err == null) {
                 this.flushAuthCache();
                 ctx.response().setStatusCode(204).end();
-            }
-        ).onFailure(err -> {
-            final String msg = err.getCause() != null
-                ? err.getCause().getMessage() : err.getMessage();
-            if ("not_found".equals(msg)) {
-                ApiResponse.sendError(ctx, 404, "NOT_FOUND", "Auth provider not found");
-            } else if (msg != null && msg.startsWith("protected:")) {
-                ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
-                    "Cannot delete the '" + msg.substring("protected:".length())
-                        + "' provider — it is required for fallback access.");
             } else {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                final Throwable cause = err.getCause() != null ? err.getCause() : err;
+                final String msg = cause.getMessage();
+                if ("not_found".equals(msg)) {
+                    ApiResponse.sendError(ctx, 404, "NOT_FOUND", "Auth provider not found");
+                } else if (msg != null && msg.startsWith("protected:")) {
+                    ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                        "Cannot delete the '" + msg.substring("protected:".length())
+                            + "' provider — it is required for fallback access.");
+                } else {
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                }
             }
         });
     }
@@ -587,25 +576,21 @@ public final class SettingsHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "JSON body is required");
             return;
         }
-        ctx.vertx().<Void>executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                final javax.json.JsonObject jobj = Json.createReader(
-                    new java.io.StringReader(body.encode())
-                ).readObject();
-                this.authProviderDao.updateConfig(providerId, jobj);
-                return null;
-            }),
-            false
-        ).onSuccess(
-            ignored -> {
+        CompletableFuture.runAsync(() -> {
+            final javax.json.JsonObject jobj = Json.createReader(
+                new java.io.StringReader(body.encode())
+            ).readObject();
+            this.authProviderDao.updateConfig(providerId, jobj);
+        }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
                 this.flushAuthCache();
                 ctx.response().setStatusCode(200)
                     .putHeader("Content-Type", "application/json")
                     .end(new JsonObject().put("status", "saved").encode());
             }
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+        });
     }
 
     /**

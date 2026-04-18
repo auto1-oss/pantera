@@ -10,8 +10,8 @@
  */
 package com.auto1.pantera.npm.cooldown;
 
-import com.auto1.pantera.cooldown.CooldownDependency;
-import com.auto1.pantera.cooldown.CooldownInspector;
+import com.auto1.pantera.cooldown.api.CooldownDependency;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.metadata.MetadataAwareInspector;
 
 import java.time.Instant;

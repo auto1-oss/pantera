@@ -10,6 +10,11 @@ import Select from 'primevue/select'
 import Button from 'primevue/button'
 import Card from 'primevue/card'
 import Checkbox from 'primevue/checkbox'
+import AutoComplete from 'primevue/autocomplete'
+import Tag from 'primevue/tag'
+import Dialog from 'primevue/dialog'
+import { listRepos } from '@/api/repos'
+import type { RepoListItem } from '@/types'
 
 const props = defineProps<{
   /** Current config value (v-model:config) */
@@ -82,6 +87,74 @@ function moveMemberDown(idx: number) {
   ;[arr[idx], arr[idx + 1]] = [arr[idx + 1], arr[idx]]
 }
 
+// State for compatible repos dropdown (group member selection)
+const compatibleRepos = ref<RepoListItem[]>([])
+const filteredRepos = ref<RepoListItem[]>([])
+
+/**
+ * Given a group type like "maven-group", return the compatible member types.
+ * Rule: strip "-group" -> base; compatible = [base, base + "-proxy"]
+ */
+function compatibleTypes(groupType: string): string[] {
+  const base = groupType.replace(/-group$/, '')
+  return [base, `${base}-proxy`]
+}
+
+/**
+ * Fetch repos compatible with the current group type from the API.
+ */
+async function fetchCompatibleRepos() {
+  if (!repoType.value?.endsWith('-group')) return
+  const types = compatibleTypes(repoType.value)
+  try {
+    const resp = await listRepos({ size: 500 })
+    const all: RepoListItem[] = resp.items ?? []
+    compatibleRepos.value = all.filter(r => types.includes(r.type))
+  } catch (e) {
+    console.error('Failed to fetch compatible repos', e)
+    compatibleRepos.value = []
+  }
+}
+
+/**
+ * PrimeVue AutoComplete completeMethod — filters the pre-fetched list client-side.
+ */
+function searchRepos(event: { query: string }) {
+  const q = event.query.toLowerCase()
+  filteredRepos.value = compatibleRepos.value.filter(
+    r => !groupMembers.value.includes(r.name) && r.name.toLowerCase().includes(q)
+  )
+}
+
+// Create-member modal state
+const showCreateMemberDialog = ref(false)
+const newMemberType = ref('')
+const newMemberName = ref('')
+const newMemberCreating = ref(false)
+
+async function createMemberRepo() {
+  if (!newMemberName.value || !newMemberType.value) return
+  newMemberCreating.value = true
+  try {
+    const { putRepo } = await import('@/api/repos')
+    await putRepo(newMemberName.value, {
+      repo: {
+        type: newMemberType.value,
+        storage: { type: 'fs' },
+      },
+    })
+    groupMembers.value.push(newMemberName.value)
+    await fetchCompatibleRepos()
+    showCreateMemberDialog.value = false
+    newMemberName.value = ''
+    newMemberType.value = ''
+  } catch (e: unknown) {
+    console.error('Failed to create member repo', e)
+  } finally {
+    newMemberCreating.value = false
+  }
+}
+
 // Cooldown
 const cooldownEnabled = ref(false)
 const cooldownDuration = ref('P30D')
@@ -132,7 +205,10 @@ async function handleCreateS3Alias() {
   }
 }
 
-onMounted(() => { loadStorages() })
+onMounted(() => {
+  loadStorages()
+  if (repoType.value?.endsWith('-group')) fetchCompatibleRepos()
+})
 
 // Reset derivative proxy/group fields when type changes (only in create mode)
 watch(repoType, () => {
@@ -140,6 +216,7 @@ watch(repoType, () => {
     remotes.value = [{ url: '', username: '', password: '' }]
     groupMembers.value = []
   }
+  fetchCompatibleRepos()
 })
 
 // Reset S3 sub-fields when storage type switches
@@ -478,11 +555,25 @@ watch(groupMembers, () => { emitConfig() }, { deep: true })
           class="flex items-center gap-2 px-3 py-2 bg-white dark:bg-gray-900"
         >
           <span class="text-xs text-gray-400 w-6 tabular-nums">{{ idx + 1 }}.</span>
-          <InputText
+          <AutoComplete
             v-model="groupMembers[idx]"
-            placeholder="repository-name"
+            :suggestions="filteredRepos"
+            optionLabel="name"
+            field="name"
+            @complete="searchRepos"
+            @item-select="(e: any) => { groupMembers[idx] = e.value.name }"
+            placeholder="Search repos..."
             class="flex-1"
-          />
+            :dropdown="true"
+            forceSelection
+          >
+            <template #option="{ option }">
+              <div class="flex items-center gap-2">
+                <span>{{ option.name }}</span>
+                <Tag :value="option.type" severity="info" class="text-xs" />
+              </div>
+            </template>
+          </AutoComplete>
           <Button
             icon="pi pi-arrow-up"
             text
@@ -515,14 +606,60 @@ watch(groupMembers, () => { emitConfig() }, { deep: true })
       <div v-else class="text-sm text-gray-400 italic mb-3">
         No members yet — add at least one to enable saving.
       </div>
-      <Button
-        icon="pi pi-plus"
-        label="Add member"
-        severity="secondary"
-        outlined
-        size="small"
-        @click="addMember"
-      />
+      <div class="flex items-center">
+        <Button
+          icon="pi pi-plus"
+          label="Add member"
+          severity="secondary"
+          outlined
+          size="small"
+          @click="addMember"
+        />
+        <Button
+          icon="pi pi-plus-circle"
+          label="Create new"
+          severity="info"
+          outlined
+          size="small"
+          class="ml-2"
+          @click="showCreateMemberDialog = true"
+        />
+      </div>
+
+      <Dialog
+        v-model:visible="showCreateMemberDialog"
+        header="Create New Member Repository"
+        :modal="true"
+        :style="{ width: '500px' }"
+      >
+        <div class="flex flex-col gap-4">
+          <div>
+            <label class="block text-sm font-medium mb-1">Type</label>
+            <Select
+              v-model="newMemberType"
+              :options="compatibleTypes(repoType).map(t => ({ label: t, value: t }))"
+              optionLabel="label"
+              optionValue="value"
+              placeholder="Select type"
+              class="w-full"
+            />
+          </div>
+          <div>
+            <label class="block text-sm font-medium mb-1">Name</label>
+            <InputText v-model="newMemberName" placeholder="e.g. maven-central" class="w-full" />
+          </div>
+        </div>
+        <template #footer>
+          <Button label="Cancel" severity="secondary" @click="showCreateMemberDialog = false" />
+          <Button
+            label="Create & Add"
+            icon="pi pi-check"
+            :loading="newMemberCreating"
+            :disabled="!newMemberName || !newMemberType"
+            @click="createMemberRepo"
+          />
+        </template>
+      </Dialog>
     </template>
   </Card>
 

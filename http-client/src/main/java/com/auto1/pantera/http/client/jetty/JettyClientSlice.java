@@ -181,16 +181,31 @@ final class JettyClientSlice implements Slice {
                         // (edge case: content source callback fired but no chunks)
                         processor.onComplete();
                     } else {
-                        EcsLogger.error("com.auto1.pantera.http.client")
-                            .message("HTTP request failed")
-                            .eventCategory("web")
-                            .eventAction("http_request_send")
-                            .eventOutcome("failure")
-                            .error(result.getFailure())
-                            .log();
+                        final Throwable failure = result.getFailure();
+                        // Idle-close is a normal connection-lifecycle event
+                        // (Jetty HTTP client 30s idle timeout firing on an
+                        // otherwise-healthy upstream). Downgrade to DEBUG so
+                        // it stops counting as a request failure in the logs
+                        // (v2.1.4 WI-00, forensic §1.7 F4.4).
+                        if (isIdleTimeout(failure)) {
+                            EcsLogger.debug("com.auto1.pantera.http.client")
+                                .message("HTTP client connection closed by idle timeout")
+                                .eventCategory("web")
+                                .eventAction("http_idle_close")
+                                .error(failure)
+                                .log();
+                        } else {
+                            EcsLogger.error("com.auto1.pantera.http.client")
+                                .message("HTTP request failed")
+                                .eventCategory("web")
+                                .eventAction("http_request_send")
+                                .eventOutcome("failure")
+                                .error(failure)
+                                .log();
+                        }
                         // Complete processor with error so subscribers don't hang
-                        processor.onError(result.getFailure());
-                        res.completeExceptionally(result.getFailure());
+                        processor.onError(failure);
+                        res.completeExceptionally(failure);
                     }
                 }
         );
@@ -427,5 +442,33 @@ final class JettyClientSlice implements Slice {
         copy.put(slice);
         copy.flip();
         return copy;
+    }
+
+    /**
+     * Return {@code true} iff the failure is Jetty's "Idle timeout expired:
+     * N/N ms" (a {@link TimeoutException} emitted when a connection goes
+     * idle and the 30s Jetty-client idle timeout fires). This is a normal
+     * connection-lifecycle signal, not a request failure, and callers log
+     * it at DEBUG rather than ERROR.
+     *
+     * @param failure The throwable from {@code result.getFailure()}
+     * @return {@code true} if this is an idle-timeout close
+     */
+    private static boolean isIdleTimeout(final Throwable failure) {
+        if (failure == null) {
+            return false;
+        }
+        Throwable cursor = failure;
+        // Walk the cause chain — Jetty may wrap the TimeoutException
+        for (int hops = 0; cursor != null && hops < 5; hops = hops + 1) {
+            if (cursor instanceof TimeoutException) {
+                final String msg = cursor.getMessage();
+                if (msg != null && msg.contains("Idle timeout expired")) {
+                    return true;
+                }
+            }
+            cursor = cursor.getCause();
+        }
+        return false;
     }
 }

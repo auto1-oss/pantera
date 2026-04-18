@@ -12,7 +12,7 @@ package com.auto1.pantera.adapters.npm;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Storage;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.metadata.CooldownMetadataService;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;

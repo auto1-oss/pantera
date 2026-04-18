@@ -14,9 +14,9 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.cache.Cache;
-import com.auto1.pantera.cooldown.CooldownInspector;
-import com.auto1.pantera.cooldown.CooldownRequest;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
+import com.auto1.pantera.cooldown.api.CooldownRequest;
+import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
@@ -24,20 +24,32 @@ import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.cache.BaseCachedProxySlice;
 import com.auto1.pantera.http.cache.DigestComputer;
 import com.auto1.pantera.http.cache.ProxyCacheConfig;
+import com.auto1.pantera.http.cache.ProxyCacheWriter;
 import com.auto1.pantera.http.cache.SidecarFile;
+import com.auto1.pantera.http.context.RequestContext;
+import com.auto1.pantera.http.fault.Fault;
+import com.auto1.pantera.http.fault.Fault.ChecksumAlgo;
+import com.auto1.pantera.http.fault.Result;
 import com.auto1.pantera.http.headers.Login;
+import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 
 /**
@@ -58,9 +70,42 @@ import java.util.regex.Matcher;
 public final class CachedProxySlice extends BaseCachedProxySlice {
 
     /**
+     * Primary artifact extensions that participate in the coupled
+     * primary+sidecar write path. The checksum sidecar paths themselves are
+     * still served by {@link ChecksumProxySlice} / standard cache flow.
+     */
+    private static final List<String> PRIMARY_EXTENSIONS = List.of(
+        ".pom", ".jar", ".war", ".aar", ".ear", ".zip", ".module"
+    );
+
+    /**
      * Maven-specific metadata cache for maven-metadata.xml files.
      */
     private final MetadataCache metadataCache;
+
+    /**
+     * Remote client slice, held here so {@link #preProcess} can fetch the
+     * primary + sidecars as a coupled batch via {@link ProxyCacheWriter}.
+     * A duplicate reference of {@code super.client()} is kept so we don't
+     * invoke a protected getter from an anonymous fetch supplier.
+     */
+    private final Slice remote;
+
+    /**
+     * Optional raw storage used by {@link ProxyCacheWriter} to land the
+     * primary + sidecars atomically. Empty when the upstream runs without a
+     * file-backed cache; in that case we fall back to the standard flow.
+     */
+    private final Optional<Storage> rawStorage;
+
+    /**
+     * Single-source-of-truth cache writer introduced by WI-07 (§9.5 of the
+     * v2.2 target architecture). Fetches the primary + every sidecar in one
+     * coupled batch, verifies the upstream {@code .sha1}/{@code .sha256}
+     * claim against the bytes we just downloaded, and atomically commits the
+     * pair. Instantiated lazily when {@link #rawStorage} is present.
+     */
+    private final ProxyCacheWriter cacheWriter;
 
     /**
      * Constructor with full configuration.
@@ -95,6 +140,11 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
             storage, events, config, cooldownService, cooldownInspector
         );
         this.metadataCache = metadataCache;
+        this.remote = client;
+        this.rawStorage = storage;
+        this.cacheWriter = storage
+            .map(raw -> new ProxyCacheWriter(raw, repoName))
+            .orElse(null);
     }
 
     /**
@@ -141,6 +191,15 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         // maven-metadata.xml uses dedicated MetadataCache with stale-while-revalidate
         if (path.contains("maven-metadata.xml") && this.metadataCache != null) {
             return Optional.of(this.handleMetadata(line, key));
+        }
+        // WI-07 §9.5 — integrity-verified atomic primary+sidecar write on
+        // cache-miss. Runs only when we have a file-backed storage and the
+        // requested path is a primary artifact. Cache-hit and sidecar paths
+        // fall through to the standard BaseCachedProxySlice flow unchanged.
+        if (this.cacheWriter != null
+            && !isChecksumSidecar(path)
+            && isPrimaryArtifact(path)) {
+            return Optional.of(this.verifyAndServePrimary(line, key, path));
         }
         return Optional.empty();
     }
@@ -292,5 +351,188 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 digest.getBytes(StandardCharsets.UTF_8)
             ));
         }
+    }
+
+    // ===== WI-07 §9.5: ProxyCacheWriter integration =====
+
+    /**
+     * Check if a path represents a Maven primary artifact that benefits from
+     * coupled primary+sidecar writing. Metadata files, directories and
+     * checksum sidecars are explicitly excluded by callers.
+     *
+     * @param path Request path.
+     * @return {@code true} if we should route this request through
+     *         {@link ProxyCacheWriter}.
+     */
+    private static boolean isPrimaryArtifact(final String path) {
+        if (path.endsWith("/") || path.contains("maven-metadata.xml")) {
+            return false;
+        }
+        final String lower = path.toLowerCase(Locale.ROOT);
+        for (final String ext : PRIMARY_EXTENSIONS) {
+            if (lower.endsWith(ext)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Primary-artifact flow: if the cache already has the primary, fall
+     * through to the standard flow (serving from cache); otherwise fetch the
+     * primary + every sidecar upstream in one coupled batch, verify digests,
+     * atomically commit, and serve the freshly-cached bytes.
+     *
+     * <p>We consult BOTH the {@link Storage} and the {@link Cache} abstraction
+     * so tests that plug a lambda-Cache without a real storage keep working,
+     * and production file-backed deployments benefit from the verify path on
+     * genuine cache misses.
+     */
+    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.CognitiveComplexity"})
+    private CompletableFuture<Response> verifyAndServePrimary(
+        final RequestLine line, final Key key, final String path
+    ) {
+        final Storage storage = this.rawStorage.orElseThrow();
+        return storage.exists(key).thenCompose(presentInStorage -> {
+            if (presentInStorage) {
+                return this.serveFromCache(storage, key);
+            }
+            return this.cache().load(
+                key,
+                com.auto1.pantera.asto.cache.Remote.EMPTY,
+                com.auto1.pantera.asto.cache.CacheControl.Standard.ALWAYS
+            ).thenCompose(opt -> {
+                if (opt.isPresent()) {
+                    return CompletableFuture.completedFuture(
+                        ResponseBuilder.ok().body(opt.get()).build()
+                    );
+                }
+                return this.fetchVerifyAndCache(line, key, path);
+            }).toCompletableFuture();
+        }).exceptionally(err -> {
+            EcsLogger.warn("com.auto1.pantera.cache")
+                .message("Primary-artifact verify-and-serve failed; falling back to not-found")
+                .eventCategory("web")
+                .eventAction("cache_write")
+                .eventOutcome("failure")
+                .field("repository.name", this.repoName())
+                .field("url.path", path)
+                .error(err)
+                .log();
+            return ResponseBuilder.notFound().build();
+        });
+    }
+
+    /**
+     * Fetch the primary + every sidecar, verify, commit via
+     * {@link ProxyCacheWriter}, then stream the primary from the cache.
+     * Integrity failures and storage failures both collapse to a clean 502
+     * response (mirroring {@code FaultTranslator.UpstreamIntegrity} policy)
+     * and leave the cache empty for this key.
+     */
+    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.CognitiveComplexity"})
+    private CompletableFuture<Response> fetchVerifyAndCache(
+        final RequestLine line, final Key key, final String path
+    ) {
+        final Storage storage = this.rawStorage.orElseThrow();
+        final String upstreamUri = this.upstreamUrl() + path;
+        final RequestContext ctx = new RequestContext(
+            org.apache.logging.log4j.ThreadContext.get("trace.id"),
+            null,
+            this.repoName(),
+            path
+        );
+        final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> sidecars =
+            new EnumMap<>(ChecksumAlgo.class);
+        sidecars.put(ChecksumAlgo.SHA1, () -> this.fetchSidecar(line, ".sha1"));
+        sidecars.put(ChecksumAlgo.MD5, () -> this.fetchSidecar(line, ".md5"));
+        sidecars.put(ChecksumAlgo.SHA256, () -> this.fetchSidecar(line, ".sha256"));
+        sidecars.put(ChecksumAlgo.SHA512, () -> this.fetchSidecar(line, ".sha512"));
+
+        return this.cacheWriter.writeWithSidecars(
+            key,
+            upstreamUri,
+            () -> this.fetchPrimary(line),
+            sidecars,
+            ctx
+        ).toCompletableFuture().thenCompose(result -> {
+            if (result instanceof Result.Err<Void> err) {
+                if (err.fault() instanceof Fault.UpstreamIntegrity) {
+                    return CompletableFuture.completedFuture(
+                        ResponseBuilder.unavailable()
+                            .header("X-Pantera-Fault", "upstream-integrity")
+                            .textBody("Upstream integrity verification failed")
+                            .build()
+                    );
+                }
+                // StorageUnavailable / anything else → 502-equivalent; no cache state.
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.unavailable()
+                        .textBody("Upstream temporarily unavailable")
+                        .build()
+                );
+            }
+            return this.serveFromCache(storage, key);
+        });
+    }
+
+    /**
+     * Read the primary from the upstream as an {@link InputStream}. On any
+     * non-success status, throws so the writer's outer exception handler
+     * treats it as a transient failure (no cache mutation).
+     */
+    private CompletionStage<InputStream> fetchPrimary(final RequestLine line) {
+        return this.remote.response(line, Headers.EMPTY, Content.EMPTY)
+            .thenApply(resp -> {
+                if (!resp.status().success()) {
+                    // Drain body to release connection.
+                    resp.body().asBytesFuture();
+                    throw new IllegalStateException(
+                        "Upstream returned HTTP " + resp.status().code()
+                    );
+                }
+                try {
+                    return resp.body().asInputStream();
+                } catch (final IOException ex) {
+                    throw new IllegalStateException("Upstream body not readable", ex);
+                }
+            });
+    }
+
+    /**
+     * Fetch a sidecar for the primary at {@code line}. Returns
+     * {@link Optional#empty()} for 4xx/5xx so the writer treats the sidecar
+     * as absent; I/O errors collapse to empty so a transient sidecar failure
+     * never blocks the primary write.
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private CompletionStage<Optional<InputStream>> fetchSidecar(
+        final RequestLine primary, final String extension
+    ) {
+        final String sidecarPath = primary.uri().getPath() + extension;
+        final RequestLine sidecarLine = new RequestLine(
+            primary.method().value(), sidecarPath
+        );
+        return this.remote.response(sidecarLine, Headers.EMPTY, Content.EMPTY)
+            .thenCompose(resp -> {
+                if (!resp.status().success()) {
+                    return resp.body().asBytesFuture()
+                        .thenApply(ignored -> Optional.<InputStream>empty());
+                }
+                return resp.body().asBytesFuture()
+                    .thenApply(bytes -> Optional.<InputStream>of(
+                        new java.io.ByteArrayInputStream(bytes)
+                    ));
+            })
+            .exceptionally(ignored -> Optional.<InputStream>empty());
+    }
+
+    /**
+     * Serve the primary from storage after a successful atomic write.
+     */
+    private CompletableFuture<Response> serveFromCache(final Storage storage, final Key key) {
+        return storage.value(key).thenApply(content ->
+            ResponseBuilder.ok().body(content).build()
+        );
     }
 }

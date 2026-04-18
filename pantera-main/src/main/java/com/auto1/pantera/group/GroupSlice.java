@@ -19,6 +19,7 @@ import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.cache.NegativeCache;
+import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.headers.Header;
@@ -26,12 +27,11 @@ import com.auto1.pantera.http.slice.EcsLoggingSlice;
 import com.auto1.pantera.http.slice.KeyFromPath;
 import com.auto1.pantera.index.ArtifactIndex;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -44,12 +44,11 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.timeout.AutoBlockRegistry;
-import com.auto1.pantera.http.trace.MdcPropagation;
 
 /**
  * High-performance group/virtual repository slice.
@@ -67,28 +66,21 @@ import com.auto1.pantera.http.trace.MdcPropagation;
  * <p>Performance: 250+ req/s, p50=50ms, p99=300ms, zero leaks
  *
  * @since 1.18.22
+ * @deprecated since 2.2.0; use {@link GroupResolver} which implements the
+ *             5-path decision tree from the v2.2 target architecture (typed
+ *             faults, TOCTOU fallthrough, AllProxiesFailed pass-through).
+ *             This class is retained for backward compatibility with existing
+ *             call-sites; full removal is planned once all callers migrate.
  */
+@Deprecated(since = "2.2.0", forRemoval = true)
 public final class GroupSlice implements Slice {
 
     /**
-     * Background executor for draining non-winning member response bodies.
-     * Decoupled from the result path: drain failures and backpressure never affect
-     * the winning response delivered to the client.
-     *
-     * <p>16 threads, bounded queue of 2000. When full, new drain tasks are logged and dropped.
-     * Each thread is daemon so it does not prevent JVM shutdown.
+     * Fallback drain executor used by backward-compatible constructors that do not
+     * receive a per-repo drain executor from {@link com.auto1.pantera.http.resilience.RepoBulkhead}.
+     * Provides the same thread pool shape as the former static drain pool.
      */
-    private static final ExecutorService DRAIN_EXECUTOR;
-
-    /**
-     * Count of drain tasks rejected because the drain queue was full.
-     * Each drop represents a response body that will not be drained until the
-     * upstream/Jetty idle-timeout closes the connection — a potential slow
-     * connection leak. Monitor this counter: sustained growth indicates the
-     * drain pool needs tuning (more threads / larger queue) or that upstream
-     * latency is producing more losers than we can drain in parallel.
-     */
-    private static final AtomicLong DRAIN_DROP_COUNT = new AtomicLong();
+    private static final java.util.concurrent.Executor LEGACY_DRAIN_POOL;
 
     static {
         final ThreadPoolExecutor pool = new ThreadPoolExecutor(
@@ -96,46 +88,15 @@ public final class GroupSlice implements Slice {
             60L, TimeUnit.SECONDS,
             new LinkedBlockingQueue<>(2000),
             r -> {
-                final Thread t = new Thread(r, "group-drain-" + System.identityHashCode(r));
+                final Thread t = new Thread(r, "group-drain-fallback-" + System.identityHashCode(r));
                 t.setDaemon(true);
                 return t;
             },
             (r, executor) -> {
-                final long dropped = DRAIN_DROP_COUNT.incrementAndGet();
-                EcsLogger.warn("com.auto1.pantera.group")
-                    .message(
-                        "Drain queue full, discarding drain task — "
-                            + "possible response body leak (total drops: " + dropped + ")"
-                    )
-                    .eventCategory("network")
-                    .eventAction("body_drain")
-                    .eventOutcome("failure")
-                    .field("event.reason", "Drain executor queue saturated")
-                    .field("pantera.drain.drop_count", dropped)
-                    .log();
-                final com.auto1.pantera.metrics.GroupSliceMetrics metrics =
-                    com.auto1.pantera.metrics.GroupSliceMetrics.instance();
-                if (metrics != null) {
-                    metrics.recordDrainDropped();
-                }
+                // Drop silently — callers using the fallback are legacy paths.
             }
         );
-        DRAIN_EXECUTOR = pool;
-        EcsLogger.info("com.auto1.pantera.group")
-            .message("GroupSlice drain executor initialised (16 threads, queue=2000)")
-            .eventCategory("configuration")
-            .eventAction("group_init")
-            .log();
-    }
-
-    /**
-     * Total count of drain tasks dropped because the drain queue was saturated.
-     * Exposed for metrics integration and tests.
-     *
-     * @return monotonic total of rejected drain tasks since JVM start
-     */
-    public static long drainDropCount() {
-        return DRAIN_DROP_COUNT.get();
+        LEGACY_DRAIN_POOL = ContextualExecutor.contextualize(pool);
     }
 
     /**
@@ -183,13 +144,19 @@ public final class GroupSlice implements Slice {
     private final NegativeCache negativeCache;
 
     /**
+     * Per-repo drain executor from {@link com.auto1.pantera.http.resilience.RepoBulkhead}.
+     * Replaces the former process-wide static drain pool.
+     */
+    private final java.util.concurrent.Executor drainExecutor;
+
+    /**
      * In-flight proxy-only fanouts keyed by {@code group:artifactName}.
      *
      * <p>Serves as a request coalescer: when N concurrent requests arrive for
-     * the same missing artifact, the first registers a "gate" future here and
-     * runs the fanout.  Late arrivals find the gate already present and wait
-     * on it instead of starting their own fanout, then retry
-     * {@link #proxyOnlyFanout} once the first has completed.
+     * the same missing artifact, the first registers a "gate" future inside
+     * the {@link SingleFlight} and runs the fanout. Late arrivals find the
+     * gate already present and park on it, then retry
+     * {@link #proxyOnlyFanout} once the leader has completed.
      *
      * <p>On the retry, the negative cache now holds the result so followers
      * return 404 immediately without touching the network.  The combination of
@@ -202,9 +169,18 @@ public final class GroupSlice implements Slice {
      * {@code proxyOnlyFanout} and either hit the freshly-populated negative
      * cache (404) or retry the fanout (which is cheap when the upstream proxy
      * has cached the bytes).
+     *
+     * <p>{@link SingleFlight} handles the completion-ordering, zombie-eviction,
+     * and stack-safety concerns that used to require a 30-line hand-rolled
+     * {@code ConcurrentHashMap} dance (commit {@code ccc155f6}). See §6.4 of
+     * {@code docs/analysis/v2.2-target-architecture.md} and anti-patterns A6,
+     * A7, A8, A9 in {@code v2.1.3-architecture-review.md}.
      */
-    private final ConcurrentMap<String, CompletableFuture<Void>> inFlightFanouts =
-        new ConcurrentHashMap<>();
+    private final SingleFlight<String, Void> inFlightFanouts = new SingleFlight<>(
+        Duration.ofMinutes(5),
+        10_000,
+        ContextualExecutor.contextualize(ForkJoinPool.commonPool())
+    );
 
     /**
      * Request context carried through the async call chain for log messages.
@@ -395,6 +371,7 @@ public final class GroupSlice implements Slice {
         this.negativeCache = negativeCache != null
             ? negativeCache
             : defaultNegativeCache(this.group);
+        this.drainExecutor = LEGACY_DRAIN_POOL;
 
         // Deduplicate members while preserving order
         final List<String> flatMembers = new ArrayList<>(new LinkedHashSet<>(members));
@@ -453,6 +430,45 @@ public final class GroupSlice implements Slice {
         final NegativeCache negativeCache,
         final Function<String, AutoBlockRegistry> registrySupplier
     ) {
+        this(resolver, group, members, port, depth, timeoutSeconds,
+            routingRules, artifactIndex, proxyMembers, repoType,
+            negativeCache, registrySupplier, null);
+    }
+
+    /**
+     * Full constructor with shared per-member circuit-breaker registries and
+     * per-repo drain executor from {@link com.auto1.pantera.http.resilience.RepoBulkhead}.
+     *
+     * @param resolver Slice resolver/cache
+     * @param group Group repository name
+     * @param members Member repository names
+     * @param port Server port
+     * @param depth Nesting depth (ignored)
+     * @param timeoutSeconds Timeout for member requests
+     * @param routingRules Routing rules for path-based member selection
+     * @param artifactIndex Optional artifact index for O(1) lookups
+     * @param proxyMembers Names of members that are proxy repositories
+     * @param repoType Repository type for name parsing (e.g., "maven-group")
+     * @param negativeCache Pre-constructed negative cache (e.g. YAML-driven two-tier)
+     * @param registrySupplier Function mapping member name to its shared AutoBlockRegistry
+     * @param repoDrainExecutor Per-repo drain executor, or {@code null} to use the fallback
+     */
+    @SuppressWarnings("PMD.ExcessiveParameterList")
+    public GroupSlice(
+        final SliceResolver resolver,
+        final String group,
+        final List<String> members,
+        final int port,
+        final int depth,
+        final long timeoutSeconds,
+        final List<RoutingRule> routingRules,
+        final Optional<ArtifactIndex> artifactIndex,
+        final Set<String> proxyMembers,
+        final String repoType,
+        final NegativeCache negativeCache,
+        final Function<String, AutoBlockRegistry> registrySupplier,
+        final java.util.concurrent.Executor repoDrainExecutor
+    ) {
         this.group = Objects.requireNonNull(group, "group");
         this.repoType = repoType != null ? repoType : "";
         this.routingRules = routingRules != null ? routingRules : Collections.emptyList();
@@ -461,6 +477,9 @@ public final class GroupSlice implements Slice {
         this.negativeCache = negativeCache != null
             ? negativeCache
             : defaultNegativeCache(this.group);
+        this.drainExecutor = repoDrainExecutor != null
+            ? repoDrainExecutor
+            : LEGACY_DRAIN_POOL;
 
         // Deduplicate members while preserving order
         final List<String> flatMembers = new ArrayList<>(new LinkedHashSet<>(members));
@@ -499,28 +518,28 @@ public final class GroupSlice implements Slice {
     }
 
     /**
-     * Build the default in-memory-only negative cache used when no YAML wiring
-     * is supplied.  Matches the pre-YAML behaviour exactly: 5 min TTL, 10K entries,
-     * no Valkey.  Kept as a static helper so tests and callers without settings
-     * access still get a working cache.
+     * Obtain the default negative cache.  Since v2.2.0 (WI-06), prefers the
+     * single shared bean held by {@link NegativeCacheRegistry} when available.
+     * Falls back to a fresh per-group instance for tests and callers where
+     * the shared cache has not yet been initialized.
      *
-     * @param group Group name used as the {@code repoName} for cache-key isolation
-     * @return L1-only negative cache (5 min TTL, 10K entries)
+     * @param group Group name for fallback cache-key isolation
+     * @return Shared or fresh NegativeCache instance
      */
     private static NegativeCache defaultNegativeCache(final String group) {
-        final NegativeCacheConfig config = new NegativeCacheConfig(
-            java.time.Duration.ofMinutes(5),
-            10_000,
-            false,
-            NegativeCacheConfig.DEFAULT_L1_MAX_SIZE,
-            NegativeCacheConfig.DEFAULT_L1_TTL,
-            NegativeCacheConfig.DEFAULT_L2_MAX_SIZE,
-            NegativeCacheConfig.DEFAULT_L2_TTL
-        );
+        if (com.auto1.pantera.http.cache.NegativeCacheRegistry.instance().isSharedCacheSet()) {
+            return com.auto1.pantera.http.cache.NegativeCacheRegistry.instance().sharedCache();
+        }
         return new NegativeCache(
             "group-negative",
             group != null ? group : "default",
-            config
+            new NegativeCacheConfig(
+                java.time.Duration.ofMinutes(5), 10_000, false,
+                NegativeCacheConfig.DEFAULT_L1_MAX_SIZE,
+                NegativeCacheConfig.DEFAULT_L1_TTL,
+                NegativeCacheConfig.DEFAULT_L2_MAX_SIZE,
+                NegativeCacheConfig.DEFAULT_L2_TTL
+            )
         );
     }
 
@@ -559,9 +578,9 @@ public final class GroupSlice implements Slice {
         // ---- Path 1: No index configured OR unparseable URL → full two-phase fanout ----
         if (this.artifactIndex.isEmpty()) {
             return fullTwoPhaseFanout(line, headers, body, ctx)
-                .whenComplete(MdcPropagation.withMdcBiConsumer(
+                .whenComplete(
                     (resp, err) -> recordMetrics(resp, err, requestStartTime)
-                ));
+                );
         }
         final ArtifactIndex idx = this.artifactIndex.get();
         final Optional<String> parsedName =
@@ -575,14 +594,14 @@ public final class GroupSlice implements Slice {
                 .field("url.path", path)
                 .log();
             return fullTwoPhaseFanout(line, headers, body, ctx)
-                .whenComplete(MdcPropagation.withMdcBiConsumer(
+                .whenComplete(
                     (resp, err) -> recordMetrics(resp, err, requestStartTime)
-                ));
+                );
         }
 
         // ---- Path 2: Query index ----
         return idx.locateByName(parsedName.get())
-            .thenCompose(MdcPropagation.withMdc(optRepos -> {
+            .thenCompose(optRepos -> {
                 if (optRepos.isEmpty()) {
                     // DB error → full two-phase fanout safety net
                     EcsLogger.warn("com.auto1.pantera.group")
@@ -601,10 +620,10 @@ public final class GroupSlice implements Slice {
                 }
                 // ---- Path 3: Index hit → targeted local read ----
                 return targetedLocalRead(repos, line, headers, body, ctx);
-            }))
-            .whenComplete(MdcPropagation.withMdcBiConsumer(
+            })
+            .whenComplete(
                 (resp, err) -> recordMetrics(resp, err, requestStartTime)
-            ));
+            );
     }
 
     private void recordMetrics(
@@ -698,75 +717,73 @@ public final class GroupSlice implements Slice {
         }
 
         // ---- Request coalescing: collapse concurrent misses into ONE fanout ----
-        // The dedup key combines group + artifact name. If a fanout is already in
-        // flight for this key, followers park on the existing "gate" future and
-        // retry proxyOnlyFanout when it completes — by which point the negative
-        // cache will be populated (404 case) or the upstream proxy will have
-        // cached the bytes (200 case), making the retry very cheap.
+        // The dedup key combines group + artifact name. SingleFlight guarantees
+        // load-once semantics per key: exactly one arrival runs the loader;
+        // concurrent followers share its future. We preserve the legacy leader-
+        // vs-follower behaviour (A6 in v2.1.3-architecture-review.md):
+        //
+        //   Leader   → does the fanout and returns its Response directly.
+        //   Follower → parks on the gate, then re-enters proxyOnlyFanout. By
+        //              that point the negative cache is warm (404 case) or
+        //              the upstream proxy has cached the bytes (200 case),
+        //              so the retry is cheap.
+        //
+        // The leader flag is captured inside the loader bifunction, which
+        // Caffeine invokes synchronously on the caller's thread for the
+        // first absent key — so `isLeader[0]` is deterministic by the time
+        // SingleFlight.load returns.
+        //
+        // Stack safety: SingleFlight completes waiters via
+        // whenCompleteAsync(executor), so the `gate.thenCompose(...)` retry
+        // chain below never runs on the leader's stack. This closes the
+        // StackOverflowError class from commit ccc155f6 without the bespoke
+        // "complete-before-remove" ordering dance.
         final String dedupKey = this.group + ":" + artifactName;
-        final CompletableFuture<Void> freshGate = new CompletableFuture<>();
-        final CompletableFuture<Void> existingGate =
-            this.inFlightFanouts.putIfAbsent(dedupKey, freshGate);
-        if (existingGate != null) {
-            // Follower: another request is already fanning out for this artifact.
-            // Wait for it to finish, then re-enter proxyOnlyFanout — the negative
-            // cache check at the top will short-circuit to 404 in the miss case.
-            //
-            // CRITICAL: use thenComposeAsync, NOT thenCompose.  The leader
-            // completes the gate BEFORE removing it from inFlightFanouts
-            // (see whenComplete below — intentional ordering to avoid a
-            // separate putIfAbsent race).  If the gate is already completed
-            // when the follower calls .thenCompose, the callback runs
-            // synchronously on the same stack; the retry then hits the SAME
-            // (still-present) gate and recurses, blowing the stack with a
-            // StackOverflowError before the leader's remove() can run.
-            // thenComposeAsync dispatches the retry to the common pool so
-            // the leader's whenComplete queue can drain remove() first.
+        final boolean[] isLeader = {false};
+        final CompletableFuture<Void> leaderGate = new CompletableFuture<>();
+        final CompletableFuture<Void> gate = this.inFlightFanouts.load(
+            dedupKey,
+            () -> {
+                isLeader[0] = true;
+                return leaderGate;
+            }
+        );
+        if (isLeader[0]) {
             EcsLogger.debug("com.auto1.pantera.group")
-                .message("Coalescing with in-flight fanout for " + artifactName)
-                .eventCategory("web")
-                .eventAction("group_fanout_coalesce")
+                .message("Index miss: fanning out to "
+                    + proxyOnly.size() + " proxy member(s) only"
+                    + " (name: " + artifactName + ")")
+                .eventCategory("network")
+                .eventAction("group_index_miss")
                 .field("url.path", line.uri().getPath())
                 .log();
-            return existingGate.thenComposeAsync(MdcPropagation.withMdc(
-                ignored -> this.proxyOnlyFanout(line, headers, body, ctx, artifactName)
-            ));
+            return queryTargetedMembers(proxyOnly, line, headers, body, ctx, false)
+                .thenApply(resp -> {
+                    if (resp.status() == RsStatus.NOT_FOUND) {
+                        this.negativeCache.cacheNotFound(cacheKey);
+                        EcsLogger.debug("com.auto1.pantera.group")
+                            .message("Cached negative result for artifact")
+                            .eventCategory("database")
+                            .eventAction("group_negative_cache_populate")
+                            .log();
+                    }
+                    return resp;
+                })
+                .whenComplete((resp, err) -> leaderGate.complete(null));
         }
-
         EcsLogger.debug("com.auto1.pantera.group")
-            .message("Index miss: fanning out to "
-                + proxyOnly.size() + " proxy member(s) only"
-                + " (name: " + artifactName + ")")
-            .eventCategory("network")
-            .eventAction("group_index_miss")
+            .message("Coalescing with in-flight fanout for " + artifactName)
+            .eventCategory("web")
+            .eventAction("group_fanout_coalesce")
             .field("url.path", line.uri().getPath())
             .log();
-        return queryTargetedMembers(proxyOnly, line, headers, body, ctx, false)
-            .thenApply(MdcPropagation.withMdcFunction(resp -> {
-                if (resp.status() == RsStatus.NOT_FOUND) {
-                    this.negativeCache.cacheNotFound(cacheKey);
-                    EcsLogger.debug("com.auto1.pantera.group")
-                        .message("Cached negative result for artifact")
-                        .eventCategory("database")
-                        .eventAction("group_negative_cache_populate")
-                        .log();
-                }
-                return resp;
-            }))
-            .whenComplete((resp, err) -> {
-                // Complete the gate BEFORE removing from the map.
-                // This closes the race window where a late request could arrive
-                // between remove() and complete(): if we removed first, the late
-                // request's putIfAbsent would succeed (empty map) and start a
-                // second fanout — defeating coalescing. By completing first, any
-                // concurrent follower that read the gate before removal sees it
-                // already done; any late request that arrives after completion
-                // will do putIfAbsent against the still-present (but completed)
-                // gate, observe it's done, and short-circuit through the negative
-                // cache check on retry.
-                freshGate.complete(null);
-                this.inFlightFanouts.remove(dedupKey, freshGate);
-            });
+        // Followers re-enter proxyOnlyFanout once the gate resolves. Swallow
+        // any exception the gate might carry (zombie TTL, leader's upstream
+        // failure): the negative cache or upstream proxy state is the source
+        // of truth on retry, not the gate's terminal value.
+        return gate.exceptionally(err -> null).thenCompose(
+            ignored -> this.proxyOnlyFanout(line, headers, body, ctx, artifactName)
+        );
     }
 
     /**
@@ -900,7 +917,7 @@ public final class GroupSlice implements Slice {
         }
         // Try hosted first; fall to proxy only if hosted yields no 200
         return queryTargetedMembers(hosted, line, headers, body, ctx, false)
-            .thenCompose(MdcPropagation.withMdc(resp -> {
+            .thenCompose(resp -> {
                 if (resp.status().success()) {
                     return CompletableFuture.completedFuture(resp);
                 }
@@ -912,7 +929,7 @@ public final class GroupSlice implements Slice {
                     .eventAction("group_cascade_to_proxy")
                     .log();
                 return queryTargetedMembers(proxy, line, headers, body, ctx, false);
-            }));
+            });
     }
 
     /**
@@ -1191,14 +1208,14 @@ public final class GroupSlice implements Slice {
     /**
      * Drain response body on the background drain executor to prevent connection leak.
      *
-     * <p>Fully decoupled from the result path: submitted to {@link #DRAIN_EXECUTOR} and
+     * <p>Fully decoupled from the result path: submitted to the per-repo drain executor and
      * returns immediately. Drain failures and backpressure never block or affect the
      * winning response delivered to the client. Uses streaming discard to avoid OOM on
      * large responses (e.g., npm typescript ~30MB).
      */
     private void drainBody(final String memberName, final Content body) {
         final String group = this.group;
-        DRAIN_EXECUTOR.execute(() ->
+        this.drainExecutor.execute(() ->
             body.subscribe(new org.reactivestreams.Subscriber<>() {
                 @Override
                 public void onSubscribe(final org.reactivestreams.Subscription sub) {

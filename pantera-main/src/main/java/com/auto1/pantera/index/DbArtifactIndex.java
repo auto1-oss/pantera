@@ -12,7 +12,7 @@ package com.auto1.pantera.index;
 
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.misc.ConfigDefaults;
-import com.auto1.pantera.http.trace.TraceContextExecutor;
+import com.auto1.pantera.http.context.ContextualExecutorService;
 
 import javax.sql.DataSource;
 import java.sql.Array;
@@ -260,7 +260,15 @@ public final class DbArtifactIndex implements ArtifactIndex {
      * task on the submitting thread, propagating backpressure instead of OOM-ing
      * the JVM before the per-query statement timeout fires.
      *
-     * @return Wrapped ExecutorService
+     * <p>The returned {@link ExecutorService} is a
+     * {@link ContextualExecutorService} wrapping the raw pool: every task-submission
+     * entry point ({@code execute}, {@code submit(Callable/Runnable)},
+     * {@code invokeAll}, {@code invokeAny}) snapshots the submitting thread's
+     * Log4j2 {@link ThreadContext} (ECS fields) and the active Elastic APM span at
+     * submit time, then restores them on the runner thread for the task's duration
+     * — so ECS fields and the trace context stay attached across the thread hop.
+     *
+     * @return Contextualising wrapper around a bounded thread pool
      */
     private static ExecutorService createDbIndexExecutor() {
         final int poolSize = Math.max(2, Runtime.getRuntime().availableProcessors());
@@ -285,7 +293,11 @@ public final class DbArtifactIndex implements ArtifactIndex {
             .eventCategory("configuration")
             .eventAction("pool_init")
             .log();
-        return TraceContextExecutor.wrap(pool);
+        // WI-post-03a: ContextualExecutorService contextualises EVERY submit path
+        // (execute, submit(Callable/Runnable), invokeAll, invokeAny) — fixes the
+        // latent bypass where submit(Callable) went straight to the underlying
+        // pool with empty ThreadContext / no APM span.
+        return ContextualExecutorService.wrap(pool);
     }
 
     /**

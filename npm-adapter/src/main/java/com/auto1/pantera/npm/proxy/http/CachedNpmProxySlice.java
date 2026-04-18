@@ -18,26 +18,31 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.cache.CachedArtifactMetadataStore;
-import com.auto1.pantera.http.cache.DedupStrategy;
+import com.auto1.pantera.http.cache.FetchSignal;
 import com.auto1.pantera.http.cache.NegativeCache;
-import com.auto1.pantera.http.cache.RequestDeduplicator;
-import com.auto1.pantera.http.cache.RequestDeduplicator.FetchSignal;
+import com.auto1.pantera.http.cache.NegativeCacheRegistry;
+import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.KeyFromPath;
 
+import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ForkJoinPool;
 
 /**
  * NPM proxy slice with negative caching and signal-based request deduplication.
  * Wraps NpmProxySlice to add caching layer that prevents repeated
  * 404 requests and deduplicates concurrent requests.
  *
- * <p>Uses shared {@link RequestDeduplicator} with SIGNAL strategy: concurrent
+ * <p>Uses the unified {@link SingleFlight} coalescer (WI-05): concurrent
  * requests for the same package wait for the first request to complete, then
  * fetch from NpmProxy's storage cache. This eliminates memory buffering while
- * maintaining full deduplication.</p>
+ * maintaining full deduplication. The retained {@link FetchSignal} enum is
+ * the same signal contract as the legacy path — only the coalescer
+ * implementation changed.</p>
  *
  * @since 1.0
  */
@@ -74,9 +79,11 @@ public final class CachedNpmProxySlice implements Slice {
     private final String repoType;
 
     /**
-     * Shared request deduplicator using SIGNAL strategy.
+     * Per-key request coalescer. Concurrent requests for the same cache key
+     * share one upstream fetch, each receiving the same {@link FetchSignal}
+     * terminal state. Wired in WI-05.
      */
-    private final RequestDeduplicator deduplicator;
+    private final SingleFlight<Key, FetchSignal> deduplicator;
 
     /**
      * Ctor with default settings.
@@ -111,9 +118,15 @@ public final class CachedNpmProxySlice implements Slice {
         this.repoName = repoName;
         this.upstreamUrl = upstreamUrl;
         this.repoType = repoType;
-        this.negativeCache = new NegativeCache(repoType, repoName);
+        this.negativeCache = NegativeCacheRegistry.instance().sharedCache();
         this.metadata = storage.map(CachedArtifactMetadataStore::new);
-        this.deduplicator = new RequestDeduplicator(DedupStrategy.SIGNAL);
+        // 5-minute zombie TTL (PANTERA_DEDUP_MAX_AGE_MS = 300 000 ms).
+        // 10K max entries bounds memory.
+        this.deduplicator = new SingleFlight<>(
+            Duration.ofMinutes(5),
+            10_000,
+            ContextualExecutor.contextualize(ForkJoinPool.commonPool())
+        );
     }
 
     @Override
@@ -188,8 +201,8 @@ public final class CachedNpmProxySlice implements Slice {
     }
 
     /**
-     * Fetches from origin with signal-based request deduplication.
-     * Uses shared {@link RequestDeduplicator}: first request fetches from origin
+     * Fetches from origin with signal-based request coalescing.
+     * Uses shared {@link SingleFlight}: first request fetches from origin
      * (which saves to NpmProxy's storage cache). Concurrent requests wait for a
      * signal, then re-fetch from origin which serves from storage cache.
      */
@@ -199,7 +212,7 @@ public final class CachedNpmProxySlice implements Slice {
         final Content body,
         final Key key
     ) {
-        return this.deduplicator.deduplicate(
+        return this.deduplicator.load(
             key,
             () -> this.doFetch(line, headers, body, key)
         ).thenCompose(signal -> this.handleSignal(signal, line, headers, key));

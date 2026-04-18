@@ -10,13 +10,13 @@
  */
 package com.auto1.pantera.cooldown.metadata;
 
-import com.auto1.pantera.cooldown.CooldownCache;
-import com.auto1.pantera.cooldown.CooldownDependency;
-import com.auto1.pantera.cooldown.CooldownInspector;
-import com.auto1.pantera.cooldown.CooldownRequest;
-import com.auto1.pantera.cooldown.CooldownResult;
-import com.auto1.pantera.cooldown.CooldownService;
-import com.auto1.pantera.cooldown.CooldownSettings;
+import com.auto1.pantera.cooldown.cache.CooldownCache;
+import com.auto1.pantera.cooldown.api.CooldownDependency;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
+import com.auto1.pantera.cooldown.api.CooldownRequest;
+import com.auto1.pantera.cooldown.api.CooldownResult;
+import com.auto1.pantera.cooldown.api.CooldownService;
+import com.auto1.pantera.cooldown.config.CooldownSettings;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -39,7 +39,7 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.lessThan;
 
 /**
- * Performance tests for {@link CooldownMetadataServiceImpl}.
+ * Performance tests for {@link MetadataFilterService}.
  * 
  * <p>Performance requirements:</p>
  * <ul>
@@ -67,7 +67,7 @@ final class CooldownMetadataServicePerformanceTest {
      */
     private static final int WARMUP_ITERATIONS = 10;
 
-    private CooldownMetadataServiceImpl service;
+    private MetadataFilterService service;
     private FastCooldownService cooldownService;
 
     @BeforeEach
@@ -77,7 +77,7 @@ final class CooldownMetadataServicePerformanceTest {
         final CooldownCache cooldownCache = new CooldownCache();
         // Use fresh metadata cache for each test to measure actual filtering time
         final FilteredMetadataCache metadataCache = new FilteredMetadataCache();
-        this.service = new CooldownMetadataServiceImpl(
+        this.service = new MetadataFilterService(
             this.cooldownService,
             settings,
             cooldownCache,
@@ -283,10 +283,10 @@ final class CooldownMetadataServicePerformanceTest {
             final String key = request.artifact() + "@" + request.version();
             if (this.blockedVersions.contains(key)) {
                 return CompletableFuture.completedFuture(
-                    CooldownResult.blocked(new com.auto1.pantera.cooldown.CooldownBlock(
+                    CooldownResult.blocked(new com.auto1.pantera.cooldown.api.CooldownBlock(
                         request.repoType(), request.repoName(),
                         request.artifact(), request.version(),
-                        com.auto1.pantera.cooldown.CooldownReason.FRESH_RELEASE,
+                        com.auto1.pantera.cooldown.api.CooldownReason.FRESH_RELEASE,
                         Instant.now(), Instant.now().plus(Duration.ofDays(7)),
                         java.util.Collections.emptyList()
                     ))
@@ -308,7 +308,7 @@ final class CooldownMetadataServicePerformanceTest {
         }
 
         @Override
-        public CompletableFuture<List<com.auto1.pantera.cooldown.CooldownBlock>> activeBlocks(
+        public CompletableFuture<List<com.auto1.pantera.cooldown.api.CooldownBlock>> activeBlocks(
             String repoType, String repoName
         ) {
             return CompletableFuture.completedFuture(java.util.Collections.emptyList());

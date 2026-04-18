@@ -15,9 +15,9 @@ import com.auto1.pantera.api.AuthzHandler;
 import com.auto1.pantera.api.RepositoryEvents;
 import com.auto1.pantera.api.RepositoryName;
 import com.auto1.pantera.api.perms.ApiRepositoryPermission;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.auth.AuthUser;
-import com.auto1.pantera.http.trace.MdcPropagation;
+import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.scheduling.MetadataEventQueues;
 import com.auto1.pantera.security.perms.AdapterBasicPermission;
 import com.auto1.pantera.security.policy.Policy;
@@ -36,6 +36,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import javax.json.Json;
 import javax.json.JsonStructure;
 
@@ -165,45 +166,44 @@ public final class RepositoryHandler {
                 ctx.user().principal().getString(AuthTokenRest.CONTEXT)
             )
         );
-        ctx.vertx().<List<JsonObject>>executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                final Collection<String> all = this.crs.listAll();
-                final List<JsonObject> filtered = new ArrayList<>(all.size());
-                for (final String name : all) {
-                    if (query != null
-                        && !name.toLowerCase(Locale.ROOT).contains(query.toLowerCase(Locale.ROOT))) {
-                        continue;
-                    }
-                    if (!perms.implies(new AdapterBasicPermission(name, "read"))) {
-                        continue;
-                    }
-                    String repoType = "unknown";
-                    try {
-                        final javax.json.JsonStructure config =
-                            this.crs.value(new RepositoryName.Simple(name));
-                        if (config instanceof javax.json.JsonObject) {
-                            final javax.json.JsonObject jobj = (javax.json.JsonObject) config;
-                            final javax.json.JsonObject repo =
-                                jobj.containsKey(RepositoryHandler.REPO)
-                                    ? jobj.getJsonObject(RepositoryHandler.REPO) : jobj;
-                            repoType = repo.getString("type", "unknown");
-                        }
-                    } catch (final Exception ignored) {
-                        // Use "unknown" type
-                    }
-                    if (type != null && !repoType.toLowerCase(Locale.ROOT).contains(
-                        type.toLowerCase(Locale.ROOT))) {
-                        continue;
-                    }
-                    filtered.add(new JsonObject()
-                        .put("name", name)
-                        .put("type", repoType));
+        CompletableFuture.supplyAsync((java.util.function.Supplier<List<JsonObject>>) () -> {
+            final Collection<String> all = this.crs.listAll();
+            final List<JsonObject> filtered = new ArrayList<>(all.size());
+            for (final String name : all) {
+                if (query != null
+                    && !name.toLowerCase(Locale.ROOT).contains(query.toLowerCase(Locale.ROOT))) {
+                    continue;
                 }
-                return filtered;
-            }),
-            false
-        ).onSuccess(
-            filtered -> {
+                if (!perms.implies(new AdapterBasicPermission(name, "read"))) {
+                    continue;
+                }
+                String repoType = "unknown";
+                try {
+                    final javax.json.JsonStructure config =
+                        this.crs.value(new RepositoryName.Simple(name));
+                    if (config instanceof javax.json.JsonObject) {
+                        final javax.json.JsonObject jobj = (javax.json.JsonObject) config;
+                        final javax.json.JsonObject repo =
+                            jobj.containsKey(RepositoryHandler.REPO)
+                                ? jobj.getJsonObject(RepositoryHandler.REPO) : jobj;
+                        repoType = repo.getString("type", "unknown");
+                    }
+                } catch (final Exception ignored) {
+                    // Use "unknown" type
+                }
+                if (type != null && !repoType.toLowerCase(Locale.ROOT).contains(
+                    type.toLowerCase(Locale.ROOT))) {
+                    continue;
+                }
+                filtered.add(new JsonObject()
+                    .put("name", name)
+                    .put("type", repoType));
+            }
+            return filtered;
+        }, HandlerExecutor.get()).whenComplete((filtered, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
                 final int total = filtered.size();
                 final int from = Math.min(page * size, total);
                 final int to = Math.min(from + size, total);
@@ -222,9 +222,7 @@ public final class RepositoryHandler {
                         .put("hasMore", to < total)
                         .encode());
             }
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+        });
     }
 
     /**
@@ -234,31 +232,26 @@ public final class RepositoryHandler {
     private void getRepository(final RoutingContext ctx) {
         final String name = ctx.pathParam("name");
         final RepositoryName rname = new RepositoryName.Simple(name);
-        ctx.vertx().<JsonStructure>executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                if (!this.crs.exists(rname)) {
-                    return null;
-                }
-                return this.crs.value(rname);
-            }),
-            false
-        ).onSuccess(
-            config -> {
-                if (config == null) {
-                    ApiResponse.sendError(
-                        ctx, 404, "NOT_FOUND",
-                        String.format("Repository '%s' not found", name)
-                    );
-                } else {
-                    ctx.response()
-                        .setStatusCode(200)
-                        .putHeader("Content-Type", "application/json")
-                        .end(config.toString());
-                }
+        CompletableFuture.supplyAsync((java.util.function.Supplier<JsonStructure>) () -> {
+            if (!this.crs.exists(rname)) {
+                return null;
             }
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+            return this.crs.value(rname);
+        }, HandlerExecutor.get()).whenComplete((config, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else if (config == null) {
+                ApiResponse.sendError(
+                    ctx, 404, "NOT_FOUND",
+                    String.format("Repository '%s' not found", name)
+                );
+            } else {
+                ctx.response()
+                    .setStatusCode(200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(config.toString());
+            }
+        });
     }
 
     /**
@@ -267,20 +260,18 @@ public final class RepositoryHandler {
      */
     private void headRepository(final RoutingContext ctx) {
         final RepositoryName rname = new RepositoryName.Simple(ctx.pathParam("name"));
-        ctx.vertx().<Boolean>executeBlocking(
-            MdcPropagation.withMdc(() -> this.crs.exists(rname)),
-            false
-        ).onSuccess(
-            exists -> {
-                if (Boolean.TRUE.equals(exists)) {
-                    ctx.response().setStatusCode(200).end();
-                } else {
-                    ctx.response().setStatusCode(404).end();
-                }
+        CompletableFuture.supplyAsync(
+            () -> this.crs.exists(rname),
+            HandlerExecutor.get()
+        ).whenComplete((exists, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else if (Boolean.TRUE.equals(exists)) {
+                ctx.response().setStatusCode(200).end();
+            } else {
+                ctx.response().setStatusCode(404).end();
             }
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+        });
     }
 
     /**
@@ -345,21 +336,18 @@ public final class RepositoryHandler {
             return;
         }
         final String actor = ctx.user().principal().getString(AuthTokenRest.SUB);
-        ctx.vertx().executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                this.crs.save(rname, body, actor);
-                return null;
-            }),
-            false
-        ).onSuccess(
-            ignored -> {
+        CompletableFuture.runAsync(
+            () -> this.crs.save(rname, body, actor),
+            HandlerExecutor.get()
+        ).whenComplete((ignored, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
                 this.filtersCache.invalidate(rname.toString());
                 this.eventBus.publish(RepositoryEvents.ADDRESS, RepositoryEvents.upsert(name));
                 ctx.response().setStatusCode(200).end();
             }
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+        });
     }
 
     /**
@@ -369,32 +357,32 @@ public final class RepositoryHandler {
     private void deleteRepository(final RoutingContext ctx) {
         final String name = ctx.pathParam("name");
         final RepositoryName rname = new RepositoryName.Simple(name);
-        ctx.vertx().<Boolean>executeBlocking(
-            MdcPropagation.withMdc(() -> this.crs.exists(rname)),
-            false
-        ).onSuccess(
-            exists -> {
-                if (!Boolean.TRUE.equals(exists)) {
-                    ApiResponse.sendError(
-                        ctx, 404, "NOT_FOUND",
-                        String.format("Repository '%s' not found", name)
-                    );
-                    return;
-                }
-                this.repoData.remove(rname)
-                    .thenRun(() -> this.crs.delete(rname))
-                    .exceptionally(exc -> {
-                        this.crs.delete(rname);
-                        return null;
-                    });
-                this.filtersCache.invalidate(rname.toString());
-                this.eventBus.publish(RepositoryEvents.ADDRESS, RepositoryEvents.remove(name));
-                this.events.ifPresent(item -> item.stopProxyMetadataProcessing(name));
-                ctx.response().setStatusCode(200).end();
+        CompletableFuture.supplyAsync(
+            () -> this.crs.exists(rname),
+            HandlerExecutor.get()
+        ).whenComplete((exists, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                return;
             }
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+            if (!Boolean.TRUE.equals(exists)) {
+                ApiResponse.sendError(
+                    ctx, 404, "NOT_FOUND",
+                    String.format("Repository '%s' not found", name)
+                );
+                return;
+            }
+            this.repoData.remove(rname)
+                .thenRun(() -> this.crs.delete(rname))
+                .exceptionally(exc -> {
+                    this.crs.delete(rname);
+                    return null;
+                });
+            this.filtersCache.invalidate(rname.toString());
+            this.eventBus.publish(RepositoryEvents.ADDRESS, RepositoryEvents.remove(name));
+            this.events.ifPresent(item -> item.stopProxyMetadataProcessing(name));
+            ctx.response().setStatusCode(200).end();
+        });
     }
 
     /**
@@ -421,30 +409,30 @@ public final class RepositoryHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "new_name is required");
             return;
         }
-        ctx.vertx().<Boolean>executeBlocking(
-            MdcPropagation.withMdc(() -> this.crs.exists(rname)),
-            false
-        ).onSuccess(
-            exists -> {
-                if (!Boolean.TRUE.equals(exists)) {
-                    ApiResponse.sendError(
-                        ctx, 404, "NOT_FOUND",
-                        String.format("Repository '%s' not found", name)
-                    );
-                    return;
-                }
-                final RepositoryName newrname = new RepositoryName.Simple(newName);
-                this.repoData.move(rname, newrname)
-                    .thenRun(() -> this.crs.move(rname, newrname));
-                this.filtersCache.invalidate(rname.toString());
-                this.eventBus.publish(
-                    RepositoryEvents.ADDRESS, RepositoryEvents.move(name, newName)
-                );
-                ctx.response().setStatusCode(200).end();
+        CompletableFuture.supplyAsync(
+            () -> this.crs.exists(rname),
+            HandlerExecutor.get()
+        ).whenComplete((exists, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                return;
             }
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+            if (!Boolean.TRUE.equals(exists)) {
+                ApiResponse.sendError(
+                    ctx, 404, "NOT_FOUND",
+                    String.format("Repository '%s' not found", name)
+                );
+                return;
+            }
+            final RepositoryName newrname = new RepositoryName.Simple(newName);
+            this.repoData.move(rname, newrname)
+                .thenRun(() -> this.crs.move(rname, newrname));
+            this.filtersCache.invalidate(rname.toString());
+            this.eventBus.publish(
+                RepositoryEvents.ADDRESS, RepositoryEvents.move(name, newName)
+            );
+            ctx.response().setStatusCode(200).end();
+        });
     }
 
     /**
@@ -466,54 +454,49 @@ public final class RepositoryHandler {
     private void getMembers(final RoutingContext ctx) {
         final String name = ctx.pathParam("name");
         final RepositoryName rname = new RepositoryName.Simple(name);
-        ctx.vertx().<JsonObject>executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                if (!this.crs.exists(rname)) {
-                    return null;
-                }
-                final JsonStructure config = this.crs.value(rname);
-                if (config == null) {
-                    return null;
-                }
-                final javax.json.JsonObject jconfig;
-                if (config instanceof javax.json.JsonObject) {
-                    jconfig = (javax.json.JsonObject) config;
-                } else {
-                    return new JsonObject().put("members", new JsonArray()).put("type", "not-a-group");
-                }
-                final javax.json.JsonObject repoSection = jconfig.containsKey(RepositoryHandler.REPO)
-                    ? jconfig.getJsonObject(RepositoryHandler.REPO) : jconfig;
-                final String repoType = repoSection.getString("type", "");
-                if (!repoType.endsWith("-group")) {
-                    return new JsonObject().put("members", new JsonArray()).put("type", "not-a-group");
-                }
-                final JsonArray members = new JsonArray();
-                if (repoSection.containsKey("remotes")) {
-                    final javax.json.JsonArray remotes = repoSection.getJsonArray("remotes");
-                    for (int idx = 0; idx < remotes.size(); idx++) {
-                        final javax.json.JsonObject remote = remotes.getJsonObject(idx);
-                        members.add(remote.getString("url", remote.toString()));
-                    }
-                }
-                return new JsonObject().put("members", members).put("type", repoType);
-            }),
-            false
-        ).onSuccess(
-            result -> {
-                if (result == null) {
-                    ApiResponse.sendError(
-                        ctx, 404, "NOT_FOUND",
-                        String.format("Repository '%s' not found", name)
-                    );
-                } else {
-                    ctx.response()
-                        .setStatusCode(200)
-                        .putHeader("Content-Type", "application/json")
-                        .end(result.encode());
+        CompletableFuture.supplyAsync((java.util.function.Supplier<JsonObject>) () -> {
+            if (!this.crs.exists(rname)) {
+                return null;
+            }
+            final JsonStructure config = this.crs.value(rname);
+            if (config == null) {
+                return null;
+            }
+            final javax.json.JsonObject jconfig;
+            if (config instanceof javax.json.JsonObject) {
+                jconfig = (javax.json.JsonObject) config;
+            } else {
+                return new JsonObject().put("members", new JsonArray()).put("type", "not-a-group");
+            }
+            final javax.json.JsonObject repoSection = jconfig.containsKey(RepositoryHandler.REPO)
+                ? jconfig.getJsonObject(RepositoryHandler.REPO) : jconfig;
+            final String repoType = repoSection.getString("type", "");
+            if (!repoType.endsWith("-group")) {
+                return new JsonObject().put("members", new JsonArray()).put("type", "not-a-group");
+            }
+            final JsonArray members = new JsonArray();
+            if (repoSection.containsKey("remotes")) {
+                final javax.json.JsonArray remotes = repoSection.getJsonArray("remotes");
+                for (int idx = 0; idx < remotes.size(); idx++) {
+                    final javax.json.JsonObject remote = remotes.getJsonObject(idx);
+                    members.add(remote.getString("url", remote.toString()));
                 }
             }
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+            return new JsonObject().put("members", members).put("type", repoType);
+        }, HandlerExecutor.get()).whenComplete((result, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else if (result == null) {
+                ApiResponse.sendError(
+                    ctx, 404, "NOT_FOUND",
+                    String.format("Repository '%s' not found", name)
+                );
+            } else {
+                ctx.response()
+                    .setStatusCode(200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(result.encode());
+            }
+        });
     }
 }

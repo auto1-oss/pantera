@@ -10,7 +10,7 @@
  */
 package com.auto1.pantera.cooldown;
 
-import com.auto1.pantera.cooldown.CooldownReason;
+import com.auto1.pantera.cooldown.api.CooldownReason;
 import java.time.Instant;
 import java.util.Optional;
 

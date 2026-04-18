@@ -102,7 +102,7 @@ public final class RpmRemove implements Slice {
                                         return new AstoRepoRemove(this.asto, this.cnfg, infos)
                                             .perform().thenAccept(
                                                 nothing -> infos.forEach(
-                                                    item -> queue.add(
+                                                    item -> queue.add( // ok: unbounded ConcurrentLinkedDeque (ArtifactEvent queue)
                                                         new ArtifactEvent(
                                                             RpmUpload.REPO_TYPE,
                                                             this.cnfg.name(), item.name(),

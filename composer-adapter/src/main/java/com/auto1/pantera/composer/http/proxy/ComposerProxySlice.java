@@ -13,8 +13,8 @@ package com.auto1.pantera.composer.http.proxy;
 import com.auto1.pantera.asto.cache.Cache;
 import com.auto1.pantera.composer.Repository;
 import com.auto1.pantera.composer.http.PackageMetadataSlice;
-import com.auto1.pantera.cooldown.CooldownInspector;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
+import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.client.ClientSlices;
@@ -48,7 +48,7 @@ public class ComposerProxySlice extends Slice.Wrap {
         final Repository repo, final Authenticator auth
     ) {
         this(clients, remote, repo, auth, Cache.NOP, Optional.empty(), "composer", "php",
-            com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE,
+            com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE,
             new NoopComposerCooldownInspector(),
             "http://localhost:8080");
     }
@@ -69,7 +69,7 @@ public class ComposerProxySlice extends Slice.Wrap {
         final Cache cache
     ) {
         this(clients, remote, repository, auth, cache, Optional.empty(), "composer", "php",
-            com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE,
+            com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE,
             new NoopComposerCooldownInspector(),
             "http://localhost:8080");
     }

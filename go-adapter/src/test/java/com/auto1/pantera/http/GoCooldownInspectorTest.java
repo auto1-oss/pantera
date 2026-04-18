@@ -11,7 +11,7 @@
 package com.auto1.pantera.http;
 
 import com.auto1.pantera.asto.Content;
-import com.auto1.pantera.cooldown.CooldownDependency;
+import com.auto1.pantera.cooldown.api.CooldownDependency;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;

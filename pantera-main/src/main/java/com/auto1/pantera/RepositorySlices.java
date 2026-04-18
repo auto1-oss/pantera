@@ -35,7 +35,7 @@ import com.auto1.pantera.docker.asto.AstoDocker;
 import com.auto1.pantera.docker.asto.RegistryRoot;
 import com.auto1.pantera.docker.http.DockerSlice;
 import com.auto1.pantera.docker.http.TrimmedDocker;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.CooldownSupport;
 import com.auto1.pantera.files.FilesSlice;
 import com.auto1.pantera.gem.http.GemSlice;
@@ -174,13 +174,19 @@ public class RepositorySlices {
     private final SharedJettyClients sharedClients;
 
     /**
-     * Negative cache configuration for group fanout 404s.
-     * <p>Loaded once from {@code meta.caches.group-negative} in pantera.yml; falls
-     * back to a 5 min TTL / 10K entry in-memory default when absent.  Each
-     * {@code *-group} repo receives a dedicated {@link NegativeCache} built from
-     * this config so key-prefixing isolates entries per group.
+     * Negative cache configuration loaded from YAML.
+     * <p>Read from {@code meta.caches.repo-negative} first; falls back to the
+     * legacy {@code meta.caches.group-negative} key with a deprecation WARN.
+     * When neither key is present, uses historical defaults (5 min / 10K).
      */
-    private final NegativeCacheConfig groupNegativeCacheConfig;
+    private final NegativeCacheConfig negativeCacheConfig;
+
+    /**
+     * Single shared NegativeCache instance for the entire JVM.
+     * All group, proxy, and hosted scopes share this bean. Keyed by
+     * {@link com.auto1.pantera.http.cache.NegativeCacheKey}.
+     */
+    private final NegativeCache sharedNegativeCache;
 
     /**
      * Shared circuit-breaker registries keyed by physical repo name.
@@ -190,6 +196,14 @@ public class RepositorySlices {
      * failures; recovery is also detected once rather than independently per group.
      */
     private final ConcurrentMap<String, AutoBlockRegistry> memberRegistries =
+        new ConcurrentHashMap<>();
+
+    /**
+     * Per-repo bulkheads keyed by repository name.
+     * Each group repository gets exactly one {@link com.auto1.pantera.http.resilience.RepoBulkhead}
+     * at first access. Saturation in one repo cannot starve another (WI-09).
+     */
+    private final ConcurrentMap<String, com.auto1.pantera.http.resilience.RepoBulkhead> repoBulkheads =
         new ConcurrentHashMap<>();
 
     /**
@@ -216,12 +230,12 @@ public class RepositorySlices {
             }
         }
         this.sharedClients = new SharedJettyClients();
-        // Load group-negative cache config once at construction time.  When the
-        // sub-key is absent from pantera.yml, fromYaml returns the default
-        // single-tier config (24h TTL / 50K entries) which we override below to
-        // preserve the pre-YAML group-slice defaults (5m / 10K) unless the
-        // operator explicitly opts in.
-        this.groupNegativeCacheConfig = loadGroupNegativeCacheConfig(settings);
+        // Load negative cache config once at construction time.
+        // Reads repo-negative first; falls back to group-negative with deprecation WARN.
+        this.negativeCacheConfig = loadNegativeCacheConfig(settings);
+        this.sharedNegativeCache = new NegativeCache(this.negativeCacheConfig);
+        com.auto1.pantera.http.cache.NegativeCacheRegistry.instance()
+            .setSharedCache(this.sharedNegativeCache);
         this.slices = CacheBuilder.newBuilder()
             .maximumSize(500)
             .expireAfterAccess(30, java.util.concurrent.TimeUnit.MINUTES)
@@ -299,8 +313,11 @@ public class RepositorySlices {
                 .log();
             return resolved.get().slice();
         }
-        // Not found is NOT cached to allow dynamic repo addition without restart
-        EcsLogger.warn("com.auto1.pantera.settings")
+        // Not found is NOT cached to allow dynamic repo addition without restart.
+        // Logged at INFO (v2.1.4 WI-00): this is a client-config error, not a
+        // Pantera failure — clients misconfigured with stale repo names produce
+        // a steady stream that was previously drowning WARN output (§1.7 F2.2).
+        EcsLogger.info("com.auto1.pantera.settings")
             .message("Repository not found in configuration")
             .eventCategory("web")
             .eventAction("slice_resolve")
@@ -669,8 +686,9 @@ public class RepositorySlices {
                     Optional.of(this.settings.artifactIndex()),
                     proxyMembers(npmFlatMembers),
                     "npm-group",
-                    newGroupNegativeCache(cfg.name()),
-                    this::getOrCreateMemberRegistry
+                    this.sharedNegativeCache,
+                    this::getOrCreateMemberRegistry,
+                    getOrCreateBulkhead(cfg.name()).drainExecutor()
                 );
                 // Create audit slice that aggregates results from ALL members
                 // This is critical for vulnerability scanning - local repos return {},
@@ -735,8 +753,9 @@ public class RepositorySlices {
                     Optional.of(this.settings.artifactIndex()),
                     proxyMembers(composerFlatMembers),
                     cfg.type(),
-                    newGroupNegativeCache(cfg.name()),
-                    this::getOrCreateMemberRegistry
+                    this.sharedNegativeCache,
+                    this::getOrCreateMemberRegistry,
+                    getOrCreateBulkhead(cfg.name()).drainExecutor()
                 );
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
@@ -765,8 +784,9 @@ public class RepositorySlices {
                     Optional.of(this.settings.artifactIndex()),
                     proxyMembers(mavenFlatMembers),
                     "maven-group",
-                    newGroupNegativeCache(cfg.name()),
-                    this::getOrCreateMemberRegistry
+                    this.sharedNegativeCache,
+                    this::getOrCreateMemberRegistry,
+                    getOrCreateBulkhead(cfg.name()).drainExecutor()
                 );
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
@@ -802,8 +822,9 @@ public class RepositorySlices {
                             Optional.of(this.settings.artifactIndex()),
                             proxyMembers(genericFlatMembers),
                             cfg.type(),
-                            newGroupNegativeCache(cfg.name()),
-                            this::getOrCreateMemberRegistry
+                            this.sharedNegativeCache,
+                            this::getOrCreateMemberRegistry,
+                            getOrCreateBulkhead(cfg.name()).drainExecutor()
                         ),
                         authentication(),
                         tokens.auth(),
@@ -1036,50 +1057,45 @@ public class RepositorySlices {
 
 
     /**
-     * Load negative cache config for group fanout 404s.
+     * Load negative cache config from YAML.
      *
-     * <p>Reads {@code meta.caches.group-negative} via {@link NegativeCacheConfig#fromYaml}.
-     * When the sub-key is absent the helper returns the package defaults (24h /
-     * 50K); we substitute the historical GroupSlice values (5 min / 10K /
-     * L1-only) so upgrades without YAML changes preserve prior behaviour.
+     * <p>Reads {@code meta.caches.repo-negative} first (the v2.2 canonical key).
+     * If absent, falls back to the legacy {@code meta.caches.group-negative} key
+     * and emits a deprecation WARN.  When neither key is present, returns the
+     * historical defaults (5 min / 10K / in-memory only) to preserve backwards
+     * compatibility.
      *
      * @param settings Pantera settings
-     * @return Group-specific negative cache config
+     * @return Unified negative cache config
      */
-    private static NegativeCacheConfig loadGroupNegativeCacheConfig(final Settings settings) {
+    private static NegativeCacheConfig loadNegativeCacheConfig(final Settings settings) {
         final com.amihaiemil.eoyaml.YamlMapping caches = settings != null && settings.meta() != null
             ? settings.meta().yamlMapping("caches")
             : null;
-        final boolean hasGroupNegative = caches != null
-            && caches.yamlMapping("group-negative") != null;
-        if (!hasGroupNegative) {
-            // Preserve pre-YAML defaults: 5 min TTL, 10K entries, in-memory only
-            return new NegativeCacheConfig(
-                java.time.Duration.ofMinutes(5),
-                10_000,
-                false,
-                NegativeCacheConfig.DEFAULT_L1_MAX_SIZE,
-                NegativeCacheConfig.DEFAULT_L1_TTL,
-                NegativeCacheConfig.DEFAULT_L2_MAX_SIZE,
-                NegativeCacheConfig.DEFAULT_L2_TTL
-            );
+        // Try the new canonical key first
+        if (caches != null && caches.yamlMapping("repo-negative") != null) {
+            return NegativeCacheConfig.fromYaml(caches, "repo-negative");
         }
-        return NegativeCacheConfig.fromYaml(caches, "group-negative");
-    }
-
-    /**
-     * Construct a per-group {@link NegativeCache} backed by the shared config.
-     * The group name is used as the cache-key prefix so entries for different
-     * groups cannot collide in either L1 or L2.
-     *
-     * @param groupName Group repository name
-     * @return Negative cache scoped to this group
-     */
-    private NegativeCache newGroupNegativeCache(final String groupName) {
-        return new NegativeCache(
-            "group-negative",
-            groupName,
-            this.groupNegativeCacheConfig
+        // Fall back to legacy key with deprecation WARN
+        if (caches != null && caches.yamlMapping("group-negative") != null) {
+            EcsLogger.warn("com.auto1.pantera.settings")
+                .message("YAML key 'meta.caches.group-negative' is deprecated; "
+                    + "rename to 'meta.caches.repo-negative' — legacy key will be "
+                    + "removed in a future release")
+                .eventCategory("configuration")
+                .eventAction("yaml_deprecation")
+                .log();
+            return NegativeCacheConfig.fromYaml(caches, "group-negative");
+        }
+        // Neither key present — preserve pre-YAML defaults
+        return new NegativeCacheConfig(
+            java.time.Duration.ofMinutes(5),
+            10_000,
+            false,
+            NegativeCacheConfig.DEFAULT_L1_MAX_SIZE,
+            NegativeCacheConfig.DEFAULT_L1_TTL,
+            NegativeCacheConfig.DEFAULT_L2_MAX_SIZE,
+            NegativeCacheConfig.DEFAULT_L2_TTL
         );
     }
 
@@ -1124,6 +1140,33 @@ public class RepositorySlices {
                     .eventAction("circuit_breaker_init")
                     .log();
                 return new AutoBlockRegistry(AutoBlockSettings.defaults());
+            }
+        );
+    }
+
+    /**
+     * Get or create a per-repo {@link com.auto1.pantera.http.resilience.RepoBulkhead}
+     * for the given group repository name (WI-09).
+     *
+     * @param repoName Group repository name
+     * @return Per-repo bulkhead (created on first access with default limits)
+     */
+    private com.auto1.pantera.http.resilience.RepoBulkhead getOrCreateBulkhead(final String repoName) {
+        return this.repoBulkheads.computeIfAbsent(
+            repoName,
+            n -> {
+                final com.auto1.pantera.http.resilience.BulkheadLimits limits =
+                    com.auto1.pantera.http.resilience.BulkheadLimits.defaults();
+                EcsLogger.info("com.auto1.pantera")
+                    .message("Per-repo bulkhead created for: " + n
+                        + " (maxConcurrent=" + limits.maxConcurrent()
+                        + ", maxQueueDepth=" + limits.maxQueueDepth() + ")")
+                    .eventCategory("configuration")
+                    .eventAction("bulkhead_init")
+                    .log();
+                return new com.auto1.pantera.http.resilience.RepoBulkhead(
+                    n, limits, java.util.concurrent.ForkJoinPool.commonPool()
+                );
             }
         );
     }

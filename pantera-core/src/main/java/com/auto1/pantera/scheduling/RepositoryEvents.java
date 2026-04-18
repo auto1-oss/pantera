@@ -66,7 +66,7 @@ public final class RepositoryEvents {
         final Headers headers) {
         final String aname = formatArtifactName(key);
         final String version = detectFileVersion(this.rtype, aname);
-        this.queue.add(
+        this.queue.add( // ok: unbounded ConcurrentLinkedDeque (ArtifactEvent queue)
             new ArtifactEvent(
                 this.rtype, this.rname, new Login(headers).getValue(),
                 aname, version, size
@@ -81,7 +81,7 @@ public final class RepositoryEvents {
      */
     public void addDeleteEventByKey(final Key key) {
         final String aname = formatArtifactName(key);
-        this.queue.add(
+        this.queue.add( // ok: unbounded ConcurrentLinkedDeque (ArtifactEvent queue)
             new ArtifactEvent(this.rtype, this.rname, aname, RepositoryEvents.VERSION)
         );
     }

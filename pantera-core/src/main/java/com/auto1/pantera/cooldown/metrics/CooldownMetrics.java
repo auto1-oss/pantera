@@ -227,6 +227,20 @@ public final class CooldownMetrics {
     }
 
     /**
+     * Record an admin action (unblock, unblock_all, policy_change).
+     * Counter: {@code pantera.cooldown.admin}.
+     *
+     * @param action Action tag value
+     */
+    public void recordAdminAction(final String action) {
+        Counter.builder("pantera.cooldown.admin")
+            .description("Cooldown admin actions")
+            .tag("action", action)
+            .register(this.registry)
+            .increment();
+    }
+
+    /**
      * Record cache invalidation.
      *
      * @param repoType Repository type

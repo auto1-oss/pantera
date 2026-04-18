@@ -17,6 +17,7 @@
  *   <li>{@link com.auto1.pantera.npm.cooldown.NpmMetadataFilter} - Filters blocked versions from metadata</li>
  *   <li>{@link com.auto1.pantera.npm.cooldown.NpmMetadataRewriter} - Serializes filtered metadata to JSON</li>
  *   <li>{@link com.auto1.pantera.npm.cooldown.NpmCooldownInspector} - Provides release dates for cooldown evaluation</li>
+ *   <li>{@link com.auto1.pantera.npm.cooldown.NpmCooldownResponseFactory} - Builds 403 responses for blocked NPM packages</li>
  * </ul>
  *
  * <p>NPM metadata structure:</p>

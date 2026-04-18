@@ -49,7 +49,7 @@ public final class MavenProxySlice extends Slice.Wrap {
     public MavenProxySlice(final ClientSlices clients, final URI remote,
         final Authenticator auth, final Cache cache) {
         this(clients, remote, auth, cache, Optional.empty(), "*",
-            "maven-proxy", com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE, Optional.empty());
+            "maven-proxy", com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE, Optional.empty());
     }
 
     /**
@@ -63,7 +63,7 @@ public final class MavenProxySlice extends Slice.Wrap {
         final Authenticator authenticator
     ) {
         this(client, uri, authenticator, Cache.NOP, Optional.empty(), "*",
-            "maven-proxy", com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE, Optional.empty(),
+            "maven-proxy", com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE, Optional.empty(),
             Duration.ofHours(24), Duration.ofHours(24), true);
     }
 
@@ -87,7 +87,7 @@ public final class MavenProxySlice extends Slice.Wrap {
         final Optional<Queue<ProxyArtifactEvent>> events,
         final String rname,
         final String rtype,
-        final com.auto1.pantera.cooldown.CooldownService cooldown,
+        final com.auto1.pantera.cooldown.api.CooldownService cooldown,
         final Optional<Storage> storage
     ) {
         this(clients, remote, auth, cache, events, rname, rtype, cooldown, storage,
@@ -118,7 +118,7 @@ public final class MavenProxySlice extends Slice.Wrap {
         final Optional<Queue<ProxyArtifactEvent>> events,
         final String rname,
         final String rtype,
-        final com.auto1.pantera.cooldown.CooldownService cooldown,
+        final com.auto1.pantera.cooldown.api.CooldownService cooldown,
         final Optional<Storage> storage,
         final Duration metadataTtl,
         final Duration negativeCacheTtl,
@@ -147,7 +147,7 @@ public final class MavenProxySlice extends Slice.Wrap {
         final String rname,
         final String upstreamUrl,
         final String rtype,
-        final com.auto1.pantera.cooldown.CooldownService cooldown,
+        final com.auto1.pantera.cooldown.api.CooldownService cooldown,
         final Optional<Storage> storage,
         final Duration metadataTtl
     ) {
@@ -168,7 +168,7 @@ public final class MavenProxySlice extends Slice.Wrap {
         final String rname,
         final String upstreamUrl,
         final String rtype,
-        final com.auto1.pantera.cooldown.CooldownService cooldown,
+        final com.auto1.pantera.cooldown.api.CooldownService cooldown,
         final MavenCooldownInspector inspector,
         final Optional<Storage> storage,
         final Duration metadataTtl

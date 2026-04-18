@@ -106,6 +106,11 @@ public final class NpmMetadataParser implements MetadataParser<JsonNode>, Releas
     }
 
     @Override
+    public Map<String, Instant> extractReleaseDates(final JsonNode metadata) {
+        return this.releaseDates(metadata);
+    }
+
+    @Override
     public Map<String, Instant> releaseDates(final JsonNode metadata) {
         final JsonNode time = metadata.get("time");
         if (time == null || !time.isObject()) {
