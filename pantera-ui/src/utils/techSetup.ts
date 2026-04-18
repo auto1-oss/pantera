@@ -31,7 +31,7 @@ export const SETUP_TECHS: TechDef[] = [
   { key: 'conda',  label: 'Conda',    color: repoTypeColor('conda'),  icon: siAnaconda,  repoTypes: ['conda'] },
   { key: 'gem',    label: 'RubyGems', color: repoTypeColor('gem'),    icon: siRubygems,  repoTypes: ['gem'] },
   { key: 'conan',  label: 'Conan',    color: repoTypeColor('conan'),  icon: siConan,     repoTypes: ['conan'] },
-  { key: 'hex',    label: 'Hex',      color: repoTypeColor('hex'),    icon: siElixir,    repoTypes: ['hex'] },
+  { key: 'hexpm',  label: 'Hex',      color: repoTypeColor('hexpm'),  icon: siElixir,    repoTypes: ['hexpm'] },
   { key: 'file',   label: 'File',     color: repoTypeColor('file'),   icon: null,        repoTypes: ['file', 'file-proxy', 'file-group'] },
   { key: 'binary', label: 'Binary',   color: repoTypeColor('binary'), icon: null,        repoTypes: ['binary'] },
 ]
@@ -290,7 +290,7 @@ export function getSetupSteps(techKey: string, repoUrl: string): SetupStep[] {
         },
       ]
 
-    case 'hex':
+    case 'hexpm':
       return [
         {
           title: 'Add the Hex repository',
