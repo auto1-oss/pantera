@@ -35,8 +35,7 @@ final class NegativeCacheSingleSourceTest {
         // Allowed production sites:
         //  1. RepositorySlices.java — the single wiring site
         //  2. NegativeCacheRegistry.java — fallback for early startup
-        //  3. GroupSlice.java — fallback for tests without shared cache
-        //  4. BaseCachedProxySlice.java — fallback for tests without shared cache
+        //  3. BaseCachedProxySlice.java — fallback for tests without shared cache
         // No adapter (npm, pypi, maven, etc.) should create its own instance.
         final Path root = Paths.get(System.getProperty("user.dir")).getParent();
         long adapterCount;
@@ -48,7 +47,6 @@ final class NegativeCacheSingleSourceTest {
                 // Exclude known allowed sites
                 .filter(p -> !p.toString().contains("RepositorySlices.java"))
                 .filter(p -> !p.toString().contains("NegativeCacheRegistry.java"))
-                .filter(p -> !p.toString().contains("GroupSlice.java"))
                 .filter(p -> !p.toString().contains("BaseCachedProxySlice.java"))
                 .filter(p -> !p.toString().contains("NegativeCache.java"))
                 .filter(p -> {

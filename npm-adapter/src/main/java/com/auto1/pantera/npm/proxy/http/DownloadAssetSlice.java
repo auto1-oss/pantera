@@ -26,7 +26,7 @@ import com.google.common.base.Strings;
 
 import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
-import com.auto1.pantera.cooldown.response.CooldownResponses;
+import com.auto1.pantera.cooldown.response.CooldownResponseRegistry;
 import com.auto1.pantera.cooldown.api.CooldownResult;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.log.EcsLogger;
@@ -233,7 +233,9 @@ public final class DownloadAssetSlice implements Slice {
                         .field("package.version", req.version())
                         .log();
                     return CompletableFuture.completedFuture(
-                        CooldownResponses.forbidden(block)
+                        CooldownResponseRegistry.instance()
+                            .get(this.repoType)
+                            .forbidden(block)
                     );
                 }
                 return this.serveAsset(tgz, headers);

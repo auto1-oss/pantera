@@ -39,9 +39,9 @@ import java.util.concurrent.atomic.AtomicLong;
  * </ul>
  *
  * <p>Access log emission is suppressed when the request carries the
- * {@link #INTERNAL_ROUTING_HEADER} header, which GroupSlice sets when dispatching
+ * {@link #INTERNAL_ROUTING_HEADER} header, which GroupResolver sets when dispatching
  * to member slices. Internal routing is already captured as DEBUG application logs
- * in GroupSlice itself (event.action=group_index_hit, group_proxy_fanout, etc.).
+ * in GroupResolver itself (event.action=group_index_hit, group_proxy_fanout, etc.).
  *
  * <p>This slice should be used at the top level of the slice chain to ensure
  * all HTTP requests are logged consistently.
@@ -51,7 +51,7 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class EcsLoggingSlice implements Slice {
 
     /**
-     * Request header set by GroupSlice when dispatching to a member slice.
+     * Request header set by GroupResolver when dispatching to a member slice.
      * When present, EcsLoggingSlice skips access log emission to avoid ~105K
      * noise entries per 30 min from internal group-to-member queries.
      * The header is group-internal and does NOT propagate to upstream remotes
@@ -157,8 +157,8 @@ public final class EcsLoggingSlice implements Slice {
             .thenApply(response -> {
                 final long duration = System.currentTimeMillis() - startTime;
 
-                // Skip access log for GroupSlice → member internal dispatches.
-                // Internal routing is captured as DEBUG application logs in GroupSlice
+                // Skip access log for GroupResolver → member internal dispatches.
+                // Internal routing is captured as DEBUG application logs in GroupResolver
                 // (event.action=group_index_hit, group_proxy_fanout, etc.).
                 if (!internalRouting) {
                     // WI-03 §4.1: emit the access log via the Tier-1 builder.

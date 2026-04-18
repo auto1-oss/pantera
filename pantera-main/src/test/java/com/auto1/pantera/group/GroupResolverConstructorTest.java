@@ -30,8 +30,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * Smoke test proving the wiring-site-friendly {@link GroupResolver}
- * constructor (mirrors {@code GroupSlice}'s full constructor shape) builds a
- * functional resolver and serves a happy-path 200 response.
+ * constructor builds a functional resolver and serves a happy-path 200
+ * response.
  *
  * @since 2.2.0
  */

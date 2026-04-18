@@ -11,32 +11,32 @@
 package com.auto1.pantera.metrics;
 
 /**
- * GroupSlice metrics - Compatibility wrapper for Micrometer.
+ * GroupResolver metrics - Compatibility wrapper for Micrometer.
  * Delegates to MicrometerMetrics for backward compatibility.
  *
  * @deprecated Use {@link com.auto1.pantera.metrics.MicrometerMetrics} directly
  * @since 1.18.21
  */
 @Deprecated
-public final class GroupSliceMetrics {
+public final class GroupResolverMetrics {
 
-    private static volatile GroupSliceMetrics INSTANCE;
+    private static volatile GroupResolverMetrics INSTANCE;
 
-    private GroupSliceMetrics() {
+    private GroupResolverMetrics() {
         // Private constructor
     }
 
     public static void initialize(final Object registry) {
         if (INSTANCE == null) {
-            synchronized (GroupSliceMetrics.class) {
+            synchronized (GroupResolverMetrics.class) {
                 if (INSTANCE == null) {
-                    INSTANCE = new GroupSliceMetrics();
+                    INSTANCE = new GroupResolverMetrics();
                 }
             }
         }
     }
 
-    public static GroupSliceMetrics instance() {
+    public static GroupResolverMetrics instance() {
         return INSTANCE;
     }
 

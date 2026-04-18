@@ -17,7 +17,7 @@ import java.util.regex.Pattern;
 /**
  * Extracts the artifact name from a raw URL path based on the repository type.
  * Each adapter stores artifacts with a specific {@code name} format in the DB.
- * This parser reverses the URL path back to that format so GroupSlice can do
+ * This parser reverses the URL path back to that format so GroupResolver can do
  * an indexed lookup via {@code WHERE name = ?} instead of expensive fan-out.
  *
  * @since 1.21.0

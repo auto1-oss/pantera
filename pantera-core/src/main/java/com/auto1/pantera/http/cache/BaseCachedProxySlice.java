@@ -21,7 +21,7 @@ import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.config.CooldownAdapterRegistry;
 import com.auto1.pantera.cooldown.response.CooldownResponseFactory;
-import com.auto1.pantera.cooldown.response.CooldownResponses;
+import com.auto1.pantera.cooldown.response.CooldownResponseRegistry;
 import com.auto1.pantera.cooldown.api.CooldownResult;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.Headers;
@@ -214,7 +214,7 @@ public abstract class BaseCachedProxySlice implements Slice {
         // Zombie TTL honours PANTERA_DEDUP_MAX_AGE_MS (default 5 min). 10K max
         // in-flight entries bounds memory. Completion hops via
         // ForkJoinPool.commonPool() — the same executor pattern used by the
-        // other WI-05 sites (CachedNpmProxySlice, GroupSlice migration).
+        // other WI-05 sites (CachedNpmProxySlice migration).
         this.singleFlight = new SingleFlight<>(
             Duration.ofMillis(
                 ConfigDefaults.getLong("PANTERA_DEDUP_MAX_AGE_MS", 300_000L)
@@ -493,21 +493,34 @@ public abstract class BaseCachedProxySlice implements Slice {
     /**
      * Build a 403 Forbidden response for a cooldown block.
      * Uses the per-adapter {@link CooldownResponseFactory} from the
-     * {@link CooldownAdapterRegistry} if one is registered for the repo type;
-     * otherwise falls back to the generic {@link CooldownResponses#forbidden(CooldownBlock)}.
+     * {@link CooldownAdapterRegistry} when a bundle is registered for the
+     * repo type; otherwise falls back to the {@link CooldownResponseRegistry}
+     * factory for the same repo type. Factory registration is mandatory —
+     * if neither registry has an entry for {@code repoType}, this method
+     * throws {@link IllegalStateException} (fail-fast; no silent defaults).
      *
      * @param block Block details
      * @param repoType Repository type for factory lookup
      * @return HTTP 403 response
+     * @throws IllegalStateException if no factory is registered for the
+     *     given repo type in either registry
      */
-    @SuppressWarnings("deprecation")
     private static Response buildForbiddenResponse(
         final CooldownBlock block,
         final String repoType
     ) {
         return CooldownAdapterRegistry.instance().get(repoType)
             .map(bundle -> bundle.responseFactory().forbidden(block))
-            .orElseGet(() -> CooldownResponses.forbidden(block));
+            .orElseGet(() -> {
+                final CooldownResponseFactory factory =
+                    CooldownResponseRegistry.instance().get(repoType);
+                if (factory == null) {
+                    throw new IllegalStateException(
+                        "No CooldownResponseFactory registered for repoType: " + repoType
+                    );
+                }
+                return factory.forbidden(block);
+            });
     }
 
     /**

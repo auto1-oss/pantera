@@ -21,7 +21,7 @@ import com.auto1.pantera.asto.cache.Remote;
 import com.auto1.pantera.asto.blocking.BlockingStorage;
 import com.auto1.pantera.asto.ext.KeyLastPart;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
-import com.auto1.pantera.cooldown.response.CooldownResponses;
+import com.auto1.pantera.cooldown.response.CooldownResponseRegistry;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.log.EcsLogger;
@@ -368,7 +368,9 @@ final class ProxySlice implements Slice {
                     .field("package.version", info.version())
                     .log();
                 return CompletableFuture.completedFuture(
-                    CooldownResponses.forbidden(evaluation.block().orElseThrow())
+                    CooldownResponseRegistry.instance()
+                        .get(this.rtype)
+                        .forbidden(evaluation.block().orElseThrow())
                 );
             }
             EcsLogger.debug("com.auto1.pantera.pypi")

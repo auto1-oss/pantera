@@ -346,7 +346,7 @@ final class SingleFlightPropertyTest {
     /**
      * Stack-safety regression guard.
      *
-     * <p>Before WI-05, {@code GroupSlice.inFlightFanouts} chained {@code
+     * <p>Before WI-05, the now-removed GroupSlice chained {@code
      * .thenCompose} on a shared gate future. When the leader completed the
      * gate synchronously, all queued {@code thenCompose} callbacks ran on the
      * leader's stack — with N &ge; ~400 followers this overflowed the stack

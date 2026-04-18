@@ -67,7 +67,7 @@ public final class NpmProxyAdapter implements Slice {
         final Optional<Storage> asto = cfg.storageOpt();
         final Optional<URL> baseUrl = Optional.of(cfg.url());
         
-        // Support multiple remotes with GroupSlice (similar to maven-proxy).
+        // Support multiple remotes with GroupResolver (similar to maven-proxy).
         // Each remote gets its own NpmProxy + NpmProxySlice, evaluated in
         // priority order.
         this.slice = new RaceSlice(

@@ -54,8 +54,8 @@ import com.auto1.pantera.http.timeout.AutoBlockRegistry;
  * Group resolution engine implementing the 5-path decision tree from
  * {@code docs/analysis/v2.2-target-architecture.md} section 2.
  *
- * <p>Replaces {@link GroupSlice} as the canonical group-resolution layer.
- * Wires together:
+ * <p>Canonical group-resolution layer (replaces the legacy GroupSlice,
+ * removed in v2.2.0). Wires together:
  * <ul>
  *   <li>{@link Fault} + {@link Result} (WI-01) for typed error paths</li>
  *   <li>{@link FaultTranslator} (WI-01) as the single HTTP-status site</li>
@@ -84,7 +84,7 @@ import com.auto1.pantera.http.timeout.AutoBlockRegistry;
  * 4. FaultTranslator.translate(result, ctx) [single translation site]
  * </pre>
  *
- * <h2>Key behaviour changes from GroupSlice</h2>
+ * <h2>Key behaviour characteristics</h2>
  * <ul>
  *   <li><b>TOCTOU fallthrough (A11 fix):</b> Index hit + targeted member 404
  *       falls through to proxy fanout instead of returning 500.</li>
@@ -148,17 +148,16 @@ public final class GroupResolver implements Slice {
     }
 
     /**
-     * Wiring-site-friendly constructor that mirrors {@link GroupSlice}'s full
-     * constructor shape (see {@code GroupSlice.java:457-471}).
+     * Wiring-site-friendly constructor.
      *
      * <p>Accepts member repository <em>names</em> and builds the
      * {@link MemberSlice} list inline via {@code resolver.slice(...)} so that
      * call-sites in {@code RepositorySlices} do not need to duplicate the
-     * member-wrapping logic when migrating from {@link GroupSlice}.  Delegates
-     * to the member-accepting constructor above.
+     * member-wrapping logic.  Delegates to the member-accepting constructor
+     * above.
      *
-     * <p>The {@code depth} parameter is accepted for API compatibility with
-     * {@link GroupSlice} but ignored (group nesting is resolved upstream).
+     * <p>The {@code depth} parameter is accepted for API compatibility but
+     * ignored (group nesting is resolved upstream).
      *
      * @param resolver Slice resolver/cache used to materialize member slices
      * @param group Group repository name
@@ -204,8 +203,7 @@ public final class GroupResolver implements Slice {
     }
 
     /**
-     * Build the flattened {@link MemberSlice} list from member names, using the
-     * same logic as {@link GroupSlice} (see {@code GroupSlice.java:485-507}):
+     * Build the flattened {@link MemberSlice} list from member names:
      * deduplicate preserving order, then wrap each name with either the
      * shared-registry 4-arg {@link MemberSlice} constructor (when the supplier
      * returns non-null) or the 3-arg variant (when the supplier is null or
@@ -1030,8 +1028,8 @@ public final class GroupResolver implements Slice {
     // ---- Metrics helpers ----
 
     private void recordRequestStart() {
-        final com.auto1.pantera.metrics.GroupSliceMetrics metrics =
-            com.auto1.pantera.metrics.GroupSliceMetrics.instance();
+        final com.auto1.pantera.metrics.GroupResolverMetrics metrics =
+            com.auto1.pantera.metrics.GroupResolverMetrics.instance();
         if (metrics != null) {
             metrics.recordRequest(this.group);
         }

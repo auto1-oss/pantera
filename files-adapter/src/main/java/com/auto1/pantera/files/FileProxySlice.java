@@ -18,7 +18,7 @@ import com.auto1.pantera.asto.cache.StreamThroughCache;
 import com.auto1.pantera.asto.cache.FromStorageCache;
 import com.auto1.pantera.asto.cache.Remote;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
-import com.auto1.pantera.cooldown.response.CooldownResponses;
+import com.auto1.pantera.cooldown.response.CooldownResponseRegistry;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
@@ -288,7 +288,9 @@ public final class FileProxySlice implements Slice {
             .thenCompose(result -> {
                 if (result.blocked()) {
                     return java.util.concurrent.CompletableFuture.completedFuture(
-                        CooldownResponses.forbidden(result.block().orElseThrow())
+                        CooldownResponseRegistry.instance()
+                            .get(FileProxySlice.REPO_TYPE)
+                            .forbidden(result.block().orElseThrow())
                     );
                 }
                 final long startTime = System.currentTimeMillis();

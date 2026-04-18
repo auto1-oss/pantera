@@ -34,7 +34,7 @@ import java.util.concurrent.ForkJoinPool;
 
 /**
  * Maven-specific group slice with metadata merging support.
- * Extends basic GroupSlice behavior with Maven metadata aggregation.
+ * Extends basic GroupResolver behavior with Maven metadata aggregation.
  *
  * <p>For maven-metadata.xml requests:
  * <ul>
@@ -99,7 +99,7 @@ public final class MavenGroupSlice implements Slice {
      * warm, so followers return immediately without touching the network.
      * The combination of coalescer + two-tier cache collapses a thundering
      * herd of N concurrent misses into exactly ONE upstream fanout + merge —
-     * same pattern as {@code GroupSlice#proxyOnlyFanout}.
+     * same pattern as {@code GroupResolver#proxyOnlyFanout}.
      *
      * <p>This coalescer deliberately does NOT share the winning {@link Response}
      * object across callers: {@link Content} is a one-shot reactive stream

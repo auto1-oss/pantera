@@ -26,7 +26,7 @@ import java.util.function.Supplier;
  * concurrent burst of {@link #load} calls sharing the same key.
  *
  * <p>Consolidates the three hand-rolled coalescers that lived in {@code
- * GroupSlice.inFlightFanouts}, {@code MavenGroupSlice.inFlightMetadataFetches},
+ * GroupResolver.inFlightFanouts}, {@code MavenGroupSlice.inFlightMetadataFetches},
  * and the legacy cache-write in-flight map into one Caffeine-backed
  * implementation. See §6.4 of {@code docs/analysis/v2.2-target-architecture.md}
  * and anti-patterns A6, A7, A8, A9 in {@code v2.1.3-architecture-review.md}.
@@ -52,7 +52,7 @@ import java.util.function.Supplier;
  *       completion regardless of caller cancellation.</li>
  *   <li><b>Stack-flat completion.</b> Followers receive completion on the
  *       configured {@code executor}, never on the leader's stack — fixes the
- *       v2.1.3 regression where {@code GroupSlice.inFlightFanouts} blew the
+ *       v2.1.3 regression where {@code GroupResolver.inFlightFanouts} blew the
  *       stack at ~400 synchronously-completing followers (commit {@code ccc155f6}).</li>
  * </ul>
  *

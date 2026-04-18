@@ -30,7 +30,7 @@ import org.junit.jupiter.api.Test;
  * End-to-end propagation test — verifies that wiring
  * {@link ContextualExecutor#contextualize(java.util.concurrent.Executor)}
  * into a {@link SingleFlight} (the WI-03 executor-wrapping points in
- * {@code GroupSlice}, {@code MavenGroupSlice}, {@code BaseCachedProxySlice},
+ * {@code MavenGroupSlice}, {@code BaseCachedProxySlice},
  * {@code CachedNpmProxySlice}) means callers no longer need to wrap each
  * continuation by hand: the executor itself snapshots the caller's
  * {@link ThreadContext} and APM span and installs them on the runner thread

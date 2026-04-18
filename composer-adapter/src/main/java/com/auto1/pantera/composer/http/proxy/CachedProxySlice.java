@@ -24,7 +24,7 @@ import com.auto1.pantera.composer.Packages;
 import com.auto1.pantera.composer.Repository;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
-import com.auto1.pantera.cooldown.response.CooldownResponses;
+import com.auto1.pantera.cooldown.response.CooldownResponseRegistry;
 import com.auto1.pantera.cooldown.api.CooldownResult;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.Headers;
@@ -340,7 +340,9 @@ final class CachedProxySlice implements Slice {
                         .field("event.reason", "cooldown_active")
                         .field("package.name", name)
                         .log();
-                    return CooldownResponses.forbidden(result.block().orElseThrow());
+                    return CooldownResponseRegistry.instance()
+                        .get(this.rtype)
+                        .forbidden(result.block().orElseThrow());
                 }
                 // Rewrite URLs (no-op for pre-rewritten content due to original_url check)
                 final byte[] rewritten = this.rewriteMetadata(bytes);
@@ -408,7 +410,9 @@ final class CachedProxySlice implements Slice {
                 .field("package.name", name)
                 .log();
             return CompletableFuture.completedFuture(
-                CooldownResponses.forbidden(result.block().orElseThrow())
+                CooldownResponseRegistry.instance()
+                    .get(this.rtype)
+                    .forbidden(result.block().orElseThrow())
             );
         }
         EcsLogger.debug("com.auto1.pantera.composer")
@@ -533,7 +537,9 @@ final class CachedProxySlice implements Slice {
                                 .field("package.name", name)
                                 .log();
                             return CompletableFuture.completedFuture(
-                                CooldownResponses.forbidden(result.block().orElseThrow())
+                                CooldownResponseRegistry.instance()
+                                    .get(this.rtype)
+                                    .forbidden(result.block().orElseThrow())
                             );
                         }
                         // Save rewritten metadata for ProxyDownloadSlice (original_url lookup)

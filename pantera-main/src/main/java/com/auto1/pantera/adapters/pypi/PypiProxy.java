@@ -55,7 +55,7 @@ public final class PypiProxy implements Slice {
             () -> new IllegalStateException("PyPI proxy requires storage to be set")
         );
         
-        // Support multiple remotes with GroupSlice (like maven-proxy)
+        // Support multiple remotes with GroupResolver (like maven-proxy)
         // Each remote gets its own PyProxySlice, evaluated in priority order
         this.slice = new RaceSlice(
             cfg.remotes().stream().map(

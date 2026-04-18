@@ -110,7 +110,7 @@ public final class CooldownWiring {
         );
         adapters.register("npm", npmBundle);
         adapters.register("npm-proxy", npmBundle);
-        responses.register(new NpmCooldownResponseFactory());
+        responses.register(new NpmCooldownResponseFactory(), "npm-proxy");
 
         // --- PyPI ---
         final var pypiBundle = new CooldownAdapterBundle<>(
@@ -122,7 +122,7 @@ public final class CooldownWiring {
         );
         adapters.register("pypi", pypiBundle);
         adapters.register("pypi-proxy", pypiBundle);
-        responses.register(new PypiCooldownResponseFactory());
+        responses.register(new PypiCooldownResponseFactory(), "pypi-proxy");
 
         // --- Docker ---
         final var dockerBundle = new CooldownAdapterBundle<>(
@@ -134,7 +134,7 @@ public final class CooldownWiring {
         );
         adapters.register("docker", dockerBundle);
         adapters.register("docker-proxy", dockerBundle);
-        responses.register(new DockerCooldownResponseFactory());
+        responses.register(new DockerCooldownResponseFactory(), "docker-proxy");
 
         // --- Go ---
         final var goBundle = new CooldownAdapterBundle<>(
@@ -146,7 +146,7 @@ public final class CooldownWiring {
         );
         adapters.register("go", goBundle);
         adapters.register("go-proxy", goBundle);
-        responses.register(new GoCooldownResponseFactory());
+        responses.register(new GoCooldownResponseFactory(), "go-proxy");
 
         // --- Composer (PHP) ---
         final var composerBundle = new CooldownAdapterBundle<>(
@@ -156,9 +156,12 @@ public final class CooldownWiring {
             new ComposerMetadataRequestDetector(),
             new ComposerCooldownResponseFactory()
         );
+        // ComposerCooldownResponseFactory.repoType() returns "composer" for its
+        // own canonical key; register "php" and "php-proxy" as aliases so the
+        // Composer proxy slices (which use repo type "php") resolve correctly.
+        responses.register(new ComposerCooldownResponseFactory(), "php", "php-proxy");
         adapters.register("php", composerBundle);
         adapters.register("php-proxy", composerBundle);
-        responses.register(new ComposerCooldownResponseFactory());
 
         EcsLogger.info("com.auto1.pantera.cooldown")
             .message("Registered cooldown adapter bundles: " + adapters.registeredTypes())

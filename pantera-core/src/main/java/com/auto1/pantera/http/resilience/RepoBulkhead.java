@@ -121,7 +121,7 @@ public final class RepoBulkhead {
      * The per-repo drain executor for background body draining.
      *
      * <p>Replaces the former process-wide static {@code DRAIN_EXECUTOR} that
-     * lived in {@code GroupSlice} and {@code GroupResolver}. Each repository's
+     * lived in {@code GroupResolver}. Each repository's
      * drain pool is bounded independently so a slow-draining repo cannot
      * exhaust the drain capacity of other repos.
      *

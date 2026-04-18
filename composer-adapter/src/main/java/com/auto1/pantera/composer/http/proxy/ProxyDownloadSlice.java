@@ -24,7 +24,7 @@ import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
-import com.auto1.pantera.cooldown.response.CooldownResponses;
+import com.auto1.pantera.cooldown.response.CooldownResponseRegistry;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 
@@ -246,7 +246,9 @@ public final class ProxyDownloadSlice implements Slice {
                             .field("package.version", version)
                             .log();
                         return CompletableFuture.completedFuture(
-                            CooldownResponses.forbidden(result.block().orElseThrow())
+                            CooldownResponseRegistry.instance()
+                                .get(this.rtype)
+                                .forbidden(result.block().orElseThrow())
                         );
                     }
                     return this.fetchAndCache(

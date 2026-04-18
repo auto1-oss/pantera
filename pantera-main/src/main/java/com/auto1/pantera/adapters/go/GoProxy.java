@@ -60,7 +60,7 @@ public final class GoProxy implements Slice {
     ) {
         final Optional<Storage> asto = cfg.storageOpt();
 
-        // Support multiple remotes with GroupSlice (like maven-proxy)
+        // Support multiple remotes with GroupResolver (like maven-proxy)
         // Each remote gets its own GoProxySlice, evaluated in priority order
         this.slice = new RaceSlice(
             cfg.remotes().stream().map(
