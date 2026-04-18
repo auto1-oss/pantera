@@ -147,6 +147,102 @@ public final class GroupResolver implements Slice {
         );
     }
 
+    /**
+     * Wiring-site-friendly constructor that mirrors {@link GroupSlice}'s full
+     * constructor shape (see {@code GroupSlice.java:457-471}).
+     *
+     * <p>Accepts member repository <em>names</em> and builds the
+     * {@link MemberSlice} list inline via {@code resolver.slice(...)} so that
+     * call-sites in {@code RepositorySlices} do not need to duplicate the
+     * member-wrapping logic when migrating from {@link GroupSlice}.  Delegates
+     * to the member-accepting constructor above.
+     *
+     * <p>The {@code depth} parameter is accepted for API compatibility with
+     * {@link GroupSlice} but ignored (group nesting is resolved upstream).
+     *
+     * @param resolver Slice resolver/cache used to materialize member slices
+     * @param group Group repository name
+     * @param memberNames Member repository names (deduplicated, order preserved)
+     * @param port Server port passed to the slice resolver
+     * @param depth Nesting depth (accepted and ignored for API compat)
+     * @param timeoutSeconds Timeout hint (unused here, preserved for API compat)
+     * @param routingRules Routing rules for path-based member selection
+     * @param artifactIndex Optional artifact index for O(log n) lookups
+     * @param proxyMembers Names of proxy repository members
+     * @param repoType Repository type for name parsing
+     * @param negativeCache Pre-constructed negative cache
+     * @param registrySupplier Function mapping member name to its shared
+     *                         {@link AutoBlockRegistry} (may be {@code null})
+     * @param repoDrainExecutor Per-repo drain executor
+     */
+    @SuppressWarnings("PMD.ExcessiveParameterList")
+    public GroupResolver(
+        final SliceResolver resolver,
+        final String group,
+        final List<String> memberNames,
+        final int port,
+        final int depth,
+        final long timeoutSeconds,
+        final List<RoutingRule> routingRules,
+        final Optional<ArtifactIndex> artifactIndex,
+        final Set<String> proxyMembers,
+        final String repoType,
+        final NegativeCache negativeCache,
+        final Function<String, AutoBlockRegistry> registrySupplier,
+        final java.util.concurrent.Executor repoDrainExecutor
+    ) {
+        this(
+            group,
+            buildMembers(resolver, memberNames, port, proxyMembers, registrySupplier),
+            routingRules,
+            artifactIndex,
+            repoType,
+            proxyMembers,
+            negativeCache,
+            repoDrainExecutor
+        );
+    }
+
+    /**
+     * Build the flattened {@link MemberSlice} list from member names, using the
+     * same logic as {@link GroupSlice} (see {@code GroupSlice.java:485-507}):
+     * deduplicate preserving order, then wrap each name with either the
+     * shared-registry 4-arg {@link MemberSlice} constructor (when the supplier
+     * returns non-null) or the 3-arg variant (when the supplier is null or
+     * returns null).
+     */
+    private static List<MemberSlice> buildMembers(
+        final SliceResolver resolver,
+        final List<String> memberNames,
+        final int port,
+        final Set<String> proxyMembers,
+        final Function<String, AutoBlockRegistry> registrySupplier
+    ) {
+        final Set<String> safeProxies = proxyMembers != null
+            ? proxyMembers : Collections.emptySet();
+        final Function<String, AutoBlockRegistry> supplier =
+            registrySupplier != null ? registrySupplier : n -> null;
+        final List<MemberSlice> out = new ArrayList<>();
+        for (final String name : new LinkedHashSet<>(memberNames)) {
+            final AutoBlockRegistry reg = supplier.apply(name);
+            if (reg != null) {
+                out.add(new MemberSlice(
+                    name,
+                    resolver.slice(new Key.From(name), port, 0),
+                    reg,
+                    safeProxies.contains(name)
+                ));
+            } else {
+                out.add(new MemberSlice(
+                    name,
+                    resolver.slice(new Key.From(name), port, 0),
+                    safeProxies.contains(name)
+                ));
+            }
+        }
+        return out;
+    }
+
     @Override
     public CompletableFuture<Response> response(
         final RequestLine line,
