@@ -49,7 +49,7 @@ import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.TimeoutSlice;
-import com.auto1.pantera.group.GroupSlice;
+import com.auto1.pantera.group.GroupResolver;
 import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.http.auth.BasicAuthScheme;
@@ -679,7 +679,7 @@ public class RepositorySlices {
                 break;
             case "npm-group":
                 final List<String> npmFlatMembers = flattenMembers(cfg.name(), cfg.members());
-                final Slice npmGroupSlice = new GroupSlice(
+                final Slice npmGroupSlice = new GroupResolver(
                     this::slice, cfg.name(), npmFlatMembers, port, depth,
                     cfg.groupMemberTimeout().orElse(120L),
                     java.util.Collections.emptyList(),
@@ -746,7 +746,7 @@ public class RepositorySlices {
             case "file-group":
             case "php-group":
                 final List<String> composerFlatMembers = flattenMembers(cfg.name(), cfg.members());
-                final GroupSlice composerDelegate = new GroupSlice(
+                final GroupResolver composerDelegate = new GroupResolver(
                     this::slice, cfg.name(), composerFlatMembers, port, depth,
                     cfg.groupMemberTimeout().orElse(120L),
                     java.util.Collections.emptyList(),
@@ -777,7 +777,7 @@ public class RepositorySlices {
             case "maven-group":
                 // Maven groups need special metadata merging
                 final List<String> mavenFlatMembers = flattenMembers(cfg.name(), cfg.members());
-                final GroupSlice mavenDelegate = new GroupSlice(
+                final GroupResolver mavenDelegate = new GroupResolver(
                     this::slice, cfg.name(), mavenFlatMembers, port, depth,
                     cfg.groupMemberTimeout().orElse(120L),
                     java.util.Collections.emptyList(),
@@ -815,7 +815,7 @@ public class RepositorySlices {
                 final List<String> genericFlatMembers = flattenMembers(cfg.name(), cfg.members());
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
-                        new GroupSlice(
+                        new GroupResolver(
                             this::slice, cfg.name(), genericFlatMembers, port, depth,
                             cfg.groupMemberTimeout().orElse(120L),
                             java.util.Collections.emptyList(),
