@@ -66,4 +66,28 @@ public final class ConfigDefaults {
             return defaultValue;
         }
     }
+
+    /**
+     * Read a boolean configuration value.
+     * Accepts case-insensitive {@code "true"}, {@code "1"}, {@code "yes"} as true;
+     * case-insensitive {@code "false"}, {@code "0"}, {@code "no"} as false;
+     * empty / missing / unrecognized returns the fallback.
+     * @param envVar Environment variable name
+     * @param defaultValue Default value if not set or unrecognized
+     * @return Configured value or default
+     */
+    public static boolean getBoolean(final String envVar, final boolean defaultValue) {
+        final String raw = get(envVar, "");
+        if (raw == null || raw.isEmpty()) {
+            return defaultValue;
+        }
+        final String val = raw.trim().toLowerCase(java.util.Locale.ROOT);
+        if ("true".equals(val) || "1".equals(val) || "yes".equals(val)) {
+            return true;
+        }
+        if ("false".equals(val) || "0".equals(val) || "no".equals(val)) {
+            return false;
+        }
+        return defaultValue;
+    }
 }

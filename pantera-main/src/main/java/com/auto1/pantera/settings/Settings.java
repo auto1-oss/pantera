@@ -170,6 +170,23 @@ public interface Settings extends AutoCloseable {
     }
 
     /**
+     * Cached filter for the "local user enabled" JDBC lookup, if the
+     * deployment has a dataSource configured and the auth chain was
+     * wrapped with {@code CachedLocalEnabledFilter}. Returned empty
+     * otherwise.
+     *
+     * <p>Exposed so admin user-management handlers can invalidate a
+     * per-user cache entry immediately when enabled state is toggled
+     * (enable / disable / update / delete).
+     *
+     * @return Optional filter reference; empty in deployments without a DB
+     */
+    default Optional<com.auto1.pantera.auth.CachedLocalEnabledFilter>
+        cachedLocalEnabledFilter() {
+        return Optional.empty();
+    }
+
+    /**
      * Whether Proxy Protocol v2 is enabled for the main + per-repo HTTP listeners.
      * When true, the HTTP server will parse the PROXYv2 header prepended by an
      * upstream load balancer (typically AWS NLB with

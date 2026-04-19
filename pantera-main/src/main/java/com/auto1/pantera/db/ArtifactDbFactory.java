@@ -234,7 +234,11 @@ public final class ArtifactDbFactory {
         hikariConfig.setMaximumPoolSize(maxSize);
         hikariConfig.setMinimumIdle(minIdle);
         hikariConfig.setConnectionTimeout(
-            ConfigDefaults.getLong("PANTERA_DB_CONNECTION_TIMEOUT_MS", 5000L)
+            // Fail-fast: 3s instead of 5s so that upstream Hikari timeouts
+            // propagate as 503 / queue-pressure signals before Vert.x
+            // request timeouts (30s default) or the client's own deadline.
+            // Operators can raise via PANTERA_DB_CONNECTION_TIMEOUT_MS.
+            ConfigDefaults.getLong("PANTERA_DB_CONNECTION_TIMEOUT_MS", 3000L)
         );
         hikariConfig.setIdleTimeout(
             ConfigDefaults.getLong("PANTERA_DB_IDLE_TIMEOUT_MS", 600_000L)
@@ -244,7 +248,12 @@ public final class ArtifactDbFactory {
         );
         hikariConfig.setPoolName(poolName);
         hikariConfig.setLeakDetectionThreshold(
-            ConfigDefaults.getLong("PANTERA_DB_LEAK_DETECTION_MS", 300000)
+            // Fail-fast: 5s instead of 300s so any leaked connection
+            // surfaces loudly in logs as a leak WARN rather than
+            // silently rotting the pool. Canary rollouts may raise to
+            // 30s initially via PANTERA_DB_LEAK_DETECTION_MS and drop
+            // back to the default once observed WARNs go to zero.
+            ConfigDefaults.getLong("PANTERA_DB_LEAK_DETECTION_MS", 5_000L)
         );
         hikariConfig.setRegisterMbeans(true);
 

@@ -101,6 +101,16 @@ public final class UserHandler {
     private final UserTokenDao tokenDao;
 
     /**
+     * Cached filter for the local-enabled flag check, if wired. When
+     * an admin toggles enabled state (update / enable / disable / delete)
+     * we must drop the per-user L1/L2 cache entry so the next
+     * authentication reflects the new state cluster-wide.
+     * May be {@code null} when the auth chain was built without a DB.
+     * @since 2.2.0
+     */
+    private final com.auto1.pantera.auth.CachedLocalEnabledFilter enabledFilter;
+
+    /**
      * Ctor.
      * @param users Crud users object
      * @param caches Pantera caches
@@ -108,11 +118,26 @@ public final class UserHandler {
      */
     public UserHandler(final CrudUsers users, final PanteraCaches caches,
         final PanteraSecurity security) {
-        this(users, caches, security, null, null);
+        this(users, caches, security, null, null, null);
     }
 
     /**
-     * Full ctor with token revocation wiring.
+     * Ctor with token revocation wiring (no enabled-filter invalidation).
+     * Kept for callers that don't have the filter reference.
+     * @param users Crud users object
+     * @param caches Pantera caches
+     * @param security Pantera security
+     * @param blocklist Revocation blocklist; may be {@code null}
+     * @param tokenDao Token DAO; may be {@code null}
+     */
+    public UserHandler(final CrudUsers users, final PanteraCaches caches,
+        final PanteraSecurity security, final RevocationBlocklist blocklist,
+        final UserTokenDao tokenDao) {
+        this(users, caches, security, blocklist, tokenDao, null);
+    }
+
+    /**
+     * Full ctor.
      * @param users Crud users object
      * @param caches Pantera caches
      * @param security Pantera security
@@ -120,10 +145,15 @@ public final class UserHandler {
      *     on user disable; may be {@code null}
      * @param tokenDao Token DAO for refresh / API token revocation on
      *     user disable; may be {@code null}
+     * @param enabledFilter Cached local-enabled filter whose per-user
+     *     entry is invalidated on enable / disable / update / delete;
+     *     may be {@code null} when not wired
+     * @checkstyle ParameterNumberCheck (5 lines)
      */
     public UserHandler(final CrudUsers users, final PanteraCaches caches,
         final PanteraSecurity security, final RevocationBlocklist blocklist,
-        final UserTokenDao tokenDao) {
+        final UserTokenDao tokenDao,
+        final com.auto1.pantera.auth.CachedLocalEnabledFilter enabledFilter) {
         this.users = users;
         this.ucache = caches.usersCache();
         this.pcache = caches.policyCache();
@@ -131,6 +161,20 @@ public final class UserHandler {
         this.policy = security.policy();
         this.blocklist = blocklist;
         this.tokenDao = tokenDao;
+        this.enabledFilter = enabledFilter;
+    }
+
+    /**
+     * Invalidate the cached enabled-flag entry for the given username,
+     * if the filter is wired. Broadcasts to peer nodes via pub/sub
+     * inside {@link com.auto1.pantera.auth.CachedLocalEnabledFilter#invalidate(String)}.
+     *
+     * @param uname Username
+     */
+    private void invalidateEnabled(final String uname) {
+        if (this.enabledFilter != null) {
+            this.enabledFilter.invalidate(uname);
+        }
     }
 
     /**
@@ -291,6 +335,7 @@ public final class UserHandler {
                 } else {
                     this.ucache.invalidate(uname);
                     this.pcache.invalidate(uname);
+                    this.invalidateEnabled(uname);
                     ctx.response().setStatusCode(201).end();
                 }
             });
@@ -312,6 +357,7 @@ public final class UserHandler {
             if (err == null) {
                 this.ucache.invalidate(uname);
                 this.pcache.invalidate(uname);
+                this.invalidateEnabled(uname);
                 ctx.response().setStatusCode(200).end();
             } else {
                 final Throwable cause = err.getCause() != null ? err.getCause() : err;
@@ -391,6 +437,10 @@ public final class UserHandler {
                 // Policy cache may contain stale role/enabled state for this
                 // user; invalidate that too so subsequent requests see fresh data.
                 this.pcache.invalidate(uname);
+                // Enabled-flag cache is keyed by username — password
+                // change doesn't flip enabled, but keeping it in sync
+                // here is defensive and cheap.
+                this.invalidateEnabled(uname);
                 ctx.response().setStatusCode(200).end();
             } else {
                 // CompletableFuture wraps the underlying exception in
@@ -427,6 +477,7 @@ public final class UserHandler {
             if (err == null) {
                 this.ucache.invalidate(uname);
                 this.pcache.invalidate(uname);
+                this.invalidateEnabled(uname);
                 ctx.response().setStatusCode(200).end();
             } else {
                 final Throwable cause = err.getCause() != null ? err.getCause() : err;
@@ -477,6 +528,7 @@ public final class UserHandler {
             if (err == null) {
                 this.ucache.invalidate(uname);
                 this.pcache.invalidate(uname);
+                this.invalidateEnabled(uname);
                 ctx.response().setStatusCode(200).end();
             } else {
                 final Throwable cause = err.getCause() != null ? err.getCause() : err;
