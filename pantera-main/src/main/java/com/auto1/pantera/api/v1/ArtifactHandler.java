@@ -422,11 +422,9 @@ public final class ArtifactHandler {
                 // and free any file channels / temp files held by downstream tees.
                 final io.reactivex.disposables.Disposable disposable =
                     io.reactivex.Flowable.fromPublisher(content)
-                        .map(buf -> {
-                            final byte[] arr = new byte[buf.remaining()];
-                            buf.get(arr);
-                            return io.vertx.core.buffer.Buffer.buffer(arr);
-                        })
+                        .map(buf -> io.vertx.core.buffer.Buffer.buffer(
+                            io.netty.buffer.Unpooled.wrappedBuffer(buf)
+                        ))
                         .subscribe(
                             chunk -> ctx.response().write(chunk),
                             err -> {
@@ -563,11 +561,9 @@ public final class ArtifactHandler {
                 // and free any file channels / temp files held by downstream tees.
                 final io.reactivex.disposables.Disposable disposable =
                     io.reactivex.Flowable.fromPublisher(content)
-                        .map(buf -> {
-                            final byte[] arr = new byte[buf.remaining()];
-                            buf.get(arr);
-                            return io.vertx.core.buffer.Buffer.buffer(arr);
-                        })
+                        .map(buf -> io.vertx.core.buffer.Buffer.buffer(
+                            io.netty.buffer.Unpooled.wrappedBuffer(buf)
+                        ))
                         .subscribe(
                             chunk -> ctx.response().write(chunk),
                             err -> {
