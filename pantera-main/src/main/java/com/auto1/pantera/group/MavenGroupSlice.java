@@ -12,6 +12,7 @@ package com.auto1.pantera.group;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.group.merge.StreamingMetadataMerger;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
@@ -21,7 +22,9 @@ import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.log.EcsLogger;
+import io.micrometer.core.instrument.DistributionSummary;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -229,14 +232,11 @@ public final class MavenGroupSlice implements Slice {
                             final byte[] checksumBytes = digest.digest(metadataBytes);
 
                             // Convert to hex string
-                            final StringBuilder hexString = new StringBuilder();
-                            for (byte b : checksumBytes) {
-                                hexString.append(String.format("%02x", b));
-                            }
+                            final String hex = java.util.HexFormat.of().formatHex(checksumBytes);
 
                             return ResponseBuilder.ok()
                                 .header("Content-Type", "text/plain")
-                                .body(hexString.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                                .body(hex.getBytes(java.nio.charset.StandardCharsets.UTF_8))
                                 .build();
                         } catch (java.security.NoSuchAlgorithmException e) {
                             EcsLogger.error("com.auto1.pantera.maven")
@@ -444,9 +444,9 @@ public final class MavenGroupSlice implements Slice {
                     // Track merge duration separately (actual XML processing time)
                     final long mergeStartTime = System.currentTimeMillis();
 
-                    // Use reflection to call MetadataMerger from maven-adapter module
-                    // This avoids circular dependency issues
-                    return mergeUsingReflection(metadataList)
+                    // StAX streaming merge — see {@link StreamingMetadataMerger}.
+                    // Peak heap is O(unique versions), not O(sum of body sizes).
+                    return mergeStreaming(metadataList)
                         .thenApply(mergedBytes -> {
                             final long mergeDuration = System.currentTimeMillis() - mergeStartTime;
                             final long totalDuration = fetchDuration + mergeDuration;
@@ -509,41 +509,53 @@ public final class MavenGroupSlice implements Slice {
     }
 
     /**
-     * Merge metadata using MetadataMerger from maven-adapter via reflection.
-     * This allows pantera-main to call maven-adapter without circular dependency.
+     * Merge metadata via the StAX streaming merger.
+     *
+     * <p>Each member byte array is fed once into a single
+     * {@link StreamingMetadataMerger}; only the deduplicated version set
+     * + scalar maxes survive past the {@code mergeMember} call. Peak
+     * memory is O(unique versions), not O(sum of body sizes).
+     *
+     * <p>Per-member body size is recorded as the alert-only histogram
+     * {@code pantera.maven.group.member_metadata_size_bytes} (when
+     * Micrometer is initialised).
+     *
+     * <p>The returned future is always successful: the merger tolerates
+     * malformed members internally and emits a minimal {@code <metadata/>}
+     * if every member parse failed.
      */
-    private CompletableFuture<byte[]> mergeUsingReflection(final List<byte[]> metadataList) {
-        try {
-            // Load MetadataMerger class
-            final Class<?> mergerClass = Class.forName(
-                "com.auto1.pantera.maven.metadata.MetadataMerger"
-            );
-            
-            // Create instance
-            final Object merger = mergerClass
-                .getConstructor(List.class)
-                .newInstance(metadataList);
-            
-            // Call merge() method
-            @SuppressWarnings("unchecked")
-            final CompletableFuture<Content> mergeFuture = (CompletableFuture<Content>)
-                mergerClass.getMethod("merge").invoke(merger);
-            
-            // Read content
-            return mergeFuture.thenCompose(this::readResponseBody);
-            
-        } catch (Exception e) {
-            EcsLogger.error("com.auto1.pantera.maven")
-                .message("Failed to merge metadata using reflection")
-                .eventCategory("web")
-                .eventAction("metadata_merge")
-                .eventOutcome("failure")
-                .error(e)
-                .log();
-            return CompletableFuture.failedFuture(
-                new IllegalStateException("Maven metadata merging not available", e)
-            );
+    private CompletableFuture<byte[]> mergeStreaming(final List<byte[]> metadataList) {
+        return CompletableFuture.supplyAsync(() -> {
+            final StreamingMetadataMerger merger = new StreamingMetadataMerger();
+            for (final byte[] body : metadataList) {
+                if (body == null || body.length == 0) {
+                    continue;
+                }
+                this.recordMemberBodySize(body.length);
+                merger.mergeMember(new ByteArrayInputStream(body));
+            }
+            return merger.toXml();
+        });
+    }
+
+    /**
+     * Alert-only histogram of per-member metadata body size. Never
+     * rejects; outliers are surfaced via the histogram's high quantiles.
+     * No-op when {@link com.auto1.pantera.metrics.MicrometerMetrics} is
+     * not initialised (e.g. unit tests).
+     */
+    private void recordMemberBodySize(final long bytes) {
+        if (!com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            return;
         }
+        DistributionSummary.builder("pantera.maven.group.member_metadata_size_bytes")
+            .description("Maven group member maven-metadata.xml body size (alert-only)")
+            .baseUnit("bytes")
+            .tags("repo_name", this.group)
+            .register(
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance().getRegistry()
+            )
+            .record(bytes);
     }
 
     /**
