@@ -54,3 +54,9 @@ pantera-main/docker-compose/pantera/artifacts/php/composer.lock
 /pantera-backfill
 pantera-main/docker-compose/pantera/keys/
 logs/.analysis/
+performance/*/*
+!performance/results/.gitkeep
+performance/wiremock/__files/*.bin
+performance/pantera-config.yml
+performance/secrets/*.pem
+performance/fixtures/uploads/*.tgz

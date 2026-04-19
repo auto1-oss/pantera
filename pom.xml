@@ -376,6 +376,7 @@ Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
                 <exclude>**/benchmark/**</exclude>
                 <exclude>**/.superpowers/**</exclude>
                 <exclude>**/pantera-ui/**</exclude>
+                <exclude>**/performance/**</exclude>
               </excludes>
             </licenseSet>
           </licenseSets>
