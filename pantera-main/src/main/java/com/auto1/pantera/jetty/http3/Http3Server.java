@@ -14,6 +14,7 @@ import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.misc.ConfigDefaults;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.asto.Content;
@@ -34,6 +35,7 @@ import org.eclipse.jetty.http3.server.HTTP3ServerQuicConfiguration;
 import org.eclipse.jetty.http3.server.RawHTTP3ServerConnectionFactory;
 import org.eclipse.jetty.quic.quiche.server.QuicheServerConnector;
 import org.eclipse.jetty.quic.quiche.server.QuicheServerQuicConfiguration;
+import org.eclipse.jetty.server.ProxyConnectionFactory;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
 
@@ -67,6 +69,30 @@ public final class Http3Server {
      */
     private static final int MAX_STREAM_BUFFER_BYTES = ConfigDefaults.getInt(
         "PANTERA_HTTP3_MAX_STREAM_BUFFER_BYTES", 16 * 1024 * 1024
+    );
+
+    /**
+     * Whether the HTTP/3 connector should accept a PROXY-protocol-v2 prelude
+     * before the QUIC/HTTP/3 bytes. Mirrors the existing Vert.x
+     * {@code setUseProxyProtocol} toggle on the HTTP/1–2 listeners
+     * (see {@code AsyncApiVerticle} / {@code VertxMain}).
+     *
+     * <p>Default {@code false}; override via
+     * {@code PANTERA_HTTP3_PROXY_PROTOCOL=true}. The planned YAML path
+     * {@code meta.http3.proxyProtocol} (see plan Task H.3) is not wired here
+     * because {@link Http3Server} is currently constructed without a
+     * {@code Settings} reference (see {@code VertxMain}:~302 and ~802).
+     * Threading {@code Settings} through would require a signature change;
+     * until then the env-var is the sole entry point and operators fronting
+     * the HTTP/3 listener with an NLB / PROXYv2 proxy set it explicitly.</p>
+     *
+     * <p>When {@code true}, a {@link ProxyConnectionFactory} is prepended to
+     * the connector's factory chain so that the upstream proxy's
+     * PROXY-protocol prelude is parsed before the HTTP/3 handshake and the
+     * real client IP (not the TCP peer) is surfaced to request handlers.</p>
+     */
+    private static final boolean PROXY_PROTOCOL_ENABLED = ConfigDefaults.getBoolean(
+        "PANTERA_HTTP3_PROXY_PROTOCOL", false
     );
 
     /**
@@ -126,16 +152,38 @@ public final class Http3Server {
             final RawHTTP3ServerConnectionFactory http3 =
                 new RawHTTP3ServerConnectionFactory(new SliceListener());
             http3.getHTTP3Configuration().setStreamIdleTimeout(15_000);
-            
-            // Create QuicheServerConnector with native QUIC support
-            final QuicheServerConnector connector = new QuicheServerConnector(
-                this.server,
-                this.ssl,
-                serverQuicConfig,
-                http3
-            );
+
+            // Build the connector's factory chain. When PROXY_PROTOCOL_ENABLED
+            // is true, prepend Jetty's ProxyConnectionFactory so the upstream
+            // LB's PROXY-protocol-v2 prelude is parsed before the HTTP/3 frames
+            // and Jetty's Server API surfaces the real client IP (not the TCP
+            // peer) to handlers. Mirrors the Vert.x setUseProxyProtocol
+            // behavior on the HTTP/1–2 listeners.
+            final QuicheServerConnector connector;
+            if (Http3Server.PROXY_PROTOCOL_ENABLED) {
+                connector = new QuicheServerConnector(
+                    this.server,
+                    this.ssl,
+                    serverQuicConfig,
+                    new ProxyConnectionFactory(),
+                    http3
+                );
+                EcsLogger.info("com.auto1.pantera.jetty.http3")
+                    .message("HTTP/3 proxy-protocol prelude parsing enabled")
+                    .eventCategory("configuration")
+                    .eventAction("http3_proxy_protocol_enabled")
+                    .field("url.port", this.port)
+                    .log();
+            } else {
+                connector = new QuicheServerConnector(
+                    this.server,
+                    this.ssl,
+                    serverQuicConfig,
+                    http3
+                );
+            }
             connector.setPort(this.port);
-            
+
             this.server.addConnector(connector);
             this.server.start();
         // @checkstyle IllegalCatchCheck (5 lines)
