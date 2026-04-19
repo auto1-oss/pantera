@@ -10,7 +10,6 @@
  */
 package com.auto1.pantera.rpm.pkg;
 
-import com.auto1.pantera.asto.misc.UncheckedIOScalar;
 import com.auto1.pantera.http.log.EcsLogger;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -34,9 +33,15 @@ import org.redline_rpm.header.Header;
 public final class FilePackageHeader {
 
     /**
-     * The RPM file input stream.
+     * The RPM file input stream (nullable when constructed from a Path – opened
+     * lazily in {@link #header()}).
      */
     private final InputStream pckg;
+
+    /**
+     * The RPM file path (nullable when constructed from an InputStream).
+     */
+    private final Path path;
 
     /**
      * Ctor.
@@ -45,6 +50,7 @@ public final class FilePackageHeader {
      */
     public FilePackageHeader(final InputStream file) {
         this.pckg = file;
+        this.path = null;
     }
 
     /**
@@ -53,7 +59,8 @@ public final class FilePackageHeader {
      * @param file The RPM file.
      */
     public FilePackageHeader(final Path file) {
-        this(new UncheckedIOScalar<>(() -> Files.newInputStream(file)).value());
+        this.pckg = null;
+        this.path = file;
     }
 
     /**
@@ -66,7 +73,24 @@ public final class FilePackageHeader {
      */
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     public Header header() throws IOException {
-        try (ReadableByteChannel chan = Channels.newChannel(this.pckg)) {
+        if (this.path != null) {
+            try (InputStream stream = Files.newInputStream(this.path)) {
+                return FilePackageHeader.readHeader(stream);
+            }
+        }
+        return FilePackageHeader.readHeader(this.pckg);
+    }
+
+    /**
+     * Parse an RPM header from the given stream.
+     * @param stream Input stream positioned at the start of an RPM file
+     * @return Parsed header
+     * @throws InvalidPackageException If the package cannot be parsed
+     * @throws IOException If an I/O error occurs
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private static Header readHeader(final InputStream stream) throws IOException {
+        try (ReadableByteChannel chan = Channels.newChannel(stream)) {
             final Format format;
             try {
                 // Use ByteArrayOutputStream for Scanner output (discarded - Scanner is just parsing)
