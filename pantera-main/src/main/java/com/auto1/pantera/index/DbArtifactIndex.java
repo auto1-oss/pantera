@@ -31,6 +31,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -1755,7 +1756,17 @@ public final class DbArtifactIndex implements ArtifactIndex {
 
     @Override
     public CompletableFuture<Optional<List<String>>> locateByName(final String artifactName) {
-        return CompletableFuture.supplyAsync(() -> {
+        try {
+            return CompletableFuture.supplyAsync(() -> locateByNameBody(artifactName), this.executor);
+        } catch (final RejectedExecutionException ree) {
+            // AbortPolicy fired — pool + queue saturated. Return a failed future
+            // so callers handle it via their existing exception path (the caller
+            // may be on the Vert.x event loop; do not rethrow synchronously).
+            return CompletableFuture.failedFuture(ree);
+        }
+    }
+
+    private Optional<List<String>> locateByNameBody(final String artifactName) {
             final List<String> repos = new ArrayList<>();
             try (Connection conn = this.source.getConnection()) {
                 // SET LOCAL requires an explicit transaction block to persist across statements
@@ -1790,7 +1801,6 @@ public final class DbArtifactIndex implements ArtifactIndex {
                 return Optional.empty();
             }
             return Optional.of(repos);
-        }, this.executor);
     }
 
     /**
