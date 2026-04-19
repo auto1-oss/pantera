@@ -1,5 +1,178 @@
 # Changelog
 
+## Version 2.2.0
+
+Target-architecture alignment release (v2.2 plan §12). Ships nine work items — WI-00 (queue/log hotfix), WI-01 (Fault + Result sum types), WI-02 (full RequestContext + Deadline + ContextualExecutor), WI-03 (StructuredLogger 5-tier + LevelPolicy + AuditAction), WI-04 (`GroupResolver` replaces `GroupSlice` at every production site), WI-05 (SingleFlight coalescer), WI-07 (ProxyCacheWriter + Maven checksum integrity), WI-post-05 (retire RequestDeduplicator), WI-post-07 (wire ProxyCacheWriter into pypi/go/composer). Also lands a **P0 production-readiness pass against the Opus 4.7 audit 2026-04-18** (Groups A–H) plus full admin / developer / user documentation. WI-06, WI-06b, WI-08, WI-09, WI-10 are deferred to follow-on v2.2.x trains.
+
+### 🏗️ Architectural changes
+
+- **`GroupResolver` is now the sole production group-resolution engine** (WI-04). The deprecated `GroupSlice` (1338 LOC) and its four dedicated test classes are deleted. All four wiring sites in `RepositorySlices.java` (npm-group, file/php-group, maven-group, generic group-adapter) now instantiate `GroupResolver`; `MavenGroupSlice` and `ComposerGroupSlice` receive it as their `Slice` delegate. A new convenience constructor on `GroupResolver` accepts the legacy `(SliceResolver, memberNames, port, ...)` shape so call-sites didn't balloon. `GroupSliceMetrics` is renamed `GroupResolverMetrics`; stale javadoc / inline-comment references across 15 production files updated. Status surface unchanged (200/404/500/502 — no 503/504 from group resolution per spec). Behavioural improvements: index-hit 404 falls through to proxy fanout (TOCTOU fix, A11), `AllProxiesFailed` passes the winning proxy's response through (was synthetic 502), and 5xx responses carry `X-Pantera-Fault` + `X-Pantera-Proxies-Tried` headers.
+  ([@aydasraf](https://github.com/aydasraf))
+- **`CooldownResponseRegistry` is the mandatory cooldown-403 path.** The deprecated `CooldownResponses.forbidden(...)` helper had 12 production callers across 6 adapters and one pantera-core fallback; all migrated to `CooldownResponseRegistry.instance().getOrThrow(repoType).forbidden(block)` and the legacy class is deleted. The former silent `.orElseGet(() -> CooldownResponses.forbidden(block))` fallback in `BaseCachedProxySlice` now throws `IllegalStateException` on a missing factory — factory registration is a startup-time hard requirement. `CooldownWiring` adds response-factory aliases (`npm-proxy`, `pypi-proxy`, `docker-proxy`, `go-proxy`, `php`, `php-proxy`) so every repoType resolves.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Sealed `Fault` hierarchy + `Result<T>` + `FaultTranslator`** introduced as the single decision point for "what HTTP status does this fault produce" (WI-01). `Fault` variants: `NotFound`, `Forbidden`, `IndexUnavailable`, `StorageUnavailable`, `AllProxiesFailed`, `UpstreamIntegrity`, `Internal`, `Deadline`, `Overload`. `FaultClassifier.classify(Throwable, String)` is the fallback for `.exceptionally(...)` handlers. 99% instructions / 97% branches coverage on the `fault` package; exhaustive-switch guard test locks the contract.
+  ([@aydasraf](https://github.com/aydasraf))
+- **`SingleFlight<K,V>` is the one coalescer in the codebase** (WI-05 + WI-post-05). Consolidates the former hand-rolled `inFlightFanouts` (GroupSlice), `inFlightMetadataFetches` (MavenGroupSlice), and `RequestDeduplicator` (CachedNpmProxySlice, BaseCachedProxySlice). Caffeine `AsyncCache`-backed with stack-flat follower completion (the v2.1.3 `StackOverflowError` at ~400 concurrent followers cannot recur), explicit zombie eviction via `CompletableFuture.orTimeout`, and per-caller cancellation isolation. `RequestDeduplicator.java`, `RequestDeduplicatorTest.java`, and the `DedupStrategy` enum are gone; the nested `FetchSignal` enum is promoted to a top-level type at `pantera-core/http/cache/FetchSignal.java`.
+  ([@aydasraf](https://github.com/aydasraf))
+- **`RequestContext` full ECS/APM envelope** (WI-02). 13-field record covering every ECS key Pantera emits (`trace.id`, `transaction.id`, `span.id`, `http.request.id`, `user.name`, `client.ip`, `user_agent.original`, `repository.name`, `repository.type`, `package.name`, `package.version`, `url.original`, `url.path`) plus an end-to-end `Deadline`. A four-arg backward-compat ctor is retained. `ContextualExecutor.contextualize(Executor)` propagates the `ThreadContext` snapshot + APM span across `CompletableFuture` boundaries — wired at `DbArtifactIndex`, `GroupResolver` drain executor, `BaseCachedProxySlice` SingleFlight, `CachedNpmProxySlice` SingleFlight, and `MavenGroupSlice` SingleFlight.
+  ([@aydasraf](https://github.com/aydasraf))
+- **`StructuredLogger` 5-tier facade** (WI-03). `access()` (Tier-1 client→pantera), `internal()` (Tier-2 pantera→pantera 500), `upstream()` (Tier-3 pantera→remote), `local()` (Tier-4 local ops), `audit()` (Tier-5 compliance, INFO, non-suppressible). Central `LevelPolicy` enum encodes the §4.2 log-level matrix in one place. Closed `AuditAction` enum enumerates the only four compliance events (`ARTIFACT_PUBLISH`, `ARTIFACT_DOWNLOAD`, `ARTIFACT_DELETE`, `RESOLUTION`) per §10.4. `EcsLoggingSlice` now emits the access log exactly once per request via `StructuredLogger.access().forRequest(ctx)` on the success path (legacy dual-emission removed).
+  ([@aydasraf](https://github.com/aydasraf))
+- **Auth cache L1/L2 + cluster-wide invalidation** (Group B). New `CachedLocalEnabledFilter` wraps `LocalEnabledFilter` the way `CachedUsers` wraps `Users`: L1 Caffeine + L2 Valkey + `CacheInvalidationPubSub` cross-node eviction. Hit rate is expected >95 %; the per-request JDBC hit is gone. `UserHandler` invalidates on put / delete / enable / disable / alterPassword — admin changes propagate to peer nodes within 100 ms. Driven by `meta.caches.auth-enabled.*` (env `PANTERA_AUTH_ENABLED_*` overrides), no hardcoded cache settings.
+  ([@aydasraf](https://github.com/aydasraf))
+- **`GroupMetadataCache` stale tier is now 2-tier, aid-not-breaker** (Group C). The former unbounded `lastKnownGood` `ConcurrentHashMap` is replaced by L1 Caffeine (bounded, 30-day TTL) + L2 Valkey (no TTL by default — Valkey `allkeys-lru` owns eviction). Degradation on read is L1 → L2 → expired primary-cache entry → miss. Under realistic cardinality no eviction fires; bounds are a JVM-memory safety net only. **L2 now survives JVM restart** (the old CHM did not), strictly improving availability. Driven by `meta.caches.group-metadata-stale.*` with full env-var override chain.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Cooldown package restructured** into SOLID sub-packages `api/`, `cache/`, `metadata/`, `response/`, `config/`, `metrics/`, `impl/`. `CooldownMetadataServiceImpl` renamed to `MetadataFilterService`. `CooldownAdapterBundle<T>` + `CooldownAdapterRegistry` populated at startup; queried on every proxy request. All 7 adapters (Maven, npm, PyPI, Docker, Go, Composer, Gradle aliased to Maven) registered with aliases.
+  ([@aydasraf](https://github.com/aydasraf))
+
+### ⚡ Performance
+
+- **`ProxyCacheWriter` — atomic primary + sidecar write with digest verification** (WI-07). The `oss-parent-58.pom.sha1` class of cache-drift bug (primary bytes and the sidecar they're verified against diverging across stale-while-revalidate refetches) can no longer produce a committed cache entry. Streams the primary into a NIO temp file (bounded chunk size, no heap scaling with artifact size) while updating four `MessageDigest` accumulators (MD5, SHA-1, SHA-256, SHA-512) in one pass; pulls sidecars concurrently; compares trimmed-lowercased hex bodies against the computed digest; saves primary-first-then-sidecars only on agreement. Mismatch → `Result.err(Fault.UpstreamIntegrity(...))`; nothing lands in the cache. Wired into maven / pypi / go / composer (WI-post-07).
+  ([@aydasraf](https://github.com/aydasraf))
+- **Cooldown filter performance hardenings** (H1-H5). Pre-warm release-date cache (`MetadataParser.extractReleaseDates()` SPI bulk-populates `CooldownCache` L1 with `false` for versions older than the cooldown period — avoids DB/Valkey round-trip for the majority). Parallel bounded version evaluation via `CompletableFuture.allOf()` on a dedicated 4-thread executor, bounded to 50 versions per request. Stale-while-revalidate on `FilteredMetadataCache` with 5-minute grace. L1 capacity increased to 50K entries (`PANTERA_COOLDOWN_METADATA_L1_SIZE`). `CooldownCache` inflight-map memory leak fixed — guaranteed removal on success, error, and cancellation via `whenComplete` + 30 s `orTimeout` zombie safety net.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Zero-copy `ArtifactHandler` chunks** (Group E.1). Download paths replace per-chunk `new byte[] + buf.get(bytes) + Buffer.buffer(bytes)` with `Buffer.buffer(Unpooled.wrappedBuffer(buf))`. At 1000 req/s × 5 MB bodies × 64 KB chunks that was ~80 000 byte[] allocations/second straight to garbage — now zero. Vert.x releases on write completion.
+  ([@aydasraf](https://github.com/aydasraf))
+- **StAX streaming Maven metadata merge** (Group E.2). `MavenGroupSlice` delegates to a new `StreamingMetadataMerger` (hardened against XXE) that accumulates only the deduplicated `<version>` `TreeSet` and newest-wins scalars. Peak memory is `O(unique versions)`, not `O(sum of member body sizes)`. Malformed or truncated member bodies are skipped with a WARN; remaining members still merge. No size cap is introduced — doing so would synthesize a client-facing 502 for legitimately large metadata. An alert-only histogram `pantera.maven.group.member_metadata_size_bytes` surfaces outliers to ops.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Hot-path `Pattern.compile` hoisted to `static final`** (Group D). `TrimmedDocker.trim()` and `SubStorage.list()` previously compiled the regex on every call; both now hold a final field compiled once in the ctor. At 1000 req/s this eliminates thousands of compile allocations per second across Docker and storage-list request paths.
+  ([@aydasraf](https://github.com/aydasraf))
+- **`String.format("%02x", ...)` checksum hex loop replaced with `java.util.HexFormat.of().formatHex(...)`** in `MavenGroupSlice` (Group E.3). Single allocation per request instead of 20 per checksum. Mirrors the existing `ProxyCacheWriter.HEX` idiom.
+  ([@aydasraf](https://github.com/aydasraf))
+- **`Yaml2Json` / `Json2Yaml` `ObjectMapper` hoisted to `static final`** (Group E.4). Previously allocated a fresh `ObjectMapper` (and `YAMLMapper`) on every call. Admin-plane only, but the reflection warm-up cost is real. Jackson feature configuration applied once at static init — safe under the JMM.
+  ([@aydasraf](https://github.com/aydasraf))
+
+### 🔧 Bug fixes
+
+- **Client-disconnect propagation** (Group A). `VertxSliceServer` now registers `closeHandler` on `request.connection()` and `exceptionHandler` on both request and response; captures the reactive-streams `Subscription` via `doOnSubscribe` and cancels it on any disconnect signal. `ArtifactHandler` captures the `Disposable` on both download paths and disposes on response `closeHandler` / `exceptionHandler`. `StreamThroughCache`, `DiskCacheStorage`, and `VertxRxFile.save` gain `doOnCancel` cleanup matching existing `doOnError` — channel closed + temp file deleted on mid-flight disconnect. `Http3Server` enforces a per-stream buffer cap via `PANTERA_HTTP3_MAX_STREAM_BUFFER_BYTES` (default 16 MiB). Resolves the class of "bytes keep streaming into a dead socket until the next write organically fails" that wasted upstream bandwidth and held file descriptors at 1000 req/s with any disconnect churn.
+  ([@aydasraf](https://github.com/aydasraf))
+- **`DbArtifactIndex` saturation now returns typed fault, not an EL-thread JDBC stall** (Group H.1). The executor's `RejectedExecutionHandler` switches from `CallerRunsPolicy` to `AbortPolicy` — under queue saturation, submissions no longer execute inline on the Vert.x event loop. **BEHAVIOR CHANGE:** saturation surfaces as `Fault.IndexUnavailable`, which `FaultTranslator` returns as `500` with `X-Pantera-Fault: index-unavailable`. The follow-up `locateByName` body is wrapped so the synchronous `RejectedExecutionException` from `CompletableFuture.supplyAsync` is always observed via a failed future, never raw-propagated up the event-loop stack. Chaos test `DbArtifactIndexSaturationTest` locks the policy.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Cooldown registry lookups now fail fast** (Group G). `CooldownResponseRegistry.getOrThrow(repoType)` replaces `.get(repoType).forbidden(...)` at all 11 production adapter sites (files / npm / pypi / composer / go / docker) and in `BaseCachedProxySlice`. Missing factory registration surfaces immediately as `IllegalStateException("No CooldownResponseFactory registered for repoType: <type>")` at first request — wiring omissions are caught at canary time instead of NPE'ing on an arbitrary request later.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Resource-leak fixes on legacy RPM / Debian streams** (Group F). `XmlPrimaryChecksums` and `FilePackageHeader` previously opened `InputStream`s eagerly in their constructors; if the consuming method was never invoked the stream leaked. Both now store only the `Path` and open inside the consuming method under try-with-resources. RPM `Gzip.unpackTar` wraps `GzipCompressorInputStream` in the same try-with as `TarArchiveInputStream` so the native `Inflater` is released if the tar wrapper ctor throws. Debian `MultiPackages.merge` wraps both GZIP streams in try-with-resources; caller-owned outer streams are protected by a non-closing wrapper adapter.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Queue overflow cascade on npm `DownloadAssetSlice`** (forensic §1.6 F1.1/F1.2). Bounded `LinkedBlockingQueue<ProxyArtifactEvent>` writes on both the cache-hit (line 198) and cache-miss (line 288) paths called `AbstractQueue.add()`, which throws `IllegalStateException("Queue full")` on overflow. A burst of 11,499 such throws in a 2-minute window in prod surfaced as 503s to clients because the exception escaped the serve path. Both call-sites migrated to `queue.offer(event)`; the `ifPresent` enqueue lambda is wrapped in `try { ... } catch (Throwable t) { log at WARN; continue; }` on both paths so background-queue failure can NEVER escape into the response. Verified by `DownloadAssetSliceQueueFullTest`.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Access-log WARN flood from 4xx client probes** (forensic §1.7 F2.1/F2.2). `EcsLogEvent.log()` emitted every 4xx at WARN, including 404 (Maven probe-and-miss + npm metadata scans), 401 (unauthenticated health checks), 403 (policy deny) — 2.4 M WARN lines in 12 h post-deploy; client-driven, not Pantera fault. Level policy now 404/401/403 → INFO; other 4xx WARN, 5xx ERROR, slow >5 s WARN unchanged. Contract tests lock the matrix.
+  ([@aydasraf](https://github.com/aydasraf))
+- **`StackOverflowError` class in GroupSlice follower chain** (commit `ccc155f6` / anti-pattern A9). When the leader fanout completed synchronously each follower's `thenCompose(...)` ran on the leader's stack — ~400 followers overflowed. Replaced the bespoke `ConcurrentHashMap<String, CompletableFuture<Void>>` coalescer with `SingleFlight<String, Void>`, which dispatches all follower completions via the configured executor. Regression guard: `stackFlatUnderSynchronousCompletion` (500 followers, synchronous leader, no SOE).
+  ([@aydasraf](https://github.com/aydasraf))
+- **Upstream sidecar/primary drift in Maven cache** (target-architecture §9.5, production `oss-parent-58.pom.sha1` symptom). Previously `storage.save(primary)` and `storage.save(sidecar)` were independent Rx pipelines; SWR refetch could update the `.pom` without re-pulling `.pom.sha1`, and eviction could drop one without the other — every mode produced the same `ChecksumFailureException` for Maven client builds. `ProxyCacheWriter.writeWithSidecars(...)` is the single write path; mismatch → `Result.err(Fault.UpstreamIntegrity(...))`, nothing lands. Regression test `ProxyCacheWriterTest.ossParent58_regressionCheck` reproduces the exact production hex.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Jetty client idle-close logged as request failure** (forensic §1.7 F4.4). "Idle timeout expired: 30000/30000 ms" is a connection-lifecycle event, not a request error. 20 ERROR entries per 12 h, all one cause. `JettyClientSlice.isIdleTimeout(Throwable)` identifies the specific `TimeoutException` (up to 5 hops) and downgrades that case to DEBUG. Other HTTP failures still log at ERROR.
+  ([@aydasraf](https://github.com/aydasraf))
+- **"Repository not found in configuration" at WARN** (forensic §1.7). Client-config error (stale repo URL in a pom.xml), not a Pantera fault. ~1,440 WARN lines per 12 h. Downgraded to INFO.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Stale `MdcPropagation` text references removed.** The class was deleted from pantera-core in WI-02 but three test files (`CooldownContextPropagationTest`, `ContextualExecutorIntegrationTest`, the now-deleted `GroupSliceFlattenedResolutionTest`) plus `docs/analysis/v2.2-next-session.md:73` still mentioned it textually. All updated to `ContextualExecutor` / `TraceContextExecutor` terminology. Zero `MdcPropagation.` references remain in production code or live tests.
+  ([@aydasraf](https://github.com/aydasraf))
+
+### 🧹 Cleanup
+
+- **Legacy `GroupSlice` deleted** (1338 LOC) plus four obsolete test classes (`GroupSliceTest`, `GroupSliceFlattenedResolutionTest`, `GroupSliceIndexRoutingTest`, `GroupSlicePerformanceTest`). Rename `GroupSliceMetrics` → `GroupResolverMetrics`.
+  ([@aydasraf](https://github.com/aydasraf))
+- **`CooldownResponses` class deleted.** All 12 production callers migrated to `CooldownResponseRegistry.getOrThrow(repoType)`.
+  ([@aydasraf](https://github.com/aydasraf))
+- **`RequestDeduplicator` / `RequestDeduplicatorTest` / `DedupStrategy` deleted** (WI-post-05). `FetchSignal` promoted to top-level type.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Dead `api-workers` `WorkerExecutor` removed** (Group H.2). `AsyncApiVerticle` created a `WorkerExecutor` that no route ever referenced.
+  ([@aydasraf](https://github.com/aydasraf))
+- **UI: legacy `'hex'` repo-type key purged in favour of `'hexpm'`** across `repoTypes.ts`, `techSetup.ts`, `SettingsView.vue`. `SettingsView` now emits `hexpm-proxy` instead of `hex-proxy` — matches the canonical family key `ApiRoutingSlice` normalises to. `SearchView.vue`'s `startsWith('hex')` prefix match is retained since it still matches `hexpm`.
+  ([@aydasraf](https://github.com/aydasraf))
+
+### 🆕 Added
+
+- **`pantera-core/http/fault/` sum types** — `Fault` sealed hierarchy, `Result<T>` with `map`/`flatMap`, `FaultClassifier.classify(Throwable, String)` for `.exceptionally(...)` handlers, `FaultTranslator.translate(Fault, RequestContext)` as the single HTTP-status decision point.
+  ([@aydasraf](https://github.com/aydasraf))
+- **`pantera-core/http/resilience/SingleFlight<K,V>`** — unified per-key request coalescer backed by Caffeine `AsyncCache`, with zombie eviction and stack-flat follower dispatch. 14 property-style tests including N=1000 coalescing, 100-caller cancellation isolation, 500-follower synchronous-completion stack-safety regression.
+  ([@aydasraf](https://github.com/aydasraf))
+- **`pantera-core/http/cache/ProxyCacheWriter`** + `IntegrityAuditor` + `scripts/pantera-cache-integrity-audit.sh` (exit 0 clean/fixed, 1 mismatch in dry-run, 2 CLI error). Companion CLI `pantera-main/tools/CacheIntegrityAudit`.
+  ([@aydasraf](https://github.com/aydasraf))
+- **`pantera-core/http/context/RequestContext` / `Deadline` / `ContextualExecutor`** — full ECS/APM envelope, monotonic wall-clock deadline with `remainingClamped`, Executor wrapper that propagates `ThreadContext` + APM `Span`.
+  ([@aydasraf](https://github.com/aydasraf))
+- **`pantera-core/http/observability/StructuredLogger`** (5-tier) + `LevelPolicy` (log-level matrix) + `pantera-core/audit/AuditAction` (closed enum of compliance events).
+  ([@aydasraf](https://github.com/aydasraf))
+- **`pantera-main/auth/CachedLocalEnabledFilter`** — Caffeine + Valkey + `CacheInvalidationPubSub` decorator.
+  ([@aydasraf](https://github.com/aydasraf))
+- **`pantera-main/group/merge/StreamingMetadataMerger`** — StAX-based, XXE-hardened, `ComparableVersion`-ordered.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Optional HTTP/3 PROXY protocol v2 support** — `PANTERA_HTTP3_PROXY_PROTOCOL=true` prepends Jetty's `ProxyConnectionFactory` to the Quiche connector (Group H.3). Default `false` — zero behavior change. Emits an INFO log `event.action=http3_proxy_protocol_enabled` when activated.
+  ([@aydasraf](https://github.com/aydasraf))
+- **`pantera-core/metrics/EventsQueueMetrics`** — shared callback emits one WARN per `queue.offer()` false-return and bumps `pantera.events.queue.dropped{queue=<repoName>}`.
+  ([@aydasraf](https://github.com/aydasraf))
+
+### 🔄 Changed
+
+- **`EcsLoggingSlice` emits the access log exactly once per request** via `StructuredLogger.access()`. The former dual emission was removed to halve access-log volume in Kibana. Only the `.exceptionally(...)` error path still uses `EcsLogEvent` (one call-site; scheduled for migration).
+  ([@aydasraf](https://github.com/aydasraf))
+- **Hikari fail-fast defaults** (Group B). `connectionTimeout` tightened from `5000` to `3000` ms; `leakDetectionThreshold` from `300000` to `5000` ms. Operators may see leak WARNs that were silent before — each is a real held-connection bug to triage. Canary ramp documented in `docs/admin-guide/database.md`.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Three hot-path executors wrapped via `ContextualExecutor.contextualize(...)`** — `DbArtifactIndex.DbIndexExecutorService`, `GroupResolver` drain executor, and all three SingleFlight-backed call sites. Every hot-path thread hop contextualised.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Bounded-queue enqueue semantics: `offer()`, not `add()`.** Every request-serving path that writes to a `LinkedBlockingQueue<*Event>` now uses `offer()` and routes overflow through `EventsQueueMetrics.recordDropped(repoName)`.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Coalescer fields in `GroupResolver` / `MavenGroupSlice` / `CachedNpmProxySlice` / `BaseCachedProxySlice` are now `SingleFlight` instances.** Field names retained for minimal diff; only the type changed.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Maven-adapter cached-proxy slice** routes primary-artifact cache misses through `ProxyCacheWriter.writeWithSidecars(...)` instead of legacy split primary/sidecar writes. Integrity failure returns 503 with `X-Pantera-Fault: upstream-integrity` rather than committing the bad pair.
+  ([@aydasraf](https://github.com/aydasraf))
+- **pypi / go / composer cached-proxy slices wired to `ProxyCacheWriter`** (WI-post-07). Each adapter uses its native sidecar algorithm set.
+  ([@aydasraf](https://github.com/aydasraf))
+- **`pom.xml` versions bumped 2.1.3 → 2.2.0** on the root reactor and all 30 modules. Docker image tags now produce `pantera:2.2.0`.
+  ([@aydasraf](https://github.com/aydasraf))
+
+### ⚠️ Deprecated
+
+- **`pantera-core/http/trace/MdcPropagation`** marked `@Deprecated(since="2.2.0", forRemoval=true)`. Replacement is `ContextualExecutor.contextualize(executor)` at pool boundaries + `RequestContext.bindToMdc()` at the request edge. The class has been removed from pantera-core source; approximately 110 production call-sites were migrated in WI-02 / WI-03 / WI-04 / Group A. Do not add new call-sites.
+  ([@aydasraf](https://github.com/aydasraf))
+
+### 📊 Observability (log-audit hardening)
+
+- **New 5xx fault signals** via `X-Pantera-Fault: <tag>` response header on every `FaultTranslator`-emitted 5xx: `internal`, `index-unavailable`, `storage-unavailable`, `deadline-exceeded`, `overload:<resource>`, `upstream-integrity:<algo>`. Additive; operator-facing runbook in `docs/admin-guide/runbooks.md`.
+  ([@aydasraf](https://github.com/aydasraf))
+- **`X-Pantera-Proxies-Tried: <n>`** on `AllProxiesFailed` passes the count of proxy members attempted.
+  ([@aydasraf](https://github.com/aydasraf))
+- **`pantera.maven.group.member_metadata_size_bytes` histogram** (tagged `repo_name`) records per-member Maven metadata body size during group merge. Alert-only — no request is rejected based on this metric.
+  ([@aydasraf](https://github.com/aydasraf))
+- **`pantera.group_metadata_cache.stale_served_from{tier=l1|l2|expired-primary|miss}`** — tiered counter for the stale-fallback read path. `expired-primary` non-zero is an operational signal to resize Valkey.
+  ([@aydasraf](https://github.com/aydasraf))
+- **`pantera.caches.auth-enabled.{hit,miss}`** — Micrometer Caffeine stats for the new auth cache.
+  ([@aydasraf](https://github.com/aydasraf))
+
+### 🔒 Security / compliance
+
+No CVE fixes, no permissions model changes, no credential-handling changes, no PII-scope changes. Integrity verification on proxy caches (WI-07 + WI-post-07) is a correctness hardening, not a security fix — the trust boundary (upstream declares a digest, we verify it) has not moved. The new audit logger emits to a dedicated `com.auto1.pantera.audit` logger (see Migration notes).
+
+### 📚 Documentation
+
+- **Admin guide** — `docs/admin-guide/cache-configuration.md` (consolidated `meta.caches.*` reference with 3-tier override precedence env→YAML→default), `docs/admin-guide/valkey-setup.md` (`maxmemory-policy=allkeys-lru` requirement, sizing), `docs/admin-guide/database.md` (Hikari canary ramp instructions), `docs/admin-guide/environment-variables.md` (auth / stale-cache / HTTP/3 / scheduler env vars; Hikari defaults updated), `docs/admin-guide/deployment-nlb.md` (HTTP/3 proxy-protocol flag), `docs/admin-guide/runbooks.md` (new 5xx signals), `docs/admin-guide/v2.2-deployment-checklist.md` (pre/during/post-deploy gating).
+  ([@aydasraf](https://github.com/aydasraf))
+- **Developer guide** — `docs/developer-guide/caching.md` (canonical L1 Caffeine + L2 Valkey + pub/sub pattern; "cache is an aid, never a breaker"), `docs/developer-guide/fault-model.md`, `docs/developer-guide/reactive-lifecycle.md` (three-terminal-path contract — complete/error/cancel — with `CachingBlob.content` as canonical example), `docs/developer-guide/cooldown.md`.
+  ([@aydasraf](https://github.com/aydasraf))
+- **User guide** — `docs/user-guide/response-headers.md` (`X-Pantera-Fault`, `-Proxies-Tried`, `-Stale`, `-Internal`), `docs/user-guide/error-reference.md`, `docs/user-guide/streaming-downloads.md`. New repository pages: `gradle.md` + `go-group`/`go-proxy` sections in `go.md` + "Adding Members to a Group Repository" section in `ui-guide.md` covering the AutoComplete group-member picker and inline "Create new" modal.
+  ([@aydasraf](https://github.com/aydasraf))
+
+### ✅ Testing
+
+- **4,926+ tests across pantera-main + pantera-core** at release time, 0 errors, 0 failures. `mvn -T8 test` green.
+- **New tests** (highlights): 54 under `http/context/` + `http/observability/` (ContextualExecutor / Deadline / RequestContext / all five StructuredLogger tiers / LevelPolicy), 6 integrity tests under pypi / go / composer, 14 property-style tests for `SingleFlight`, 4 `BaseCachedProxySliceDedupTest` regression tests, 7 `StreamingMetadataMergerTest` fixtures (disjoint + overlapping versions, max-scalar semantics, malformed-member skip), 4 `GroupMetadataCacheStaleFallbackTest` tier-degradation cases, `CooldownResponseRegistryGetOrThrowTest`, `CachedLocalEnabledFilterTest` (7 cases), `DbArtifactIndexSaturationTest` (chaos), `CooldownValkeyStalenessTest` (chaos), `CooldownHighCardinalityTest` (chaos), `CooldownConcurrentFilterStampedeTest` (chaos), `PolicyChangeInvalidationTest`, `UpstreamPublishReEvalTest`.
+- **Commit-message hygiene gate**: `git log c71fbbfe..HEAD --format='%B' | git interpret-trailers --only-trailers | grep -ic 'co-authored-by'` returns `0`.
+
+### 🧭 Migration notes
+
+No operator action required for functional rollout — all changes are drop-in for v2.1.3 deployments.
+
+- The `queue.add → queue.offer` migration is internal; no YAML change, no CLI flag, no API change.
+- The access-log level policy change is internal to `EcsLogEvent` / `StructuredLogger.access`; Kibana panels filtering `log.level: WARN AND http.response.status_code: 404` will empty — intended outcome. Filter by status code instead.
+- The `ProxyCacheWriter` path activates only when a file-backed `Storage` is present; tests injecting a lambda-`Cache` keep the pre-v2.2.0 code path.
+- The `SingleFlight` coalescers use dedicated Caffeine `AsyncCache` instances with a 5-minute in-flight TTL and 10K max keys; heap growth is bounded, no tuning required.
+- `scripts/pantera-cache-integrity-audit.sh` is additive — zero-impact no-op unless invoked; `--dry-run` is safe against production.
+- **Kibana `user_agent` sub-fields**: operators who queried `user_agent.name` / `.version` / `.os.name` need to query `user_agent.original` directly (that's what `RequestContext` emits) or wait for the follow-up WI that re-lifts the parser. No data loss — only parsed sub-fields are unavailable this release.
+- **Audit-log level**: `StructuredLogger.audit()` writes to logger `com.auto1.pantera.audit`. The bundled `log4j2.xml` inherits from `com.auto1.pantera` at INFO — "non-suppressible" is by convention. Add a dedicated `<Logger name="com.auto1.pantera.audit" level="info" additivity="false">` in production overrides to enforce.
+- **Hikari canary ramp** (`docs/admin-guide/database.md`): start the first week at `PANTERA_DB_CONNECTION_TIMEOUT_MS=10000` and `PANTERA_DB_LEAK_DETECTION_MS=30000`; drop to defaults (3000 / 5000) after zero leak WARNs observed.
+- **Valkey `maxmemory-policy`**: required `allkeys-lru` for the stale-metadata L2 to behave correctly under memory pressure — see `docs/admin-guide/valkey-setup.md`.
+
+---
+
 ## Version 2.1.3
 
 ### 🔧 Bug fixes
