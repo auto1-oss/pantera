@@ -184,9 +184,14 @@ public final class DbArtifactIndex implements ArtifactIndex {
 
     /**
      * Bounded queue capacity for the default executor.
-     * When the queue is full, {@link ThreadPoolExecutor.CallerRunsPolicy} executes
-     * the task on the submitting thread, propagating backpressure to callers instead
-     * of buffering unboundedly and OOM-ing the JVM under DB latency spikes.
+     * When the queue is full, {@link ThreadPoolExecutor.AbortPolicy} rejects further
+     * submissions with {@link java.util.concurrent.RejectedExecutionException}, which
+     * callers translate into a typed {@link com.auto1.pantera.http.fault.Fault.IndexUnavailable}.
+     * The previous {@link ThreadPoolExecutor.CallerRunsPolicy} applied backpressure by
+     * running the task on the submitting thread, but when that submitting thread was
+     * a Vert.x event-loop thread (e.g. a group-resolver request inlining the index
+     * call), the blocking JDBC work ran on the event loop and stalled the entire
+     * reactor. AbortPolicy keeps the event loop free and fails fast under saturation.
      * Configurable via PANTERA_INDEX_EXECUTOR_QUEUE env var.
      */
     private static final int QUEUE_SIZE =
@@ -216,8 +221,9 @@ public final class DbArtifactIndex implements ArtifactIndex {
      * Constructor with default executor.
      * Creates a bounded thread pool sized to available processors.
      * Uses a {@code QUEUE_SIZE}-slot {@link LinkedBlockingQueue} and
-     * {@link ThreadPoolExecutor.CallerRunsPolicy} to apply backpressure when the
-     * queue fills rather than buffering tasks unboundedly.
+     * {@link ThreadPoolExecutor.AbortPolicy} so saturation surfaces as a
+     * {@link java.util.concurrent.RejectedExecutionException} — never a blocking
+     * run on the submitting thread (which may be a Vert.x event loop).
      *
      * @param source JDBC DataSource
      */
@@ -256,9 +262,18 @@ public final class DbArtifactIndex implements ArtifactIndex {
     /**
      * Build the default bounded executor for DB index operations.
      * Queue size is configurable via PANTERA_INDEX_EXECUTOR_QUEUE (default 500).
-     * When the queue is full, {@link ThreadPoolExecutor.CallerRunsPolicy} runs the
-     * task on the submitting thread, propagating backpressure instead of OOM-ing
-     * the JVM before the per-query statement timeout fires.
+     * When the queue is full, {@link ThreadPoolExecutor.AbortPolicy} rejects new
+     * submissions with {@link java.util.concurrent.RejectedExecutionException}.
+     * Callers that submit via {@link CompletableFuture#supplyAsync(java.util.function.Supplier, java.util.concurrent.Executor)}
+     * observe the REE as a {@link java.util.concurrent.CompletionException} which
+     * {@code GroupResolver} maps to {@link com.auto1.pantera.http.fault.Fault.IndexUnavailable}
+     * via its {@code .exceptionally(...)} branch.
+     *
+     * <p>Rationale for AbortPolicy over CallerRunsPolicy: when the submitting thread
+     * is a Vert.x event-loop thread — as it is for every inlined group-resolver
+     * request — CallerRunsPolicy would execute the blocking JDBC work on the event
+     * loop and stall the reactor. AbortPolicy guarantees the blocking work never
+     * runs on the caller thread; the caller thread can remain an event loop safely.
      *
      * <p>The returned {@link ExecutorService} is a
      * {@link ContextualExecutorService} wrapping the raw pool: every task-submission
@@ -284,12 +299,12 @@ public final class DbArtifactIndex implements ArtifactIndex {
                 thread.setDaemon(true);
                 return thread;
             },
-            new ThreadPoolExecutor.CallerRunsPolicy()
+            new ThreadPoolExecutor.AbortPolicy()
         );
         pool.allowCoreThreadTimeOut(false);
         EcsLogger.info("com.auto1.pantera.index")
             .message("DbArtifactIndex executor initialised ("
-                + poolSize + " threads, queue=" + QUEUE_SIZE + ", policy=caller-runs)")
+                + poolSize + " threads, queue=" + QUEUE_SIZE + ", policy=abort)")
             .eventCategory("configuration")
             .eventAction("pool_init")
             .log();
