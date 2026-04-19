@@ -511,16 +511,7 @@ public abstract class BaseCachedProxySlice implements Slice {
     ) {
         return CooldownAdapterRegistry.instance().get(repoType)
             .map(bundle -> bundle.responseFactory().forbidden(block))
-            .orElseGet(() -> {
-                final CooldownResponseFactory factory =
-                    CooldownResponseRegistry.instance().get(repoType);
-                if (factory == null) {
-                    throw new IllegalStateException(
-                        "No CooldownResponseFactory registered for repoType: " + repoType
-                    );
-                }
-                return factory.forbidden(block);
-            });
+            .orElseGet(() -> CooldownResponseRegistry.instance().getOrThrow(repoType).forbidden(block));
     }
 
     /**

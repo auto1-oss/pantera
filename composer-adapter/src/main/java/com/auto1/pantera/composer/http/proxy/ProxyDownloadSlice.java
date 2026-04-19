@@ -247,7 +247,7 @@ public final class ProxyDownloadSlice implements Slice {
                             .log();
                         return CompletableFuture.completedFuture(
                             CooldownResponseRegistry.instance()
-                                .get(this.rtype)
+                                .getOrThrow(this.rtype)
                                 .forbidden(result.block().orElseThrow())
                         );
                     }

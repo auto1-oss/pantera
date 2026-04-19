@@ -234,7 +234,7 @@ public final class DownloadAssetSlice implements Slice {
                         .log();
                     return CompletableFuture.completedFuture(
                         CooldownResponseRegistry.instance()
-                            .get(this.repoType)
+                            .getOrThrow(this.repoType)
                             .forbidden(block)
                     );
                 }

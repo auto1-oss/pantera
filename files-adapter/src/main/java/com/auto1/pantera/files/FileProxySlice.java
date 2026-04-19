@@ -289,7 +289,7 @@ public final class FileProxySlice implements Slice {
                 if (result.blocked()) {
                     return java.util.concurrent.CompletableFuture.completedFuture(
                         CooldownResponseRegistry.instance()
-                            .get(FileProxySlice.REPO_TYPE)
+                            .getOrThrow(FileProxySlice.REPO_TYPE)
                             .forbidden(result.block().orElseThrow())
                     );
                 }

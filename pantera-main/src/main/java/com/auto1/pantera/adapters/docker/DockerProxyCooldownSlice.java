@@ -132,7 +132,7 @@ public final class DockerProxyCooldownSlice implements Slice {
                         return this.cooldown.evaluate(cooldownRequest, this.inspector)
                             .thenApply(result -> result.blocked()
                                 ? CooldownResponseRegistry.instance()
-                                    .get(this.repoType)
+                                    .getOrThrow(this.repoType)
                                     .forbidden(result.block().orElseThrow())
                                 : rebuilt
                             );
@@ -149,7 +149,7 @@ public final class DockerProxyCooldownSlice implements Slice {
                         return this.cooldown.evaluate(cooldownRequest, this.inspector)
                             .thenApply(result -> result.blocked()
                                 ? CooldownResponseRegistry.instance()
-                                    .get(this.repoType)
+                                    .getOrThrow(this.repoType)
                                     .forbidden(result.block().orElseThrow())
                                 : rebuilt
                             );
@@ -169,7 +169,7 @@ public final class DockerProxyCooldownSlice implements Slice {
                             return this.cooldown.evaluate(cooldownRequest, this.inspector)
                                 .thenApply(result -> result.blocked()
                                     ? CooldownResponseRegistry.instance()
-                                        .get(this.repoType)
+                                        .getOrThrow(this.repoType)
                                         .forbidden(result.block().orElseThrow())
                                     : rebuilt
                                 );

@@ -78,6 +78,25 @@ public final class CooldownResponseRegistry {
     }
 
     /**
+     * Returns the factory for {@code repoType}; throws IllegalStateException
+     * with a descriptive message when absent. Prefer this over {@link #get}
+     * at call sites that cannot sensibly handle a missing factory.
+     *
+     * @param repoType Repository type identifier (non-null)
+     * @return Registered factory
+     * @throws IllegalStateException if no factory is registered for {@code repoType}
+     */
+    public CooldownResponseFactory getOrThrow(final String repoType) {
+        final CooldownResponseFactory f = this.factories.get(repoType);
+        if (f == null) {
+            throw new IllegalStateException(
+                "No CooldownResponseFactory registered for repoType: " + repoType
+            );
+        }
+        return f;
+    }
+
+    /**
      * Returns the set of registered repository types.
      *
      * @return Unmodifiable set of registered types

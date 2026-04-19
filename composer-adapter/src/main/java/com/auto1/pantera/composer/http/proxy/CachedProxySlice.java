@@ -341,7 +341,7 @@ final class CachedProxySlice implements Slice {
                         .field("package.name", name)
                         .log();
                     return CooldownResponseRegistry.instance()
-                        .get(this.rtype)
+                        .getOrThrow(this.rtype)
                         .forbidden(result.block().orElseThrow());
                 }
                 // Rewrite URLs (no-op for pre-rewritten content due to original_url check)
@@ -411,7 +411,7 @@ final class CachedProxySlice implements Slice {
                 .log();
             return CompletableFuture.completedFuture(
                 CooldownResponseRegistry.instance()
-                    .get(this.rtype)
+                    .getOrThrow(this.rtype)
                     .forbidden(result.block().orElseThrow())
             );
         }
@@ -538,7 +538,7 @@ final class CachedProxySlice implements Slice {
                                 .log();
                             return CompletableFuture.completedFuture(
                                 CooldownResponseRegistry.instance()
-                                    .get(this.rtype)
+                                    .getOrThrow(this.rtype)
                                     .forbidden(result.block().orElseThrow())
                             );
                         }
