@@ -141,6 +141,19 @@ public final class StreamThroughCache implements Cache {
                     .eventOutcome("failure")
                     .error(err)
                     .log();
+            })
+            // Client cancelled mid-stream (e.g., closed connection) — mirror doOnError cleanup
+            // so the temp file/channel don't leak when subscription is cancelled.
+            .doOnCancel(() -> {
+                closeQuietly(channel);
+                deleteTempFileQuietly(tempFile);
+                EcsLogger.debug("com.auto1.pantera.asto.cache")
+                    .message(String.format("Stream-through: subscription cancelled for key '%s', cleaning up temp file", key.string()))
+                    .eventCategory("database")
+                    .eventAction("stream_through")
+                    .eventOutcome("unknown")
+                    .field("event.reason", "cancel")
+                    .log();
             });
         return new Content.From(remote.size(), teed);
     }

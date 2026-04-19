@@ -120,6 +120,13 @@ public class VertxRxFile {
             .flatMapCompletable(
                 asyncFile -> Completable.create(
                     emitter -> flow.map(buf -> Buffer.buffer(new Remaining(buf).bytes()))
+                        // Safety net: if the upstream Flowable errors before toSubscriber()
+                        // sees any data (or between items), the AsyncFile could otherwise
+                        // be left open. Close it explicitly; ignore close failures since
+                        // the primary error is already being signalled to the emitter.
+                        .doOnError(err -> asyncFile.rxClose()
+                            .onErrorComplete()
+                            .subscribe())
                         .subscribe(asyncFile.toSubscriber()
                             .onWriteStreamEnd(emitter::onComplete)
                             .onWriteStreamError(emitter::onError)

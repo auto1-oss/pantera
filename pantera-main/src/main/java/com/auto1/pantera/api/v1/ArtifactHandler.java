@@ -416,23 +416,37 @@ public final class ArtifactHandler {
                     return asto.value(artifactKey);
                 })
             )
-            .thenAccept(content ->
-                io.reactivex.Flowable.fromPublisher(content)
-                    .map(buf -> {
-                        final byte[] arr = new byte[buf.remaining()];
-                        buf.get(arr);
-                        return io.vertx.core.buffer.Buffer.buffer(arr);
-                    })
-                    .subscribe(
-                        chunk -> ctx.response().write(chunk),
-                        err -> {
-                            if (!ctx.response().ended()) {
-                                ctx.response().end();
-                            }
-                        },
-                        () -> ctx.response().end()
-                    )
-            )
+            .thenAccept(content -> {
+                // Capture the Disposable so a client disconnect (closeHandler) or
+                // response error (exceptionHandler) can cancel the upstream stream
+                // and free any file channels / temp files held by downstream tees.
+                final io.reactivex.disposables.Disposable disposable =
+                    io.reactivex.Flowable.fromPublisher(content)
+                        .map(buf -> {
+                            final byte[] arr = new byte[buf.remaining()];
+                            buf.get(arr);
+                            return io.vertx.core.buffer.Buffer.buffer(arr);
+                        })
+                        .subscribe(
+                            chunk -> ctx.response().write(chunk),
+                            err -> {
+                                if (!ctx.response().ended()) {
+                                    ctx.response().end();
+                                }
+                            },
+                            () -> ctx.response().end()
+                        );
+                ctx.response().closeHandler(v -> {
+                    if (!disposable.isDisposed()) {
+                        disposable.dispose();
+                    }
+                });
+                ctx.response().exceptionHandler(err -> {
+                    if (!disposable.isDisposed()) {
+                        disposable.dispose();
+                    }
+                });
+            })
             .exceptionally(err -> {
                 if (!ctx.response().headWritten()) {
                     ApiResponse.sendError(ctx, 404, "NOT_FOUND",
@@ -543,23 +557,37 @@ public final class ArtifactHandler {
                     return asto.value(artifactKey);
                 })
             )
-            .thenAccept(content ->
-                io.reactivex.Flowable.fromPublisher(content)
-                    .map(buf -> {
-                        final byte[] arr = new byte[buf.remaining()];
-                        buf.get(arr);
-                        return io.vertx.core.buffer.Buffer.buffer(arr);
-                    })
-                    .subscribe(
-                        chunk -> ctx.response().write(chunk),
-                        err -> {
-                            if (!ctx.response().ended()) {
-                                ctx.response().end();
-                            }
-                        },
-                        () -> ctx.response().end()
-                    )
-            )
+            .thenAccept(content -> {
+                // Capture the Disposable so a client disconnect (closeHandler) or
+                // response error (exceptionHandler) can cancel the upstream stream
+                // and free any file channels / temp files held by downstream tees.
+                final io.reactivex.disposables.Disposable disposable =
+                    io.reactivex.Flowable.fromPublisher(content)
+                        .map(buf -> {
+                            final byte[] arr = new byte[buf.remaining()];
+                            buf.get(arr);
+                            return io.vertx.core.buffer.Buffer.buffer(arr);
+                        })
+                        .subscribe(
+                            chunk -> ctx.response().write(chunk),
+                            err -> {
+                                if (!ctx.response().ended()) {
+                                    ctx.response().end();
+                                }
+                            },
+                            () -> ctx.response().end()
+                        );
+                ctx.response().closeHandler(v -> {
+                    if (!disposable.isDisposed()) {
+                        disposable.dispose();
+                    }
+                });
+                ctx.response().exceptionHandler(err -> {
+                    if (!disposable.isDisposed()) {
+                        disposable.dispose();
+                    }
+                });
+            })
             .exceptionally(err -> {
                 if (!ctx.response().headWritten()) {
                     ApiResponse.sendError(ctx, 404, "NOT_FOUND",
