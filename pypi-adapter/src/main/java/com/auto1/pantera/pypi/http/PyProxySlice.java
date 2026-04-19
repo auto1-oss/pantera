@@ -13,8 +13,8 @@ package com.auto1.pantera.pypi.http;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.cache.FromStorageCache;
 import com.auto1.pantera.asto.cache.StreamThroughCache;
-import com.auto1.pantera.cooldown.CooldownService;
-import com.auto1.pantera.cooldown.NoopCooldownService;
+import com.auto1.pantera.cooldown.api.CooldownService;
+import com.auto1.pantera.cooldown.impl.NoopCooldownService;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.client.ClientSlices;
@@ -173,7 +173,7 @@ public final class PyProxySlice extends Slice.Wrap {
         final String rname,
         final PyProxyCooldownInspector inspector
     ) {
-        com.auto1.pantera.cooldown.InspectorRegistry.instance()
+        com.auto1.pantera.cooldown.config.InspectorRegistry.instance()
             .register(rtype, rname, inspector);
         return inspector;
     }

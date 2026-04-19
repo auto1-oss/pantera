@@ -329,7 +329,7 @@ public final class CacheManifests implements Manifests {
                             effectiveOwner = ArtifactEvent.DEF_OWNER;
                         }
                     }
-                    queue.add(
+                    queue.add( // ok: unbounded ConcurrentLinkedDeque (ArtifactEvent queue)
                         new ArtifactEvent(
                             CacheManifests.REPO_TYPE,
                             this.rname,

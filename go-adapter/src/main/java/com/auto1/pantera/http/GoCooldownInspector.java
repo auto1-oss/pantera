@@ -10,8 +10,8 @@
  */
 package com.auto1.pantera.http;
 
-import com.auto1.pantera.cooldown.CooldownDependency;
-import com.auto1.pantera.cooldown.CooldownInspector;
+import com.auto1.pantera.cooldown.api.CooldownDependency;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Remaining;
 import com.auto1.pantera.http.headers.Header;

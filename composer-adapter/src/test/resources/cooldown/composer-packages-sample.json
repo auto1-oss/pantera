@@ -1,0 +1,251 @@
+{
+  "packages": {
+    "vendor/sample-lib": {
+      "1.0.0": {
+        "name": "vendor/sample-lib",
+        "version": "1.0.0",
+        "version_normalized": "1.0.0.0",
+        "source": {
+          "type": "git",
+          "url": "https://github.com/vendor/sample-lib.git",
+          "reference": "abc123"
+        },
+        "dist": {
+          "type": "zip",
+          "url": "https://repo.example.com/vendor/sample-lib/1.0.0/sample-lib-1.0.0.zip",
+          "reference": "abc123",
+          "shasum": "d41d8cd98f00b204e9800998ecf8427e"
+        },
+        "require": {
+          "php": ">=7.4"
+        },
+        "type": "library",
+        "autoload": {
+          "psr-4": {
+            "Vendor\\SampleLib\\": "src/"
+          }
+        },
+        "license": [
+          "MIT"
+        ],
+        "time": "2023-01-15T10:30:00+00:00"
+      },
+      "1.1.0": {
+        "name": "vendor/sample-lib",
+        "version": "1.1.0",
+        "version_normalized": "1.1.0.0",
+        "source": {
+          "type": "git",
+          "url": "https://github.com/vendor/sample-lib.git",
+          "reference": "def456"
+        },
+        "dist": {
+          "type": "zip",
+          "url": "https://repo.example.com/vendor/sample-lib/1.1.0/sample-lib-1.1.0.zip",
+          "reference": "def456",
+          "shasum": "e99a18c428cb38d5f260853678922e03"
+        },
+        "require": {
+          "php": ">=7.4"
+        },
+        "type": "library",
+        "license": [
+          "MIT"
+        ],
+        "time": "2023-06-20T14:00:00+00:00"
+      },
+      "1.2.0": {
+        "name": "vendor/sample-lib",
+        "version": "1.2.0",
+        "version_normalized": "1.2.0.0",
+        "source": {
+          "type": "git",
+          "url": "https://github.com/vendor/sample-lib.git",
+          "reference": "ghi789"
+        },
+        "dist": {
+          "type": "zip",
+          "url": "https://repo.example.com/vendor/sample-lib/1.2.0/sample-lib-1.2.0.zip",
+          "reference": "ghi789",
+          "shasum": "f1d2d2f924e986ac86fdf7b36c94bcdf"
+        },
+        "require": {
+          "php": ">=8.0"
+        },
+        "type": "library",
+        "license": [
+          "MIT"
+        ],
+        "time": "2023-09-01T09:15:00+00:00"
+      },
+      "2.0.0": {
+        "name": "vendor/sample-lib",
+        "version": "2.0.0",
+        "version_normalized": "2.0.0.0",
+        "source": {
+          "type": "git",
+          "url": "https://github.com/vendor/sample-lib.git",
+          "reference": "jkl012"
+        },
+        "dist": {
+          "type": "zip",
+          "url": "https://repo.example.com/vendor/sample-lib/2.0.0/sample-lib-2.0.0.zip",
+          "reference": "jkl012",
+          "shasum": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6"
+        },
+        "require": {
+          "php": ">=8.1"
+        },
+        "type": "library",
+        "license": [
+          "MIT"
+        ],
+        "time": "2024-01-10T16:45:00+00:00"
+      },
+      "2.0.1": {
+        "name": "vendor/sample-lib",
+        "version": "2.0.1",
+        "version_normalized": "2.0.1.0",
+        "source": {
+          "type": "git",
+          "url": "https://github.com/vendor/sample-lib.git",
+          "reference": "mno345"
+        },
+        "dist": {
+          "type": "zip",
+          "url": "https://repo.example.com/vendor/sample-lib/2.0.1/sample-lib-2.0.1.zip",
+          "reference": "mno345",
+          "shasum": "b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7"
+        },
+        "require": {
+          "php": ">=8.1"
+        },
+        "type": "library",
+        "license": [
+          "MIT"
+        ],
+        "time": "2024-02-28T11:20:00+00:00"
+      },
+      "2.1.0": {
+        "name": "vendor/sample-lib",
+        "version": "2.1.0",
+        "version_normalized": "2.1.0.0",
+        "source": {
+          "type": "git",
+          "url": "https://github.com/vendor/sample-lib.git",
+          "reference": "pqr678"
+        },
+        "dist": {
+          "type": "zip",
+          "url": "https://repo.example.com/vendor/sample-lib/2.1.0/sample-lib-2.1.0.zip",
+          "reference": "pqr678",
+          "shasum": "c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8"
+        },
+        "require": {
+          "php": ">=8.1"
+        },
+        "type": "library",
+        "license": [
+          "MIT"
+        ],
+        "time": "2024-05-15T08:00:00+00:00"
+      },
+      "2.2.0": {
+        "name": "vendor/sample-lib",
+        "version": "2.2.0",
+        "version_normalized": "2.2.0.0",
+        "source": {
+          "type": "git",
+          "url": "https://github.com/vendor/sample-lib.git",
+          "reference": "stu901"
+        },
+        "dist": {
+          "type": "zip",
+          "url": "https://repo.example.com/vendor/sample-lib/2.2.0/sample-lib-2.2.0.zip",
+          "reference": "stu901",
+          "shasum": "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9"
+        },
+        "require": {
+          "php": ">=8.2"
+        },
+        "type": "library",
+        "license": [
+          "MIT"
+        ],
+        "time": "2024-08-20T13:30:00+00:00"
+      },
+      "3.0.0-beta.1": {
+        "name": "vendor/sample-lib",
+        "version": "3.0.0-beta.1",
+        "version_normalized": "3.0.0.0-beta1",
+        "source": {
+          "type": "git",
+          "url": "https://github.com/vendor/sample-lib.git",
+          "reference": "vwx234"
+        },
+        "dist": {
+          "type": "zip",
+          "url": "https://repo.example.com/vendor/sample-lib/3.0.0-beta.1/sample-lib-3.0.0-beta.1.zip",
+          "reference": "vwx234",
+          "shasum": "e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0"
+        },
+        "require": {
+          "php": ">=8.2"
+        },
+        "type": "library",
+        "license": [
+          "MIT"
+        ],
+        "time": "2024-10-01T07:00:00+00:00"
+      },
+      "3.0.0": {
+        "name": "vendor/sample-lib",
+        "version": "3.0.0",
+        "version_normalized": "3.0.0.0",
+        "source": {
+          "type": "git",
+          "url": "https://github.com/vendor/sample-lib.git",
+          "reference": "yza567"
+        },
+        "dist": {
+          "type": "zip",
+          "url": "https://repo.example.com/vendor/sample-lib/3.0.0/sample-lib-3.0.0.zip",
+          "reference": "yza567",
+          "shasum": "f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1"
+        },
+        "require": {
+          "php": ">=8.2"
+        },
+        "type": "library",
+        "license": [
+          "MIT"
+        ],
+        "time": "2024-11-15T15:00:00+00:00"
+      },
+      "3.1.0": {
+        "name": "vendor/sample-lib",
+        "version": "3.1.0",
+        "version_normalized": "3.1.0.0",
+        "source": {
+          "type": "git",
+          "url": "https://github.com/vendor/sample-lib.git",
+          "reference": "bcd890"
+        },
+        "dist": {
+          "type": "zip",
+          "url": "https://repo.example.com/vendor/sample-lib/3.1.0/sample-lib-3.1.0.zip",
+          "reference": "bcd890",
+          "shasum": "a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2"
+        },
+        "require": {
+          "php": ">=8.2"
+        },
+        "type": "library",
+        "license": [
+          "MIT"
+        ],
+        "time": "2025-01-20T10:00:00+00:00"
+      }
+    }
+  }
+}

@@ -15,7 +15,7 @@ import com.auto1.pantera.api.RepositoryName;
 import com.auto1.pantera.api.perms.ApiRepositoryPermission;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Meta;
-import com.auto1.pantera.http.trace.MdcPropagation;
+import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.RepoData;
 import com.auto1.pantera.settings.repo.CrudRepoSettings;
@@ -26,6 +26,7 @@ import io.vertx.ext.web.RoutingContext;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.concurrent.CompletableFuture;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import javax.json.Json;
@@ -415,23 +416,35 @@ public final class ArtifactHandler {
                     return asto.value(artifactKey);
                 })
             )
-            .thenAccept(content ->
-                io.reactivex.Flowable.fromPublisher(content)
-                    .map(buf -> {
-                        final byte[] arr = new byte[buf.remaining()];
-                        buf.get(arr);
-                        return io.vertx.core.buffer.Buffer.buffer(arr);
-                    })
-                    .subscribe(
-                        chunk -> ctx.response().write(chunk),
-                        err -> {
-                            if (!ctx.response().ended()) {
-                                ctx.response().end();
-                            }
-                        },
-                        () -> ctx.response().end()
-                    )
-            )
+            .thenAccept(content -> {
+                // Capture the Disposable so a client disconnect (closeHandler) or
+                // response error (exceptionHandler) can cancel the upstream stream
+                // and free any file channels / temp files held by downstream tees.
+                final io.reactivex.disposables.Disposable disposable =
+                    io.reactivex.Flowable.fromPublisher(content)
+                        .map(buf -> io.vertx.core.buffer.Buffer.buffer(
+                            io.netty.buffer.Unpooled.wrappedBuffer(buf)
+                        ))
+                        .subscribe(
+                            chunk -> ctx.response().write(chunk),
+                            err -> {
+                                if (!ctx.response().ended()) {
+                                    ctx.response().end();
+                                }
+                            },
+                            () -> ctx.response().end()
+                        );
+                ctx.response().closeHandler(v -> {
+                    if (!disposable.isDisposed()) {
+                        disposable.dispose();
+                    }
+                });
+                ctx.response().exceptionHandler(err -> {
+                    if (!disposable.isDisposed()) {
+                        disposable.dispose();
+                    }
+                });
+            })
             .exceptionally(err -> {
                 if (!ctx.response().headWritten()) {
                     ApiResponse.sendError(ctx, 404, "NOT_FOUND",
@@ -542,23 +555,35 @@ public final class ArtifactHandler {
                     return asto.value(artifactKey);
                 })
             )
-            .thenAccept(content ->
-                io.reactivex.Flowable.fromPublisher(content)
-                    .map(buf -> {
-                        final byte[] arr = new byte[buf.remaining()];
-                        buf.get(arr);
-                        return io.vertx.core.buffer.Buffer.buffer(arr);
-                    })
-                    .subscribe(
-                        chunk -> ctx.response().write(chunk),
-                        err -> {
-                            if (!ctx.response().ended()) {
-                                ctx.response().end();
-                            }
-                        },
-                        () -> ctx.response().end()
-                    )
-            )
+            .thenAccept(content -> {
+                // Capture the Disposable so a client disconnect (closeHandler) or
+                // response error (exceptionHandler) can cancel the upstream stream
+                // and free any file channels / temp files held by downstream tees.
+                final io.reactivex.disposables.Disposable disposable =
+                    io.reactivex.Flowable.fromPublisher(content)
+                        .map(buf -> io.vertx.core.buffer.Buffer.buffer(
+                            io.netty.buffer.Unpooled.wrappedBuffer(buf)
+                        ))
+                        .subscribe(
+                            chunk -> ctx.response().write(chunk),
+                            err -> {
+                                if (!ctx.response().ended()) {
+                                    ctx.response().end();
+                                }
+                            },
+                            () -> ctx.response().end()
+                        );
+                ctx.response().closeHandler(v -> {
+                    if (!disposable.isDisposed()) {
+                        disposable.dispose();
+                    }
+                });
+                ctx.response().exceptionHandler(err -> {
+                    if (!disposable.isDisposed()) {
+                        disposable.dispose();
+                    }
+                });
+            })
             .exceptionally(err -> {
                 if (!ctx.response().headWritten()) {
                     ApiResponse.sendError(ctx, 404, "NOT_FOUND",
@@ -580,47 +605,44 @@ public final class ArtifactHandler {
         }
         final String name = ctx.pathParam("name");
         final RepositoryName rname = new RepositoryName.Simple(name);
-        ctx.vertx().<String>executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                if (!this.crs.exists(rname)) {
-                    return null;
-                }
-                final JsonStructure config = this.crs.value(rname);
-                if (config == null) {
-                    return null;
-                }
-                if (config instanceof javax.json.JsonObject) {
-                    final javax.json.JsonObject jobj = (javax.json.JsonObject) config;
-                    final javax.json.JsonObject repo = jobj.containsKey("repo")
-                        ? jobj.getJsonObject("repo") : jobj;
-                    return repo.getString("type", "unknown");
-                }
-                return "unknown";
-            }),
-            false
-        ).onSuccess(
-            repoType -> {
-                if (repoType == null) {
-                    ApiResponse.sendError(
-                        ctx, 404, "NOT_FOUND",
-                        String.format("Repository '%s' not found", name)
-                    );
-                    return;
-                }
-                final JsonArray instructions = buildPullInstructions(repoType, name, path);
-                ctx.response()
-                    .setStatusCode(200)
-                    .putHeader("Content-Type", "application/json")
-                    .end(
-                        new JsonObject()
-                            .put("type", repoType)
-                            .put("instructions", instructions)
-                            .encode()
-                    );
+        CompletableFuture.supplyAsync(() -> {
+            if (!this.crs.exists(rname)) {
+                return null;
             }
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+            final JsonStructure config = this.crs.value(rname);
+            if (config == null) {
+                return null;
+            }
+            if (config instanceof javax.json.JsonObject) {
+                final javax.json.JsonObject jobj = (javax.json.JsonObject) config;
+                final javax.json.JsonObject repo = jobj.containsKey("repo")
+                    ? jobj.getJsonObject("repo") : jobj;
+                return repo.getString("type", "unknown");
+            }
+            return "unknown";
+        }, HandlerExecutor.get()).whenComplete((repoType, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                return;
+            }
+            if (repoType == null) {
+                ApiResponse.sendError(
+                    ctx, 404, "NOT_FOUND",
+                    String.format("Repository '%s' not found", name)
+                );
+                return;
+            }
+            final JsonArray instructions = buildPullInstructions(repoType, name, path);
+            ctx.response()
+                .setStatusCode(200)
+                .putHeader("Content-Type", "application/json")
+                .end(
+                    new JsonObject()
+                        .put("type", repoType)
+                        .put("instructions", instructions)
+                        .encode()
+                );
+        });
     }
 
     /**

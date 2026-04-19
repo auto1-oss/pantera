@@ -22,10 +22,10 @@ import com.auto1.pantera.http.client.UriClientSlice;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
-import com.auto1.pantera.cooldown.CooldownInspector;
-import com.auto1.pantera.cooldown.CooldownRequest;
-import com.auto1.pantera.cooldown.CooldownResponses;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
+import com.auto1.pantera.cooldown.api.CooldownRequest;
+import com.auto1.pantera.cooldown.response.CooldownResponseRegistry;
+import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 
 import javax.json.Json;
@@ -246,7 +246,9 @@ public final class ProxyDownloadSlice implements Slice {
                             .field("package.version", version)
                             .log();
                         return CompletableFuture.completedFuture(
-                            CooldownResponses.forbidden(result.block().orElseThrow())
+                            CooldownResponseRegistry.instance()
+                                .getOrThrow(this.rtype)
+                                .forbidden(result.block().orElseThrow())
                         );
                     }
                     return this.fetchAndCache(

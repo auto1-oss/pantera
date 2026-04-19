@@ -47,9 +47,11 @@ public final class Gzip {
      */
     @SuppressWarnings("PMD.AssignmentInOperand")
     public void unpackTar(final Path dest) throws IOException {
-        final GzipCompressorInputStream input =
-            new GzipCompressorInputStream(Files.newInputStream(this.file));
-        try (TarArchiveInputStream tar = new TarArchiveInputStream(input)) {
+        try (
+            GzipCompressorInputStream input =
+                new GzipCompressorInputStream(Files.newInputStream(this.file));
+            TarArchiveInputStream tar = new TarArchiveInputStream(input)
+        ) {
             TarArchiveEntry entry;
             while ((entry = (TarArchiveEntry) tar.getNextEntry()) != null) {
                 final Path next = dest.resolve(entry.getName());

@@ -12,7 +12,7 @@ package com.auto1.pantera.adapters.pypi;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Storage;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
@@ -55,7 +55,7 @@ public final class PypiProxy implements Slice {
             () -> new IllegalStateException("PyPI proxy requires storage to be set")
         );
         
-        // Support multiple remotes with GroupSlice (like maven-proxy)
+        // Support multiple remotes with GroupResolver (like maven-proxy)
         // Each remote gets its own PyProxySlice, evaluated in priority order
         this.slice = new RaceSlice(
             cfg.remotes().stream().map(

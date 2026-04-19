@@ -16,7 +16,7 @@ import com.auto1.pantera.docker.composite.ReadWriteDocker;
 import com.auto1.pantera.docker.http.DockerSlice;
 import com.auto1.pantera.docker.http.TrimmedDocker;
 import com.auto1.pantera.docker.proxy.ProxyDocker;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.auth.CombinedAuthScheme;
 import com.auto1.pantera.http.DockerRoutingSlice;
 import com.auto1.pantera.http.Headers;
@@ -126,7 +126,7 @@ public final class DockerProxy implements Slice {
     ) {
         final DockerProxyCooldownInspector inspector = new DockerProxyCooldownInspector();
         // Register inspector globally so unblock can invalidate its cache
-        com.auto1.pantera.cooldown.InspectorRegistry.instance()
+        com.auto1.pantera.cooldown.config.InspectorRegistry.instance()
             .register("docker", cfg.name(), inspector);
         final Docker proxies = new MultiReadDocker(
             cfg.remotes().stream().map(r -> proxy(client, cfg, events, r, inspector))

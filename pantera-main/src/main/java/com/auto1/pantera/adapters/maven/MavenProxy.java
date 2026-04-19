@@ -19,7 +19,7 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.client.ClientSlices;
 import com.auto1.pantera.http.client.auth.GenericAuthenticator;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.group.RaceSlice;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.maven.http.MavenProxySlice;

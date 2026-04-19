@@ -12,28 +12,32 @@ package com.auto1.pantera.group;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.group.merge.StreamingMetadataMerger;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.context.ContextualExecutor;
+import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.http.trace.MdcPropagation;
+import io.micrometer.core.instrument.DistributionSummary;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.ByteBuffer;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ForkJoinPool;
 
 /**
  * Maven-specific group slice with metadata merging support.
- * Extends basic GroupSlice behavior with Maven metadata aggregation.
+ * Extends basic GroupResolver behavior with Maven metadata aggregation.
  *
  * <p>For maven-metadata.xml requests:
  * <ul>
@@ -92,22 +96,30 @@ public final class MavenGroupSlice implements Slice {
      *
      * <p>Serves as a request coalescer: when N concurrent requests arrive for
      * the same {@code maven-metadata.xml} with a cold L1+L2 cache, the first
-     * registers a "gate" future here and runs the full N-member fanout +
-     * merge.  Late arrivals find the gate already present and park on it
-     * instead of starting their own fanout, then retry {@link #response} once
-     * the leader completes.  On retry the L1 cache is warm, so followers
-     * return immediately without touching the network.  The combination of
-     * coalescer + two-tier cache collapses a thundering herd of N concurrent
-     * misses into exactly ONE upstream fanout + merge — same pattern as
-     * {@code GroupSlice#proxyOnlyFanout}.
+     * installs a gate inside the {@link SingleFlight} and runs the full
+     * N-member fanout + merge.  Late arrivals park on the gate and retry
+     * {@link #response} once the leader completes.  On retry the L1 cache is
+     * warm, so followers return immediately without touching the network.
+     * The combination of coalescer + two-tier cache collapses a thundering
+     * herd of N concurrent misses into exactly ONE upstream fanout + merge —
+     * same pattern as {@code GroupResolver#proxyOnlyFanout}.
      *
      * <p>This coalescer deliberately does NOT share the winning {@link Response}
      * object across callers: {@link Content} is a one-shot reactive stream
      * that cannot be subscribed to twice.  Instead followers re-enter
      * {@code response()} and read the freshly-populated cache.
+     *
+     * <p>{@link SingleFlight} replaces the hand-rolled {@code ConcurrentHashMap}
+     * dance from commit {@code b37deea2} — see §6.4 of
+     * {@code docs/analysis/v2.2-target-architecture.md} and A6/A7/A8/A9 in
+     * {@code v2.1.3-architecture-review.md}.
      */
-    private final ConcurrentMap<String, CompletableFuture<Void>> inFlightMetadataFetches =
-        new ConcurrentHashMap<>();
+    private final SingleFlight<String, Void> inFlightMetadataFetches =
+        new SingleFlight<>(
+            Duration.ofMinutes(5),
+            10_000,
+            ContextualExecutor.contextualize(ForkJoinPool.commonPool())
+        );
 
     /**
      * Constructor.
@@ -208,10 +220,10 @@ public final class MavenGroupSlice implements Slice {
         );
 
         return mergeMetadata(metadataLine, headers, body, metadataPath)
-            .thenApply(MdcPropagation.withMdcFunction(metadataResponse -> {
+            .thenApply(metadataResponse -> {
                 // Extract body from metadata response
                 return metadataResponse.body().asBytesFuture()
-                    .thenApply(MdcPropagation.withMdcFunction(metadataBytes -> {
+                    .thenApply(metadataBytes -> {
                         try {
                             // Compute checksum
                             final java.security.MessageDigest digest = java.security.MessageDigest.getInstance(
@@ -220,14 +232,11 @@ public final class MavenGroupSlice implements Slice {
                             final byte[] checksumBytes = digest.digest(metadataBytes);
 
                             // Convert to hex string
-                            final StringBuilder hexString = new StringBuilder();
-                            for (byte b : checksumBytes) {
-                                hexString.append(String.format("%02x", b));
-                            }
+                            final String hex = java.util.HexFormat.of().formatHex(checksumBytes);
 
                             return ResponseBuilder.ok()
                                 .header("Content-Type", "text/plain")
-                                .body(hexString.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                                .body(hex.getBytes(java.nio.charset.StandardCharsets.UTF_8))
                                 .build();
                         } catch (java.security.NoSuchAlgorithmException e) {
                             EcsLogger.error("com.auto1.pantera.maven")
@@ -242,8 +251,8 @@ public final class MavenGroupSlice implements Slice {
                                 .textBody("Failed to compute checksum")
                                 .build();
                         }
-                    }));
-            }))
+                    });
+            })
             .thenCompose(future -> future);
     }
 
@@ -251,10 +260,11 @@ public final class MavenGroupSlice implements Slice {
      * Merge maven-metadata.xml from all members.
      *
      * <p>Fast path: L1/L2 cache hit → return cached bytes.  Slow path: miss →
-     * coalesce concurrent callers through {@link #inFlightMetadataFetches} so
-     * exactly one leader does the N-member fanout + merge while followers park
-     * on the leader's gate and re-enter {@code response()} once the cache is
-     * warm.  See {@code GroupSlice#proxyOnlyFanout} for the same pattern.
+     * coalesce concurrent callers through the in-flight {@link SingleFlight}
+     * so exactly one leader does the N-member fanout + merge while followers
+     * park on the leader's gate and re-enter {@code response()} once the
+     * cache is warm.  See {@code GroupSlice#proxyOnlyFanout} for the same
+     * pattern.
      */
     private CompletableFuture<Response> mergeMetadata(
         final RequestLine line,
@@ -265,7 +275,7 @@ public final class MavenGroupSlice implements Slice {
         final String cacheKey = path;
 
         // Check two-tier cache (L1 then L2 if miss)
-        return this.metadataCache.get(cacheKey).thenCompose(MdcPropagation.withMdc(cached -> {
+        return this.metadataCache.get(cacheKey).thenCompose(cached -> {
             if (cached.isPresent()) {
                 // Cache HIT (L1 or L2)
                 EcsLogger.debug("com.auto1.pantera.maven")
@@ -285,54 +295,44 @@ public final class MavenGroupSlice implements Slice {
             }
 
             // Cache MISS: coalesce concurrent callers so only one does the
-            // N-member fanout + merge.  See class-level field Javadoc.
+            // N-member fanout + merge. Leader-vs-follower is distinguished by
+            // a flag the loader sets on the caller's thread (Caffeine runs
+            // the bifunction synchronously for the first absent key). The
+            // leader does the real fetch + merge and returns the Response
+            // directly; followers park on the gate and re-enter response()
+            // once the L1 cache is warm — same pattern as
+            // {@code GroupSlice#proxyOnlyFanout}. SingleFlight handles zombie
+            // eviction and stack-flat completion (A6/A7/A8/A9, WI-05).
             final String dedupKey = this.group + ":" + path;
-            final CompletableFuture<Void> freshGate = new CompletableFuture<>();
-            final CompletableFuture<Void> existingGate =
-                this.inFlightMetadataFetches.putIfAbsent(dedupKey, freshGate);
-            if (existingGate != null) {
-                // Follower: another request is already fetching+merging for
-                // this path.  Wait for the leader's gate, then re-enter
-                // response() — by that time the L1 cache is warm so this
-                // retry is just a cache read.
-                //
-                // CRITICAL: use thenComposeAsync, NOT thenCompose.  The
-                // leader completes the gate BEFORE removing it from
-                // inFlightMetadataFetches (see whenComplete below —
-                // intentional ordering to close a putIfAbsent race).  If the
-                // gate is already completed when the follower calls
-                // thenCompose, the callback runs synchronously on the same
-                // stack; the retry then hits the SAME (still-present) gate
-                // and would recurse, blowing the stack with
-                // StackOverflowError before the leader's remove() runs.
-                // thenComposeAsync dispatches the retry to the common pool
-                // so the leader's whenComplete queue can drain remove()
-                // first.  Same fix as commit 7c30f01f in GroupSlice.
-                EcsLogger.debug("com.auto1.pantera.maven")
-                    .message("Coalescing with in-flight metadata fetch")
-                    .eventCategory("web")
-                    .eventAction("metadata_fetch_coalesce")
-                    .field("repository.name", this.group)
-                    .field("url.path", path)
-                    .log();
-                return existingGate.thenComposeAsync(MdcPropagation.withMdc(
-                    ignored -> this.response(line, headers, body)
-                ));
+            final boolean[] isLeader = {false};
+            final CompletableFuture<Void> leaderGate = new CompletableFuture<>();
+            final CompletableFuture<Void> gate = this.inFlightMetadataFetches.load(
+                dedupKey,
+                () -> {
+                    isLeader[0] = true;
+                    return leaderGate;
+                }
+            );
+            if (isLeader[0]) {
+                return fetchAndMergeFromMembers(line, headers, path, cacheKey)
+                    .whenComplete(
+                        (resp, err) -> leaderGate.complete(null)
+                    );
             }
-
-            // Leader: do the actual fetch + merge; complete then remove the
-            // gate in whenComplete so followers observe completion first.
-            return fetchAndMergeFromMembers(line, headers, path, cacheKey)
-                .whenComplete(MdcPropagation.withMdcBiConsumer((resp, err) -> {
-                    // Complete the gate BEFORE removing from the map — same
-                    // reasoning as GroupSlice#proxyOnlyFanout: closes the race
-                    // window where a late request arriving between remove()
-                    // and complete() could observe an empty map and start a
-                    // second fanout, defeating coalescing.
-                    freshGate.complete(null);
-                    this.inFlightMetadataFetches.remove(dedupKey, freshGate);
-                }));
-        }));
+            EcsLogger.debug("com.auto1.pantera.maven")
+                .message("Coalescing with in-flight metadata fetch")
+                .eventCategory("web")
+                .eventAction("metadata_fetch_coalesce")
+                .field("repository.name", this.group)
+                .field("url.path", path)
+                .log();
+            // Follower: re-enter response() once the gate resolves. Swallow
+            // any exception the gate might carry — the L1/L2 cache is the
+            // source of truth on retry.
+            return gate.exceptionally(err -> null).thenCompose(
+                ignored -> this.response(line, headers, body)
+            );
+        });
     }
 
     /**
@@ -349,7 +349,7 @@ public final class MavenGroupSlice implements Slice {
         // Cache MISS - fetch and merge from members
         // CRITICAL: Consume original body to prevent OneTimePublisher errors
         // GET requests for maven-metadata.xml have empty bodies, but Content is still reference-counted
-        return CompletableFuture.completedFuture((byte[]) null).thenCompose(MdcPropagation.withMdc(requestBytes -> {
+        return CompletableFuture.completedFuture((byte[]) null).thenCompose(requestBytes -> {
             // Track fetch duration separately from merge duration
             final long fetchStartTime = System.currentTimeMillis();
 
@@ -370,7 +370,7 @@ public final class MavenGroupSlice implements Slice {
 
                 final CompletableFuture<byte[]> memberFuture = memberSlice
                     .response(memberLine, dropFullPathHeader(headers), Content.EMPTY)
-                    .thenCompose(MdcPropagation.withMdc(resp -> {
+                    .thenCompose(resp -> {
                         if (resp.status() == RsStatus.OK) {
                             return readResponseBody(resp.body());
                         } else {
@@ -378,8 +378,8 @@ public final class MavenGroupSlice implements Slice {
                             return resp.body().asBytesFuture()
                                 .thenApply(ignored -> (byte[]) null);
                         }
-                    }))
-                    .exceptionally(MdcPropagation.withMdcFunction(err -> {
+                    })
+                    .exceptionally(err -> {
                         EcsLogger.warn("com.auto1.pantera.maven")
                             .message("Member failed to fetch metadata: " + member)
                             .eventCategory("web")
@@ -389,14 +389,14 @@ public final class MavenGroupSlice implements Slice {
                             .error(err)
                             .log();
                         return null;
-                    }));
+                    });
 
                 futures.add(memberFuture);
             }
 
             // Wait for all members and merge results
             return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
-                .thenCompose(MdcPropagation.withMdc(v -> {
+                .thenCompose(v -> {
                     final List<byte[]> metadataList = new ArrayList<>();
                     for (CompletableFuture<byte[]> future : futures) {
                         final byte[] metadata = future.getNow(null);
@@ -411,7 +411,7 @@ public final class MavenGroupSlice implements Slice {
                     if (metadataList.isEmpty()) {
                         // All members failed — try last-known-good stale fallback
                         return MavenGroupSlice.this.metadataCache.getStale(cacheKey)
-                            .thenApply(MdcPropagation.withMdcFunction(stale -> {
+                            .thenApply(stale -> {
                                 if (stale.isPresent()) {
                                     EcsLogger.warn("com.auto1.pantera.maven")
                                         .message("Returning stale metadata (all members failed)")
@@ -438,16 +438,16 @@ public final class MavenGroupSlice implements Slice {
                                     .field("event.duration", fetchDuration)
                                     .log();
                                 return ResponseBuilder.notFound().build();
-                            }));
+                            });
                     }
 
                     // Track merge duration separately (actual XML processing time)
                     final long mergeStartTime = System.currentTimeMillis();
 
-                    // Use reflection to call MetadataMerger from maven-adapter module
-                    // This avoids circular dependency issues
-                    return mergeUsingReflection(metadataList)
-                        .thenApply(MdcPropagation.withMdcFunction(mergedBytes -> {
+                    // StAX streaming merge — see {@link StreamingMetadataMerger}.
+                    // Peak heap is O(unique versions), not O(sum of body sizes).
+                    return mergeStreaming(metadataList)
+                        .thenApply(mergedBytes -> {
                             final long mergeDuration = System.currentTimeMillis() - mergeStartTime;
                             final long totalDuration = fetchDuration + mergeDuration;
 
@@ -487,9 +487,9 @@ public final class MavenGroupSlice implements Slice {
                                 .header("Content-Type", "application/xml")
                                 .body(mergedBytes)
                                 .build();
-                        }));
-                }))
-                .exceptionally(MdcPropagation.withMdcFunction(err -> {
+                        });
+                })
+                .exceptionally(err -> {
                     // Unwrap CompletionException to get the real cause
                     final Throwable cause = err.getCause() != null ? err.getCause() : err;
                     EcsLogger.error("com.auto1.pantera.maven")
@@ -504,46 +504,58 @@ public final class MavenGroupSlice implements Slice {
                     return ResponseBuilder.internalError()
                         .textBody("Failed to merge metadata: " + cause.getMessage())
                         .build();
-                }));
-        }));
+                });
+        });
     }
 
     /**
-     * Merge metadata using MetadataMerger from maven-adapter via reflection.
-     * This allows pantera-main to call maven-adapter without circular dependency.
+     * Merge metadata via the StAX streaming merger.
+     *
+     * <p>Each member byte array is fed once into a single
+     * {@link StreamingMetadataMerger}; only the deduplicated version set
+     * + scalar maxes survive past the {@code mergeMember} call. Peak
+     * memory is O(unique versions), not O(sum of body sizes).
+     *
+     * <p>Per-member body size is recorded as the alert-only histogram
+     * {@code pantera.maven.group.member_metadata_size_bytes} (when
+     * Micrometer is initialised).
+     *
+     * <p>The returned future is always successful: the merger tolerates
+     * malformed members internally and emits a minimal {@code <metadata/>}
+     * if every member parse failed.
      */
-    private CompletableFuture<byte[]> mergeUsingReflection(final List<byte[]> metadataList) {
-        try {
-            // Load MetadataMerger class
-            final Class<?> mergerClass = Class.forName(
-                "com.auto1.pantera.maven.metadata.MetadataMerger"
-            );
-            
-            // Create instance
-            final Object merger = mergerClass
-                .getConstructor(List.class)
-                .newInstance(metadataList);
-            
-            // Call merge() method
-            @SuppressWarnings("unchecked")
-            final CompletableFuture<Content> mergeFuture = (CompletableFuture<Content>)
-                mergerClass.getMethod("merge").invoke(merger);
-            
-            // Read content
-            return mergeFuture.thenCompose(this::readResponseBody);
-            
-        } catch (Exception e) {
-            EcsLogger.error("com.auto1.pantera.maven")
-                .message("Failed to merge metadata using reflection")
-                .eventCategory("web")
-                .eventAction("metadata_merge")
-                .eventOutcome("failure")
-                .error(e)
-                .log();
-            return CompletableFuture.failedFuture(
-                new IllegalStateException("Maven metadata merging not available", e)
-            );
+    private CompletableFuture<byte[]> mergeStreaming(final List<byte[]> metadataList) {
+        return CompletableFuture.supplyAsync(() -> {
+            final StreamingMetadataMerger merger = new StreamingMetadataMerger();
+            for (final byte[] body : metadataList) {
+                if (body == null || body.length == 0) {
+                    continue;
+                }
+                this.recordMemberBodySize(body.length);
+                merger.mergeMember(new ByteArrayInputStream(body));
+            }
+            return merger.toXml();
+        });
+    }
+
+    /**
+     * Alert-only histogram of per-member metadata body size. Never
+     * rejects; outliers are surfaced via the histogram's high quantiles.
+     * No-op when {@link com.auto1.pantera.metrics.MicrometerMetrics} is
+     * not initialised (e.g. unit tests).
+     */
+    private void recordMemberBodySize(final long bytes) {
+        if (!com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            return;
         }
+        DistributionSummary.builder("pantera.maven.group.member_metadata_size_bytes")
+            .description("Maven group member maven-metadata.xml body size (alert-only)")
+            .baseUnit("bytes")
+            .tags("repo_name", this.group)
+            .register(
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance().getRegistry()
+            )
+            .record(bytes);
     }
 
     /**

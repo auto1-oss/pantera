@@ -64,7 +64,7 @@ class GoProxySliceTest {
             Optional.empty(),
             "test-repo",
             "go-proxy",
-            com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE
+            com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE
         );
         
         MatcherAssert.assertThat(
@@ -94,7 +94,7 @@ class GoProxySliceTest {
             Optional.empty(),
             "test-repo",
             "go-proxy",
-            com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE
+            com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE
         );
 
         MatcherAssert.assertThat(

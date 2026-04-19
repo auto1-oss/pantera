@@ -5,9 +5,9 @@
 package com.auto1.pantera.adapters.docker;
 
 import com.auto1.pantera.asto.Content;
-import com.auto1.pantera.cooldown.CooldownRequest;
-import com.auto1.pantera.cooldown.CooldownResponses;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownRequest;
+import com.auto1.pantera.cooldown.response.CooldownResponseRegistry;
+import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.docker.Digest;
 import com.auto1.pantera.docker.Docker;
 import com.auto1.pantera.docker.cache.DockerProxyCooldownInspector;
@@ -131,7 +131,9 @@ public final class DockerProxyCooldownSlice implements Slice {
                         );
                         return this.cooldown.evaluate(cooldownRequest, this.inspector)
                             .thenApply(result -> result.blocked()
-                                ? CooldownResponses.forbidden(result.block().orElseThrow())
+                                ? CooldownResponseRegistry.instance()
+                                    .getOrThrow(this.repoType)
+                                    .forbidden(result.block().orElseThrow())
                                 : rebuilt
                             );
                     }
@@ -146,7 +148,9 @@ public final class DockerProxyCooldownSlice implements Slice {
                         );
                         return this.cooldown.evaluate(cooldownRequest, this.inspector)
                             .thenApply(result -> result.blocked()
-                                ? CooldownResponses.forbidden(result.block().orElseThrow())
+                                ? CooldownResponseRegistry.instance()
+                                    .getOrThrow(this.repoType)
+                                    .forbidden(result.block().orElseThrow())
                                 : rebuilt
                             );
                     }
@@ -164,7 +168,9 @@ public final class DockerProxyCooldownSlice implements Slice {
                             );
                             return this.cooldown.evaluate(cooldownRequest, this.inspector)
                                 .thenApply(result -> result.blocked()
-                                    ? CooldownResponses.forbidden(result.block().orElseThrow())
+                                    ? CooldownResponseRegistry.instance()
+                                        .getOrThrow(this.repoType)
+                                        .forbidden(result.block().orElseThrow())
                                     : rebuilt
                                 );
                         });

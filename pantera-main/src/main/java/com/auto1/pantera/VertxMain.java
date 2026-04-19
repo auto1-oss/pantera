@@ -441,7 +441,7 @@ public final class VertxMain {
                 Thread.sleep(2000); // wait for server to fully bind
                 final java.net.http.HttpClient hc = java.net.http.HttpClient.newBuilder()
                     .connectTimeout(java.time.Duration.ofSeconds(3)).build();
-                // Hit each group repo once to JIT-compile GroupSlice + index lookup
+                // Hit each group repo once to JIT-compile GroupResolver + index lookup
                 for (final com.auto1.pantera.settings.repo.RepoConfig cfg : repos.configs()) {
                     if (cfg.type().endsWith("-group")) {
                         try {
@@ -1041,12 +1041,12 @@ public final class VertxMain {
             // Initialize MicrometerMetrics with the registry
             com.auto1.pantera.metrics.MicrometerMetrics.initialize(registry);
 
-            // Initialize GroupSliceMetrics so the drain-drop counter
+            // Initialize GroupResolverMetrics so the drain-drop counter
             // (pantera.group.drain.dropped) registers with Prometheus. Without
-            // this call, GroupSliceMetrics.instance() returns null and the
+            // this call, GroupResolverMetrics.instance() returns null and the
             // counter is never emitted — operators fly blind on drain pool
             // saturation even though the code-level counter increments.
-            com.auto1.pantera.metrics.GroupSliceMetrics.initialize(registry);
+            com.auto1.pantera.metrics.GroupResolverMetrics.initialize(registry);
 
             // Initialize storage metrics recorder
             com.auto1.pantera.metrics.StorageMetricsRecorder.initialize();

@@ -15,7 +15,7 @@ import com.amihaiemil.eoyaml.YamlSequence;
 import com.auto1.pantera.api.ssl.KeyStore;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.cache.ValkeyConnection;
-import com.auto1.pantera.cooldown.CooldownSettings;
+import com.auto1.pantera.cooldown.config.CooldownSettings;
 import com.auto1.pantera.http.client.HttpClientSettings;
 import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.scheduling.MetadataEventQueues;
@@ -166,6 +166,23 @@ public interface Settings extends AutoCloseable {
      * @return Valkey connection if configured
      */
     default Optional<ValkeyConnection> valkeyConnection() {
+        return Optional.empty();
+    }
+
+    /**
+     * Cached filter for the "local user enabled" JDBC lookup, if the
+     * deployment has a dataSource configured and the auth chain was
+     * wrapped with {@code CachedLocalEnabledFilter}. Returned empty
+     * otherwise.
+     *
+     * <p>Exposed so admin user-management handlers can invalidate a
+     * per-user cache entry immediately when enabled state is toggled
+     * (enable / disable / update / delete).
+     *
+     * @return Optional filter reference; empty in deployments without a DB
+     */
+    default Optional<com.auto1.pantera.auth.CachedLocalEnabledFilter>
+        cachedLocalEnabledFilter() {
         return Optional.empty();
     }
 

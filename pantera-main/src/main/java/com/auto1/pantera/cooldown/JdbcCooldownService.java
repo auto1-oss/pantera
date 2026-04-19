@@ -9,6 +9,19 @@
  * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
  */
 package com.auto1.pantera.cooldown;
+
+import com.auto1.pantera.cooldown.api.CooldownBlock;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
+import com.auto1.pantera.cooldown.api.CooldownReason;
+import com.auto1.pantera.cooldown.api.CooldownRequest;
+import com.auto1.pantera.cooldown.api.CooldownResult;
+import com.auto1.pantera.cooldown.api.CooldownService;
+import com.auto1.pantera.cooldown.cache.CooldownCache;
+import com.auto1.pantera.cooldown.config.CooldownCircuitBreaker;
+import com.auto1.pantera.cooldown.config.CooldownSettings;
+import com.auto1.pantera.cooldown.config.InspectorRegistry;
+import com.auto1.pantera.cooldown.metrics.CooldownMetrics;
+import com.auto1.pantera.http.log.EcsLogger;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -21,9 +34,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
 import java.util.stream.Collectors;
-import com.auto1.pantera.cooldown.metrics.CooldownMetrics;
-import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.http.trace.MdcPropagation;
+
 
 final class JdbcCooldownService implements CooldownService {
 
@@ -88,14 +99,15 @@ final class JdbcCooldownService implements CooldownService {
     ) {
         this.settings = Objects.requireNonNull(settings);
         this.repository = Objects.requireNonNull(repository);
-        this.executor = Objects.requireNonNull(executor);
+        this.executor = com.auto1.pantera.http.context.ContextualExecutor
+            .contextualize(Objects.requireNonNull(executor));
         this.cache = Objects.requireNonNull(cache);
         this.circuitBreaker = Objects.requireNonNull(circuitBreaker);
     }
 
     /**
      * Get the cooldown cache instance.
-     * Used by CooldownMetadataServiceImpl for cache sharing.
+     * Used by MetadataFilterService for cache sharing.
      * @return CooldownCache instance
      */
     public CooldownCache cache() {
@@ -260,7 +272,7 @@ final class JdbcCooldownService implements CooldownService {
             request.artifact(),
             request.version(),
             () -> this.evaluateFromDatabase(request, inspector)
-        ).thenCompose(MdcPropagation.withMdc(blocked -> {
+        ).thenCompose(blocked -> {
             if (blocked) {
                 EcsLogger.info("com.auto1.pantera.cooldown")
                     .message("Artifact BLOCKED by cooldown (cache/db)")
@@ -288,7 +300,7 @@ final class JdbcCooldownService implements CooldownService {
                 this.recordVersionAllowedMetric(request.repoType(), request.repoName());
                 return CompletableFuture.completedFuture(CooldownResult.allowed());
             }
-        })).whenComplete(MdcPropagation.withMdcBiConsumer((result, error) -> {
+        }).whenComplete((result, error) -> {
             if (error != null) {
                 this.circuitBreaker.recordFailure();
                 EcsLogger.error("com.auto1.pantera.cooldown")
@@ -303,7 +315,7 @@ final class JdbcCooldownService implements CooldownService {
             } else {
                 this.circuitBreaker.recordSuccess();
             }
-        }));
+        });
     }
 
     @Override
@@ -380,7 +392,7 @@ final class JdbcCooldownService implements CooldownService {
         // Step 1: Check database for existing block (async)
         return CompletableFuture.supplyAsync(() -> {
             return this.checkExistingBlockWithTimestamp(request);
-        }, this.executor).thenCompose(MdcPropagation.withMdc(result -> {
+        }, this.executor).thenCompose(result -> {
             if (result.isPresent()) {
                 final BlockCacheEntry entry = result.get();
                 EcsLogger.debug("com.auto1.pantera.cooldown")
@@ -402,9 +414,9 @@ final class JdbcCooldownService implements CooldownService {
             }
             // Step 2: No existing block - check if artifact should be blocked
             return this.checkNewArtifactAndCache(request, inspector);
-        }));
+        });
     }
-    
+
     /**
      * Get full block result with details from database.
      * Only called when cache says artifact is blocked.
@@ -520,7 +532,7 @@ final class JdbcCooldownService implements CooldownService {
         // Async fetch release date with timeout to prevent hanging
         return inspector.releaseDate(request.artifact(), request.version())
             .orTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
-            .exceptionally(MdcPropagation.<Throwable, Optional<Instant>>withMdcFunction(error -> {
+            .exceptionally(error -> {
                 EcsLogger.warn("com.auto1.pantera.cooldown")
                     .message("Failed to fetch release date (allowing)")
                     .eventCategory("database")
@@ -531,10 +543,10 @@ final class JdbcCooldownService implements CooldownService {
                     .field("error.message", error.getMessage())
                     .log();
                 return Optional.empty();
-            }))
-            .thenCompose(MdcPropagation.withMdc(release -> {
+            })
+            .thenCompose(release -> {
                 return this.shouldBlockNewArtifact(request, inspector, release);
-            }));
+            });
     }
 
     /**
@@ -598,13 +610,13 @@ final class JdbcCooldownService implements CooldownService {
                 .log();
             // Create block in database (async)
             return this.createBlockInDatabase(request, CooldownReason.FRESH_RELEASE, until)
-                .thenApply(MdcPropagation.withMdcFunction(success -> {
+                .thenApply(success -> {
                     // Cache as blocked with dynamic TTL (until block expires)
                     this.cache.putBlocked(request.repoName(), request.artifact(),
                         request.version(), until);
                     return true;
-                }))
-                .exceptionally(MdcPropagation.<Throwable, Boolean>withMdcFunction(error -> {
+                })
+                .exceptionally(error -> {
                     EcsLogger.error("com.auto1.pantera.cooldown")
                         .message("Failed to create block (blocking anyway)")
                         .eventCategory("database")
@@ -618,7 +630,7 @@ final class JdbcCooldownService implements CooldownService {
                     this.cache.putBlocked(request.repoName(), request.artifact(),
                         request.version(), until);
                     return true;
-                }));
+                });
         }
 
         EcsLogger.debug("com.auto1.pantera.cooldown")
@@ -664,11 +676,11 @@ final class JdbcCooldownService implements CooldownService {
                 installedBy
             );
             return true;
-        }, this.executor).thenApply(MdcPropagation.withMdcFunction(result -> {
+        }, this.executor).thenApply(result -> {
             // Increment active blocks metric (O(1), no DB query)
             this.incrementActiveBlocksMetric(request.repoType(), request.repoName());
             return result;
-        }));
+        });
     }
 
     /**
@@ -732,7 +744,7 @@ final class JdbcCooldownService implements CooldownService {
                 .log();
         }
         // Invalidate inspector cache (same as unblockSingle does)
-        com.auto1.pantera.cooldown.InspectorRegistry.instance()
+        InspectorRegistry.instance()
             .invalidate(record.repoType(), record.repoName(),
                 record.artifact(), record.version());
     }
@@ -748,7 +760,7 @@ final class JdbcCooldownService implements CooldownService {
         record.ifPresent(value -> this.release(value, actor, Instant.now()));
         
         // Invalidate inspector cache (works for all adapters: Docker, NPM, PyPI, etc.)
-        com.auto1.pantera.cooldown.InspectorRegistry.instance()
+        InspectorRegistry.instance()
             .invalidate(repoType, repoName, artifact, version);
     }
 
@@ -779,7 +791,7 @@ final class JdbcCooldownService implements CooldownService {
         // Single bulk DELETE instead of N individual updates
         final int count = this.repository.deleteActiveBlocksForRepo(repoType, repoName);
         // Clear inspector cache (works for all adapters: Docker, NPM, PyPI, etc.)
-        com.auto1.pantera.cooldown.InspectorRegistry.instance()
+        InspectorRegistry.instance()
             .clearAll(repoType, repoName);
         return count;
     }

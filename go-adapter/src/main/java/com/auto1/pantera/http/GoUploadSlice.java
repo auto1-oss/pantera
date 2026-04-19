@@ -164,7 +164,7 @@ final class GoUploadSlice implements Slice {
             .thenApply(meta -> meta.read(Meta.OP_SIZE).orElseThrow())
             .thenAccept(
                 size -> this.events.ifPresent(
-                    queue -> queue.add(
+                    queue -> queue.add( // ok: unbounded ConcurrentLinkedDeque (ArtifactEvent queue)
                         new ArtifactEvent(
                             REPO_TYPE,
                             this.repo,

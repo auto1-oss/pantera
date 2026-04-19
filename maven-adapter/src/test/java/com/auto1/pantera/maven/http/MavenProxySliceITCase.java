@@ -85,7 +85,7 @@ final class MavenProxySliceITCase {
                     Optional.of(this.events),
                     "my-maven-proxy",
                     "maven-proxy",
-                    com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE,
+                    com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE,
                     Optional.of(this.storage)
                 )
             )

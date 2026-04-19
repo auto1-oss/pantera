@@ -12,7 +12,7 @@ package com.auto1.pantera.index;
 
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.misc.ConfigDefaults;
-import com.auto1.pantera.http.trace.TraceContextExecutor;
+import com.auto1.pantera.http.context.ContextualExecutorService;
 
 import javax.sql.DataSource;
 import java.sql.Array;
@@ -31,6 +31,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -184,9 +185,14 @@ public final class DbArtifactIndex implements ArtifactIndex {
 
     /**
      * Bounded queue capacity for the default executor.
-     * When the queue is full, {@link ThreadPoolExecutor.CallerRunsPolicy} executes
-     * the task on the submitting thread, propagating backpressure to callers instead
-     * of buffering unboundedly and OOM-ing the JVM under DB latency spikes.
+     * When the queue is full, {@link ThreadPoolExecutor.AbortPolicy} rejects further
+     * submissions with {@link java.util.concurrent.RejectedExecutionException}, which
+     * callers translate into a typed {@link com.auto1.pantera.http.fault.Fault.IndexUnavailable}.
+     * The previous {@link ThreadPoolExecutor.CallerRunsPolicy} applied backpressure by
+     * running the task on the submitting thread, but when that submitting thread was
+     * a Vert.x event-loop thread (e.g. a group-resolver request inlining the index
+     * call), the blocking JDBC work ran on the event loop and stalled the entire
+     * reactor. AbortPolicy keeps the event loop free and fails fast under saturation.
      * Configurable via PANTERA_INDEX_EXECUTOR_QUEUE env var.
      */
     private static final int QUEUE_SIZE =
@@ -216,8 +222,9 @@ public final class DbArtifactIndex implements ArtifactIndex {
      * Constructor with default executor.
      * Creates a bounded thread pool sized to available processors.
      * Uses a {@code QUEUE_SIZE}-slot {@link LinkedBlockingQueue} and
-     * {@link ThreadPoolExecutor.CallerRunsPolicy} to apply backpressure when the
-     * queue fills rather than buffering tasks unboundedly.
+     * {@link ThreadPoolExecutor.AbortPolicy} so saturation surfaces as a
+     * {@link java.util.concurrent.RejectedExecutionException} — never a blocking
+     * run on the submitting thread (which may be a Vert.x event loop).
      *
      * @param source JDBC DataSource
      */
@@ -256,11 +263,28 @@ public final class DbArtifactIndex implements ArtifactIndex {
     /**
      * Build the default bounded executor for DB index operations.
      * Queue size is configurable via PANTERA_INDEX_EXECUTOR_QUEUE (default 500).
-     * When the queue is full, {@link ThreadPoolExecutor.CallerRunsPolicy} runs the
-     * task on the submitting thread, propagating backpressure instead of OOM-ing
-     * the JVM before the per-query statement timeout fires.
+     * When the queue is full, {@link ThreadPoolExecutor.AbortPolicy} rejects new
+     * submissions with {@link java.util.concurrent.RejectedExecutionException}.
+     * Callers that submit via {@link CompletableFuture#supplyAsync(java.util.function.Supplier, java.util.concurrent.Executor)}
+     * observe the REE as a {@link java.util.concurrent.CompletionException} which
+     * {@code GroupResolver} maps to {@link com.auto1.pantera.http.fault.Fault.IndexUnavailable}
+     * via its {@code .exceptionally(...)} branch.
      *
-     * @return Wrapped ExecutorService
+     * <p>Rationale for AbortPolicy over CallerRunsPolicy: when the submitting thread
+     * is a Vert.x event-loop thread — as it is for every inlined group-resolver
+     * request — CallerRunsPolicy would execute the blocking JDBC work on the event
+     * loop and stall the reactor. AbortPolicy guarantees the blocking work never
+     * runs on the caller thread; the caller thread can remain an event loop safely.
+     *
+     * <p>The returned {@link ExecutorService} is a
+     * {@link ContextualExecutorService} wrapping the raw pool: every task-submission
+     * entry point ({@code execute}, {@code submit(Callable/Runnable)},
+     * {@code invokeAll}, {@code invokeAny}) snapshots the submitting thread's
+     * Log4j2 {@link ThreadContext} (ECS fields) and the active Elastic APM span at
+     * submit time, then restores them on the runner thread for the task's duration
+     * — so ECS fields and the trace context stay attached across the thread hop.
+     *
+     * @return Contextualising wrapper around a bounded thread pool
      */
     private static ExecutorService createDbIndexExecutor() {
         final int poolSize = Math.max(2, Runtime.getRuntime().availableProcessors());
@@ -276,16 +300,20 @@ public final class DbArtifactIndex implements ArtifactIndex {
                 thread.setDaemon(true);
                 return thread;
             },
-            new ThreadPoolExecutor.CallerRunsPolicy()
+            new ThreadPoolExecutor.AbortPolicy()
         );
         pool.allowCoreThreadTimeOut(false);
         EcsLogger.info("com.auto1.pantera.index")
             .message("DbArtifactIndex executor initialised ("
-                + poolSize + " threads, queue=" + QUEUE_SIZE + ", policy=caller-runs)")
+                + poolSize + " threads, queue=" + QUEUE_SIZE + ", policy=abort)")
             .eventCategory("configuration")
             .eventAction("pool_init")
             .log();
-        return TraceContextExecutor.wrap(pool);
+        // WI-post-03a: ContextualExecutorService contextualises EVERY submit path
+        // (execute, submit(Callable/Runnable), invokeAll, invokeAny) — fixes the
+        // latent bypass where submit(Callable) went straight to the underlying
+        // pool with empty ThreadContext / no APM span.
+        return ContextualExecutorService.wrap(pool);
     }
 
     /**
@@ -1728,7 +1756,17 @@ public final class DbArtifactIndex implements ArtifactIndex {
 
     @Override
     public CompletableFuture<Optional<List<String>>> locateByName(final String artifactName) {
-        return CompletableFuture.supplyAsync(() -> {
+        try {
+            return CompletableFuture.supplyAsync(() -> locateByNameBody(artifactName), this.executor);
+        } catch (final RejectedExecutionException ree) {
+            // AbortPolicy fired — pool + queue saturated. Return a failed future
+            // so callers handle it via their existing exception path (the caller
+            // may be on the Vert.x event loop; do not rethrow synchronously).
+            return CompletableFuture.failedFuture(ree);
+        }
+    }
+
+    private Optional<List<String>> locateByNameBody(final String artifactName) {
             final List<String> repos = new ArrayList<>();
             try (Connection conn = this.source.getConnection()) {
                 // SET LOCAL requires an explicit transaction block to persist across statements
@@ -1763,7 +1801,6 @@ public final class DbArtifactIndex implements ArtifactIndex {
                 return Optional.empty();
             }
             return Optional.of(repos);
-        }, this.executor);
     }
 
     /**

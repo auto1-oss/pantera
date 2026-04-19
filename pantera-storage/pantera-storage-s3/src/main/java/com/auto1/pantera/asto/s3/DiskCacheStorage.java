@@ -370,6 +370,22 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                                 .error(ex)
                                 .log();
                         }
+                    })
+                    // Client cancelled mid-write (e.g., closed connection) — mirror doOnError
+                    // so the temp file and channel don't leak when subscription is cancelled.
+                    .doOnCancel(() -> {
+                        try { ch.close(); } catch (final IOException ex) {
+                            EcsLogger.debug("com.auto1.pantera.asto.cache")
+                                .message("Failed to close channel on cancel")
+                                .error(ex)
+                                .log();
+                        }
+                        try { Files.deleteIfExists(tmp); } catch (final IOException ex) {
+                            EcsLogger.debug("com.auto1.pantera.asto.cache")
+                                .message("Failed to delete temp file on cancel")
+                                .error(ex)
+                                .log();
+                        }
                     });
                 result.complete(new Content.From(cnt.size(), stream));
             } catch (final IOException ioe) {

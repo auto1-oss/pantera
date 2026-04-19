@@ -161,7 +161,7 @@ public final class UploadSlice implements Slice {
                                 .header(new ContentLength(0))
                                 .build();
                             this.events.ifPresent(
-                                queue -> queue.add(
+                                queue -> queue.add( // ok: unbounded ConcurrentLinkedDeque (ArtifactEvent queue)
                                     new ArtifactEvent(
                                         UploadSlice.REPO_TYPE, this.rname,
                                         new Login(headers).getValue(),

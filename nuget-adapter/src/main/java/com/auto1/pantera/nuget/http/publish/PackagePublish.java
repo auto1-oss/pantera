@@ -125,7 +125,7 @@ public final class PackagePublish implements Route {
                 (info, throwable) -> {
                     if (throwable == null) {
                         this.events.ifPresent(
-                            queue -> queue.add(
+                            queue -> queue.add( // ok: unbounded ConcurrentLinkedDeque (ArtifactEvent queue)
                                 new ArtifactEvent(
                                     PackagePublish.REPO_TYPE, this.name,
                                     new Login(headers).getValue(), info.packageName(),

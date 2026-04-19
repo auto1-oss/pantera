@@ -55,7 +55,7 @@ const allProxyTypes = [
   'maven-proxy', 'docker-proxy', 'npm-proxy', 'pypi-proxy',
   'helm-proxy', 'go-proxy', 'nuget-proxy', 'debian-proxy',
   'rpm-proxy', 'conda-proxy', 'gem-proxy', 'conan-proxy',
-  'hex-proxy', 'php-proxy', 'file-proxy',
+  'hexpm-proxy', 'php-proxy', 'file-proxy',
 ]
 const proxyTypeSuggestions = ref<string[]>([])
 function searchProxyTypes(event: { query: string }) {

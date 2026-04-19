@@ -10,7 +10,7 @@
  */
 package com.auto1.pantera.npm.proxy.http;
 
-import com.auto1.pantera.cooldown.CooldownDependency;
+import com.auto1.pantera.cooldown.api.CooldownDependency;
 import com.auto1.pantera.npm.proxy.NpmRemote;
 import com.auto1.pantera.npm.proxy.model.NpmAsset;
 import com.auto1.pantera.npm.proxy.model.NpmPackage;

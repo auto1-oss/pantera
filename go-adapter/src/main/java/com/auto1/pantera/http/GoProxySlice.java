@@ -51,7 +51,7 @@ public final class GoProxySlice extends Slice.Wrap {
     ) {
         this(
             clients, remote, auth, cache, Optional.empty(), Optional.empty(), "*",
-            "go-proxy", com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE
+            "go-proxy", com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE
         );
     }
 
@@ -69,7 +69,7 @@ public final class GoProxySlice extends Slice.Wrap {
     ) {
         this(
             client, uri, authenticator, Cache.NOP, Optional.empty(), Optional.empty(), "*",
-            "go-proxy", com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE
+            "go-proxy", com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE
         );
     }
 
@@ -93,7 +93,7 @@ public final class GoProxySlice extends Slice.Wrap {
         final Optional<Queue<ProxyArtifactEvent>> events,
         final String rname,
         final String rtype,
-        final com.auto1.pantera.cooldown.CooldownService cooldown
+        final com.auto1.pantera.cooldown.api.CooldownService cooldown
     ) {
         this(clients, remote, auth, cache, events, Optional.empty(), rname, rtype, cooldown);
     }
@@ -120,7 +120,7 @@ public final class GoProxySlice extends Slice.Wrap {
         final Optional<Storage> storage,
         final String rname,
         final String rtype,
-        final com.auto1.pantera.cooldown.CooldownService cooldown
+        final com.auto1.pantera.cooldown.api.CooldownService cooldown
     ) {
         this(remote(clients, remote, auth), cache, events, storage, rname, rtype, cooldown);
     }
@@ -132,7 +132,7 @@ public final class GoProxySlice extends Slice.Wrap {
         final Optional<Storage> storage,
         final String rname,
         final String rtype,
-        final com.auto1.pantera.cooldown.CooldownService cooldown
+        final com.auto1.pantera.cooldown.api.CooldownService cooldown
     ) {
         this(remote, cache, events, storage, rname, rtype, cooldown, new GoCooldownInspector(remote));
     }
@@ -144,7 +144,7 @@ public final class GoProxySlice extends Slice.Wrap {
         final Optional<Storage> storage,
         final String rname,
         final String rtype,
-        final com.auto1.pantera.cooldown.CooldownService cooldown,
+        final com.auto1.pantera.cooldown.api.CooldownService cooldown,
         final GoCooldownInspector inspector
     ) {
         super(

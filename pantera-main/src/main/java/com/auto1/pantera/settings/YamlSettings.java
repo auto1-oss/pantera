@@ -30,7 +30,7 @@ import com.auto1.pantera.cache.NegativeCacheConfig;
 import com.auto1.pantera.cache.PublishingCleanable;
 import com.auto1.pantera.cache.StoragesCache;
 import com.auto1.pantera.cache.ValkeyConnection;
-import com.auto1.pantera.cooldown.CooldownSettings;
+import com.auto1.pantera.cooldown.config.CooldownSettings;
 import com.auto1.pantera.cooldown.YamlCooldownSettings;
 import com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheConfig;
 import com.auto1.pantera.db.ArtifactDbFactory;
@@ -187,6 +187,15 @@ public final class YamlSettings implements Settings {
     private final ValkeyConnection valkeyConn;
 
     /**
+     * Cached enabled-flag filter wrapping {@link com.auto1.pantera.auth.LocalEnabledFilter}.
+     * Held so admin handlers (user update/enable/disable/delete) can
+     * invalidate the per-user cache entry directly.
+     * May be {@code null} when no dataSource is configured.
+     * @since 2.2.0
+     */
+    private final com.auto1.pantera.auth.CachedLocalEnabledFilter cachedLocalEnabledFilter;
+
+    /**
      * Guard flag to make {@link #close()} idempotent without spurious error logs.
      * @since 1.20.13
      */
@@ -254,8 +263,11 @@ public final class YamlSettings implements Settings {
         this.jwtSettings = JwtSettings.fromYaml(this.meta());
         final Optional<ValkeyConnection> valkey = YamlSettings.initValkey(this.meta());
         this.valkeyConn = valkey.orElse(null);
-        // Initialize global cache config for all adapters
-        GlobalCacheConfig.initialize(valkey);
+        // Initialize global cache config for all adapters. Pass the
+        // `caches` YAML mapping so per-cache config sections (e.g.
+        // `auth-enabled`) can be resolved by accessors like
+        // GlobalCacheConfig.getInstance().authEnabled().
+        GlobalCacheConfig.initialize(valkey, this.meta().yamlMapping("caches"));
         // Initialize unified negative cache config
         NegativeCacheConfig.initialize(this.meta().yamlMapping("caches"));
         // Initialize cooldown metadata cache config
@@ -266,34 +278,41 @@ public final class YamlSettings implements Settings {
         } else {
             this.artifactsDb = YamlSettings.initArtifactsDb(this.meta());
         }
-        final CachedUsers auth = YamlSettings.initAuth(
-            this.meta(), valkey, this.jwtSettings, this.artifactsDb.orElse(null)
+        // Create the cross-instance pub/sub up front so the
+        // CachedLocalEnabledFilter inside the auth chain can subscribe
+        // for L1 invalidation broadcasts. Both the pub/sub and the
+        // auth chain are ultimately owned by this settings object.
+        final CacheInvalidationPubSub psEarly = valkey
+            .map(CacheInvalidationPubSub::new)
+            .orElse(null);
+        this.cachePubSub = psEarly;
+        final AuthChain authChain = YamlSettings.initAuth(
+            this.meta(), valkey, this.jwtSettings, this.artifactsDb.orElse(null),
+            psEarly
         );
+        final CachedUsers auth = authChain.cachedUsers();
+        this.cachedLocalEnabledFilter = authChain.enabledFilter();
         this.security = new PanteraSecurity.FromYaml(
             this.meta(), auth, new PolicyStorage(this.meta()).parse(),
             this.artifactsDb.orElse(null)
         );
-        // Initialize cross-instance cache invalidation via Redis pub/sub
-        if (valkey.isPresent()) {
-            final CacheInvalidationPubSub ps =
-                new CacheInvalidationPubSub(valkey.get());
-            this.cachePubSub = ps;
-            ps.register("auth", auth);
+        // Register cache handlers on the pub/sub created earlier.
+        if (psEarly != null) {
+            psEarly.register("auth", auth);
             final GuavaFiltersCache filters = new GuavaFiltersCache();
-            ps.register("filters", filters);
+            psEarly.register("filters", filters);
             final Cleanable<String> policyCache;
             if (this.security.policy() instanceof Cleanable) {
                 policyCache = (Cleanable<String>) this.security.policy();
-                ps.register("policy", policyCache);
+                psEarly.register("policy", policyCache);
             }
             this.acach = new PanteraCaches.All(
-                new PublishingCleanable(auth, ps, "auth"),
+                new PublishingCleanable(auth, psEarly, "auth"),
                 new StoragesCache(),
                 this.security.policy(),
-                new PublishingFiltersCache(filters, ps)
+                new PublishingFiltersCache(filters, psEarly)
             );
         } else {
-            this.cachePubSub = null;
             this.acach = new PanteraCaches.All(
                 auth, new StoragesCache(), this.security.policy(), new GuavaFiltersCache()
             );
@@ -415,6 +434,12 @@ public final class YamlSettings implements Settings {
     @Override
     public Optional<ValkeyConnection> valkeyConnection() {
         return Optional.ofNullable(this.valkeyConn);
+    }
+
+    @Override
+    public Optional<com.auto1.pantera.auth.CachedLocalEnabledFilter>
+        cachedLocalEnabledFilter() {
+        return Optional.ofNullable(this.cachedLocalEnabledFilter);
     }
 
     @Override
@@ -746,14 +771,16 @@ public final class YamlSettings implements Settings {
      * @param valkey Optional Valkey connection for L2 cache
      * @param jwtSettings JWT settings for cache TTL capping
      * @param dataSource Database data source (nullable)
+     * @param cachePubSub Optional cross-instance pub/sub (nullable)
      * @return Authentication
      * @checkstyle ParameterNumberCheck (5 lines)
      */
-    private static CachedUsers initAuth(
+    private static AuthChain initAuth(
         final YamlMapping settings,
         final Optional<ValkeyConnection> valkey,
         final JwtSettings jwtSettings,
-        final DataSource dataSource
+        final DataSource dataSource,
+        final com.auto1.pantera.cache.CacheInvalidationPubSub cachePubSub
     ) {
         Authentication res;
         if (dataSource != null) {
@@ -815,21 +842,52 @@ public final class YamlSettings implements Settings {
         // checks enabled for local users, but SSO providers do not.
         // Order matters: wrap BEFORE CachedUsers so a stale cache
         // entry cannot let a just-disabled user through.
+        com.auto1.pantera.auth.CachedLocalEnabledFilter cachedEnabledFilter = null;
         if (dataSource != null) {
-            res = new com.auto1.pantera.auth.LocalEnabledFilter(res, dataSource);
+            final Authentication local = new com.auto1.pantera.auth.LocalEnabledFilter(
+                res, dataSource
+            );
+            // Cache the enabled-flag lookup so the per-request JDBC hit in
+            // LocalEnabledFilter does not fire on every CLI basic-auth pull.
+            // Admin toggles (enable/disable/update/delete) call
+            // CachedLocalEnabledFilter.invalidate(username) via the hook in
+            // UserHandler, and pub/sub broadcasts the invalidation to peer
+            // Pantera instances so stale L1 copies drop within ms.
+            cachedEnabledFilter = new com.auto1.pantera.auth.CachedLocalEnabledFilter(
+                local,
+                com.auto1.pantera.cache.GlobalCacheConfig.getInstance(),
+                valkey.orElse(null),
+                cachePubSub
+            );
+            res = cachedEnabledFilter;
         }
         // Create CachedUsers with Valkey connection and JWT settings for TTL capping
+        final CachedUsers users;
         if (valkey.isPresent()) {
             EcsLogger.info("com.auto1.pantera.settings")
                 .message(String.format("Initializing auth cache with Valkey L2 cache and JWT TTL cap: expires=%s, expirySeconds=%d", jwtSettings.expires(), jwtSettings.expirySeconds()))
                 .eventCategory("authentication")
                 .eventAction("auth_cache_init")
                 .log();
-            return new CachedUsers(res, valkey.get(), jwtSettings);
+            users = new CachedUsers(res, valkey.get(), jwtSettings);
         } else {
-            return new CachedUsers(res, null, jwtSettings);
+            users = new CachedUsers(res, null, jwtSettings);
         }
+        return new AuthChain(users, cachedEnabledFilter);
     }
+
+    /**
+     * Result holder for {@link #initAuth}: the outer {@link CachedUsers}
+     * credential cache plus the inner {@link com.auto1.pantera.auth.CachedLocalEnabledFilter}
+     * reference so admin handlers can invalidate it directly.
+     *
+     * @param cachedUsers Outer cached credential chain
+     * @param enabledFilter Inner enabled-flag filter (nullable when no DB)
+     */
+    private record AuthChain(
+        CachedUsers cachedUsers,
+        com.auto1.pantera.auth.CachedLocalEnabledFilter enabledFilter
+    ) { }
 
     /**
      * Initialize and scheduled mechanism to gather artifact events

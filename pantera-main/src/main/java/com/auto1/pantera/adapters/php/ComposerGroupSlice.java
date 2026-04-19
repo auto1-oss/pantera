@@ -44,7 +44,7 @@ public final class ComposerGroupSlice implements Slice {
 
     /**
      * Delegate group slice for non-packages.json requests.
-     * Uses the standard GroupSlice with artifact index, proxy awareness,
+     * Uses the standard GroupResolver with artifact index, proxy awareness,
      * circuit breaker, and error handling.
      */
     private final Slice delegate;
@@ -79,7 +79,7 @@ public final class ComposerGroupSlice implements Slice {
     /**
      * Constructor with delegate slice for standard group behavior.
      *
-     * @param delegate Delegate group slice (GroupSlice with index/proxy support)
+     * @param delegate Delegate group slice (GroupResolver with index/proxy support)
      * @param resolver Slice resolver
      * @param group Group repository name
      * @param members List of member repository names
@@ -126,13 +126,13 @@ public final class ComposerGroupSlice implements Slice {
 
         // For p2 metadata requests, try each member directly.
         // The artifact index cannot match p2 paths (it stores package names,
-        // not filesystem paths), so the delegate GroupSlice would skip local
+        // not filesystem paths), so the delegate GroupResolver would skip local
         // members and return 404.
         if (path.contains("/p2/")) {
             return tryMembersForP2(line, headers, body);
         }
 
-        // For other requests (tarballs, artifacts), delegate to GroupSlice
+        // For other requests (tarballs, artifacts), delegate to GroupResolver
         // which has artifact index, proxy awareness, circuit breaker, and error handling
         return this.delegate.response(line, headers, body);
     }

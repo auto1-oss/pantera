@@ -18,36 +18,57 @@ import com.auto1.pantera.asto.cache.CacheControl;
 import com.auto1.pantera.asto.cache.DigestVerification;
 import com.auto1.pantera.asto.cache.Remote;
 import com.auto1.pantera.asto.ext.Digests;
-import com.auto1.pantera.cooldown.CooldownRequest;
-import com.auto1.pantera.cooldown.CooldownResponses;
-import com.auto1.pantera.cooldown.CooldownService;
-import com.auto1.pantera.cooldown.CooldownInspector;
+import com.auto1.pantera.cooldown.api.CooldownRequest;
+import com.auto1.pantera.cooldown.response.CooldownResponseRegistry;
+import com.auto1.pantera.cooldown.api.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
+import com.auto1.pantera.http.cache.ProxyCacheWriter;
+import com.auto1.pantera.http.context.RequestContext;
+import com.auto1.pantera.http.fault.Fault;
+import com.auto1.pantera.http.fault.Fault.ChecksumAlgo;
+import com.auto1.pantera.http.fault.Result;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.slice.KeyFromPath;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
+import io.micrometer.core.instrument.MeterRegistry;
 import io.reactivex.Flowable;
 import org.apache.commons.codec.DecoderException;
 import org.apache.commons.codec.binary.Hex;
 
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
+import java.util.EnumMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicReference;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.StreamSupport;
 
 /**
  * Go proxy slice with cache support.
+ *
+ * <p>Primary artifact writes (the {@code *.zip} module archives) flow
+ * through {@link ProxyCacheWriter} so the Go checksum-database SHA-256
+ * sidecar is verified against the downloaded bytes before anything
+ * lands in the cache — giving the Go adapter the same primary+sidecar
+ * integrity guarantee the Maven adapter received in WI-07 (§9.5).
+ * {@code *.info} and {@code *.mod} paths have no upstream sidecars and
+ * are handled by the legacy {@code fetchThroughCache} flow unchanged.
  *
  * @since 1.0
  */
@@ -118,6 +139,15 @@ final class CachedProxySlice implements Slice {
     private final Optional<Storage> storage;
 
     /**
+     * Single-source-of-truth cache writer introduced by WI-07 (§9.5 of the
+     * v2.2 target architecture). Fetches the primary {@code *.zip} + the
+     * Go checksum SHA-256 sidecar in one coupled batch, verifies the
+     * declared claim against the bytes we just downloaded, and atomically
+     * commits the pair. Null when {@link #storage} is empty.
+     */
+    private final ProxyCacheWriter cacheWriter;
+
+    /**
      * Wraps origin slice with caching layer and default 12h metadata TTL.
      *
      * @param client Client slice
@@ -147,6 +177,9 @@ final class CachedProxySlice implements Slice {
         this.rtype = rtype;
         this.cooldown = cooldown;
         this.inspector = inspector;
+        this.cacheWriter = storage
+            .map(raw -> new ProxyCacheWriter(raw, rname, meterRegistry()))
+            .orElse(null);
     }
 
     @Override
@@ -259,7 +292,9 @@ final class CachedProxySlice implements Slice {
                             .field("package.version", version)
                             .log();
                         return CompletableFuture.completedFuture(
-                            CooldownResponses.forbidden(result.block().orElseThrow())
+                            CooldownResponseRegistry.instance()
+                                .getOrThrow(this.rtype)
+                                .forbidden(result.block().orElseThrow())
                         );
                     }
                     EcsLogger.debug("com.auto1.pantera.go")
@@ -365,6 +400,15 @@ final class CachedProxySlice implements Slice {
         final Optional<Instant> releaseDate,
         final AtomicReference<Headers> rshdr
     ) {
+        // WI-07 §9.5 — integrity-verified atomic primary+sidecar write for
+        // Go module archives. Only *.zip has an upstream .ziphash (SHA-256)
+        // sidecar; *.info / *.mod have no sidecars and fall through to the
+        // legacy flow. Runs only when we have a file-backed storage.
+        if (this.cacheWriter != null
+            && this.storage.isPresent()
+            && key.string().endsWith(".zip")) {
+            return this.verifyAndServePrimary(line, key, owner, artifactPath, releaseDate, rshdr);
+        }
         // Get checksum headers from remote HEAD for validation
         return new RepoHead(this.client)
             .head(line.uri().getPath())
@@ -550,16 +594,21 @@ final class CachedProxySlice implements Slice {
                 owner,
                 release
             );
-            queue.add(event);
-            EcsLogger.debug("com.auto1.pantera.go")
-                .message("Successfully enqueued Go proxy event (queue size: " + queue.size() + ")")
-                .eventCategory("web")
-                .eventAction("proxy_request")
-                .field("package.name", key.string())
-                .field("repository.name", this.rname)
-                .field("user.name", owner)
-                .field("package.release_date", release.map(Object::toString).orElse(null))
-                .log();
+            // Bounded ProxyArtifactEvent queue — offer() + drop counter so
+            // a full queue cannot cascade to 503 on the serve path.
+            if (!queue.offer(event)) {
+                com.auto1.pantera.metrics.EventsQueueMetrics.recordDropped(this.rname);
+            } else {
+                EcsLogger.debug("com.auto1.pantera.go")
+                    .message("Successfully enqueued Go proxy event (queue size: " + queue.size() + ")")
+                    .eventCategory("web")
+                    .eventAction("proxy_request")
+                    .field("package.name", key.string())
+                    .field("repository.name", this.rname)
+                    .field("user.name", owner)
+                    .field("package.release_date", release.map(Object::toString).orElse(null))
+                    .log();
+            }
         });
     }
 
@@ -633,5 +682,191 @@ final class CachedProxySlice implements Slice {
                 }
                 return ResponseBuilder.notFound().build();
             });
+    }
+
+    // ===== WI-07 §9.5: ProxyCacheWriter integration =====
+
+    /**
+     * Primary-artifact flow for {@code *.zip} module archives.
+     *
+     * <p>On cache hit, serves from the raw storage. On cache miss, fetches
+     * the primary + the Go {@code .ziphash} SHA-256 sidecar upstream in
+     * one coupled batch, verifies the declared digest against the
+     * downloaded bytes via {@link ProxyCacheWriter}, atomically commits
+     * on agreement, and streams the freshly-cached bytes back.
+     *
+     * <p>Integrity failures collapse to a 502 with
+     * {@code X-Pantera-Fault: upstream-integrity:sha256}; storage failures
+     * collapse to a 502 and leave the cache empty for this key.
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private CompletableFuture<Response> verifyAndServePrimary(
+        final RequestLine line,
+        final Key key,
+        final String owner,
+        final Optional<String> artifactPath,
+        final Optional<Instant> releaseDate,
+        final AtomicReference<Headers> rshdr
+    ) {
+        final Storage raw = this.storage.orElseThrow();
+        return raw.exists(key).thenCompose(present -> {
+            if (present) {
+                if (artifactPath.isPresent()) {
+                    this.enqueueEvent(key, owner, artifactPath, releaseDate);
+                }
+                return this.serveFromCache(raw, key);
+            }
+            return this.fetchVerifyAndCache(line, key, owner, artifactPath, releaseDate, rshdr);
+        }).exceptionally(err -> {
+            EcsLogger.warn("com.auto1.pantera.go")
+                .message("Go primary-artifact verify-and-serve failed; returning 502")
+                .eventCategory("web")
+                .eventAction("cache_write")
+                .eventOutcome("failure")
+                .field("repository.name", this.rname)
+                .field("url.path", key.string())
+                .error(err)
+                .log();
+            return ResponseBuilder.badGateway().build();
+        }).toCompletableFuture();
+    }
+
+    /**
+     * Cache-miss branch: fetch primary + sidecar upstream via
+     * {@link ProxyCacheWriter} and serve from the freshly-cached bytes.
+     */
+    private CompletionStage<Response> fetchVerifyAndCache(
+        final RequestLine line,
+        final Key key,
+        final String owner,
+        final Optional<String> artifactPath,
+        final Optional<Instant> releaseDate,
+        final AtomicReference<Headers> rshdr
+    ) {
+        final Storage raw = this.storage.orElseThrow();
+        final RequestContext ctx = new RequestContext(
+            org.apache.logging.log4j.ThreadContext.get("trace.id"),
+            null,
+            this.rname,
+            key.string()
+        );
+        final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> sidecars =
+            new EnumMap<>(ChecksumAlgo.class);
+        sidecars.put(ChecksumAlgo.SHA256, () -> this.fetchSidecar(line, ".ziphash"));
+        return this.cacheWriter.writeWithSidecars(
+            key,
+            key.string(),
+            () -> this.fetchPrimary(line, rshdr),
+            sidecars,
+            ctx
+        ).thenCompose(result -> {
+            if (result instanceof Result.Err<Void> err) {
+                if (err.fault() instanceof Fault.UpstreamIntegrity ui) {
+                    return CompletableFuture.<Response>completedFuture(
+                        ResponseBuilder.badGateway()
+                            .header(
+                                "X-Pantera-Fault",
+                                "upstream-integrity:"
+                                    + ui.algo().name().toLowerCase(Locale.ROOT)
+                            )
+                            .textBody("Upstream integrity verification failed")
+                            .build()
+                    );
+                }
+                return CompletableFuture.<Response>completedFuture(
+                    ResponseBuilder.badGateway()
+                        .textBody("Upstream temporarily unavailable")
+                        .build()
+                );
+            }
+            if (artifactPath.isPresent()) {
+                this.enqueueEvent(
+                    key, owner, artifactPath,
+                    releaseDate.or(() -> this.parseLastModified(rshdr.get()))
+                );
+            }
+            return this.serveFromCache(raw, key);
+        });
+    }
+
+    /**
+     * Read the primary from upstream as an {@link InputStream}. On any
+     * non-success status, throws so the writer's outer exception handler
+     * treats it as a transient failure (no cache mutation).
+     */
+    private CompletionStage<InputStream> fetchPrimary(
+        final RequestLine line, final AtomicReference<Headers> rshdr
+    ) {
+        return this.client.response(line, Headers.EMPTY, Content.EMPTY)
+            .thenApply(resp -> {
+                if (!resp.status().success()) {
+                    resp.body().asBytesFuture();
+                    throw new IllegalStateException(
+                        "Upstream returned HTTP " + resp.status().code()
+                    );
+                }
+                rshdr.set(resp.headers());
+                try {
+                    return resp.body().asInputStream();
+                } catch (final IOException ex) {
+                    throw new IllegalStateException("Upstream body not readable", ex);
+                }
+            });
+    }
+
+    /**
+     * Fetch a sidecar for the primary at {@code line}. Returns
+     * {@link Optional#empty()} for 4xx/5xx and I/O errors so the writer
+     * treats the sidecar as absent and a transient sidecar failure never
+     * blocks the primary write.
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private CompletionStage<Optional<InputStream>> fetchSidecar(
+        final RequestLine primary, final String extension
+    ) {
+        final String sidecarPath = primary.uri().getPath() + extension;
+        final RequestLine sidecarLine = new RequestLine(RqMethod.GET, sidecarPath);
+        return this.client.response(sidecarLine, Headers.EMPTY, Content.EMPTY)
+            .thenCompose(resp -> {
+                if (!resp.status().success()) {
+                    return resp.body().asBytesFuture()
+                        .thenApply(ignored -> Optional.<InputStream>empty());
+                }
+                return resp.body().asBytesFuture()
+                    .thenApply(bytes -> Optional.<InputStream>of(
+                        new ByteArrayInputStream(bytes)
+                    ));
+            })
+            .exceptionally(ignored -> Optional.<InputStream>empty());
+    }
+
+    /**
+     * Serve the primary from storage after a successful atomic write.
+     */
+    private CompletionStage<Response> serveFromCache(final Storage raw, final Key key) {
+        return raw.value(key).thenApply(content ->
+            ResponseBuilder.ok().body(content).build()
+        );
+    }
+
+    /**
+     * Resolve the shared micrometer registry when metrics are enabled.
+     *
+     * @return Registry or {@code null} when metrics have not been
+     *         initialised (e.g. test suites that skip bootstrap).
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private static MeterRegistry meterRegistry() {
+        try {
+            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                return com.auto1.pantera.metrics.MicrometerMetrics.getInstance().getRegistry();
+            }
+        } catch (final Exception ex) {
+            EcsLogger.debug("com.auto1.pantera.go")
+                .message("MicrometerMetrics registry unavailable; writer will run without metrics")
+                .error(ex)
+                .log();
+        }
+        return null;
     }
 }

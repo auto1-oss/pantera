@@ -88,7 +88,7 @@ public final class EventQueue<T> {
                 .log();
             return false;
         }
-        this.queue.add(item);
+        this.queue.add(item); // ok: unbounded ConcurrentLinkedQueue, capacity enforced by AtomicInteger above
         return true;
     }
 

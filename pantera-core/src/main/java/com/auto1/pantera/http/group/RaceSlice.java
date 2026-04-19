@@ -31,7 +31,7 @@ import java.util.concurrent.ExecutionException;
  * <p>This is a low-level utility for "first response wins" patterns —
  * NOT a group repository resolver. For group/virtual repository resolution
  * with index lookup, member flattening, and negative caching, see
- * {@link com.auto1.pantera.group.GroupSlice} in pantera-main.
+ * {@link com.auto1.pantera.group.GroupResolver} in pantera-main.
  */
 public final class RaceSlice implements Slice {
 

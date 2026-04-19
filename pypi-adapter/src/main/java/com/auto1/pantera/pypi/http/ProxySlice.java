@@ -20,9 +20,9 @@ import com.auto1.pantera.asto.cache.FromStorageCache;
 import com.auto1.pantera.asto.cache.Remote;
 import com.auto1.pantera.asto.blocking.BlockingStorage;
 import com.auto1.pantera.asto.ext.KeyLastPart;
-import com.auto1.pantera.cooldown.CooldownRequest;
-import com.auto1.pantera.cooldown.CooldownResponses;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownRequest;
+import com.auto1.pantera.cooldown.response.CooldownResponseRegistry;
+import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.ResponseBuilder;
@@ -302,15 +302,19 @@ final class ProxySlice implements Slice {
                         .field("package.name", info.artifact())
                         .field("package.version", info.version())
                         .log();
-                    // Enqueue event for cache hit
-                    this.events.ifPresent(queue ->
-                        queue.add(new ProxyArtifactEvent(
+                    // Enqueue event for cache hit — bounded ProxyArtifactEvent queue.
+                    // offer() + drop counter so a full queue cannot cascade to 503.
+                    this.events.ifPresent(queue -> {
+                        if (!queue.offer(new ProxyArtifactEvent(
                             key,
                             this.rname,
                             user,
                             Optional.empty()
-                        ))
-                    );
+                        ))) {
+                            com.auto1.pantera.metrics.EventsQueueMetrics
+                                .recordDropped(this.rname);
+                        }
+                    });
                     // Serve cached content
                     return this.serveArtifactContent(line, key, cached.get(), Headers.EMPTY);
                 }
@@ -364,7 +368,9 @@ final class ProxySlice implements Slice {
                     .field("package.version", info.version())
                     .log();
                 return CompletableFuture.completedFuture(
-                    CooldownResponses.forbidden(evaluation.block().orElseThrow())
+                    CooldownResponseRegistry.instance()
+                        .getOrThrow(this.rtype)
+                        .forbidden(evaluation.block().orElseThrow())
                 );
             }
             EcsLogger.debug("com.auto1.pantera.pypi")
@@ -451,12 +457,16 @@ final class ProxySlice implements Slice {
                                             ProxySlice.this.releaseInstant(
                                                 response.headers()
                                             );
-                                        ProxySlice.this.events.ifPresent(queue ->
-                                            queue.add(new ProxyArtifactEvent(
+                                        // Bounded ProxyArtifactEvent queue — offer() + drop counter.
+                                        ProxySlice.this.events.ifPresent(queue -> {
+                                            if (!queue.offer(new ProxyArtifactEvent(
                                                 key, ProxySlice.this.rname, user,
                                                 releaseDate.map(Instant::toEpochMilli)
-                                            ))
-                                        );
+                                            ))) {
+                                                com.auto1.pantera.metrics.EventsQueueMetrics
+                                                    .recordDropped(ProxySlice.this.rname);
+                                            }
+                                        });
                                     });
                                 }
                                 final String path = line.uri().getPath();
@@ -815,15 +825,19 @@ final class ProxySlice implements Slice {
                         remote.set(response.headers());
                         if (response.status().success()) {
                             remoteSuccess.set(true);
-                            // Enqueue artifact event immediately on successful remote fetch
-                            ProxySlice.this.events.ifPresent(queue ->
-                                queue.add(new ProxyArtifactEvent(
+                            // Enqueue artifact event immediately on successful remote fetch.
+                            // Bounded ProxyArtifactEvent queue — offer() + drop counter.
+                            ProxySlice.this.events.ifPresent(queue -> {
+                                if (!queue.offer(new ProxyArtifactEvent(
                                     key,
                                     ProxySlice.this.rname,
                                     user,
                                     ProxySlice.this.releaseInstant(response.headers()).map(Instant::toEpochMilli)
-                                ))
-                            );
+                                ))) {
+                                    com.auto1.pantera.metrics.EventsQueueMetrics
+                                        .recordDropped(ProxySlice.this.rname);
+                                }
+                            });
                             return Optional.of(response.body());
                         }
                         return Optional.empty();
@@ -836,16 +850,20 @@ final class ProxySlice implements Slice {
                 if (throwable != null || content.isEmpty()) {
                     return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
                 }
-                // Enqueue event on cache hit (remote fetch already enqueued above)
+                // Enqueue event on cache hit (remote fetch already enqueued above).
+                // Bounded ProxyArtifactEvent queue — offer() + drop counter.
                 if (!remoteSuccess.get()) {
-                    ProxySlice.this.events.ifPresent(queue ->
-                        queue.add(new ProxyArtifactEvent(
+                    ProxySlice.this.events.ifPresent(queue -> {
+                        if (!queue.offer(new ProxyArtifactEvent(
                             key,
                             ProxySlice.this.rname,
                             user,
                             Optional.empty()  // No release date on cache hit
-                        ))
-                    );
+                        ))) {
+                            com.auto1.pantera.metrics.EventsQueueMetrics
+                                .recordDropped(ProxySlice.this.rname);
+                        }
+                    });
                 }
                 // Serve artifact content (cooldown already evaluated and passed)
                 return this.serveArtifactContent(line, key, content.get(), remote.get());
