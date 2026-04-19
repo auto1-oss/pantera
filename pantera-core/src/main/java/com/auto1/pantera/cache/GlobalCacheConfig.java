@@ -45,6 +45,27 @@ public final class GlobalCacheConfig {
     /** Default L2 operation timeout (ms) for the auth-enabled cache. */
     static final int DEFAULT_AUTH_ENABLED_L2_TIMEOUT_MS = 100;
 
+    // -------------------------------------------------------------
+    // Compile-time defaults for the group-metadata STALE cache (aid,
+    // never breaker — bounds are a JVM-memory safety net only; under
+    // realistic cardinality these never fire).
+    // -------------------------------------------------------------
+
+    /** Default L1 max size for the group-metadata stale cache. */
+    static final int DEFAULT_GROUP_METADATA_STALE_L1_MAX_SIZE = 100_000;
+
+    /** Default L1 TTL (seconds) for the group-metadata stale cache — 30 days. */
+    static final int DEFAULT_GROUP_METADATA_STALE_L1_TTL_SECONDS = 2_592_000;
+
+    /** Default flag: L2 (Valkey) enabled for the group-metadata stale cache. */
+    static final boolean DEFAULT_GROUP_METADATA_STALE_L2_ENABLED = true;
+
+    /** Default L2 TTL (seconds) — {@code 0} means no TTL (rely on Valkey LRU). */
+    static final int DEFAULT_GROUP_METADATA_STALE_L2_TTL_SECONDS = 0;
+
+    /** Default L2 operation timeout (ms) for the group-metadata stale cache. */
+    static final int DEFAULT_GROUP_METADATA_STALE_L2_TIMEOUT_MS = 100;
+
     /**
      * Singleton instance.
      */
@@ -217,6 +238,96 @@ public final class GlobalCacheConfig {
             yL2Timeout != null ? yL2Timeout : DEFAULT_AUTH_ENABLED_L2_TIMEOUT_MS
         );
         return new AuthEnabledConfig(l1Size, l1Ttl, l2Enabled, l2Ttl, l2Timeout);
+    }
+
+    /**
+     * Configuration for the group-metadata STALE cache (last-known-good
+     * fallback used when all upstream members are unreachable).
+     *
+     * <p>Design principle: this cache is an AID, never a BREAKER. Under
+     * realistic cardinality no eviction ever fires. Bounds exist only as a
+     * JVM-memory safety net against pathological growth; they are NOT an
+     * expiry mechanism.
+     *
+     * @param l1MaxSize L1 Caffeine max entries (safety net only)
+     * @param l1TtlSeconds L1 TTL in seconds (long — 30d default)
+     * @param l2Enabled Whether L2 (Valkey) stale tier is enabled
+     * @param l2TtlSeconds L2 TTL in seconds ({@code 0} = no TTL, Valkey LRU)
+     * @param l2TimeoutMs L2 operation timeout in milliseconds
+     */
+    public record GroupMetadataStaleConfig(
+        int l1MaxSize,
+        int l1TtlSeconds,
+        boolean l2Enabled,
+        int l2TtlSeconds,
+        int l2TimeoutMs
+    ) { }
+
+    /**
+     * Resolve group-metadata stale cache configuration with precedence
+     * env → YAML ({@code meta.caches.group-metadata-stale.*}) → default.
+     *
+     * <p>YAML paths:
+     * <ul>
+     *   <li>{@code group-metadata-stale.l1.maxSize}</li>
+     *   <li>{@code group-metadata-stale.l1.ttlSeconds}</li>
+     *   <li>{@code group-metadata-stale.l2.enabled}</li>
+     *   <li>{@code group-metadata-stale.l2.ttlSeconds}</li>
+     *   <li>{@code group-metadata-stale.l2.timeoutMs}</li>
+     * </ul>
+     *
+     * <p>Env overrides: {@code PANTERA_GROUP_METADATA_STALE_L1_SIZE},
+     * {@code PANTERA_GROUP_METADATA_STALE_L1_TTL_SECONDS},
+     * {@code PANTERA_GROUP_METADATA_STALE_L2_ENABLED},
+     * {@code PANTERA_GROUP_METADATA_STALE_L2_TTL_SECONDS},
+     * {@code PANTERA_GROUP_METADATA_STALE_L2_TIMEOUT_MS}.
+     *
+     * @return Resolved config
+     */
+    public GroupMetadataStaleConfig groupMetadataStale() {
+        // YAML values (may be null if YAML not provided or keys missing)
+        Integer yL1Size = null;
+        Integer yL1Ttl = null;
+        Boolean yL2Enabled = null;
+        Integer yL2Ttl = null;
+        Integer yL2Timeout = null;
+        if (this.caches != null) {
+            final YamlMapping section = this.caches.yamlMapping("group-metadata-stale");
+            if (section != null) {
+                final YamlMapping l1 = section.yamlMapping("l1");
+                if (l1 != null) {
+                    yL1Size = parseIntOrNull(l1.string("maxSize"));
+                    yL1Ttl = parseIntOrNull(l1.string("ttlSeconds"));
+                }
+                final YamlMapping l2 = section.yamlMapping("l2");
+                if (l2 != null) {
+                    yL2Enabled = parseBooleanOrNull(l2.string("enabled"));
+                    yL2Ttl = parseIntOrNull(l2.string("ttlSeconds"));
+                    yL2Timeout = parseIntOrNull(l2.string("timeoutMs"));
+                }
+            }
+        }
+        final int l1Size = ConfigDefaults.getInt(
+            "PANTERA_GROUP_METADATA_STALE_L1_SIZE",
+            yL1Size != null ? yL1Size : DEFAULT_GROUP_METADATA_STALE_L1_MAX_SIZE
+        );
+        final int l1Ttl = ConfigDefaults.getInt(
+            "PANTERA_GROUP_METADATA_STALE_L1_TTL_SECONDS",
+            yL1Ttl != null ? yL1Ttl : DEFAULT_GROUP_METADATA_STALE_L1_TTL_SECONDS
+        );
+        final boolean l2Enabled = ConfigDefaults.getBoolean(
+            "PANTERA_GROUP_METADATA_STALE_L2_ENABLED",
+            yL2Enabled != null ? yL2Enabled : DEFAULT_GROUP_METADATA_STALE_L2_ENABLED
+        );
+        final int l2Ttl = ConfigDefaults.getInt(
+            "PANTERA_GROUP_METADATA_STALE_L2_TTL_SECONDS",
+            yL2Ttl != null ? yL2Ttl : DEFAULT_GROUP_METADATA_STALE_L2_TTL_SECONDS
+        );
+        final int l2Timeout = ConfigDefaults.getInt(
+            "PANTERA_GROUP_METADATA_STALE_L2_TIMEOUT_MS",
+            yL2Timeout != null ? yL2Timeout : DEFAULT_GROUP_METADATA_STALE_L2_TIMEOUT_MS
+        );
+        return new GroupMetadataStaleConfig(l1Size, l1Ttl, l2Enabled, l2Ttl, l2Timeout);
     }
 
     private static Integer parseIntOrNull(final String val) {

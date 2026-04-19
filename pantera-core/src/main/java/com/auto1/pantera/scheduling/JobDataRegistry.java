@@ -10,6 +10,8 @@
  */
 package com.auto1.pantera.scheduling;
 
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.misc.ConfigDefaults;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -28,10 +30,28 @@ import java.util.concurrent.ConcurrentHashMap;
  * In a clustered setup, each node maintains its own registry. Since Quartz
  * ensures a given trigger fires on only one node at a time, the node that
  * scheduled the job always has the data in its registry.
+ * <p>
+ * A defensive sanity cap ({@value #DEFAULT_MAX_ENTRIES} entries by default,
+ * overridable via {@code PANTERA_JOB_DATA_REGISTRY_MAX}) is enforced. The
+ * cap is NOT a hard limit — {@link #register} still accepts the entry so
+ * jobs never silently drop — but an overflow crosses a loud error log
+ * which flags a scheduler-side ref leak for operators.
  *
  * @since 1.20.13
  */
 public final class JobDataRegistry {
+
+    /**
+     * Default sanity cap for registered entries.
+     */
+    private static final int DEFAULT_MAX_ENTRIES = 10_000;
+
+    /**
+     * Sanity cap resolved from env / sysprop / default at class-load time.
+     */
+    private static final int MAX_ENTRIES = ConfigDefaults.getInt(
+        "PANTERA_JOB_DATA_REGISTRY_MAX", DEFAULT_MAX_ENTRIES
+    );
 
     /**
      * In-memory store for non-serializable job data.
@@ -51,6 +71,20 @@ public final class JobDataRegistry {
      * @param value Runtime object (Queue, Consumer, etc.)
      */
     public static void register(final String key, final Object value) {
+        final int size = DATA.size();
+        if (size >= MAX_ENTRIES) {
+            EcsLogger.error("com.auto1.pantera.scheduling")
+                .message("JobDataRegistry overflow — scheduler bug leaking refs")
+                .eventCategory("process")
+                .eventAction("job_data_overflow")
+                .eventOutcome("failure")
+                .field("entry.count", size)
+                .field(
+                    "key.prefix",
+                    key.substring(0, Math.min(32, key.length()))
+                )
+                .log();
+        }
         DATA.put(key, value);
     }
 
