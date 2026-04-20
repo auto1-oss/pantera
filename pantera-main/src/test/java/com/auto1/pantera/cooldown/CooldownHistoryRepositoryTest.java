@@ -107,14 +107,40 @@ final class CooldownHistoryRepositoryTest {
     }
 
     @Test
-    void archiveAndDeleteIsAtomicOnMissingId() {
-        Assertions.assertThrows(
-            IllegalStateException.class,
+    void archiveAndDeleteIsIdempotentOnMissingId() {
+        // Missing id must be treated as a concurrent-race no-op: no throw,
+        // no history row inserted. This matches the idempotent semantics of
+        // the prior plain-DELETE path and prevents 500s when the periodic
+        // archiveExpiredBatch wins the race against expire()/release().
+        Assertions.assertDoesNotThrow(
             () -> this.repository.archiveAndDelete(99999L, ArchiveReason.EXPIRED, "system")
         );
         MatcherAssert.assertThat(
             "No history row should be inserted when target id is missing",
             this.historyRowCount(), Matchers.is(0L)
+        );
+    }
+
+    @Test
+    void archiveAndDeleteIsIdempotentAcrossConcurrentCalls() {
+        final long id = this.insertLive(
+            "maven-proxy", "central", "com.example.lib", "1.0.0",
+            CooldownReason.FRESH_RELEASE, "system",
+            Instant.now().minus(Duration.ofHours(2)),
+            Instant.now().plus(Duration.ofHours(70))
+        );
+        // First call archives + deletes the live row.
+        this.repository.archiveAndDelete(id, ArchiveReason.EXPIRED, "system");
+        // Second call on the same id (simulating the race where e.g. the
+        // expiry cron already archived the row) must NOT throw and must NOT
+        // add a second history row.
+        Assertions.assertDoesNotThrow(
+            () -> this.repository.archiveAndDelete(id, ArchiveReason.EXPIRED, "system")
+        );
+        MatcherAssert.assertThat(
+            "second archiveAndDelete on same id must be a no-op",
+            this.repository.countHistory(Set.of("central"), null, null, null),
+            Matchers.is(1L)
         );
     }
 

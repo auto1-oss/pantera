@@ -567,12 +567,17 @@ public final class CooldownRepository {
     /**
      * Archive a single live block row into history and delete it from the live
      * table. The INSERT and DELETE run in the same transaction — both succeed
-     * or neither does.
+     * or neither does. Idempotent on concurrent-delete races: if the row has
+     * already been archived/deleted by another worker (e.g. the
+     * {@code archiveExpiredBatch} cron), this method is a silent no-op instead
+     * of throwing. This matches the semantics of the previous plain-DELETE
+     * path and prevents spurious 500s when {@code expire()}/{@code release()}
+     * races the cleanup cron on the same id.
      * @param blockId Id of the row in {@code artifact_cooldowns} to archive.
      * @param reason Reason the row is being archived.
      * @param actor Username performing the archive.
-     * @throws IllegalStateException if the block id does not exist or the
-     *     transaction otherwise fails.
+     * @throws IllegalStateException if the underlying transaction fails for
+     *     reasons other than a missing row.
      */
     public void archiveAndDelete(final long blockId,
                                  final ArchiveReason reason,
@@ -594,15 +599,25 @@ public final class CooldownRepository {
                 ins.setString(2, reason.name());
                 ins.setString(3, actor);
                 ins.setLong(4, blockId);
-                ins.executeUpdate();
+
+                final int inserted = ins.executeUpdate();
+                if (inserted == 0) {
+                    // Row already archived/deleted by a concurrent cleanup
+                    // (typically the archiveExpiredBatch cron). Idempotent
+                    // no-op — commit the empty transaction and return.
+                    conn.commit();
+                    return;
+                }
 
                 del.setLong(1, blockId);
                 final int deleted = del.executeUpdate();
                 if (deleted == 0) {
+                    // INSERT succeeded (1 row) but the row vanished between
+                    // INSERT and DELETE — very unlikely under FOR UPDATE SKIP
+                    // LOCKED semantics of the batch cleanup. Rollback so we
+                    // don't leave an orphan history entry.
                     conn.rollback();
-                    throw new IllegalStateException(
-                        "Block " + blockId + " not found for archiveAndDelete"
-                    );
+                    return;
                 }
                 conn.commit();
             } catch (final SQLException err) {
