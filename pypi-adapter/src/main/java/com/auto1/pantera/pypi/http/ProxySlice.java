@@ -36,6 +36,8 @@ import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.KeyFromPath;
 import com.auto1.pantera.pypi.NormalizedProjectName;
+import com.auto1.pantera.pypi.cooldown.PypiJsonHandler;
+import com.auto1.pantera.pypi.cooldown.PypiSimpleHandler;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 import com.github.benmanes.caffeine.cache.Caffeine;
 
@@ -184,6 +186,26 @@ final class ProxySlice implements Slice {
     private final com.github.benmanes.caffeine.cache.Cache<String, String> lastModifiedCache;
 
     /**
+     * {@code /simple/<pkg>/} cooldown handler. Filters blocked versions
+     * out of PEP 503 HTML (or PEP 691 JSON) Simple Index responses.
+     *
+     * <p>Before this wiring the registered {@code PypiMetadataFilter}
+     * bundle was dead infrastructure — the proxy's {@link #serveNonArtifact}
+     * path never invoked {@code MetadataFilterService.filterMetadata}
+     * (exactly the same failure mode Go had before commit
+     * {@code 1eb53ceb}). This handler is where that trio now runs.</p>
+     */
+    private final PypiSimpleHandler simpleHandler;
+
+    /**
+     * {@code /pypi/<pkg>/json} cooldown handler. Closes the unbounded
+     * resolution gap on the JSON API surface — tools like poetry and
+     * pip-tools resolve {@code pip install foo} via this endpoint, and
+     * without filtering a blocked version would leak to the client.
+     */
+    private final PypiJsonHandler jsonHandler;
+
+    /**
      * Ctor with default 12h metadata TTL.
      * @param clients HTTP clients
      * @param auth Authenticator
@@ -250,6 +272,23 @@ final class ProxySlice implements Slice {
             .maximumSize(10_000)
             .expireAfterWrite(Duration.ofHours(24))
             .build();
+        // Cooldown handlers. The Simple handler consumes the proxy's
+        // own post-processing flow (URL rewriting happens inside
+        // serveNonArtifact before filtering) so /simple/ links point
+        // at the proxy path, not upstream CDNs. The JSON handler goes
+        // directly to the separate PyPI JSON API slice the inspector
+        // already owns — it has no URL-rewriting dependency for the
+        // filter to be useful.
+        final Slice simpleUpstream = (simpleLine, simpleHeaders, simpleBody) ->
+            this.serveNonArtifact(simpleLine, simpleHeaders, simpleBody,
+                new Login(simpleHeaders).getValue());
+        this.simpleHandler = new PypiSimpleHandler(
+            simpleUpstream, cooldown, inspector, rtype, rname
+        );
+        final Slice jsonUpstream = this.inspector.metadataSlice();
+        this.jsonHandler = jsonUpstream == null
+            ? null
+            : new PypiJsonHandler(jsonUpstream, cooldown, inspector, rtype, rname);
     }
 
     @Override
@@ -258,6 +297,32 @@ final class ProxySlice implements Slice {
     ) {
         final Optional<ArtifactCoordinates> coords = this.extract(line);
         final String user = new Login(rqheaders).getValue();
+
+        // Cooldown metadata handlers run ahead of the artifact /
+        // non-artifact split so blocked versions never leak into pip's
+        // resolver view. Matches the Go adapter dispatch pattern
+        // established in commit 1eb53ceb.
+        final String path = line.uri().getPath();
+        if (this.jsonHandler != null && this.jsonHandler.matches(path)) {
+            EcsLogger.debug("com.auto1.pantera.pypi")
+                .message("Dispatching /pypi/<pkg>/json to cooldown JSON handler")
+                .eventCategory("web")
+                .eventAction("proxy_request")
+                .field("url.path", path)
+                .field("repository.name", this.rname)
+                .log();
+            return this.jsonHandler.handle(line, user);
+        }
+        if (coords.isEmpty() && this.simpleHandler.matches(path)) {
+            EcsLogger.debug("com.auto1.pantera.pypi")
+                .message("Dispatching /simple/<pkg>/ to cooldown Simple handler")
+                .eventCategory("web")
+                .eventAction("proxy_request")
+                .field("url.path", path)
+                .field("repository.name", this.rname)
+                .log();
+            return this.simpleHandler.handle(line, user);
+        }
 
         // For artifacts: CRITICAL FIX - Check cache FIRST before any network calls
         // This ensures offline mode works - serve cached content even when upstream is down

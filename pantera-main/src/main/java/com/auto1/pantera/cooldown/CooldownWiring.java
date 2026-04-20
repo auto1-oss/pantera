@@ -113,6 +113,19 @@ public final class CooldownWiring {
         responses.register(new NpmCooldownResponseFactory(), "npm-proxy");
 
         // --- PyPI ---
+        // Both PyPI metadata surfaces — {@code /simple/<pkg>/} (PEP 503
+        // HTML / PEP 691 JSON) and {@code /pypi/<pkg>/json} (JSON API) —
+        // are consumed via handler dispatch inside the PyPI {@code
+        // ProxySlice}, not via {@link
+        // com.auto1.pantera.cooldown.metadata.MetadataFilterService}.
+        // See {@code PypiSimpleHandler} and {@code PypiJsonHandler} for
+        // the actual orchestration; the bundle registered here is kept
+        // so the 403 response factory is discoverable for direct-artifact
+        // block paths. This mirrors the Go adapter's split between
+        // {@code /@v/list} (handler) and {@code /@latest} (handler) —
+        // both bypass the SPI service for the same reason (per-adapter
+        // flows need sibling-endpoint fallback logic the generic service
+        // does not model).
         final var pypiBundle = new CooldownAdapterBundle<>(
             new PypiMetadataParser(),
             new PypiMetadataFilter(),
