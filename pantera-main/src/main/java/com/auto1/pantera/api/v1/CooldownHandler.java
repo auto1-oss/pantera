@@ -446,20 +446,24 @@ public final class CooldownHandler {
         final boolean sortAsc = "asc".equalsIgnoreCase(
             ctx.queryParam("sort_dir").stream().findFirst().orElse("desc")
         );
-        final PermissionCollection perms = this.policy.getPermissions(
-            new AuthUser(
-                ctx.user().principal().getString(AuthTokenRest.SUB),
-                ctx.user().principal().getString(AuthTokenRest.CONTEXT)
-            )
+        // Build AuthUser on the event loop (cheap — just reads ctx principal).
+        // Defer policy.getPermissions(...) and crs.listAll() into the async closure:
+        // CachedYamlPolicy falls back to storage (blocking) on cache miss, and
+        // CrudRepoSettings (RepositoryDao) runs JDBC — neither belongs on the
+        // Vert.x event loop.
+        final AuthUser authUser = new AuthUser(
+            ctx.user().principal().getString(AuthTokenRest.SUB),
+            ctx.user().principal().getString(AuthTokenRest.CONTEXT)
         );
-        // Compute accessible repo set once per request — O(repos), not O(blocks).
-        // Scoping is pushed into SQL via ANY(?), so the DB returns only rows
-        // the caller may see — the former Java-side skip/filter pagination
-        // (and its off-by-N filteredTotal bug) is gone.
-        final Set<String> accessibleRepos = this.crs.listAll().stream()
-            .filter(n -> perms.implies(new AdapterBasicPermission(n, "read")))
-            .collect(java.util.stream.Collectors.toSet());
         CompletableFuture.supplyAsync((java.util.function.Supplier<JsonObject>) () -> {
+            final PermissionCollection perms = this.policy.getPermissions(authUser);
+            // Compute accessible repo set once per request — O(repos), not O(blocks).
+            // Scoping is pushed into SQL via ANY(?), so the DB returns only rows
+            // the caller may see — the former Java-side skip/filter pagination
+            // (and its off-by-N filteredTotal bug) is gone.
+            final Set<String> accessibleRepos = this.crs.listAll().stream()
+                .filter(n -> perms.implies(new AdapterBasicPermission(n, "read")))
+                .collect(java.util.stream.Collectors.toSet());
             final List<DbBlockRecord> rows = this.repository.findActivePaginated(
                 accessibleRepos, repoFilter, repoTypeFilter, searchQuery,
                 sortDbCol, sortAsc, page * size, size

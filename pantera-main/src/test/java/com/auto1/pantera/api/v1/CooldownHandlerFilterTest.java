@@ -476,10 +476,10 @@ final class CooldownHandlerFilterTest {
             req.bearerTokenAuthentication(bearer);
         }
         req.send()
-            .onSuccess(res -> {
+            .onSuccess(res -> ctx.verify(() -> {
                 assertion.accept(res);
                 ctx.completeNow();
-            })
+            }))
             .onFailure(ctx::failNow)
             .toCompletionStage().toCompletableFuture()
             .get(TEST_TIMEOUT, TimeUnit.SECONDS);
