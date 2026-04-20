@@ -108,7 +108,11 @@ BEGIN
             'CooldownCleanupFallback (Vertx) will handle cleanup at runtime.';
         RETURN;
     END IF;
-    CREATE EXTENSION IF NOT EXISTS pg_cron;
+    -- pg_cron was already installed by V114 via the same NOT EXISTS guard;
+    -- re-running CREATE EXTENSION IF NOT EXISTS here emits a NOTICE that
+    -- Flyway logs at WARN. The outer NOT EXISTS guard above already short-
+    -- circuits if pg_cron is unavailable, so this DO block can assume the
+    -- extension is present.
 
     -- Unschedule V114's cleanup job (hard-delete variant) so we can replace it.
     PERFORM cron.unschedule(jobid) FROM cron.job

@@ -12,7 +12,6 @@ package com.auto1.pantera.api.v1;
 
 import com.auth0.jwt.JWT;
 import com.auth0.jwt.algorithms.Algorithm;
-import com.auto1.pantera.api.perms.ApiCooldownHistoryPermission;
 import com.auto1.pantera.api.perms.ApiCooldownPermission;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
@@ -71,15 +70,14 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 /**
  * Verifies the {@code GET /api/v1/cooldown/history} endpoint added in 2.2.0:
- * the two-layer gate (API-level
- * {@link ApiCooldownHistoryPermission#READ} + per-repo
+ * the gate (API-level {@link ApiCooldownPermission#READ} + per-repo
  * {@link AdapterBasicPermission}) and the archive-field serialisation.
  *
  * <p>Parallel to {@link CooldownHandlerFilterTest} but exercises the archive
- * table ({@code artifact_cooldowns_history}) and the distinct history
- * permission. A user with only {@link ApiCooldownPermission#READ} (the
- * blocked-list permission) must be rejected — that's the whole point of
- * splitting the permissions.
+ * table ({@code artifact_cooldowns_history}). History reuses the same
+ * {@link ApiCooldownPermission#READ} gate as {@code /blocked}; per-row
+ * filtering falls back to the repo-level
+ * {@link AdapterBasicPermission}({@code repo}, {@code "read"}).
  *
  * @since 2.2.0
  */
@@ -97,7 +95,7 @@ final class CooldownHandlerHistoryTest {
     /**
      * Permissions the test user holds. Mutated per-test.
      */
-    private static volatile PermissionSpec permSpec = new PermissionSpec(false, false, Set.of());
+    private static volatile PermissionSpec permSpec = new PermissionSpec(false, Set.of());
 
     private static HikariDataSource sharedDs;
 
@@ -129,7 +127,7 @@ final class CooldownHandlerHistoryTest {
         this.truncateHistory();
         this.truncateCooldowns();
         this.truncateRepositories();
-        permSpec = new PermissionSpec(false, false, Set.of());
+        permSpec = new PermissionSpec(false, Set.of());
         final Storage storage = new InMemoryStorage();
         final PanteraSecurity security = new PanteraSecurity() {
             @Override
@@ -200,15 +198,14 @@ final class CooldownHandlerHistoryTest {
     }
 
     /**
-     * A user that has ApiCooldownPermission.READ but NOT
-     * ApiCooldownHistoryPermission.READ must get 403 — the two permissions
-     * are independent gates. This is the entire reason the new permission
-     * exists.
+     * A user who lacks {@link ApiCooldownPermission#READ} must get 403 even
+     * when they have {@link AdapterBasicPermission} on the seeded repo —
+     * the API gate is the coarse check that must fire before row scoping.
      */
     @Test
-    void historyEndpointReturns403WithoutHistoryPermission(final Vertx vertx,
+    void historyEndpointReturns403WithoutCooldownReadPermission(final Vertx vertx,
         final VertxTestContext ctx) throws Exception {
-        permSpec = new PermissionSpec(true, false, Set.of("repo-a"));
+        permSpec = new PermissionSpec(false, Set.of("repo-a"));
         this.seedRepo("repo-a", "npm-proxy");
         this.seedHistory(
             "npm-proxy", "repo-a", "pkg-a", "1.0.0",
@@ -218,8 +215,7 @@ final class CooldownHandlerHistoryTest {
             vertx, ctx, HttpMethod.GET, "/api/v1/cooldown/history",
             res -> Assertions.assertEquals(
                 403, res.statusCode(),
-                "user without ApiCooldownHistoryPermission must be rejected, "
-                    + "even if they have ApiCooldownPermission"
+                "user without ApiCooldownPermission.READ must be rejected"
             )
         );
     }
@@ -241,7 +237,7 @@ final class CooldownHandlerHistoryTest {
             ArchiveReason.MANUAL_UNBLOCK, "alice");
         this.seedHistory("npm-proxy", "repo-c", "pkg-c", "3.0.0",
             ArchiveReason.EXPIRED, "system");
-        permSpec = new PermissionSpec(false, true, Set.of("repo-a"));
+        permSpec = new PermissionSpec(true, Set.of("repo-a"));
         this.request(
             vertx, ctx, HttpMethod.GET, "/api/v1/cooldown/history",
             res -> {
@@ -274,7 +270,7 @@ final class CooldownHandlerHistoryTest {
             "npm-proxy", "repo-a", "pkg-a", "1.0.0",
             ArchiveReason.MANUAL_UNBLOCK, "alice"
         );
-        permSpec = new PermissionSpec(false, true, Set.of("repo-a"));
+        permSpec = new PermissionSpec(true, Set.of("repo-a"));
         this.request(
             vertx, ctx, HttpMethod.GET, "/api/v1/cooldown/history",
             res -> {
@@ -313,7 +309,7 @@ final class CooldownHandlerHistoryTest {
         this.seedHistory("npm-proxy", "repo-b", "pkg-other", "3.0.0",
             ArchiveReason.EXPIRED, "system");
         permSpec = new PermissionSpec(
-            false, true, Set.of("repo-a", "repo-b", "repo-a-maven")
+            true, Set.of("repo-a", "repo-b", "repo-a-maven")
         );
         this.request(
             vertx, ctx, HttpMethod.GET,
@@ -345,7 +341,7 @@ final class CooldownHandlerHistoryTest {
             this.seedHistory("npm-proxy", "repo-a", "pkg-" + i, "1.0.0",
                 ArchiveReason.EXPIRED, "system");
         }
-        permSpec = new PermissionSpec(false, true, Set.of("repo-a"));
+        permSpec = new PermissionSpec(true, Set.of("repo-a"));
         this.request(
             vertx, ctx, HttpMethod.GET, "/api/v1/cooldown/history?size=5",
             res -> {
@@ -375,9 +371,6 @@ final class CooldownHandlerHistoryTest {
         if (spec.cooldownRead()) {
             coll.add(ApiCooldownPermission.READ);
         }
-        if (spec.historyRead()) {
-            coll.add(ApiCooldownHistoryPermission.READ);
-        }
         for (final String repo : spec.allowedRepos()) {
             coll.add(new AdapterBasicPermission(repo, "read"));
         }
@@ -385,15 +378,13 @@ final class CooldownHandlerHistoryTest {
     }
 
     /**
-     * Test permission spec — captures which API perms and which repos the
-     * test user holds.
+     * Test permission spec — captures whether the user holds the API-level
+     * cooldown read permission and which per-repo reads they hold.
      * @param cooldownRead whether ApiCooldownPermission.READ is granted
-     * @param historyRead whether ApiCooldownHistoryPermission.READ is granted
      * @param allowedRepos the set of repos AdapterBasicPermission(_, "read") applies to
      */
     private record PermissionSpec(
         boolean cooldownRead,
-        boolean historyRead,
         Set<String> allowedRepos
     ) {
     }

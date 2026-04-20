@@ -296,6 +296,46 @@ final class CooldownHandlerFilterTest {
         );
     }
 
+    /**
+     * The UI sends base repo-type values ({@code docker}, {@code npm},
+     * {@code maven}) while the database column stores full subtyped values
+     * ({@code docker-proxy}, {@code docker-group}, ...). The repo_type
+     * filter must match rows whose repo_type starts with {@code <base>-}
+     * in addition to an exact match, so a user asking for "docker" sees
+     * both {@code docker-proxy} and {@code docker-group} rows.
+     */
+    @Test
+    void blockedFiltersByRepoTypeBase(final Vertx vertx,
+        final VertxTestContext ctx) throws Exception {
+        this.seedRepo("repo-proxy", "docker-proxy");
+        this.seedRepo("repo-group", "docker-group");
+        this.seedRepo("repo-maven", "maven-proxy");
+        this.seedBlock("docker-proxy", "repo-proxy", "pkg-dp", "1.0.0");
+        this.seedBlock("docker-group", "repo-group", "pkg-dg", "1.0.0");
+        this.seedBlock("maven-proxy", "repo-maven", "pkg-mp", "1.0.0");
+        allowedRepos = Set.of("repo-proxy", "repo-group", "repo-maven");
+        this.request(
+            vertx, ctx, HttpMethod.GET,
+            "/api/v1/cooldown/blocked?repo_type=docker",
+            res -> {
+                Assertions.assertEquals(200, res.statusCode());
+                final JsonObject body = res.bodyAsJsonObject();
+                Assertions.assertEquals(2, body.getInteger("total"),
+                    "base 'docker' must match both 'docker-proxy' and "
+                        + "'docker-group' rows");
+                final JsonArray items = body.getJsonArray("items");
+                Assertions.assertEquals(2, items.size());
+                for (int i = 0; i < items.size(); i++) {
+                    Assertions.assertTrue(
+                        items.getJsonObject(i).getString("repo_type")
+                            .startsWith("docker"),
+                        "row with non-docker repo_type leaked into response"
+                    );
+                }
+            }
+        );
+    }
+
     @Test
     void blockedTotalMatchesFilteredRowsAfterPermScoping(final Vertx vertx,
         final VertxTestContext ctx) throws Exception {
