@@ -227,6 +227,159 @@ describe('CooldownView filter dropdowns', () => {
     expect(wrapper.text()).not.toContain('Actions')
     expect(wrapper.find('button .pi-unlock').exists()).toBe(false)
   })
+
+  it('uses the "Cooldown history" card title in history mode', async () => {
+    seedAuth({
+      api_cooldown_permissions: ['read'],
+      api_cooldown_history_permissions: ['read'],
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    // Active mode keeps the existing "Blocked Artifacts" title.
+    expect(wrapper.text()).toContain('Blocked Artifacts')
+    expect(wrapper.text()).not.toContain('Cooldown history')
+
+    const vm = wrapper.vm as unknown as { mode: 'active' | 'history' }
+    vm.mode = 'history'
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Cooldown history')
+    // Old "Archived Artifacts" title is gone.
+    expect(wrapper.text()).not.toContain('Archived Artifacts')
+  })
+
+  it('renders renamed history headers (Unblocked date/by/reason)', async () => {
+    seedAuth({
+      api_cooldown_permissions: ['read'],
+      api_cooldown_history_permissions: ['read'],
+    })
+    getCooldownHistoryMock.mockResolvedValue({
+      items: [
+        {
+          package_name: 'left-pad',
+          version: '1.2.3',
+          repo: 'npm-proxy',
+          repo_type: 'npm-proxy',
+          reason: 'CVE-2024-1234',
+          blocked_date: '2026-04-10T00:00:00Z',
+          blocked_until: '2026-04-17T00:00:00Z',
+          remaining_hours: 0,
+          archived_at: '2026-04-17T01:00:00Z',
+          archive_reason: 'EXPIRED',
+          archived_by: 'system',
+        },
+      ],
+      page: 0, size: 50, total: 1, hasMore: false,
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as { mode: 'active' | 'history' }
+    vm.mode = 'history'
+    await flushPromises()
+
+    const text = wrapper.text()
+    // New labels.
+    expect(text).toContain('Unblocked date')
+    expect(text).toContain('Unblocked by')
+    expect(text).toContain('Unblocked reason')
+    // Old labels must be gone.
+    expect(text).not.toContain('Archived at')
+    expect(text).not.toContain('Archive reason')
+    expect(text).not.toContain('Archived by')
+  })
+
+  it('drops "Originally blocked at" column in history mode', async () => {
+    seedAuth({
+      api_cooldown_permissions: ['read'],
+      api_cooldown_history_permissions: ['read'],
+    })
+    getCooldownHistoryMock.mockResolvedValue({
+      items: [
+        {
+          package_name: 'left-pad',
+          version: '1.2.3',
+          repo: 'npm-proxy',
+          repo_type: 'npm-proxy',
+          reason: 'CVE-2024-1234',
+          blocked_date: '2026-04-10T00:00:00Z',
+          blocked_until: '2026-04-17T00:00:00Z',
+          remaining_hours: 0,
+          archived_at: '2026-04-17T01:00:00Z',
+          archive_reason: 'EXPIRED',
+          archived_by: 'system',
+        },
+      ],
+      page: 0, size: 50, total: 1, hasMore: false,
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as { mode: 'active' | 'history' }
+    vm.mode = 'history'
+    await flushPromises()
+
+    // blocked_date / "Originally blocked at" is no longer shown in history;
+    // the column is active-mode only (as "Blocked at").
+    expect(wrapper.text()).not.toContain('Originally blocked at')
+  })
+
+  it('renders RepoTypeBadge for Type column in both active and history modes', async () => {
+    seedAuth({
+      api_cooldown_permissions: ['read'],
+      api_cooldown_history_permissions: ['read'],
+    })
+    getCooldownBlockedMock.mockResolvedValue({
+      items: [
+        {
+          package_name: 'pkg-a',
+          version: '1.0.0',
+          repo: 'npm-proxy',
+          repo_type: 'npm-proxy',
+          reason: 'CVE',
+          blocked_date: '2026-04-10T00:00:00Z',
+          blocked_until: '2026-05-01T00:00:00Z',
+          remaining_hours: 240,
+        },
+      ],
+      page: 0, size: 50, total: 1, hasMore: false,
+    })
+    getCooldownHistoryMock.mockResolvedValue({
+      items: [
+        {
+          package_name: 'pkg-a',
+          version: '1.0.0',
+          repo: 'docker-proxy',
+          repo_type: 'docker-proxy',
+          reason: 'CVE',
+          blocked_date: '2026-04-10T00:00:00Z',
+          blocked_until: '2026-04-17T00:00:00Z',
+          remaining_hours: 0,
+          archived_at: '2026-04-17T01:00:00Z',
+          archive_reason: 'EXPIRED',
+          archived_by: 'system',
+        },
+      ],
+      page: 0, size: 50, total: 1, hasMore: false,
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    // Active mode: npm badge from RepoTypeBadge.
+    expect(wrapper.text()).toContain('npm')
+
+    const vm = wrapper.vm as unknown as { mode: 'active' | 'history' }
+    vm.mode = 'history'
+    await flushPromises()
+
+    // History mode: Docker badge from RepoTypeBadge.
+    expect(wrapper.text()).toContain('Docker')
+  })
 })
 
 describe('CooldownView cooldown-enabled repositories grid', () => {
