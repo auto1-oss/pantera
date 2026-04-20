@@ -23,10 +23,13 @@ type Mode = 'active' | 'history'
 const notify = useNotificationStore()
 const auth = useAuthStore()
 const canWrite = auth.hasAction('api_cooldown_permissions', 'write')
-// Anyone with read access to cooldown can toggle into the history view;
-// per-repo AdapterBasicPermission continues to filter rows server-side.
+// The history feed is gated by its own narrower permission
+// (api_cooldown_history_permissions.read). A user can have api_cooldown.read
+// to see the live blocked list without necessarily being allowed to browse
+// the long-term archive. Per-repo AdapterBasicPermission continues to filter
+// rows server-side on top of this API-level gate.
 const canReadHistory = computed(() =>
-  auth.hasAction('api_cooldown_permissions', 'read'),
+  auth.hasAction('api_cooldown_history_permissions', 'read'),
 )
 
 const repos = ref<CooldownRepo[]>([])

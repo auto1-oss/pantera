@@ -13,6 +13,7 @@ package com.auto1.pantera.api.v1;
 import com.auto1.pantera.api.AuthTokenRest;
 import com.auto1.pantera.api.AuthzHandler;
 import com.auto1.pantera.api.RepositoryName;
+import com.auto1.pantera.api.perms.ApiCooldownHistoryPermission;
 import com.auto1.pantera.api.perms.ApiCooldownPermission;
 import com.auto1.pantera.cooldown.ArchiveReason;
 import com.auto1.pantera.cooldown.CooldownRepository;
@@ -181,11 +182,13 @@ public final class CooldownHandler {
             .handler(new AuthzHandler(this.policy, ApiCooldownPermission.READ))
             .handler(this::blocked);
         // GET /api/v1/cooldown/history — paginated archive/history feed.
-        // Gated by the same ApiCooldownPermission.READ as /blocked; the
+        // Gated by ApiCooldownHistoryPermission.READ — a separate, narrower
+        // permission than ApiCooldownPermission.READ so operators can expose
+        // the live blocked list without exposing the long-term archive. The
         // per-request handler additionally filters rows to repos the caller
         // has AdapterBasicPermission(repo, "read") on.
         router.get("/api/v1/cooldown/history")
-            .handler(new AuthzHandler(this.policy, ApiCooldownPermission.READ))
+            .handler(new AuthzHandler(this.policy, ApiCooldownHistoryPermission.READ))
             .handler(this::history);
         // POST /api/v1/repositories/:name/cooldown/unblock — unblock single artifact
         router.post("/api/v1/repositories/:name/cooldown/unblock")
