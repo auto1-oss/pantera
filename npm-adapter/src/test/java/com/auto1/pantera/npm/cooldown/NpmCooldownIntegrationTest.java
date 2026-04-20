@@ -280,6 +280,58 @@ final class NpmCooldownIntegrationTest {
         assertThat(filtered.get("dist-tags").get("latest").asText(), equalTo("19.0.0"));
     }
 
+    /**
+     * Non-{@code latest} dist-tags pointing to a blocked version must be
+     * dropped by the filter pipeline — otherwise {@code npm install pkg@beta}
+     * would silently resolve to a different version than the user asked for.
+     * The {@code latest} tag is separately rewritten to the most recent
+     * non-blocked stable version (covered elsewhere).
+     */
+    @Test
+    void dropsNonLatestDistTagsPointingAtBlockedVersion() throws Exception {
+        this.cooldownService.blockVersion("pkg", "3.0.0-beta.1");
+
+        final java.time.Instant now = java.time.Instant.now();
+        final String dateOld = now.minus(java.time.Duration.ofDays(30)).toString();
+        final String dateRecent = now.minus(java.time.Duration.ofDays(1)).toString();
+        final String rawJson = String.format("""
+            {
+                "name": "pkg",
+                "dist-tags": {
+                    "latest": "2.0.0",
+                    "beta": "3.0.0-beta.1",
+                    "next": "2.1.0"
+                },
+                "versions": {
+                    "2.0.0": { "name": "pkg", "version": "2.0.0" },
+                    "2.1.0": { "name": "pkg", "version": "2.1.0" },
+                    "3.0.0-beta.1": { "name": "pkg", "version": "3.0.0-beta.1" }
+                },
+                "time": {
+                    "2.0.0": "%s",
+                    "2.1.0": "%s",
+                    "3.0.0-beta.1": "%s"
+                }
+            }
+            """, dateOld, dateOld, dateRecent);
+
+        final byte[] result = this.service.filterMetadata(
+            "npm", "test-repo", "pkg",
+            rawJson.getBytes(StandardCharsets.UTF_8),
+            this.parser, this.filter, this.rewriter,
+            Optional.of(this.inspector)
+        ).get();
+
+        final JsonNode filtered = MAPPER.readTree(result);
+        // blocked version stripped from versions
+        assertThat(filtered.get("versions").has("3.0.0-beta.1"), is(false));
+        // blocked-targeted beta tag dropped
+        assertThat(filtered.get("dist-tags").has("beta"), is(false));
+        // latest unchanged (it wasn't blocked) and other non-latest tag preserved
+        assertThat(filtered.get("dist-tags").get("latest").asText(), equalTo("2.0.0"));
+        assertThat(filtered.get("dist-tags").get("next").asText(), equalTo("2.1.0"));
+    }
+
     @Test
     void cachesFilteredMetadata() throws Exception {
         final String rawJson = """

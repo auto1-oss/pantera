@@ -14,7 +14,9 @@ import com.auto1.pantera.cooldown.metadata.MetadataFilter;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -25,12 +27,24 @@ import java.util.Set;
  * <ul>
  *   <li>{@code versions} - removes blocked version objects</li>
  *   <li>{@code time} - removes timestamps for blocked versions</li>
- *   <li>{@code dist-tags} - updates if latest points to blocked version</li>
+ *   <li>{@code dist-tags} - drops any non-{@code latest} tag entry whose target
+ *       is a blocked version (so {@code npm install pkg@beta} fails cleanly
+ *       instead of silently resolving to a different version). The
+ *       {@code latest} tag is updated separately by
+ *       {@link #updateLatest(JsonNode, String)} when the orchestrator picks
+ *       a fallback version.</li>
  * </ul>
  *
  * @since 1.0
  */
 public final class NpmMetadataFilter implements MetadataFilter<JsonNode> {
+
+    /**
+     * Name of the {@code latest} dist-tag. The {@code latest} tag is handled
+     * separately (rewritten to the most recent non-blocked version) — it is
+     * never dropped because unbounded {@code npm install pkg} depends on it.
+     */
+    private static final String LATEST_TAG = "latest";
 
     @Override
     public JsonNode filter(final JsonNode metadata, final Set<String> blockedVersions) {
@@ -57,6 +71,34 @@ public final class NpmMetadataFilter implements MetadataFilter<JsonNode> {
             final ObjectNode timeObj = (ObjectNode) time;
             for (final String blocked : blockedVersions) {
                 timeObj.remove(blocked);
+            }
+        }
+
+        // Filter dist-tags: drop non-latest tags pointing to blocked versions.
+        // `latest` is left alone here because MetadataFilterService calls
+        // updateLatest() after this with the chosen fallback version. Dropping
+        // non-latest tags (beta, next, canary, ...) is safer than rewriting
+        // them — `npm install pkg@beta` should fail-closed rather than
+        // silently resolve to a version the user didn't ask for.
+        final JsonNode distTags = root.get("dist-tags");
+        if (distTags != null && distTags.isObject()) {
+            final ObjectNode distTagsObj = (ObjectNode) distTags;
+            final Iterator<String> tagNames = distTagsObj.fieldNames();
+            // Collect first to avoid ConcurrentModificationException
+            final List<String> toRemove = new ArrayList<>();
+            while (tagNames.hasNext()) {
+                final String tagName = tagNames.next();
+                if (LATEST_TAG.equals(tagName)) {
+                    continue;
+                }
+                final JsonNode target = distTagsObj.get(tagName);
+                if (target != null && target.isTextual()
+                    && blockedVersions.contains(target.asText())) {
+                    toRemove.add(tagName);
+                }
+            }
+            for (final String tagName : toRemove) {
+                distTagsObj.remove(tagName);
             }
         }
 
