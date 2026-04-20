@@ -176,6 +176,16 @@ export interface BlockedArtifact {
   remaining_hours: number
 }
 
+// Cooldown history — same as BlockedArtifact plus archive metadata.
+// Returned by GET /api/v1/cooldown/history (registered by Task 13).
+export type ArchiveReason = 'EXPIRED' | 'MANUAL_UNBLOCK' | 'ADMIN_PURGE'
+
+export interface HistoryArtifact extends BlockedArtifact {
+  archived_at: string
+  archive_reason: ArchiveReason
+  archived_by: string
+}
+
 // Cooldown config
 export interface CooldownConfig {
   enabled: boolean
@@ -184,6 +194,10 @@ export interface CooldownConfig {
     enabled: boolean
     minimum_allowed_age?: string
   }>
+  // Optional persistence/cleanup tunables (Task 8). GET /cooldown/config
+  // may not yet echo these fields back — treat as optional on read.
+  history_retention_days?: number
+  cleanup_batch_limit?: number
 }
 
 // Settings
