@@ -42,6 +42,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import javax.json.Json;
 import javax.json.JsonStructure;
@@ -432,6 +433,10 @@ public final class CooldownHandler {
         );
         final String searchQuery = ctx.queryParam("search").stream()
             .findFirst().orElse(null);
+        final String repoFilter = ctx.queryParam("repo").stream()
+            .findFirst().orElse(null);
+        final String repoTypeFilter = ctx.queryParam("repo_type").stream()
+            .findFirst().orElse(null);
         final String sortByParam = ctx.queryParam("sort_by").stream()
             .findFirst().orElse(null);
         // SORT_COL_MAP is an immutable Map.of() which throws NPE on null key — guard explicitly
@@ -447,30 +452,27 @@ public final class CooldownHandler {
                 ctx.user().principal().getString(AuthTokenRest.CONTEXT)
             )
         );
+        // Compute accessible repo set once per request — O(repos), not O(blocks).
+        // Scoping is pushed into SQL via ANY(?), so the DB returns only rows
+        // the caller may see — the former Java-side skip/filter pagination
+        // (and its off-by-N filteredTotal bug) is gone.
+        final Set<String> accessibleRepos = this.crs.listAll().stream()
+            .filter(n -> perms.implies(new AdapterBasicPermission(n, "read")))
+            .collect(java.util.stream.Collectors.toSet());
         CompletableFuture.supplyAsync((java.util.function.Supplier<JsonObject>) () -> {
-            final List<DbBlockRecord> allBlocks =
-                this.repository.findAllActivePaginated(
-                    0, Integer.MAX_VALUE, searchQuery, sortDbCol, sortAsc
-                );
+            final List<DbBlockRecord> rows = this.repository.findActivePaginated(
+                accessibleRepos, repoFilter, repoTypeFilter, searchQuery,
+                sortDbCol, sortAsc, page * size, size
+            );
+            final long total = this.repository.countActiveBlocks(
+                accessibleRepos, repoFilter, repoTypeFilter, searchQuery
+            );
             final Instant now = Instant.now();
             final JsonArray items = new JsonArray();
-            int skipped = 0;
-            int added = 0;
-            for (final DbBlockRecord rec : allBlocks) {
-                if (!perms.implies(
-                    new AdapterBasicPermission(rec.repoName(), "read"))) {
-                    continue;
-                }
-                if (skipped < page * size) {
-                    skipped++;
-                    continue;
-                }
-                if (added >= size) {
-                    continue;
-                }
+            for (final DbBlockRecord rec : rows) {
                 final long remainingSecs =
                     Duration.between(now, rec.blockedUntil()).getSeconds();
-                final JsonObject item = new JsonObject()
+                items.add(new JsonObject()
                     .put("package_name", rec.artifact())
                     .put("version", rec.version())
                     .put("repo", rec.repoName())
@@ -479,17 +481,9 @@ public final class CooldownHandler {
                     .put("blocked_date", rec.blockedAt().toString())
                     .put("blocked_until", rec.blockedUntil().toString())
                     .put("remaining_hours",
-                        Math.max(0, remainingSecs / 3600));
-                items.add(item);
-                added++;
+                        Math.max(0, remainingSecs / 3600)));
             }
-            final int filteredTotal = skipped + added
-                + (int) allBlocks.stream()
-                    .skip((long) skipped + added)
-                    .filter(r -> perms.implies(
-                        new AdapterBasicPermission(r.repoName(), "read")))
-                    .count();
-            return ApiResponse.paginated(items, page, size, filteredTotal);
+            return ApiResponse.paginated(items, page, size, (int) total);
         }, HandlerExecutor.get()).whenComplete((result, err) -> {
             if (err != null) {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
