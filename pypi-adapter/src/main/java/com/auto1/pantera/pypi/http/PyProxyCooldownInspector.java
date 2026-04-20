@@ -54,6 +54,20 @@ final class PyProxyCooldownInspector implements CooldownInspector,
         this.metadata = metadata;
     }
 
+    /**
+     * Expose the PyPI JSON API slice this inspector is configured with.
+     *
+     * <p>Package-private — consumed by {@link ProxySlice} so the JSON-API
+     * cooldown handler can reuse the same {@code /pypi/&lt;pkg&gt;/json}
+     * upstream the inspector already talks to. Returns {@code null}
+     * when the default ctor was used (i.e. no metadata slice wired).</p>
+     *
+     * @return Upstream JSON API slice, or null
+     */
+    com.auto1.pantera.http.Slice metadataSlice() {
+        return this.metadata;
+    }
+
     @Override
     public void invalidate(final String artifact, final String version) {
         this.releases.invalidate(key(artifact, version));
