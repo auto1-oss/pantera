@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
-import { getCooldownOverview, getCooldownBlocked } from '@/api/settings'
+import { getCooldownOverview, getCooldownBlocked, getCooldownHistory } from '@/api/settings'
 import { unblockArtifact, unblockAll } from '@/api/repos'
 import { useNotificationStore } from '@/stores/notifications'
 import { useAuthStore } from '@/stores/auth'
@@ -15,15 +15,22 @@ import Card from 'primevue/card'
 import Tag from 'primevue/tag'
 import InputText from 'primevue/inputtext'
 import Select from 'primevue/select'
+import SelectButton from 'primevue/selectbutton'
 import Paginator from 'primevue/paginator'
-import type { CooldownRepo, BlockedArtifact } from '@/types'
+import type { CooldownRepo, BlockedArtifact, HistoryArtifact } from '@/types'
+
+type Mode = 'active' | 'history'
 
 const notify = useNotificationStore()
 const auth = useAuthStore()
 const canWrite = auth.hasAction('api_cooldown_permissions', 'write')
+const canReadHistory = computed(() =>
+  auth.hasAction('api_cooldown_history_permissions', 'read'),
+)
 
 const repos = ref<CooldownRepo[]>([])
-const blocked = ref<BlockedArtifact[]>([])
+const blocked = ref<Array<BlockedArtifact | HistoryArtifact>>([])
+const mode = ref<Mode>('active')
 const settingsOpen = ref(false)
 const blockedPage = ref(0)
 const blockedSize = ref(50)
@@ -66,6 +73,12 @@ watch([repoFilter, typeFilter], () => {
   loadBlocked()
 })
 
+// Mode toggle: reset pagination and reload from the appropriate endpoint.
+watch(mode, () => {
+  blockedPage.value = 0
+  loadBlocked()
+})
+
 onBeforeUnmount(() => {
   if (searchTimeout) clearTimeout(searchTimeout)
   if (blockedAbortCtrl) blockedAbortCtrl.abort()
@@ -102,7 +115,9 @@ async function loadBlocked() {
       params.sort_by = sortField.value
       params.sort_dir = sortOrder.value >= 0 ? 'asc' : 'desc'
     }
-    const resp = await getCooldownBlocked(params as any, ctrl.signal)
+    const resp = mode.value === 'active'
+      ? await getCooldownBlocked(params as any, ctrl.signal)
+      : await getCooldownHistory(params as any, ctrl.signal)
     if (ctrl.signal.aborted) return
     blocked.value = resp.items
     blockedTotal.value = resp.total
@@ -222,7 +237,7 @@ onMounted(() => {
       <Card class="shadow-sm">
         <template #title>
           <div class="flex items-center justify-between">
-            <span>Blocked Artifacts</span>
+            <span>{{ mode === 'active' ? 'Blocked Artifacts' : 'Archived Artifacts' }}</span>
             <span class="text-sm font-normal text-gray-400">{{ blockedTotal }} total</span>
           </div>
         </template>
@@ -252,6 +267,18 @@ onMounted(() => {
               placeholder="All types"
               class="w-40"
             />
+            <SelectButton
+              v-if="canReadHistory"
+              v-model="mode"
+              :options="[
+                { label: 'Active', value: 'active' },
+                { label: 'History', value: 'history' },
+              ]"
+              option-label="label"
+              option-value="value"
+              :allow-empty="false"
+              aria-label="Toggle active vs. history view"
+            />
           </div>
           <DataTable
             :value="blocked"
@@ -275,12 +302,21 @@ onMounted(() => {
                 <Tag :value="data.reason" severity="info" />
               </template>
             </Column>
-            <Column field="remaining_hours" header="Remaining" sortable>
+            <Column
+              v-if="mode === 'active'"
+              field="remaining_hours"
+              header="Remaining"
+              sortable
+            >
               <template #body="{ data }">
                 <span>{{ formatRemaining(data.blocked_until) }}</span>
               </template>
             </Column>
-            <Column v-if="canWrite" header="" class="w-16">
+            <Column
+              v-if="mode === 'active' && canWrite"
+              header="Actions"
+              class="w-16"
+            >
               <template #body="{ data }">
                 <Button
                   icon="pi pi-unlock"
@@ -292,8 +328,38 @@ onMounted(() => {
                 />
               </template>
             </Column>
+            <Column
+              v-if="mode === 'history'"
+              field="blocked_date"
+              header="Originally blocked at"
+              sortable
+            />
+            <Column
+              v-if="mode === 'history'"
+              field="archived_at"
+              header="Archived at"
+              sortable
+            />
+            <Column
+              v-if="mode === 'history'"
+              field="archive_reason"
+              header="Archive reason"
+              sortable
+            >
+              <template #body="{ data }">
+                <Tag :value="data.archive_reason" severity="secondary" />
+              </template>
+            </Column>
+            <Column
+              v-if="mode === 'history'"
+              field="archived_by"
+              header="Archived by"
+              sortable
+            />
             <template #empty>
-              <div class="text-center text-gray-400 py-4">No blocked artifacts</div>
+              <div class="text-center text-gray-400 py-4">
+                {{ mode === 'active' ? 'No blocked artifacts' : 'No archived artifacts' }}
+              </div>
             </template>
           </DataTable>
           <Paginator
