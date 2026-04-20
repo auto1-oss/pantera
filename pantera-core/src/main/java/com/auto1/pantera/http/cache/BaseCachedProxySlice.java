@@ -1105,20 +1105,31 @@ public abstract class BaseCachedProxySlice implements Slice {
             });
     }
 
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void enqueueEvent(
         final Key key, final Headers headers, final long size, final String owner
     ) {
         if (this.events.isEmpty()) {
             return;
         }
-        final Optional<ProxyArtifactEvent> event =
-            this.buildArtifactEvent(key, headers, size, owner);
-        event.ifPresent(e -> {
-            if (!this.events.get().offer(e)) {
-                com.auto1.pantera.metrics.EventsQueueMetrics
-                    .recordDropped(this.repoName);
-            }
-        });
+        try {
+            final Optional<ProxyArtifactEvent> event =
+                this.buildArtifactEvent(key, headers, size, owner);
+            event.ifPresent(e -> {
+                if (!this.events.get().offer(e)) {
+                    com.auto1.pantera.metrics.EventsQueueMetrics
+                        .recordDropped(this.repoName);
+                }
+            });
+        } catch (final Throwable t) {
+            EcsLogger.warn("com.auto1.pantera.cache")
+                .message("Failed to enqueue proxy event; serve path unaffected")
+                .eventCategory("process")
+                .eventAction("queue_enqueue")
+                .eventOutcome("failure")
+                .field("repository.name", this.repoName)
+                .log();
+        }
     }
 
     private void trackUpstreamFailure(final Throwable error) {

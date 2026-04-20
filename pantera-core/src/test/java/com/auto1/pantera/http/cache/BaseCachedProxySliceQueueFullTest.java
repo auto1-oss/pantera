@@ -90,6 +90,8 @@ final class BaseCachedProxySliceQueueFullTest {
         assertEquals(RsStatus.OK, response.status(), "serve path returns 200 despite full queue");
         // Drop counter advanced — ops has visibility into the overflow.
         final long drops = EventsQueueMetrics.dropCount() - dropsBefore;
+        // EventsQueueMetrics.DROP_COUNT is a static AtomicLong shared across the
+        // test JVM; other tests in the suite may also advance it, so tolerate >= 1.
         assertTrue(
             drops >= 1L,
             "EventsQueueMetrics drop counter must advance by at least 1 on offer() overflow,"
