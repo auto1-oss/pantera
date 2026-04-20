@@ -83,10 +83,10 @@ CREATE OR REPLACE FUNCTION _cooldown_batch_limit() RETURNS integer AS $fn$
 $fn$ LANGUAGE sql STABLE;
 
 CREATE OR REPLACE FUNCTION _cooldown_retention_days() RETURNS integer AS $fn$
-    SELECT GREATEST(1, COALESCE(
+    SELECT GREATEST(1, LEAST(3650, COALESCE(
         NULLIF(value->>'history_retention_days', '')::integer,
         90
-    ))
+    )))
     FROM settings
     WHERE key = 'cooldown'
     UNION ALL
@@ -125,7 +125,7 @@ BEGIN
             WITH victims AS (
                 SELECT id FROM artifact_cooldowns
                 WHERE status = 'ACTIVE'
-                  AND blocked_until < EXTRACT(EPOCH FROM NOW()) * 1000
+                  AND blocked_until < EXTRACT(EPOCH FROM NOW())::bigint * 1000
                 ORDER BY blocked_until
                 LIMIT _cooldown_batch_limit()
                 FOR UPDATE SKIP LOCKED
