@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### 🔧 Bug fixes
+
+- **Maven adapter event queue (`BaseCachedProxySlice.java`) now increments the
+  `pantera.events.queue.dropped` counter on overflow**, matching the npm
+  adapter pattern from the 2.1.3 incident fix. The previous `offer()` call
+  at line 1116 ignored the boolean return value — under burst load the
+  bounded `ProxyArtifactEvent` queue would silently drop events, leaving
+  ops with zero signal (no WARN, no Micrometer counter). No functional
+  change to the serve path; closes an observability gap before cooldown
+  rollout to all proxy repos. Regression guard:
+  `BaseCachedProxySliceQueueFullTest`.
+  ([@aydasraf](https://github.com/aydasraf))
+
 ## Version 2.2.0
 
 Target-architecture alignment release (v2.2 plan §12). Ships nine work items — WI-00 (queue/log hotfix), WI-01 (Fault + Result sum types), WI-02 (full RequestContext + Deadline + ContextualExecutor), WI-03 (StructuredLogger 5-tier + LevelPolicy + AuditAction), WI-04 (`GroupResolver` replaces `GroupSlice` at every production site), WI-05 (SingleFlight coalescer), WI-07 (ProxyCacheWriter + Maven checksum integrity), WI-post-05 (retire RequestDeduplicator), WI-post-07 (wire ProxyCacheWriter into pypi/go/composer). Also lands a **P0 production-readiness pass against the Opus 4.7 audit 2026-04-18** (Groups A–H) plus full admin / developer / user documentation. WI-06, WI-06b, WI-08, WI-09, WI-10 are deferred to follow-on v2.2.x trains.

@@ -1113,7 +1113,12 @@ public abstract class BaseCachedProxySlice implements Slice {
         }
         final Optional<ProxyArtifactEvent> event =
             this.buildArtifactEvent(key, headers, size, owner);
-        event.ifPresent(e -> this.events.get().offer(e));
+        event.ifPresent(e -> {
+            if (!this.events.get().offer(e)) {
+                com.auto1.pantera.metrics.EventsQueueMetrics
+                    .recordDropped(this.repoName);
+            }
+        });
     }
 
     private void trackUpstreamFailure(final Throwable error) {
