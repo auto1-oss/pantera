@@ -12,6 +12,7 @@ package com.auto1.pantera.api.v1;
 
 import com.auto1.pantera.api.AuthTokenRest;
 import com.auto1.pantera.api.perms.ApiAliasPermission;
+import com.auto1.pantera.api.perms.ApiCooldownHistoryPermission;
 import com.auto1.pantera.api.perms.ApiCooldownPermission;
 import com.auto1.pantera.api.perms.ApiRepositoryPermission;
 import com.auto1.pantera.api.perms.ApiRolePermission;
@@ -878,6 +879,12 @@ public final class AuthHandler {
                     new java.security.Permission[]{
                         ApiCooldownPermission.READ,
                         ApiCooldownPermission.WRITE,
+                    }))
+            .put("api_cooldown_history_permissions",
+                AuthHandler.allowedActions(perms, "cooldown_history",
+                    new String[]{"read"},
+                    new java.security.Permission[]{
+                        ApiCooldownHistoryPermission.READ,
                     }))
             .put("api_search_permissions",
                 AuthHandler.allowedActions(perms, "search",

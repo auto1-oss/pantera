@@ -131,11 +131,11 @@ describe('CooldownView filter dropdowns', () => {
     expect(lastCall[0].repo).toBe('pypi-proxy')
   })
 
-  it('hides the history toggle when user lacks cooldown read permission', async () => {
-    // Seed auth with no cooldown permissions at all. The SelectButton
-    // is gated on canReadHistory (which checks api_cooldown_permissions.read)
-    // and must not render.
-    seedAuth({})
+  it('hides the history toggle when user lacks history permission', async () => {
+    // Seed auth with no history permission. Even if the user has
+    // api_cooldown_permissions.read, the SelectButton must stay hidden
+    // because canReadHistory checks api_cooldown_history_permissions.read.
+    seedAuth({ api_cooldown_permissions: ['read'] })
     const wrapper = mountView()
     await flushPromises()
 
@@ -143,8 +143,8 @@ describe('CooldownView filter dropdowns', () => {
     expect(toggle.exists()).toBe(false)
   })
 
-  it('shows the history toggle for users with cooldown read permission', async () => {
-    seedAuth({ api_cooldown_permissions: ['read'] })
+  it('shows the history toggle for users with history permission', async () => {
+    seedAuth({ api_cooldown_history_permissions: ['read'] })
     const wrapper = mountView()
     await flushPromises()
 
@@ -155,6 +155,7 @@ describe('CooldownView filter dropdowns', () => {
   it('shows history rows when toggle is set to history', async () => {
     seedAuth({
       api_cooldown_permissions: ['read', 'write'],
+      api_cooldown_history_permissions: ['read'],
     })
     getCooldownHistoryMock.mockResolvedValue({
       items: [
@@ -191,6 +192,7 @@ describe('CooldownView filter dropdowns', () => {
   it('hides unblock column in history mode', async () => {
     seedAuth({
       api_cooldown_permissions: ['read', 'write'],
+      api_cooldown_history_permissions: ['read'],
     })
     getCooldownHistoryMock.mockResolvedValue({
       items: [
