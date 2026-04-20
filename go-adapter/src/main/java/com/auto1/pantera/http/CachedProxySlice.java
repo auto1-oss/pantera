@@ -23,6 +23,7 @@ import com.auto1.pantera.cooldown.response.CooldownResponseRegistry;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.http.cache.ProxyCacheWriter;
+import com.auto1.pantera.http.cooldown.GoLatestHandler;
 import com.auto1.pantera.http.context.RequestContext;
 import com.auto1.pantera.http.fault.Fault;
 import com.auto1.pantera.http.fault.Fault.ChecksumAlgo;
@@ -148,6 +149,16 @@ final class CachedProxySlice implements Slice {
     private final ProxyCacheWriter cacheWriter;
 
     /**
+     * {@code /@latest} cooldown handler: intercepts {@code go get
+     * <module>} (without a pseudo-version) resolution, rewrites the
+     * response to the highest non-blocked version when the upstream
+     * latest is in cooldown. Closes the unbounded-resolution gap left
+     * by a {@code /@v/list}-only filter — the Go client does not hit
+     * {@code /@v/list} on this path.
+     */
+    private final GoLatestHandler latestHandler;
+
+    /**
      * Wraps origin slice with caching layer and default 12h metadata TTL.
      *
      * @param client Client slice
@@ -180,6 +191,9 @@ final class CachedProxySlice implements Slice {
         this.cacheWriter = storage
             .map(raw -> new ProxyCacheWriter(raw, rname, meterRegistry()))
             .orElse(null);
+        this.latestHandler = new GoLatestHandler(
+            client, cooldown, inspector, rtype, rname
+        );
     }
 
     @Override
@@ -204,6 +218,20 @@ final class CachedProxySlice implements Slice {
                 .eventAction("proxy_request")
                 .log();
             return this.handleRootPath(line);
+        }
+        // Cooldown-aware @latest rewrite: intercepts before generic
+        // fetchThroughCache so "go get <module>" (no pseudo-version) is
+        // transparently redirected to the highest non-blocked version.
+        if (this.latestHandler.matches(path)) {
+            final String user = new Login(headers).getValue();
+            EcsLogger.debug("com.auto1.pantera.go")
+                .message("Handling @latest via cooldown handler")
+                .eventCategory("web")
+                .eventAction("proxy_request")
+                .field("url.path", path)
+                .field("repository.name", this.rname)
+                .log();
+            return this.latestHandler.handle(line, user);
         }
         final Key key = new KeyFromPath(path);
         final Matcher matcher = ARTIFACT.matcher(key.string());

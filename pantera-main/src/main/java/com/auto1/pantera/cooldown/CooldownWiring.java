@@ -137,6 +137,19 @@ public final class CooldownWiring {
         responses.register(new DockerCooldownResponseFactory(), "docker-proxy");
 
         // --- Go ---
+        // The {@code /@v/list} bundle is registered here for consistency with
+        // other adapters and for the 403 response factory. The Go adapter also
+        // ships a second set of SPI implementations for the {@code /@latest}
+        // endpoint — {@code GoLatestMetadataRequestDetector},
+        // {@code GoLatestMetadataParser}, {@code GoLatestMetadataFilter} and
+        // {@code GoLatestMetadataRewriter} — wired directly inside
+        // {@code CachedProxySlice} (go-adapter) via {@code GoLatestHandler}.
+        // The {@code /@latest} handler cannot share a single-detector bundle
+        // slot because its flow needs a sibling {@code /@v/list} fetch to
+        // resolve a fallback, which the generic {@link
+        // com.auto1.pantera.cooldown.metadata.MetadataFilterService} does not
+        // model. Both code paths coexist: {@code /@v/list} requests go through
+        // the bundle; {@code /@latest} requests go through the handler.
         final var goBundle = new CooldownAdapterBundle<>(
             new GoMetadataParser(),
             new GoMetadataFilter(),
