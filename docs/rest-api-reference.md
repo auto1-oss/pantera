@@ -1686,7 +1686,26 @@ curl http://localhost:8086/api/v1/search/stats \
 
 ## 10. Cooldown Management
 
-Cooldown prevents recently-published upstream artifacts from being cached in proxy repositories for a configurable period, protecting against supply-chain attacks involving newly uploaded malicious packages.
+Cooldown prevents recently-published upstream artifacts from being cached in
+proxy repositories for a configurable period, protecting against supply-chain
+attacks involving newly uploaded malicious packages.
+
+Cooldown is enforced at two layers:
+
+1. **Metadata filtering** -- on every metadata response served from a proxy
+   repository (port 8080), blocked versions are silently removed so client
+   resolvers (npm, pip, go, docker, composer, mvn) never see them. This covers
+   both direct installs and transitive-dependency resolution. See
+   [Cooldown Metadata Filtering](cooldown-metadata-filtering.md) for the full
+   adapter coverage matrix.
+2. **Artifact fetch gate** -- a direct request for a specific blocked artifact
+   returns a format-appropriate 403 (or 404 `MANIFEST_UNKNOWN` for Docker tags)
+   with a `Retry-After` header. For `file-proxy`, which has no metadata
+   filtering, this is the only enforcement layer and triggers based on the
+   artifact's cached-at / remote-modified timestamp.
+
+The management API endpoints below (served on port 8086) control policy and
+state -- the actual filtering happens transparently on the repository port.
 
 ### GET /api/v1/cooldown/config
 

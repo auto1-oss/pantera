@@ -26,6 +26,66 @@ For example, if cooldown is set to 7 days on the npm proxy, a package version pu
 
 ---
 
+## What You See: Direct Installs
+
+When you run an install command and the **latest** (or a requested specific
+version) is still in cooldown, Pantera rewrites the metadata your package
+manager sees so that the blocked versions appear not to exist:
+
+| Client command | What the client sees |
+|----------------|----------------------|
+| `npm install foo` (no constraint) | Resolves to the highest non-blocked version; `dist-tags.latest` and `GET /foo/latest` both point at the highest allowed version. |
+| `pip install foo` (no constraint) | `/simple/foo/` and `/pypi/foo/json` show only non-blocked versions; `info.version` points at the highest allowed version. |
+| `go get example.com/mod` (no constraint) | `@latest` returns the highest non-blocked version; `@v/list` omits blocked versions. |
+| `docker pull foo:latest` where the tag resolves to a blocked digest | Registry returns `MANIFEST_UNKNOWN` (the Docker client reports `manifest unknown`). |
+| `docker pull foo:1.2.3` where `1.2.3` is blocked | Same as above -- the tag is invisible. |
+| `composer require foo/bar` | `/packages/foo/bar.json` and `/p2/foo/bar.json` show only non-blocked versions; root `/packages.json` / `/repo.json` is filtered too. |
+| `mvn install` (for `foo:bar:LATEST` / `RELEASE`) | `maven-metadata.xml` rewrites `<latest>`, `<release>`, and the `<versions>` list. |
+
+If you request a **specific** blocked version by exact URL (direct download,
+not via the resolver), Pantera returns a format-appropriate 403 or 404 with a
+`Retry-After` header indicating when the block expires.
+
+---
+
+## What You See: Transitive Dependencies
+
+When your build resolves dependencies (e.g., `npm install`, `mvn install`,
+`pip install -r requirements.txt`, `composer update`, `go mod download`), the
+package manager queries each dependency's metadata -- including dependencies of
+dependencies. Pantera's filter runs on every one of those responses:
+
+- If a transitive dependency's constraint has at least one non-blocked
+  satisfying version, your resolver transparently picks the next-best match.
+  **The build succeeds and there is no visible indication that cooldown was
+  involved.** This is the common case.
+- If **every** version satisfying a transitive dependency's constraint is
+  currently blocked, the resolver fails with its normal "no matching version"
+  error (`ETARGET`, `Could not find artifact`, `No matching distribution
+  found`, etc.) -- indistinguishable from upstream genuinely not having a
+  match. This is the intended **fail-closed** behaviour: rather than leaking a
+  blocked version into your build tree, Pantera makes it invisible.
+- When this happens, check the cooldown panel: if the missing version is
+  listed there, cooldown is the cause and you can either wait, pin to an
+  older version, or request an emergency unblock.
+
+---
+
+## File / Raw Proxies
+
+`file-proxy` repositories (the "Generic Files" type, raw artifact proxies) do
+**not** filter metadata, because raw files have no version-resolution
+semantics -- there is no tag list, no packument, no `latest`. Each file is its
+own resource identified by URL.
+
+Cooldown still protects file-proxy repositories, but only at the **artifact
+fetch** layer. If the underlying file's timestamp (cached-at / remote
+last-modified) falls inside the cooldown window, the download is blocked with
+a 403; once the window elapses the file becomes available automatically.
+Admins can unblock specific files through the normal cooldown panel.
+
+---
+
 ## Checking if an Artifact is Blocked
 
 ### Via the Management UI
