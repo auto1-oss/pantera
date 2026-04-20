@@ -52,6 +52,27 @@ public final class CooldownSettings {
     private volatile Map<String, RepoTypeConfig> repoNameOverrides;
 
     /**
+     * How many days of cooldown history to retain before the background
+     * purge deletes it. Read live by {@code CooldownCleanupFallback} every
+     * tick so admin-UI changes take effect without a restart.
+     *
+     * <p>Defaults to 90 days; Task 8 will plumb this through
+     * {@link #update(boolean, Duration, Map)} from the DB-settings blob.
+     */
+    private volatile int historyRetentionDays = 90;
+
+    /**
+     * Maximum rows the background cleanup / purge workers move per batch.
+     * Read live by {@code CooldownCleanupFallback} every tick. Keeping this
+     * bounded caps the per-iteration lock footprint on the artifact_cooldowns
+     * and artifact_cooldowns_history tables.
+     *
+     * <p>Defaults to 10 000 rows; Task 8 will plumb this through
+     * {@link #update(boolean, Duration, Map)} from the DB-settings blob.
+     */
+    private volatile int cleanupBatchLimit = 10_000;
+
+    /**
      * Ctor with global settings only.
      *
      * @param enabled Whether cooldown logic is enabled
@@ -193,6 +214,25 @@ public final class CooldownSettings {
      */
     public Map<String, RepoTypeConfig> repoTypeOverrides() {
         return new HashMap<>(this.repoTypeOverrides);
+    }
+
+    /**
+     * History retention in days — rows in the cooldown history table older
+     * than this are purged by the background cleanup worker.
+     *
+     * @return retention window, in days
+     */
+    public int historyRetentionDays() {
+        return this.historyRetentionDays;
+    }
+
+    /**
+     * Batch size used by the background cleanup / purge workers.
+     *
+     * @return maximum rows moved or deleted per iteration
+     */
+    public int cleanupBatchLimit() {
+        return this.cleanupBatchLimit;
     }
 
     /**
