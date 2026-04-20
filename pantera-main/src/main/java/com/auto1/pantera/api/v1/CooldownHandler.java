@@ -15,6 +15,7 @@ import com.auto1.pantera.api.AuthzHandler;
 import com.auto1.pantera.api.RepositoryName;
 import com.auto1.pantera.api.perms.ApiCooldownHistoryPermission;
 import com.auto1.pantera.api.perms.ApiCooldownPermission;
+import com.auto1.pantera.cooldown.ArchiveReason;
 import com.auto1.pantera.cooldown.CooldownRepository;
 import com.auto1.pantera.cooldown.DbBlockRecord;
 import com.auto1.pantera.cooldown.DbHistoryRecord;
@@ -279,8 +280,10 @@ public final class CooldownHandler {
                 ? ctx.user().principal().getString(AuthTokenRest.SUB, "system")
                 : "system";
             if (wasEnabled && !newEnabled) {
-                // Global cooldown disabled — unblock everything
-                this.repository.unblockAll(actor);
+                // Global cooldown disabled — archive + unblock everything so
+                // the sweep leaves a MANUAL_UNBLOCK audit trail in history.
+                this.repository.archiveAndDeleteAll(
+                    ArchiveReason.MANUAL_UNBLOCK, actor);
             } else if (newEnabled) {
                 // Check each repo type override for disable transitions
                 for (final Map.Entry<String, CooldownSettings.RepoTypeConfig> entry
@@ -288,9 +291,13 @@ public final class CooldownHandler {
                     if (!entry.getValue().enabled()) {
                         final CooldownSettings.RepoTypeConfig old =
                             oldOverrides.get(entry.getKey());
-                        // Unblock if was enabled (or new) and now disabled
+                        // Unblock if was enabled (or new) and now disabled —
+                        // archive + delete so per-repo-type sweeps also
+                        // produce MANUAL_UNBLOCK history rows.
                         if (old == null || old.enabled()) {
-                            this.repository.unblockByRepoType(entry.getKey(), actor);
+                            this.repository.archiveAndDeleteByRepoType(
+                                entry.getKey(),
+                                ArchiveReason.MANUAL_UNBLOCK, actor);
                         }
                     }
                 }

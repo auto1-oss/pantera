@@ -483,6 +483,65 @@ final class JdbcCooldownServiceTest {
         );
     }
 
+    @Test
+    void unblockAllForRepoRoutesThroughArchive() {
+        // Seed three active blocks in the target repo plus one unrelated row
+        // that must be left alone.
+        final Instant now = Instant.now();
+        final Instant until = now.plus(Duration.ofHours(72));
+        for (int i = 0; i < 3; i++) {
+            this.repository.insertBlock(
+                "npm-proxy", "npm", "pkg" + i, "1.0." + i,
+                CooldownReason.FRESH_RELEASE,
+                now, until, "system", Optional.empty()
+            );
+        }
+        this.repository.insertBlock(
+            "npm-proxy", "other-repo", "keep-me", "9.9.9",
+            CooldownReason.FRESH_RELEASE,
+            now, until, "system", Optional.empty()
+        );
+        this.service.unblockAll("npm-proxy", "npm", "alice").join();
+        MatcherAssert.assertThat(
+            "All target-repo live rows should be gone",
+            this.recordExists("npm", "pkg0", "1.0.0"), Matchers.is(false)
+        );
+        MatcherAssert.assertThat(
+            this.recordExists("npm", "pkg1", "1.0.1"), Matchers.is(false)
+        );
+        MatcherAssert.assertThat(
+            this.recordExists("npm", "pkg2", "1.0.2"), Matchers.is(false)
+        );
+        MatcherAssert.assertThat(
+            "Unrelated repo's row must remain live",
+            this.recordExists("other-repo", "keep-me", "9.9.9"),
+            Matchers.is(true)
+        );
+        final List<DbHistoryRecord> history = this.repository.findHistoryPaginated(
+            Set.of("npm", "other-repo"), null, null, null,
+            "archived_at", false, 0, 50
+        );
+        MatcherAssert.assertThat(
+            "Three archived rows in history (one per bulk-unblocked live row)",
+            history, Matchers.hasSize(3)
+        );
+        MatcherAssert.assertThat(
+            "all history rows tagged MANUAL_UNBLOCK",
+            history.stream().allMatch(r -> r.archiveReason() == ArchiveReason.MANUAL_UNBLOCK),
+            Matchers.is(true)
+        );
+        MatcherAssert.assertThat(
+            "all history rows tagged with the actor passed in",
+            history.stream().allMatch(r -> "alice".equals(r.archivedBy())),
+            Matchers.is(true)
+        );
+        MatcherAssert.assertThat(
+            "history rows are for the target repo only",
+            history.stream().allMatch(r -> "npm".equals(r.repoName())),
+            Matchers.is(true)
+        );
+    }
+
     private void truncate() {
         try (Connection conn = this.dataSource.getConnection();
             PreparedStatement stmt = conn.prepareStatement(

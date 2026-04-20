@@ -122,59 +122,122 @@ public final class CooldownRepository {
     }
 
     /**
-     * Delete all active blocks for a repository in a single statement.
-     * @param repoType Repository type
-     * @param repoName Repository name
-     * @return Number of deleted rows
+     * Archive all active blocks for a repository into
+     * {@code artifact_cooldowns_history} and delete them from the live table
+     * in a single CTE. Mirrors {@link #archiveExpiredBatch(int)} but keyed by
+     * {@code (repo_type, repo_name)} and parameterised by archive reason +
+     * actor. Used by the service-level bulk unblock ("Unblock All" per repo).
+     * @param repoType Repository type.
+     * @param repoName Repository name.
+     * @param reason Archive reason written to each history row.
+     * @param actor Username performing the action; written to {@code archived_by}.
+     * @return Number of rows moved to history.
      */
-    int deleteActiveBlocksForRepo(final String repoType, final String repoName) {
-        final String sql =
-            "DELETE FROM artifact_cooldowns WHERE repo_type = ? AND repo_name = ? AND status = ?";
+    public int archiveAndDeleteByRepo(final String repoType, final String repoName,
+                                      final ArchiveReason reason, final String actor) {
+        final String sql = "WITH victims AS ("
+            + "SELECT id FROM artifact_cooldowns"
+            + " WHERE repo_type = ? AND repo_name = ? AND status = 'ACTIVE'"
+            + " FOR UPDATE SKIP LOCKED"
+            + "), archived AS ("
+            + "INSERT INTO artifact_cooldowns_history ("
+            + "original_id, repo_type, repo_name, artifact, version, "
+            + "reason, blocked_by, blocked_at, blocked_until, "
+            + "installed_by, archived_at, archive_reason, archived_by"
+            + ") SELECT c.id, c.repo_type, c.repo_name, c.artifact, c.version, "
+            + "c.reason, c.blocked_by, c.blocked_at, c.blocked_until, "
+            + "c.installed_by, ?, ?, ? "
+            + "FROM artifact_cooldowns c JOIN victims v ON v.id = c.id "
+            + "RETURNING original_id) "
+            + "DELETE FROM artifact_cooldowns c USING archived a "
+            + "WHERE c.id = a.original_id";
         try (Connection conn = this.dataSource.getConnection();
             PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setString(1, repoType);
             stmt.setString(2, repoName);
-            stmt.setString(3, BlockStatus.ACTIVE.name());
-            return stmt.executeUpdate();
-        } catch (final SQLException err) {
-            throw new IllegalStateException("Failed to delete active blocks for repo", err);
-        }
-    }
-
-    /**
-     * Delete all active blocks globally. Used when cooldown is disabled.
-     * @param actor Username performing the action
-     * @return Number of deleted rows
-     */
-    public int unblockAll(final String actor) {
-        final String sql = "DELETE FROM artifact_cooldowns WHERE status = ?";
-        try (Connection conn = this.dataSource.getConnection();
-            PreparedStatement stmt = conn.prepareStatement(sql)) {
-            stmt.setString(1, BlockStatus.ACTIVE.name());
-            return stmt.executeUpdate();
-        } catch (final SQLException err) {
-            throw new IllegalStateException("Failed to unblock all cooldown blocks", err);
-        }
-    }
-
-    /**
-     * Delete all active blocks for a specific repo type. Used when a repo type
-     * cooldown override is disabled.
-     * @param repoType Repository type (e.g. "maven-proxy")
-     * @param actor Username performing the action
-     * @return Number of deleted rows
-     */
-    public int unblockByRepoType(final String repoType, final String actor) {
-        final String sql =
-            "DELETE FROM artifact_cooldowns WHERE repo_type = ? AND status = ?";
-        try (Connection conn = this.dataSource.getConnection();
-            PreparedStatement stmt = conn.prepareStatement(sql)) {
-            stmt.setString(1, repoType);
-            stmt.setString(2, BlockStatus.ACTIVE.name());
+            stmt.setLong(3, Instant.now().toEpochMilli());
+            stmt.setString(4, reason.name());
+            stmt.setString(5, actor);
             return stmt.executeUpdate();
         } catch (final SQLException err) {
             throw new IllegalStateException(
-                "Failed to unblock blocks for repo type " + repoType, err);
+                "Failed to archive+delete active blocks for repo", err);
+        }
+    }
+
+    /**
+     * Archive all active blocks for a given repo type into history and delete
+     * them from the live table. Used when a repo-type cooldown override is
+     * disabled via config.
+     * @param repoType Repository type (e.g. {@code "maven-proxy"}).
+     * @param reason Archive reason written to each history row.
+     * @param actor Username performing the action.
+     * @return Number of rows moved to history.
+     */
+    public int archiveAndDeleteByRepoType(final String repoType,
+                                          final ArchiveReason reason, final String actor) {
+        final String sql = "WITH victims AS ("
+            + "SELECT id FROM artifact_cooldowns"
+            + " WHERE repo_type = ? AND status = 'ACTIVE'"
+            + " FOR UPDATE SKIP LOCKED"
+            + "), archived AS ("
+            + "INSERT INTO artifact_cooldowns_history ("
+            + "original_id, repo_type, repo_name, artifact, version, "
+            + "reason, blocked_by, blocked_at, blocked_until, "
+            + "installed_by, archived_at, archive_reason, archived_by"
+            + ") SELECT c.id, c.repo_type, c.repo_name, c.artifact, c.version, "
+            + "c.reason, c.blocked_by, c.blocked_at, c.blocked_until, "
+            + "c.installed_by, ?, ?, ? "
+            + "FROM artifact_cooldowns c JOIN victims v ON v.id = c.id "
+            + "RETURNING original_id) "
+            + "DELETE FROM artifact_cooldowns c USING archived a "
+            + "WHERE c.id = a.original_id";
+        try (Connection conn = this.dataSource.getConnection();
+            PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, repoType);
+            stmt.setLong(2, Instant.now().toEpochMilli());
+            stmt.setString(3, reason.name());
+            stmt.setString(4, actor);
+            return stmt.executeUpdate();
+        } catch (final SQLException err) {
+            throw new IllegalStateException(
+                "Failed to archive+delete active blocks for repo type " + repoType, err);
+        }
+    }
+
+    /**
+     * Archive all active blocks globally into history and delete them from the
+     * live table. Used when cooldown is disabled via config.
+     * @param reason Archive reason written to each history row.
+     * @param actor Username performing the action.
+     * @return Number of rows moved to history.
+     */
+    public int archiveAndDeleteAll(final ArchiveReason reason, final String actor) {
+        final String sql = "WITH victims AS ("
+            + "SELECT id FROM artifact_cooldowns"
+            + " WHERE status = 'ACTIVE'"
+            + " FOR UPDATE SKIP LOCKED"
+            + "), archived AS ("
+            + "INSERT INTO artifact_cooldowns_history ("
+            + "original_id, repo_type, repo_name, artifact, version, "
+            + "reason, blocked_by, blocked_at, blocked_until, "
+            + "installed_by, archived_at, archive_reason, archived_by"
+            + ") SELECT c.id, c.repo_type, c.repo_name, c.artifact, c.version, "
+            + "c.reason, c.blocked_by, c.blocked_at, c.blocked_until, "
+            + "c.installed_by, ?, ?, ? "
+            + "FROM artifact_cooldowns c JOIN victims v ON v.id = c.id "
+            + "RETURNING original_id) "
+            + "DELETE FROM artifact_cooldowns c USING archived a "
+            + "WHERE c.id = a.original_id";
+        try (Connection conn = this.dataSource.getConnection();
+            PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setLong(1, Instant.now().toEpochMilli());
+            stmt.setString(2, reason.name());
+            stmt.setString(3, actor);
+            return stmt.executeUpdate();
+        } catch (final SQLException err) {
+            throw new IllegalStateException(
+                "Failed to archive+delete all active cooldown blocks", err);
         }
     }
 
