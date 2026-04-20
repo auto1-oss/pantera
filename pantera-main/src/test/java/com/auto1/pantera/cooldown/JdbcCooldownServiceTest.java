@@ -273,25 +273,6 @@ final class JdbcCooldownServiceTest {
         }
     }
 
-    private String status(final String repo, final String artifact, final String version) {
-        try (Connection conn = this.dataSource.getConnection();
-            PreparedStatement stmt = conn.prepareStatement(
-                "SELECT status FROM artifact_cooldowns WHERE repo_name = ? AND artifact = ? AND version = ?"
-            )) {
-            stmt.setString(1, repo);
-            stmt.setString(2, artifact);
-            stmt.setString(3, version);
-            try (ResultSet rs = stmt.executeQuery()) {
-                if (rs.next()) {
-                    return rs.getString(1);
-                }
-            }
-            throw new IllegalStateException("Cooldown entry not found");
-        } catch (final SQLException err) {
-            throw new IllegalStateException(err);
-        }
-    }
-
     private String blockedBy(final String repo, final String artifact, final String version) {
         try (Connection conn = this.dataSource.getConnection();
             PreparedStatement stmt = conn.prepareStatement(
