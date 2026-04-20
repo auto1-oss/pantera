@@ -791,8 +791,10 @@ final class JdbcCooldownService implements CooldownService {
                 .field("repository.name", repoName)
                 .log();
         }
-        // Single bulk DELETE instead of N individual updates
-        final int count = this.repository.deleteActiveBlocksForRepo(repoType, repoName);
+        // Single bulk archive+delete instead of N individual updates so that
+        // every unblocked row leaves a MANUAL_UNBLOCK history trail.
+        final int count = this.repository.archiveAndDeleteByRepo(
+            repoType, repoName, ArchiveReason.MANUAL_UNBLOCK, actor);
         // Clear inspector cache (works for all adapters: Docker, NPM, PyPI, etc.)
         InspectorRegistry.instance()
             .clearAll(repoType, repoName);

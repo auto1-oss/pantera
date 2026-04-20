@@ -342,6 +342,101 @@ final class CooldownHistoryRepositoryTest {
         );
     }
 
+    @Test
+    void archiveAndDeleteByRepoArchivesAllActiveForThatRepo() {
+        for (int i = 0; i < 5; i++) {
+            this.seedLive("npm-proxy", "repo-a", "pkg" + i, "1.0." + i);
+        }
+        this.seedLive("npm-proxy", "repo-b", "untouched", "1.0.0");
+        final int moved = this.repository.archiveAndDeleteByRepo(
+            "npm-proxy", "repo-a", ArchiveReason.MANUAL_UNBLOCK, "alice");
+        MatcherAssert.assertThat(
+            "5 rows for repo-a should have been archived", moved, Matchers.is(5)
+        );
+        MatcherAssert.assertThat(
+            "Only repo-b's row should remain live",
+            this.liveRowCount(), Matchers.is(1L)
+        );
+        final List<DbHistoryRecord> history = this.repository.findHistoryPaginated(
+            Set.of("repo-a", "repo-b"), null, null, null, "archived_at", false, 0, 50
+        );
+        MatcherAssert.assertThat(history, Matchers.hasSize(5));
+        MatcherAssert.assertThat(
+            "all history rows are for repo-a",
+            history.stream().allMatch(r -> "repo-a".equals(r.repoName())),
+            Matchers.is(true)
+        );
+        MatcherAssert.assertThat(
+            "all history rows tagged MANUAL_UNBLOCK",
+            history.stream().allMatch(r -> r.archiveReason() == ArchiveReason.MANUAL_UNBLOCK),
+            Matchers.is(true)
+        );
+        MatcherAssert.assertThat(
+            "all history rows tagged with actor 'alice'",
+            history.stream().allMatch(r -> "alice".equals(r.archivedBy())),
+            Matchers.is(true)
+        );
+    }
+
+    @Test
+    void archiveAndDeleteByRepoTypeArchivesAcrossRepos() {
+        this.seedLive("maven-proxy", "repo-a", "pkg1", "1.0.0");
+        this.seedLive("maven-proxy", "repo-b", "pkg2", "2.0.0");
+        this.seedLive("npm-proxy", "repo-c", "pkg3", "3.0.0");
+        final int moved = this.repository.archiveAndDeleteByRepoType(
+            "maven-proxy", ArchiveReason.MANUAL_UNBLOCK, "alice");
+        MatcherAssert.assertThat(moved, Matchers.is(2));
+        MatcherAssert.assertThat(
+            "Only the npm-proxy row should remain live",
+            this.liveRowCount(), Matchers.is(1L)
+        );
+        final List<DbHistoryRecord> history = this.repository.findHistoryPaginated(
+            Set.of("repo-a", "repo-b", "repo-c"), null, null, null,
+            "archived_at", false, 0, 50
+        );
+        MatcherAssert.assertThat(history, Matchers.hasSize(2));
+        MatcherAssert.assertThat(
+            history.stream().map(DbHistoryRecord::repoName).toList(),
+            Matchers.containsInAnyOrder("repo-a", "repo-b")
+        );
+        MatcherAssert.assertThat(
+            history.stream().allMatch(r -> "maven-proxy".equals(r.repoType())),
+            Matchers.is(true)
+        );
+        MatcherAssert.assertThat(
+            history.stream().allMatch(r -> r.archiveReason() == ArchiveReason.MANUAL_UNBLOCK),
+            Matchers.is(true)
+        );
+        MatcherAssert.assertThat(
+            history.stream().allMatch(r -> "alice".equals(r.archivedBy())),
+            Matchers.is(true)
+        );
+    }
+
+    @Test
+    void archiveAndDeleteAllArchivesEverything() {
+        this.seedLive("maven-proxy", "repo-a", "pkg1", "1.0.0");
+        this.seedLive("npm-proxy", "repo-b", "pkg2", "2.0.0");
+        this.seedLive("pypi-proxy", "repo-c", "pkg3", "3.0.0");
+        final int moved = this.repository.archiveAndDeleteAll(
+            ArchiveReason.MANUAL_UNBLOCK, "alice");
+        MatcherAssert.assertThat(moved, Matchers.is(3));
+        MatcherAssert.assertThat(this.liveRowCount(), Matchers.is(0L));
+        final List<DbHistoryRecord> history = this.repository.findHistoryPaginated(
+            Set.of("repo-a", "repo-b", "repo-c"), null, null, null,
+            "archived_at", false, 0, 50
+        );
+        MatcherAssert.assertThat(history, Matchers.hasSize(3));
+        MatcherAssert.assertThat(
+            history.stream().allMatch(r -> r.archiveReason() == ArchiveReason.MANUAL_UNBLOCK),
+            Matchers.is(true)
+        );
+        MatcherAssert.assertThat(
+            history.stream().allMatch(r -> "alice".equals(r.archivedBy())),
+            Matchers.is(true)
+        );
+    }
+
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
