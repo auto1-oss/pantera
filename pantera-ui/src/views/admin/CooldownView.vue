@@ -403,7 +403,7 @@ onMounted(() => {
       <Card class="shadow-sm">
         <template #title>
           <div class="flex items-center justify-between">
-            <span>{{ mode === 'active' ? 'Blocked Artifacts' : 'Archived Artifacts' }}</span>
+            <span>{{ mode === 'active' ? 'Blocked Artifacts' : 'Cooldown history' }}</span>
             <span class="text-sm font-normal text-gray-400">{{ blockedTotal }} total</span>
           </div>
         </template>
@@ -417,9 +417,21 @@ onMounted(() => {
             :sortOrder="sortOrder"
             @sort="onSort"
           >
-            <Column field="package_name" header="Package" sortable />
+            <Column field="package_name" header="Package" sortable>
+              <template #body="{ data }">
+                <span class="truncate max-w-[14rem] inline-block align-middle" :title="data.package_name">
+                  {{ data.package_name }}
+                </span>
+              </template>
+            </Column>
             <Column field="version" header="Version" sortable />
-            <Column field="repo" header="Repository" sortable />
+            <Column field="repo" header="Repository" sortable>
+              <template #body="{ data }">
+                <span class="truncate max-w-[14rem] inline-block align-middle" :title="data.repo">
+                  {{ data.repo }}
+                </span>
+              </template>
+            </Column>
             <Column field="repo_type" header="Type" sortable>
               <template #body="{ data }">
                 <RepoTypeBadge :type="data.repo_type" />
@@ -430,6 +442,12 @@ onMounted(() => {
                 <Tag :value="data.reason" severity="info" />
               </template>
             </Column>
+            <Column
+              v-if="mode === 'active'"
+              field="blocked_date"
+              header="Blocked at"
+              sortable
+            />
             <Column
               v-if="mode === 'active'"
               field="remaining_hours"
@@ -443,7 +461,6 @@ onMounted(() => {
             <Column
               v-if="mode === 'active' && canWrite"
               header="Actions"
-              class="w-16"
             >
               <template #body="{ data }">
                 <Button
@@ -458,32 +475,26 @@ onMounted(() => {
             </Column>
             <Column
               v-if="mode === 'history'"
-              field="blocked_date"
-              header="Originally blocked at"
+              field="archived_at"
+              header="Unblocked date"
               sortable
             />
             <Column
               v-if="mode === 'history'"
-              field="archived_at"
-              header="Archived at"
+              field="archived_by"
+              header="Unblocked by"
               sortable
             />
             <Column
               v-if="mode === 'history'"
               field="archive_reason"
-              header="Archive reason"
+              header="Unblocked reason"
               sortable
             >
               <template #body="{ data }">
                 <Tag :value="data.archive_reason" severity="secondary" />
               </template>
             </Column>
-            <Column
-              v-if="mode === 'history'"
-              field="archived_by"
-              header="Archived by"
-              sortable
-            />
             <template #empty>
               <div class="text-center text-gray-400 py-4">
                 {{ mode === 'active' ? 'No blocked artifacts' : 'No archived artifacts' }}
