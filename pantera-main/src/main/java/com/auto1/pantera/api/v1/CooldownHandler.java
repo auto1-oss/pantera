@@ -232,13 +232,13 @@ public final class CooldownHandler {
         final Integer cleanupBatchLimit = body.getInteger("cleanup_batch_limit");
         if (historyRetentionDays != null
             && (historyRetentionDays <= 0 || historyRetentionDays > 3650)) {
-            ApiResponse.sendError(ctx, 400, "VALIDATION",
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
                 "history_retention_days must be in (0, 3650]");
             return;
         }
         if (cleanupBatchLimit != null
             && (cleanupBatchLimit <= 0 || cleanupBatchLimit > 100_000)) {
-            ApiResponse.sendError(ctx, 400, "VALIDATION",
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
                 "cleanup_batch_limit must be in (0, 100000]");
             return;
         }
@@ -264,10 +264,6 @@ public final class CooldownHandler {
             ? historyRetentionDays : this.csettings.historyRetentionDays();
         final int effectiveBatchLimit = cleanupBatchLimit != null
             ? cleanupBatchLimit : this.csettings.cleanupBatchLimit();
-        this.csettings.update(
-            newEnabled, newAge, overrides,
-            effectiveRetentionDays, effectiveBatchLimit
-        );
         // Auto-unblock when cooldown changes
         if (this.repository != null) {
             final String actor = ctx.user() != null
@@ -291,7 +287,9 @@ public final class CooldownHandler {
                 }
             }
         }
-        // Persist to DB if available
+        // Persist to DB FIRST — if the DB write fails, the exception propagates
+        // and we do NOT mutate in-memory state. This prevents drift where
+        // in-memory is ahead of DB and a restart reverts to the stale blob.
         if (this.settingsDao != null) {
             final String actor2 = ctx.user() != null
                 ? ctx.user().principal().getString(AuthTokenRest.SUB, "system")
@@ -322,6 +320,11 @@ public final class CooldownHandler {
             }
             this.settingsDao.put("cooldown", jb.build(), actor2);
         }
+        // DB write succeeded (or no DAO) — now apply in-memory.
+        this.csettings.update(
+            newEnabled, newAge, overrides,
+            effectiveRetentionDays, effectiveBatchLimit
+        );
         // Invalidate ALL caches: a policy change (e.g. 30d→7d) can shift
         // which versions are in/out of the cooldown window, so every cached
         // decision and every cached filtered-metadata response may be stale.
