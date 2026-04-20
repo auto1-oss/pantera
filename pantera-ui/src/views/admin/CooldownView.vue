@@ -7,6 +7,7 @@ import { useAuthStore } from '@/stores/auth'
 import { REPO_TYPE_FILTERS } from '@/utils/repoTypes'
 import RepoTypeBadge from '@/components/common/RepoTypeBadge.vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
+import CooldownSettingsDialog from './CooldownSettingsDialog.vue'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
 import Button from 'primevue/button'
@@ -23,6 +24,7 @@ const canWrite = auth.hasAction('api_cooldown_permissions', 'write')
 
 const repos = ref<CooldownRepo[]>([])
 const blocked = ref<BlockedArtifact[]>([])
+const settingsOpen = ref(false)
 const blockedPage = ref(0)
 const blockedSize = ref(50)
 const blockedTotal = ref(0)
@@ -152,6 +154,15 @@ async function handleUnblockAll(repoName: string) {
   }
 }
 
+// Retention changes can shift what appears in the blocked list (e.g.
+// an admin shortening retention may expire blocks sooner on the next
+// cleanup tick); reload so the user sees the effect of their change.
+function onSettingsSaved() {
+  notify.success('Cooldown settings saved')
+  loadBlocked()
+  loadOverview()
+}
+
 onMounted(() => {
   loadOverview()
   loadBlocked()
@@ -161,7 +172,19 @@ onMounted(() => {
 <template>
   <AppLayout>
     <div class="space-y-6">
-      <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Cooldown</h1>
+      <div class="flex items-center justify-between">
+        <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Cooldown</h1>
+        <Button
+          v-if="canWrite"
+          icon="pi pi-cog"
+          severity="secondary"
+          text
+          aria-label="Cooldown settings"
+          @click="settingsOpen = true"
+        />
+      </div>
+
+      <CooldownSettingsDialog v-model="settingsOpen" @saved="onSettingsSaved" />
 
       <Card class="shadow-sm">
         <template #title>Cooldown-Enabled Repositories</template>
