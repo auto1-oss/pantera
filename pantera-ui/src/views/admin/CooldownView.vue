@@ -76,6 +76,10 @@ watch([repoFilter, typeFilter], () => {
 // Mode toggle: reset pagination and reload from the appropriate endpoint.
 watch(mode, () => {
   blockedPage.value = 0
+  blocked.value = []
+  blockedTotal.value = 0
+  sortField.value = null
+  sortOrder.value = -1
   loadBlocked()
 })
 
