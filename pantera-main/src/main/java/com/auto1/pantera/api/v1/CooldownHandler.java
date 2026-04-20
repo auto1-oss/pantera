@@ -13,9 +13,11 @@ package com.auto1.pantera.api.v1;
 import com.auto1.pantera.api.AuthTokenRest;
 import com.auto1.pantera.api.AuthzHandler;
 import com.auto1.pantera.api.RepositoryName;
+import com.auto1.pantera.api.perms.ApiCooldownHistoryPermission;
 import com.auto1.pantera.api.perms.ApiCooldownPermission;
 import com.auto1.pantera.cooldown.CooldownRepository;
 import com.auto1.pantera.cooldown.DbBlockRecord;
+import com.auto1.pantera.cooldown.DbHistoryRecord;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.cache.CooldownCache;
 import com.auto1.pantera.cooldown.config.CooldownSettings;
@@ -178,6 +180,13 @@ public final class CooldownHandler {
         router.get("/api/v1/cooldown/blocked")
             .handler(new AuthzHandler(this.policy, ApiCooldownPermission.READ))
             .handler(this::blocked);
+        // GET /api/v1/cooldown/history — paginated archive/history feed.
+        // Two-layer gate: the API-level ApiCooldownHistoryPermission admits the
+        // request, and the per-request handler additionally filters rows to
+        // repos the caller has AdapterBasicPermission(repo, "read") on.
+        router.get("/api/v1/cooldown/history")
+            .handler(new AuthzHandler(this.policy, ApiCooldownHistoryPermission.READ))
+            .handler(this::history);
         // POST /api/v1/repositories/:name/cooldown/unblock — unblock single artifact
         router.post("/api/v1/repositories/:name/cooldown/unblock")
             .handler(new AuthzHandler(this.policy, ApiCooldownPermission.WRITE))
@@ -443,6 +452,22 @@ public final class CooldownHandler {
     );
 
     /**
+     * Frontend sort field → DB column mapping for the history endpoint.
+     * Shape mirrors {@link #SORT_COL_MAP} so the UI can use the same field
+     * names — {@code remaining_hours} is replaced by archive-specific
+     * columns ({@code archived_at}, {@code archive_reason}).
+     */
+    private static final Map<String, String> HISTORY_SORT_COL_MAP = Map.of(
+        "package_name", "artifact",
+        "version", "version",
+        "repo", "repo_name",
+        "repo_type", "repo_type",
+        "reason", "reason",
+        "archived_at", "archived_at",
+        "archive_reason", "archive_reason"
+    );
+
+    /**
      * GET /api/v1/cooldown/blocked — paginated list of actively blocked artifacts.
      * Supports server-side search via ?search= and sort via ?sort_by= / ?sort_dir=.
      * @param ctx Routing context
@@ -518,6 +543,94 @@ public final class CooldownHandler {
                     .put("blocked_until", rec.blockedUntil().toString())
                     .put("remaining_hours",
                         Math.max(0, remainingSecs / 3600)));
+            }
+            return ApiResponse.paginated(items, page, size, (int) total);
+        }, HandlerExecutor.get()).whenComplete((result, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
+                ctx.response()
+                    .setStatusCode(200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(result.encode());
+            }
+        });
+    }
+
+    /**
+     * GET /api/v1/cooldown/history — paginated list of archived blocks
+     * ({@code artifact_cooldowns_history}). Mirrors {@link #blocked} exactly
+     * except the SQL targets the history table and the serialised rows add
+     * the archive fields ({@code archived_at}, {@code archive_reason},
+     * {@code archived_by}). Two-layer authorisation: the route-level
+     * {@link ApiCooldownHistoryPermission#READ} gates the API surface, and
+     * the handler additionally restricts rows to repositories the caller has
+     * {@code AdapterBasicPermission(repo, "read")} on.
+     * @param ctx Routing context
+     * @checkstyle ExecutableStatementCountCheck (60 lines)
+     */
+    private void history(final RoutingContext ctx) {
+        if (this.repository == null) {
+            ctx.response()
+                .setStatusCode(200)
+                .putHeader("Content-Type", "application/json")
+                .end(ApiResponse.paginated(new JsonArray(), 0, 20, 0).encode());
+            return;
+        }
+        final int page = ApiResponse.intParam(
+            ctx.queryParam("page").stream().findFirst().orElse(null), 0
+        );
+        final int size = ApiResponse.clampSize(
+            ApiResponse.intParam(
+                ctx.queryParam("size").stream().findFirst().orElse(null), 50
+            )
+        );
+        final String searchQuery = ctx.queryParam("search").stream()
+            .findFirst().orElse(null);
+        final String repoFilter = ctx.queryParam("repo").stream()
+            .findFirst().orElse(null);
+        final String repoTypeFilter = ctx.queryParam("repo_type").stream()
+            .findFirst().orElse(null);
+        final String sortByParam = ctx.queryParam("sort_by").stream()
+            .findFirst().orElse(null);
+        // HISTORY_SORT_COL_MAP is an immutable Map.of() — guard null explicitly.
+        final String sortDbCol = sortByParam != null
+            ? HISTORY_SORT_COL_MAP.getOrDefault(sortByParam, "archived_at")
+            : "archived_at";
+        final boolean sortAsc = "asc".equalsIgnoreCase(
+            ctx.queryParam("sort_dir").stream().findFirst().orElse("desc")
+        );
+        // AuthUser built on the event loop; perms + listAll are deferred
+        // because they may hit storage / JDBC.
+        final AuthUser authUser = new AuthUser(
+            ctx.user().principal().getString(AuthTokenRest.SUB),
+            ctx.user().principal().getString(AuthTokenRest.CONTEXT)
+        );
+        CompletableFuture.supplyAsync((java.util.function.Supplier<JsonObject>) () -> {
+            final PermissionCollection perms = this.policy.getPermissions(authUser);
+            final Set<String> accessibleRepos = this.crs.listAll().stream()
+                .filter(n -> perms.implies(new AdapterBasicPermission(n, "read")))
+                .collect(java.util.stream.Collectors.toSet());
+            final List<DbHistoryRecord> rows = this.repository.findHistoryPaginated(
+                accessibleRepos, repoFilter, repoTypeFilter, searchQuery,
+                sortDbCol, sortAsc, page * size, size
+            );
+            final long total = this.repository.countHistory(
+                accessibleRepos, repoFilter, repoTypeFilter, searchQuery
+            );
+            final JsonArray items = new JsonArray();
+            for (final DbHistoryRecord rec : rows) {
+                items.add(new JsonObject()
+                    .put("package_name", rec.artifact())
+                    .put("version", rec.version())
+                    .put("repo", rec.repoName())
+                    .put("repo_type", rec.repoType())
+                    .put("reason", rec.reason().name())
+                    .put("blocked_date", rec.blockedAt().toString())
+                    .put("blocked_until", rec.blockedUntil().toString())
+                    .put("archived_at", rec.archivedAt().toString())
+                    .put("archive_reason", rec.archiveReason().name())
+                    .put("archived_by", rec.archivedBy()));
             }
             return ApiResponse.paginated(items, page, size, (int) total);
         }, HandlerExecutor.get()).whenComplete((result, err) -> {
