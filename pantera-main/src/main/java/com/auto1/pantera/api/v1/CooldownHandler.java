@@ -228,6 +228,20 @@ public final class CooldownHandler {
         final Duration newAge = body.containsKey("minimum_allowed_age")
             ? CooldownHandler.parseDuration(body.getString("minimum_allowed_age"))
             : this.csettings.minimumAllowedAge();
+        final Integer historyRetentionDays = body.getInteger("history_retention_days");
+        final Integer cleanupBatchLimit = body.getInteger("cleanup_batch_limit");
+        if (historyRetentionDays != null
+            && (historyRetentionDays <= 0 || historyRetentionDays > 3650)) {
+            ApiResponse.sendError(ctx, 400, "VALIDATION",
+                "history_retention_days must be in (0, 3650]");
+            return;
+        }
+        if (cleanupBatchLimit != null
+            && (cleanupBatchLimit <= 0 || cleanupBatchLimit > 100_000)) {
+            ApiResponse.sendError(ctx, 400, "VALIDATION",
+                "cleanup_batch_limit must be in (0, 100000]");
+            return;
+        }
         final Map<String, CooldownSettings.RepoTypeConfig> overrides = new HashMap<>();
         final JsonObject repoTypes = body.getJsonObject("repo_types");
         if (repoTypes != null) {
@@ -246,7 +260,14 @@ public final class CooldownHandler {
         final boolean wasEnabled = this.csettings.enabled();
         final Map<String, CooldownSettings.RepoTypeConfig> oldOverrides =
             this.csettings.repoTypeOverrides();
-        this.csettings.update(newEnabled, newAge, overrides);
+        final int effectiveRetentionDays = historyRetentionDays != null
+            ? historyRetentionDays : this.csettings.historyRetentionDays();
+        final int effectiveBatchLimit = cleanupBatchLimit != null
+            ? cleanupBatchLimit : this.csettings.cleanupBatchLimit();
+        this.csettings.update(
+            newEnabled, newAge, overrides,
+            effectiveRetentionDays, effectiveBatchLimit
+        );
         // Auto-unblock when cooldown changes
         if (this.repository != null) {
             final String actor = ctx.user() != null
@@ -290,6 +311,14 @@ public final class CooldownHandler {
                                 entry.getValue().minimumAllowedAge())));
                 }
                 jb.add("repo_types", rtb);
+            }
+            // Persist the two new tunables only when the caller set them —
+            // absence preserves "use code default" semantics at next reload.
+            if (historyRetentionDays != null) {
+                jb.add("history_retention_days", (int) historyRetentionDays);
+            }
+            if (cleanupBatchLimit != null) {
+                jb.add("cleanup_batch_limit", (int) cleanupBatchLimit);
             }
             this.settingsDao.put("cooldown", jb.build(), actor2);
         }

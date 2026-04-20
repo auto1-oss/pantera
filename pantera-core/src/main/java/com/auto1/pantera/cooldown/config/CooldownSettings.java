@@ -236,7 +236,11 @@ public final class CooldownSettings {
     }
 
     /**
-     * Update cooldown settings in-place for hot reload.
+     * Update cooldown settings in-place for hot reload (3-arg variant).
+     *
+     * <p>Preserves the current values of {@link #historyRetentionDays()} and
+     * {@link #cleanupBatchLimit()}, which are not known to the YAML bootstrap
+     * caller. The DB-load path uses the 5-arg overload to plumb those through.
      *
      * @param newEnabled Whether cooldown is enabled
      * @param newMinAge New global minimum allowed age
@@ -244,9 +248,47 @@ public final class CooldownSettings {
      */
     public void update(final boolean newEnabled, final Duration newMinAge,
         final Map<String, RepoTypeConfig> overrides) {
+        this.update(
+            newEnabled, newMinAge, overrides,
+            this.historyRetentionDays, this.cleanupBatchLimit
+        );
+    }
+
+    /**
+     * Update cooldown settings in-place for hot reload (5-arg variant), including
+     * background-cleanup tunables sourced from the DB settings blob.
+     *
+     * <p>Validates the two new tunables; out-of-range values raise
+     * {@link IllegalArgumentException} and leave all fields untouched.
+     *
+     * @param newEnabled Whether cooldown is enabled
+     * @param newMinAge New global minimum allowed age
+     * @param overrides New per-repo-type overrides
+     * @param newHistoryRetentionDays Retention window for cooldown history (days),
+     *                                must be in (0, 3650]
+     * @param newCleanupBatchLimit Maximum rows per background cleanup iteration,
+     *                             must be in (0, 100000]
+     */
+    @SuppressWarnings("PMD.UseObjectForClearerAPI")
+    public void update(final boolean newEnabled, final Duration newMinAge,
+        final Map<String, RepoTypeConfig> overrides,
+        final int newHistoryRetentionDays,
+        final int newCleanupBatchLimit) {
+        if (newHistoryRetentionDays <= 0 || newHistoryRetentionDays > 3650) {
+            throw new IllegalArgumentException(
+                "historyRetentionDays must be in (0, 3650]"
+            );
+        }
+        if (newCleanupBatchLimit <= 0 || newCleanupBatchLimit > 100_000) {
+            throw new IllegalArgumentException(
+                "cleanupBatchLimit must be in (0, 100000]"
+            );
+        }
         this.enabled = newEnabled;
         this.minimumAllowedAge = Objects.requireNonNull(newMinAge);
         this.repoTypeOverrides = new HashMap<>(Objects.requireNonNull(overrides));
+        this.historyRetentionDays = newHistoryRetentionDays;
+        this.cleanupBatchLimit = newCleanupBatchLimit;
     }
 
     /**
