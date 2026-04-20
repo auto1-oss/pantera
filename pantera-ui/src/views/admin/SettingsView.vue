@@ -48,6 +48,8 @@ const authAllowPermanent = ref(true)
 const cooldownConfig = ref<CooldownConfig | null>(null)
 const cooldownEnabled = ref(false)
 const cooldownAge = ref('7d')
+const cooldownHistoryRetentionDays = ref(90)
+const cooldownCleanupBatchLimit = ref(10000)
 const newRepoType = ref('')
 
 // Proxy repo types for autocomplete
@@ -103,6 +105,8 @@ onMounted(async () => {
       cooldownConfig.value = cd
       cooldownEnabled.value = cd.enabled
       cooldownAge.value = cd.minimum_allowed_age
+      cooldownHistoryRetentionDays.value = cd.history_retention_days ?? 90
+      cooldownCleanupBatchLimit.value = cd.cleanup_batch_limit ?? 10000
     }
     getAuthSettings().then(s => {
       authAccessTtl.value = parseInt(s.access_token_ttl_seconds ?? '3600')
@@ -210,6 +214,8 @@ async function saveCooldown() {
     const payload: CooldownConfig = {
       enabled: cooldownEnabled.value,
       minimum_allowed_age: cooldownAge.value,
+      history_retention_days: cooldownHistoryRetentionDays.value,
+      cleanup_batch_limit: cooldownCleanupBatchLimit.value,
       repo_types: {},
     }
     if (cooldownConfig.value?.repo_types) {
@@ -433,6 +439,42 @@ async function saveExternalLinks() {
                 placeholder="7d"
               />
               <span class="text-xs text-gray-400">e.g. 7d, 24h, 30m</span>
+            </div>
+
+            <!-- History retention -->
+            <div class="flex flex-col gap-2">
+              <label for="cooldown-retention" class="text-sm text-gray-500">
+                History retention (days)
+              </label>
+              <InputNumber
+                id="cooldown-retention"
+                v-model="cooldownHistoryRetentionDays"
+                :min="1"
+                :max="3650"
+                show-buttons
+                class="w-40"
+              />
+              <small class="text-gray-500">
+                Days to retain archived cooldown blocks before auto-purge.
+              </small>
+            </div>
+
+            <!-- Cleanup batch limit -->
+            <div class="flex flex-col gap-2">
+              <label for="cooldown-batch" class="text-sm text-gray-500">
+                Cleanup batch limit
+              </label>
+              <InputNumber
+                id="cooldown-batch"
+                v-model="cooldownCleanupBatchLimit"
+                :min="1"
+                :max="100000"
+                show-buttons
+                class="w-40"
+              />
+              <small class="text-gray-500">
+                Max rows archived per cleanup tick.
+              </small>
             </div>
 
             <!-- Per-repo-type overrides -->

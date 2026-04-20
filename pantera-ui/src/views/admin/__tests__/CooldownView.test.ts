@@ -4,7 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { useAuthStore } from '@/stores/auth'
 import CooldownView from '../CooldownView.vue'
 import PrimeVue from 'primevue/config'
-import Aura from '@primevue/themes/aura'
+import Aura from '@primeuix/themes/aura'
 
 // The settings API is mocked at module level so we can observe which
 // params CooldownView forwards to /cooldown/blocked for each
@@ -131,10 +131,11 @@ describe('CooldownView filter dropdowns', () => {
     expect(lastCall[0].repo).toBe('pypi-proxy')
   })
 
-  it('hides the history toggle when user lacks the permission', async () => {
-    // Seed auth with no history-read permission. The SelectButton is
-    // gated on canReadHistory and must not render.
-    seedAuth({ api_cooldown_permissions: ['read'] })
+  it('hides the history toggle when user lacks cooldown read permission', async () => {
+    // Seed auth with no cooldown permissions at all. The SelectButton
+    // is gated on canReadHistory (which checks api_cooldown_permissions.read)
+    // and must not render.
+    seedAuth({})
     const wrapper = mountView()
     await flushPromises()
 
@@ -142,10 +143,18 @@ describe('CooldownView filter dropdowns', () => {
     expect(toggle.exists()).toBe(false)
   })
 
+  it('shows the history toggle for users with cooldown read permission', async () => {
+    seedAuth({ api_cooldown_permissions: ['read'] })
+    const wrapper = mountView()
+    await flushPromises()
+
+    const toggle = wrapper.find('[aria-label="Toggle active vs. history view"]')
+    expect(toggle.exists()).toBe(true)
+  })
+
   it('shows history rows when toggle is set to history', async () => {
     seedAuth({
       api_cooldown_permissions: ['read', 'write'],
-      api_cooldown_history_permissions: ['read'],
     })
     getCooldownHistoryMock.mockResolvedValue({
       items: [
@@ -182,7 +191,6 @@ describe('CooldownView filter dropdowns', () => {
   it('hides unblock column in history mode', async () => {
     seedAuth({
       api_cooldown_permissions: ['read', 'write'],
-      api_cooldown_history_permissions: ['read'],
     })
     getCooldownHistoryMock.mockResolvedValue({
       items: [
