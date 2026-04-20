@@ -159,20 +159,30 @@ final class CooldownHistoryRepositoryTest {
     }
 
     @Test
-    void countActiveBlocksMatchesFindCount() {
-        for (int i = 0; i < 5; i++) {
+    void countActiveBlocksReflectsTotalIndependentOfPageSize() {
+        final int total = 12;
+        for (int i = 0; i < 8; i++) {
             this.seedLive("maven-proxy", "repo-a", "pkg" + i, "1.0.0");
         }
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < 4; i++) {
             this.seedLive("npm-proxy", "repo-b", "npkg" + i, "2.0.0");
         }
         final Set<String> repos = Set.of("repo-a", "repo-b");
+        final int pageSize = 5;
         final long count = this.repository.countActiveBlocks(repos, null, null, null);
-        final List<DbBlockRecord> rows = this.repository.findActivePaginated(
-            repos, null, null, null, null, false, 0, 100
+        final List<DbBlockRecord> page = this.repository.findActivePaginated(
+            repos, null, null, null, "blocked_at", true, 0, pageSize
         );
-        MatcherAssert.assertThat(count, Matchers.is((long) rows.size()));
-        MatcherAssert.assertThat(count, Matchers.is(8L));
+        MatcherAssert.assertThat(
+            "count reflects full total", count, Matchers.is((long) total)
+        );
+        MatcherAssert.assertThat(
+            "page slice is limited", page, Matchers.hasSize(pageSize)
+        );
+        MatcherAssert.assertThat(
+            "count must not trivially equal page.size()",
+            count, Matchers.not((long) page.size())
+        );
     }
 
     @Test
@@ -277,23 +287,33 @@ final class CooldownHistoryRepositoryTest {
     }
 
     @Test
-    void countHistoryMatchesFindCount() {
+    void countHistoryReflectsTotalIndependentOfPageSize() {
         final long nowMs = Instant.now().toEpochMilli();
-        for (int i = 0; i < 7; i++) {
+        final int total = 12;
+        for (int i = 0; i < 8; i++) {
             this.insertHistoryRaw("maven-proxy", "repo-a", "pkg" + i, "1.0.0",
                 nowMs - i * 1000L, ArchiveReason.EXPIRED);
         }
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < 4; i++) {
             this.insertHistoryRaw("npm-proxy", "repo-b", "npkg" + i, "2.0.0",
                 nowMs - i * 1000L, ArchiveReason.MANUAL_UNBLOCK);
         }
         final Set<String> repos = Set.of("repo-a", "repo-b");
+        final int pageSize = 5;
         final long count = this.repository.countHistory(repos, null, null, null);
-        final List<DbHistoryRecord> rows = this.repository.findHistoryPaginated(
-            repos, null, null, null, null, false, 0, 100
+        final List<DbHistoryRecord> page = this.repository.findHistoryPaginated(
+            repos, null, null, null, "archived_at", true, 0, pageSize
         );
-        MatcherAssert.assertThat(count, Matchers.is((long) rows.size()));
-        MatcherAssert.assertThat(count, Matchers.is(10L));
+        MatcherAssert.assertThat(
+            "count reflects full total", count, Matchers.is((long) total)
+        );
+        MatcherAssert.assertThat(
+            "page slice is limited", page, Matchers.hasSize(pageSize)
+        );
+        MatcherAssert.assertThat(
+            "count must not trivially equal page.size()",
+            count, Matchers.not((long) page.size())
+        );
     }
 
     // -----------------------------------------------------------------------
