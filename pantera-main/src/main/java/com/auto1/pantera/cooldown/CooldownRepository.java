@@ -726,7 +726,8 @@ public final class CooldownRepository {
         final String sql = ACTIVE_SELECT_COLS
             + " WHERE repo_name = ANY(?)"
             + " AND (? IS NULL OR repo_name = ?)"
-            + " AND (? IS NULL OR repo_type = ?)"
+            + " AND (? IS NULL OR LOWER(repo_type) = LOWER(?)"
+            + " OR LOWER(repo_type) LIKE LOWER(?) || '-%')"
             + " AND (? IS NULL OR (artifact ILIKE '%' || ? || '%'"
             + " OR version ILIKE '%' || ? || '%'"
             + " OR repo_name ILIKE '%' || ? || '%'))"
@@ -739,8 +740,8 @@ public final class CooldownRepository {
             );
             stmt.setArray(1, reposArr);
             bindOptionalFilters(stmt, 2, repoFilter, repoTypeFilter, search);
-            stmt.setInt(10, limit);
-            stmt.setInt(11, offset);
+            stmt.setInt(11, limit);
+            stmt.setInt(12, offset);
             try (ResultSet rs = stmt.executeQuery()) {
                 final List<DbBlockRecord> result = new ArrayList<>();
                 while (rs.next()) {
@@ -774,7 +775,8 @@ public final class CooldownRepository {
         final String sql = "SELECT COUNT(*) FROM artifact_cooldowns"
             + " WHERE repo_name = ANY(?)"
             + " AND (? IS NULL OR repo_name = ?)"
-            + " AND (? IS NULL OR repo_type = ?)"
+            + " AND (? IS NULL OR LOWER(repo_type) = LOWER(?)"
+            + " OR LOWER(repo_type) LIKE LOWER(?) || '-%')"
             + " AND (? IS NULL OR (artifact ILIKE '%' || ? || '%'"
             + " OR version ILIKE '%' || ? || '%'"
             + " OR repo_name ILIKE '%' || ? || '%'))";
@@ -892,7 +894,8 @@ public final class CooldownRepository {
         final String sql = HISTORY_SELECT_COLS
             + " WHERE repo_name = ANY(?)"
             + " AND (? IS NULL OR repo_name = ?)"
-            + " AND (? IS NULL OR repo_type = ?)"
+            + " AND (? IS NULL OR LOWER(repo_type) = LOWER(?)"
+            + " OR LOWER(repo_type) LIKE LOWER(?) || '-%')"
             + " AND (? IS NULL OR (artifact ILIKE '%' || ? || '%'"
             + " OR version ILIKE '%' || ? || '%'"
             + " OR repo_name ILIKE '%' || ? || '%'))"
@@ -905,8 +908,8 @@ public final class CooldownRepository {
             );
             stmt.setArray(1, reposArr);
             bindOptionalFilters(stmt, 2, repoFilter, repoTypeFilter, search);
-            stmt.setInt(10, limit);
-            stmt.setInt(11, offset);
+            stmt.setInt(11, limit);
+            stmt.setInt(12, offset);
             try (ResultSet rs = stmt.executeQuery()) {
                 final List<DbHistoryRecord> result = new ArrayList<>();
                 while (rs.next()) {
@@ -940,7 +943,8 @@ public final class CooldownRepository {
         final String sql = "SELECT COUNT(*) FROM artifact_cooldowns_history"
             + " WHERE repo_name = ANY(?)"
             + " AND (? IS NULL OR repo_name = ?)"
-            + " AND (? IS NULL OR repo_type = ?)"
+            + " AND (? IS NULL OR LOWER(repo_type) = LOWER(?)"
+            + " OR LOWER(repo_type) LIKE LOWER(?) || '-%')"
             + " AND (? IS NULL OR (artifact ILIKE '%' || ? || '%'"
             + " OR version ILIKE '%' || ? || '%'"
             + " OR repo_name ILIKE '%' || ? || '%'))";
@@ -965,12 +969,18 @@ public final class CooldownRepository {
     /**
      * Bind the three optional filter triples used by findActivePaginated /
      * findHistoryPaginated / the count variants. Binds parameters starting at
-     * {@code startIdx} and consumes 8 positions: repoFilter × 2, repoType × 2,
-     * search × 4 (one for the IS NULL guard, three for the ILIKE clauses).
+     * {@code startIdx} and consumes 9 positions: repoFilter × 2, repoType × 3
+     * (IS NULL guard + exact match + prefix LIKE), search × 4 (IS NULL guard
+     * + three ILIKE clauses).
+     *
+     * <p>The repo_type block maps to the SQL predicate
+     * {@code (? IS NULL OR LOWER(repo_type) = LOWER(?) OR LOWER(repo_type) LIKE LOWER(?) || '-%')}
+     * so callers sending the base value {@code docker} match rows whose
+     * {@code repo_type} is {@code docker-proxy}, {@code docker-group}, etc.
      * @param stmt PreparedStatement.
      * @param startIdx Starting 1-based parameter index.
      * @param repoFilter Optional repo_name filter.
-     * @param repoTypeFilter Optional repo_type filter.
+     * @param repoTypeFilter Optional repo_type filter (matches exact or subtype prefix).
      * @param search Optional substring filter.
      * @throws SQLException on bind failure.
      */
@@ -984,6 +994,7 @@ public final class CooldownRepository {
         int idx = startIdx;
         setNullableString(stmt, idx++, repoFilter);
         setNullableString(stmt, idx++, repoFilter);
+        setNullableString(stmt, idx++, repoTypeFilter);
         setNullableString(stmt, idx++, repoTypeFilter);
         setNullableString(stmt, idx++, repoTypeFilter);
         final String searchValue = (search == null || search.isBlank()) ? null : search.trim();

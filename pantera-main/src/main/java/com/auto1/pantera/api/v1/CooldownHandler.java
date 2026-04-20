@@ -13,7 +13,6 @@ package com.auto1.pantera.api.v1;
 import com.auto1.pantera.api.AuthTokenRest;
 import com.auto1.pantera.api.AuthzHandler;
 import com.auto1.pantera.api.RepositoryName;
-import com.auto1.pantera.api.perms.ApiCooldownHistoryPermission;
 import com.auto1.pantera.api.perms.ApiCooldownPermission;
 import com.auto1.pantera.cooldown.ArchiveReason;
 import com.auto1.pantera.cooldown.CooldownRepository;
@@ -182,11 +181,11 @@ public final class CooldownHandler {
             .handler(new AuthzHandler(this.policy, ApiCooldownPermission.READ))
             .handler(this::blocked);
         // GET /api/v1/cooldown/history — paginated archive/history feed.
-        // Two-layer gate: the API-level ApiCooldownHistoryPermission admits the
-        // request, and the per-request handler additionally filters rows to
-        // repos the caller has AdapterBasicPermission(repo, "read") on.
+        // Gated by the same ApiCooldownPermission.READ as /blocked; the
+        // per-request handler additionally filters rows to repos the caller
+        // has AdapterBasicPermission(repo, "read") on.
         router.get("/api/v1/cooldown/history")
-            .handler(new AuthzHandler(this.policy, ApiCooldownHistoryPermission.READ))
+            .handler(new AuthzHandler(this.policy, ApiCooldownPermission.READ))
             .handler(this::history);
         // POST /api/v1/repositories/:name/cooldown/unblock — unblock single artifact
         router.post("/api/v1/repositories/:name/cooldown/unblock")
@@ -206,7 +205,9 @@ public final class CooldownHandler {
         final JsonObject response = new JsonObject()
             .put("enabled", this.csettings.enabled())
             .put("minimum_allowed_age",
-                CooldownHandler.formatDuration(this.csettings.minimumAllowedAge()));
+                CooldownHandler.formatDuration(this.csettings.minimumAllowedAge()))
+            .put("history_retention_days", this.csettings.historyRetentionDays())
+            .put("cleanup_batch_limit", this.csettings.cleanupBatchLimit());
         final JsonObject overrides = new JsonObject();
         for (final Map.Entry<String, CooldownSettings.RepoTypeConfig> entry
             : this.csettings.repoTypeOverrides().entrySet()) {
@@ -569,9 +570,9 @@ public final class CooldownHandler {
      * ({@code artifact_cooldowns_history}). Mirrors {@link #blocked} exactly
      * except the SQL targets the history table and the serialised rows add
      * the archive fields ({@code archived_at}, {@code archive_reason},
-     * {@code archived_by}). Two-layer authorisation: the route-level
-     * {@link ApiCooldownHistoryPermission#READ} gates the API surface, and
-     * the handler additionally restricts rows to repositories the caller has
+     * {@code archived_by}). Authorisation: the route-level
+     * {@link ApiCooldownPermission#READ} gates the API surface, and the
+     * handler additionally restricts rows to repositories the caller has
      * {@code AdapterBasicPermission(repo, "read")} on.
      * @param ctx Routing context
      * @checkstyle ExecutableStatementCountCheck (60 lines)
