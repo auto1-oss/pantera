@@ -334,8 +334,8 @@ describe('CooldownView cooldown-enabled repositories grid', () => {
   })
 
   it('shows the Paginator only when the filtered set exceeds the page size', async () => {
-    // 15 tiles, pageSize=12 → paginator must appear.
-    const many = Array.from({ length: 15 }, (_, i) => ({
+    // 13 tiles, pageSize=10 → paginator must appear.
+    const many = Array.from({ length: 13 }, (_, i) => ({
       name: `repo-${i}`,
       type: 'npm-proxy',
       cooldown: '7d',
@@ -345,7 +345,7 @@ describe('CooldownView cooldown-enabled repositories grid', () => {
 
     let wrapper = mountView()
     await flushPromises()
-    expect(wrapper.findAll('[data-testid="cooldown-repo-tile"]')).toHaveLength(12)
+    expect(wrapper.findAll('[data-testid="cooldown-repo-tile"]')).toHaveLength(10)
     expect(wrapper.find('.p-paginator').exists()).toBe(true)
     wrapper.unmount()
 
@@ -364,5 +364,58 @@ describe('CooldownView cooldown-enabled repositories grid', () => {
     // Only the blocked-artifacts table's paginator (which is also hidden for
     // total=0) should not render, and neither should the grid's.
     expect(wrapper.find('.p-paginator').exists()).toBe(false)
+  })
+
+  it('renders the RepoTypeBadge on each tile (no inline brand-color dot)', async () => {
+    getCooldownOverviewMock.mockResolvedValue([
+      { name: 'alpha', type: 'npm-proxy', cooldown: '7d', active_blocks: 0 },
+      { name: 'bravo', type: 'docker-group', cooldown: '3d', active_blocks: 0 },
+    ])
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const tiles = wrapper.findAll('[data-testid="cooldown-repo-tile"]')
+    expect(tiles).toHaveLength(2)
+    // Each tile should render via the shared RepoTypeBadge component
+    // rather than an inline "w-2.5 h-2.5 rounded-full" brand-color dot.
+    for (const tile of tiles) {
+      expect(tile.find('.w-2\\.5.h-2\\.5.rounded-full').exists()).toBe(false)
+    }
+    // RepoTypeBadge renders the tech label ("npm", "Docker") inline.
+    const text = wrapper.text()
+    expect(text).toContain('npm')
+    expect(text).toContain('Docker')
+  })
+})
+
+describe('CooldownView global filter bar', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    getCooldownOverviewMock.mockReset()
+    getCooldownBlockedMock.mockReset()
+    getCooldownHistoryMock.mockReset()
+    getCooldownOverviewMock.mockResolvedValue([])
+    getCooldownBlockedMock.mockResolvedValue({
+      items: [], page: 0, size: 50, total: 0, hasMore: false,
+    })
+    getCooldownHistoryMock.mockResolvedValue({
+      items: [], page: 0, size: 50, total: 0, hasMore: false,
+    })
+  })
+
+  it('has no local filter/search inputs inside the blocked-artifacts card', async () => {
+    // The global filter bar at the top is the single source of truth;
+    // the blocked-artifacts Card must NOT host its own search/filter UI.
+    const wrapper = mountView()
+    await flushPromises()
+
+    // Only the three global filter ids should be present in the page.
+    // No extra blocked-specific search/filter IDs remain.
+    expect(wrapper.findAll('#cooldown-filter-search')).toHaveLength(1)
+    expect(wrapper.findAll('#cooldown-filter-repo')).toHaveLength(1)
+    expect(wrapper.findAll('#cooldown-filter-type')).toHaveLength(1)
+    // No "Search blocked artifacts"-style duplicate label.
+    expect(wrapper.text()).not.toContain('Search blocked artifacts')
   })
 })
