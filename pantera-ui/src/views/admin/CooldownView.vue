@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { getCooldownOverview, getCooldownBlocked } from '@/api/settings'
 import { unblockArtifact, unblockAll } from '@/api/repos'
 import { useNotificationStore } from '@/stores/notifications'
 import { useAuthStore } from '@/stores/auth'
+import { REPO_TYPE_FILTERS } from '@/utils/repoTypes'
 import RepoTypeBadge from '@/components/common/RepoTypeBadge.vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import DataTable from 'primevue/datatable'
@@ -12,6 +13,7 @@ import Button from 'primevue/button'
 import Card from 'primevue/card'
 import Tag from 'primevue/tag'
 import InputText from 'primevue/inputtext'
+import Select from 'primevue/select'
 import Paginator from 'primevue/paginator'
 import type { CooldownRepo, BlockedArtifact } from '@/types'
 
@@ -26,10 +28,26 @@ const blockedSize = ref(50)
 const blockedTotal = ref(0)
 const loading = ref(false)
 const search = ref('')
+const repoFilter = ref<string | null>(null)
+const typeFilter = ref<string | null>(null)
 const sortField = ref<string | null>(null)
 const sortOrder = ref<number>(-1) // -1=desc (default: newest first)
 let searchTimeout: ReturnType<typeof setTimeout> | null = null
 let blockedAbortCtrl: AbortController | null = null
+
+// Repo dropdown options: derived from the overview endpoint (which is
+// already permission-scoped server-side), with an "All repos" sentinel.
+const repoOptions = computed(() => [
+  { label: 'All repos', value: null as string | null },
+  ...repos.value.map(r => ({ label: r.name, value: r.name as string | null })),
+])
+
+// Repo-type dropdown options: reuse the shared filter list with an
+// "All types" sentinel prepended.
+const typeOptions = computed(() => [
+  { label: 'All types', value: null as string | null },
+  ...REPO_TYPE_FILTERS.filter(o => o.value !== null),
+])
 
 // Debounced server-side search: reset to page 0 and reload
 watch(search, () => {
@@ -38,6 +56,12 @@ watch(search, () => {
     blockedPage.value = 0
     loadBlocked()
   }, 400)
+})
+
+// Repo + repo-type filters: reset to page 0 and reload immediately.
+watch([repoFilter, typeFilter], () => {
+  blockedPage.value = 0
+  loadBlocked()
 })
 
 onBeforeUnmount(() => {
@@ -65,6 +89,12 @@ async function loadBlocked() {
     }
     if (search.value.trim()) {
       params.search = search.value.trim()
+    }
+    if (repoFilter.value) {
+      params.repo = repoFilter.value
+    }
+    if (typeFilter.value) {
+      params.repo_type = typeFilter.value
     }
     if (sortField.value) {
       params.sort_by = sortField.value
@@ -174,12 +204,30 @@ onMounted(() => {
           </div>
         </template>
         <template #content>
-          <div class="relative mb-3">
-            <i class="pi pi-search absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-            <InputText
-              v-model="search"
-              placeholder="Search by package, version or repo..."
-              class="w-full !pl-10"
+          <div class="flex flex-wrap items-center gap-3 mb-3">
+            <span class="relative flex-1 min-w-[16rem]">
+              <i class="pi pi-search absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+              <InputText
+                v-model="search"
+                placeholder="Search by package, version or repo..."
+                class="w-full !pl-10"
+              />
+            </span>
+            <Select
+              v-model="repoFilter"
+              :options="repoOptions"
+              optionLabel="label"
+              optionValue="value"
+              placeholder="All repos"
+              class="w-48"
+            />
+            <Select
+              v-model="typeFilter"
+              :options="typeOptions"
+              optionLabel="label"
+              optionValue="value"
+              placeholder="All types"
+              class="w-40"
             />
           </div>
           <DataTable
