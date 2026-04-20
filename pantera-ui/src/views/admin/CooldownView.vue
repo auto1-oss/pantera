@@ -4,7 +4,7 @@ import { getCooldownOverview, getCooldownBlocked, getCooldownHistory } from '@/a
 import { unblockArtifact, unblockAll } from '@/api/repos'
 import { useNotificationStore } from '@/stores/notifications'
 import { useAuthStore } from '@/stores/auth'
-import { REPO_TYPE_FILTERS, getTechInfo } from '@/utils/repoTypes'
+import { REPO_TYPE_FILTERS } from '@/utils/repoTypes'
 import { useConfirmDelete } from '@/composables/useConfirmDelete'
 import RepoTypeBadge from '@/components/common/RepoTypeBadge.vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -50,9 +50,9 @@ let searchTimeout: ReturnType<typeof setTimeout> | null = null
 let blockedAbortCtrl: AbortController | null = null
 
 // Client-side pagination for the cooldown-enabled repositories tile grid.
-// 12 tiles = 3 rows × 4 cols on lg, which matches the compact card layout.
+// 10 tiles = 2 rows × 5 cols on xl, which matches the compact card layout.
 const repoPage = ref(0)
-const repoPageSize = 12
+const repoPageSize = 10
 
 // Strip "-proxy" / "-group" / "-hosted" suffix to get the base tech type.
 // Mirrors parseType() in utils/repoTypes.ts so `typeFilter="docker"` matches
@@ -261,6 +261,63 @@ onMounted(() => {
         <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Cooldown</h1>
       </div>
 
+      <!--
+        Global filter bar: single source of truth for search, repo, type
+        and active/history mode. Drives both the tile grid (client-side
+        filter via filteredRepos) and the blocked-artifacts DataTable
+        (server-side via loadBlocked params).
+      -->
+      <div class="flex flex-wrap items-end gap-3">
+        <div class="flex flex-col gap-1 flex-1 min-w-[16rem]">
+          <label class="text-sm text-gray-500" for="cooldown-filter-search">Search</label>
+          <span class="relative">
+            <i class="pi pi-search absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+            <InputText
+              id="cooldown-filter-search"
+              v-model="search"
+              placeholder="Search by package, version or repo..."
+              class="w-full !pl-10"
+            />
+          </span>
+        </div>
+        <div class="flex flex-col gap-1">
+          <label class="text-sm text-gray-500" for="cooldown-filter-repo">Repository</label>
+          <Select
+            id="cooldown-filter-repo"
+            v-model="repoFilter"
+            :options="repoOptions"
+            option-label="label"
+            option-value="value"
+            placeholder="All repos"
+            class="w-48"
+          />
+        </div>
+        <div class="flex flex-col gap-1">
+          <label class="text-sm text-gray-500" for="cooldown-filter-type">Type</label>
+          <Select
+            id="cooldown-filter-type"
+            v-model="typeFilter"
+            :options="typeOptions"
+            option-label="label"
+            option-value="value"
+            placeholder="All types"
+            class="w-40"
+          />
+        </div>
+        <SelectButton
+          v-if="canReadHistory"
+          v-model="mode"
+          :options="[
+            { label: 'Active', value: 'active' },
+            { label: 'History', value: 'history' },
+          ]"
+          option-label="label"
+          option-value="value"
+          :allow-empty="false"
+          aria-label="Toggle active vs. history view"
+        />
+      </div>
+
       <Card class="shadow-sm">
         <template #title>
           <div class="flex items-center gap-2">
@@ -285,32 +342,28 @@ onMounted(() => {
           </div>
           <div
             v-else
-            class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3"
+            class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3"
           >
             <div
               v-for="repo in pagedRepos"
               :key="repo.name"
-              class="border border-surface-200 dark:border-surface-700 rounded-lg p-3 flex flex-col gap-1 bg-surface-0 dark:bg-surface-900"
+              class="border border-surface-200 dark:border-surface-700 rounded-lg p-3 flex flex-col gap-2 bg-surface-card"
               data-testid="cooldown-repo-tile"
             >
               <div class="flex items-center gap-2 min-w-0">
                 <span
-                  class="w-2.5 h-2.5 rounded-full flex-shrink-0"
-                  :style="{ backgroundColor: getTechInfo(repo.type).color }"
-                />
-                <span
-                  class="font-semibold truncate"
+                  class="font-semibold truncate text-color"
                   :title="repo.name"
                 >
                   {{ repo.name }}
                 </span>
               </div>
-              <div class="text-xs text-gray-500 truncate">
-                {{ repo.type }} &middot; {{ repo.cooldown }}
+              <div class="flex items-center gap-2 min-w-0">
+                <RepoTypeBadge :type="repo.type" />
               </div>
               <div class="flex items-center justify-between mt-1">
                 <span class="text-xs text-gray-500">
-                  {{ repo.active_blocks ?? 0 }} active
+                  {{ repo.cooldown }} &middot; {{ repo.active_blocks ?? 0 }} active
                 </span>
                 <Button
                   v-if="(repo.active_blocks ?? 0) > 0 && canWrite"
@@ -355,56 +408,6 @@ onMounted(() => {
           </div>
         </template>
         <template #content>
-          <div class="flex flex-wrap items-end gap-3 mb-3">
-            <div class="flex flex-col gap-1 flex-1 min-w-[16rem]">
-              <label class="text-sm text-gray-500" for="cooldown-filter-search">Search</label>
-              <span class="relative">
-                <i class="pi pi-search absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-                <InputText
-                  id="cooldown-filter-search"
-                  v-model="search"
-                  placeholder="Search by package, version or repo..."
-                  class="w-full !pl-10"
-                />
-              </span>
-            </div>
-            <div class="flex flex-col gap-1">
-              <label class="text-sm text-gray-500" for="cooldown-filter-repo">Repository</label>
-              <Select
-                id="cooldown-filter-repo"
-                v-model="repoFilter"
-                :options="repoOptions"
-                option-label="label"
-                option-value="value"
-                placeholder="All repos"
-                class="w-48"
-              />
-            </div>
-            <div class="flex flex-col gap-1">
-              <label class="text-sm text-gray-500" for="cooldown-filter-type">Type</label>
-              <Select
-                id="cooldown-filter-type"
-                v-model="typeFilter"
-                :options="typeOptions"
-                option-label="label"
-                option-value="value"
-                placeholder="All types"
-                class="w-40"
-              />
-            </div>
-            <SelectButton
-              v-if="canReadHistory"
-              v-model="mode"
-              :options="[
-                { label: 'Active', value: 'active' },
-                { label: 'History', value: 'history' },
-              ]"
-              option-label="label"
-              option-value="value"
-              :allow-empty="false"
-              aria-label="Toggle active vs. history view"
-            />
-          </div>
           <DataTable
             :value="blocked"
             :loading="loading"
