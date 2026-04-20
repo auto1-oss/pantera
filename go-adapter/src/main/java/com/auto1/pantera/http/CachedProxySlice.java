@@ -24,6 +24,7 @@ import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.http.cache.ProxyCacheWriter;
 import com.auto1.pantera.http.cooldown.GoLatestHandler;
+import com.auto1.pantera.http.cooldown.GoListHandler;
 import com.auto1.pantera.http.context.RequestContext;
 import com.auto1.pantera.http.fault.Fault;
 import com.auto1.pantera.http.fault.Fault.ChecksumAlgo;
@@ -159,6 +160,17 @@ final class CachedProxySlice implements Slice {
     private final GoLatestHandler latestHandler;
 
     /**
+     * {@code /@v/list} cooldown handler: filters blocked versions out of
+     * the plain-text version list Go clients fetch for {@code go list
+     * -m -versions &lt;module&gt;}, {@code go mod download}, and MVS
+     * resolution. This is where {@code GoMetadataFilter} /
+     * {@code GoMetadataParser} (registered via {@code CooldownWiring})
+     * are actually consumed; without it the bundle would be dead
+     * infrastructure and blocked versions would leak to the client.
+     */
+    private final GoListHandler listHandler;
+
+    /**
      * Wraps origin slice with caching layer and default 12h metadata TTL.
      *
      * @param client Client slice
@@ -192,6 +204,9 @@ final class CachedProxySlice implements Slice {
             .map(raw -> new ProxyCacheWriter(raw, rname, meterRegistry()))
             .orElse(null);
         this.latestHandler = new GoLatestHandler(
+            client, cooldown, inspector, rtype, rname
+        );
+        this.listHandler = new GoListHandler(
             client, cooldown, inspector, rtype, rname
         );
     }
@@ -232,6 +247,19 @@ final class CachedProxySlice implements Slice {
                 .field("repository.name", this.rname)
                 .log();
             return this.latestHandler.handle(line, user);
+        }
+        // Cooldown-aware @v/list filter: strips blocked versions so
+        // "go list -m -versions" / MVS resolution never sees them.
+        if (this.listHandler.matches(path)) {
+            final String user = new Login(headers).getValue();
+            EcsLogger.debug("com.auto1.pantera.go")
+                .message("Handling @v/list via cooldown handler")
+                .eventCategory("web")
+                .eventAction("proxy_request")
+                .field("url.path", path)
+                .field("repository.name", this.rname)
+                .log();
+            return this.listHandler.handle(line, user);
         }
         final Key key = new KeyFromPath(path);
         final Matcher matcher = ARTIFACT.matcher(key.string());
