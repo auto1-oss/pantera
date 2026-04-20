@@ -14,6 +14,9 @@ import com.auto1.pantera.api.RepositoryEvents;
 import com.auto1.pantera.api.v1.AsyncApiVerticle;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.auth.JwtTokens;
+import com.auto1.pantera.cooldown.CooldownCleanupFallback;
+import com.auto1.pantera.cooldown.CooldownRepository;
+import com.auto1.pantera.cooldown.PgCronStatus;
 import com.auto1.pantera.http.BaseSlice;
 import com.auto1.pantera.http.MainSlice;
 import com.auto1.pantera.http.Slice;
@@ -111,6 +114,12 @@ public final class VertxMain {
      * Config watch service for hot reload.
      */
     private com.auto1.pantera.settings.ConfigWatchService configWatch;
+
+    /**
+     * Vertx-periodic cooldown cleanup fallback. Only started when pg_cron
+     * is absent or its cleanup job is not scheduled. Nullable.
+     */
+    private CooldownCleanupFallback cooldownCleanupFallback;
 
     /**
      * Vert.x instance - must be closed on shutdown to release event loops and worker threads.
@@ -248,6 +257,31 @@ public final class VertxMain {
         final RepositorySlices slices = new RepositorySlices(
             settings, repos, jwtTokens
         );
+        // Cooldown cleanup fallback: if pg_cron is not running the
+        // cleanup job, start the Vertx-periodic fallback so expired
+        // blocks still get archived and history still gets purged.
+        // Requires a DataSource (no DB => no cooldown => no cleanup).
+        // RepositorySlices construction above has already called
+        // CooldownSupport.create(settings), which runs
+        // loadDbCooldownSettings — so settings.cooldown() now reflects
+        // the DB-persisted retention/batch values the fallback reads.
+        if (sharedDs.isPresent()) {
+            final javax.sql.DataSource ds = sharedDs.get();
+            final PgCronStatus pgCron = new PgCronStatus(ds);
+            if (!pgCron.cleanupJobScheduled()) {
+                this.cooldownCleanupFallback = new CooldownCleanupFallback(
+                    new CooldownRepository(ds), settings.cooldown()
+                );
+                this.cooldownCleanupFallback.start(this.vertx.getDelegate());
+            } else {
+                EcsLogger.info("com.auto1.pantera.cooldown.cleanup")
+                    .message("pg_cron cleanup job is scheduled; skipping Vertx fallback")
+                    .eventCategory("configuration")
+                    .eventAction("cooldown_fallback_skip")
+                    .eventOutcome("success")
+                    .log();
+            }
+        }
         if (settings.metrics().http()) {
             try {
                 slices.enableJettyMetrics(BackendRegistries.getDefaultNow());
@@ -682,6 +716,27 @@ public final class VertxMain {
                 .eventOutcome("failure")
                 .error(e)
                 .log();
+        }
+        // 7b. Cancel cooldown cleanup fallback timers (must run before
+        //     Vert.x close so the timer ids can still be cancelled).
+        if (this.cooldownCleanupFallback != null) {
+            try {
+                this.cooldownCleanupFallback.stop(this.vertx.getDelegate());
+                EcsLogger.info("com.auto1.pantera.cooldown.cleanup")
+                    .message("Cooldown cleanup fallback stopped")
+                    .eventCategory("web")
+                    .eventAction("cooldown_fallback_stop")
+                    .eventOutcome("success")
+                    .log();
+            } catch (final Exception e) {
+                EcsLogger.error("com.auto1.pantera.cooldown.cleanup")
+                    .message("Failed to stop cooldown cleanup fallback")
+                    .eventCategory("web")
+                    .eventAction("cooldown_fallback_stop")
+                    .eventOutcome("failure")
+                    .error(e)
+                    .log();
+            }
         }
         // 8. Close Vert.x instance (LAST - closes event loops and worker threads)
         if (this.vertx != null) {
