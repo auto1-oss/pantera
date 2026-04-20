@@ -162,6 +162,71 @@ curl -X POST "http://pantera:8086/api/v1/cooldown/invalidate" \
   -d '{"repo_type":"npm","repo_name":"npm-proxy"}'
 ```
 
+## Retention & history
+
+Expired and manually unblocked cooldown entries are archived to
+`artifact_cooldowns_history` rather than hard-deleted. This preserves an
+audit trail of past blocks for compliance and incident review.
+
+- `archive_reason` is one of `EXPIRED` (cron or Vertx-fallback auto-cleanup),
+  `MANUAL_UNBLOCK` (admin unblock action), or `ADMIN_PURGE` (reserved for
+  future bulk-purge actions).
+- `archived_by` is the authenticated user's subject (for manual unblocks)
+  or `"system"` (for automatic expirations).
+- History is purged daily at ~03:00 UTC for entries older than
+  `history_retention_days` (DB setting, default 90, bounds `(0, 3650]`).
+  Edit via the admin UI "Cooldown settings" dialog or
+  `PUT /api/v1/cooldown/config`.
+
+## Cleanup execution modes
+
+Two mutually-exclusive cleanup paths run on a 10-minute cadence:
+
+1. **pg_cron (preferred)** -- scheduled by migration V121. Uses the
+   `_cooldown_batch_limit()` / `_cooldown_retention_days()` Postgres helper
+   functions that read live from the `settings` JSON blob, so admin UI
+   changes take effect on the next cron tick without restart.
+2. **Vertx fallback** -- activates automatically at startup if pg_cron is
+   not installed or the cleanup job is not registered. Runs the same SQL
+   on the same cadence via `vertx.setPeriodic`, reading the shared
+   `CooldownSettings` object on each tick. Blocking JDBC dispatched via
+   `HandlerExecutor` -- never the event loop.
+
+At startup `VertxMain` queries `pg_extension` and `cron.job`; the log line
+identifies the chosen mode:
+
+- `pg_cron cleanup job is scheduled; skipping Vertx fallback`, or
+- `pg_cron cleanup job not scheduled; starting Vertx fallback`
+
+History retention is enforced daily by either mechanism (pg_cron job
+`purge-cooldown-history` or the fallback's hourly check-gated purge).
+
+## Permission model
+
+Two API-level permissions gate cooldown features:
+
+- `api_cooldown_permissions`
+  - `read` -- access to `GET /cooldown/blocked`, `GET /cooldown/overview`,
+    `GET /cooldown/config`.
+  - `write` -- access to unblock actions and `PUT /cooldown/config`.
+- `api_cooldown_history_permissions`
+  - `read` -- access to `GET /cooldown/history` and the UI history toggle.
+
+Per-repo row filtering is layered on top of both `/blocked` and `/history`
+via the existing `AdapterBasicPermission(repoName, "read")`. A user with
+the API-level permission still sees only rows for repos they have
+repo-level read on.
+
+## Admin UI
+
+The cooldown admin view (`/admin/cooldown`) exposes:
+
+- Free-text search + repo name + repo type dropdown filters (combine with AND).
+- Active / History toggle (visible only when `api_cooldown_history_permissions.read` is granted).
+- Gear icon opening the cooldown settings dialog (visible only when
+  `api_cooldown_permissions.write` is granted). Edits: enabled toggle,
+  minimum allowed age, history retention days, cleanup batch limit.
+
 ## Configuration
 
 ### Global Cooldown Duration

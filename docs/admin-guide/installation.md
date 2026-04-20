@@ -294,6 +294,23 @@ shared_preload_libraries = 'pg_cron'
 cron.database_name = 'artifacts'
 ```
 
+### pg_cron is optional
+
+Pantera prefers pg_cron for cooldown cleanup but does not require it.
+When the extension is not installed (common on managed Postgres variants
+that don't include pg_cron in the preload list), a Vertx-periodic task
+inside the application runs the same cleanup logic on the same 10-minute
+cadence. No manual intervention is needed.
+
+Check which mode is active in the logs at startup:
+
+    grep 'pantera.cooldown.cleanup' pantera.log | head -5
+
+Expect one of:
+
+- `pg_cron cleanup job is scheduled; skipping Vertx fallback`
+- `pg_cron cleanup job not scheduled; starting Vertx fallback`
+
 ### 2. Create the Extension
 
 Run once as a superuser against your Pantera database:
