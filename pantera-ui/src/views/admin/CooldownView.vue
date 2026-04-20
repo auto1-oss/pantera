@@ -7,7 +7,6 @@ import { useAuthStore } from '@/stores/auth'
 import { REPO_TYPE_FILTERS } from '@/utils/repoTypes'
 import RepoTypeBadge from '@/components/common/RepoTypeBadge.vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
-import CooldownSettingsDialog from './CooldownSettingsDialog.vue'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
 import Button from 'primevue/button'
@@ -24,14 +23,15 @@ type Mode = 'active' | 'history'
 const notify = useNotificationStore()
 const auth = useAuthStore()
 const canWrite = auth.hasAction('api_cooldown_permissions', 'write')
+// Anyone with read access to cooldown can toggle into the history view;
+// per-repo AdapterBasicPermission continues to filter rows server-side.
 const canReadHistory = computed(() =>
-  auth.hasAction('api_cooldown_history_permissions', 'read'),
+  auth.hasAction('api_cooldown_permissions', 'read'),
 )
 
 const repos = ref<CooldownRepo[]>([])
 const blocked = ref<Array<BlockedArtifact | HistoryArtifact>>([])
 const mode = ref<Mode>('active')
-const settingsOpen = ref(false)
 const blockedPage = ref(0)
 const blockedSize = ref(50)
 const blockedTotal = ref(0)
@@ -173,15 +173,6 @@ async function handleUnblockAll(repoName: string) {
   }
 }
 
-// Retention changes can shift what appears in the blocked list (e.g.
-// an admin shortening retention may expire blocks sooner on the next
-// cleanup tick); reload so the user sees the effect of their change.
-function onSettingsSaved() {
-  notify.success('Cooldown settings saved')
-  loadBlocked()
-  loadOverview()
-}
-
 onMounted(() => {
   loadOverview()
   loadBlocked()
@@ -193,48 +184,65 @@ onMounted(() => {
     <div class="space-y-6">
       <div class="flex items-center justify-between">
         <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Cooldown</h1>
-        <Button
-          v-if="canWrite"
-          icon="pi pi-cog"
-          severity="secondary"
-          text
-          aria-label="Cooldown settings"
-          @click="settingsOpen = true"
-        />
       </div>
-
-      <CooldownSettingsDialog v-model="settingsOpen" @saved="onSettingsSaved" />
 
       <Card class="shadow-sm">
         <template #title>Cooldown-Enabled Repositories</template>
         <template #content>
-          <div v-if="repos.length === 0" class="text-gray-400 text-sm">
-            No cooldown-enabled repositories
-          </div>
-          <div v-else class="divide-y divide-gray-100 dark:divide-gray-700">
-            <div v-for="r in repos" :key="r.name" class="flex items-center justify-between py-2">
-              <div class="flex items-center gap-2">
-                <span class="font-medium">{{ r.name }}</span>
-                <RepoTypeBadge :type="r.type" />
+          <DataTable
+            :value="repos"
+            stripedRows
+            :paginator="repos.length > 25"
+            :rows="25"
+            :rows-per-page-options="[25, 50, 100]"
+          >
+            <Column field="name" header="Name" sortable>
+              <template #body="{ data }">
+                <span class="font-medium">{{ data.name }}</span>
+              </template>
+            </Column>
+            <Column field="type" header="Type" sortable>
+              <template #body="{ data }">
+                <RepoTypeBadge :type="data.type" />
+              </template>
+            </Column>
+            <Column field="cooldown" header="Cooldown" sortable>
+              <template #body="{ data }">
+                <span class="text-sm text-gray-400 font-mono">{{ data.cooldown }}</span>
+              </template>
+            </Column>
+            <Column field="active_blocks" header="Active blocks" sortable>
+              <template #body="{ data }">
                 <Tag
-                  v-if="r.active_blocks != null && r.active_blocks > 0"
-                  :value="`${r.active_blocks} blocked`"
+                  v-if="data.active_blocks != null && data.active_blocks > 0"
+                  :value="String(data.active_blocks)"
                   severity="danger"
                 />
-              </div>
-              <div class="flex items-center gap-3">
-                <span class="text-sm text-gray-400 font-mono">{{ r.cooldown }}</span>
+                <span v-else class="text-gray-400">0</span>
+              </template>
+            </Column>
+            <Column
+              v-if="canWrite"
+              header=""
+              class="w-32"
+            >
+              <template #body="{ data }">
                 <Button
-                  v-if="canWrite"
-                  label="Unblock All"
+                  v-if="data.active_blocks != null && data.active_blocks > 0"
+                  label="Unblock all"
                   size="small"
                   severity="warn"
                   text
-                  @click="handleUnblockAll(r.name)"
+                  @click="handleUnblockAll(data.name)"
                 />
+              </template>
+            </Column>
+            <template #empty>
+              <div class="text-center text-gray-400 py-4">
+                No cooldown-enabled repositories
               </div>
-            </div>
-          </div>
+            </template>
+          </DataTable>
         </template>
       </Card>
 
@@ -246,31 +254,43 @@ onMounted(() => {
           </div>
         </template>
         <template #content>
-          <div class="flex flex-wrap items-center gap-3 mb-3">
-            <span class="relative flex-1 min-w-[16rem]">
-              <i class="pi pi-search absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-              <InputText
-                v-model="search"
-                placeholder="Search by package, version or repo..."
-                class="w-full !pl-10"
+          <div class="flex flex-wrap items-end gap-3 mb-3">
+            <div class="flex flex-col gap-1 flex-1 min-w-[16rem]">
+              <label class="text-sm text-gray-500" for="cooldown-filter-search">Search</label>
+              <span class="relative">
+                <i class="pi pi-search absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                <InputText
+                  id="cooldown-filter-search"
+                  v-model="search"
+                  placeholder="Search by package, version or repo..."
+                  class="w-full !pl-10"
+                />
+              </span>
+            </div>
+            <div class="flex flex-col gap-1">
+              <label class="text-sm text-gray-500" for="cooldown-filter-repo">Repository</label>
+              <Select
+                id="cooldown-filter-repo"
+                v-model="repoFilter"
+                :options="repoOptions"
+                option-label="label"
+                option-value="value"
+                placeholder="All repos"
+                class="w-48"
               />
-            </span>
-            <Select
-              v-model="repoFilter"
-              :options="repoOptions"
-              optionLabel="label"
-              optionValue="value"
-              placeholder="All repos"
-              class="w-48"
-            />
-            <Select
-              v-model="typeFilter"
-              :options="typeOptions"
-              optionLabel="label"
-              optionValue="value"
-              placeholder="All types"
-              class="w-40"
-            />
+            </div>
+            <div class="flex flex-col gap-1">
+              <label class="text-sm text-gray-500" for="cooldown-filter-type">Type</label>
+              <Select
+                id="cooldown-filter-type"
+                v-model="typeFilter"
+                :options="typeOptions"
+                option-label="label"
+                option-value="value"
+                placeholder="All types"
+                class="w-40"
+              />
+            </div>
             <SelectButton
               v-if="canReadHistory"
               v-model="mode"
