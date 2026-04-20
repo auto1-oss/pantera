@@ -199,6 +199,20 @@ async function loadBlocked() {
   }
 }
 
+// Compact SHA digests for display in the Version column. Docker cooldown
+// blocks may record a digest like `sha256:<64 hex>` when the client pushed
+// by digest instead of a human-readable tag. We keep the algorithm prefix
+// and show the first 12 hex chars + ellipsis to stay readable in the
+// table while the `title` attribute tooltips the full value.
+function formatVersion(v: string | null | undefined): string {
+  if (!v) return ''
+  const sha = /^sha256:([0-9a-f]{64})$/i.exec(v)
+  if (sha) return `sha256:${sha[1].slice(0, 12)}\u2026`
+  const genericSha = /^(sha\d+):([0-9a-f]{32,})$/i.exec(v)
+  if (genericSha) return `${genericSha[1]}:${genericSha[2].slice(0, 12)}\u2026`
+  return v
+}
+
 function formatRemaining(blockedUntil: string): string {
   const secs = Math.max(0, Math.floor((new Date(blockedUntil).getTime() - Date.now()) / 1000))
   if (secs === 0) return '<1m'
@@ -419,17 +433,17 @@ onMounted(() => {
           >
             <Column field="package_name" header="Package" sortable>
               <template #body="{ data }">
-                <span class="truncate max-w-[14rem] inline-block align-middle" :title="data.package_name">
-                  {{ data.package_name }}
-                </span>
+                <span class="break-all whitespace-normal">{{ data.package_name }}</span>
               </template>
             </Column>
-            <Column field="version" header="Version" sortable />
+            <Column field="version" header="Version" sortable>
+              <template #body="{ data }">
+                <span :title="data.version">{{ formatVersion(data.version) }}</span>
+              </template>
+            </Column>
             <Column field="repo" header="Repository" sortable>
               <template #body="{ data }">
-                <span class="truncate max-w-[14rem] inline-block align-middle" :title="data.repo">
-                  {{ data.repo }}
-                </span>
+                <span class="break-all whitespace-normal">{{ data.repo }}</span>
               </template>
             </Column>
             <Column field="repo_type" header="Type" sortable>

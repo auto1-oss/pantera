@@ -542,6 +542,113 @@ describe('CooldownView cooldown-enabled repositories grid', () => {
   })
 })
 
+describe('CooldownView cell formatting', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    getCooldownOverviewMock.mockReset()
+    getCooldownBlockedMock.mockReset()
+    getCooldownHistoryMock.mockReset()
+    getCooldownOverviewMock.mockResolvedValue([])
+    getCooldownHistoryMock.mockResolvedValue({
+      items: [], page: 0, size: 50, total: 0, hasMore: false,
+    })
+  })
+
+  // Utility for building a single-row active-blocked response with the
+  // given overrides. Keeps each formatting test below to just the field
+  // under exercise.
+  function seedActiveRow(overrides: Record<string, unknown>) {
+    getCooldownBlockedMock.mockResolvedValue({
+      items: [
+        {
+          package_name: 'pkg-a',
+          version: '1.0.0',
+          repo: 'npm-proxy',
+          repo_type: 'npm-proxy',
+          reason: 'CVE',
+          blocked_date: '2026-04-10T00:00:00Z',
+          blocked_until: '2026-05-01T00:00:00Z',
+          remaining_hours: 240,
+          ...overrides,
+        },
+      ],
+      page: 0, size: 50, total: 1, hasMore: false,
+    })
+  }
+
+  it('formatVersion compacts a sha256 digest to first 12 chars', async () => {
+    // Helper is a local function inside <script setup>; assert the rendered
+    // cell text instead of importing it directly.
+    const fullDigest =
+      'sha256:a2c28d7c0866d9feb4ad9f83da005b26f56a899f2b6a4d8743ace41f8d072971'
+    seedActiveRow({ version: fullDigest })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const text = wrapper.text()
+    expect(text).toContain('sha256:a2c28d7c0866\u2026')
+    // Full 64-char digest must NOT leak into the rendered cell.
+    expect(text).not.toContain(fullDigest)
+
+    // Tooltip should still carry the full digest for hover-to-reveal.
+    const versionSpan = wrapper.find(`span[title="${fullDigest}"]`)
+    expect(versionSpan.exists()).toBe(true)
+  })
+
+  it('formatVersion leaves regular versions untouched', async () => {
+    // Mount once, then swap in rows of each non-digest shape via the mock
+    // and remount so we observe the rendered text for each case.
+    const cases = [
+      { in: 'latest', out: 'latest' },
+      { in: '4.17.20', out: '4.17.20' },
+      { in: '1.2-beta', out: '1.2-beta' },
+      { in: '', out: '' },
+    ]
+
+    for (const c of cases) {
+      seedActiveRow({ version: c.in })
+      const wrapper = mountView()
+      await flushPromises()
+
+      const text = wrapper.text()
+      if (c.in !== '') {
+        expect(text).toContain(c.out)
+      }
+      // None of these should be collapsed to an ellipsis.
+      if (c.in !== '') {
+        expect(text).not.toContain(`${c.in}\u2026`)
+      }
+      wrapper.unmount()
+    }
+  })
+
+  it('package_name cell wraps instead of truncating', async () => {
+    const longName = '@auto1/some-very-very-long-internal-package-name-here-0123'
+    expect(longName.length).toBeGreaterThan(50)
+    seedActiveRow({ package_name: longName })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    // Full package name is rendered (no ellipsis character in output).
+    const text = wrapper.text()
+    expect(text).toContain(longName)
+    expect(text).not.toContain('\u2026')
+
+    // The wrapping span uses break-all + whitespace-normal; no truncate /
+    // max-w-* helper classes should remain on the Package cell span.
+    const pkgSpan = wrapper
+      .findAll('span')
+      .find(s => s.text() === longName)
+    expect(pkgSpan).toBeDefined()
+    const classes = pkgSpan!.classes()
+    expect(classes).toContain('break-all')
+    expect(classes).toContain('whitespace-normal')
+    expect(classes).not.toContain('truncate')
+  })
+})
+
 describe('CooldownView global filter bar', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
