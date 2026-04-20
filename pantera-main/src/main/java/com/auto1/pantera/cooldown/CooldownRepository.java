@@ -122,22 +122,6 @@ public final class CooldownRepository {
     }
 
     /**
-     * Delete a cooldown block record by id.
-     * Callers must log the record details before calling this method.
-     * @param blockId Record id to delete
-     */
-    void deleteBlock(final long blockId) {
-        final String sql = "DELETE FROM artifact_cooldowns WHERE id = ?";
-        try (Connection conn = this.dataSource.getConnection();
-            PreparedStatement stmt = conn.prepareStatement(sql)) {
-            stmt.setLong(1, blockId);
-            stmt.executeUpdate();
-        } catch (final SQLException err) {
-            throw new IllegalStateException("Failed to delete cooldown block", err);
-        }
-    }
-
-    /**
      * Delete all active blocks for a repository in a single statement.
      * @param repoType Repository type
      * @param repoName Repository name

@@ -22,6 +22,7 @@ import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.cache.CooldownCache;
 import com.auto1.pantera.cooldown.config.CooldownSettings;
 import com.auto1.pantera.db.ArtifactDbFactory;
+import com.auto1.pantera.db.DbManager;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -31,6 +32,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -65,6 +67,9 @@ final class JdbcCooldownServiceTest {
     @BeforeEach
     void setUp() {
         this.dataSource = new ArtifactDbFactory(this.settings(), "cooldowns").initialize();
+        // Run Flyway migrations so the V121 artifact_cooldowns_history table
+        // exists — archiveAndDelete targets it from expire/release.
+        DbManager.migrate(this.dataSource);
         this.repository = new CooldownRepository(this.dataSource);
         this.executor = Executors.newSingleThreadExecutor();
         this.service = new JdbcCooldownService(
@@ -415,10 +420,92 @@ final class JdbcCooldownServiceTest {
         MatcherAssert.assertThat("other-repo allows 5-day-old artifact (only 72h global)", other.blocked(), Matchers.is(false));
     }
 
+    @Test
+    void expireArchivesWithSystemActorAndExpiredReason() {
+        // Seed an ACTIVE block whose blocked_until is already in the past.
+        final Instant pastBlockedAt = Instant.now().minus(Duration.ofHours(80));
+        final Instant pastBlockedUntil = Instant.now().minus(Duration.ofHours(1));
+        final DbBlockRecord inserted = this.repository.insertBlock(
+            "maven-proxy", "central", "com.expire.me", "1.0.0",
+            CooldownReason.FRESH_RELEASE,
+            pastBlockedAt, pastBlockedUntil, "system",
+            Optional.empty()
+        );
+        // Trigger the expire path: evaluate() -> checkExistingBlockWithTimestamp()
+        // sees blocked_until < now and calls expire().
+        final CooldownRequest request = new CooldownRequest(
+            "maven-proxy", "central", "com.expire.me", "1.0.0", "alice", Instant.now()
+        );
+        final CooldownInspector inspector = new CooldownInspector() {
+            @Override
+            public CompletableFuture<Optional<Instant>> releaseDate(final String artifact, final String version) {
+                return CompletableFuture.completedFuture(Optional.empty());
+            }
+
+            @Override
+            public CompletableFuture<List<CooldownDependency>> dependencies(final String artifact, final String version) {
+                return CompletableFuture.completedFuture(List.of());
+            }
+        };
+        this.service.evaluate(request, inspector).join();
+        MatcherAssert.assertThat(
+            "Live row should be gone after expire",
+            this.recordExists("central", "com.expire.me", "1.0.0"),
+            Matchers.is(false)
+        );
+        final List<DbHistoryRecord> history = this.repository.findHistoryPaginated(
+            Set.of("central"), null, null, null, "archived_at", false, 0, 50
+        );
+        MatcherAssert.assertThat(
+            "History should contain the archived expire row", history, Matchers.hasSize(1)
+        );
+        MatcherAssert.assertThat(
+            history.get(0).archiveReason(), Matchers.is(ArchiveReason.EXPIRED)
+        );
+        MatcherAssert.assertThat(
+            history.get(0).archivedBy(), Matchers.is("system")
+        );
+        MatcherAssert.assertThat(
+            history.get(0).originalId(), Matchers.is(inserted.id())
+        );
+    }
+
+    @Test
+    void releaseArchivesWithProvidedActorAndManualUnblockReason() {
+        final Instant now = Instant.now();
+        final DbBlockRecord inserted = this.repository.insertBlock(
+            "npm-proxy", "npm", "left-pad", "1.1.0",
+            CooldownReason.FRESH_RELEASE,
+            now, now.plus(Duration.ofHours(72)), "system",
+            Optional.empty()
+        );
+        this.service.unblock("npm-proxy", "npm", "left-pad", "1.1.0", "alice").join();
+        MatcherAssert.assertThat(
+            "Live row should be gone after release",
+            this.recordExists("npm", "left-pad", "1.1.0"),
+            Matchers.is(false)
+        );
+        final List<DbHistoryRecord> history = this.repository.findHistoryPaginated(
+            Set.of("npm"), null, null, null, "archived_at", false, 0, 50
+        );
+        MatcherAssert.assertThat(
+            "History should contain the archived release row", history, Matchers.hasSize(1)
+        );
+        MatcherAssert.assertThat(
+            history.get(0).archiveReason(), Matchers.is(ArchiveReason.MANUAL_UNBLOCK)
+        );
+        MatcherAssert.assertThat(
+            history.get(0).archivedBy(), Matchers.is("alice")
+        );
+        MatcherAssert.assertThat(
+            history.get(0).originalId(), Matchers.is(inserted.id())
+        );
+    }
+
     private void truncate() {
         try (Connection conn = this.dataSource.getConnection();
             PreparedStatement stmt = conn.prepareStatement(
-                "TRUNCATE TABLE artifact_cooldowns, artifacts RESTART IDENTITY"
+                "TRUNCATE TABLE artifact_cooldowns, artifact_cooldowns_history, artifacts RESTART IDENTITY"
             )) {
             stmt.executeUpdate();
         } catch (final SQLException err) {
