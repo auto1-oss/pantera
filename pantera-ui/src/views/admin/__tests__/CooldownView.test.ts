@@ -228,3 +228,141 @@ describe('CooldownView filter dropdowns', () => {
     expect(wrapper.find('button .pi-unlock').exists()).toBe(false)
   })
 })
+
+describe('CooldownView cooldown-enabled repositories grid', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    getCooldownOverviewMock.mockReset()
+    getCooldownBlockedMock.mockReset()
+    getCooldownHistoryMock.mockReset()
+    getCooldownBlockedMock.mockResolvedValue({
+      items: [], page: 0, size: 50, total: 0, hasMore: false,
+    })
+    getCooldownHistoryMock.mockResolvedValue({
+      items: [], page: 0, size: 50, total: 0, hasMore: false,
+    })
+  })
+
+  it('renders one tile per repo with the repo name visible', async () => {
+    getCooldownOverviewMock.mockResolvedValue([
+      { name: 'alpha', type: 'npm-proxy', cooldown: '7d', active_blocks: 0 },
+      { name: 'bravo', type: 'pypi-proxy', cooldown: '3d', active_blocks: 0 },
+      { name: 'charlie', type: 'docker-proxy', cooldown: '1d', active_blocks: 0 },
+    ])
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const tiles = wrapper.findAll('[data-testid="cooldown-repo-tile"]')
+    expect(tiles).toHaveLength(3)
+    const text = wrapper.text()
+    expect(text).toContain('alpha')
+    expect(text).toContain('bravo')
+    expect(text).toContain('charlie')
+  })
+
+  it('filters the grid by the shared search ref (case-insensitive, substring)', async () => {
+    getCooldownOverviewMock.mockResolvedValue([
+      { name: 'alpha', type: 'npm-proxy', cooldown: '7d', active_blocks: 0 },
+      { name: 'bravo', type: 'pypi-proxy', cooldown: '3d', active_blocks: 0 },
+      { name: 'charlie', type: 'docker-proxy', cooldown: '1d', active_blocks: 0 },
+    ])
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as { search: string }
+    vm.search = 'BRAV'
+    await flushPromises()
+
+    const tiles = wrapper.findAll('[data-testid="cooldown-repo-tile"]')
+    expect(tiles).toHaveLength(1)
+    expect(tiles[0].text()).toContain('bravo')
+  })
+
+  it('filters the grid by base type so "docker" matches both docker-proxy and docker-group', async () => {
+    getCooldownOverviewMock.mockResolvedValue([
+      { name: 'npm-mirror', type: 'npm-proxy', cooldown: '7d', active_blocks: 0 },
+      { name: 'docker-up', type: 'docker-proxy', cooldown: '7d', active_blocks: 0 },
+      { name: 'docker-all', type: 'docker-group', cooldown: '7d', active_blocks: 0 },
+    ])
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as { typeFilter: string | null }
+    vm.typeFilter = 'docker'
+    await flushPromises()
+
+    const tiles = wrapper.findAll('[data-testid="cooldown-repo-tile"]')
+    expect(tiles).toHaveLength(2)
+    const text = tiles.map(t => t.text()).join(' | ')
+    expect(text).toContain('docker-up')
+    expect(text).toContain('docker-all')
+    expect(text).not.toContain('npm-mirror')
+  })
+
+  it('hides the eraser icon when active_blocks is zero', async () => {
+    seedAuth({ api_cooldown_permissions: ['read', 'write'] })
+    getCooldownOverviewMock.mockResolvedValue([
+      { name: 'quiet-repo', type: 'npm-proxy', cooldown: '7d', active_blocks: 0 },
+    ])
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const tile = wrapper.find('[data-testid="cooldown-repo-tile"]')
+    expect(tile.exists()).toBe(true)
+    // No eraser button rendered inside the tile.
+    expect(tile.find('button .pi-eraser').exists()).toBe(false)
+  })
+
+  it('hides the eraser icon when the user lacks write permission', async () => {
+    // Read-only user: api_cooldown_permissions.write absent.
+    seedAuth({ api_cooldown_permissions: ['read'] })
+    getCooldownOverviewMock.mockResolvedValue([
+      { name: 'noisy-repo', type: 'npm-proxy', cooldown: '7d', active_blocks: 5 },
+    ])
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const tile = wrapper.find('[data-testid="cooldown-repo-tile"]')
+    expect(tile.exists()).toBe(true)
+    // active_blocks > 0, but canWrite=false so no eraser.
+    expect(tile.find('button .pi-eraser').exists()).toBe(false)
+  })
+
+  it('shows the Paginator only when the filtered set exceeds the page size', async () => {
+    // 15 tiles, pageSize=12 → paginator must appear.
+    const many = Array.from({ length: 15 }, (_, i) => ({
+      name: `repo-${i}`,
+      type: 'npm-proxy',
+      cooldown: '7d',
+      active_blocks: 0,
+    }))
+    getCooldownOverviewMock.mockResolvedValue(many)
+
+    let wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.findAll('[data-testid="cooldown-repo-tile"]')).toHaveLength(12)
+    expect(wrapper.find('.p-paginator').exists()).toBe(true)
+    wrapper.unmount()
+
+    // 8 tiles → paginator hidden.
+    const few = Array.from({ length: 8 }, (_, i) => ({
+      name: `repo-${i}`,
+      type: 'npm-proxy',
+      cooldown: '7d',
+      active_blocks: 0,
+    }))
+    getCooldownOverviewMock.mockResolvedValue(few)
+
+    wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.findAll('[data-testid="cooldown-repo-tile"]')).toHaveLength(8)
+    // Only the blocked-artifacts table's paginator (which is also hidden for
+    // total=0) should not render, and neither should the grid's.
+    expect(wrapper.find('.p-paginator').exists()).toBe(false)
+  })
+})
