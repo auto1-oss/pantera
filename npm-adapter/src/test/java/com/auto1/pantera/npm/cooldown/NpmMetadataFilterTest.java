@@ -185,6 +185,90 @@ final class NpmMetadataFilterTest {
         assertThat(filtered.get("dist-tags").has("beta"), is(false));
     }
 
+    /**
+     * Non-{@code latest} tags pointing to a blocked version should be dropped
+     * in {@link NpmMetadataFilter#filter(JsonNode, Set)} — otherwise
+     * {@code npm install pkg@beta} would silently resolve to a different
+     * version than the user asked for. The {@code latest} tag is handled
+     * separately by {@link com.auto1.pantera.cooldown.metadata.MetadataFilterService} via {@code updateLatest}.
+     */
+    @Test
+    void filterDropsNonLatestDistTagsPointingToBlockedVersion() throws Exception {
+        final String json = """
+            {
+                "name": "test-package",
+                "dist-tags": {
+                    "latest": "2.0.0",
+                    "beta": "3.0.0-beta.1",
+                    "next": "3.0.0-rc.1",
+                    "canary": "4.0.0-canary.1"
+                },
+                "versions": {
+                    "1.0.0": {},
+                    "2.0.0": {},
+                    "3.0.0-beta.1": {},
+                    "3.0.0-rc.1": {},
+                    "4.0.0-canary.1": {}
+                }
+            }
+            """;
+        final JsonNode metadata = this.parser.parse(json.getBytes(StandardCharsets.UTF_8));
+        final JsonNode filtered = this.filter.filter(
+            metadata, Set.of("3.0.0-beta.1", "4.0.0-canary.1")
+        );
+        assertThat(filtered.get("dist-tags").has("latest"), is(true));
+        assertThat(filtered.get("dist-tags").get("latest").asText(), equalTo("2.0.0"));
+        assertThat(filtered.get("dist-tags").has("beta"), is(false));
+        assertThat(filtered.get("dist-tags").has("next"), is(true));
+        assertThat(filtered.get("dist-tags").has("canary"), is(false));
+        // blocked versions also stripped from versions object
+        assertThat(filtered.get("versions").has("3.0.0-beta.1"), is(false));
+        assertThat(filtered.get("versions").has("4.0.0-canary.1"), is(false));
+        assertThat(filtered.get("versions").has("3.0.0-rc.1"), is(true));
+    }
+
+    /**
+     * The {@code latest} dist-tag must NOT be dropped by {@code filter()} even
+     * when it points at a blocked version — {@link com.auto1.pantera.cooldown.metadata.MetadataFilterService}
+     * relies on it being present so that {@code getLatestVersion()} can detect
+     * the stale-latest condition and call {@code updateLatest()} with the
+     * chosen fallback. Dropping it here would silently disable the rewrite.
+     */
+    @Test
+    void filterKeepsLatestDistTagEvenIfBlocked() throws Exception {
+        final String json = """
+            {
+                "name": "test-package",
+                "dist-tags": { "latest": "2.0.0", "beta": "3.0.0-beta.1" },
+                "versions": { "1.0.0": {}, "2.0.0": {}, "3.0.0-beta.1": {} }
+            }
+            """;
+        final JsonNode metadata = this.parser.parse(json.getBytes(StandardCharsets.UTF_8));
+        final JsonNode filtered = this.filter.filter(metadata, Set.of("2.0.0"));
+        // latest is preserved by filter() — rewriting is the orchestrator's job
+        assertThat(filtered.get("dist-tags").has("latest"), is(true));
+        assertThat(filtered.get("dist-tags").get("latest").asText(), equalTo("2.0.0"));
+    }
+
+    /**
+     * If a non-latest dist-tag points to a version that is NOT blocked, it
+     * must be preserved verbatim.
+     */
+    @Test
+    void filterKeepsNonLatestDistTagsWhenTargetNotBlocked() throws Exception {
+        final String json = """
+            {
+                "name": "test-package",
+                "dist-tags": { "latest": "2.0.0", "beta": "3.0.0-beta.1" },
+                "versions": { "1.0.0": {}, "2.0.0": {}, "3.0.0-beta.1": {} }
+            }
+            """;
+        final JsonNode metadata = this.parser.parse(json.getBytes(StandardCharsets.UTF_8));
+        final JsonNode filtered = this.filter.filter(metadata, Set.of("1.0.0"));
+        assertThat(filtered.get("dist-tags").has("beta"), is(true));
+        assertThat(filtered.get("dist-tags").get("beta").asText(), equalTo("3.0.0-beta.1"));
+    }
+
     @Test
     void handlesComplexMetadata() throws Exception {
         final String json = """
