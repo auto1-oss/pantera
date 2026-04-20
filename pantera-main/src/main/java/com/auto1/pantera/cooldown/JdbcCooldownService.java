@@ -719,7 +719,10 @@ final class JdbcCooldownService implements CooldownService {
             .field("repository.type", record.repoType())
             .field("repository.name", record.repoName())
             .log();
-        this.repository.deleteBlock(record.id());
+        this.repository.archiveAndDelete(
+            record.id(),
+            ArchiveReason.EXPIRED,
+            SYSTEM_ACTOR);
         // Decrement active blocks metric (O(1), no DB query)
         this.decrementActiveBlocksMetric(record.repoType(), record.repoName());
         // Invalidate the filtered metadata cache so clients see the
@@ -811,7 +814,10 @@ final class JdbcCooldownService implements CooldownService {
             .field("repository.type", record.repoType())
             .field("repository.name", record.repoName())
             .log();
-        this.repository.deleteBlock(record.id());
+        this.repository.archiveAndDelete(
+            record.id(),
+            ArchiveReason.MANUAL_UNBLOCK,
+            actor);
     }
 
     private CooldownBlock toCooldownBlock(final DbBlockRecord record) {
