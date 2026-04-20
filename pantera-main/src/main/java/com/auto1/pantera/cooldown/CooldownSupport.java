@@ -210,7 +210,7 @@ public final class CooldownSupport {
      * @param ds Database data source
      */
     @SuppressWarnings("PMD.CognitiveComplexity")
-    private static void loadDbCooldownSettings(
+    static void loadDbCooldownSettings(
         final CooldownSettings csettings,
         final javax.sql.DataSource ds
     ) {
@@ -241,10 +241,23 @@ public final class CooldownSupport {
                     );
                 }
             }
-            csettings.update(enabled, minAge, overrides);
+            final int historyRetentionDays = cfg.getInt(
+                "history_retention_days", csettings.historyRetentionDays()
+            );
+            final int cleanupBatchLimit = cfg.getInt(
+                "cleanup_batch_limit", csettings.cleanupBatchLimit()
+            );
+            // If out-of-range values are present in the blob, update() throws and
+            // the outer catch logs it as a load failure — YAML defaults apply.
+            csettings.update(
+                enabled, minAge, overrides,
+                historyRetentionDays, cleanupBatchLimit
+            );
             EcsLogger.info("com.auto1.pantera.cooldown")
                 .message("Loaded cooldown settings from database (enabled: "
-                    + enabled + ", overrides: " + overrides.size() + ")")
+                    + enabled + ", overrides: " + overrides.size()
+                    + ", history_retention_days: " + historyRetentionDays
+                    + ", cleanup_batch_limit: " + cleanupBatchLimit + ")")
                 .eventCategory("configuration")
                 .eventAction("cooldown_db_load")
                 .log();
