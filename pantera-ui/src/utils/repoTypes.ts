@@ -127,10 +127,6 @@ export function repoTypeSeverity(raw: string): string {
   return 'secondary'
 }
 
-function capitalize(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1)
-}
-
 /** Filter dropdown options. */
 export const REPO_TYPE_FILTERS = [
   { label: 'All Types', value: null },

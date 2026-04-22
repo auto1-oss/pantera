@@ -1,6 +1,6 @@
 import { getApiClient } from './client'
 import type {
-  PaginatedResponse, CursorResponse, Repository, RepoMember, RepoListItem,
+  PaginatedResponse, CursorResponse, RepoMember, RepoListItem,
   TreeEntry, ArtifactDetail, PullInstructions, StorageAlias,
 } from '@/types'
 
