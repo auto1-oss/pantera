@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useConfigStore } from '@/stores/config'
 import { useNotificationStore } from '@/stores/notifications'
-import { generateTokenForSession, getAuthSettings } from '@/api/auth'
+import { generateTokenForSession } from '@/api/auth'
 import HealthIndicator from '@/components/common/HealthIndicator.vue'
 import Button from 'primevue/button'
 import Menu from 'primevue/menu'
@@ -43,9 +43,20 @@ const expiryOptions = ref([
   { label: '90 days', value: 90 },
 ])
 
-onMounted(async () => {
-  try {
-    const settings = await getAuthSettings()
+// Auth settings come from /auth/me (populated by the auth store on login),
+// not from the admin-only /admin/auth-settings endpoint — that one 403s
+// for read-only users, which silently left the dropdown pinned to the
+// hardcoded 30/90-day fallback. Reading from the already-fetched user
+// object gives every authenticated user the same options the server
+// actually accepts from them, with no extra network round-trip.
+// Watched (not onMounted) so a late /auth/me resolution — e.g. after a
+// silent JWT refresh — still updates the dropdown.
+watch(
+  () => auth.user?.auth_settings,
+  (settings) => {
+    if (!settings) {
+      return
+    }
     const maxTtlDays = Math.floor(parseInt(settings.api_token_max_ttl_seconds ?? '31536000') / 86400)
     const allowPermanent = settings.api_token_allow_permanent === 'true'
     const opts = []
@@ -58,10 +69,9 @@ onMounted(async () => {
       expiryOptions.value = opts
       tokenExpiryDays.value = opts[0].value
     }
-  } catch {
-    // Keep defaults if settings unavailable
-  }
-})
+  },
+  { immediate: true },
+)
 
 async function handleGenerateToken() {
   generating.value = true
