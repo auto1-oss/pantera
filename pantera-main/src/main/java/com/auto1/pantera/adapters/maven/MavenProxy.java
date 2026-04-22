@@ -20,6 +20,7 @@ import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.client.ClientSlices;
 import com.auto1.pantera.http.client.auth.GenericAuthenticator;
 import com.auto1.pantera.cooldown.api.CooldownService;
+import com.auto1.pantera.cooldown.metadata.CooldownMetadataService;
 import com.auto1.pantera.http.group.RaceSlice;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.maven.http.MavenProxySlice;
@@ -39,13 +40,40 @@ public final class MavenProxy implements Slice {
     private final Slice slice;
 
     /**
+     * Construct a Maven proxy without metadata filtering.
+     * Kept for backward compatibility; production wiring in
+     * {@code RepositorySlices} uses the overload that takes
+     * {@link CooldownMetadataService}.
      * @param client HTTP client.
      * @param cfg Repository configuration.
      * @param queue Artifact events queue
+     * @param cooldown Cooldown service
      */
     public MavenProxy(
         ClientSlices client, RepoConfig cfg, Optional<Queue<ProxyArtifactEvent>> queue,
         CooldownService cooldown
+    ) {
+        this(client, cfg, queue, cooldown, null);
+    }
+
+    /**
+     * Construct a Maven proxy that filters upstream
+     * {@code maven-metadata.xml} responses through the cooldown metadata
+     * service before returning them to the client — fresh versions inside
+     * the cooldown window are stripped from the {@code <versions>} list
+     * and {@code <latest>} / {@code <release>} are rewritten downward.
+     *
+     * @param client HTTP client.
+     * @param cfg Repository configuration.
+     * @param queue Artifact events queue.
+     * @param cooldown Cooldown service (freshness enforcement on artifact
+     *                 fetches).
+     * @param cooldownMetadata Metadata filter service, or null to skip
+     *                         filtering (tests, legacy deployments).
+     */
+    public MavenProxy(
+        ClientSlices client, RepoConfig cfg, Optional<Queue<ProxyArtifactEvent>> queue,
+        CooldownService cooldown, CooldownMetadataService cooldownMetadata
     ) {
         final Optional<Storage> asto = cfg.storageOpt();
         slice = new RaceSlice(
@@ -58,7 +86,8 @@ public final class MavenProxy implements Slice {
                     cfg.name(),
                     cfg.type(),
                     cooldown,
-                    asto  // Pass storage for checksum persistence
+                    asto,  // Pass storage for checksum persistence
+                    cooldownMetadata
                 )
             ).collect(Collectors.toList())
         );

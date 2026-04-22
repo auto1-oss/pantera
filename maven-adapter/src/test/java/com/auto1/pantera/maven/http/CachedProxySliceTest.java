@@ -18,8 +18,13 @@ import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.cooldown.api.CooldownDependency;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.impl.NoopCooldownService;
+import com.auto1.pantera.cooldown.metadata.CooldownMetadataService;
+import com.auto1.pantera.cooldown.metadata.MetadataFilter;
+import com.auto1.pantera.cooldown.metadata.MetadataParser;
+import com.auto1.pantera.cooldown.metadata.MetadataRewriter;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.cache.CachedArtifactMetadataStore;
+import com.auto1.pantera.http.cache.ProxyCacheConfig;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.hm.RsHasBody;
 import com.auto1.pantera.http.hm.RsHasStatus;
@@ -40,6 +45,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedList;
 import java.util.List;
@@ -48,6 +54,7 @@ import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Test case for {@link CachedProxySlice}.
@@ -215,5 +222,137 @@ final class CachedProxySliceTest {
                 return CompletableFuture.completedFuture(List.of());
             }
         };
+    }
+
+    /**
+     * Regression: when a {@link CooldownMetadataService} is provided,
+     * {@code handleMetadata()} MUST pass the upstream {@code maven-metadata.xml}
+     * bytes through it before responding. Before the wiring fix, the service
+     * existed in {@code CooldownAdapterRegistry} but was never invoked on the
+     * Maven proxy path — a {@code latest.release} resolve through
+     * {@code gradle_group} resolved to fresh-within-cooldown versions
+     * (reproduced with {@code com.google.guava:guava:latest.release} picking
+     * up {@code 33.6.0-jre} 8 days after release against a 14-day cooldown).
+     *
+     * <p>The test substitutes a recording stub service; the stub asserts that
+     * the filter is invoked with (repoType, repoName, packageName, rawBytes)
+     * and returns a deterministic "filtered" body. The response body must
+     * equal that body — not the upstream bytes — proving the filter ran.</p>
+     */
+    @Test
+    void handleMetadataInvokesCooldownFilterWhenServiceProvided() throws Exception {
+        final byte[] upstreamXml = (
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+            + "<metadata>"
+            + "<groupId>com.google.guava</groupId>"
+            + "<artifactId>guava</artifactId>"
+            + "<versioning><latest>33.6.0-jre</latest><release>33.6.0-jre</release>"
+            + "<versions><version>33.5.0-jre</version><version>33.6.0-jre</version></versions>"
+            + "</versioning></metadata>"
+        ).getBytes(StandardCharsets.UTF_8);
+        final byte[] filteredXml = (
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+            + "<metadata>"
+            + "<groupId>com.google.guava</groupId>"
+            + "<artifactId>guava</artifactId>"
+            + "<versioning><latest>33.5.0-jre</latest><release>33.5.0-jre</release>"
+            + "<versions><version>33.5.0-jre</version></versions>"
+            + "</versioning></metadata>"
+        ).getBytes(StandardCharsets.UTF_8);
+        final AtomicReference<String> capturedPackage = new AtomicReference<>();
+        final AtomicReference<byte[]> capturedBytes = new AtomicReference<>();
+        final CooldownMetadataService recordingService = new CooldownMetadataService() {
+            @Override
+            public <T> CompletableFuture<byte[]> filterMetadata(
+                final String repoType, final String repoName, final String packageName,
+                final byte[] rawMetadata, final MetadataParser<T> parser,
+                final MetadataFilter<T> filter, final MetadataRewriter<T> rewriter,
+                final Optional<CooldownInspector> inspector
+            ) {
+                capturedPackage.set(packageName);
+                capturedBytes.set(rawMetadata);
+                return CompletableFuture.completedFuture(filteredXml);
+            }
+
+            @Override
+            public void invalidate(final String repoType, final String repoName, final String packageName) { }
+
+            @Override
+            public void invalidateAll(final String repoType, final String repoName) { }
+
+            @Override
+            public void clearAll() { }
+
+            @Override
+            public String stats() {
+                return "recording";
+            }
+        };
+        final CachedProxySlice slice = new CachedProxySlice(
+            (line, headers, body) -> CompletableFuture.completedFuture(
+                ResponseBuilder.ok().body(upstreamXml).build()
+            ),
+            (cacheKey, supplier, control) -> CompletableFuture.completedFuture(Optional.empty()),
+            Optional.of(this.events), "gradle_proxy",
+            "https://repo.maven.apache.org/maven2", "maven-proxy",
+            NoopCooldownService.INSTANCE, noopInspector(), NO_STORAGE,
+            ProxyCacheConfig.defaults(),
+            new MetadataCache(Duration.ofMinutes(1)),
+            recordingService
+        );
+        final Response response = slice.response(
+            new RequestLine(RqMethod.GET, "/com/google/guava/guava/maven-metadata.xml"),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "Filter must be invoked with the group/artifact coordinate",
+            capturedPackage.get(),
+            Matchers.is("com/google/guava/guava")
+        );
+        MatcherAssert.assertThat(
+            "Filter must receive the raw upstream bytes",
+            capturedBytes.get() != null && java.util.Arrays.equals(capturedBytes.get(), upstreamXml),
+            Matchers.is(true)
+        );
+        MatcherAssert.assertThat(response.status(), Matchers.is(RsStatus.OK));
+        assertArrayEquals(
+            filteredXml,
+            response.body().asBytes(),
+            "Response body must be the filter's output, not the raw upstream bytes — "
+                + "if this fails, handleMetadata() is bypassing the cooldown filter and "
+                + "Gradle's latest.release resolution will pick up too-fresh versions"
+        );
+    }
+
+    /**
+     * Absence of a {@link CooldownMetadataService} must preserve the
+     * pre-fix pass-through behaviour — used by the legacy 11-arg constructor
+     * path and by tests. Pairs with the test above to prove the guard on
+     * {@code cooldownMetadata != null} is real, not unconditional.
+     */
+    @Test
+    void handleMetadataPassesThroughWhenNoCooldownMetadataService() throws Exception {
+        final byte[] upstreamXml = "<metadata><groupId>x</groupId><artifactId>y</artifactId></metadata>"
+            .getBytes(StandardCharsets.UTF_8);
+        final CachedProxySlice slice = new CachedProxySlice(
+            (line, headers, body) -> CompletableFuture.completedFuture(
+                ResponseBuilder.ok().body(upstreamXml).build()
+            ),
+            (cacheKey, supplier, control) -> CompletableFuture.completedFuture(Optional.empty()),
+            Optional.of(this.events), "gradle_proxy",
+            "https://repo.maven.apache.org/maven2", "maven-proxy",
+            NoopCooldownService.INSTANCE, noopInspector(), NO_STORAGE,
+            ProxyCacheConfig.defaults(),
+            new MetadataCache(Duration.ofMinutes(1))
+            // no CooldownMetadataService → pass-through behaviour
+        );
+        final Response response = slice.response(
+            new RequestLine(RqMethod.GET, "/x/y/maven-metadata.xml"),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(response.status(), Matchers.is(RsStatus.OK));
+        assertArrayEquals(upstreamXml, response.body().asBytes());
     }
 }

@@ -571,7 +571,8 @@ public class RepositorySlices {
                             clientSlices,
                             cfg,
                             settings.artifactMetadata().flatMap(queues -> queues.proxyEventQueues(cfg)),
-                            this.cooldown
+                            this.cooldown,
+                            this.cooldownMetadata
                         ),
                         settings.httpClientSettings().proxyTimeout()
                     ),
