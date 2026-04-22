@@ -77,9 +77,16 @@ final class GoCooldownInspector implements CooldownInspector {
 
     @Override
     public CompletableFuture<Optional<Instant>> releaseDate(final String artifact, final String version) {
-        // Try .info file first (contains timestamp), then fall back to .mod file
-        final String infoPath = String.format("/%s/@v/v%s.info", artifact, version);
-        final String modPath = String.format("/%s/@v/v%s.mod", artifact, version);
+        // Normalise: callers from /@v/list and /@latest pass versions WITH
+        // the Go-canonical "v" prefix ("v1.2.3"), while the artifact-path
+        // regex in CachedProxySlice strips it ("1.2.3"). The path format
+        // below already adds a literal "v", so a v-prefixed input produced
+        // "/foo/@v/vv1.2.3.info" → 404 → empty release date → cooldown
+        // fail-open. That bypass let fresh "@latest" responses pass
+        // through unrewritten. Strip once here so every caller works.
+        final String bare = stripLeadingV(version);
+        final String infoPath = String.format("/%s/@v/v%s.info", artifact, bare);
+        final String modPath = String.format("/%s/@v/v%s.mod", artifact, bare);
         
         return this.head.head(infoPath)
             .thenCompose(headers -> {
@@ -115,7 +122,7 @@ final class GoCooldownInspector implements CooldownInspector {
     }
 
     private CompletableFuture<Optional<String>> readGoMod(final String artifact, final String version) {
-        final String path = String.format("/%s/@v/v%s.mod", artifact, version);
+        final String path = String.format("/%s/@v/v%s.mod", artifact, stripLeadingV(version));
         return this.remote.response(
             new RequestLine(RqMethod.GET, path),
             Headers.EMPTY,
@@ -135,6 +142,19 @@ final class GoCooldownInspector implements CooldownInspector {
             return bodyBytes(response.body())
                 .thenApply(bytes -> Optional.of(new String(bytes, StandardCharsets.UTF_8)));
         });
+    }
+
+    /**
+     * Strip a leading {@code v} from a Go module version string so the
+     * path-format {@code /%s/@v/v%s.info} produces exactly one {@code v}
+     * regardless of whether the caller passed the Go-canonical
+     * {@code "v1.2.3"} or the regex-stripped {@code "1.2.3"}.
+     */
+    private static String stripLeadingV(final String version) {
+        if (version == null || version.isEmpty() || version.charAt(0) != 'v') {
+            return version;
+        }
+        return version.substring(1);
     }
 
     private static Optional<Instant> parseLastModified(final Headers headers) {
