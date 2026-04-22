@@ -107,6 +107,15 @@ public class AsyncApiTestBase {
         }
     }
 
+    /**
+     * Expose the shared Testcontainers-backed DataSource so subclasses
+     * can instantiate DAOs (e.g. AuthSettingsDao) in individual tests
+     * that need to mutate DB state (auth settings flags, etc.).
+     */
+    protected static DataSource sharedDs() {
+        return sharedDs;
+    }
+
     @BeforeEach
     final void setUp(final Vertx vertx, final VertxTestContext ctx) throws Exception {
         final Storage storage = new InMemoryStorage();
