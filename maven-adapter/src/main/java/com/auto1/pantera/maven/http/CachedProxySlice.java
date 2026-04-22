@@ -17,6 +17,8 @@ import com.auto1.pantera.asto.cache.Cache;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.api.CooldownService;
+import com.auto1.pantera.cooldown.metadata.AllVersionsBlockedException;
+import com.auto1.pantera.cooldown.metadata.CooldownMetadataService;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
@@ -33,6 +35,10 @@ import com.auto1.pantera.http.fault.Result;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.maven.cooldown.MavenMetadataFilter;
+import com.auto1.pantera.maven.cooldown.MavenMetadataParser;
+import com.auto1.pantera.maven.cooldown.MavenMetadataRequestDetector;
+import com.auto1.pantera.maven.cooldown.MavenMetadataRewriter;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 
 import java.io.IOException;
@@ -108,7 +114,27 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
     private final ProxyCacheWriter cacheWriter;
 
     /**
-     * Constructor with full configuration.
+     * Cooldown metadata filter service. When present, {@link #handleMetadata}
+     * runs the upstream {@code maven-metadata.xml} bytes through the parser /
+     * filter / rewriter chain before returning, so fresh versions inside the
+     * admin-configured cooldown window are stripped from {@code <versions>}
+     * and {@code <latest>} / {@code <release>} are rewritten downward. When
+     * null (legacy constructors, tests), responses pass through unfiltered —
+     * same behaviour as before the metadata filter was wired.
+     */
+    private final CooldownMetadataService cooldownMetadata;
+
+    /**
+     * Inspector used by the metadata filter to resolve per-version release
+     * dates. Holding one instance avoids re-wrapping the remote slice on
+     * every request.
+     */
+    private final MavenCooldownInspector metadataInspector;
+
+    /**
+     * Constructor with full configuration (no metadata filtering).
+     * Delegates to the overload below with {@code cooldownMetadata=null}; used
+     * by legacy callers and tests that do not need filter behaviour.
      * @param client Upstream remote slice
      * @param cache Asto cache for artifact storage
      * @param events Event queue for proxy artifact events
@@ -135,6 +161,44 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         final ProxyCacheConfig config,
         final MetadataCache metadataCache
     ) {
+        this(
+            client, cache, events, repoName, upstreamUrl, repoType,
+            cooldownService, cooldownInspector, storage, config, metadataCache,
+            null
+        );
+    }
+
+    /**
+     * Constructor with metadata filter enabled.
+     * @param client Upstream remote slice
+     * @param cache Asto cache for artifact storage
+     * @param events Event queue for proxy artifact events
+     * @param repoName Repository name
+     * @param upstreamUrl Upstream base URL
+     * @param repoType Repository type
+     * @param cooldownService Cooldown service
+     * @param cooldownInspector Cooldown inspector
+     * @param storage Optional local storage
+     * @param config Unified proxy cache configuration
+     * @param metadataCache Maven metadata cache
+     * @param cooldownMetadata Cooldown metadata filter service, or null to
+     *                         disable filtering on this slice
+     */
+    @SuppressWarnings("PMD.ExcessiveParameterList")
+    CachedProxySlice(
+        final Slice client,
+        final Cache cache,
+        final Optional<Queue<ProxyArtifactEvent>> events,
+        final String repoName,
+        final String upstreamUrl,
+        final String repoType,
+        final CooldownService cooldownService,
+        final CooldownInspector cooldownInspector,
+        final Optional<Storage> storage,
+        final ProxyCacheConfig config,
+        final MetadataCache metadataCache,
+        final CooldownMetadataService cooldownMetadata
+    ) {
         super(
             client, cache, repoName, repoType, upstreamUrl,
             storage, events, config, cooldownService, cooldownInspector
@@ -145,6 +209,9 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         this.cacheWriter = storage
             .map(raw -> new ProxyCacheWriter(raw, repoName))
             .orElse(null);
+        this.cooldownMetadata = cooldownMetadata;
+        this.metadataInspector = cooldownMetadata == null
+            ? null : new MavenCooldownInspector(client);
     }
 
     /**
@@ -285,6 +352,22 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
 
     /**
      * Handle maven-metadata.xml requests using dedicated MetadataCache.
+     *
+     * <p>When {@link #cooldownMetadata} is non-null, the cached upstream XML
+     * is run through the parser / filter / rewriter chain before the
+     * response is built — fresh versions inside the configured cooldown
+     * window are stripped from {@code <versions>} and {@code <latest>} /
+     * {@code <release>} are rewritten to the newest non-blocked version.
+     * The metadata cache itself stores UNFILTERED upstream bytes so the
+     * filter decision re-evaluates per request (cooldown state changes as
+     * versions age out of the window — caching filtered output would
+     * produce stale decisions).</p>
+     *
+     * <p>If every version is blocked, returns 403 with a short explanation.
+     * On any filter error (parse failure, unexpected upstream format) the
+     * unfiltered bytes are served instead — availability over strictness,
+     * matching the npm adapter's fail-open behaviour.</p>
+     *
      * @param line Request line
      * @param key Cache key
      * @return Response future
@@ -292,7 +375,7 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
     private CompletableFuture<Response> handleMetadata(
         final RequestLine line, final Key key
     ) {
-        return this.metadataCache.load(
+        final CompletableFuture<Optional<Content>> loaded = this.metadataCache.load(
             key,
             () -> this.client().response(line, Headers.EMPTY, Content.EMPTY)
                 .thenApply(resp -> {
@@ -301,13 +384,97 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                     }
                     return Optional.<Content>empty();
                 })
-        ).thenApply(opt -> opt
-            .map(content -> ResponseBuilder.ok()
-                .header("Content-Type", "text/xml")
-                .body(content)
-                .build()
-            )
-            .orElse(ResponseBuilder.notFound().build())
+        );
+        return loaded.thenCompose(opt -> {
+            if (opt.isEmpty()) {
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.notFound().build()
+                );
+            }
+            if (this.cooldownMetadata == null) {
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.ok()
+                        .header("Content-Type", "text/xml")
+                        .body(opt.get())
+                        .build()
+                );
+            }
+            return this.applyMetadataCooldown(line, opt.get());
+        });
+    }
+
+    /**
+     * Run upstream {@code maven-metadata.xml} bytes through the cooldown
+     * metadata filter. Extracts the package coordinate (groupId/artifactId)
+     * from the URL path, drains the reactive body, invokes the filter
+     * service, and wraps the filtered bytes in a 200 response. Falls through
+     * to the unfiltered bytes on any non-{@link AllVersionsBlockedException}
+     * failure so upstream quirks do not turn metadata requests into 5xx.
+     */
+    private CompletableFuture<Response> applyMetadataCooldown(
+        final RequestLine line, final Content content
+    ) {
+        final Optional<String> pkgOpt = new MavenMetadataRequestDetector()
+            .extractPackageName(line.uri().getPath());
+        if (pkgOpt.isEmpty()) {
+            return CompletableFuture.completedFuture(
+                ResponseBuilder.ok()
+                    .header("Content-Type", "text/xml")
+                    .body(content)
+                    .build()
+            );
+        }
+        final String packageName = pkgOpt.get();
+        return content.asBytesFuture().thenCompose(
+            bytes -> this.cooldownMetadata.filterMetadata(
+                this.repoType(),
+                this.repoName(),
+                packageName,
+                bytes,
+                new MavenMetadataParser(),
+                new MavenMetadataFilter(),
+                new MavenMetadataRewriter(),
+                Optional.ofNullable(this.metadataInspector)
+            ).handle((filtered, ex) -> {
+                if (ex == null) {
+                    return ResponseBuilder.ok()
+                        .header("Content-Type", "text/xml")
+                        .body(filtered)
+                        .build();
+                }
+                Throwable cause = ex;
+                while (cause != null) {
+                    if (cause instanceof AllVersionsBlockedException) {
+                        EcsLogger.info("com.auto1.pantera.maven")
+                            .message("All versions blocked by cooldown")
+                            .eventCategory("database")
+                            .eventAction("all_versions_blocked")
+                            .field("repository.name", this.repoName())
+                            .field("package.name", packageName)
+                            .log();
+                        return ResponseBuilder.forbidden()
+                            .textBody(
+                                "All versions of '" + packageName
+                                    + "' are under cooldown; no non-blocked "
+                                    + "version is currently available."
+                            )
+                            .build();
+                    }
+                    cause = cause.getCause();
+                }
+                EcsLogger.warn("com.auto1.pantera.maven")
+                    .message("Cooldown metadata filter failed — serving unfiltered")
+                    .eventCategory("database")
+                    .eventAction("filter_error")
+                    .field("repository.name", this.repoName())
+                    .field("package.name", packageName)
+                    .error(ex)
+                    .log();
+                return ResponseBuilder.ok()
+                    .header("Content-Type", "text/xml")
+                    .body(bytes)
+                    .build();
+            })
         );
     }
 
