@@ -207,6 +207,19 @@ public class RepositorySlices {
         new ConcurrentHashMap<>();
 
     /**
+     * Supplier of circuit-breaker settings. Every new {@link AutoBlockRegistry}
+     * constructed in {@link #getOrCreateMemberRegistry} receives this supplier
+     * so admin-time settings updates (via the system-settings UI) flow into
+     * existing registries on the next recorded outcome. Defaults to
+     * {@link com.auto1.pantera.http.timeout.AutoBlockSettings#defaults()}
+     * when the DB-backed loader is not wired at construction time (tests,
+     * legacy boot sequences).
+     */
+    private final java.util.function.Supplier<
+        com.auto1.pantera.http.timeout.AutoBlockSettings
+    > circuitBreakerSettings;
+
+    /**
      * @param settings Pantera settings
      * @param repos Repositories
      * @param tokens Tokens: authentication and generation
@@ -216,6 +229,30 @@ public class RepositorySlices {
         final Repositories repos,
         final Tokens tokens
     ) {
+        this(
+            settings, repos, tokens,
+            com.auto1.pantera.circuit.CircuitBreakerSettingsLoader.activeSupplier()
+        );
+    }
+
+    /**
+     * @param settings Pantera settings
+     * @param repos Repositories
+     * @param tokens Tokens: authentication and generation
+     * @param circuitBreakerSettings Supplier returning the current circuit-
+     *                               breaker settings; used by
+     *                               {@link AutoBlockRegistry} on every
+     *                               record to pick up admin-time updates
+     */
+    public RepositorySlices(
+        final Settings settings,
+        final Repositories repos,
+        final Tokens tokens,
+        final java.util.function.Supplier<
+            com.auto1.pantera.http.timeout.AutoBlockSettings
+        > circuitBreakerSettings
+    ) {
+        this.circuitBreakerSettings = circuitBreakerSettings;
         this.settings = settings;
         this.repos = repos;
         this.tokens = tokens;
@@ -1140,7 +1177,7 @@ public class RepositorySlices {
                     .eventCategory("configuration")
                     .eventAction("circuit_breaker_init")
                     .log();
-                return new AutoBlockRegistry(AutoBlockSettings.defaults());
+                return new AutoBlockRegistry(this.circuitBreakerSettings);
             }
         );
     }

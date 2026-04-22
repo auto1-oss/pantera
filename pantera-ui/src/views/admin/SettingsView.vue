@@ -4,7 +4,10 @@ import {
   getSettings, updatePrefixes, updateSettingsSection,
   getCooldownConfig, updateCooldownConfig,
 } from '@/api/settings'
-import { getAuthSettings, updateAuthSettings } from '@/api/auth'
+import {
+  getAuthSettings, updateAuthSettings,
+  getCircuitBreakerSettings, updateCircuitBreakerSettings,
+} from '@/api/auth'
 import { useConfigStore } from '@/stores/config'
 import { useNotificationStore } from '@/stores/notifications'
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -43,6 +46,13 @@ const authAccessTtl = ref(3600)
 const authRefreshTtl = ref(604800)
 const authApiMaxTtl = ref(7776000)
 const authAllowPermanent = ref(true)
+
+// Circuit breaker (rate-over-sliding-window, 2.2.0)
+const cbFailureRatePercent = ref(50)     // stored as 0.0-1.0 on server, shown as % here
+const cbMinCalls = ref(20)
+const cbWindowSeconds = ref(30)
+const cbInitialBlockSeconds = ref(20)
+const cbMaxBlockSeconds = ref(300)
 
 // Cooldown config
 const cooldownConfig = ref<CooldownConfig | null>(null)
@@ -113,6 +123,15 @@ onMounted(async () => {
       authRefreshTtl.value = parseInt(s.refresh_token_ttl_seconds ?? '604800')
       authApiMaxTtl.value = parseInt(s.api_token_max_ttl_seconds ?? '7776000')
       authAllowPermanent.value = s.api_token_allow_permanent === 'true'
+    }).catch(() => {})
+    getCircuitBreakerSettings().then(s => {
+      cbFailureRatePercent.value = Math.round(
+        parseFloat(s.circuit_breaker_failure_rate_threshold ?? '0.5') * 100,
+      )
+      cbMinCalls.value = parseInt(s.circuit_breaker_minimum_number_of_calls ?? '20')
+      cbWindowSeconds.value = parseInt(s.circuit_breaker_sliding_window_seconds ?? '30')
+      cbInitialBlockSeconds.value = parseInt(s.circuit_breaker_initial_block_seconds ?? '20')
+      cbMaxBlockSeconds.value = parseInt(s.circuit_breaker_max_block_seconds ?? '300')
     }).catch(() => {})
   } catch {
     notify.error('Failed to load settings')
@@ -185,6 +204,49 @@ async function saveAuthSettings() {
     notify.success('Authentication settings saved')
   } catch {
     notify.error('Failed to save authentication settings')
+  } finally {
+    saving.value = null
+  }
+}
+
+/**
+ * Save rate-over-sliding-window circuit breaker settings. Server-side
+ * invariants (rate in (0,1], minCalls>=1, initial<=max) are also
+ * validated client-side below to give immediate feedback — the server
+ * does the same checks again and rejects with 400 if anything slips
+ * through, so nothing gets persisted in an invalid state.
+ */
+async function saveCircuitBreakerSettings() {
+  const ratePct = cbFailureRatePercent.value
+  if (ratePct <= 0 || ratePct > 100) {
+    notify.error('Failure rate must be between 1 and 100%')
+    return
+  }
+  if (cbMinCalls.value < 1) {
+    notify.error('Minimum number of calls must be at least 1')
+    return
+  }
+  if (cbWindowSeconds.value < 1) {
+    notify.error('Sliding window must be at least 1 second')
+    return
+  }
+  if (cbInitialBlockSeconds.value < 1
+      || cbMaxBlockSeconds.value < cbInitialBlockSeconds.value) {
+    notify.error('Initial block must be >= 1s and <= max block duration')
+    return
+  }
+  saving.value = 'circuit-breaker'
+  try {
+    await updateCircuitBreakerSettings({
+      circuit_breaker_failure_rate_threshold: (ratePct / 100).toFixed(3),
+      circuit_breaker_minimum_number_of_calls: String(cbMinCalls.value),
+      circuit_breaker_sliding_window_seconds: String(cbWindowSeconds.value),
+      circuit_breaker_initial_block_seconds: String(cbInitialBlockSeconds.value),
+      circuit_breaker_max_block_seconds: String(cbMaxBlockSeconds.value),
+    })
+    notify.success('Circuit breaker settings saved')
+  } catch {
+    notify.error('Failed to save circuit breaker settings')
   } finally {
     saving.value = null
   }
@@ -407,6 +469,72 @@ async function saveExternalLinks() {
               size="small"
               :loading="saving === 'auth'"
               @click="saveAuthSettings"
+            />
+          </div>
+        </template>
+      </Card>
+
+      <!-- Circuit Breaker (rate-over-sliding-window) -->
+      <Card class="shadow-sm">
+        <template #title>Circuit Breaker</template>
+        <template #subtitle>
+          Rate-over-sliding-window circuit breaker for proxy upstreams. The breaker
+          opens when the failure rate in the window exceeds the threshold AND the
+          window has seen at least the minimum number of calls — the volume gate is
+          what protects against cold-start false positives.
+        </template>
+        <template #content>
+          <div class="space-y-4">
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Failure Rate Threshold (%)</label>
+                <InputNumber v-model="cbFailureRatePercent" :min="1" :max="100" suffix="%" class="w-full" />
+                <span class="text-xs text-gray-400">
+                  Default: 50%. Breaker opens when failure rate ≥ this value across the window.
+                </span>
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Minimum Number of Calls</label>
+                <InputNumber v-model="cbMinCalls" :min="1" :max="10000" class="w-full" />
+                <span class="text-xs text-gray-400">
+                  Default: 20. No trip until the window has seen this many outcomes (rate + volume gate).
+                </span>
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Sliding Window (seconds)</label>
+                <InputNumber v-model="cbWindowSeconds" :min="1" :max="600" suffix=" s" class="w-full" />
+                <span class="text-xs text-gray-400">
+                  Default: 30s. Rolling window over which failure rate is computed.
+                </span>
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Initial Block Duration (seconds)</label>
+                <InputNumber v-model="cbInitialBlockSeconds" :min="1" :max="3600" suffix=" s" class="w-full" />
+                <span class="text-xs text-gray-400">
+                  Default: 20s. First block after the breaker opens; Fibonacci-scaled on repeat trips.
+                </span>
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Max Block Duration (seconds)</label>
+                <InputNumber v-model="cbMaxBlockSeconds" :min="1" :max="86400" suffix=" s" class="w-full" />
+                <span class="text-xs text-gray-400">
+                  Default: 300s (5 min). Upper bound on the Fibonacci back-off.
+                </span>
+              </div>
+            </div>
+            <div class="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded p-2">
+              <i class="pi pi-info-circle mr-1" />
+              Settings take effect on the next recorded outcome across every proxy
+              upstream — no restart needed. A very low rate threshold combined with
+              a low minimum-calls value makes the breaker trip-happy under cold-start
+              bursts; the defaults are tuned to avoid that.
+            </div>
+            <Button
+              label="Save Circuit Breaker Settings"
+              icon="pi pi-save"
+              size="small"
+              :loading="saving === 'circuit-breaker'"
+              @click="saveCircuitBreakerSettings"
             />
           </div>
         </template>
