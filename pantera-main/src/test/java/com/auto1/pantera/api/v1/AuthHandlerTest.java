@@ -72,4 +72,25 @@ class AuthHandlerTest extends AsyncApiTestBase {
                 assertThat(json.getJsonObject("permissions"), notNullValue());
             });
     }
+
+    /**
+     * Regression: read-only users must see the same api_token_max_ttl_seconds
+     * and api_token_allow_permanent values as admins. GET /admin/auth-settings
+     * is admin-gated, so embedding the two public fields in /auth/me is the
+     * bridge — without it, the token-generation dropdown in AppHeader.vue
+     * silently falls back to a hardcoded 30/90-day list for non-admins.
+     */
+    @Test
+    void meEndpointReturnsAuthSettingsForPublicConsumption(final Vertx vertx,
+        final VertxTestContext ctx) throws Exception {
+        request(vertx, ctx, HttpMethod.GET, "/api/v1/auth/me",
+            res -> {
+                assertThat(res.statusCode(), is(200));
+                final JsonObject json = res.bodyAsJsonObject();
+                final JsonObject settings = json.getJsonObject("auth_settings");
+                assertThat(settings, notNullValue());
+                assertThat(settings.getString("api_token_max_ttl_seconds"), notNullValue());
+                assertThat(settings.getString("api_token_allow_permanent"), notNullValue());
+            });
+    }
 }

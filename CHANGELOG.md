@@ -1,5 +1,12 @@
 # Changelog
 
+## Version 2.1.4 (Hotfix)
+
+### 🔧 Bug fixes
+
+- **Read-only users locked out of all token-TTL options except 30 / 90 days.** `AppHeader.vue`'s token-generation dialog fetched `api_token_max_ttl_seconds` and `api_token_allow_permanent` via `GET /admin/auth-settings` on mount, but that endpoint is admin-gated — non-admin users got 403, the catch block swallowed it, and the expiry dropdown silently fell back to a hardcoded `[30, 90]` list. The server-side `AuthHandler.generateTokenEndpoint` has no role-based TTL cap, so this was purely a UI artifact masquerading as a policy: a read-only user could always have generated a 365-day or permanent token by calling the token endpoint directly, they just couldn't see the option in the UI. `/api/v1/auth/me` now embeds the two public auth-settings fields (`api_token_max_ttl_seconds`, `api_token_allow_permanent`) in the response under an `auth_settings` object, and `AppHeader.vue` reads them from the auth store via a `watch` on `auth.user?.auth_settings` — no extra network call, no admin gate. The write-path (`PUT /admin/auth-settings`) remains admin-only.
+  ([@aydasraf](https://github.com/aydasraf))
+
 ## Version 2.1.3
 
 ### 🔧 Bug fixes
