@@ -51,6 +51,16 @@ export interface UserInfo {
    * the backend once a sufficiently complex password is submitted.
    */
   must_change_password?: boolean
+  /**
+   * Public-read mirror of the two admin auth-settings fields the token
+   * dialog needs (max TTL + permanent toggle). Present for every
+   * authenticated user; the admin-only GET /admin/auth-settings is no
+   * longer required to build the dropdown.
+   */
+  auth_settings?: {
+    api_token_max_ttl_seconds?: string
+    api_token_allow_permanent?: string
+  }
 }
 
 export interface RepoListItem {
