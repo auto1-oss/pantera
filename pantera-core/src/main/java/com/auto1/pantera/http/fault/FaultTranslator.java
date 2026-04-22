@@ -14,6 +14,7 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.context.RequestContext;
+import com.auto1.pantera.http.log.EcsLogger;
 
 import java.util.Comparator;
 import java.util.List;
@@ -113,10 +114,27 @@ public final class FaultTranslator {
             case Fault.Deadline d -> ResponseBuilder.gatewayTimeout()
                 .header(HEADER_FAULT, TAG_DEADLINE)
                 .build();
-            case Fault.Overload ov -> ResponseBuilder.from(RsStatus.SERVICE_UNAVAILABLE)
-                .header("Retry-After", Long.toString(ov.retryAfter().toSeconds()))
-                .header(HEADER_FAULT, TAG_OVERLOAD_PREFIX + ov.resource())
-                .build();
+            case Fault.Overload ov -> {
+                // Log the Fault → 503 mapping so operators can correlate a
+                // 503 back to a specific overload source (e.g. per-repo
+                // RepoBulkhead). Previously this translation was silent
+                // and operators had to rely on the X-Pantera-Fault header
+                // surviving through to Kibana — which it often doesn't
+                // when reverse-proxies strip custom headers.
+                EcsLogger.info("com.auto1.pantera.http.fault")
+                    .message("Fault.Overload translated to 503")
+                    .eventCategory("web")
+                    .eventAction("fault_translated")
+                    .eventOutcome("failure")
+                    .field("event.reason", "overload")
+                    .field("fault.resource", ov.resource())
+                    .field("retry_after_seconds", ov.retryAfter().toSeconds())
+                    .log();
+                yield ResponseBuilder.from(RsStatus.SERVICE_UNAVAILABLE)
+                    .header("Retry-After", Long.toString(ov.retryAfter().toSeconds()))
+                    .header(HEADER_FAULT, TAG_OVERLOAD_PREFIX + ov.resource())
+                    .build();
+            }
             case Fault.AllProxiesFailed apf -> passThroughProxy(apf);
             case Fault.UpstreamIntegrity ui -> ResponseBuilder.badGateway()
                 .header(HEADER_FAULT, TAG_UPSTREAM_INTEGRITY_PREFIX + ui.algo().name())
