@@ -10,6 +10,8 @@
  */
 package com.auto1.pantera.http.timeout;
 
+import com.auto1.pantera.http.log.EcsLogger;
+
 import java.time.Instant;
 import java.util.Locale;
 import java.util.concurrent.ConcurrentHashMap;
@@ -54,6 +56,13 @@ public final class AutoBlockRegistry {
                         state.blockedUntil(), BlockState.Status.PROBING
                     )
                 );
+                EcsLogger.info("com.auto1.pantera.http.timeout")
+                    .message("Circuit breaker transition BLOCKED → PROBING — block expired")
+                    .eventCategory("web")
+                    .eventAction("circuit_breaker_probing")
+                    .eventOutcome("success")
+                    .field("remote.id", remoteId)
+                    .log();
                 return false;
             }
             return true;
@@ -80,15 +89,23 @@ public final class AutoBlockRegistry {
      * blocks the remote with Fibonacci-increasing duration.
      */
     public void recordFailure(final String remoteId) {
+        // Use a holder so we can detect-and-log the CLOSED→OPEN transition
+        // outside the compute() lambda (logging inside would be called
+        // under the ConcurrentHashMap bin lock — cheap in practice but
+        // we avoid it on principle).
+        final BlockState[] previous = new BlockState[1];
+        final BlockState[] updated = new BlockState[1];
         this.states.compute(remoteId, (key, current) -> {
             final BlockState state =
                 current != null ? current : BlockState.online();
+            previous[0] = state;
             // If already actively blocked, don't extend the duration.
             // Under high traffic every in-flight request hits this path and would
             // keep resetting blockedUntil to "now + maxBlockDuration", preventing
             // the circuit from ever transitioning to PROBING and self-healing.
             if (state.status() == BlockState.Status.BLOCKED
                 && !Instant.now().isAfter(state.blockedUntil())) {
+                updated[0] = state;
                 return state;
             }
             final int failures = state.failureCount() + 1;
@@ -103,22 +120,58 @@ public final class AutoBlockRegistry {
                         * FIBONACCI[fibIdx],
                     this.settings.maxBlockDuration().toMillis()
                 );
-                return new BlockState(
+                updated[0] = new BlockState(
                     failures, fibIdx, Instant.now().plusMillis(blockMs),
                     BlockState.Status.BLOCKED
                 );
+                return updated[0];
             }
-            return new BlockState(
+            updated[0] = new BlockState(
                 failures, state.fibonacciIndex(),
                 state.blockedUntil(), state.status()
             );
+            return updated[0];
         });
+        if (previous[0].status() != BlockState.Status.BLOCKED
+            && updated[0].status() == BlockState.Status.BLOCKED) {
+            // ONLINE or PROBING → BLOCKED: the circuit just tripped.
+            final long blockMillis = updated[0].blockedUntil().toEpochMilli()
+                - Instant.now().toEpochMilli();
+            EcsLogger.warn("com.auto1.pantera.http.timeout")
+                .message("Circuit breaker OPENED — upstream blocked after "
+                    + updated[0].failureCount() + " consecutive failures")
+                .eventCategory("web")
+                .eventAction("circuit_breaker_opened")
+                .eventOutcome("failure")
+                .field("event.reason", "failure_threshold_reached")
+                .field("remote.id", remoteId)
+                .field("failure.count", updated[0].failureCount())
+                .field("failure.threshold", this.settings.failureThreshold())
+                .field("block.duration_ms", blockMillis)
+                .field("block.until", updated[0].blockedUntil().toString())
+                .log();
+        }
     }
 
     /**
      * Record a success for a remote. Resets to ONLINE state.
      */
     public void recordSuccess(final String remoteId) {
-        this.states.put(remoteId, BlockState.online());
+        final BlockState previous = this.states.put(remoteId, BlockState.online());
+        // Only log the PROBING/BLOCKED → ONLINE recovery transition, not
+        // every single successful request. ONLINE → ONLINE is the normal
+        // case and should stay silent to avoid access-log volume.
+        if (previous != null
+            && previous.status() != BlockState.Status.ONLINE) {
+            EcsLogger.info("com.auto1.pantera.http.timeout")
+                .message("Circuit breaker CLOSED — upstream recovered")
+                .eventCategory("web")
+                .eventAction("circuit_breaker_closed")
+                .eventOutcome("success")
+                .field("remote.id", remoteId)
+                .field("previous.status",
+                    previous.status().name().toLowerCase(Locale.ROOT))
+                .log();
+        }
     }
 }

@@ -607,6 +607,22 @@ public abstract class BaseCachedProxySlice implements Slice {
                 );
             case ERROR:
             default:
+                // Coalescer fetch failed and stale cache unavailable → 503.
+                // Previously this path emitted 503 silently (zero app-layer
+                // log, only the access log). Pair the response with a
+                // structured WARN so operators can distinguish this failure
+                // mode from other 503 sources (circuit-breaker fast-fail,
+                // RepoBulkhead overload, raw upstream passthrough).
+                EcsLogger.warn("com.auto1.pantera." + this.repoType)
+                    .message("SingleFlight coalescer returned ERROR — "
+                        + "serving stale if available, else 503")
+                    .eventCategory("web")
+                    .eventAction("proxy_fetch_coalesced_error")
+                    .eventOutcome("failure")
+                    .field("event.reason", "coalescer_error")
+                    .field("repository.name", this.repoName)
+                    .field("url.path", line.uri().getPath())
+                    .log();
                 return this.tryServeStale(
                     key,
                     () -> CompletableFuture.completedFuture(

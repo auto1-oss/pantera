@@ -15,6 +15,7 @@ import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.timeout.AutoBlockRegistry;
 
@@ -55,6 +56,23 @@ public final class CircuitBreakerSlice implements Slice {
         final RequestLine line, final Headers headers, final Content body
     ) {
         if (this.registry.isBlocked(this.remoteId)) {
+            // Observability bug-fix: previously this fail-fast 503 was
+            // emitted silently — no log line, no event.action, no trace.id
+            // correlation. Operators investigating "why did client X get
+            // 503?" had no way to tell the circuit breaker from a real
+            // upstream 5xx or an overload. WARN level because a tripped
+            // circuit means upstream has already failed N times; it's a
+            // noteworthy event but not an error originating in Pantera.
+            EcsLogger.warn("com.auto1.pantera.http.client")
+                .message("Circuit breaker OPEN — fast-failing with 503 without upstream call")
+                .eventCategory("web")
+                .eventAction("circuit_breaker_open")
+                .eventOutcome("failure")
+                .field("event.reason", "auto_block_active")
+                .field("remote.id", this.remoteId)
+                .field("url.path", line.uri().getPath())
+                .field("http.response.status_code", 503)
+                .log();
             return CompletableFuture.completedFuture(
                 ResponseBuilder.serviceUnavailable(
                     "Auto-blocked - remote unavailable: " + this.remoteId
