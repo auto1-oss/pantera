@@ -92,6 +92,140 @@ public final class AdminAuthHandler {
             .handler(adminAuthz).handler(this::updateSettings);
         router.post("/api/v1/admin/revoke-user/:username")
             .handler(adminAuthz).handler(this::revokeUser);
+        router.get("/api/v1/admin/circuit-breaker-settings")
+            .handler(adminAuthz).handler(this::getCircuitBreakerSettings);
+        router.put("/api/v1/admin/circuit-breaker-settings")
+            .handler(adminAuthz).handler(this::updateCircuitBreakerSettings);
+    }
+
+    /**
+     * Whitelist of keys the circuit-breaker endpoint accepts.
+     * Anything outside this set in a PUT body is rejected with 400 —
+     * prevents the endpoint from becoming a generic settings-poke hole.
+     */
+    private static final java.util.Set<String> CB_KEYS = java.util.Set.of(
+        "circuit_breaker_failure_rate_threshold",
+        "circuit_breaker_minimum_number_of_calls",
+        "circuit_breaker_sliding_window_seconds",
+        "circuit_breaker_initial_block_seconds",
+        "circuit_breaker_max_block_seconds"
+    );
+
+    /**
+     * GET /api/v1/admin/circuit-breaker-settings — returns the 5 keys
+     * (with DB-persisted values; absent keys fall through to the
+     * hardcoded defaults on the server side). Response always includes
+     * every key so the UI form can populate without extra null checks.
+     */
+    private void getCircuitBreakerSettings(final RoutingContext ctx) {
+        CompletableFuture.supplyAsync(() -> {
+            final com.auto1.pantera.http.timeout.AutoBlockSettings current =
+                com.auto1.pantera.circuit.CircuitBreakerSettingsLoader.activeSupplier().get();
+            final JsonObject result = new JsonObject()
+                .put("circuit_breaker_failure_rate_threshold",
+                    String.valueOf(current.failureRateThreshold()))
+                .put("circuit_breaker_minimum_number_of_calls",
+                    String.valueOf(current.minimumNumberOfCalls()))
+                .put("circuit_breaker_sliding_window_seconds",
+                    String.valueOf(current.slidingWindowSeconds()))
+                .put("circuit_breaker_initial_block_seconds",
+                    String.valueOf(current.initialBlockDuration().toSeconds()))
+                .put("circuit_breaker_max_block_seconds",
+                    String.valueOf(current.maxBlockDuration().toSeconds()));
+            return result;
+        }, HandlerExecutor.get()).whenComplete((settings, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
+                ctx.response()
+                    .setStatusCode(200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(settings.encode());
+            }
+        });
+    }
+
+    /**
+     * PUT /api/v1/admin/circuit-breaker-settings — partial updates OK;
+     * only keys from the {@link #CB_KEYS} whitelist are persisted.
+     * Values are validated by round-tripping through the
+     * {@link com.auto1.pantera.http.timeout.AutoBlockSettings} record
+     * constructor — if the proposed change would produce an invariant
+     * violation (rate > 1.0, negative duration, etc.) the PUT is
+     * rejected and nothing is written.
+     */
+    private void updateCircuitBreakerSettings(final RoutingContext ctx) {
+        final JsonObject body = ctx.body().asJsonObject();
+        if (body == null || body.isEmpty()) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Request body is required");
+            return;
+        }
+        for (final String key : body.fieldNames()) {
+            if (!CB_KEYS.contains(key)) {
+                ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                    "Unknown circuit-breaker setting: " + key);
+                return;
+            }
+        }
+        // Validate: fetch current settings, overlay the proposed changes,
+        // round-trip through AutoBlockSettings constructor (which
+        // enforces invariants). If that throws, reject the PUT.
+        final com.auto1.pantera.http.timeout.AutoBlockSettings current =
+            com.auto1.pantera.circuit.CircuitBreakerSettingsLoader.activeSupplier().get();
+        try {
+            new com.auto1.pantera.http.timeout.AutoBlockSettings(
+                Double.parseDouble(body.getString(
+                    "circuit_breaker_failure_rate_threshold",
+                    String.valueOf(current.failureRateThreshold())
+                )),
+                Integer.parseInt(body.getString(
+                    "circuit_breaker_minimum_number_of_calls",
+                    String.valueOf(current.minimumNumberOfCalls())
+                )),
+                Integer.parseInt(body.getString(
+                    "circuit_breaker_sliding_window_seconds",
+                    String.valueOf(current.slidingWindowSeconds())
+                )),
+                java.time.Duration.ofSeconds(Integer.parseInt(body.getString(
+                    "circuit_breaker_initial_block_seconds",
+                    String.valueOf(current.initialBlockDuration().toSeconds())
+                ))),
+                java.time.Duration.ofSeconds(Integer.parseInt(body.getString(
+                    "circuit_breaker_max_block_seconds",
+                    String.valueOf(current.maxBlockDuration().toSeconds())
+                )))
+            );
+        } catch (final IllegalArgumentException ex) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                "Invalid circuit-breaker setting: " + ex.getMessage());
+            return;
+        }
+        CompletableFuture.supplyAsync(() -> {
+            for (final String key : body.fieldNames()) {
+                this.settingsDao.put(key, body.getValue(key).toString());
+            }
+            // Invalidate the shared loader so the next record outcome
+            // across every AutoBlockRegistry picks up the new values.
+            final com.auto1.pantera.circuit.CircuitBreakerSettingsLoader loader =
+                com.auto1.pantera.circuit.CircuitBreakerSettingsLoader.installed();
+            if (loader != null) {
+                loader.invalidate();
+            }
+            return null;
+        }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
+                EcsLogger.info("com.auto1.pantera.api.v1")
+                    .message("Admin updated circuit-breaker settings")
+                    .eventCategory("configuration")
+                    .eventAction("circuit_breaker_settings_update")
+                    .eventOutcome("success")
+                    .field("settings.keys", String.join(",", body.fieldNames()))
+                    .log();
+                ctx.response().setStatusCode(204).end();
+            }
+        });
     }
 
     /**

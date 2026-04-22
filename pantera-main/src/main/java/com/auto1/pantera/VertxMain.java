@@ -254,6 +254,17 @@ public final class VertxMain {
         final com.auto1.pantera.auth.JwtTokens jwtTokens = new com.auto1.pantera.auth.JwtTokens(
             rsaKeys.privateKey(), rsaKeys.publicKey(), userTokenDao, null, null, enabledCheck
         );
+        // Install the circuit-breaker settings loader BEFORE constructing
+        // RepositorySlices so the default-constructor activeSupplier()
+        // picks up the DB-backed loader rather than pure hardcoded
+        // defaults. When no DataSource is present (tests, DB-less boot)
+        // RepositorySlices falls back to AutoBlockSettings::defaults
+        // automatically via activeSupplier().
+        sharedDs.ifPresent(ds ->
+            com.auto1.pantera.circuit.CircuitBreakerSettingsLoader.install(
+                new com.auto1.pantera.db.dao.AuthSettingsDao(ds)
+            )
+        );
         final RepositorySlices slices = new RepositorySlices(
             settings, repos, jwtTokens
         );
