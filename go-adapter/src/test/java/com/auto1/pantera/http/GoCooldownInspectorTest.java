@@ -21,6 +21,10 @@ import org.junit.jupiter.api.Test;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
+import java.util.Queue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -77,6 +81,55 @@ class GoCooldownInspectorTest {
         final Instant date = inspector.releaseDate("example.com/test", "1.0.0").get().orElseThrow();
         
         assertNotNull(date);
+    }
+
+    /**
+     * Regression: GoLatestHandler and GoListHandler pass versions with the
+     * Go-canonical "v" prefix ("v1.2.3") while the artifact-path regex in
+     * CachedProxySlice strips it ("1.2.3"). Before the fix, the inspector
+     * format-string {@code /%s/@v/v%s.info} produced
+     * {@code /.../@v/vv1.2.3.info} for the prefixed case, upstream returned
+     * 404, release date came back empty, and cooldown failed open — which
+     * silently bypassed the @latest rewrite for every module (observed in
+     * v2.2.0 against github.com/openai/openai-go/v3, blocked-until 2026-04-30
+     * leaked a 403 on .info instead of being rewritten to a prior version).
+     *
+     * <p>Pin: prefixed and unprefixed inputs must both resolve to the same
+     * upstream path {@code /<module>/@v/v1.2.3.info}.</p>
+     */
+    @Test
+    void normalisesLeadingVInVersion() throws Exception {
+        final Queue<String> requestedPaths = new ConcurrentLinkedQueue<>();
+        final Slice remote = (line, headers, body) -> {
+            requestedPaths.add(line.uri().getPath());
+            if (line.uri().getPath().equals("/example.com/foo/@v/v1.2.3.info")) {
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.ok()
+                        .header("Last-Modified", "Mon, 01 Jan 2024 12:00:00 GMT")
+                        .body(new byte[0])
+                        .build()
+                );
+            }
+            return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
+        };
+        final GoCooldownInspector inspector = new GoCooldownInspector(remote);
+
+        final Optional<Instant> prefixed =
+            inspector.releaseDate("example.com/foo", "v1.2.3").get();
+        final Optional<Instant> bare =
+            inspector.releaseDate("example.com/foo", "1.2.3").get();
+
+        assertTrue(
+            prefixed.isPresent(),
+            "v-prefixed version must resolve to the same upstream path as the bare form; "
+                + "requested paths: " + requestedPaths
+        );
+        assertEquals(prefixed, bare, "prefixed and bare inputs must produce the same Instant");
+        assertTrue(
+            requestedPaths.stream().noneMatch(p -> p.contains("/vv")),
+            "inspector must never produce a double-v path like /@v/vv1.2.3.info; "
+                + "requested paths: " + requestedPaths
+        );
     }
 
     @Test
