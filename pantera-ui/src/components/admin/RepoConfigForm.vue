@@ -131,28 +131,72 @@ const showCreateMemberDialog = ref(false)
 const newMemberType = ref('')
 const newMemberName = ref('')
 const newMemberCreating = ref(false)
+const newMemberStorageType = ref<'fs' | 's3'>('fs')
+const newMemberStoragePath = ref('/var/pantera/data')
+const newMemberS3Alias = ref('')
+const newMemberRemoteUrl = ref('')
+const newMemberRemoteUsername = ref('')
+const newMemberRemotePassword = ref('')
+
+const newMemberIsProxy = computed(() => newMemberType.value.endsWith('-proxy'))
+
+const canCreateMember = computed<boolean>(() => {
+  if (!newMemberName.value || !newMemberType.value) return false
+  if (newMemberStorageType.value === 'fs' && !newMemberStoragePath.value.trim()) return false
+  if (newMemberStorageType.value === 's3' && !newMemberS3Alias.value) return false
+  if (newMemberIsProxy.value && !newMemberRemoteUrl.value.trim()) return false
+  return true
+})
+
+function resetNewMemberFields() {
+  newMemberType.value = ''
+  newMemberName.value = ''
+  newMemberStorageType.value = 'fs'
+  newMemberStoragePath.value = '/var/pantera/data'
+  newMemberS3Alias.value = ''
+  newMemberRemoteUrl.value = ''
+  newMemberRemoteUsername.value = ''
+  newMemberRemotePassword.value = ''
+}
 
 async function createMemberRepo() {
-  if (!newMemberName.value || !newMemberType.value) return
+  if (!canCreateMember.value) return
   newMemberCreating.value = true
   try {
     const { putRepo } = await import('@/api/repos')
-    await putRepo(newMemberName.value, {
-      repo: {
-        type: newMemberType.value,
-        storage: { type: 'fs' },
-      },
-    })
+    const storage: RepoConfigEnvelope['repo']['storage'] =
+      newMemberStorageType.value === 's3'
+        ? newMemberS3Alias.value
+        : { type: 'fs', path: newMemberStoragePath.value.trim() }
+    const memberRepo: RepoConfigEnvelope['repo'] = {
+      type: newMemberType.value,
+      storage,
+    }
+    if (newMemberIsProxy.value) {
+      const remote: { url: string; username?: string; password?: string } = {
+        url: newMemberRemoteUrl.value.trim(),
+      }
+      if (newMemberRemoteUsername.value.trim()) {
+        remote.username = newMemberRemoteUsername.value.trim()
+        remote.password = newMemberRemotePassword.value
+      }
+      memberRepo.remotes = [remote]
+    }
+    await putRepo(newMemberName.value, { repo: memberRepo })
     groupMembers.value.push(newMemberName.value)
     await fetchCompatibleRepos()
     showCreateMemberDialog.value = false
-    newMemberName.value = ''
-    newMemberType.value = ''
+    resetNewMemberFields()
   } catch (e: unknown) {
     console.error('Failed to create member repo', e)
   } finally {
     newMemberCreating.value = false
   }
+}
+
+function cancelCreateMember() {
+  showCreateMemberDialog.value = false
+  resetNewMemberFields()
 }
 
 // Cooldown
@@ -631,6 +675,7 @@ watch(groupMembers, () => { emitConfig() }, { deep: true })
         header="Create New Member Repository"
         :modal="true"
         :style="{ width: '500px' }"
+        @hide="resetNewMemberFields"
       >
         <div class="flex flex-col gap-4">
           <div>
@@ -648,14 +693,71 @@ watch(groupMembers, () => { emitConfig() }, { deep: true })
             <label class="block text-sm font-medium mb-1">Name</label>
             <InputText v-model="newMemberName" placeholder="e.g. maven-central" class="w-full" />
           </div>
+          <div>
+            <label class="block text-sm font-medium mb-1">Storage Type</label>
+            <Select v-model="newMemberStorageType" :options="['fs', 's3']" class="w-full" />
+          </div>
+          <div v-if="newMemberStorageType === 'fs'">
+            <label class="block text-sm font-medium mb-1">Path</label>
+            <InputText
+              v-model="newMemberStoragePath"
+              placeholder="/var/pantera/data"
+              class="w-full"
+            />
+          </div>
+          <div v-else-if="newMemberStorageType === 's3'">
+            <label class="block text-sm font-medium mb-1">S3 Storage</label>
+            <Select
+              v-if="s3Storages.length > 0"
+              v-model="newMemberS3Alias"
+              :options="s3Storages.map(s => s.name)"
+              placeholder="Select S3 storage"
+              class="w-full"
+            />
+            <p v-else class="text-xs text-gray-500">
+              No S3 storages configured. Create one on the main Create Repository page first,
+              or use fs storage here.
+            </p>
+          </div>
+
+          <template v-if="newMemberIsProxy">
+            <div class="border-t border-gray-200 dark:border-gray-700 pt-3">
+              <label class="block text-sm font-medium mb-1">Remote URL</label>
+              <InputText
+                v-model="newMemberRemoteUrl"
+                placeholder="https://repo1.maven.org/maven2"
+                class="w-full"
+              />
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="block text-xs text-gray-500 mb-1">Username (optional)</label>
+                <InputText
+                  v-model="newMemberRemoteUsername"
+                  placeholder="Anonymous"
+                  class="w-full"
+                  autocomplete="off"
+                />
+              </div>
+              <div v-if="newMemberRemoteUsername">
+                <label class="block text-xs text-gray-500 mb-1">Password</label>
+                <InputText
+                  v-model="newMemberRemotePassword"
+                  type="password"
+                  class="w-full"
+                  autocomplete="new-password"
+                />
+              </div>
+            </div>
+          </template>
         </div>
         <template #footer>
-          <Button label="Cancel" severity="secondary" @click="showCreateMemberDialog = false" />
+          <Button label="Cancel" severity="secondary" @click="cancelCreateMember" />
           <Button
             label="Create & Add"
             icon="pi pi-check"
             :loading="newMemberCreating"
-            :disabled="!newMemberName || !newMemberType"
+            :disabled="!canCreateMember"
             @click="createMemberRepo"
           />
         </template>
