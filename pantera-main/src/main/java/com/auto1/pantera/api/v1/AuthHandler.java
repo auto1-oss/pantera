@@ -940,6 +940,21 @@ public final class AuthHandler {
                     .log();
             }
         }
+        // Public-read mirror of the two auth_settings keys the token-
+        // generation UI needs (max TTL + permanent toggle). The dedicated
+        // GET /admin/auth-settings is admin-only, which silently 403'd for
+        // read-only users and made AppHeader.vue fall back to a hardcoded
+        // 30/90-day dropdown — causing the illusion of a role-based token
+        // policy that does not exist server-side. Exposing the two fields
+        // here lets every authenticated user see the actual options the
+        // server already accepts from them. Write-path remains admin-only.
+        if (this.settingsDao != null) {
+            result.put("auth_settings", new JsonObject()
+                .put("api_token_max_ttl_seconds",
+                    this.settingsDao.get("api_token_max_ttl_seconds").orElse("31536000"))
+                .put("api_token_allow_permanent",
+                    this.settingsDao.get("api_token_allow_permanent").orElse("true")));
+        }
         ctx.response()
             .setStatusCode(200)
             .putHeader("Content-Type", "application/json")
