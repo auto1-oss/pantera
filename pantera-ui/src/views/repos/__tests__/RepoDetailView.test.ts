@@ -4,7 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import RepoDetailView from '../RepoDetailView.vue'
 import PrimeVue from 'primevue/config'
-import Aura from '@primevue/themes/aura'
+import Aura from '@primeuix/themes/aura'
 
 vi.mock('@/api/repos', () => ({
   getRepo: vi.fn().mockResolvedValue({ repo: { type: 'maven-proxy', storage: {} } }),
