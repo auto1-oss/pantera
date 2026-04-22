@@ -11,6 +11,7 @@
 package com.auto1.pantera.pypi.http;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
 import javax.json.Json;
@@ -43,7 +44,17 @@ public final class SimpleJsonRenderer {
                 entry.add("requires-python", file.requiresPython());
             }
             if (file.uploadTime() != null) {
-                entry.add("upload-time", file.uploadTime().toString());
+                // PEP 700: upload-time format is yyyy-mm-ddThh:mm:ss.ffffffZ
+                // with max 6 fractional digits. Truncate to microseconds to
+                // avoid emitting the 9-digit nanosecond form produced by
+                // Instant.toString() when the source Instant has nano
+                // precision (Linux filesystem creationTime). Python's
+                // datetime.fromisoformat rejects >6 fractional digits on
+                // all versions through 3.13, which breaks pip parsing.
+                entry.add(
+                    "upload-time",
+                    file.uploadTime().truncatedTo(ChronoUnit.MICROS).toString()
+                );
             }
             // PEP 691: yanked is either boolean false (not yanked) or
             // a string (yanked reason, may be empty). A boolean true

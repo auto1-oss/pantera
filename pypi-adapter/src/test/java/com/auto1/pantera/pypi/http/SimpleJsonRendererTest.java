@@ -14,6 +14,7 @@ import java.io.StringReader;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.regex.Pattern;
 import javax.json.Json;
 import javax.json.JsonObject;
 import org.hamcrest.MatcherAssert;
@@ -95,6 +96,45 @@ class SimpleJsonRendererTest {
         MatcherAssert.assertThat(
             file.containsKey("upload-time"),
             new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void truncatesNanosecondUploadTimeToPep700Format() {
+        // PEP 700 mandates "yyyy-mm-ddThh:mm:ss.ffffffZ" — max 6 fractional
+        // digits, Z suffix. Python's datetime.fromisoformat rejects any
+        // fraction wider than 6 digits on every CPython version through
+        // 3.13, which breaks pip's parse_links. Regression for the
+        // 9-digit filesystem-creationTime leak.
+        final Instant nanos = Instant.parse("2026-03-24T19:38:57Z").plusNanos(874_672_722L);
+        final SimpleJsonRenderer.FileEntry entry = new SimpleJsonRenderer.FileEntry(
+            "pkg-1.0.0-py3-none-any.whl",
+            "https://example.com/pkg-1.0.0-py3-none-any.whl",
+            "cafebabe",
+            null,
+            nanos,
+            false,
+            Optional.empty(),
+            Optional.empty()
+        );
+        final JsonObject file = Json.createReader(new StringReader(
+            SimpleJsonRenderer.render("pkg", List.of(entry))
+        )).readObject().getJsonArray("files").getJsonObject(0);
+        final String uploadTime = file.getString("upload-time");
+        MatcherAssert.assertThat(
+            "upload-time must match PEP 700 format: yyyy-mm-ddThh:mm:ss[.ffffff]Z "
+                + "(max 6 fractional digits, Z suffix). Got: " + uploadTime,
+            Pattern.matches(
+                "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+                uploadTime
+            ),
+            new IsEqual<>(true)
+        );
+        // Sanity: must be the microsecond-truncated value, not 9 digits.
+        MatcherAssert.assertThat(
+            "upload-time truncated to microseconds should preserve the top 6 digits",
+            uploadTime,
+            new IsEqual<>("2026-03-24T19:38:57.874672Z")
         );
     }
 

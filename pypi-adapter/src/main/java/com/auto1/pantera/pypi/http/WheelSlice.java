@@ -40,6 +40,7 @@ import org.reactivestreams.Publisher;
 
 import java.nio.ByteBuffer;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.UUID;
@@ -113,7 +114,7 @@ final class WheelSlice implements Slice {
                                 this.storage,
                                 new Key.From(packageName, info.version(), filename),
                                 info.requiresPython(),
-                                Instant.now()
+                                Instant.now().truncatedTo(ChronoUnit.MICROS)
                             )
                         );
                         // Regenerate package-level index.html after upload
