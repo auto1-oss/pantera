@@ -739,9 +739,39 @@ public final class AuthHandler {
         final int requestedDays = body != null
             ? body.getInteger("expiry_days", DEFAULT_EXPIRY_DAYS)
             : DEFAULT_EXPIRY_DAYS;
-        // Enforce admin-configured maximum, if set (0 = unlimited/permanent is always allowed)
-        final int maxTokenDays = this.settingsDao != null
-            ? this.settingsDao.getInt(SETTING_MAX_TOKEN_DAYS, 0) : 0;
+        // Read the admin-configured caps. Two keys exist for historical
+        // reasons: api_token_max_ttl_seconds is what the UI (SettingsView
+        // + /admin/auth-settings) writes; max_api_token_days is a legacy
+        // key that preceded the UI. Prefer the UI key when present so
+        // flipping the admin slider actually enforces at the server.
+        // Without this, the UI toggle was security theatre — a user
+        // could POST expiry_days=X directly and bypass the configured
+        // cap, or POST expiry_days=0 to mint a permanent token even
+        // when "Allow permanent API tokens" was off.
+        int maxTokenDays = 0;
+        boolean allowPermanent = true;
+        if (this.settingsDao != null) {
+            final int maxSeconds = this.settingsDao.getInt("api_token_max_ttl_seconds", 0);
+            if (maxSeconds > 0) {
+                maxTokenDays = maxSeconds / 86400;
+            } else {
+                maxTokenDays = this.settingsDao.getInt(SETTING_MAX_TOKEN_DAYS, 0);
+            }
+            allowPermanent = this.settingsDao.getBool("api_token_allow_permanent", true);
+        }
+        if (requestedDays <= 0 && !allowPermanent) {
+            EcsLogger.info("com.auto1.pantera.auth")
+                .message("Rejected permanent token request — disabled by admin policy")
+                .eventCategory("authentication")
+                .eventAction("token_generate")
+                .eventOutcome("failure")
+                .field("event.reason", "permanent_tokens_disabled")
+                .log();
+            ApiResponse.sendError(ctx, 400, "PERMANENT_TOKENS_DISABLED",
+                "Permanent API tokens are disabled by administrator policy. "
+                    + "Provide a positive expiry_days value.");
+            return;
+        }
         final int expiryDays;
         if (maxTokenDays > 0 && requestedDays > 0 && requestedDays > maxTokenDays) {
             expiryDays = maxTokenDays;
@@ -933,6 +963,21 @@ public final class AuthHandler {
                     .field("user.context", context != null ? context : "local")
                     .log();
             }
+        }
+        // Public-read mirror of the two auth_settings keys the token-
+        // generation UI needs (max TTL + permanent toggle). The dedicated
+        // GET /admin/auth-settings is admin-only, which silently 403'd for
+        // read-only users and made AppHeader.vue fall back to a hardcoded
+        // 30/90-day dropdown — causing the illusion of a role-based token
+        // policy that does not exist server-side. Exposing the two fields
+        // here lets every authenticated user see the actual options the
+        // server already accepts from them. Write-path remains admin-only.
+        if (this.settingsDao != null) {
+            result.put("auth_settings", new JsonObject()
+                .put("api_token_max_ttl_seconds",
+                    this.settingsDao.get("api_token_max_ttl_seconds").orElse("31536000"))
+                .put("api_token_allow_permanent",
+                    this.settingsDao.get("api_token_allow_permanent").orElse("true")));
         }
         ctx.response()
             .setStatusCode(200)
