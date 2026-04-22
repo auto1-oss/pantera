@@ -350,7 +350,15 @@ public final class CacheManifests implements Manifests {
 
     private CompletionStage<Optional<Long>> releaseTimestamp(final Manifest manifest) {
         if (manifest.isManifestList()) {
-            return CompletableFuture.completedFuture(Optional.empty());
+            // Multi-arch tags (e.g. ubuntu:latest, python:3.12) resolve to
+            // an OCI image index / Docker manifest list with no `config`
+            // blob. Historically we returned empty here, which caused
+            // cooldown to fail-open for every multi-arch image on first
+            // pull. Resolve through: fetch the first child (typically
+            // linux/amd64) and read its config's `created` timestamp.
+            // All children of a single tag share a build run, so any
+            // one of them gives a representative release date.
+            return this.firstChildReleaseTimestamp(manifest);
         }
         return this.origin.layers().get(manifest.config()).thenCompose(
             blob -> {
@@ -362,6 +370,53 @@ public final class CacheManifests implements Manifests {
                     .thenApply(this::extractCreatedTimestamp);
             }
         );
+    }
+
+    /**
+     * Resolve a manifest list's release timestamp by fetching the first
+     * child manifest and reading its image-config {@code created} field.
+     * Returns empty on any upstream failure — never throws — so the
+     * caller falls through to the existing "no release date → allow"
+     * branch rather than blocking on a transient upstream blip.
+     *
+     * <p>Cost is bounded: the result is cached in
+     * {@link DockerProxyCooldownInspector}'s Caffeine cache
+     * ({@code maximumSize=10_000}, {@code expireAfterWrite=24h}), so at
+     * most one extra upstream pair per {@code image:tag} per day. The
+     * child manifest and its config blob are also warmed in the
+     * registry cache for the downstream pull.</p>
+     */
+    private CompletionStage<Optional<Long>> firstChildReleaseTimestamp(
+        final Manifest manifestList
+    ) {
+        final Collection<Digest> children = manifestList.manifestListChildren();
+        if (children.isEmpty()) {
+            return CompletableFuture.completedFuture(Optional.empty());
+        }
+        final Digest firstChild = children.iterator().next();
+        return this.origin.manifests()
+            .get(ManifestReference.from(firstChild))
+            .thenCompose(opt -> {
+                // Defensive: nested manifest lists are not defined by
+                // OCI but some registries emit them. Bail out rather
+                // than recurse.
+                if (opt.isEmpty() || opt.get().isManifestList()) {
+                    return CompletableFuture.<Optional<Long>>completedFuture(Optional.empty());
+                }
+                return this.releaseTimestamp(opt.get());
+            })
+            .exceptionally(ex -> {
+                EcsLogger.debug("com.auto1.pantera.docker")
+                    .message("Could not resolve child manifest for release date")
+                    .eventCategory("web")
+                    .eventAction("manifest_cache")
+                    .field("repository.name", this.rname)
+                    .field("container.image.name", this.name)
+                    .field("container.image.hash.all", firstChild.string())
+                    .field("error.message", ex.getMessage())
+                    .log();
+                return Optional.empty();
+            });
     }
 
     private Optional<Long> extractCreatedTimestamp(final byte[] config) {
