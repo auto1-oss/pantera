@@ -18,6 +18,7 @@ import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -863,6 +864,126 @@ class DbArtifactIndexTest {
                 }
             }
         }
+    }
+
+    /**
+     * Cascade delete: {@code removePrefix} must hit every row whose
+     * {@code name} starts with the prefix, leave rows in other repos
+     * alone, and leave unrelated rows in the same repo alone. Before
+     * 2.2.0 the DELETE handler removed storage but left ghost rows in
+     * the index — this pins the fix.
+     */
+    @Test
+    void removePrefixDeletesExactlyMatchingRows() throws Exception {
+        final Instant now = Instant.now();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "com/example/pkg/1.0/pkg-1.0.jar", "pkg",
+            "1.0", 100L, now, "user"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "com/example/pkg/1.0/pkg-1.0.pom", "pkg",
+            "1.0", 50L, now, "user"
+        )).join();
+        // Same prefix but different repo — must not be touched
+        this.index.index(new ArtifactDocument(
+            "maven", "repo2", "com/example/pkg/1.0/pkg-1.0.jar", "pkg",
+            "1.0", 100L, now, "user"
+        )).join();
+        // Different prefix in same repo — must not be touched
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "com/example/other/2.0/other-2.0.jar", "other",
+            "2.0", 100L, now, "user"
+        )).join();
+        final int deleted = this.index.removePrefix(
+            "repo1", "com/example/pkg/1.0/"
+        ).join();
+        MatcherAssert.assertThat(
+            "removePrefix must delete exactly the two matching rows",
+            deleted,
+            new IsEqual<>(2)
+        );
+        // After delete, the path should only locate to repo2 (repo1's row
+        // was cascaded away); locate returns the surviving repos per path.
+        final List<String> locateResult = this.index.locateByName(
+            "com/example/pkg/1.0/pkg-1.0.jar"
+        ).join().orElseThrow();
+        MatcherAssert.assertThat(
+            "repo1 must no longer appear in locate (cascaded delete)",
+            locateResult,
+            Matchers.not(Matchers.hasItem("repo1"))
+        );
+        MatcherAssert.assertThat(
+            "repo2 row with the same path must still be locatable",
+            locateResult,
+            Matchers.contains("repo2")
+        );
+        MatcherAssert.assertThat(
+            "unrelated prefix in the same repo must still be locatable",
+            this.index.locateByName("com/example/other/2.0/other-2.0.jar")
+                .join().orElseThrow(),
+            Matchers.contains("repo1")
+        );
+    }
+
+    /**
+     * Passing an empty prefix must NOT wipe an entire repo — it signals
+     * a coding error and the index should refuse.
+     */
+    @Test
+    void removePrefixRefusesEmptyPrefix() throws Exception {
+        final Instant now = Instant.now();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "com/example/anything", "anything",
+            "1.0", 100L, now, "user"
+        )).join();
+        final java.util.concurrent.CompletionException err =
+            Assertions.assertThrows(
+                java.util.concurrent.CompletionException.class,
+                () -> this.index.removePrefix("repo1", "").join()
+            );
+        MatcherAssert.assertThat(
+            "Must refuse empty prefix with IllegalArgumentException",
+            err.getCause() instanceof IllegalArgumentException,
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "The existing row must not have been touched",
+            this.index.locateByName("com/example/anything")
+                .join().orElseThrow(),
+            Matchers.contains("repo1")
+        );
+    }
+
+    /**
+     * LIKE wildcards in the caller-supplied prefix must be escaped so
+     * `foo%` doesn't accidentally wipe `foobar`. Without escape, the
+     * prefix `foo%` would match `foobar/...` as well.
+     */
+    @Test
+    void removePrefixEscapesLikeWildcards() throws Exception {
+        final Instant now = Instant.now();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "foo%literal/a", "foo",
+            "1", 1L, now, "u"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "foobar/a", "foo",
+            "1", 1L, now, "u"
+        )).join();
+        final int deleted = this.index.removePrefix(
+            "repo1", "foo%literal/"
+        ).join();
+        MatcherAssert.assertThat(
+            "Only the literal 'foo%literal/' prefix must be removed",
+            deleted,
+            new IsEqual<>(1)
+        );
+        MatcherAssert.assertThat(
+            "foobar/ row (which LIKE would match with unescaped '%')"
+                + " must remain",
+            this.index.locateByName("foobar/a").join().orElseThrow(),
+            Matchers.contains("repo1")
+        );
     }
 
     /**
