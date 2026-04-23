@@ -53,13 +53,14 @@ function formatModifiedAbsolute(iso?: string | null): string {
   if (!iso) return ''
   const ts = Date.parse(iso)
   if (Number.isNaN(ts)) return ''
-  const d = new Date(ts)
-  const yyyy = d.getUTCFullYear()
-  const mm = String(d.getUTCMonth() + 1).padStart(2, '0')
-  const dd = String(d.getUTCDate()).padStart(2, '0')
-  const hh = String(d.getUTCHours()).padStart(2, '0')
-  const min = String(d.getUTCMinutes()).padStart(2, '0')
-  return `${yyyy}-${mm}-${dd} ${hh}:${min}`
+  return new Date(ts).toLocaleString('en-CA', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).replace(',', '')
 }
 
 function kindPillClass(kind: string): string {
@@ -138,7 +139,7 @@ function kindPillClass(kind: string): string {
           class="text-[10px] px-1.5 py-0 rounded leading-[16px]"
         >{{ entry.artifact_kind.toLowerCase() }}</span>
         <Tag
-          v-if="entry.type === 'file' && (entry as Record<string, unknown>).yanked"
+          v-if="entry.type === 'file' && entry.yanked"
           value="Yanked"
           severity="danger"
           class="text-xs"

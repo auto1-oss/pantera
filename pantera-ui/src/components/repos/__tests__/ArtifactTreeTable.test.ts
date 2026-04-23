@@ -76,7 +76,7 @@ describe('ArtifactTreeTable', () => {
     expect(row.text()).toContain('artifact') // kind pill
     expect(row.text()).toContain('2.3 MB')    // formatted size
     expect(row.get('[data-testid="tree-uploaded-abs"]').text())
-      .toMatch(/2026-04-23/)
+      .toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/)
     expect(row.get('[data-testid="tree-uploaded-rel"]').text())
       .toMatch(/ago/)
   })
