@@ -84,45 +84,15 @@ public final class DbArtifactIndex implements ArtifactIndex {
     private static final String DELETE_SQL =
         "DELETE FROM artifacts WHERE repo_name = ? AND name = ?";
 
-    /**
-     * Full-text search SQL using tsvector/GIN index with relevance ranking.
-     * Uses COUNT(*) OVER() window function to get the total hit count in a
-     * single index scan instead of a separate COUNT query.
-     */
-    private static final String FTS_SEARCH_SQL = String.join(
-        " ",
-        "SELECT repo_type, repo_name, name, version, size, created_date, owner,",
-        "ts_rank(search_tokens, plainto_tsquery('simple', ?)) AS rank,",
-        "COUNT(*) OVER() AS total_count",
-        "FROM artifacts WHERE search_tokens @@ plainto_tsquery('simple', ?)",
-        "ORDER BY rank DESC, name, version LIMIT ? OFFSET ?"
-    );
-
-    /**
-     * Prefix-matching FTS SQL using to_tsquery with ':*' suffix.
-     * Matches words starting with query terms: "test" matches "test", "testing", etc.
-     * Uses COUNT(*) OVER() window function to avoid a separate COUNT query.
-     */
-    private static final String PREFIX_FTS_SEARCH_SQL = String.join(
-        " ",
-        "SELECT repo_type, repo_name, name, version, size, created_date, owner,",
-        "ts_rank(search_tokens, to_tsquery('simple', ?)) AS rank,",
-        "COUNT(*) OVER() AS total_count",
-        "FROM artifacts WHERE search_tokens @@ to_tsquery('simple', ?)",
-        "ORDER BY rank DESC, name, version LIMIT ? OFFSET ?"
-    );
-
-    /**
-     * Fallback search SQL with LIKE (used when tsvector is unavailable or returns 0 results).
-     * Uses COUNT(*) OVER() window function to avoid a separate COUNT query.
-     */
-    private static final String LIKE_SEARCH_SQL = String.join(
-        " ",
-        "SELECT repo_type, repo_name, name, version, size, created_date, owner,",
-        "COUNT(*) OVER() AS total_count",
-        "FROM artifacts WHERE LOWER(name) LIKE LOWER(?)",
-        "ORDER BY name, version LIMIT ? OFFSET ?"
-    );
+    // Removed 2.2.0: the static SQL templates FTS_SEARCH_SQL,
+    // PREFIX_FTS_SEARCH_SQL, and LIKE_SEARCH_SQL were kept only as
+    // back-compat entry points for the 3-arg search(query, max, offset)
+    // overload. That overload now delegates to the filtered search path
+    // (searchFilteredFts / PrefixFts / Like), so the SQL is constructed
+    // dynamically via buildOrderBy + buildFilterClauses. Duplicated
+    // constants caused the metadata-noise regression (the filtered path
+    // added `AND artifact_kind = 'ARTIFACT'` but the constants did not),
+    // and divergence is a recurring failure mode worth eliminating.
 
     /**
      * Statement timeout for LIKE fallback queries.
@@ -1532,125 +1502,18 @@ public final class DbArtifactIndex implements ArtifactIndex {
     public CompletableFuture<SearchResult> search(
         final String query, final int maxResults, final int offset
     ) {
-        return CompletableFuture.supplyAsync(() -> {
-            // If query contains SQL wildcards, use LIKE directly
-            final boolean uselike = query.contains("%") || query.contains("_");
-            if (uselike) {
-                return DbArtifactIndex.searchWithLike(
-                    this.source, query, maxResults, offset
-                );
-            }
-            // Use prefix-matching FTS: "test" → 'test:*' matches
-            // "test", "test.txt", "testing", etc. Uses GIN index
-            // for efficient search on large datasets (10M+ rows).
-            try {
-                final SearchResult ftsResult = DbArtifactIndex.searchWithPrefixFts(
-                    this.source, query, maxResults, offset
-                );
-                if (ftsResult.totalHits() == 0) {
-                    // Fallback to exact-match FTS (handles phrases)
-                    final SearchResult exact = DbArtifactIndex.searchWithFts(
-                        this.source, query, maxResults, offset
-                    );
-                    if (exact.totalHits() == 0) {
-                        // Final fallback: LIKE search for special chars (@, /, -)
-                        return DbArtifactIndex.searchWithLike(
-                            this.source, "%" + query + "%", maxResults, offset
-                        );
-                    }
-                    return exact;
-                }
-                return ftsResult;
-            } catch (final SQLException ex) {
-                // Graceful degradation: if tsvector column doesn't exist or
-                // any FTS-related error occurs, fall back to LIKE
-                EcsLogger.warn("com.auto1.pantera.index")
-                    .message("FTS search failed, falling back to LIKE: "
-                        + ex.getMessage())
-                    .eventCategory("database")
-                    .eventAction("db_fts_fallback")
-                    .error(ex)
-                    .log();
-                return DbArtifactIndex.searchWithLike(
-                    this.source, "%" + query + "%", maxResults, offset
-                );
-            }
-        }, this.executor);
-    }
-
-    /**
-     * Execute full-text search using tsvector/GIN index.
-     *
-     * @param source DataSource
-     * @param query Search query (plain text, not a pattern)
-     * @param maxResults Max results per page
-     * @param offset Pagination offset
-     * @return SearchResult with ranked results
-     * @throws SQLException On database error (caller should handle for fallback)
-     */
-    private static SearchResult searchWithFts(
-        final DataSource source, final String query,
-        final int maxResults, final int offset
-    ) throws SQLException {
-        long totalHits = 0;
-        final List<ArtifactDocument> docs = new ArrayList<>();
-        try (Connection conn = source.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(FTS_SEARCH_SQL)) {
-            stmt.setString(1, query);
-            stmt.setString(2, query);
-            stmt.setInt(3, maxResults);
-            stmt.setInt(4, offset);
-            try (ResultSet rs = stmt.executeQuery()) {
-                while (rs.next()) {
-                    if (docs.isEmpty()) {
-                        totalHits = rs.getLong("total_count");
-                    }
-                    docs.add(fromResultSet(rs));
-                }
-            }
-        }
-        return new SearchResult(docs, totalHits, offset, null);
-    }
-
-    /**
-     * Execute prefix-matching FTS: "test" becomes "test:*" tsquery,
-     * matching "test", "test.txt", "testing", etc. Uses GIN index.
-     *
-     * @param source DataSource
-     * @param query Raw user query
-     * @param maxResults Max results per page
-     * @param offset Pagination offset
-     * @return SearchResult with ranked results
-     * @throws SQLException On database error
-     */
-    private static SearchResult searchWithPrefixFts(
-        final DataSource source, final String query,
-        final int maxResults, final int offset
-    ) throws SQLException {
-        final String tsquery = DbArtifactIndex.buildPrefixTsQuery(query);
-        if (tsquery.isEmpty()) {
-            return new SearchResult(
-                java.util.Collections.emptyList(), 0, offset, null
-            );
-        }
-        long totalHits = 0;
-        final List<ArtifactDocument> docs = new ArrayList<>();
-        try (Connection conn = source.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(PREFIX_FTS_SEARCH_SQL)) {
-            stmt.setString(1, tsquery);
-            stmt.setString(2, tsquery);
-            stmt.setInt(3, maxResults);
-            stmt.setInt(4, offset);
-            try (ResultSet rs = stmt.executeQuery()) {
-                while (rs.next()) {
-                    if (docs.isEmpty()) {
-                        totalHits = rs.getLong("total_count");
-                    }
-                    docs.add(fromResultSet(rs));
-                }
-            }
-        }
-        return new SearchResult(docs, totalHits, offset, null);
+        // Cleanup 4a (2.2.0): delegate to the filtered search path so a
+        // single code path applies classification (artifact_kind) and
+        // honours sort, permission scoping, and facet suppression. The
+        // old hardcoded-SQL helpers (searchWithFts / searchWithPrefixFts
+        // / searchWithLike) + their constants (FTS_SEARCH_SQL /
+        // PREFIX_FTS_SEARCH_SQL / LIKE_SEARCH_SQL) were deleted — they
+        // diverged silently from the filtered path and bypassed the
+        // metadata-noise filter introduced in 2.2.0.
+        return search(
+            query, maxResults, offset,
+            null, null, "relevance", true, null
+        );
     }
 
     /**
@@ -1674,63 +1537,6 @@ public final class DbArtifactIndex implements ArtifactIndex {
             }
         }
         return sb.toString();
-    }
-
-    /**
-     * Execute search using LIKE pattern matching (fallback).
-     *
-     * @param source DataSource
-     * @param pattern LIKE pattern (should include % wildcards)
-     * @param maxResults Max results per page
-     * @param offset Pagination offset
-     * @return SearchResult
-     */
-    private static SearchResult searchWithLike(
-        final DataSource source, final String pattern,
-        final int maxResults, final int offset
-    ) {
-        long totalHits = 0;
-        final List<ArtifactDocument> docs = new ArrayList<>();
-        try (Connection conn = source.getConnection()) {
-            // SET LOCAL requires an explicit transaction block to persist across statements
-            conn.setAutoCommit(false);
-            try {
-                // Guard against runaway LIKE scans on large tables
-                try (java.sql.Statement guard = conn.createStatement()) {
-                    guard.execute(
-                        "SET LOCAL statement_timeout = '" + LIKE_TIMEOUT_MS + "ms'"
-                    );
-                }
-                // Single query with COUNT(*) OVER() — avoids double index scan
-                try (PreparedStatement stmt = conn.prepareStatement(LIKE_SEARCH_SQL)) {
-                    stmt.setString(1, pattern);
-                    stmt.setInt(2, maxResults);
-                    stmt.setInt(3, offset);
-                    try (ResultSet rs = stmt.executeQuery()) {
-                        while (rs.next()) {
-                            if (docs.isEmpty()) {
-                                totalHits = rs.getLong("total_count");
-                            }
-                            docs.add(fromResultSet(rs));
-                        }
-                    }
-                }
-                conn.commit();
-            } catch (final SQLException inner) {
-                conn.rollback();
-                throw inner;
-            }
-        } catch (final SQLException ex) {
-            EcsLogger.error("com.auto1.pantera.index")
-                .message("LIKE search failed for pattern: " + pattern)
-                .eventCategory("database")
-                .eventAction("db_search_like")
-                .eventOutcome("failure")
-                .error(ex)
-                .log();
-            return SearchResult.EMPTY;
-        }
-        return new SearchResult(docs, totalHits, offset, null);
     }
 
     @Override

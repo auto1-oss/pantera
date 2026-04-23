@@ -88,14 +88,37 @@ public final class RepoData {
 
     /**
      * Delete artifact from repository storage.
+     * Legacy overload — uses YAML-only storage lookup and will fail with
+     * {@code ValueNotFoundException: No value for key: {repo}.yml} on
+     * repositories that exist only in the DB. Prefer
+     * {@link #deleteArtifact(RepositoryName, String, CrudRepoSettings)}.
      * @param rname Repository name
      * @param artifactPath Path to the artifact within repository storage
      * @return Completable action of the delete operation, returns true if deleted, false if not found
      */
     public CompletionStage<Boolean> deleteArtifact(final RepositoryName rname, final String artifactPath) {
+        return this.deleteArtifact(rname, artifactPath, null);
+    }
+
+    /**
+     * Delete artifact with DB-fallback storage lookup. This is the path
+     * the REST delete handler must use — DB-only repos (every 2.0+ repo
+     * created via the management UI) have no `.yml` in configStorage and
+     * would otherwise 500 on `ValueNotFoundException`.
+     *
+     * @param rname Repository name
+     * @param artifactPath Path to the artifact within repository storage
+     * @param crs Repository settings CRUD — nullable, falls back to
+     *            the YAML-only lookup when null
+     * @return Completable action: true if deleted, false if not found
+     */
+    public CompletionStage<Boolean> deleteArtifact(
+        final RepositoryName rname, final String artifactPath,
+        final CrudRepoSettings crs
+    ) {
         final String repo = rname.toString();
         final Key artifactKey = new Key.From(repo, artifactPath);
-        return this.repoStorage(rname)
+        return this.repoStorage(rname, crs)
             .thenCompose(asto -> asto.exists(artifactKey)
                 .thenCompose(exists -> {
                     if (!exists) {
@@ -138,15 +161,31 @@ public final class RepoData {
     }
 
     /**
-     * Delete a package folder (and its contents) from repository storage.
+     * Delete a package folder (legacy YAML-only lookup).
+     * See {@link #deletePackageFolder(RepositoryName, String, CrudRepoSettings)}.
      * @param rname Repository name
      * @param packagePath Path to the package folder within repository storage
      * @return Completable action returning true if deletion happened, false if nothing found
      */
     public CompletionStage<Boolean> deletePackageFolder(final RepositoryName rname, final String packagePath) {
+        return this.deletePackageFolder(rname, packagePath, null);
+    }
+
+    /**
+     * Delete a package folder with DB-fallback storage lookup.
+     * @param rname Repository name
+     * @param packagePath Path to the package folder within repository storage
+     * @param crs Repository settings CRUD — nullable, falls back to the
+     *            YAML-only lookup when null
+     * @return Completable action returning true if deletion happened, false if nothing found
+     */
+    public CompletionStage<Boolean> deletePackageFolder(
+        final RepositoryName rname, final String packagePath,
+        final CrudRepoSettings crs
+    ) {
         final String repo = rname.toString();
         final Key folder = new Key.From(repo, packagePath);
-        return this.repoStorage(rname)
+        return this.repoStorage(rname, crs)
             .thenCompose(asto ->
                 asto.exists(folder).thenCompose(exists -> {
                     final CompletionStage<Boolean> deletion;
