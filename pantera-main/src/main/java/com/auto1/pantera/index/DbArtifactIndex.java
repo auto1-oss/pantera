@@ -545,7 +545,11 @@ public final class DbArtifactIndex implements ArtifactIndex {
             return hasRank ? "rank DESC, name ASC" : "name ASC";
         }
         return switch (field) {
-            case NAME -> "name " + dir;
+            case NAME ->
+                // Fix C (2.2.0): use name_sort (V123) so `pkg-10` sorts after
+                // `pkg-2`. The raw `name` tiebreaker keeps ordering stable
+                // across duplicates and insertion batches.
+                "name_sort " + dir + " NULLS LAST, name " + dir;
             case VERSION ->
                 "version_sort " + dir + " NULLS LAST, version " + dir;
             case DATE -> "created_date " + dir;
