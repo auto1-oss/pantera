@@ -15,7 +15,6 @@ import Breadcrumb from 'primevue/breadcrumb'
 import Dialog from 'primevue/dialog'
 import Textarea from 'primevue/textarea'
 import Message from 'primevue/message'
-import Select from 'primevue/select'
 import type { TreeEntry, ArtifactDetail } from '@/types'
 
 const props = defineProps<{ name: string }>()
@@ -169,9 +168,9 @@ async function loadTree(path: string) {
       sort_dir: sortAsc.value ? 'asc' : 'desc',
     }, ctrl.signal)
     if (ctrl.signal.aborted) return
-    treeItems.value = resp.items
-    marker.value = resp.marker
-    hasMore.value = resp.hasMore
+    treeItems.value = Array.isArray(resp?.items) ? resp.items : []
+    marker.value = resp?.marker ?? null
+    hasMore.value = resp?.hasMore ?? false
   } catch (err: unknown) {
     if (ctrl.signal.aborted) return
     treeItems.value = []
@@ -190,9 +189,9 @@ async function loadMore() {
       sort: sortBy.value,
       sort_dir: sortAsc.value ? 'asc' : 'desc',
     })
-    treeItems.value.push(...resp.items)
-    marker.value = resp.marker
-    hasMore.value = resp.hasMore
+    if (Array.isArray(resp?.items)) treeItems.value.push(...resp.items)
+    marker.value = resp?.marker ?? null
+    hasMore.value = resp?.hasMore ?? false
   } finally {
     treeLoading.value = false
   }
@@ -376,18 +375,13 @@ function formatSize(bytes?: number): string {
         <template #title>
           <div class="flex items-center justify-between">
             <span>Artifacts</span>
-            <div class="flex items-center gap-2">
-              <Select
-                v-model="sortBy"
-                :options="[
-                  { label: 'Name', value: 'name' },
-                  { label: 'Date', value: 'date' },
-                ]"
-                option-label="label"
-                option-value="value"
-                size="small"
-                class="!text-xs"
-                @change="onSortChange"
+            <div class="flex items-center gap-1">
+              <Button
+                :label="sortBy === 'name' ? 'Name' : 'Date'"
+                :icon="sortBy === 'name' ? 'pi pi-sort' : 'pi pi-calendar'"
+                :title="'Sort by ' + (sortBy === 'name' ? 'date' : 'name')"
+                text size="small"
+                @click="sortBy = sortBy === 'name' ? 'date' : 'name'; onSortChange()"
               />
               <Button
                 :icon="sortAsc
