@@ -129,16 +129,28 @@ public final class ArtifactHandlerTest extends AsyncApiTestBase {
     }
 
     /**
-     * With real sizes hydrated from the artifacts DB, sort=size&sort_dir=asc
-     * returns files in ascending size order; desc reverses. Names are
-     * intentionally anti-alphabetical vs size so a broken comparator that
-     * fell back to name order would flip the observed ordering — the
-     * assertion would then fail, catching the regression.
+     * With real sizes hydrated from the artifacts DB (rows seeded directly
+     * before the request), sort=size&sort_dir=asc returns files in ascending
+     * size order; desc reverses. Names are intentionally anti-alphabetical
+     * vs size, so a broken comparator that fell back to name order would
+     * flip the observed ordering and the assertion would fail. Without the
+     * DB seed, all hydrated sizes would be 0 and name ordering would
+     * determine the result — so the DB-seed step is load-bearing for this
+     * test's protective value.
      */
     @Test
     void treeSortBySizeOrdersFiles(@TempDir final Path tempStorage,
         final Vertx vertx, final VertxTestContext ctx) throws Exception {
         final WebClient client = WebClient.create(vertx);
+        // Clean any leftover rows from a previous run of this test so the
+        // INSERTs below cannot hit the UNIQUE(repo_name, name, version)
+        // constraint under Surefire retries or parallel execution.
+        try (Connection conn = sharedDs().getConnection();
+             PreparedStatement del = conn.prepareStatement(
+                 "DELETE FROM artifacts WHERE repo_name = ?")) {
+            del.setString(1, "size-order");
+            del.executeUpdate();
+        }
         final JsonObject body = new JsonObject().put(
             "repo",
             new JsonObject().put("type", "file")
@@ -211,6 +223,8 @@ public final class ArtifactHandlerTest extends AsyncApiTestBase {
         final JsonArray descItems = desc.bodyAsJsonObject().getJsonArray("items");
         Assertions.assertEquals("a-large.bin",
             descItems.getJsonObject(0).getString("name"));
+        Assertions.assertEquals("m-medium.bin",
+            descItems.getJsonObject(1).getString("name"));
         Assertions.assertEquals("z-small.bin",
             descItems.getJsonObject(2).getString("name"));
         ctx.completeNow();
