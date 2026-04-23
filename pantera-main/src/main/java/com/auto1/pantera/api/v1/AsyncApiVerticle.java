@@ -451,7 +451,7 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         new DashboardHandler(crs, this.dataSource).register(router);
         new ArtifactHandler(
             crs, new RepoData(this.configsStorage, this.caches.storagesCache()),
-            this.security.policy(), this.dataSource
+            this.security.policy(), this.dataSource, this.artifactIndex
         ).register(router);
         new CooldownHandler(
             this.cooldown, this.cooldownMetadata,

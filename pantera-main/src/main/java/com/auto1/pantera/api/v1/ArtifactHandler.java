@@ -17,6 +17,7 @@ import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.RepoData;
 import com.auto1.pantera.settings.repo.CrudRepoSettings;
@@ -101,19 +102,39 @@ public final class ArtifactHandler {
     private final DataSource dataSource;
 
     /**
+     * Artifact index — used by the delete handlers to cascade the storage
+     * delete into the DB, so search / locate don't return ghosts.
+     * Nullable for tests; {@link ArtifactIndex#NOP} is a safe default.
+     */
+    private final ArtifactIndex artifactIndex;
+
+    /**
      * Ctor.
      * @param crs Repository settings CRUD
      * @param repoData Repository data management
      * @param policy Pantera security policy
      * @param dataSource Artifacts DB DataSource (nullable; enables date /
      *                   kind enrichment for tree listings when present)
+     * @param artifactIndex Index used by delete handlers to cascade DB
+     *                      removal alongside the storage delete
      */
     public ArtifactHandler(final CrudRepoSettings crs, final RepoData repoData,
-        final Policy<?> policy, final DataSource dataSource) {
+        final Policy<?> policy, final DataSource dataSource,
+        final ArtifactIndex artifactIndex) {
         this.crs = crs;
         this.repoData = repoData;
         this.policy = policy;
         this.dataSource = dataSource;
+        this.artifactIndex = artifactIndex == null ? ArtifactIndex.NOP : artifactIndex;
+    }
+
+    /**
+     * Back-compat ctor without the artifact index — delete handlers will
+     * skip DB cascade, matching pre-2.2.0 behaviour.
+     */
+    public ArtifactHandler(final CrudRepoSettings crs, final RepoData repoData,
+        final Policy<?> policy, final DataSource dataSource) {
+        this(crs, repoData, policy, dataSource, ArtifactIndex.NOP);
     }
 
     /**
@@ -125,7 +146,7 @@ public final class ArtifactHandler {
      */
     public ArtifactHandler(final CrudRepoSettings crs, final RepoData repoData,
         final Policy<?> policy) {
-        this(crs, repoData, policy, null);
+        this(crs, repoData, policy, null, ArtifactIndex.NOP);
     }
 
     /**
@@ -852,10 +873,44 @@ public final class ArtifactHandler {
             return;
         }
         final RepositoryName rname = new RepositoryName.Simple(ctx.pathParam("name"));
+        final String repoName = rname.toString();
         // Fix (2.2.0): use DB-fallback storage lookup so DB-only repos
         // created via the management UI don't 500 with
-        // `No value for key: {repo}.yml`.
+        // `No value for key: {repo}.yml`. On success, cascade the delete
+        // into the artifacts DB index so search/locate don't return
+        // ghosts for files that have been removed from storage. The
+        // cascade is best-effort: if it fails we still return 204 and
+        // log — the ghost will resolve next backfill pass.
         this.repoData.deleteArtifact(rname, path, this.crs)
+            .thenCompose(deleted -> {
+                if (!deleted) {
+                    return CompletableFuture.completedFuture(deleted);
+                }
+                // Cover both cases: single file at the exact path, and
+                // directory delete (which also removes any children).
+                return this.artifactIndex.remove(repoName, path)
+                    .thenCompose(
+                        nothing -> this.artifactIndex.removePrefix(
+                            repoName, path.endsWith("/") ? path : path + "/"
+                        )
+                    )
+                    .<Boolean>handle((count, err) -> {
+                        if (err != null) {
+                            EcsLogger.warn("com.auto1.pantera.api.v1")
+                                .message("Artifact deleted from storage but"
+                                    + " DB-index cascade failed; ghost row"
+                                    + " will persist until next backfill: "
+                                    + err.getMessage())
+                                .eventCategory("database")
+                                .eventAction("delete_index_cascade_failed")
+                                .field("repository.name", repoName)
+                                .field("file.path", path)
+                                .error(err)
+                                .log();
+                        }
+                        return deleted;
+                    });
+            })
             .thenAccept(
                 deleted -> ctx.response().setStatusCode(204).end()
             )
@@ -890,8 +945,33 @@ public final class ArtifactHandler {
             return;
         }
         final RepositoryName rname = new RepositoryName.Simple(ctx.pathParam("name"));
-        // Fix (2.2.0): DB-fallback storage lookup — see deleteArtifactHandler.
+        final String repoName = rname.toString();
+        // Fix (2.2.0): DB-fallback storage lookup + DB-index cascade. See
+        // deleteArtifactHandler for the rationale.
         this.repoData.deletePackageFolder(rname, path, this.crs)
+            .thenCompose(deleted -> {
+                if (!deleted) {
+                    return CompletableFuture.completedFuture(deleted);
+                }
+                return this.artifactIndex.removePrefix(
+                        repoName, path.endsWith("/") ? path : path + "/"
+                    )
+                    .<Boolean>handle((count, err) -> {
+                        if (err != null) {
+                            EcsLogger.warn("com.auto1.pantera.api.v1")
+                                .message("Package folder deleted from storage"
+                                    + " but DB-index cascade failed: "
+                                    + err.getMessage())
+                                .eventCategory("database")
+                                .eventAction("delete_index_cascade_failed")
+                                .field("repository.name", repoName)
+                                .field("file.path", path)
+                                .error(err)
+                                .log();
+                        }
+                        return deleted;
+                    });
+            })
             .thenAccept(
                 deleted -> ctx.response().setStatusCode(204).end()
             )

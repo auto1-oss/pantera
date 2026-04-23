@@ -349,6 +349,53 @@ public final class DbArtifactIndex implements ArtifactIndex {
     }
 
     @Override
+    public CompletableFuture<Integer> removePrefix(
+        final String repoName, final String pathPrefix
+    ) {
+        if (pathPrefix == null || pathPrefix.isEmpty()) {
+            // Refuse to wipe an entire repo via a prefix-empty call — that
+            // should go through the repo-delete flow, which handles orphan
+            // cleanup differently.
+            return CompletableFuture.failedFuture(
+                new IllegalArgumentException("pathPrefix must not be empty")
+            );
+        }
+        // LIKE uses '%' and '_' as wildcards — both are legal path chars in
+        // corner cases (e.g. docker manifests, custom names). Escape them so
+        // the prefix is treated literally. `\` is the default ESCAPE char.
+        final String escaped = pathPrefix
+            .replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_");
+        return CompletableFuture.supplyAsync(() -> {
+            try (Connection conn = this.source.getConnection();
+                 PreparedStatement stmt = conn.prepareStatement(
+                     "DELETE FROM artifacts"
+                         + " WHERE repo_name = ? AND name LIKE ? ESCAPE '\\'"
+                 )) {
+                stmt.setString(1, repoName);
+                stmt.setString(2, escaped + "%");
+                return stmt.executeUpdate();
+            } catch (final SQLException ex) {
+                EcsLogger.error("com.auto1.pantera.index")
+                    .message("Failed to remove artifact prefix")
+                    .eventCategory("database")
+                    .eventAction("db_remove_prefix")
+                    .eventOutcome("failure")
+                    .field("repository.name", repoName)
+                    .field("package.name", pathPrefix)
+                    .error(ex)
+                    .log();
+                throw new RuntimeException(
+                    String.format("Failed to remove prefix %s from %s",
+                        pathPrefix, repoName),
+                    ex
+                );
+            }
+        }, this.executor);
+    }
+
+    @Override
     public CompletableFuture<SearchResult> search(
         final String query, final int maxResults, final int offset,
         final String repoType, final String repoName, final String sortBy, final boolean sortAsc
