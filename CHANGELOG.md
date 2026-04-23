@@ -2,6 +2,68 @@
 
 ## Unreleased
 
+### 🐛 Search & Browse overhaul (bugs A–F)
+
+- **Search — date sort now honours `sort_dir`.** `SearchHandler` round-tripped
+  the sort key through `SortField.name().toLowerCase()`, which emitted
+  `"date"` as the wire value — a value `DbArtifactIndex.toSortField` does
+  not recognise, silently degrading every `created_at` query to
+  `RELEVANCE` (`rank DESC, name ASC`). Users saw asc and desc return
+  byte-identical orderings. The handler now passes the already-validated
+  wire key (`"created_at"`) directly. Regression: `createdAtSortHonoursDirection`
+  + a contract test that pins `"date"` as explicitly NOT a valid wire value.
+- **Search — natural name sort.** Name column is lexicographic, so
+  `pkg-10` sorted before `pkg-2`. V123 adds a `name_sort` STORED generated
+  column built via a new `natural_sort_key(text)` SQL function that
+  zero-pads every digit run to 20 chars; `buildOrderBy`'s NAME branch
+  uses it with `name` as a stable tiebreaker. Regression:
+  `nameSortIsNatural` (pkg-2 < pkg-10 < pkg-11 < pkg-100).
+- **Search — metadata/checksum/signature noise excluded by default.** A
+  `wkda.common.api.vehicle-api` query returned 16 510 results, every one
+  of them a `.meta.maven.shards.*` internal metadata row, burying real
+  artifacts. V124 adds a STORED `artifact_kind` column populated via
+  `classify_artifact(text)` (labels `ARTIFACT | CHECKSUM | SIGNATURE |
+  METADATA` using the same patterns `MavenScanner` already filters at
+  backfill time). All three search paths (FTS exact, FTS prefix, LIKE
+  fallback) append `AND artifact_kind = 'ARTIFACT'`. Non-artifact rows
+  stay in the table for group routing and integrity checks. Regression:
+  `searchExcludesNonArtifactKinds` + classification contract for 19
+  filename patterns.
+- **Search UI — upload date visible.** The API already returned
+  `created_at`; the result card dropped it. Now shows `{N}m/h/d/mo ago`
+  with a full-timestamp tooltip.
+- **Repo browser — date column + DB-hydrated metadata + server-side
+  sort.** `ArtifactHandler.treeHandler` is rewritten: storage still owns
+  tree structure, but a single batched `WHERE repo_name = ? AND name =
+  ANY(?)` query hydrates every file row with size, `created_at`, and
+  `artifact_kind`. Accepts `sort=name|date` + `sort_dir=asc|desc`;
+  directories always sort first (file-manager convention); unknown sort
+  values degrade to `name`. DB failure returns the plain storage listing
+  without 5xx. `RepoDetailView` adds a sort dropdown + asc/desc toggle +
+  relative-date column. Parity with the native `FileSystemBrowseSlice`
+  experience users asked for.
+- **Conan uploads now index in the artifacts table.** `ConanSlice` /
+  `ConanUpload.PutFile` previously used the events-less `SliceUpload`
+  ctor, so Conan packages were invisible to tree/search. Thread
+  `Optional<Queue<ArtifactEvent>>` through; `RepositorySlices` passes
+  `artifactEvents()`. Gradle is not touched — the gradle-adapter module
+  has no source code and is not in the reactor.
+- **DELETE /api/v1/repositories/:name/artifacts** failed with
+  `ValueNotFoundException: No value for key: {repo}.yml` on every repo
+  created via the management UI (anything DB-only). `RepoData.deleteArtifact`
+  and `deletePackageFolder` were using the YAML-only `repoStorage(rname)`
+  lookup; added DB-fallback overloads that take `CrudRepoSettings`. The
+  handlers now pass `this.crs` — same lookup the read and tree paths
+  already use.
+- **Cleanup:** delete three dead SQL constants (`FTS_SEARCH_SQL`,
+  `PREFIX_FTS_SEARCH_SQL`, `LIKE_SEARCH_SQL`) plus the three legacy
+  helpers (`searchWithFts`, `searchWithPrefixFts`, `searchWithLike`).
+  The 3-arg `search(query, max, offset)` entry point now delegates to
+  the filtered search path, so classification + sort + permission
+  scoping are applied by a single code path. The constants bypassed the
+  `artifact_kind` filter and were the main reason bug A hid for so long.
+  ([@aydasraf](https://github.com/aydasraf))
+
 ### 🔧 Bug fixes
 
 - **Maven adapter event queue (`BaseCachedProxySlice.java`) now increments the
