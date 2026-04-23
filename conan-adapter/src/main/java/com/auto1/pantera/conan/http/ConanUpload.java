@@ -23,6 +23,7 @@ import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqHeaders;
 import com.auto1.pantera.http.rq.RqParams;
 import com.auto1.pantera.http.slice.SliceUpload;
+import com.auto1.pantera.scheduling.RepositoryEvents;
 import org.reactivestreams.Publisher;
 
 import javax.json.Json;
@@ -215,13 +216,34 @@ public final class ConanUpload {
         private final ItemTokenizer tokenizer;
 
         /**
-         * Ctor.
+         * Optional repository events sink. When present, successful uploads
+         * emit an {@code ArtifactEvent} so the artifacts DB index stays in
+         * sync with storage — otherwise Conan uploads would be invisible
+         * to the tree browser and search.
+         */
+        private final Optional<RepositoryEvents> events;
+
+        /**
+         * Legacy ctor retained for callers that cannot supply an events
+         * queue (tests, tools). Uploads are not indexed in this mode.
          * @param storage Current Pantera storage instance.
          * @param tokenizer Tokenize repository items via JWT tokens.
          */
         public PutFile(final Storage storage, final ItemTokenizer tokenizer) {
+            this(storage, tokenizer, Optional.empty());
+        }
+
+        /**
+         * Ctor.
+         * @param storage Current Pantera storage instance.
+         * @param tokenizer Tokenize repository items via JWT tokens.
+         * @param events Optional repository events sink for DB indexing.
+         */
+        public PutFile(final Storage storage, final ItemTokenizer tokenizer,
+            final Optional<RepositoryEvents> events) {
             this.storage = storage;
             this.tokenizer = tokenizer;
+            this.events = events;
         }
 
         @Override
@@ -236,8 +258,11 @@ public final class ConanUpload {
                         item -> {
                             if (item.isPresent() && item.get().getHostname().equals(hostname)
                                 && item.get().getPath().equals(path)) {
-                                return new SliceUpload(this.storage)
-                                    .response(line, headers, body);
+                                return new SliceUpload(
+                                    this.storage,
+                                    com.auto1.pantera.http.slice.KeyFromPath::new,
+                                    this.events
+                                ).response(line, headers, body);
                             }
                             return CompletableFuture.completedFuture(
                                 ResponseBuilder.unauthorized().build()

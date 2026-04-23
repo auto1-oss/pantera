@@ -16,6 +16,7 @@ import com.auto1.pantera.api.perms.ApiRepositoryPermission;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.http.context.HandlerExecutor;
+import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.RepoData;
 import com.auto1.pantera.settings.repo.CrudRepoSettings;
@@ -25,12 +26,24 @@ import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
+import java.sql.Array;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import javax.json.Json;
 import javax.json.JsonStructure;
+import javax.sql.DataSource;
 
 /**
  * Artifact handler for /api/v1/repositories/:name/artifact* endpoints.
@@ -79,16 +92,40 @@ public final class ArtifactHandler {
     private final Policy<?> policy;
 
     /**
+     * Artifacts DataSource — used by {@link #treeHandler} to hydrate file
+     * entries with upload date, size, and {@code artifact_kind} via a single
+     * batch lookup instead of N per-key metadata calls against storage.
+     * Nullable: when null the handler falls back to a storage-only listing
+     * (no modified date / kind in the response).
+     */
+    private final DataSource dataSource;
+
+    /**
      * Ctor.
+     * @param crs Repository settings CRUD
+     * @param repoData Repository data management
+     * @param policy Pantera security policy
+     * @param dataSource Artifacts DB DataSource (nullable; enables date /
+     *                   kind enrichment for tree listings when present)
+     */
+    public ArtifactHandler(final CrudRepoSettings crs, final RepoData repoData,
+        final Policy<?> policy, final DataSource dataSource) {
+        this.crs = crs;
+        this.repoData = repoData;
+        this.policy = policy;
+        this.dataSource = dataSource;
+    }
+
+    /**
+     * Legacy ctor without DataSource — preserves older wiring that
+     * predates the 2.2.0 tree-handler DB hydration.
      * @param crs Repository settings CRUD
      * @param repoData Repository data management
      * @param policy Pantera security policy
      */
     public ArtifactHandler(final CrudRepoSettings crs, final RepoData repoData,
         final Policy<?> policy) {
-        this.crs = crs;
-        this.repoData = repoData;
-        this.policy = policy;
+        this(crs, repoData, policy, null);
     }
 
     /**
@@ -143,6 +180,12 @@ public final class ArtifactHandler {
         final String repoName = ctx.pathParam("name");
         final String path = ctx.queryParam("path").stream()
             .findFirst().orElse("/");
+        final String sortBy = normalizeTreeSort(
+            ctx.queryParam("sort").stream().findFirst().orElse("name")
+        );
+        final boolean sortAsc = !"desc".equalsIgnoreCase(
+            ctx.queryParam("sort_dir").stream().findFirst().orElse("asc")
+        );
         final RepositoryName rname = new RepositoryName.Simple(repoName);
         // Resolve the storage key: repo root or sub-path
         final Key prefix;
@@ -154,7 +197,7 @@ public final class ArtifactHandler {
         }
         this.repoData.repoStorage(rname, this.crs)
             .thenCompose(asto -> asto.list(prefix, "/").thenCompose(listing -> {
-                final JsonArray items = new JsonArray();
+                final JsonArray dirItems = new JsonArray();
                 final String prefixStr = prefix.string();
                 final int prefixLen = prefixStr.isEmpty() ? 0 : prefixStr.length() + 1;
                 // Directories first
@@ -172,15 +215,14 @@ public final class ArtifactHandler {
                     final String repoPrefix = repoName + "/";
                     String itemPath = dirStr.startsWith(repoPrefix)
                         ? dirStr.substring(repoPrefix.length()) : dirStr;
-                    items.add(new JsonObject()
+                    dirItems.add(new JsonObject()
                         .put("name", name)
                         .put("path", itemPath)
                         .put("type", "directory"));
                 }
                 // Then files — for PyPI artifacts, check sidecar for
                 // yanked status so the tree can show a "Yanked" badge.
-                final java.util.List<java.util.concurrent.CompletableFuture<JsonObject>>
-                    fileFutures = new java.util.ArrayList<>();
+                final List<CompletableFuture<JsonObject>> fileFutures = new ArrayList<>();
                 for (final Key file : listing.files()) {
                     final String fileStr = file.string();
                     final String name = fileStr.contains("/")
@@ -213,8 +255,7 @@ public final class ArtifactHandler {
                         fileFutures.add(
                             asto.exists(sidecar).thenCompose(exists -> {
                                 if (!exists) {
-                                    return java.util.concurrent.CompletableFuture
-                                        .completedFuture(entry);
+                                    return CompletableFuture.completedFuture(entry);
                                 }
                                 return asto.value(sidecar)
                                     .thenCompose(
@@ -222,10 +263,10 @@ public final class ArtifactHandler {
                                     )
                                     .thenApply(bytes -> {
                                         try (javax.json.JsonReader reader =
-                                            javax.json.Json.createReader(
-                                                new java.io.StringReader(
+                                            Json.createReader(
+                                                new StringReader(
                                                     new String(bytes,
-                                                        java.nio.charset.StandardCharsets.UTF_8)
+                                                        StandardCharsets.UTF_8)
                                                 )
                                             )) {
                                             final javax.json.JsonObject sc =
@@ -240,26 +281,35 @@ public final class ArtifactHandler {
                             })
                         );
                     } else {
-                        fileFutures.add(
-                            java.util.concurrent.CompletableFuture
-                                .completedFuture(entry)
-                        );
+                        fileFutures.add(CompletableFuture.completedFuture(entry));
                     }
                 }
-                return java.util.concurrent.CompletableFuture.allOf(
-                    fileFutures.toArray(
-                        new java.util.concurrent.CompletableFuture[0]
-                    )
-                ).thenAccept(ignored -> {
+                return CompletableFuture.allOf(
+                    fileFutures.toArray(new CompletableFuture[0])
+                ).thenCompose(ignored -> {
+                    final JsonArray fileItems = new JsonArray();
                     for (final var f : fileFutures) {
-                        items.add(f.join());
+                        fileItems.add(f.join());
                     }
-                    ctx.response().setStatusCode(200)
-                        .putHeader("Content-Type", "application/json")
-                        .end(new JsonObject()
-                            .put("items", items)
-                            .put("marker", (String) null)
-                            .put("hasMore", false).encode());
+                    // Fix E (2.2.0): hydrate file entries with DB metadata
+                    // (size, modified, artifact_kind). One IN query batches
+                    // the whole listing; falls back to the raw storage view
+                    // if the DB is unavailable.
+                    return hydrateFilesWithDbMetadata(
+                        this.dataSource, repoName, fileItems
+                    ).thenAccept(hydrated -> {
+                        final JsonArray items = sortTreeEntries(
+                            dirItems, hydrated, sortBy, sortAsc
+                        );
+                        ctx.response().setStatusCode(200)
+                            .putHeader("Content-Type", "application/json")
+                            .end(new JsonObject()
+                                .put("items", items)
+                                .put("sort", sortBy)
+                                .put("sort_dir", sortAsc ? "asc" : "desc")
+                                .put("marker", (String) null)
+                                .put("hasMore", false).encode());
+                    });
                 });
             }))
             .exceptionally(err -> {
@@ -267,6 +317,140 @@ public final class ArtifactHandler {
                     err.getCause() != null ? err.getCause().getMessage() : err.getMessage());
                 return null;
             });
+    }
+
+    /**
+     * Normalise the tree sort parameter to a known value. Unknown values
+     * fall back to {@code name} so a typo never breaks the listing.
+     *
+     * @param raw Query parameter value
+     * @return "name" or "date"
+     */
+    private static String normalizeTreeSort(final String raw) {
+        if (raw == null) {
+            return "name";
+        }
+        return switch (raw.toLowerCase()) {
+            case "date", "modified", "created_at" -> "date";
+            default -> "name";
+        };
+    }
+
+    /**
+     * Batch-hydrate file entries with DB-sourced metadata (size, modified
+     * timestamp, artifact_kind). Issues ONE query per listing regardless
+     * of the number of files, then merges by `path`. Missing DB rows are
+     * left as-is — the storage listing already provides name/path/type.
+     *
+     * @param ds DataSource — may be null (handler wired without DB)
+     * @param repoName Repository name
+     * @param files File-kind JsonObjects from the storage listing
+     * @return Future carrying the same JsonArray with metadata merged in
+     */
+    private static CompletableFuture<JsonArray> hydrateFilesWithDbMetadata(
+        final DataSource ds, final String repoName, final JsonArray files
+    ) {
+        if (ds == null || files.isEmpty()) {
+            return CompletableFuture.completedFuture(files);
+        }
+        final List<String> paths = new ArrayList<>();
+        for (int i = 0; i < files.size(); i++) {
+            paths.add(files.getJsonObject(i).getString("path"));
+        }
+        return CompletableFuture.supplyAsync(() -> {
+            final Map<String, JsonObject> byPath = new HashMap<>();
+            try (Connection conn = ds.getConnection();
+                 PreparedStatement stmt = conn.prepareStatement(
+                     "SELECT name, size, created_date, artifact_kind"
+                         + " FROM artifacts"
+                         + " WHERE repo_name = ? AND name = ANY(?)")) {
+                stmt.setString(1, repoName);
+                final Array arr = conn.createArrayOf(
+                    "text", paths.toArray(new String[0])
+                );
+                stmt.setArray(2, arr);
+                try (ResultSet rs = stmt.executeQuery()) {
+                    while (rs.next()) {
+                        byPath.put(rs.getString("name"),
+                            new JsonObject()
+                                .put("size", rs.getLong("size"))
+                                .put("modified",
+                                    Instant.ofEpochMilli(rs.getLong("created_date"))
+                                        .toString())
+                                .put("artifact_kind",
+                                    rs.getString("artifact_kind")));
+                    }
+                }
+            } catch (final SQLException ex) {
+                EcsLogger.warn("com.auto1.pantera.api.v1")
+                    .message("Tree DB hydration failed; returning"
+                        + " storage-only listing: " + ex.getMessage())
+                    .eventCategory("database")
+                    .eventAction("tree_hydrate_fallback")
+                    .error(ex)
+                    .log();
+                return files;
+            }
+            for (int i = 0; i < files.size(); i++) {
+                final JsonObject file = files.getJsonObject(i);
+                final JsonObject meta = byPath.get(file.getString("path"));
+                if (meta != null) {
+                    file.put("size", meta.getLong("size"));
+                    file.put("modified", meta.getString("modified"));
+                    file.put("artifact_kind", meta.getString("artifact_kind"));
+                }
+            }
+            return files;
+        });
+    }
+
+    /**
+     * Combine directory + file entries into a single sorted list.
+     * Directories always sort first within each direction: users
+     * expect to see folders grouped together regardless of the
+     * active sort key. Within each group, apply the requested sort.
+     *
+     * @param dirs Directory entries (no date — sorted by name only)
+     * @param files File entries (may carry `modified` and `size`)
+     * @param sortBy "name" or "date"
+     * @param sortAsc true for ascending
+     * @return New JsonArray containing dirs then files in sorted order
+     */
+    private static JsonArray sortTreeEntries(
+        final JsonArray dirs, final JsonArray files,
+        final String sortBy, final boolean sortAsc
+    ) {
+        final Comparator<JsonObject> byName = Comparator.comparing(
+            o -> o.getString("name", ""),
+            (a, b) -> a.compareToIgnoreCase(b) != 0
+                ? a.compareToIgnoreCase(b) : a.compareTo(b)
+        );
+        final Comparator<JsonObject> cmp;
+        if ("date".equals(sortBy)) {
+            // Files without `modified` sort as epoch 0; name breaks ties.
+            cmp = Comparator.<JsonObject, String>comparing(
+                o -> o.getString("modified", "1970-01-01T00:00:00Z")
+            ).thenComparing(byName);
+        } else {
+            cmp = byName;
+        }
+        final Comparator<JsonObject> effective = sortAsc ? cmp : cmp.reversed();
+        final List<JsonObject> dirList = new ArrayList<>();
+        for (int i = 0; i < dirs.size(); i++) {
+            dirList.add(dirs.getJsonObject(i));
+        }
+        dirList.sort(
+            sortAsc ? byName : byName.reversed()
+        );
+        final List<JsonObject> fileList = new ArrayList<>();
+        for (int i = 0; i < files.size(); i++) {
+            fileList.add(files.getJsonObject(i));
+        }
+        fileList.sort(effective);
+        final JsonArray out = new JsonArray();
+        dirList.forEach(out::add);
+        fileList.forEach(out::add);
+        return out;
     }
 
     /**

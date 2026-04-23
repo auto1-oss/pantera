@@ -43,7 +43,11 @@ export async function getMembers(name: string): Promise<RepoMember[]> {
 }
 
 export async function getTree(name: string, params: {
-  path?: string; limit?: number; marker?: string
+  path?: string
+  limit?: number
+  marker?: string
+  sort?: 'name' | 'date'
+  sort_dir?: 'asc' | 'desc'
 } = {}, signal?: AbortSignal): Promise<CursorResponse<TreeEntry>> {
   const { data } = await getApiClient().get(`/repositories/${name}/tree`, { params, signal })
   return data
