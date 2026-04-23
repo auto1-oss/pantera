@@ -345,7 +345,7 @@ public final class ArtifactHandler {
      * fall back to {@code name} so a typo never breaks the listing.
      *
      * @param raw Query parameter value
-     * @return "name" or "date"
+     * @return "name", "date", or "size"
      */
     private static String normalizeTreeSort(final String raw) {
         if (raw == null) {
@@ -353,6 +353,7 @@ public final class ArtifactHandler {
         }
         return switch (raw.toLowerCase()) {
             case "date", "modified", "created_at" -> "date";
+            case "size" -> "size";
             default -> "name";
         };
     }

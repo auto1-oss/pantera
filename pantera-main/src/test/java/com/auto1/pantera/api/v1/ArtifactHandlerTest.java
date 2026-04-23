@@ -121,4 +121,33 @@ public final class ArtifactHandlerTest extends AsyncApiTestBase {
             bogus.bodyAsJsonObject().getString("sort"));
         ctx.completeNow();
     }
+
+    /**
+     * Size is a valid sort key — request with sort=size&sort_dir=desc
+     * must round-trip both values in the response envelope.
+     */
+    @Test
+    void treeAcceptsSizeSort(final Vertx vertx, final VertxTestContext ctx)
+        throws Exception {
+        final WebClient client = WebClient.create(vertx);
+        final HttpResponse<Buffer> put = client
+            .put(this.port(), AsyncApiTestBase.HOST,
+                "/api/v1/repositories/size-repo")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(VALID_BODY)
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(200, put.statusCode());
+        final HttpResponse<Buffer> sizeDesc = client
+            .get(this.port(), AsyncApiTestBase.HOST,
+                "/api/v1/repositories/size-repo/tree?sort=size&sort_dir=desc")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .send().toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(200, sizeDesc.statusCode());
+        final JsonObject body = sizeDesc.bodyAsJsonObject();
+        Assertions.assertEquals("size", body.getString("sort"));
+        Assertions.assertEquals("desc", body.getString("sort_dir"));
+        ctx.completeNow();
+    }
 }
