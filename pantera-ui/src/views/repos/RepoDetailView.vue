@@ -162,7 +162,7 @@ async function loadTree(path: string) {
     const resp = await getTree(props.name, {
       path,
       sort: sortBy.value,
-      sort_dir: sortAsc.value ? 'asc' : 'desc',
+      sort_dir: sortDir.value,
     }, ctrl.signal)
     if (ctrl.signal.aborted) return
     treeItems.value = Array.isArray(resp?.items) ? resp.items : []
@@ -178,19 +178,25 @@ async function loadTree(path: string) {
 
 async function loadMore() {
   if (!marker.value) return
+  if (treeAbortCtrl) treeAbortCtrl.abort()
+  treeAbortCtrl = new AbortController()
+  const ctrl = treeAbortCtrl
   treeLoading.value = true
   try {
     const resp = await getTree(props.name, {
       path: currentPath.value,
       marker: marker.value,
       sort: sortBy.value,
-      sort_dir: sortAsc.value ? 'asc' : 'desc',
-    })
+      sort_dir: sortDir.value,
+    }, ctrl.signal)
+    if (ctrl.signal.aborted) return
     if (Array.isArray(resp?.items)) treeItems.value.push(...resp.items)
     marker.value = resp?.marker ?? null
     hasMore.value = resp?.hasMore ?? false
+  } catch {
+    if (ctrl.signal.aborted) return
   } finally {
-    treeLoading.value = false
+    if (!ctrl.signal.aborted) treeLoading.value = false
   }
 }
 
@@ -267,7 +273,7 @@ async function downloadArtifact(path: string) {
 }
 
 function formatSize(bytes?: number): string {
-  if (!bytes) return '-'
+  if (bytes === undefined || bytes === null) return '-'
   if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MB`
   if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${bytes} B`

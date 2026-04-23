@@ -63,7 +63,7 @@ describe('RepoDetailView', () => {
     const wrapper = mountView()
     await flushPromises()
     const headers = wrapper.findAll('[data-testid="tree-header"]')
-    // headers[2] is Size
+    expect(headers[2].text()).toContain('Size')
     await headers[2].trigger('click')
     await flushPromises()
     const getTreeMock = vi.mocked(reposApi.getTree)
