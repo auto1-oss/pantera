@@ -25,7 +25,7 @@ function ariaSort(key: 'name' | 'date' | 'size'): 'ascending' | 'descending' | '
 }
 
 function formatSize(bytes?: number): string {
-  if (!bytes) return '-'
+  if (bytes === undefined || bytes === null) return '-'
   if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MB`
   if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${bytes} B`
@@ -79,7 +79,11 @@ function kindPillClass(kind: string): string {
 </script>
 
 <template>
-  <div data-testid="artifact-tree-table" class="w-full">
+  <div
+    data-testid="artifact-tree-table"
+    class="w-full transition-opacity"
+    :class="{ 'opacity-60 pointer-events-none': loading }"
+  >
     <div
       class="flex gap-2 px-3 py-1.5 border-b border-gray-200 dark:border-gray-700
              bg-gray-50 dark:bg-gray-800 text-xs font-semibold uppercase
@@ -129,7 +133,7 @@ function kindPillClass(kind: string): string {
       <div class="flex-1 flex items-center gap-2 text-sm">
         <i
           :class="entry.type === 'directory'
-            ? 'pi pi-folder text-yellow-500'
+            ? 'pi pi-folder text-yellow-500 dark:text-yellow-400'
             : 'pi pi-file text-gray-400 dark:text-gray-500'"
         />
         <span class="font-mono text-gray-900 dark:text-gray-100">{{ entry.name }}</span>
@@ -150,11 +154,15 @@ function kindPillClass(kind: string): string {
           <div
             data-testid="tree-uploaded-abs"
             class="text-[11px] text-gray-700 dark:text-gray-200 tabular-nums"
-          >{{ formatModifiedAbsolute(entry.modified) }}</div>
+          >
+            {{ formatModifiedAbsolute(entry.modified) }}
+          </div>
           <div
             data-testid="tree-uploaded-rel"
             class="text-[10px] text-gray-400 dark:text-gray-500"
-          >{{ formatModified(entry.modified) }}</div>
+          >
+            {{ formatModified(entry.modified) }}
+          </div>
         </template>
         <span
           v-else

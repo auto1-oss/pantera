@@ -57,6 +57,24 @@ describe('ArtifactTreeTable', () => {
     expect(headers[2].attributes('aria-sort')).toBe('none')
   })
 
+  it('shows the sort arrow on the active column and flips it with sortDir', () => {
+    const asc = mountTable({
+      props: { items, sortBy: 'date', sortDir: 'asc', loading: false },
+    })
+    const ascHeaders = asc.findAll('[data-testid="tree-header"]')
+    const ascIcon = ascHeaders[1].find('i')
+    expect(ascIcon.exists()).toBe(true)
+    expect(ascIcon.classes()).toContain('pi-arrow-up')
+    expect(ascHeaders[0].find('i').exists()).toBe(false)
+    expect(ascHeaders[2].find('i').exists()).toBe(false)
+
+    const desc = mountTable({
+      props: { items, sortBy: 'date', sortDir: 'desc', loading: false },
+    })
+    const descIcon = desc.findAll('[data-testid="tree-header"]')[1].find('i')
+    expect(descIcon.classes()).toContain('pi-arrow-down')
+  })
+
   it('renders a file row with name, uploaded (absolute + relative), size, and kind pill', () => {
     const fileItems: TreeEntry[] = [
       {
