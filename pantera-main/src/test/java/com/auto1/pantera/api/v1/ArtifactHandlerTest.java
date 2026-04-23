@@ -20,6 +20,8 @@ import io.vertx.ext.web.client.WebClient;
 import io.vertx.junit5.VertxTestContext;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -127,14 +129,11 @@ public final class ArtifactHandlerTest extends AsyncApiTestBase {
     }
 
     /**
-     * With real files of differing sizes on disk, sort=size&sort_dir=asc returns
-     * files in ascending size order; sort_dir=desc reverses them.
-     * Files are seeded directly on the filesystem — DB hydration is not wired
-     * for these keys, so the size comparator falls back to 0 for all entries
-     * and name-based tie-breaking determines order. The file names are chosen
-     * so that alphabetical order (a < b < c) matches the intended size order
-     * (small < medium < large), allowing the strict asc/desc assertions below
-     * to pass while simultaneously exercising the size-sort comparator path.
+     * With real sizes hydrated from the artifacts DB, sort=size&sort_dir=asc
+     * returns files in ascending size order; desc reverses. Names are
+     * intentionally anti-alphabetical vs size so a broken comparator that
+     * fell back to name order would flip the observed ordering — the
+     * assertion would then fail, catching the regression.
      */
     @Test
     void treeSortBySizeOrdersFiles(@TempDir final Path tempStorage,
@@ -154,14 +153,39 @@ public final class ArtifactHandlerTest extends AsyncApiTestBase {
             .toCompletionStage().toCompletableFuture()
             .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS)
             .statusCode());
-        // Seed three files with distinct sizes directly on disk.
-        // Storage path is tempStorage; key = "size-order/{filename}"
-        // → filesystem path = tempStorage/size-order/{filename}.
+        // Seed three files on disk with names intentionally anti-alphabetical
+        // vs size so the test can distinguish a correct size comparator from
+        // a broken one that falls back to name order.
         final Path repoDir = tempStorage.resolve("size-order");
         Files.createDirectories(repoDir);
-        Files.write(repoDir.resolve("a-small.bin"), new byte[16]);
-        Files.write(repoDir.resolve("b-medium.bin"), new byte[1024]);
-        Files.write(repoDir.resolve("c-large.bin"), new byte[65536]);
+        Files.write(repoDir.resolve("z-small.bin"), new byte[16]);
+        Files.write(repoDir.resolve("m-medium.bin"), new byte[1024]);
+        Files.write(repoDir.resolve("a-large.bin"), new byte[65536]);
+        // Seed matching DB rows so hydration populates real sizes.
+        final long now = System.currentTimeMillis();
+        try (Connection conn = sharedDs().getConnection();
+             PreparedStatement ins = conn.prepareStatement(
+                 "INSERT INTO artifacts "
+                     + "(repo_type, repo_name, name, version, size, "
+                     + "created_date, release_date, owner, path_prefix) "
+                     + "VALUES (?,?,?,?,?,?,?,?,?)")) {
+            for (final String[] row : new String[][] {
+                {"z-small.bin", "16"},
+                {"m-medium.bin", "1024"},
+                {"a-large.bin", "65536"}
+            }) {
+                ins.setString(1, "file");
+                ins.setString(2, "size-order");
+                ins.setString(3, row[0]);
+                ins.setString(4, "1");
+                ins.setLong(5, Long.parseLong(row[1]));
+                ins.setLong(6, now);
+                ins.setLong(7, now);
+                ins.setString(8, "");
+                ins.setNull(9, java.sql.Types.VARCHAR);
+                ins.executeUpdate();
+            }
+        }
         final HttpResponse<Buffer> asc = client
             .get(this.port(), AsyncApiTestBase.HOST,
                 "/api/v1/repositories/size-order/tree?sort=size&sort_dir=asc")
@@ -170,14 +194,13 @@ public final class ArtifactHandlerTest extends AsyncApiTestBase {
             .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
         Assertions.assertEquals(200, asc.statusCode());
         final JsonArray ascItems = asc.bodyAsJsonObject().getJsonArray("items");
-        Assertions.assertEquals(3, ascItems.size(),
-            "Expected 3 files in listing");
-        Assertions.assertEquals("a-small.bin",
-            ascItems.getJsonObject(0).getString("name"),
-            "Ascending sort: smallest file first");
-        Assertions.assertEquals("c-large.bin",
-            ascItems.getJsonObject(2).getString("name"),
-            "Ascending sort: largest file last");
+        Assertions.assertEquals(3, ascItems.size());
+        Assertions.assertEquals("z-small.bin",
+            ascItems.getJsonObject(0).getString("name"));
+        Assertions.assertEquals("m-medium.bin",
+            ascItems.getJsonObject(1).getString("name"));
+        Assertions.assertEquals("a-large.bin",
+            ascItems.getJsonObject(2).getString("name"));
         final HttpResponse<Buffer> desc = client
             .get(this.port(), AsyncApiTestBase.HOST,
                 "/api/v1/repositories/size-order/tree?sort=size&sort_dir=desc")
@@ -186,12 +209,10 @@ public final class ArtifactHandlerTest extends AsyncApiTestBase {
             .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
         Assertions.assertEquals(200, desc.statusCode());
         final JsonArray descItems = desc.bodyAsJsonObject().getJsonArray("items");
-        Assertions.assertEquals("c-large.bin",
-            descItems.getJsonObject(0).getString("name"),
-            "Descending sort: largest file first");
-        Assertions.assertEquals("a-small.bin",
-            descItems.getJsonObject(2).getString("name"),
-            "Descending sort: smallest file last");
+        Assertions.assertEquals("a-large.bin",
+            descItems.getJsonObject(0).getString("name"));
+        Assertions.assertEquals("z-small.bin",
+            descItems.getJsonObject(2).getString("name"));
         ctx.completeNow();
     }
 
