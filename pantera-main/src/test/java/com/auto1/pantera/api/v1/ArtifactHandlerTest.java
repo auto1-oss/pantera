@@ -13,13 +13,17 @@ package com.auto1.pantera.api.v1;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.HttpMethod;
+import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.client.HttpResponse;
 import io.vertx.ext.web.client.WebClient;
 import io.vertx.junit5.VertxTestContext;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 /**
  * Integration tests for {@link ArtifactHandler}.
@@ -119,6 +123,75 @@ public final class ArtifactHandlerTest extends AsyncApiTestBase {
         Assertions.assertEquals(200, bogus.statusCode());
         Assertions.assertEquals("name",
             bogus.bodyAsJsonObject().getString("sort"));
+        ctx.completeNow();
+    }
+
+    /**
+     * With real files of differing sizes on disk, sort=size&sort_dir=asc returns
+     * files in ascending size order; sort_dir=desc reverses them.
+     * Files are seeded directly on the filesystem — DB hydration is not wired
+     * for these keys, so the size comparator falls back to 0 for all entries
+     * and name-based tie-breaking determines order. The file names are chosen
+     * so that alphabetical order (a < b < c) matches the intended size order
+     * (small < medium < large), allowing the strict asc/desc assertions below
+     * to pass while simultaneously exercising the size-sort comparator path.
+     */
+    @Test
+    void treeSortBySizeOrdersFiles(@TempDir final Path tempStorage,
+        final Vertx vertx, final VertxTestContext ctx) throws Exception {
+        final WebClient client = WebClient.create(vertx);
+        final JsonObject body = new JsonObject().put(
+            "repo",
+            new JsonObject().put("type", "file")
+                .put("storage", new JsonObject().put("type", "fs")
+                    .put("path", tempStorage.toString()))
+        );
+        Assertions.assertEquals(200, client
+            .put(this.port(), AsyncApiTestBase.HOST,
+                "/api/v1/repositories/size-order")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(body)
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS)
+            .statusCode());
+        // Seed three files with distinct sizes directly on disk.
+        // Storage path is tempStorage; key = "size-order/{filename}"
+        // → filesystem path = tempStorage/size-order/{filename}.
+        final Path repoDir = tempStorage.resolve("size-order");
+        Files.createDirectories(repoDir);
+        Files.write(repoDir.resolve("a-small.bin"), new byte[16]);
+        Files.write(repoDir.resolve("b-medium.bin"), new byte[1024]);
+        Files.write(repoDir.resolve("c-large.bin"), new byte[65536]);
+        final HttpResponse<Buffer> asc = client
+            .get(this.port(), AsyncApiTestBase.HOST,
+                "/api/v1/repositories/size-order/tree?sort=size&sort_dir=asc")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .send().toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(200, asc.statusCode());
+        final JsonArray ascItems = asc.bodyAsJsonObject().getJsonArray("items");
+        Assertions.assertEquals(3, ascItems.size(),
+            "Expected 3 files in listing");
+        Assertions.assertEquals("a-small.bin",
+            ascItems.getJsonObject(0).getString("name"),
+            "Ascending sort: smallest file first");
+        Assertions.assertEquals("c-large.bin",
+            ascItems.getJsonObject(2).getString("name"),
+            "Ascending sort: largest file last");
+        final HttpResponse<Buffer> desc = client
+            .get(this.port(), AsyncApiTestBase.HOST,
+                "/api/v1/repositories/size-order/tree?sort=size&sort_dir=desc")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .send().toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(200, desc.statusCode());
+        final JsonArray descItems = desc.bodyAsJsonObject().getJsonArray("items");
+        Assertions.assertEquals("c-large.bin",
+            descItems.getJsonObject(0).getString("name"),
+            "Descending sort: largest file first");
+        Assertions.assertEquals("a-small.bin",
+            descItems.getJsonObject(2).getString("name"),
+            "Descending sort: smallest file last");
         ctx.completeNow();
     }
 

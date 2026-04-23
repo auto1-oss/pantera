@@ -434,7 +434,7 @@ public final class ArtifactHandler {
      *
      * @param dirs Directory entries (no date — sorted by name only)
      * @param files File entries (may carry `modified` and `size`)
-     * @param sortBy "name" or "date"
+     * @param sortBy "name", "date", or "size"
      * @param sortAsc true for ascending
      * @return New JsonArray containing dirs then files in sorted order
      */
@@ -452,6 +452,11 @@ public final class ArtifactHandler {
             // Files without `modified` sort as epoch 0; name breaks ties.
             cmp = Comparator.<JsonObject, String>comparing(
                 o -> o.getString("modified", "1970-01-01T00:00:00Z")
+            ).thenComparing(byName);
+        } else if ("size".equals(sortBy)) {
+            // Files without a hydrated `size` sort as 0; name breaks ties.
+            cmp = Comparator.<JsonObject>comparingLong(
+                o -> o.getLong("size", 0L)
             ).thenComparing(byName);
         } else {
             cmp = byName;
