@@ -12,6 +12,7 @@ package com.auto1.pantera.index;
 
 import com.amihaiemil.eoyaml.Yaml;
 import com.auto1.pantera.db.ArtifactDbFactory;
+import com.auto1.pantera.db.DbManager;
 import com.auto1.pantera.db.PostgreSQLTestConfig;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
@@ -79,6 +80,11 @@ class DbArtifactIndexTest {
             ).build(),
             "artifacts"
         ).initialize();
+        // Run Flyway migrations so Flyway-managed columns
+        // (name_sort V123, version_sort V111, search_tokens V109, …) are
+        // present. Production calls initialize() followed by
+        // DbManager.migrate(); tests must mirror that.
+        DbManager.migrate(this.dataSource);
         // Clean up artifacts table before each test
         try (Connection conn = this.dataSource.getConnection();
              Statement stmt = conn.createStatement()) {
@@ -691,6 +697,57 @@ class DbArtifactIndexTest {
             "desc order must place the oldest timestamp last",
             desc.documents().get(desc.documents().size() - 1).artifactName(),
             new IsEqual<>("sorted-alpha")
+        );
+    }
+
+    /**
+     * Natural name sort via V123's {@code name_sort} generated column: numeric
+     * runs embedded in filenames must sort numerically, not lexicographically.
+     * Without the column, {@code pkg-10} sorts before {@code pkg-2}; with it,
+     * every digit run is zero-padded to 20 chars so lexicographic comparison
+     * preserves numeric order.
+     */
+    @Test
+    void nameSortIsNatural() throws Exception {
+        final Instant now = Instant.now();
+        // Intentional insertion order is not-sorted; relies on the column,
+        // not insertion order, to place rows correctly.
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "pkg-2", "pkg-2",
+            "1.0.0", 100L, now, "user"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "pkg-10", "pkg-10",
+            "1.0.0", 100L, now, "user"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "pkg-11", "pkg-11",
+            "1.0.0", 100L, now, "user"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "pkg-100", "pkg-100",
+            "1.0.0", 100L, now, "user"
+        )).join();
+        final SearchResult asc = this.index.search(
+            "pkg", 10, 0, null, null, "name", true, null
+        ).join();
+        final List<String> ascNames = asc.documents().stream()
+            .map(ArtifactDocument::artifactName).toList();
+        MatcherAssert.assertThat(
+            "Natural sort must place pkg-2 before pkg-10, pkg-10 before pkg-11,"
+                + " and pkg-11 before pkg-100 — lexicographic sort would reverse these",
+            ascNames,
+            Matchers.contains("pkg-2", "pkg-10", "pkg-11", "pkg-100")
+        );
+        final SearchResult desc = this.index.search(
+            "pkg", 10, 0, null, null, "name", false, null
+        ).join();
+        final List<String> descNames = desc.documents().stream()
+            .map(ArtifactDocument::artifactName).toList();
+        MatcherAssert.assertThat(
+            "Desc order must reverse the natural sort",
+            descNames,
+            Matchers.contains("pkg-100", "pkg-11", "pkg-10", "pkg-2")
         );
     }
 
