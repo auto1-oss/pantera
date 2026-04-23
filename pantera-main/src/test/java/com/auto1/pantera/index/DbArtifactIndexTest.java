@@ -28,6 +28,7 @@ import com.zaxxer.hikari.HikariDataSource;
 import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.Statement;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -749,6 +750,119 @@ class DbArtifactIndexTest {
             descNames,
             Matchers.contains("pkg-100", "pkg-11", "pkg-10", "pkg-2")
         );
+    }
+
+    /**
+     * V124 classification: search must exclude metadata, checksum, and
+     * signature rows from user-facing results. The pre-fix complaint was
+     * 16 510 `.meta.maven.shards.*` rows dominating a single query; this
+     * test pins the regression by inserting one primary artifact plus
+     * representative rows of every non-ARTIFACT kind and asserting only
+     * the primary artifact is returned.
+     */
+    @Test
+    void searchExcludesNonArtifactKinds() throws Exception {
+        final Instant now = Instant.now();
+        // Primary artifact — should be returned
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "com/example/vehicle-api", "vehicle-api",
+            "1.0.0", 1024L, now, "user"
+        )).join();
+        // Non-artifact rows that must be hidden by default
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", ".meta.maven.shards.vehicle-api", "vehicle-api",
+            "1.0.0-1e7d13d", 340L, now, "system"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "vehicle-api-1.0.0.jar.md5", "vehicle-api",
+            "1.0.0", 32L, now, "system"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "vehicle-api-1.0.0.jar.sha256", "vehicle-api",
+            "1.0.0", 64L, now, "system"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "vehicle-api-1.0.0.jar.asc", "vehicle-api",
+            "1.0.0", 800L, now, "system"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "maven-metadata.xml", "vehicle-api",
+            "1.0.0", 512L, now, "system"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "vehicle-api.pantera-meta.json", "vehicle-api",
+            "1.0.0", 128L, now, "system"
+        )).join();
+        final SearchResult result = this.index.search(
+            "vehicle-api", 50, 0, null, null, "relevance", true, null
+        ).join();
+        MatcherAssert.assertThat(
+            "Only the primary artifact should be searchable; non-ARTIFACT"
+                + " rows remain in the index for routing but are filtered"
+                + " from user-facing search results",
+            result.documents().size(),
+            new IsEqual<>(1)
+        );
+        MatcherAssert.assertThat(
+            "The single hit must be the real vehicle-api artifact",
+            result.documents().get(0).artifactPath(),
+            new IsEqual<>("com/example/vehicle-api")
+        );
+        MatcherAssert.assertThat(
+            "Total hits must reflect the filtered count, not the raw row"
+                + " count — otherwise hasMore/pagination breaks",
+            result.totalHits(),
+            new IsEqual<>(1L)
+        );
+    }
+
+    /**
+     * Classification function contract: every known pattern produces the
+     * expected kind. Tests the DB function directly via SELECT; any future
+     * change to classify_artifact must keep these invariants or adjust this
+     * test.
+     */
+    @Test
+    void classificationFunctionLabelsKnownPatterns() throws Exception {
+        try (Connection conn = this.dataSource.getConnection();
+             Statement stmt = conn.createStatement()) {
+            final java.util.Map<String, String> cases = new java.util.LinkedHashMap<>();
+            cases.put("vehicle-api-1.0.0.jar", "ARTIFACT");
+            cases.put("some-library", "ARTIFACT");
+            cases.put("pkg.md5", "CHECKSUM");
+            cases.put("pkg.SHA1", "CHECKSUM");
+            cases.put("pkg.sha256", "CHECKSUM");
+            cases.put("pkg.sha512", "CHECKSUM");
+            cases.put("pkg.asc", "SIGNATURE");
+            cases.put("pkg.sig", "SIGNATURE");
+            cases.put("maven-metadata.xml", "METADATA");
+            // Checksum rule fires first — maven-metadata.xml.md5 is the
+            // checksum of a metadata file. Both kinds are excluded from
+            // search results, so the user-visible outcome is the same.
+            cases.put("maven-metadata.xml.md5", "CHECKSUM");
+            cases.put(".meta.maven.shards.foo", "METADATA");
+            cases.put(".pantera-heartbeat", "METADATA");
+            cases.put("foo.pantera-meta.json", "METADATA");
+            cases.put("Packages", "METADATA");
+            cases.put("Packages.gz", "METADATA");
+            cases.put("Release", "METADATA");
+            cases.put("InRelease", "METADATA");
+            cases.put("index.yaml", "METADATA");
+            cases.put("packages.json", "METADATA");
+            for (final var entry : cases.entrySet()) {
+                try (ResultSet rs = stmt.executeQuery(
+                    "SELECT classify_artifact('"
+                        + entry.getKey().replace("'", "''") + "')"
+                )) {
+                    MatcherAssert.assertThat(
+                        "classify_artifact('" + entry.getKey() + "') must be "
+                            + entry.getValue(),
+                        rs.next() && rs.getString(1).equals(entry.getValue()),
+                        new IsEqual<>(true)
+                    );
+                }
+            }
+        }
     }
 
     /**

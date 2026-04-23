@@ -579,6 +579,12 @@ public final class DbArtifactIndex implements ArtifactIndex {
     /**
      * Build optional WHERE filter clauses for type, repo, and allowed repos.
      * Fix 5: adds AND repo_name = ANY(?) when allowedRepos is non-null.
+     * Fix B (2.2.0): always appends {@code AND artifact_kind = 'ARTIFACT'}
+     * to exclude checksum/signature/metadata rows from user-facing search.
+     * The `artifact_kind` generated column (V124) classifies every row;
+     * non-ARTIFACT rows remain in the index for group routing and
+     * integrity checks but are invisible to search, which was returning
+     * 16k+ `.meta.maven.shards.*` entries per query before this filter.
      *
      * @param repoType Base repo type (e.g. "maven"), or null
      * @param repoName Exact repo name, or null
@@ -598,6 +604,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
         if (allowedRepos != null) {
             sb.append(" AND repo_name = ANY(?)");
         }
+        sb.append(" AND artifact_kind = 'ARTIFACT'");
         return sb.toString();
     }
 
