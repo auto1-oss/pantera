@@ -14,10 +14,8 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Stream;
@@ -27,18 +25,22 @@ import org.slf4j.LoggerFactory;
 /**
  * Scanner for Maven (and Gradle) repositories.
  *
- * <p>Walks the Maven directory structure for artifact files
- * ({@code .jar}, {@code .war}, {@code .aar}, {@code .zip},
- * {@code .pom}) and
- * infers groupId, artifactId, and version from the standard Maven
- * directory convention:</p>
- * <pre>groupId-as-path/artifactId/version/artifactId-version.ext</pre>
+ * <p>Walks the Maven directory structure and treats any file whose name
+ * matches {@code artifactId-version} (or {@code artifactId_version}) under
+ * {@code groupId-as-path/artifactId/version/} as an artifact, regardless of
+ * extension. Sidecars ({@code .sha1}, {@code .md5}, {@code .asc}, etc.),
+ * {@code maven-metadata.xml}, and pantera-meta JSON files are filtered out
+ * by a blocklist.</p>
  *
- * <p>Works for both local/hosted repos (with {@code maven-metadata.xml})
- * and proxy/cache repos (without metadata). Sidecar files
- * ({@code .sha1}, {@code .md5}, {@code .json}, etc.) are skipped.
- * When multiple files share the same GAV (e.g. {@code .jar} + {@code .pom}),
- * only one record is emitted using the largest file size.</p>
+ * <p>This structural detection matches the same invariant used by the upload
+ * path ({@code UploadSlice.isPrimaryArtifactPath}) and the group lookup
+ * parser ({@code ArtifactNameParser.parseMaven}), so unusual extensions
+ * (e.g. {@code .graphql}, {@code .tar.gz}) that are valid Maven artifacts
+ * are indexed consistently across upload, scan, and lookup.</p>
+ *
+ * <p>When multiple files share the same GAV (e.g. {@code .jar} + {@code .pom}),
+ * only one record is emitted; a binary beats a {@code .pom}/{@code .module},
+ * and among binaries the largest file size wins.</p>
  *
  * @since 1.20.13
  */
@@ -48,13 +50,6 @@ final class MavenScanner implements Scanner {
      * Logger.
      */
     private static final Logger LOG = LoggerFactory.getLogger(MavenScanner.class);
-
-    /**
-     * Artifact file extensions to match, in priority order.
-     */
-    private static final List<String> EXTENSIONS = Arrays.asList(
-        ".jar", ".war", ".aar", ".zip", ".pom", ".module"
-    );
 
     /**
      * Repository type identifier.
@@ -78,7 +73,7 @@ final class MavenScanner implements Scanner {
         final Set<String> hasBinary = new HashSet<>();
         try (Stream<Path> walk = Files.walk(root)) {
             walk.filter(Files::isRegularFile)
-                .filter(MavenScanner::isMavenArtifact)
+                .filter(MavenScanner::isScannableCandidate)
                 .forEach(path -> {
                     final ArtifactRecord record = this.parseFromPath(
                         root, repoName, path
@@ -112,28 +107,32 @@ final class MavenScanner implements Scanner {
     }
 
     /**
-     * Check if a file is a Maven artifact (not a sidecar/metadata file).
+     * Cheap blocklist filter — rejects files that are obviously not
+     * artifacts (hidden files, checksums, signatures, pantera sidecars,
+     * {@code maven-metadata.xml}). The true structural invariant
+     * ({@code filename.startsWith(artifactId + "-")}) is checked later
+     * in {@link #parseFromPath} once the path has been decomposed.
      *
      * @param path File path to check
-     * @return True if the file is a Maven artifact
+     * @return True if the file is worth inspecting as a potential artifact
      */
-    private static boolean isMavenArtifact(final Path path) {
+    private static boolean isScannableCandidate(final Path path) {
         final String name = path.getFileName().toString();
         if (name.startsWith(".")) {
             return false;
         }
         if (name.endsWith(".md5") || name.endsWith(".sha1")
             || name.endsWith(".sha256") || name.endsWith(".sha512")
-            || name.endsWith(".asc") || name.endsWith(".sig")
-            || name.endsWith(".json") || name.endsWith(".xml")) {
+            || name.endsWith(".asc") || name.endsWith(".sig")) {
             return false;
         }
-        for (final String ext : EXTENSIONS) {
-            if (name.endsWith(ext)) {
-                return true;
-            }
+        // pantera-meta JSON sidecars and Maven's own metadata XML.
+        if (name.endsWith(".pantera-meta.json")
+            || "maven-metadata.xml".equals(name)
+            || name.startsWith("maven-metadata.xml.")) {
+            return false;
         }
-        return false;
+        return true;
     }
 
     /**
@@ -156,6 +155,17 @@ final class MavenScanner implements Scanner {
         }
         final String version = relative.getName(count - 2).toString();
         final String artifactId = relative.getName(count - 3).toString();
+        // Structural invariant shared with UploadSlice.isPrimaryArtifactPath
+        // and ArtifactNameParser.parseMaven: the file must belong to this
+        // artifact's coordinates. Accept both `-` (Maven) and `_` (legacy
+        // internal) separators.
+        final String filename = path.getFileName().toString();
+        if (!filename.startsWith(artifactId + '-')
+            && !filename.startsWith(artifactId + '_')) {
+            LOG.debug("Filename {} does not match artifactId {}",
+                filename, artifactId);
+            return null;
+        }
         final StringBuilder groupBuilder = new StringBuilder();
         for (int idx = 0; idx < count - 3; idx++) {
             if (idx > 0) {
