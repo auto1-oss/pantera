@@ -91,6 +91,8 @@ export interface TreeEntry {
   type: 'file' | 'directory'
   size?: number
   modified?: string
+  artifact_kind?: 'ARTIFACT' | 'CHECKSUM' | 'SIGNATURE' | 'METADATA'
+  yanked?: boolean
 }
 
 export interface ArtifactDetail {

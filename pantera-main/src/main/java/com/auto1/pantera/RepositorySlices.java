@@ -959,7 +959,7 @@ public class RepositorySlices {
                     new ItemTokenizer(
                         Vertx.vertx(), jwtTokens.publicKey(), jwtTokens.privateKey()
                     ),
-                    cfg.name()
+                    cfg.name(), artifactEvents()
                 );
                 break;
             case "hexpm":

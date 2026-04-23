@@ -15,6 +15,7 @@ import Breadcrumb from 'primevue/breadcrumb'
 import Dialog from 'primevue/dialog'
 import Textarea from 'primevue/textarea'
 import Message from 'primevue/message'
+import Select from 'primevue/select'
 import type { TreeEntry, ArtifactDetail } from '@/types'
 
 const props = defineProps<{ name: string }>()
@@ -94,14 +95,22 @@ const treeLoading = ref(false)
 const marker = ref<string | null>(null)
 const hasMore = ref(false)
 const sortAsc = ref(true)
+const sortBy = ref<'name' | 'date'>('name')
 
+// Server is authoritative for ordering after 2.2.0 — treeItems comes back
+// already sorted by the sort params sent on load. Kept as a computed ref
+// to keep the template unchanged; directories-first is still enforced here
+// as a belt-and-braces guard if a server path ever returns mixed order.
 const sortedItems = computed(() => {
   return [...treeItems.value].sort((a, b) => {
     if (a.type !== b.type) return a.type === 'directory' ? -1 : 1
-    const cmp = a.name.localeCompare(b.name, undefined, { numeric: true })
-    return sortAsc.value ? cmp : -cmp
+    return 0
   })
 })
+
+function onSortChange() {
+  loadTree(currentPath.value)
+}
 
 // Artifact detail dialog
 const detailVisible = ref(false)
@@ -154,7 +163,11 @@ async function loadTree(path: string) {
   treeLoading.value = true
   currentPath.value = path
   try {
-    const resp = await getTree(props.name, { path }, ctrl.signal)
+    const resp = await getTree(props.name, {
+      path,
+      sort: sortBy.value,
+      sort_dir: sortAsc.value ? 'asc' : 'desc',
+    }, ctrl.signal)
     if (ctrl.signal.aborted) return
     treeItems.value = resp.items
     marker.value = resp.marker
@@ -171,13 +184,49 @@ async function loadMore() {
   if (!marker.value) return
   treeLoading.value = true
   try {
-    const resp = await getTree(props.name, { path: currentPath.value, marker: marker.value })
+    const resp = await getTree(props.name, {
+      path: currentPath.value,
+      marker: marker.value,
+      sort: sortBy.value,
+      sort_dir: sortAsc.value ? 'asc' : 'desc',
+    })
     treeItems.value.push(...resp.items)
     marker.value = resp.marker
     hasMore.value = resp.hasMore
   } finally {
     treeLoading.value = false
   }
+}
+
+function formatModified(iso?: string | null): string {
+  if (!iso) return ''
+  const ts = Date.parse(iso)
+  if (Number.isNaN(ts)) return ''
+  const diffMs = Date.now() - ts
+  const sec = Math.round(diffMs / 1000)
+  if (sec < 60) return `${sec}s ago`
+  const min = Math.round(sec / 60)
+  if (min < 60) return `${min}m ago`
+  const hr = Math.round(min / 60)
+  if (hr < 48) return `${hr}h ago`
+  const day = Math.round(hr / 24)
+  if (day < 30) return `${day}d ago`
+  const mon = Math.round(day / 30)
+  if (mon < 18) return `${mon}mo ago`
+  return `${Math.round(mon / 12)}y ago`
+}
+
+function formatModifiedAbsolute(iso?: string | null): string {
+  if (!iso) return ''
+  const ts = Date.parse(iso)
+  if (Number.isNaN(ts)) return ''
+  return new Date(ts).toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 }
 
 function navigateTree(entry: TreeEntry) {
@@ -327,12 +376,26 @@ function formatSize(bytes?: number): string {
         <template #title>
           <div class="flex items-center justify-between">
             <span>Artifacts</span>
-            <div class="flex items-center gap-1">
+            <div class="flex items-center gap-2">
+              <Select
+                v-model="sortBy"
+                :options="[
+                  { label: 'Name', value: 'name' },
+                  { label: 'Date', value: 'date' },
+                ]"
+                option-label="label"
+                option-value="value"
+                size="small"
+                class="!text-xs"
+                @change="onSortChange"
+              />
               <Button
-                :icon="sortAsc ? 'pi pi-sort-alpha-down' : 'pi pi-sort-alpha-up'"
-                :title="sortAsc ? 'A → Z' : 'Z → A'"
+                :icon="sortAsc
+                  ? (sortBy === 'date' ? 'pi pi-sort-amount-up-alt' : 'pi pi-sort-alpha-down')
+                  : (sortBy === 'date' ? 'pi pi-sort-amount-down' : 'pi pi-sort-alpha-up')"
+                :title="sortAsc ? 'Ascending' : 'Descending'"
                 text size="small"
-                @click="sortAsc = !sortAsc"
+                @click="sortAsc = !sortAsc; onSortChange()"
               />
               <Button v-if="currentPath !== '/'" icon="pi pi-arrow-up" label="Up" text size="small" @click="goUp" />
             </div>
@@ -358,7 +421,12 @@ function formatSize(bytes?: number): string {
             >
               <i :class="entry.type === 'directory' ? 'pi pi-folder text-yellow-500' : 'pi pi-file text-gray-400'" />
               <span class="flex-1 text-sm font-mono text-gray-800 dark:text-gray-200">{{ entry.name }}</span>
-              <span v-if="entry.size" class="text-xs text-gray-400">{{ formatSize(entry.size) }}</span>
+              <span v-if="entry.size" class="text-xs text-gray-400 w-16 text-right">{{ formatSize(entry.size) }}</span>
+              <span
+                v-if="entry.modified"
+                class="text-xs text-gray-400 w-20 text-right tabular-nums"
+                :title="formatModifiedAbsolute(entry.modified)"
+              >{{ formatModified(entry.modified) }}</span>
               <!-- PyPI yanked status badge (action buttons are in the artifact detail dialog) -->
               <Tag
                 v-if="isPypi && entry.type === 'file' && (entry as Record<string, unknown>).yanked"

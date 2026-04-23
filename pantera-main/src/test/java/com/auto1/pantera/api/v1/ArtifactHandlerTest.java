@@ -70,4 +70,55 @@ public final class ArtifactHandlerTest extends AsyncApiTestBase {
             res -> Assertions.assertEquals(400, res.statusCode())
         );
     }
+
+    /**
+     * The tree response must echo the sort + sort_dir params back so the
+     * UI knows which ordering it received. Unknown sort values fall back
+     * to {@code name}; this pins the default when no param is supplied.
+     */
+    @Test
+    void treeEchoesSortParams(final Vertx vertx, final VertxTestContext ctx) throws Exception {
+        final WebClient client = WebClient.create(vertx);
+        final HttpResponse<Buffer> put = client
+            .put(this.port(), AsyncApiTestBase.HOST,
+                "/api/v1/repositories/sort-repo")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(VALID_BODY)
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(200, put.statusCode());
+        // Default: no params → sort=name&sort_dir=asc
+        final HttpResponse<Buffer> def = client
+            .get(this.port(), AsyncApiTestBase.HOST,
+                "/api/v1/repositories/sort-repo/tree")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .send().toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(200, def.statusCode());
+        final JsonObject defBody = def.bodyAsJsonObject();
+        Assertions.assertEquals("name", defBody.getString("sort"));
+        Assertions.assertEquals("asc", defBody.getString("sort_dir"));
+        // Explicit date desc
+        final HttpResponse<Buffer> dateDesc = client
+            .get(this.port(), AsyncApiTestBase.HOST,
+                "/api/v1/repositories/sort-repo/tree?sort=date&sort_dir=desc")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .send().toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(200, dateDesc.statusCode());
+        final JsonObject ddBody = dateDesc.bodyAsJsonObject();
+        Assertions.assertEquals("date", ddBody.getString("sort"));
+        Assertions.assertEquals("desc", ddBody.getString("sort_dir"));
+        // Unknown sort value must degrade to "name", not reject with 4xx
+        final HttpResponse<Buffer> bogus = client
+            .get(this.port(), AsyncApiTestBase.HOST,
+                "/api/v1/repositories/sort-repo/tree?sort=garbage")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .send().toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(200, bogus.statusCode());
+        Assertions.assertEquals("name",
+            bogus.bodyAsJsonObject().getString("sort"));
+        ctx.completeNow();
+    }
 }
