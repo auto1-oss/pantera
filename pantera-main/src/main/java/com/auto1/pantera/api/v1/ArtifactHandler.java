@@ -852,7 +852,10 @@ public final class ArtifactHandler {
             return;
         }
         final RepositoryName rname = new RepositoryName.Simple(ctx.pathParam("name"));
-        this.repoData.deleteArtifact(rname, path)
+        // Fix (2.2.0): use DB-fallback storage lookup so DB-only repos
+        // created via the management UI don't 500 with
+        // `No value for key: {repo}.yml`.
+        this.repoData.deleteArtifact(rname, path, this.crs)
             .thenAccept(
                 deleted -> ctx.response().setStatusCode(204).end()
             )
@@ -887,7 +890,8 @@ public final class ArtifactHandler {
             return;
         }
         final RepositoryName rname = new RepositoryName.Simple(ctx.pathParam("name"));
-        this.repoData.deletePackageFolder(rname, path)
+        // Fix (2.2.0): DB-fallback storage lookup — see deleteArtifactHandler.
+        this.repoData.deletePackageFolder(rname, path, this.crs)
             .thenAccept(
                 deleted -> ctx.response().setStatusCode(204).end()
             )
