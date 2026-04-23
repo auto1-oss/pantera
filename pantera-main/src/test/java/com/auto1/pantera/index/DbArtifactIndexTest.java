@@ -639,4 +639,73 @@ class DbArtifactIndexTest {
             new IsEqual<>(1L)
         );
     }
+
+    /**
+     * Regression for the 2.2.0 SearchHandler date-sort bug.
+     * Prior to the fix, SearchHandler passed {@code SortField.DATE.name().toLowerCase()}
+     * ("date") as the wire value, but {@link DbArtifactIndex#toSortField(String)}
+     * only recognises "created_at", so every date-sorted query silently degraded
+     * to RELEVANCE. This test asserts the contract that the index honours
+     * "created_at" as the wire key and that asc/desc produce strictly opposite
+     * orderings.
+     */
+    @Test
+    void createdAtSortHonoursDirection() throws Exception {
+        final Instant oldest = Instant.parse("2024-01-01T00:00:00Z");
+        final Instant middle = Instant.parse("2024-06-01T00:00:00Z");
+        final Instant newest = Instant.parse("2024-12-01T00:00:00Z");
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "sorted-alpha", "sorted-alpha",
+            "1.0.0", 100L, oldest, "user"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "sorted-bravo", "sorted-bravo",
+            "1.0.0", 100L, middle, "user"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "sorted-charlie", "sorted-charlie",
+            "1.0.0", 100L, newest, "user"
+        )).join();
+        final SearchResult asc = this.index.search(
+            "sorted", 10, 0, null, null, "created_at", true, null
+        ).join();
+        MatcherAssert.assertThat(
+            "asc order must place the oldest timestamp first",
+            asc.documents().get(0).artifactName(),
+            new IsEqual<>("sorted-alpha")
+        );
+        MatcherAssert.assertThat(
+            "asc order must place the newest timestamp last",
+            asc.documents().get(asc.documents().size() - 1).artifactName(),
+            new IsEqual<>("sorted-charlie")
+        );
+        final SearchResult desc = this.index.search(
+            "sorted", 10, 0, null, null, "created_at", false, null
+        ).join();
+        MatcherAssert.assertThat(
+            "desc order must place the newest timestamp first",
+            desc.documents().get(0).artifactName(),
+            new IsEqual<>("sorted-charlie")
+        );
+        MatcherAssert.assertThat(
+            "desc order must place the oldest timestamp last",
+            desc.documents().get(desc.documents().size() - 1).artifactName(),
+            new IsEqual<>("sorted-alpha")
+        );
+    }
+
+    /**
+     * Contract test: {@link DbArtifactIndex#toSortField(String)} accepts the
+     * wire format ("created_at") only — the enum-name form ("date") must NOT
+     * be accepted, otherwise the round-trip bug could be re-introduced by a
+     * future caller that passes {@code SortField.DATE.name().toLowerCase()}.
+     */
+    @Test
+    void toSortFieldRejectsEnumNameFormForDate() {
+        MatcherAssert.assertThat(
+            "'date' (enum-name form) must NOT map to DATE — only 'created_at' does",
+            DbArtifactIndex.toSortField("date"),
+            new IsEqual<>(DbArtifactIndex.SortField.RELEVANCE)
+        );
+    }
 }

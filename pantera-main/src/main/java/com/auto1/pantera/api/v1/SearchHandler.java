@@ -191,31 +191,34 @@ public final class SearchHandler {
         // FreePermissions (admin/wildcard) gets null → no restriction in SQL.
         // Otherwise enumerate AdapterBasicPermission read entries.
         final List<String> allowedRepos = resolveAllowedRepos(perms);
-        // Fix 1: map sort string to SortField enum for index
-        final DbArtifactIndex.SortField sortField = DbArtifactIndex.toSortField(sortBy);
         // Effective FTS query: bare terms only (field values are handled as filters).
         // When blank (pure field-filter query like "name:pydantic"), DbArtifactIndex
         // switches to the filter-only LIKE path automatically.
         final String ftsQuery = parsed.ftsQuery();
-        // Fix 5: use the permission-filtered search method directly (no overfetch needed)
+        // Fix A (2.2.0): pass the validated wire-format sort key (e.g. "created_at")
+        // directly; DbArtifactIndex.toSortField() does the canonical parsing.
+        // The previous code round-tripped through SortField.name().toLowerCase(),
+        // which emitted "date" for SortField.DATE — a value that toSortField does
+        // not recognise, silently degrading every created_at sort to RELEVANCE
+        // (rank DESC, name ASC). asc/desc then produced identical orderings.
         final java.util.concurrent.CompletableFuture<com.auto1.pantera.index.SearchResult> future;
         if (this.index instanceof DbArtifactIndex) {
             if (fieldFilters.isEmpty() && parsed.ftsQuery().equals(query)) {
                 // No structured syntax used — fast path (backward compat)
                 future = ((DbArtifactIndex) this.index).search(
                     query, size, dbOffset, repoType, repoName,
-                    sortField.name().toLowerCase(), sortAsc, allowedRepos
+                    sortBy, sortAsc, allowedRepos
                 );
             } else {
                 future = ((DbArtifactIndex) this.index).search(
                     ftsQuery, size, dbOffset, repoType, repoName,
-                    sortField.name().toLowerCase(), sortAsc, allowedRepos, fieldFilters
+                    sortBy, sortAsc, allowedRepos, fieldFilters
                 );
             }
         } else {
             future = this.index.search(
                 query, size, dbOffset, repoType, repoName,
-                sortField.name().toLowerCase(), sortAsc
+                sortBy, sortAsc
             );
         }
         future.whenComplete((result, error) -> {
