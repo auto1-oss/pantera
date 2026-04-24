@@ -444,7 +444,7 @@ public class RepositorySlices {
             .eventCategory("configuration")
             .eventAction("slice_warmup")
             .eventOutcome("success")
-            .field("repository.count", warmed)
+            .field("pantera.repository.count", warmed)
             .log();
     }
 

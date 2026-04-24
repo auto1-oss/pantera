@@ -221,7 +221,7 @@ public final class AdminAuthHandler {
                     .eventCategory("configuration")
                     .eventAction("circuit_breaker_settings_update")
                     .eventOutcome("success")
-                    .field("settings.keys", String.join(",", body.fieldNames()))
+                    .field("pantera.settings.keys", String.join(",", body.fieldNames()))
                     .log();
                 ctx.response().setStatusCode(204).end();
             }
@@ -294,7 +294,7 @@ public final class AdminAuthHandler {
                     .eventCategory("iam")
                     .eventAction("auth_settings_update")
                     .eventOutcome("success")
-                    .field("settings.keys", String.join(",", body.fieldNames()))
+                    .field("pantera.settings.keys", String.join(",", body.fieldNames()))
                     .log();
                 ctx.response().setStatusCode(204).end();
             }
