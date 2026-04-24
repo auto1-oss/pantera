@@ -331,9 +331,16 @@ function decomposeConfig(raw: RepoConfigEnvelope) {
   cooldownDuration.value = repo.cooldown?.duration ?? 'P30D'
 }
 
-// Watch initialConfig and decompose whenever it arrives (handles async load)
+// Watch initialConfig and decompose whenever it arrives (handles async load).
+// After decomposing, emit the built config so the parent sees a valid envelope
+// without requiring the user to touch a field first — otherwise an untouched
+// form leaves the parent's config at null and the create button sends a body
+// with no storage.
 watch(() => props.initialConfig, (val) => {
-  if (val) decomposeConfig(val)
+  if (val) {
+    decomposeConfig(val)
+    emitConfig()
+  }
 }, { immediate: true })
 
 // ---------------------------------------------------------------------------
