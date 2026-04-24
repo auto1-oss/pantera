@@ -115,9 +115,10 @@ public final class GuardedHttpServerResponse {
             } catch (Exception e) {
                 // Response may have been ended by Vert.x internally
                 EcsLogger.debug("com.auto1.pantera.vertx")
-                    .message(String.format("Response end() failed (likely already ended by Vert.x), caller=%s, request=%s", caller, this.requestId))
+                    .message(String.format("Response end() failed (likely already ended by Vert.x), caller=%s", caller))
                     .eventCategory("web")
                     .eventAction("response_end")
+                    .field("http.request.id", this.requestId)
                     .error(e)
                     .log();
                 return false;
@@ -128,6 +129,7 @@ public final class GuardedHttpServerResponse {
                 .message(String.format("End has already been called: '%s', caller=%s, terminatedBy=%s", this.requestId, caller, this.terminatedBy.get()))
                 .eventCategory("web")
                 .eventAction("response_end_duplicate")
+                .field("http.request.id", this.requestId)
                 .log();
             return false;
         }
@@ -150,9 +152,10 @@ public final class GuardedHttpServerResponse {
                 return true;
             } catch (Exception e) {
                 EcsLogger.debug("com.auto1.pantera.vertx")
-                    .message(String.format("Response end(body) failed (likely already ended by Vert.x), caller=%s, request=%s", caller, this.requestId))
+                    .message(String.format("Response end(body) failed (likely already ended by Vert.x), caller=%s", caller))
                     .eventCategory("web")
                     .eventAction("response_end")
+                    .field("http.request.id", this.requestId)
                     .error(e)
                     .log();
                 return false;
@@ -162,6 +165,7 @@ public final class GuardedHttpServerResponse {
                 .message(String.format("End has already been called: '%s', caller=%s, terminatedBy=%s", this.requestId, caller, this.terminatedBy.get()))
                 .eventCategory("web")
                 .eventAction("response_end_duplicate")
+                .field("http.request.id", this.requestId)
                 .log();
             return false;
         }
@@ -189,9 +193,10 @@ public final class GuardedHttpServerResponse {
                 return true;
             } catch (Exception e) {
                 EcsLogger.debug("com.auto1.pantera.vertx")
-                    .message(String.format("Error response failed (likely already ended), caller=%s, request=%s", caller, this.requestId))
+                    .message(String.format("Error response failed (likely already ended), caller=%s", caller))
                     .eventCategory("web")
                     .eventAction("response_error")
+                    .field("http.request.id", this.requestId)
                     .error(e)
                     .log();
                 return false;
@@ -201,6 +206,7 @@ public final class GuardedHttpServerResponse {
                 .message(String.format("End has already been called: '%s', caller=%s, terminatedBy=%s", this.requestId, caller, this.terminatedBy.get()))
                 .eventCategory("web")
                 .eventAction("response_error_duplicate")
+                .field("http.request.id", this.requestId)
                 .log();
             return false;
         }
