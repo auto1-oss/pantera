@@ -573,12 +573,12 @@ public final class OktaOidcClient {
                 }
             }
             EcsLogger.info("com.auto1.pantera.auth")
-                .message(String.format("Okta authentication successful: groups=[%s], groupsClaim=%s", String.join(",", groups), this.groupsClaim))
+                .message(String.format("Okta authentication successful: groups=[%s], groupsClaim=%s, email=%s",
+                    String.join(",", groups), this.groupsClaim, email != null ? email : ""))
                 .eventCategory("authentication")
                 .eventAction("login")
                 .eventOutcome("success")
                 .field("user.name", uname)
-                .field("user.email", email != null ? email : "")
                 .log();
             return new OktaAuthResult(uname, email, groups);
         } catch (final IllegalArgumentException err) {

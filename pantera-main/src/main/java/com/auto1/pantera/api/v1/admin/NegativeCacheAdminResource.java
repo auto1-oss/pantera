@@ -264,17 +264,16 @@ public final class NegativeCacheAdminResource {
         this.cache.invalidate(nck);
         final String user = extractUsername(ctx);
         EcsLogger.warn(LOGGER)
-            .message("Manual neg-cache invalidation: single key")
+            .message("Manual neg-cache invalidation: single key"
+                + " (scope=" + scope
+                + ", repo_type=" + repoType
+                + ", artifact=" + artifactName
+                + ", version=" + version
+                + ", l1_invalidated=" + (wasInL1 ? 1 : 0) + ")")
             .eventCategory("configuration")
             .eventAction("neg_cache_invalidate")
             .eventOutcome("success")
-            .field("manual", true)
             .field("user.name", user)
-            .field("neg_cache.scope", scope)
-            .field("neg_cache.repo_type", repoType)
-            .field("neg_cache.artifact_name", artifactName)
-            .field("neg_cache.version", version)
-            .field("neg_cache.l1_invalidated", wasInL1 ? 1 : 0)
             .log();
         ctx.response()
             .setStatusCode(200)
@@ -343,18 +342,17 @@ public final class NegativeCacheAdminResource {
                 return;
             }
             EcsLogger.warn(LOGGER)
-                .message("Manual neg-cache invalidation: pattern")
+                .message("Manual neg-cache invalidation: pattern"
+                    + " (filter_scope=" + filterScope
+                    + ", filter_type=" + filterType
+                    + ", filter_artifact=" + filterName
+                    + ", filter_version=" + filterVersion
+                    + ", l1_invalidated=" + counts[0]
+                    + ", l2_invalidated=" + counts[1] + ")")
                 .eventCategory("configuration")
                 .eventAction("neg_cache_invalidate")
                 .eventOutcome("success")
-                .field("manual", true)
                 .field("user.name", user)
-                .field("neg_cache.filter.scope", filterScope)
-                .field("neg_cache.filter.repo_type", filterType)
-                .field("neg_cache.filter.artifact_name", filterName)
-                .field("neg_cache.filter.version", filterVersion)
-                .field("neg_cache.l1_invalidated", counts[0])
-                .field("neg_cache.l2_invalidated", counts[1])
                 .log();
             ctx.response()
                 .setStatusCode(200)

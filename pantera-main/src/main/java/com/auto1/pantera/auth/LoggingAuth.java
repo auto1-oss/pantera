@@ -39,21 +39,19 @@ public final class LoggingAuth implements Authentication {
         final Optional<AuthUser> res = this.origin.user(username, password);
         if (res.isEmpty()) {
             EcsLogger.warn("com.auto1.pantera.auth")
-                .message("Failed to authenticate user")
+                .message("Failed to authenticate user via " + this.origin)
                 .eventCategory("authentication")
                 .eventAction("login")
                 .eventOutcome("failure")
                 .field("user.name", username)
-                .field("event.provider", this.origin.toString())
                 .log();
         } else {
             EcsLogger.info("com.auto1.pantera.auth")
-                .message("Successfully authenticated user")
+                .message("Successfully authenticated user via " + this.origin)
                 .eventCategory("authentication")
                 .eventAction("login")
                 .eventOutcome("success")
                 .field("user.name", username)
-                .field("event.provider", this.origin.toString())
                 .log();
         }
         return res;

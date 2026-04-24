@@ -359,12 +359,11 @@ public final class StreamingMetadataMerger {
             this.groupId = v;
         } else if (!this.groupId.equals(v)) {
             EcsLogger.warn(LOG)
-                .message("Member metadata groupId mismatch — keeping first")
+                .message("Member metadata groupId mismatch — keeping first"
+                    + " (kept=" + this.groupId + ", other=" + v + ")")
                 .eventCategory("web")
                 .eventAction("metadata_merge")
                 .field("event.reason", "groupid_mismatch")
-                .field("pantera.merge.groupid_kept", this.groupId)
-                .field("pantera.merge.groupid_other", v)
                 .log();
         }
     }
@@ -378,12 +377,11 @@ public final class StreamingMetadataMerger {
             this.artifactId = v;
         } else if (!this.artifactId.equals(v)) {
             EcsLogger.warn(LOG)
-                .message("Member metadata artifactId mismatch — keeping first")
+                .message("Member metadata artifactId mismatch — keeping first"
+                    + " (kept=" + this.artifactId + ", other=" + v + ")")
                 .eventCategory("web")
                 .eventAction("metadata_merge")
                 .field("event.reason", "artifactid_mismatch")
-                .field("pantera.merge.artifactid_kept", this.artifactId)
-                .field("pantera.merge.artifactid_other", v)
                 .log();
         }
     }

@@ -354,10 +354,9 @@ public final class CooldownHandler {
         }
         CooldownHandler.recordAdminMetric("policy_change");
         StructuredLogger.local().forComponent(LOG_COMPONENT)
-            .message("Cooldown policy updated — all caches invalidated")
-            .field("cooldown.enabled", newEnabled)
-            .field("cooldown.minimum_allowed_age",
-                CooldownHandler.formatDuration(newAge))
+            .message("Cooldown policy updated — all caches invalidated"
+                + " (enabled=" + newEnabled
+                + ", minimum_allowed_age=" + CooldownHandler.formatDuration(newAge) + ")")
             .info();
         ctx.response()
             .setStatusCode(200)

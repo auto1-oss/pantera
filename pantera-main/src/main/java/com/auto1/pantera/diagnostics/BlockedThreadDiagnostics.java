@@ -249,7 +249,6 @@ public final class BlockedThreadDiagnostics {
                             info.getThreadName(), info.getLockName(), info.getLockOwnerName()))
                         .eventCategory("host")
                         .eventAction("blocked_thread")
-                        .field("pantera.blocked_thread.name", info.getThreadName())
                         .field("error.stack_trace", sb.toString())
                         .log();
                 }

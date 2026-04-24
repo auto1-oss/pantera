@@ -278,11 +278,10 @@ public final class QuartzService {
             this.scheduler.deleteJob(key);
         } catch (final SchedulerException err) {
             EcsLogger.error("com.auto1.pantera.scheduling")
-                .message("Error while deleting quartz job")
+                .message("Error while deleting quartz job (job=" + key + ")")
                 .eventCategory("process")
                 .eventAction("job_delete")
                 .eventOutcome("failure")
-                .field("process.name", key.toString())
                 .error(err)
                 .log();
         }

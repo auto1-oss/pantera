@@ -309,11 +309,11 @@ public final class UserDao implements CrudUsers {
             ps.setInt(1, userId);
             final int deleted = ps.executeUpdate();
             EcsLogger.info("com.auto1.pantera.db")
-                .message("updateUserRoles: cleared existing roles, " + deleted + " records removed")
+                .message("updateUserRoles: cleared existing roles, " + deleted + " records removed"
+                    + " (user_id=" + userId + ")")
                 .eventCategory("iam")
                 .eventAction("role_assignment")
                 .field("user.name", uname)
-                .field("user.id", userId)
                 .log();
         }
         // Insert new role assignments
@@ -323,11 +323,11 @@ public final class UserDao implements CrudUsers {
                 roleNames.add(roles.getString(idx));
             }
             EcsLogger.info("com.auto1.pantera.db")
-                .message("updateUserRoles: assigning " + roleNames.size() + " roles [" + String.join(",", roleNames) + "]")
+                .message("updateUserRoles: assigning " + roleNames.size() + " roles [" + String.join(",", roleNames) + "]"
+                    + " (user_id=" + userId + ")")
                 .eventCategory("iam")
                 .eventAction("role_assignment")
                 .field("user.name", uname)
-                .field("user.id", userId)
                 .log();
             // Filter to only roles that actually exist in the DB. Previously
             // we auto-created missing roles with permissions='{}', which

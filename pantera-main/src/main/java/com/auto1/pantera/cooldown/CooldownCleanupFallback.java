@@ -83,10 +83,10 @@ public final class CooldownCleanupFallback {
      */
     public void start(final Vertx vertx) {
         EcsLogger.info("com.auto1.pantera.cooldown.cleanup")
-            .message("pg_cron cleanup job not scheduled; starting Vertx fallback")
-            .field("interval_min", 10)
-            .field("batch_limit", this.settings.cleanupBatchLimit())
-            .field("retention_days", this.settings.historyRetentionDays())
+            .message("pg_cron cleanup job not scheduled; starting Vertx fallback"
+                + " (interval_min=10"
+                + ", batch_limit=" + this.settings.cleanupBatchLimit()
+                + ", retention_days=" + this.settings.historyRetentionDays() + ")")
             .log();
         this.cleanupTimerId = vertx.setPeriodic(TEN_MINUTES_MS,
             id -> this.dispatchCleanup());
@@ -137,9 +137,9 @@ public final class CooldownCleanupFallback {
                 archived = this.repo.archiveExpiredBatch(batchLimit);
             } catch (final RuntimeException err) {
                 EcsLogger.error("com.auto1.pantera.cooldown.cleanup")
-                    .message("fallback cleanup iteration failed")
-                    .field("iteration", i)
-                    .field("total_archived_this_run", totalArchived)
+                    .message("fallback cleanup iteration failed"
+                        + " (iteration=" + i
+                        + ", total_archived=" + totalArchived + ")")
                     .error(err)
                     .log();
                 return;
@@ -151,8 +151,7 @@ public final class CooldownCleanupFallback {
         }
         if (totalArchived > 0L) {
             EcsLogger.info("com.auto1.pantera.cooldown.cleanup")
-                .message("fallback cleanup completed")
-                .field("archived", totalArchived)
+                .message("fallback cleanup completed (archived=" + totalArchived + ")")
                 .log();
         }
     }
@@ -177,9 +176,9 @@ public final class CooldownCleanupFallback {
                 purged = this.repo.purgeHistoryOlderThan(cutoff, batchLimit);
             } catch (final RuntimeException err) {
                 EcsLogger.error("com.auto1.pantera.cooldown.history")
-                    .message("fallback purge iteration failed")
-                    .field("iteration", i)
-                    .field("total_purged_this_run", totalPurged)
+                    .message("fallback purge iteration failed"
+                        + " (iteration=" + i
+                        + ", total_purged=" + totalPurged + ")")
                     .error(err)
                     .log();
                 return;
@@ -192,9 +191,9 @@ public final class CooldownCleanupFallback {
         this.lastPurgeAt.set(now);
         if (totalPurged > 0L) {
             EcsLogger.info("com.auto1.pantera.cooldown.history")
-                .message("fallback history purge completed")
-                .field("purged", totalPurged)
-                .field("retention_days", retentionDays)
+                .message("fallback history purge completed"
+                    + " (purged=" + totalPurged
+                    + ", retention_days=" + retentionDays + ")")
                 .log();
         }
     }

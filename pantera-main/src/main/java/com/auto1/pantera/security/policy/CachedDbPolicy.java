@@ -245,11 +245,10 @@ public final class CachedDbPolicy implements Policy<UserPermissions>, Cleanable<
             );
         } catch (final Exception ex) {
             EcsLogger.error("com.auto1.pantera.security")
-                .message("Failed to read role permissions from DB")
+                .message("Failed to read role permissions from DB (role=" + role + ")")
                 .eventCategory("authentication")
                 .eventAction("role_permissions_read")
                 .eventOutcome("failure")
-                .field("user.roles", role)
                 .error(ex)
                 .log();
             return EmptyPermissions.INSTANCE;

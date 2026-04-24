@@ -477,13 +477,13 @@ public final class AuthHandler {
                     final boolean intersects = groups.stream().anyMatch(allowedGroups::contains);
                     if (!intersects) {
                         EcsLogger.warn("com.auto1.pantera.api.v1")
-                            .message("SSO login rejected: user not in any allowed group")
+                            .message("SSO login rejected: user not in any allowed group"
+                                + " (user_groups=" + String.join(",", groups)
+                                + ", allowed_groups=" + String.join(",", allowedGroups) + ")")
                             .eventCategory("authentication")
                             .eventAction("sso_callback")
                             .eventOutcome("failure")
                             .field("user.name", username)
-                            .field("user.groups", String.join(",", groups))
-                            .field("allowed_groups", String.join(",", allowedGroups))
                             .log();
                         throw new IllegalStateException(
                             "Access denied: user is not in any allowed group for this provider"
@@ -961,12 +961,12 @@ public final class AuthHandler {
                 // earlier (or the row was deleted out from under the JWT).
                 EcsLogger.warn("com.auto1.pantera.api.v1")
                     .message("/me: authenticated user has no DB row — "
-                        + "permissions will be empty")
+                        + "permissions will be empty"
+                        + " (context=" + (context != null ? context : "local") + ")")
                     .eventCategory("authentication")
                     .eventAction("me_user_lookup")
                     .eventOutcome("failure")
                     .field("user.name", sub)
-                    .field("user.context", context != null ? context : "local")
                     .log();
             }
         }

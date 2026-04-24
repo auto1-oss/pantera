@@ -190,12 +190,12 @@ public final class CooldownWiring {
         adapters.register("php-proxy", composerBundle);
 
         EcsLogger.info("com.auto1.pantera.cooldown")
-            .message("Registered cooldown adapter bundles: " + adapters.registeredTypes())
+            .message("Registered cooldown adapter bundles: " + adapters.registeredTypes()
+                + " (adapter_count=" + adapters.registeredTypes().size()
+                + ", response_factory_count=" + responses.registeredTypes().size() + ")")
             .eventCategory("configuration")
             .eventAction("adapter_wiring")
             .eventOutcome("success")
-            .field("adapter.count", adapters.registeredTypes().size())
-            .field("response_factory.count", responses.registeredTypes().size())
             .log();
     }
 }

@@ -323,12 +323,11 @@ public final class AdminAuthHandler {
                     this.blocklist.revokeUser(username, REVOKE_USER_TTL_SECONDS);
                 }
                 EcsLogger.info("com.auto1.pantera.api.v1")
-                    .message("Admin revoked all tokens for user")
+                    .message("Admin revoked all tokens for user (revoked_count=" + count + ")")
                     .eventCategory("iam")
                     .eventAction("user_revoke")
                     .eventOutcome("success")
                     .field("user.name", username)
-                    .field("revoked_count", count)
                     .log();
                 ctx.response()
                     .setStatusCode(200)
