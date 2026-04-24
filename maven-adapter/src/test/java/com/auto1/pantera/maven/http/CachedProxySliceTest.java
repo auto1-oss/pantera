@@ -48,6 +48,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedList;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -208,6 +209,71 @@ final class CachedProxySliceTest {
             )
         );
         MatcherAssert.assertThat("Events queue is empty", this.events.isEmpty());
+    }
+
+    /**
+     * Regression test for WI-07 enqueue gap: when the ProxyCacheWriter path
+     * handles a primary artifact (jar/pom) fetch on cache-miss, a
+     * ProxyArtifactEvent MUST be offered to the events queue so that
+     * MavenProxyPackageProcessor can write the DB-index row.
+     *
+     * <p>Before the fix, {@code fetchVerifyAndCache} returned directly to
+     * {@code serveFromCache} without calling {@code enqueueEventForWriter},
+     * so the queue was always empty for maven-proxy and gradle-proxy repos.</p>
+     */
+    @Test
+    void fetchVerifyAndCacheEnqueuesEventOnSuccess() {
+        final byte[] artifactBytes = "fake-jar-bytes".getBytes(StandardCharsets.UTF_8);
+        final String path = "/com/example/mylib/1.0/mylib-1.0.jar";
+        final InMemoryStorage storage = new InMemoryStorage();
+        final LinkedBlockingQueue<ProxyArtifactEvent> queue = new LinkedBlockingQueue<>();
+        // Upstream returns the artifact bytes on the primary request;
+        // sidecar requests (sha1, sha256, md5, sha512) return 404 so the
+        // writer skips verification and commits the primary only.
+        final CachedProxySlice slice = new CachedProxySlice(
+            (line, headers, body) -> {
+                final String reqPath = line.uri().getPath();
+                if (reqPath.endsWith(".jar")) {
+                    return CompletableFuture.completedFuture(
+                        ResponseBuilder.ok().body(artifactBytes).build()
+                    );
+                }
+                // Sidecar requests (sha1/sha256/md5/sha512): 404 so writer skips
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.notFound().build()
+                );
+            },
+            (cacheKey, supplier, control) -> supplier.get(),
+            Optional.of(queue),
+            "gradle_proxy",
+            "https://repo.maven.apache.org/maven2",
+            "maven-proxy",
+            NoopCooldownService.INSTANCE,
+            noopInspector(),
+            Optional.of(storage)
+        );
+        final Response response = slice.response(
+            new RequestLine(RqMethod.GET, path),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "Response must be 200 OK after successful ProxyCacheWriter write",
+            response.status(),
+            Matchers.is(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "Events queue must receive exactly one ProxyArtifactEvent after "
+                + "ProxyCacheWriter succeeds — regression for WI-07 enqueue gap",
+            queue.size(),
+            Matchers.is(1)
+        );
+        final ProxyArtifactEvent event = queue.poll();
+        MatcherAssert.assertThat(
+            "Event repo name must match the slice's repository name",
+            event.repoName(),
+            Matchers.is("gradle_proxy")
+        );
     }
 
     private static CooldownInspector noopInspector() {

@@ -39,6 +39,7 @@ import com.auto1.pantera.maven.cooldown.MavenMetadataFilter;
 import com.auto1.pantera.maven.cooldown.MavenMetadataParser;
 import com.auto1.pantera.maven.cooldown.MavenMetadataRequestDetector;
 import com.auto1.pantera.maven.cooldown.MavenMetadataRewriter;
+import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 
 import java.io.IOException;
@@ -112,6 +113,14 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      * pair. Instantiated lazily when {@link #rawStorage} is present.
      */
     private final ProxyCacheWriter cacheWriter;
+
+    /**
+     * Local copy of the events queue so that {@link #enqueueEventForWriter}
+     * can offer events without going through the private field in
+     * {@link BaseCachedProxySlice}. Mirrors the pattern used by the Go
+     * adapter for its WI-07 post-write enqueue call.
+     */
+    private final Optional<Queue<ProxyArtifactEvent>> localEvents;
 
     /**
      * Cooldown metadata filter service. When present, {@link #handleMetadata}
@@ -206,6 +215,7 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         this.metadataCache = metadataCache;
         this.remote = client;
         this.rawStorage = storage;
+        this.localEvents = events;
         this.cacheWriter = storage
             .map(raw -> new ProxyCacheWriter(raw, repoName))
             .orElse(null);
@@ -639,7 +649,16 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                         .build()
                 );
             }
-            return this.serveFromCache(storage, key);
+            // Success path: enqueue a DB-index event so MavenProxyPackageProcessor
+            // records this artifact. Upstream headers are unavailable here so
+            // Headers.EMPTY is passed (no Last-Modified → processor falls back
+            // to System.currentTimeMillis() for created_date, same as pre-WI-07).
+            return storage.size(key)
+                .exceptionally(ignored -> 0L)
+                .thenCompose(size -> {
+                    this.enqueueEventForWriter(key, size);
+                    return this.serveFromCache(storage, key);
+                });
         });
     }
 
@@ -701,5 +720,51 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         return storage.value(key).thenApply(content ->
             ResponseBuilder.ok().body(content).build()
         );
+    }
+
+    /**
+     * Enqueue a proxy-artifact event after a successful {@link ProxyCacheWriter}
+     * write. Mirrors {@code BaseCachedProxySlice.enqueueEvent} for the new
+     * verify-then-write path so Maven/Gradle proxies generate DB-index events
+     * the same way the legacy {@code fetchAndCache} path does.
+     *
+     * <p>Upstream headers are not available at this call site (the writer
+     * returns only a {@code Result&lt;Void&gt;}), so {@code Headers.EMPTY} is passed
+     * to {@link #buildArtifactEvent}. This means {@code lastModified} will be
+     * {@code Optional.empty()} — the event processor's existing fallback sets
+     * {@code created_date = System.currentTimeMillis()}, which matches the
+     * pre-regression behavior for artifacts whose upstream does not send
+     * {@code Last-Modified}.</p>
+     *
+     * <p>Any exception in the enqueue path is swallowed so the serve path
+     * (the {@code return serveFromCache(...)} that follows this call) is
+     * never affected by a queue failure.</p>
+     *
+     * @param key Artifact cache key
+     * @param size Artifact size in bytes (0 when unavailable)
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private void enqueueEventForWriter(final Key key, final long size) {
+        if (this.localEvents.isEmpty()) {
+            return;
+        }
+        try {
+            final Optional<ProxyArtifactEvent> event =
+                this.buildArtifactEvent(key, Headers.EMPTY, size, ArtifactEvent.DEF_OWNER);
+            event.ifPresent(e -> {
+                if (!this.localEvents.get().offer(e)) {
+                    com.auto1.pantera.metrics.EventsQueueMetrics
+                        .recordDropped(this.repoName());
+                }
+            });
+        } catch (final Throwable t) {
+            EcsLogger.warn("com.auto1.pantera.cache")
+                .message("Failed to enqueue proxy event; serve path unaffected")
+                .eventCategory("process")
+                .eventAction("queue_enqueue")
+                .eventOutcome("failure")
+                .field("repository.name", this.repoName())
+                .log();
+        }
     }
 }
