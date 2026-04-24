@@ -529,6 +529,24 @@ public abstract class BaseCachedProxySlice implements Slice {
                             );
                         }
                         return onAllow.get();
+                    })
+                    // Fail-open on evaluate errors (inspector timeout, upstream
+                    // HEAD failure, parse error, etc). Availability > strictness:
+                    // a broken cooldown evaluator must NOT block legitimate
+                    // artifact serving. Matches the MetadataFilterService
+                    // pass-through-on-error behavior.
+                    .exceptionallyCompose(err -> {
+                        EcsLogger.warn("com.auto1.pantera.cooldown")
+                            .message("Cooldown evaluate failed; proceeding without block")
+                            .eventCategory("database")
+                            .eventAction("cooldown_evaluate_failure")
+                            .eventOutcome("failure")
+                            .field("repository.type", this.repoType)
+                            .field("repository.name", this.repoName)
+                            .field("url.path", path)
+                            .error(err)
+                            .log();
+                        return onAllow.get();
                     });
             }
         }
