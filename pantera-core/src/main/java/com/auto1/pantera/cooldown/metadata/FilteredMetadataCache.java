@@ -61,7 +61,7 @@ import java.util.concurrent.TimeUnit;
  *
  * @since 1.0
  */
-public final class FilteredMetadataCache {
+public class FilteredMetadataCache {
 
     /**
      * Default L1 cache size (number of packages).

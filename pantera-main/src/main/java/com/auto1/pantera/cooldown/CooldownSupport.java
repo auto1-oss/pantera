@@ -186,6 +186,13 @@ public final class CooldownSupport {
                     .log();
             }
         });
+        // Wire envelope invalidation back into the cooldown service so block
+        // state changes invalidate cached filtered-metadata envelopes eagerly
+        // instead of letting them go stale for up to the L2 TTL (10 minutes).
+        // This covers new blocks (createBlockInDatabase), bulk mark
+        // (markAllBlocked), bulk unmark (unmarkAllBlockedPackage / ForRepo),
+        // and manual archive (archiveAndDelete via expire()).
+        jdbc.setEnvelopeInvalidator(metadataCache);
         return metadataService;
     }
 

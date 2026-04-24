@@ -20,6 +20,7 @@ import com.auto1.pantera.cooldown.cache.CooldownCache;
 import com.auto1.pantera.cooldown.config.CooldownCircuitBreaker;
 import com.auto1.pantera.cooldown.config.CooldownSettings;
 import com.auto1.pantera.cooldown.config.InspectorRegistry;
+import com.auto1.pantera.cooldown.metadata.FilteredMetadataCache;
 import com.auto1.pantera.cooldown.metrics.CooldownMetrics;
 import com.auto1.pantera.http.log.EcsLogger;
 import java.time.Duration;
@@ -66,6 +67,15 @@ final class JdbcCooldownService implements CooldownService {
         OnBlockRemoved NOOP = (repoType, repoName, artifact, version) -> { };
         void accept(String repoType, String repoName, String artifact, String version);
     }
+
+    /**
+     * Optional filtered-metadata envelope cache invalidator. When non-null,
+     * every block state change (new block, unblock, bulk mark/unmark) fires
+     * an invalidation so the envelope gets re-filtered on the next request
+     * rather than serving a stale "0 blocked" snapshot frozen in Valkey.
+     * Nullable: unit tests and the pre-2.2.0 wiring leave this as null.
+     */
+    private volatile FilteredMetadataCache envelopeInvalidator;
 
     private static final String SYSTEM_ACTOR = "system";
 
@@ -128,6 +138,76 @@ final class JdbcCooldownService implements CooldownService {
      */
     void setOnBlockRemoved(final OnBlockRemoved callback) {
         this.onBlockRemoved = callback != null ? callback : OnBlockRemoved.NOOP;
+    }
+
+    /**
+     * Wire the filtered-metadata cache for envelope invalidation. Called
+     * by CooldownSupport.createMetadataService after the cache instance
+     * is constructed, since that happens AFTER the JdbcCooldownService
+     * is built.
+     *
+     * @param cache Filtered-metadata cache to invalidate on block changes,
+     *              or null to disable invalidation (no-op)
+     */
+    public void setEnvelopeInvalidator(final FilteredMetadataCache cache) {
+        this.envelopeInvalidator = cache;
+    }
+
+    /**
+     * Invalidate the filtered-metadata envelope for a single package.
+     * Swallows exceptions and logs a WARN so that an invalidation failure
+     * does not break the block-state-change operation that triggered it.
+     *
+     * @param repoType  Repository type (e.g. "maven-proxy")
+     * @param repoName  Repository name (e.g. "central")
+     * @param artifact  Package name (e.g. "com/google/guava/guava")
+     */
+    private void invalidateEnvelope(
+        final String repoType, final String repoName, final String artifact
+    ) {
+        final FilteredMetadataCache cache = this.envelopeInvalidator;
+        if (cache != null) {
+            try {
+                cache.invalidate(repoType, repoName, artifact);
+            } catch (final Exception ex) {
+                EcsLogger.warn("com.auto1.pantera.cooldown")
+                    .message("Envelope invalidation failed; will expire via TTL")
+                    .eventCategory("database")
+                    .eventAction("envelope_invalidate")
+                    .eventOutcome("failure")
+                    .field("repository.type", repoType)
+                    .field("repository.name", repoName)
+                    .field("package.name", artifact)
+                    .error(ex)
+                    .log();
+            }
+        }
+    }
+
+    /**
+     * Invalidate all filtered-metadata envelopes for a repository.
+     * Used when the entire repo is unblocked (unblockAll path).
+     *
+     * @param repoType Repository type
+     * @param repoName Repository name
+     */
+    private void invalidateAllEnvelopes(final String repoType, final String repoName) {
+        final FilteredMetadataCache cache = this.envelopeInvalidator;
+        if (cache != null) {
+            try {
+                cache.invalidateAll(repoType, repoName);
+            } catch (final Exception ex) {
+                EcsLogger.warn("com.auto1.pantera.cooldown")
+                    .message("Envelope invalidation (all) failed; will expire via TTL")
+                    .eventCategory("database")
+                    .eventAction("envelope_invalidate_all")
+                    .eventOutcome("failure")
+                    .field("repository.type", repoType)
+                    .field("repository.name", repoName)
+                    .error(ex)
+                    .log();
+            }
+        }
     }
 
     /**
@@ -359,6 +439,10 @@ final class JdbcCooldownService implements CooldownService {
                 }
                 // Unmark all all-blocked packages in this repo and update metric
                 this.unmarkAllBlockedForRepo(repoType, repoName);
+                // Envelope cache invalidation (coherency): drop all cached filtered-metadata
+                // envelopes for the repo unconditionally — active per-version blocks have been
+                // cleared so every package's next metadata request must re-filter.
+                this.invalidateAllEnvelopes(repoType, repoName);
             },
             this.executor
         );
@@ -679,6 +763,9 @@ final class JdbcCooldownService implements CooldownService {
         }, this.executor).thenApply(result -> {
             // Increment active blocks metric (O(1), no DB query)
             this.incrementActiveBlocksMetric(request.repoType(), request.repoName());
+            // Envelope cache invalidation (coherency): drop cached filtered metadata so next request
+            // re-filters with the new block state rather than serving a stale "0 blocked" snapshot.
+            this.invalidateEnvelope(request.repoType(), request.repoName(), request.artifact());
             return result;
         });
     }
@@ -725,6 +812,9 @@ final class JdbcCooldownService implements CooldownService {
             SYSTEM_ACTOR);
         // Decrement active blocks metric (O(1), no DB query)
         this.decrementActiveBlocksMetric(record.repoType(), record.repoName());
+        // Envelope cache invalidation (coherency): drop cached filtered metadata so next request
+        // re-filters with the new block state (block expired → version now visible in metadata).
+        this.invalidateEnvelope(record.repoType(), record.repoName(), record.artifact());
         // Invalidate the filtered metadata cache so clients see the
         // unblocked version immediately. Without this, the metadata
         // cache serves the old filtered response (with the version
@@ -851,6 +941,11 @@ final class JdbcCooldownService implements CooldownService {
                         .field("package.name", artifact)
                         .log();
                 }
+                if (inserted) {
+                    // Envelope cache invalidation (coherency): drop cached filtered metadata so next
+                    // request re-filters with the new block state (all versions now blocked).
+                    this.invalidateEnvelope(repoType, repoName, artifact);
+                }
             } catch (Exception e) {
                 EcsLogger.warn("com.auto1.pantera.cooldown")
                     .message("Failed to mark package as all-blocked")
@@ -880,6 +975,11 @@ final class JdbcCooldownService implements CooldownService {
                     .field("repository.name", repoName)
                     .field("package.name", artifact)
                     .log();
+            }
+            if (wasBlocked) {
+                // Envelope cache invalidation (coherency): drop cached filtered metadata so next
+                // request re-filters now that the package is no longer universally blocked.
+                this.invalidateEnvelope(repoType, repoName, artifact);
             }
         } catch (Exception e) {
             EcsLogger.warn("com.auto1.pantera.cooldown")
@@ -911,6 +1011,11 @@ final class JdbcCooldownService implements CooldownService {
                     .field("repository.type", repoType)
                     .field("repository.name", repoName)
                     .log();
+            }
+            if (count > 0) {
+                // Envelope cache invalidation (coherency): drop all cached filtered-metadata
+                // envelopes for the repo so next requests re-filter with the cleared block state.
+                this.invalidateAllEnvelopes(repoType, repoName);
             }
         } catch (Exception e) {
             EcsLogger.warn("com.auto1.pantera.cooldown")
