@@ -24,6 +24,7 @@ import com.auto1.pantera.cooldown.config.CooldownSettings;
 import com.auto1.pantera.cooldown.metadata.FilteredMetadataCache;
 import com.auto1.pantera.db.ArtifactDbFactory;
 import com.auto1.pantera.db.DbManager;
+import com.zaxxer.hikari.HikariDataSource;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -85,6 +86,12 @@ final class JdbcCooldownServiceTest {
     void tearDown() {
         this.truncate();
         this.executor.shutdownNow();
+        // Close the per-test Hikari pool or the Testcontainers PG container
+        // runs out of max_connections around the 20th test. initialize()
+        // returns a HikariDataSource internally; cast and close.
+        if (this.dataSource instanceof HikariDataSource hikari) {
+            hikari.close();
+        }
     }
 
     @Test
