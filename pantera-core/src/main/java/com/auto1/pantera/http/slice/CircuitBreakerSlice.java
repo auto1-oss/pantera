@@ -64,12 +64,12 @@ public final class CircuitBreakerSlice implements Slice {
             // circuit means upstream has already failed N times; it's a
             // noteworthy event but not an error originating in Pantera.
             EcsLogger.warn("com.auto1.pantera.http.client")
-                .message("Circuit breaker OPEN — fast-failing with 503 without upstream call")
+                .message("Circuit breaker OPEN — fast-failing with 503 without upstream call"
+                    + " (remote=" + this.remoteId + ")")
                 .eventCategory("web")
                 .eventAction("circuit_breaker_open")
                 .eventOutcome("failure")
                 .field("event.reason", "auto_block_active")
-                .field("remote.id", this.remoteId)
                 .field("url.path", line.uri().getPath())
                 .field("http.response.status_code", 503)
                 .log();

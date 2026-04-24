@@ -292,16 +292,16 @@ public final class ProxyCacheWriter {
         deleteQuietly(tempFile);
         final String tag = algo.name().toLowerCase(Locale.ROOT);
         EcsLogger.error("com.auto1.pantera.cache")
-            .message("Upstream sidecar disagrees with computed digest; rejecting cache write")
+            .message("Upstream sidecar disagrees with computed digest; rejecting cache write"
+                + " (algo=" + tag
+                + ", sidecar_claim=" + sidecarClaim
+                + ", computed=" + computed + ")")
             .eventCategory("web")
             .eventAction("cache_write")
             .eventOutcome("integrity_failure")
             .field("repository.name", this.repoName)
             .field("url.path", primaryKey.string())
             .field("url.full", upstreamUri)
-            .field("pantera.cache.algo", tag)
-            .field("pantera.cache.sidecar_claim", sidecarClaim)
-            .field("pantera.cache.computed", computed)
             .field("trace.id", traceId(ctx))
             .log();
         this.incrementIntegrityFailure(tag);
@@ -432,13 +432,13 @@ public final class ProxyCacheWriter {
         final Key primaryKey, final Collection<ChecksumAlgo> sidecars, final RequestContext ctx
     ) {
         EcsLogger.info("com.auto1.pantera.cache")
-            .message("Proxy cache write with verified sidecars")
+            .message("Proxy cache write with verified sidecars (algos="
+                + algoList(sidecars) + ")")
             .eventCategory("web")
             .eventAction("cache_write")
             .eventOutcome("success")
             .field("repository.name", this.repoName)
             .field("url.path", primaryKey.string())
-            .field("pantera.cache.sidecars", algoList(sidecars))
             .field("trace.id", traceId(ctx))
             .log();
     }
@@ -635,14 +635,14 @@ public final class ProxyCacheWriter {
                 }
             }
             EcsLogger.info("com.auto1.pantera.cache")
-                .message("Cache integrity audit complete")
+                .message("Cache integrity audit complete"
+                    + " (scanned=" + scanned
+                    + ", mismatches=" + mismatches.size()
+                    + ", fix=" + fix + ")")
                 .eventCategory("file")
                 .eventAction("integrity_audit")
                 .eventOutcome(mismatches.isEmpty() ? "success" : "failure")
                 .field("repository.name", repoName)
-                .field("pantera.audit.scanned", scanned)
-                .field("pantera.audit.mismatches", mismatches.size())
-                .field("pantera.audit.fix", fix)
                 .log();
             return new Report(scanned, mismatches, fix);
         }
@@ -702,15 +702,15 @@ public final class ProxyCacheWriter {
             }
             for (final AlgoMismatch m : per) {
                 EcsLogger.warn("com.auto1.pantera.cache")
-                    .message("Cache integrity mismatch detected")
+                    .message("Cache integrity mismatch detected"
+                        + " (algo=" + m.algo().name().toLowerCase(Locale.ROOT)
+                        + ", sidecar_claim=" + m.sidecarClaim()
+                        + ", computed=" + m.computed() + ")")
                     .eventCategory("file")
                     .eventAction("integrity_audit")
                     .eventOutcome("failure")
                     .field("repository.name", repoName)
                     .field("url.path", primary.string())
-                    .field("pantera.cache.algo", m.algo().name().toLowerCase(Locale.ROOT))
-                    .field("pantera.cache.sidecar_claim", m.sidecarClaim())
-                    .field("pantera.cache.computed", m.computed())
                     .log();
             }
             if (fix) {

@@ -70,12 +70,11 @@ public final class EventsQueueMetrics {
     public static void recordDropped(final String repoName) {
         final long total = DROP_COUNT.incrementAndGet();
         EcsLogger.warn("com.auto1.pantera.scheduling.events")
-            .message("event queue full — dropping event")
+            .message("event queue full — dropping event (drop_count=" + total + ")")
             .eventCategory("process")
             .eventAction("queue_overflow")
             .eventOutcome("failure")
             .field("repository.name", repoName == null ? "unknown" : repoName)
-            .field("pantera.events.queue.drop_count", total)
             .log();
         if (MicrometerMetrics.isInitialized()) {
             try {

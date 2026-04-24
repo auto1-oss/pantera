@@ -74,12 +74,11 @@ public final class OperationControl {
         final boolean res = perms.stream()
             .anyMatch(perm -> policy.getPermissions(user).implies(perm));
         EcsLogger.debug("com.auto1.pantera.security")
-            .message("Authorization operation")
+            .message("Authorization operation (roles=" + this.perms + ")")
             .eventCategory("authentication")
             .eventAction("authorization_check")
             .eventOutcome(res ? "success" : "failure")
             .field("user.name", user.name())
-            .field("user.roles", this.perms.toString())
             .field("event.reason", res ? "allowed" : "denied")
             .log();
         return res;

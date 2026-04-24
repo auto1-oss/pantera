@@ -74,15 +74,12 @@ public final class JobDataRegistry {
         final int size = DATA.size();
         if (size >= MAX_ENTRIES) {
             EcsLogger.error("com.auto1.pantera.scheduling")
-                .message("JobDataRegistry overflow — scheduler bug leaking refs")
+                .message("JobDataRegistry overflow — scheduler bug leaking refs"
+                    + " (entry_count=" + size
+                    + ", key_prefix=" + key.substring(0, Math.min(32, key.length())) + ")")
                 .eventCategory("process")
                 .eventAction("job_data_overflow")
                 .eventOutcome("failure")
-                .field("entry.count", size)
-                .field(
-                    "key.prefix",
-                    key.substring(0, Math.min(32, key.length()))
-                )
                 .log();
         }
         DATA.put(key, value);

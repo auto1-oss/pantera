@@ -122,13 +122,13 @@ public final class FaultTranslator {
                 // surviving through to Kibana — which it often doesn't
                 // when reverse-proxies strip custom headers.
                 EcsLogger.info("com.auto1.pantera.http.fault")
-                    .message("Fault.Overload translated to 503")
+                    .message("Fault.Overload translated to 503"
+                        + " (resource=" + ov.resource()
+                        + ", retry_after_seconds=" + ov.retryAfter().toSeconds() + ")")
                     .eventCategory("web")
                     .eventAction("fault_translated")
                     .eventOutcome("failure")
                     .field("event.reason", "overload")
-                    .field("fault.resource", ov.resource())
-                    .field("retry_after_seconds", ov.retryAfter().toSeconds())
                     .log();
                 yield ResponseBuilder.from(RsStatus.SERVICE_UNAVAILABLE)
                     .header("Retry-After", Long.toString(ov.retryAfter().toSeconds()))

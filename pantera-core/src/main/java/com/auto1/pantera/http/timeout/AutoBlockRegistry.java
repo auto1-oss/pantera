@@ -90,11 +90,11 @@ public final class AutoBlockRegistry {
                 if (System.currentTimeMillis() >= state.blockedUntilMs) {
                     state.status = Status.PROBING;
                     EcsLogger.info("com.auto1.pantera.http.timeout")
-                        .message("Circuit breaker transition BLOCKED → PROBING — block expired")
+                        .message("Circuit breaker transition BLOCKED → PROBING — block expired"
+                            + " (remote=" + remoteId + ")")
                         .eventCategory("web")
                         .eventAction("circuit_breaker_probing")
                         .eventOutcome("success")
-                        .field("remote.id", remoteId)
                         .log();
                     return false;
                 }
@@ -199,18 +199,15 @@ public final class AutoBlockRegistry {
                 .message("Circuit breaker OPENED — failure rate "
                     + String.format(Locale.ROOT, "%.2f", rate * 100)
                     + "% over " + total + " requests in "
-                    + settings.slidingWindowSeconds() + "s window")
+                    + settings.slidingWindowSeconds() + "s window"
+                    + " (remote=" + remoteId
+                    + ", failure_count=" + failures
+                    + ", threshold=" + settings.failureRateThreshold()
+                    + ", blocked_until=" + Instant.ofEpochMilli(state.blockedUntilMs) + ")")
                 .eventCategory("web")
                 .eventAction("circuit_breaker_opened")
                 .eventOutcome("failure")
                 .field("event.reason", "failure_rate_threshold_reached")
-                .field("remote.id", remoteId)
-                .field("failure.rate", rate)
-                .field("failure.count", failures)
-                .field("request.total", total)
-                .field("failure.rate_threshold", settings.failureRateThreshold())
-                .field("window.seconds", settings.slidingWindowSeconds())
-                .field("block.until", Instant.ofEpochMilli(state.blockedUntilMs).toString())
                 .log();
         }
     }
@@ -238,15 +235,15 @@ public final class AutoBlockRegistry {
         state.blockedUntilMs = blockedUntilMs;
         if (probeFailure) {
             EcsLogger.warn("com.auto1.pantera.http.timeout")
-                .message("Circuit breaker re-OPENED — probe failed")
+                .message("Circuit breaker re-OPENED — probe failed"
+                    + " (remote=" + remoteId
+                    + ", fibonacci_index=" + fibIdx
+                    + ", block_duration_ms=" + blockMs
+                    + ", blocked_until=" + Instant.ofEpochMilli(blockedUntilMs) + ")")
                 .eventCategory("web")
                 .eventAction("circuit_breaker_probe_failed")
                 .eventOutcome("failure")
                 .field("event.reason", "probe_failure")
-                .field("remote.id", remoteId)
-                .field("fibonacci.index", fibIdx)
-                .field("block.duration_ms", blockMs)
-                .field("block.until", Instant.ofEpochMilli(blockedUntilMs).toString())
                 .log();
         }
     }
@@ -263,11 +260,11 @@ public final class AutoBlockRegistry {
         state.currentBucketStartMs = System.currentTimeMillis();
         state.currentBucket = 0;
         EcsLogger.info("com.auto1.pantera.http.timeout")
-            .message("Circuit breaker CLOSED — probe succeeded, upstream recovered")
+            .message("Circuit breaker CLOSED — probe succeeded, upstream recovered"
+                + " (remote=" + remoteId + ")")
             .eventCategory("web")
             .eventAction("circuit_breaker_closed")
             .eventOutcome("success")
-            .field("remote.id", remoteId)
             .log();
     }
 

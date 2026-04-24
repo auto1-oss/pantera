@@ -1066,14 +1066,14 @@ public abstract class BaseCachedProxySlice implements Slice {
                 final Duration age = Duration.between(meta.savedAt(), Instant.now());
                 if (age.compareTo(this.config.staleMaxAge()) > 0) {
                     EcsLogger.warn("com.auto1.pantera." + this.repoType)
-                        .message("Stale artifact too old, refusing to serve")
+                        .message("Stale artifact too old, refusing to serve"
+                            + " (age_seconds=" + age.getSeconds()
+                            + ", max_age_seconds=" + this.config.staleMaxAge().getSeconds() + ")")
                         .eventCategory("network")
                         .eventAction("stale_too_old")
                         .eventOutcome("failure")
                         .field("repository.name", this.repoName)
                         .field("url.path", key.string())
-                        .field("stale.age.seconds", age.getSeconds())
-                        .field("stale.max.age.seconds", this.config.staleMaxAge().getSeconds())
                         .log();
                     return fallback.get();
                 }
