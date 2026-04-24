@@ -24,6 +24,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 final class MavenCooldownInspectorTest {
@@ -88,6 +89,25 @@ final class MavenCooldownInspectorTest {
                 "com.example.parent:1.0",
                 "com.example.ancestor:2.0"
             )
+        );
+    }
+
+    @Test
+    void slashSeparatedGroupIdProducesCanonicalPath() {
+        Assertions.assertEquals(
+            "/com/google/guava/guava/33.6.0-jre/guava-33.6.0-jre.pom",
+            MavenCooldownInspector.artifactPath("com/google/guava/guava", "33.6.0-jre", "pom"),
+            "Slash-separated group id must yield /group/name/version/name-version.pom, "
+                + "not double the artifact prefix"
+        );
+    }
+
+    @Test
+    void dotSeparatedGroupIdProducesSamePath() {
+        Assertions.assertEquals(
+            "/com/google/guava/guava/33.6.0-jre/guava-33.6.0-jre.pom",
+            MavenCooldownInspector.artifactPath("com.google.guava.guava", "33.6.0-jre", "pom"),
+            "Dot-separated group id must produce the same canonical path as slash form"
         );
     }
 

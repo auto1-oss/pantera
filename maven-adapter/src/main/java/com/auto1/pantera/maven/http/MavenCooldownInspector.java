@@ -280,16 +280,23 @@ final class MavenCooldownInspector implements CooldownInspector {
         return artifactPath(artifact, version, "pom");
     }
 
-    private static String artifactPath(final String artifact, final String version, final String ext) {
-        final int idx = artifact.lastIndexOf('.');
+    static String artifactPath(final String artifact, final String version, final String ext) {
+        // Accept both dot-separated ("com.google.guava.guava") and
+        // slash-separated ("com/google/guava/guava") forms — the filter
+        // pipeline passes the slash form (derived from the XML URL
+        // prefix), while other call sites use the dot form. Find the
+        // last separator of either kind to split group from artifactId.
+        final int lastSlash = artifact.lastIndexOf('/');
+        final int lastDot = artifact.lastIndexOf('.');
+        final int sep = Math.max(lastSlash, lastDot);
         final String group;
         final String name;
-        if (idx == -1) {
+        if (sep == -1) {
             group = "";
             name = artifact;
         } else {
-            group = artifact.substring(0, idx).replace('.', '/');
-            name = artifact.substring(idx + 1);
+            group = artifact.substring(0, sep).replace('.', '/');
+            name = artifact.substring(sep + 1);
         }
         final StringBuilder path = new StringBuilder();
         path.append('/');
