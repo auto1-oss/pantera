@@ -15,6 +15,7 @@ import com.auto1.pantera.api.RepositoryName;
 import com.auto1.pantera.api.perms.ApiRepositoryPermission;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Meta;
+import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.index.ArtifactIndex;
@@ -109,6 +110,13 @@ public final class ArtifactHandler {
     private final ArtifactIndex artifactIndex;
 
     /**
+     * Caffeine-backed cache for storage-level file metadata (size, modified).
+     * Prevents repeated S3 HEADs during burst browsing when the DB has no
+     * matching row for the file path (Go, npm, PyPI, Docker, Helm, Debian).
+     */
+    private final StorageMetaCache metaCache;
+
+    /**
      * Ctor.
      * @param crs Repository settings CRUD
      * @param repoData Repository data management
@@ -121,11 +129,27 @@ public final class ArtifactHandler {
     public ArtifactHandler(final CrudRepoSettings crs, final RepoData repoData,
         final Policy<?> policy, final DataSource dataSource,
         final ArtifactIndex artifactIndex) {
+        this(crs, repoData, policy, dataSource, artifactIndex, new StorageMetaCache());
+    }
+
+    /**
+     * Primary ctor — all fields.
+     * @param crs Repository settings CRUD
+     * @param repoData Repository data management
+     * @param policy Pantera security policy
+     * @param dataSource Artifacts DB DataSource (nullable)
+     * @param artifactIndex Index used by delete handlers to cascade DB removal
+     * @param metaCache Caffeine-backed storage metadata cache
+     */
+    ArtifactHandler(final CrudRepoSettings crs, final RepoData repoData,
+        final Policy<?> policy, final DataSource dataSource,
+        final ArtifactIndex artifactIndex, final StorageMetaCache metaCache) {
         this.crs = crs;
         this.repoData = repoData;
         this.policy = policy;
         this.dataSource = dataSource;
         this.artifactIndex = artifactIndex == null ? ArtifactIndex.NOP : artifactIndex;
+        this.metaCache = metaCache == null ? new StorageMetaCache() : metaCache;
     }
 
     /**
@@ -314,10 +338,12 @@ public final class ArtifactHandler {
                     }
                     // Fix E (2.2.0): hydrate file entries with DB metadata
                     // (size, modified, artifact_kind). One IN query batches
-                    // the whole listing; falls back to the raw storage view
-                    // if the DB is unavailable.
+                    // the whole listing; for DB misses, falls back to
+                    // storage metadata + Caffeine cache so burst browsing
+                    // doesn't hammer S3 with repeated HEADs.
                     return hydrateFilesWithDbMetadata(
-                        this.dataSource, repoName, fileItems
+                        this.dataSource, repoName, fileItems,
+                        asto, this.metaCache
                     ).thenAccept(hydrated -> {
                         final JsonArray items = sortTreeEntries(
                             dirItems, hydrated, sortBy, sortAsc
@@ -361,26 +387,38 @@ public final class ArtifactHandler {
     /**
      * Batch-hydrate file entries with DB-sourced metadata (size, modified
      * timestamp, artifact_kind). Issues ONE query per listing regardless
-     * of the number of files, then merges by `path`. Missing DB rows are
-     * left as-is — the storage listing already provides name/path/type.
+     * of the number of files, then merges by {@code path}.
+     *
+     * <p>For files where the DB has no matching row (Go, npm, PyPI, Docker,
+     * Helm, Debian — whose DB {@code name} is a module/package name, not
+     * a file path), the method falls back to
+     * {@link Storage#metadata(Key)} for size and modified timestamp, and
+     * derives {@code artifact_kind} from the filename. Fallback results are
+     * stored in {@code metaCache} so repeated calls for the same key during
+     * burst browsing do not pay S3 HEAD costs.</p>
      *
      * @param ds DataSource — may be null (handler wired without DB)
      * @param repoName Repository name
      * @param files File-kind JsonObjects from the storage listing
+     * @param asto Storage instance for the repository (fallback reads)
+     * @param metaCache Caffeine cache for storage metadata (avoids repeat HEADs)
      * @return Future carrying the same JsonArray with metadata merged in
      */
+    @SuppressWarnings("PMD.CyclomaticComplexity")
     private static CompletableFuture<JsonArray> hydrateFilesWithDbMetadata(
-        final DataSource ds, final String repoName, final JsonArray files
+        final DataSource ds, final String repoName, final JsonArray files,
+        final Storage asto, final StorageMetaCache metaCache
     ) {
-        if (ds == null || files.isEmpty()) {
+        if (files.isEmpty()) {
             return CompletableFuture.completedFuture(files);
         }
-        final List<String> paths = new ArrayList<>();
-        for (int i = 0; i < files.size(); i++) {
-            paths.add(files.getJsonObject(i).getString("path"));
-        }
-        return CompletableFuture.supplyAsync(() -> {
-            final Map<String, JsonObject> byPath = new HashMap<>();
+        // Step 1: DB batch query (fast path — one round-trip for all files).
+        final Map<String, JsonObject> byPath = new HashMap<>();
+        if (ds != null) {
+            final List<String> paths = new ArrayList<>();
+            for (int i = 0; i < files.size(); i++) {
+                paths.add(files.getJsonObject(i).getString("path"));
+            }
             try (Connection conn = ds.getConnection();
                  PreparedStatement stmt = conn.prepareStatement(
                      "SELECT name, size, created_date, artifact_kind"
@@ -405,25 +443,118 @@ public final class ArtifactHandler {
                 }
             } catch (final SQLException ex) {
                 EcsLogger.warn("com.auto1.pantera.api.v1")
-                    .message("Tree DB hydration failed; returning"
-                        + " storage-only listing: " + ex.getMessage())
+                    .message("Tree DB hydration failed; falling back"
+                        + " to storage metadata: " + ex.getMessage())
                     .eventCategory("database")
                     .eventAction("tree_hydrate_fallback")
                     .error(ex)
                     .log();
-                return files;
+                // byPath stays empty — all files will go through the asto fallback
             }
-            for (int i = 0; i < files.size(); i++) {
-                final JsonObject file = files.getJsonObject(i);
-                final JsonObject meta = byPath.get(file.getString("path"));
-                if (meta != null) {
-                    file.put("size", meta.getLong("size"));
-                    file.put("modified", meta.getString("modified"));
-                    file.put("artifact_kind", meta.getString("artifact_kind"));
+        }
+        // Step 2: Apply DB hits; collect misses for the asto fallback.
+        final List<Integer> missingIdx = new ArrayList<>();
+        for (int i = 0; i < files.size(); i++) {
+            final JsonObject file = files.getJsonObject(i);
+            final JsonObject meta = byPath.get(file.getString("path"));
+            if (meta != null) {
+                file.put("size", meta.getLong("size"));
+                file.put("modified", meta.getString("modified"));
+                file.put("artifact_kind", meta.getString("artifact_kind"));
+            } else {
+                missingIdx.add(i);
+            }
+        }
+        if (missingIdx.isEmpty() || asto == null) {
+            return CompletableFuture.completedFuture(files);
+        }
+        // Step 3: Fan out storage metadata reads for DB-miss files.
+        // Check the Caffeine cache first to avoid S3 HEADs on repeated browse.
+        final List<CompletableFuture<Void>> futures = new ArrayList<>();
+        for (final int idx : missingIdx) {
+            final JsonObject file = files.getJsonObject(idx);
+            final String filePath = file.getString("path");
+            final String fileName = file.getString("name");
+            // Derive kind from filename — used regardless of whether asto succeeds.
+            file.put("artifact_kind", deriveArtifactKind(fileName));
+            final java.util.Optional<StorageMetaCache.Entry> cached =
+                metaCache.get(repoName, filePath);
+            if (cached.isPresent()) {
+                final StorageMetaCache.Entry entry = cached.get();
+                if (entry.size() != null) {
+                    file.put("size", entry.size());
                 }
+                if (entry.modifiedIso() != null) {
+                    file.put("modified", entry.modifiedIso());
+                }
+                futures.add(CompletableFuture.completedFuture(null));
+            } else {
+                // Cache miss — read from storage and populate cache.
+                final Key storageKey = new Key.From(repoName, filePath);
+                futures.add(
+                    asto.metadata(storageKey)
+                        .thenAccept(meta -> {
+                            final Long size = meta.read(Meta.OP_SIZE)
+                                .map(Long::longValue).orElse(null);
+                            String modifiedIso = null;
+                            final java.util.Optional<? extends Instant> updated =
+                                meta.read(Meta.OP_UPDATED_AT);
+                            if (updated.isPresent()) {
+                                modifiedIso = updated.get().toString();
+                            } else {
+                                final java.util.Optional<? extends Instant> created =
+                                    meta.read(Meta.OP_CREATED_AT);
+                                if (created.isPresent()) {
+                                    modifiedIso = created.get().toString();
+                                }
+                            }
+                            metaCache.put(repoName, filePath, size, modifiedIso);
+                            if (size != null) {
+                                file.put("size", size);
+                            }
+                            if (modifiedIso != null) {
+                                file.put("modified", modifiedIso);
+                            }
+                        })
+                        .exceptionally(err -> {
+                            // Storage metadata unavailable — leave size/modified unset.
+                            // artifact_kind was already derived from the filename above.
+                            return null;
+                        })
+                );
             }
-            return files;
-        });
+        }
+        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+            .thenApply(ignored -> files);
+    }
+
+    /**
+     * Heuristic classification by filename, used when the artifacts DB has
+     * no row for this path. Returns one of CHECKSUM, SIGNATURE, METADATA,
+     * ARTIFACT. Only the leaf name is inspected.
+     *
+     * @param name File name
+     * @return Kind constant
+     */
+    private static String deriveArtifactKind(final String name) {
+        final String lower = name.toLowerCase();
+        if (lower.endsWith(".sha256") || lower.endsWith(".sha512")
+            || lower.endsWith(".sha1") || lower.endsWith(".md5")) {
+            return "CHECKSUM";
+        }
+        if (lower.endsWith(".asc") || lower.endsWith(".sig")
+            || lower.endsWith(".sigstore")) {
+            return "SIGNATURE";
+        }
+        if (lower.endsWith(".pom") || lower.endsWith(".xml")
+            || lower.endsWith(".info") || lower.endsWith(".mod")
+            || lower.endsWith(".json")
+            || lower.equals("list") || lower.equals("index.yaml")
+            || lower.equals("packages.json")
+            || lower.equals("maven-metadata.xml")) {
+            return "METADATA";
+        }
+        return "ARTIFACT";
     }
 
     /**
@@ -892,6 +1023,9 @@ public final class ArtifactHandler {
                 if (!deleted) {
                     return CompletableFuture.completedFuture(deleted);
                 }
+                // Evict from metadata cache so the next tree view doesn't
+                // show stale size/modified for a file that no longer exists.
+                this.metaCache.invalidate(repoName, path);
                 // Cover both cases: single file at the exact path, and
                 // directory delete (which also removes any children).
                 return this.artifactIndex.remove(repoName, path)
@@ -959,6 +1093,9 @@ public final class ArtifactHandler {
                 if (!deleted) {
                     return CompletableFuture.completedFuture(deleted);
                 }
+                // Evict all cache entries under this folder prefix so the
+                // next tree view doesn't serve stale metadata for deleted files.
+                this.metaCache.invalidatePrefix(repoName, path);
                 return this.artifactIndex.removePrefix(
                         repoName, path.endsWith("/") ? path : path + "/"
                     )

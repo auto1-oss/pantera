@@ -258,4 +258,68 @@ public final class ArtifactHandlerTest extends AsyncApiTestBase {
         Assertions.assertEquals("desc", body.getString("sort_dir"));
         ctx.completeNow();
     }
+
+    /**
+     * For repo types where file paths don't match the artifacts DB's
+     * name column (Go local, npm, PyPI, Docker, Helm, Debian), the
+     * tree endpoint falls back to reading size/modified from storage
+     * metadata and deriving artifact_kind from the filename.
+     */
+    @Test
+    void treeFallsBackToStorageMetadataWhenDbHasNoRows(
+        @TempDir final Path tempStorage,
+        final Vertx vertx, final VertxTestContext ctx) throws Exception {
+        final WebClient client = WebClient.create(vertx);
+        try (Connection conn = sharedDs().getConnection();
+             PreparedStatement del = conn.prepareStatement(
+                 "DELETE FROM artifacts WHERE repo_name = ?")) {
+            del.setString(1, "fallback-repo");
+            del.executeUpdate();
+        }
+        final JsonObject body = new JsonObject().put(
+            "repo",
+            new JsonObject().put("type", "file")
+                .put("storage", new JsonObject().put("type", "fs")
+                    .put("path", tempStorage.toString()))
+        );
+        Assertions.assertEquals(200, client
+            .put(this.port(), AsyncApiTestBase.HOST,
+                "/api/v1/repositories/fallback-repo")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(body)
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS)
+            .statusCode());
+        final Path repoDir = tempStorage.resolve("fallback-repo");
+        Files.createDirectories(repoDir);
+        Files.write(repoDir.resolve("v1.0.1.info"), new byte[128]);
+        Files.write(repoDir.resolve("v1.0.1.mod"), new byte[256]);
+        Files.write(repoDir.resolve("v1.0.1.zip"), new byte[4096]);
+        final HttpResponse<Buffer> res = client
+            .get(this.port(), AsyncApiTestBase.HOST,
+                "/api/v1/repositories/fallback-repo/tree")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .send().toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(200, res.statusCode());
+        final JsonArray items = res.bodyAsJsonObject().getJsonArray("items");
+        Assertions.assertEquals(3, items.size());
+        for (int i = 0; i < items.size(); i++) {
+            final JsonObject item = items.getJsonObject(i);
+            Assertions.assertTrue(item.getLong("size", -1L) > 0,
+                "Size should be hydrated from storage: " + item.encode());
+            Assertions.assertNotNull(item.getString("modified"),
+                "Modified should be hydrated from storage: " + item.encode());
+            Assertions.assertNotNull(item.getString("artifact_kind"),
+                "Kind should be derived from filename: " + item.encode());
+        }
+        // Items are sorted by name (default), so: v1.0.1.info, v1.0.1.mod, v1.0.1.zip
+        Assertions.assertEquals("METADATA",
+            items.getJsonObject(0).getString("artifact_kind")); // v1.0.1.info
+        Assertions.assertEquals("METADATA",
+            items.getJsonObject(1).getString("artifact_kind")); // v1.0.1.mod
+        Assertions.assertEquals("ARTIFACT",
+            items.getJsonObject(2).getString("artifact_kind")); // v1.0.1.zip
+        ctx.completeNow();
+    }
 }
