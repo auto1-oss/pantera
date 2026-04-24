@@ -83,23 +83,26 @@ public final class ScriptRunner implements Job {
         final JobKey key = context.getJobDetail().getKey();
         try {
             EcsLogger.error("com.auto1.pantera.scripting")
-                .message("Force stopping job (job=" + key + ")")
+                .message("Force stopping job")
                 .eventCategory("process")
                 .eventAction("job_stop")
+                .field("process.name", key.toString())
                 .log();
             new StdSchedulerFactory().getScheduler().deleteJob(key);
             EcsLogger.error("com.auto1.pantera.scripting")
-                .message("Job stopped (job=" + key + ")")
+                .message("Job stopped")
                 .eventCategory("process")
                 .eventAction("job_stop")
                 .eventOutcome("success")
+                .field("process.name", key.toString())
                 .log();
         } catch (final SchedulerException error) {
             EcsLogger.error("com.auto1.pantera.scripting")
-                .message("Error while stopping job (job=" + key + ")")
+                .message("Error while stopping job")
                 .eventCategory("process")
                 .eventAction("job_stop")
                 .eventOutcome("failure")
+                .field("process.name", key.toString())
                 .error(error)
                 .log();
             throw new PanteraException(error);

@@ -511,11 +511,12 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                     this.actualPort = res.result().actualPort();
                 }
                 EcsLogger.info("com.auto1.pantera.api.v1")
-                    .message("AsyncApiVerticle started (scheme=" + schema + ")")
+                    .message("AsyncApiVerticle started")
                     .eventCategory("api")
                     .eventAction("server_start")
                     .eventOutcome("success")
                     .field("url.port", this.actualPort)
+                    .field("url.scheme", schema)
                     .log();
             })
             .onFailure(

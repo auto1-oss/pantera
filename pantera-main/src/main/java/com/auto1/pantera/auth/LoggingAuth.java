@@ -44,6 +44,7 @@ public final class LoggingAuth implements Authentication {
                 .eventAction("login")
                 .eventOutcome("failure")
                 .field("user.name", username)
+                .field("event.provider", this.origin.toString())
                 .log();
         } else {
             EcsLogger.info("com.auto1.pantera.auth")
@@ -52,6 +53,7 @@ public final class LoggingAuth implements Authentication {
                 .eventAction("login")
                 .eventOutcome("success")
                 .field("user.name", username)
+                .field("event.provider", this.origin.toString())
                 .log();
         }
         return res;

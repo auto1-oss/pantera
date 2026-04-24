@@ -787,9 +787,10 @@ public final class YamlSettings implements Settings {
             // Database is the primary source of truth for user credentials
             res = new AuthFromDb(dataSource);
             EcsLogger.info("com.auto1.pantera.security")
-                .message("Using AuthFromDb as primary authenticator (provider=db)")
+                .message("Using AuthFromDb as primary authenticator")
                 .eventCategory("authentication")
                 .eventAction("auth_init")
+                .field("event.provider", "db")
                 .log();
         } else {
             res = new AuthFromEnv();

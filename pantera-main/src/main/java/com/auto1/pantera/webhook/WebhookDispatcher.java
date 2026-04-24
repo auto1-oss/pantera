@@ -111,11 +111,12 @@ public final class WebhookDispatcher {
         request.sendBuffer(Buffer.buffer(body), ar -> {
             if (ar.succeeded() && ar.result().statusCode() < 300) {
                 EcsLogger.debug("com.auto1.pantera.webhook")
-                    .message("Webhook delivered (event_type=" + payload.getString("event") + ")")
+                    .message("Webhook delivered")
                     .eventCategory("network")
                     .eventAction("deliver")
                     .eventOutcome("success")
                     .field("url.full", webhook.url())
+                    .field("event.type", payload.getString("event"))
                     .log();
             } else if (attempt < MAX_RETRIES) {
                 final long delay = (long) Math.pow(2, attempt) * 1000L;
