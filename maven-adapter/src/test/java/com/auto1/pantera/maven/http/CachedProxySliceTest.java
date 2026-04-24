@@ -15,9 +15,16 @@ import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.FailedCompletionStage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.cooldown.api.CooldownBlock;
 import com.auto1.pantera.cooldown.api.CooldownDependency;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
+import com.auto1.pantera.cooldown.api.CooldownReason;
+import com.auto1.pantera.cooldown.api.CooldownRequest;
+import com.auto1.pantera.cooldown.api.CooldownResult;
+import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.impl.NoopCooldownService;
+import com.auto1.pantera.cooldown.response.CooldownResponseRegistry;
+import com.auto1.pantera.maven.cooldown.MavenCooldownResponseFactory;
 import com.auto1.pantera.cooldown.metadata.CooldownMetadataService;
 import com.auto1.pantera.cooldown.metadata.MetadataFilter;
 import com.auto1.pantera.cooldown.metadata.MetadataParser;
@@ -75,6 +82,10 @@ final class CachedProxySliceTest {
     @BeforeEach
     void init() {
         this.events = new LinkedList<>();
+        // Ensure the maven-proxy type has a 403 factory registered so that
+        // buildForbiddenResponse (called by evaluateCooldownOrProceed) does not
+        // throw IllegalStateException in the cooldown-gating regression tests.
+        CooldownResponseRegistry.instance().register("maven-proxy", new MavenCooldownResponseFactory());
     }
 
     @Test
@@ -273,6 +284,190 @@ final class CachedProxySliceTest {
             "Event repo name must match the slice's repository name",
             event.repoName(),
             Matchers.is("gradle_proxy")
+        );
+    }
+
+    /**
+     * Regression: the ProxyCacheWriter path (preProcess → verifyAndServePrimary)
+     * MUST gate through cooldown evaluation. A blocked version inside the
+     * cooldown window must return 403; upstream must NOT be contacted and
+     * storage must remain empty.
+     *
+     * <p>Before the fix, preProcess short-circuited directly to
+     * verifyAndServePrimary → fetchVerifyAndCache without ever calling
+     * evaluateCooldownAndFetch, so a freshly-released or admin-blocked version
+     * was fetched from upstream and cached with no 403 ever firing.</p>
+     */
+    @Test
+    void verifyAndServePrimaryBlocksCooldownedVersion() {
+        final String path = "/com/example/mylib/1.0/mylib-1.0.jar";
+        final InMemoryStorage storage = new InMemoryStorage();
+        final AtomicBoolean upstreamCalled = new AtomicBoolean(false);
+        final CooldownBlock block = new CooldownBlock(
+            "maven-proxy", "maven_proxy", "com/example/mylib", "1.0",
+            CooldownReason.FRESH_RELEASE,
+            Instant.now().minusSeconds(60),
+            Instant.now().plusSeconds(3600),
+            List.of()
+        );
+        final CooldownService blockingService = new CooldownService() {
+            @Override
+            public CompletableFuture<CooldownResult> evaluate(
+                final CooldownRequest request, final CooldownInspector inspector
+            ) {
+                return CompletableFuture.completedFuture(CooldownResult.blocked(block));
+            }
+            @Override
+            public CompletableFuture<Void> unblock(
+                final String rt, final String rn, final String art,
+                final String ver, final String actor
+            ) {
+                return CompletableFuture.completedFuture(null);
+            }
+            @Override
+            public CompletableFuture<Void> unblockAll(
+                final String rt, final String rn, final String actor
+            ) {
+                return CompletableFuture.completedFuture(null);
+            }
+            @Override
+            public CompletableFuture<List<CooldownBlock>> activeBlocks(
+                final String rt, final String rn
+            ) {
+                return CompletableFuture.completedFuture(List.of());
+            }
+        };
+        final CachedProxySlice slice = new CachedProxySlice(
+            (line, headers, body) -> {
+                upstreamCalled.set(true);
+                return CompletableFuture.failedFuture(
+                    new AssertionError("Upstream must not be called for a blocked version")
+                );
+            },
+            (cacheKey, supplier, control) -> supplier.get(),
+            Optional.of(this.events),
+            "maven_proxy",
+            "https://repo.maven.apache.org/maven2",
+            "maven-proxy",
+            blockingService,
+            noopInspector(),
+            Optional.of(storage),
+            ProxyCacheConfig.withCooldown(),
+            null
+        );
+        final Response response = slice.response(
+            new RequestLine(RqMethod.GET, path),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "Blocked version must return 403 — regression for WI-07 cooldown bypass",
+            response.status(),
+            Matchers.is(RsStatus.FORBIDDEN)
+        );
+        MatcherAssert.assertThat(
+            "Upstream must NOT be contacted for a blocked version",
+            upstreamCalled.get(),
+            Matchers.is(false)
+        );
+        final Key key = new Key.From(path.substring(1));
+        final boolean cached = storage.exists(key).join();
+        MatcherAssert.assertThat(
+            "Storage must be empty — blocked version must not be cached",
+            cached,
+            Matchers.is(false)
+        );
+    }
+
+    /**
+     * Regression: a version that was cached BEFORE the block was applied
+     * must STILL return 403 when the admin subsequently marks it blocked.
+     *
+     * <p>Before the fix, verifyAndServePrimary checked storage.exists() first
+     * and returned the cached bytes without any cooldown evaluation, meaning
+     * a blocked version that had landed in cache was served forever.</p>
+     */
+    @Test
+    void verifyAndServePrimaryBlocksEvenWhenCacheHasVersion() {
+        final String path = "/com/example/mylib/1.0/mylib-1.0.jar";
+        final byte[] cachedBytes = "already-cached-jar".getBytes(StandardCharsets.UTF_8);
+        final InMemoryStorage storage = new InMemoryStorage();
+        final Key key = new Key.From(path.substring(1));
+        // Pre-populate storage to simulate a version cached before the block was applied.
+        storage.save(key, new Content.From(cachedBytes)).join();
+        final AtomicBoolean upstreamCalled = new AtomicBoolean(false);
+        final CooldownBlock block = new CooldownBlock(
+            "maven-proxy", "maven_proxy", "com/example/mylib", "1.0",
+            CooldownReason.FRESH_RELEASE,
+            Instant.now().minusSeconds(60),
+            Instant.now().plusSeconds(3600),
+            List.of()
+        );
+        final CooldownService blockingService = new CooldownService() {
+            @Override
+            public CompletableFuture<CooldownResult> evaluate(
+                final CooldownRequest request, final CooldownInspector inspector
+            ) {
+                return CompletableFuture.completedFuture(CooldownResult.blocked(block));
+            }
+            @Override
+            public CompletableFuture<Void> unblock(
+                final String rt, final String rn, final String art,
+                final String ver, final String actor
+            ) {
+                return CompletableFuture.completedFuture(null);
+            }
+            @Override
+            public CompletableFuture<Void> unblockAll(
+                final String rt, final String rn, final String actor
+            ) {
+                return CompletableFuture.completedFuture(null);
+            }
+            @Override
+            public CompletableFuture<List<CooldownBlock>> activeBlocks(
+                final String rt, final String rn
+            ) {
+                return CompletableFuture.completedFuture(List.of());
+            }
+        };
+        final CachedProxySlice slice = new CachedProxySlice(
+            (line, headers, body) -> {
+                upstreamCalled.set(true);
+                return CompletableFuture.failedFuture(
+                    new AssertionError("Upstream must not be called for a blocked version")
+                );
+            },
+            (cacheKey, supplier, control) -> supplier.get(),
+            Optional.of(this.events),
+            "maven_proxy",
+            "https://repo.maven.apache.org/maven2",
+            "maven-proxy",
+            blockingService,
+            noopInspector(),
+            Optional.of(storage),
+            ProxyCacheConfig.withCooldown(),
+            null
+        );
+        final Response response = slice.response(
+            new RequestLine(RqMethod.GET, path),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "Already-cached blocked version must return 403 — not serve cached bytes",
+            response.status(),
+            Matchers.is(RsStatus.FORBIDDEN)
+        );
+        MatcherAssert.assertThat(
+            "Upstream must NOT be contacted for a blocked version even on cache-hit path",
+            upstreamCalled.get(),
+            Matchers.is(false)
+        );
+        final byte[] body = response.body().asBytes();
+        MatcherAssert.assertThat(
+            "Cached bytes must NOT appear in the 403 response body",
+            new String(body, StandardCharsets.UTF_8).contains("already-cached-jar"),
+            Matchers.is(false)
         );
     }
 

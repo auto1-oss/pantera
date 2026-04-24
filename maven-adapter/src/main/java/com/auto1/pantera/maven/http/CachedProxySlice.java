@@ -273,10 +273,15 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         // cache-miss. Runs only when we have a file-backed storage and the
         // requested path is a primary artifact. Cache-hit and sidecar paths
         // fall through to the standard BaseCachedProxySlice flow unchanged.
+        // Security: both the cache-hit and cache-miss branches inside
+        // verifyAndServePrimary bypass evaluateCooldownAndFetch entirely, so
+        // we gate this path through evaluateCooldownOrProceed first. An
+        // already-cached blocked version is therefore still refused even if
+        // the block was applied after the version was first cached.
         if (this.cacheWriter != null
             && !isChecksumSidecar(path)
             && isPrimaryArtifact(path)) {
-            return Optional.of(this.verifyAndServePrimary(line, key, path));
+            return Optional.of(this.verifyAndServePrimaryGated(line, headers, key, path));
         }
         return Optional.empty();
     }
@@ -552,6 +557,30 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
             }
         }
         return false;
+    }
+
+    /**
+     * Cooldown-gated wrapper around {@link #verifyAndServePrimary}.
+     *
+     * <p>Delegates to {@link BaseCachedProxySlice#evaluateCooldownOrProceed}
+     * so both the cache-hit and cache-miss branches inside
+     * {@code verifyAndServePrimary} are guarded by a cooldown evaluation
+     * before any storage access or upstream fetch occurs. If the version is
+     * blocked, a 403 is returned immediately — even for versions that were
+     * cached before the block was applied.</p>
+     *
+     * @param line    Request line
+     * @param headers Request headers (forwarded to cooldown request builder)
+     * @param key     Cache key
+     * @param path    Request path
+     * @return Response future
+     */
+    private CompletableFuture<Response> verifyAndServePrimaryGated(
+        final RequestLine line, final Headers headers, final Key key, final String path
+    ) {
+        return this.evaluateCooldownOrProceed(
+            headers, path, () -> this.verifyAndServePrimary(line, key, path)
+        );
     }
 
     /**

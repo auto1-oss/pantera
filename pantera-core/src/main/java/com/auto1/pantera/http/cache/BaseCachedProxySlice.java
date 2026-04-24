@@ -491,6 +491,51 @@ public abstract class BaseCachedProxySlice implements Slice {
     }
 
     /**
+     * Gate the supplied async action with a cooldown evaluation.
+     *
+     * <p>When cooldown is enabled and a {@link CooldownRequest} can be built
+     * for the path, the request is evaluated first. If blocked, a 403
+     * response is returned immediately and {@code onAllow} is never called.
+     * If allowed (or if cooldown is disabled / not applicable), {@code onAllow}
+     * is invoked and its result returned.</p>
+     *
+     * <p>Use this in subclass {@link #preProcess} overrides to gate
+     * adapter-specific short-circuit paths that bypass
+     * {@link #evaluateCooldownAndFetch} (e.g., the Maven ProxyCacheWriter
+     * path introduced by WI-07).</p>
+     *
+     * @param headers Request headers (used by {@link #buildCooldownRequest})
+     * @param path    Request path (used by {@link #buildCooldownRequest})
+     * @param onAllow Supplier of the downstream action to run if allowed
+     * @return Future that resolves to either a 403 block response or the
+     *     result of {@code onAllow}
+     */
+    protected final CompletableFuture<Response> evaluateCooldownOrProceed(
+        final Headers headers,
+        final String path,
+        final Supplier<CompletableFuture<Response>> onAllow
+    ) {
+        if (this.config.cooldownEnabled()
+            && this.cooldownService != null
+            && this.cooldownInspector != null) {
+            final Optional<CooldownRequest> request =
+                this.buildCooldownRequest(path, headers);
+            if (request.isPresent()) {
+                return this.cooldownService.evaluate(request.get(), this.cooldownInspector)
+                    .thenCompose(result -> {
+                        if (result.blocked()) {
+                            return CompletableFuture.completedFuture(
+                                buildForbiddenResponse(result.block().orElseThrow(), this.repoType)
+                            );
+                        }
+                        return onAllow.get();
+                    });
+            }
+        }
+        return onAllow.get();
+    }
+
+    /**
      * Build a 403 Forbidden response for a cooldown block.
      * Uses the per-adapter {@link CooldownResponseFactory} from the
      * {@link CooldownAdapterRegistry} when a bundle is registered for the
