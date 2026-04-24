@@ -226,7 +226,7 @@ public final class DockerManifestByTagHandler {
                     .field("repository.name", this.repoName)
                     .field("package.name", image)
                     .field("package.version", tag)
-                    .field("container.image.digest", digest.orElse(""))
+                    .field("container.image.hash.all", digest.orElse(""))
                     .log();
                 return manifestUnknown(tag);
             }

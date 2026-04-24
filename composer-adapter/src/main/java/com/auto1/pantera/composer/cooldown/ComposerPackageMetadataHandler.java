@@ -257,15 +257,15 @@ public final class ComposerPackageMetadataHandler {
             try {
                 final byte[] body = MAPPER.writeValueAsBytes(filtered);
                 EcsLogger.info("com.auto1.pantera.composer")
-                    .message("Composer metadata filtered: removed cooldown-blocked versions")
+                    .message("Composer metadata filtered: removed cooldown-blocked versions"
+                        + " (total=" + versions.size()
+                        + ", blocked=" + blocked.size()
+                        + ", served=" + kept.size() + ")")
                     .eventCategory("web")
                     .eventAction("metadata_filter")
                     .eventOutcome("success")
                     .field("repository.name", this.repoName)
                     .field("package.name", pkg)
-                    .field("metrics.total_versions", versions.size())
-                    .field("metrics.blocked_versions", blocked.size())
-                    .field("metrics.served_versions", kept.size())
                     .log();
                 return ResponseBuilder.ok()
                     .header("Content-Type", CONTENT_TYPE)

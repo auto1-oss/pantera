@@ -243,15 +243,15 @@ public final class PypiSimpleHandler {
             try {
                 final byte[] body = this.rewriter.rewrite(filtered);
                 EcsLogger.info("com.auto1.pantera.pypi")
-                    .message("/simple/ filtered: removed cooldown-blocked versions")
+                    .message("/simple/ filtered: removed cooldown-blocked versions"
+                        + " (total=" + versions.size()
+                        + ", blocked=" + blocked.size()
+                        + ", served_links=" + filtered.links().size() + ")")
                     .eventCategory("web")
                     .eventAction("simple_filter")
                     .eventOutcome("success")
                     .field("repository.name", this.repoName)
                     .field("package.name", pkg)
-                    .field("metrics.total_versions", versions.size())
-                    .field("metrics.blocked_versions", blocked.size())
-                    .field("metrics.served_links", filtered.links().size())
                     .log();
                 return ResponseBuilder.ok()
                     .header("Content-Type", this.rewriter.contentType())

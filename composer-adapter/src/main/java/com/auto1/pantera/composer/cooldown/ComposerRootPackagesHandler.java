@@ -274,13 +274,13 @@ public final class ComposerRootPackagesHandler {
             try {
                 final byte[] body = MAPPER.writeValueAsBytes(filtered);
                 EcsLogger.info("com.auto1.pantera.composer")
-                    .message("Root packages filtered: removed cooldown-blocked versions")
+                    .message("Root packages filtered: removed cooldown-blocked versions"
+                        + " (total=" + entries.size()
+                        + ", blocked=" + blocked.size() + ")")
                     .eventCategory("web")
                     .eventAction("root_filter")
                     .eventOutcome("success")
                     .field("repository.name", this.repoName)
-                    .field("metrics.total_versions", entries.size())
-                    .field("metrics.blocked_packages", blocked.size())
                     .log();
                 return ResponseBuilder.ok()
                     .header("Content-Type", CONTENT_TYPE)

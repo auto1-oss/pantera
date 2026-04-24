@@ -207,14 +207,14 @@ public final class PypiJsonHandler {
             }
             if (result instanceof PypiJsonMetadataFilter.Filtered filtered) {
                 EcsLogger.info("com.auto1.pantera.pypi")
-                    .message("/pypi/<pkg>/json filtered: removed cooldown-blocked versions")
+                    .message("/pypi/<pkg>/json filtered: removed cooldown-blocked versions"
+                        + " (total=" + versions.size()
+                        + ", blocked=" + blocked.size() + ")")
                     .eventCategory("web")
                     .eventAction("json_filter")
                     .eventOutcome("success")
                     .field("repository.name", this.repoName)
                     .field("package.name", pkg)
-                    .field("metrics.total_versions", versions.size())
-                    .field("metrics.blocked_versions", blocked.size())
                     .log();
                 return ResponseBuilder.ok()
                     .header("Content-Type", CONTENT_TYPE)

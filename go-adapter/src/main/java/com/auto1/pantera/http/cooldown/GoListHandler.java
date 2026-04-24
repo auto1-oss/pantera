@@ -242,15 +242,15 @@ public final class GoListHandler {
                 return this.allBlockedResponse(module);
             }
             EcsLogger.info("com.auto1.pantera.go")
-                .message("@v/list filtered: removed cooldown-blocked versions")
+                .message("@v/list filtered: removed cooldown-blocked versions"
+                    + " (total=" + versions.size()
+                    + ", blocked=" + blocked.size()
+                    + ", served=" + kept.size() + ")")
                 .eventCategory("web")
                 .eventAction("list_filter")
                 .eventOutcome("success")
                 .field("repository.name", this.repoName)
                 .field("package.name", module)
-                .field("metrics.total_versions", versions.size())
-                .field("metrics.blocked_versions", blocked.size())
-                .field("metrics.served_versions", kept.size())
                 .log();
             final byte[] body = serialise(kept, endsWithNewline(upstreamBytes));
             return ResponseBuilder.ok()

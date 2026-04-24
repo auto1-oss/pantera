@@ -257,15 +257,15 @@ public final class DockerTagsListHandler {
             try {
                 final byte[] body = this.rewriter.rewrite(filtered);
                 EcsLogger.info("com.auto1.pantera.docker")
-                    .message("/tags/list filtered: removed cooldown-blocked tags")
+                    .message("/tags/list filtered: removed cooldown-blocked tags"
+                        + " (total=" + tags.size()
+                        + ", blocked=" + blocked.size()
+                        + ", served=" + (tags.size() - blocked.size()) + ")")
                     .eventCategory("web")
                     .eventAction("tags_filter")
                     .eventOutcome("success")
                     .field("repository.name", this.repoName)
                     .field("package.name", image)
-                    .field("metrics.total_versions", tags.size())
-                    .field("metrics.blocked_versions", blocked.size())
-                    .field("metrics.served_versions", tags.size() - blocked.size())
                     .log();
                 return ResponseBuilder.ok()
                     .header("Content-Type", this.rewriter.contentType())
