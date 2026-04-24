@@ -217,11 +217,11 @@ public final class AdminAuthHandler {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
             } else {
                 EcsLogger.info("com.auto1.pantera.api.v1")
-                    .message("Admin updated circuit-breaker settings")
+                    .message("Admin updated circuit-breaker settings (keys="
+                        + String.join(",", body.fieldNames()) + ")")
                     .eventCategory("configuration")
                     .eventAction("circuit_breaker_settings_update")
                     .eventOutcome("success")
-                    .field("pantera.settings.keys", String.join(",", body.fieldNames()))
                     .log();
                 ctx.response().setStatusCode(204).end();
             }
@@ -290,11 +290,11 @@ public final class AdminAuthHandler {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
             } else {
                 EcsLogger.info("com.auto1.pantera.api.v1")
-                    .message("Admin updated auth settings")
+                    .message("Admin updated auth settings (keys="
+                        + String.join(",", body.fieldNames()) + ")")
                     .eventCategory("iam")
                     .eventAction("auth_settings_update")
                     .eventOutcome("success")
-                    .field("pantera.settings.keys", String.join(",", body.fieldNames()))
                     .log();
                 ctx.response().setStatusCode(204).end();
             }

@@ -440,11 +440,10 @@ public class RepositorySlices {
         }
         this.sharedClients.awaitAllStarted(timeout);
         EcsLogger.info("com.auto1.pantera.settings")
-            .message("Repository slices warmed up")
+            .message("Repository slices warmed up (count=" + warmed + ")")
             .eventCategory("configuration")
             .eventAction("slice_warmup")
             .eventOutcome("success")
-            .field("pantera.repository.count", warmed)
             .log();
     }
 
