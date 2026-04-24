@@ -206,6 +206,8 @@ public interface Authentication {
                         .eventAction("provider_match")
                         .eventOutcome("success")
                         .field("user.name", user)
+                        .field("event.provider",
+                            auth.getClass().getSimpleName())
                         .log();
                     return result;
                 }
@@ -223,6 +225,8 @@ public interface Authentication {
                         .eventAction("provider_reject_authoritative")
                         .eventOutcome("failure")
                         .field("user.name", user)
+                        .field("event.provider",
+                            auth.getClass().getSimpleName())
                         .log();
                     return Optional.empty();
                 }

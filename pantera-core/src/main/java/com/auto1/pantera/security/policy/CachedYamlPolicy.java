@@ -270,11 +270,12 @@ public final class CachedYamlPolicy implements Policy<UserPermissions>, Cleanabl
             }
         } catch (final IOException | ValueNotFoundException err) {
             EcsLogger.error("com.auto1.pantera.security")
-                .message("Failed to read/parse role permissions file (role=" + role + ")")
+                .message("Failed to read/parse role permissions file")
                 .eventCategory("authentication")
                 .eventAction("role_permissions_read")
                 .eventOutcome("failure")
                 .field("file.name", filename)
+                .field("user.roles", role)
                 .log();
             res = EmptyPermissions.INSTANCE;
         }
