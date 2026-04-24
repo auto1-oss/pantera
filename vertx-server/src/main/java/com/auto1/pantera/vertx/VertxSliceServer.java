@@ -503,10 +503,9 @@ public final class VertxSliceServer implements Closeable {
                         // Small body - buffer for simpler error handling
                         req.bodyHandler(body -> {
                             EcsLogger.debug("com.auto1.pantera.vertx")
-                                .message("Small request body buffered")
+                                .message("Small request body buffered (bytes=" + body.length() + ")")
                                 .eventCategory("web")
                                 .eventAction("request_buffer")
-                                .field("http.request.body.bytes", body.length())
                                 .log();
                             this.serveWithBody(req, body, guardedResponse).whenComplete((result, throwable) -> {
                                 try {
@@ -537,10 +536,9 @@ public final class VertxSliceServer implements Closeable {
                     } else {
                         // Large body or chunked transfer - stream directly to slice
                         EcsLogger.debug("com.auto1.pantera.vertx")
-                            .message("Streaming large request body")
+                            .message("Streaming large request body (bytes=" + contentLength + ")")
                             .eventCategory("web")
                             .eventAction("request_stream")
-                            .field("http.request.body.bytes", contentLength)
                             .log();
                         this.serveWithStream(req, contentLength, guardedResponse).whenComplete((result, throwable) -> {
                             try {
@@ -685,12 +683,11 @@ public final class VertxSliceServer implements Closeable {
 
         addRequestContext(
             EcsLogger.debug("com.auto1.pantera.vertx")
-                .message("Serving request with streaming body")
+                .message("Serving request with streaming body (bytes=" + contentLength + ")")
                 .eventCategory("web")
                 .eventAction("request_serve_stream")
                 .field("http.request.method", req.method().name())
-                .field("url.path", LogSanitizer.sanitizeUrl(req.uri()))
-                .field("http.request.body.bytes", contentLength),
+                .field("url.path", LogSanitizer.sanitizeUrl(req.uri())),
             ctx
         ).log();
 
@@ -1265,30 +1262,29 @@ public final class VertxSliceServer implements Closeable {
      * EcsLayout includes all MDC entries in JSON output automatically.
      * Do NOT add them here — that causes duplicate fields in Elastic.
      *
-     * <p>Headers are injected as individual dot-notated fields
-     * (e.g., {@code http.request.headers.content-type}) so ES can map each
-     * as a keyword sub-field under the {@code http.request.headers} object
-     * (configured as {@code "type": "object", "dynamic": true}).
-     * Passing a {@code Map} as a single field value causes EcsLayout to serialize
-     * it via {@code .toString()}, producing a plain string incompatible with object mapping.
+     * <p>Allowlisted request headers are emitted as the documented
+     * {@code http.request.headers} ECS field (comma-separated key=value pairs).
+     * Client port and user-agent are not individually structured fields in the
+     * documented schema and are omitted from structured output at this level.
      *
      * @param logger Logger builder
      * @param ctx Request context
      * @return Enriched logger
      */
     private static EcsLogger addRequestContext(final EcsLogger logger, final RequestLogContext ctx) {
-        if (ctx.remotePort() >= 0) {
-            logger.field("client.port", ctx.remotePort());
-        }
-        if (ctx.userAgent() != null && !ctx.userAgent().isEmpty()) {
-            logger.field("user_agent.original", ctx.userAgent());
-        }
-        // Inject each allowlisted header as a separate dot-notated field
+        // Build the allowlisted headers string for the documented http.request.headers field
+        final StringBuilder headers = new StringBuilder();
         for (Map.Entry<String, String> entry : ctx.headers().entrySet()) {
             final String headerName = entry.getKey();
             if (HEADER_ALLOWLIST.contains(headerName)) {
-                logger.field("http.request.headers." + headerName, entry.getValue());
+                if (headers.length() > 0) {
+                    headers.append(", ");
+                }
+                headers.append(headerName).append('=').append(entry.getValue());
             }
+        }
+        if (headers.length() > 0) {
+            logger.field("http.request.headers", headers.toString());
         }
         return logger;
     }
