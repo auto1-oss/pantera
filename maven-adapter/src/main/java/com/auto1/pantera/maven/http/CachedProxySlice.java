@@ -757,13 +757,14 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                         .recordDropped(this.repoName());
                 }
             });
-        } catch (final Throwable t) {
+        } catch (final Exception ex) {
             EcsLogger.warn("com.auto1.pantera.cache")
                 .message("Failed to enqueue proxy event; serve path unaffected")
                 .eventCategory("process")
                 .eventAction("queue_enqueue")
                 .eventOutcome("failure")
                 .field("repository.name", this.repoName())
+                .error(ex)
                 .log();
         }
     }
