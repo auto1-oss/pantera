@@ -81,16 +81,22 @@ public final class RaceSlice implements Slice {
             // Create a result future
             final CompletableFuture<Response> result = new CompletableFuture<>();
 
-            // Track how many repos have responded with 404/error
+            // Track how many remotes have completed (any outcome).
             final java.util.concurrent.atomic.AtomicInteger failedCount =
                 new java.util.concurrent.atomic.AtomicInteger(0);
 
-            // Track whether ANY remote returned a 5xx or threw — so when all
-            // remotes failed we can complete with 503 (informative) rather
-            // than 404 (misleading: implies the artifact doesn't exist
-            // anywhere when really upstreams were unreachable).
+            // Track whether ANY remote returned a 5xx or threw — informs the
+            // 502-vs-404 decision when no 2xx and no 403 was observed.
             final java.util.concurrent.atomic.AtomicBoolean anyServerError =
                 new java.util.concurrent.atomic.AtomicBoolean(false);
+
+            // First 403 captured (status, headers, drained bytes) so we can
+            // forward it verbatim if the priority rules pick "forbidden" as
+            // the final answer. Saved drained-form to avoid leaking the
+            // underlying HTTP body — every per-target handler drains its
+            // body, only the SAVED 403 is reconstituted at completion.
+            final java.util.concurrent.atomic.AtomicReference<DrainedResponse> firstForbidden =
+                new java.util.concurrent.atomic.AtomicReference<>();
 
             // Start all repository requests in parallel
             for (int i = 0; i < this.targets.size(); i++) {
@@ -120,62 +126,66 @@ public final class RaceSlice implements Slice {
                             .eventOutcome("success")
                             .field("event.reason", "late_response")
                             .log();
-                        // Consume body even if this response lost the race to
-                        // avoid leaking underlying HTTP resources.
                         return res.body().asBytesFuture().thenApply(ignored -> null);
                     }
 
                     final int code = res.status().code();
-                    final boolean isFailure = code == RsStatus.NOT_FOUND.code()
-                        || code >= 500;
-                    if (isFailure) {
+
+                    // Priority rule 1: 2xx / 3xx wins immediately. Don't drain
+                    // the body — it will be served to the client. Drain any
+                    // saved 403 since it lost.
+                    if (code >= 200 && code < 400) {
                         EcsLogger.debug("com.auto1.pantera.http")
-                            .message("Repository returned " + code
-                                + " (index: " + index + "); race continues")
+                            .message("Repository found artifact (index: " + index + ")")
                             .eventCategory("web")
                             .eventAction("group_race")
-                            .eventOutcome("failure")
-                            .field("event.reason",
-                                code == RsStatus.NOT_FOUND.code()
-                                    ? "artifact_not_found" : "upstream_error")
+                            .eventOutcome("success")
                             .field("http.response.status_code", code)
                             .log();
-                        if (code >= 500) {
-                            anyServerError.set(true);
+                        result.complete(res);
+                        final DrainedResponse savedForbidden = firstForbidden.getAndSet(null);
+                        if (savedForbidden == null) {
+                            return CompletableFuture.completedFuture(null);
                         }
-                        // Consume failure response bodies to avoid leaks.
-                        return res.body().asBytesFuture().thenApply(ignored -> {
-                            if (failedCount.incrementAndGet() == this.targets.size()) {
-                                // Every remote failed. If any 5xx'd, surface
-                                // 503 (transient — clients should retry); if
-                                // all 404'd, surface 404 (definitively absent).
-                                if (anyServerError.get()) {
-                                    result.complete(
-                                        ResponseBuilder.badGateway()
-                                            .textBody("All upstream remotes failed")
-                                            .build()
-                                    );
-                                } else {
-                                    result.complete(
-                                        ResponseBuilder.notFound().build()
-                                    );
-                                }
-                            }
-                            return null;
-                        });
+                        // No body to drain — DrainedResponse already has bytes,
+                        // and the underlying HTTP body was drained at capture
+                        // time. Nothing further to release.
+                        return CompletableFuture.completedFuture(null);
                     }
 
-                    // SUCCESS! This repo has the artifact (2xx, 3xx, etc.)
-                    // Complete the result (first success wins) - don't consume body, it will be served
+                    // Failure paths: drain body, classify, race-continue.
+                    final boolean isForbidden = code == RsStatus.FORBIDDEN.code();
+                    final boolean is5xx = code >= 500;
+                    if (is5xx) {
+                        anyServerError.set(true);
+                    }
                     EcsLogger.debug("com.auto1.pantera.http")
-                        .message("Repository found artifact (index: " + index + ")")
+                        .message("Repository returned " + code
+                            + " (index: " + index + "); race continues")
                         .eventCategory("web")
                         .eventAction("group_race")
-                        .eventOutcome("success")
+                        .eventOutcome("failure")
+                        .field("event.reason",
+                            code == RsStatus.NOT_FOUND.code() ? "artifact_not_found"
+                                : isForbidden ? "forbidden"
+                                : is5xx ? "upstream_error"
+                                : "client_error")
                         .field("http.response.status_code", code)
                         .log();
-                    result.complete(res);
-                    return CompletableFuture.completedFuture(null);
+                    return res.body().asBytesFuture().thenApply(bytes -> {
+                        if (isForbidden) {
+                            // CAS — only the FIRST 403 wins; later 403s' bytes
+                            // are dropped after the drain above (already done).
+                            firstForbidden.compareAndSet(
+                                null,
+                                new DrainedResponse(res.status(), res.headers(), bytes)
+                            );
+                        }
+                        if (failedCount.incrementAndGet() == this.targets.size()) {
+                            completeBasedOnPriority(result, firstForbidden, anyServerError);
+                        }
+                        return null;
+                    });
                 })
                 .exceptionally(err -> {
                     if (result.isDone()) {
@@ -191,17 +201,7 @@ public final class RaceSlice implements Slice {
                     // Treat exceptions the same as 5xx — race-continue + remember.
                     anyServerError.set(true);
                     if (failedCount.incrementAndGet() == this.targets.size()) {
-                        if (anyServerError.get()) {
-                            result.complete(
-                                ResponseBuilder.badGateway()
-                                    .textBody("All upstream remotes failed")
-                                    .build()
-                            );
-                        } else {
-                            result.complete(
-                                ResponseBuilder.notFound().build()
-                            );
-                        }
+                        completeBasedOnPriority(result, firstForbidden, anyServerError);
                     }
                     return null;
                 });
@@ -209,5 +209,59 @@ public final class RaceSlice implements Slice {
 
             return result;
         });
+    }
+
+    /**
+     * Final-decision logic when all targets have responded with non-success.
+     * Priority order, applied in sequence:
+     * <ol>
+     *   <li>If any target returned 403 — forward the FIRST 403 captured (its
+     *       drained body, headers, status). 403 says "exists but blocked";
+     *       outranks 404 (definitively absent) and 5xx (transient).</li>
+     *   <li>If any target returned 5xx (or threw) — return 502, since at
+     *       least one upstream's true state is unknown.</li>
+     *   <li>Otherwise (all 404 / similar definitive misses) — return 404.</li>
+     * </ol>
+     */
+    private static void completeBasedOnPriority(
+        final CompletableFuture<Response> result,
+        final java.util.concurrent.atomic.AtomicReference<DrainedResponse> firstForbidden,
+        final java.util.concurrent.atomic.AtomicBoolean anyServerError
+    ) {
+        final DrainedResponse forbidden = firstForbidden.get();
+        if (forbidden != null) {
+            result.complete(new Response(
+                forbidden.status, forbidden.headers, new Content.From(forbidden.bytes)
+            ));
+            return;
+        }
+        if (anyServerError.get()) {
+            result.complete(
+                ResponseBuilder.badGateway()
+                    .textBody("All upstream remotes failed")
+                    .build()
+            );
+            return;
+        }
+        result.complete(ResponseBuilder.notFound().build());
+    }
+
+    /**
+     * Captured 403 response — status, headers, and fully-drained body bytes.
+     * Held in an AtomicReference so the FIRST 403 wins via CAS; subsequent
+     * 403s are dropped after their bodies are drained at the per-target
+     * handler. If the priority rule selects "forbidden" as the final answer,
+     * we reconstitute a Response from these fields.
+     */
+    private static final class DrainedResponse {
+        final RsStatus status;
+        final Headers headers;
+        final byte[] bytes;
+
+        DrainedResponse(final RsStatus status, final Headers headers, final byte[] bytes) {
+            this.status = status;
+            this.headers = headers;
+            this.bytes = bytes;
+        }
     }
 }

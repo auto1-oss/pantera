@@ -109,6 +109,67 @@ final class RaceSliceTest {
         Assertions.assertEquals(RsStatus.OK, result.status());
     }
 
+    @Test
+    @Timeout(1)
+    void forbiddenBeatsAllNotFound() {
+        // Priority rule 2: 403 outranks 404. If any member returns 403, the
+        // group must surface 403 — saying "exists but blocked" is more
+        // informative than "definitely not anywhere" when at least one
+        // member knows otherwise.
+        final Response response = new RaceSlice(
+            slice(RsStatus.FORBIDDEN, "blocked-by-cooldown", Duration.ZERO),
+            slice(RsStatus.NOT_FOUND, "not-here", Duration.ZERO),
+            slice(RsStatus.NOT_FOUND, "not-here-either", Duration.ZERO)
+        ).response(new RequestLine(RqMethod.GET, "/path"), Headers.EMPTY, Content.EMPTY).join();
+        Assertions.assertEquals(RsStatus.FORBIDDEN, response.status());
+        // First 403's body is forwarded verbatim
+        Assertions.assertEquals("blocked-by-cooldown", response.body().asString());
+    }
+
+    @Test
+    @Timeout(1)
+    void successBeatsForbiddenAndNotFound() {
+        // Priority rule 1: 2xx outranks 403. A blocked member must NOT prevent
+        // serving from a sibling that has the artifact allowed. Without this
+        // rule, race timing decided whether the user saw 200 or 403 — the
+        // exact bug observed in production for guava plugin marker fetches.
+        final Response response = new RaceSlice(
+            slice(RsStatus.FORBIDDEN, "blocked", Duration.ZERO),
+            slice(RsStatus.OK, "found-it", Duration.ofMillis(50)),
+            slice(RsStatus.NOT_FOUND, "not-here", Duration.ZERO)
+        ).response(new RequestLine(RqMethod.GET, "/path"), Headers.EMPTY, Content.EMPTY).join();
+        Assertions.assertEquals(RsStatus.OK, response.status());
+        Assertions.assertEquals("found-it", response.body().asString());
+    }
+
+    @Test
+    @Timeout(1)
+    void forbiddenBeats5xxAndNotFound() {
+        // Priority rule 2 over rule 3: 403 (definitive "exists but blocked")
+        // outranks 5xx (uninformative — true state unknown).
+        final Response response = new RaceSlice(
+            slice(RsStatus.FORBIDDEN, "blocked", Duration.ZERO),
+            slice(RsStatus.INTERNAL_ERROR, "boom", Duration.ZERO),
+            slice(RsStatus.NOT_FOUND, "not-here", Duration.ZERO)
+        ).response(new RequestLine(RqMethod.GET, "/path"), Headers.EMPTY, Content.EMPTY).join();
+        Assertions.assertEquals(RsStatus.FORBIDDEN, response.status());
+    }
+
+    @Test
+    @Timeout(1)
+    void firstForbiddenBodyIsForwardedNotLast() {
+        // When multiple members return 403 (e.g. cooldown blocks on multiple
+        // mirrors), only the FIRST 403's body is forwarded. Later 403s are
+        // drained and discarded. CAS in the implementation guarantees this.
+        final Response response = new RaceSlice(
+            slice(RsStatus.FORBIDDEN, "first-403", Duration.ZERO),
+            slice(RsStatus.FORBIDDEN, "second-403", Duration.ofMillis(50)),
+            slice(RsStatus.FORBIDDEN, "third-403", Duration.ofMillis(100))
+        ).response(new RequestLine(RqMethod.GET, "/path"), Headers.EMPTY, Content.EMPTY).join();
+        Assertions.assertEquals(RsStatus.FORBIDDEN, response.status());
+        Assertions.assertEquals("first-403", response.body().asString());
+    }
+
     private static Slice slice(RsStatus status, String body, Duration delay) {
         return new SliceWithDelay(
             new SliceSimple(ResponseBuilder.from(status).textBody(body).build()), delay
