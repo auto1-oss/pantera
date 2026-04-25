@@ -671,7 +671,21 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                             .build()
                     );
                 }
-                // StorageUnavailable / anything else → 502-equivalent; no cache state.
+                // Upstream-404 must propagate as 404, not 503: RaceSlice's
+                // contract is "404 → try the next remote, non-404 → that
+                // remote wins." Mapping 404 → 503 caused a single remote's
+                // 404 to short-circuit the race even when another remote
+                // had the artifact (e.g. .module on maven-central vs
+                // plugins.gradle.org). Other 4xx are also "doesn't have
+                // it" semantically — surface them as 404 too.
+                if (err.fault() instanceof Fault.StorageUnavailable storageErr
+                    && storageErr.cause() instanceof UpstreamHttpException upstreamErr
+                    && upstreamErr.status() >= 400 && upstreamErr.status() < 500) {
+                    return CompletableFuture.completedFuture(
+                        ResponseBuilder.notFound().build()
+                    );
+                }
+                // StorageUnavailable / anything else → 503; transient failure.
                 return CompletableFuture.completedFuture(
                     ResponseBuilder.unavailable()
                         .textBody("Upstream temporarily unavailable")
@@ -702,9 +716,7 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 if (!resp.status().success()) {
                     // Drain body to release connection.
                     resp.body().asBytesFuture();
-                    throw new IllegalStateException(
-                        "Upstream returned HTTP " + resp.status().code()
-                    );
+                    throw new UpstreamHttpException(resp.status().code());
                 }
                 try {
                     return resp.body().asInputStream();
@@ -712,6 +724,30 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                     throw new IllegalStateException("Upstream body not readable", ex);
                 }
             });
+    }
+
+    /**
+     * Carries the upstream HTTP status so {@link #fetchVerifyAndCache} can
+     * distinguish "this upstream truly doesn't have it" (404 → propagate as
+     * 404 to RaceSlice, so other remotes can serve) from "transient failure"
+     * (5xx, timeouts → surface as 503). Without this, every non-2xx upstream
+     * response was mapped to 503 by the cache writer, and RaceSlice treats
+     * 503 as a "winning" response (only 404 triggers race-continue), so a
+     * single 404 from maven-central beat a 200 from plugins.gradle.org for
+     * Gradle plugin .module files.
+     */
+    private static final class UpstreamHttpException extends IllegalStateException {
+        private static final long serialVersionUID = 1L;
+        private final int status;
+
+        UpstreamHttpException(final int status) {
+            super("Upstream returned HTTP " + status);
+            this.status = status;
+        }
+
+        int status() {
+            return this.status;
+        }
     }
 
     /**
