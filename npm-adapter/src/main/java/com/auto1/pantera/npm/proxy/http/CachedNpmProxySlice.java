@@ -246,10 +246,20 @@ public final class CachedNpmProxySlice implements Slice {
                     this.recordUpstreamErrorMetric(
                         new RuntimeException("HTTP " + response.status().code())
                     );
-                } else {
-                    this.recordProxyMetric("client_error", duration);
+                    return FetchSignal.ERROR;
                 }
-                return FetchSignal.ERROR;
+                // Non-404 4xx (403 rate-limit / unauthorized, 410 Gone for
+                // unpublished, 451, 409, etc.) means "this remote doesn't
+                // serve this artifact" — semantically equivalent to NOT_FOUND
+                // from the RaceSlice's perspective. Mapping to ERROR (→ 503)
+                // would short-circuit the race because RaceSlice's contract
+                // is "404 → try next remote; anything else → this remote
+                // wins". Surface as NOT_FOUND so a multi-remote npm proxy
+                // (e.g. npmjs + a private mirror) can fall back when one
+                // remote rate-limits. The "client_error" metric still fires
+                // for observability.
+                this.recordProxyMetric("client_error", duration);
+                return FetchSignal.NOT_FOUND;
             })
             .exceptionally(error -> {
                 final long duration = System.currentTimeMillis() - startTime;
