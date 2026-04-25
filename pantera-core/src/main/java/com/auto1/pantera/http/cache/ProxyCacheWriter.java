@@ -184,8 +184,23 @@ public final class ProxyCacheWriter {
             ))
             .exceptionally(err -> {
                 deleteQuietly(tempFile);
+                final Throwable cause = unwrap(err);
+                // Surface the underlying cause so 503 isn't a black box. The
+                // outer caller maps this to ResponseBuilder.unavailable() with
+                // no log of its own; without this, every cache-write failure
+                // (upstream timeout, integrity reject, storage disk-full) is
+                // indistinguishable in the access logs.
+                EcsLogger.warn("com.auto1.pantera.cache")
+                    .message("Proxy cache write failed; surfacing as 503")
+                    .eventCategory("web")
+                    .eventAction("cache_write")
+                    .eventOutcome("failure")
+                    .field("repository.name", this.repoName)
+                    .field("url.path", primaryKey.string())
+                    .error(cause)
+                    .log();
                 return Result.err(new Fault.StorageUnavailable(
-                    unwrap(err), primaryKey.string()
+                    cause, primaryKey.string()
                 ));
             });
     }
