@@ -62,13 +62,49 @@ final class RaceSliceTest {
 
     @Test
     @Timeout(1)
-    void returnsNotFoundIfSomeFailsWithException() {
+    void returnsServiceUnavailableIfAllFailsWithException() {
+        // Exceptions and 5xx responses indicate "couldn't reach remote",
+        // not "artifact doesn't exist". When ALL remotes fail this way,
+        // RaceSlice returns 503 (transient) so clients retry, rather than
+        // 404 which would imply definitive absence.
         Slice s = (line, headers, body) -> CompletableFuture.failedFuture(new IllegalStateException());
 
-        Assertions.assertEquals(RsStatus.NOT_FOUND,
+        Assertions.assertEquals(RsStatus.SERVICE_UNAVAILABLE,
             new RaceSlice(s)
                 .response(new RequestLine(RqMethod.GET, "/faulty/path"), Headers.EMPTY, Content.EMPTY)
                 .join().status());
+    }
+
+    @Test
+    @Timeout(1)
+    void mixedFailuresWithAny5xxReturn503() {
+        // One remote 404, one 5xx, one exception — race-continue all the way
+        // and surface 503 because at least one was a server-error / network
+        // failure (informative > silent absence).
+        Slice s404 = slice(RsStatus.NOT_FOUND, "miss", Duration.ZERO);
+        Slice s500 = slice(RsStatus.INTERNAL_ERROR, "boom", Duration.ZERO);
+        Slice sBoom = (line, headers, body) ->
+            CompletableFuture.failedFuture(new IllegalStateException("net"));
+
+        Assertions.assertEquals(RsStatus.SERVICE_UNAVAILABLE,
+            new RaceSlice(s404, s500, sBoom)
+                .response(new RequestLine(RqMethod.GET, "/path"), Headers.EMPTY, Content.EMPTY)
+                .join().status());
+    }
+
+    @Test
+    @Timeout(1)
+    void serverErrorOnOneRemoteDoesNotShortCircuitWhenAnotherSucceeds() {
+        // Pre-fix behavior: a 5xx from one remote won the race because
+        // RaceSlice only treated 404 as "try next". Now race continues past
+        // 5xx, and a sibling remote's 200 wins.
+        Slice s500 = slice(RsStatus.INTERNAL_ERROR, "boom", Duration.ZERO);
+        Slice s200 = slice(RsStatus.OK, "found", Duration.ofMillis(50));
+
+        final Response result = new RaceSlice(s500, s200)
+            .response(new RequestLine(RqMethod.GET, "/path"), Headers.EMPTY, Content.EMPTY)
+            .join();
+        Assertions.assertEquals(RsStatus.OK, result.status());
     }
 
     private static Slice slice(RsStatus status, String body, Duration delay) {

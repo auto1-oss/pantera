@@ -85,6 +85,13 @@ public final class RaceSlice implements Slice {
             final java.util.concurrent.atomic.AtomicInteger failedCount =
                 new java.util.concurrent.atomic.AtomicInteger(0);
 
+            // Track whether ANY remote returned a 5xx or threw — so when all
+            // remotes failed we can complete with 503 (informative) rather
+            // than 404 (misleading: implies the artifact doesn't exist
+            // anywhere when really upstreams were unreachable).
+            final java.util.concurrent.atomic.AtomicBoolean anyServerError =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
+
             // Start all repository requests in parallel
             for (int i = 0; i < this.targets.size(); i++) {
                 final int index = i;
@@ -118,32 +125,54 @@ public final class RaceSlice implements Slice {
                         return res.body().asBytesFuture().thenApply(ignored -> null);
                     }
 
-                    if (res.status() == RsStatus.NOT_FOUND) {
+                    final int code = res.status().code();
+                    final boolean isFailure = code == RsStatus.NOT_FOUND.code()
+                        || code >= 500;
+                    if (isFailure) {
                         EcsLogger.debug("com.auto1.pantera.http")
-                            .message("Repository returned 404 (index: " + index + ")")
+                            .message("Repository returned " + code
+                                + " (index: " + index + "); race continues")
                             .eventCategory("web")
                             .eventAction("group_race")
                             .eventOutcome("failure")
-                            .field("event.reason", "artifact_not_found")
+                            .field("event.reason",
+                                code == RsStatus.NOT_FOUND.code()
+                                    ? "artifact_not_found" : "upstream_error")
+                            .field("http.response.status_code", code)
                             .log();
-                        // Consume 404 response bodies as well to avoid leaks.
+                        if (code >= 500) {
+                            anyServerError.set(true);
+                        }
+                        // Consume failure response bodies to avoid leaks.
                         return res.body().asBytesFuture().thenApply(ignored -> {
                             if (failedCount.incrementAndGet() == this.targets.size()) {
-                                // All repos returned 404, return 404
-                                result.complete(ResponseBuilder.notFound().build());
+                                // Every remote failed. If any 5xx'd, surface
+                                // 503 (transient — clients should retry); if
+                                // all 404'd, surface 404 (definitively absent).
+                                if (anyServerError.get()) {
+                                    result.complete(
+                                        ResponseBuilder.unavailable()
+                                            .textBody("All upstream remotes failed")
+                                            .build()
+                                    );
+                                } else {
+                                    result.complete(
+                                        ResponseBuilder.notFound().build()
+                                    );
+                                }
                             }
                             return null;
                         });
                     }
 
-                    // SUCCESS! This repo has the artifact
+                    // SUCCESS! This repo has the artifact (2xx, 3xx, etc.)
                     // Complete the result (first success wins) - don't consume body, it will be served
                     EcsLogger.debug("com.auto1.pantera.http")
                         .message("Repository found artifact (index: " + index + ")")
                         .eventCategory("web")
                         .eventAction("group_race")
                         .eventOutcome("success")
-                        .field("http.response.status_code", res.status().code())
+                        .field("http.response.status_code", code)
                         .log();
                     result.complete(res);
                     return CompletableFuture.completedFuture(null);
@@ -159,10 +188,20 @@ public final class RaceSlice implements Slice {
                         .eventOutcome("failure")
                         .error(err)
                         .log();
-                    // Count this as a failure
+                    // Treat exceptions the same as 5xx — race-continue + remember.
+                    anyServerError.set(true);
                     if (failedCount.incrementAndGet() == this.targets.size()) {
-                        // All repos failed, return 404
-                        result.complete(ResponseBuilder.notFound().build());
+                        if (anyServerError.get()) {
+                            result.complete(
+                                ResponseBuilder.unavailable()
+                                    .textBody("All upstream remotes failed")
+                                    .build()
+                            );
+                        } else {
+                            result.complete(
+                                ResponseBuilder.notFound().build()
+                            );
+                        }
                     }
                     return null;
                 });
