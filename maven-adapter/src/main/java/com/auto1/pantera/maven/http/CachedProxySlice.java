@@ -665,15 +665,15 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
             if (result instanceof Result.Err<Void> err) {
                 if (err.fault() instanceof Fault.UpstreamIntegrity) {
                     return CompletableFuture.completedFuture(
-                        ResponseBuilder.unavailable()
+                        ResponseBuilder.badGateway()
                             .header("X-Pantera-Fault", "upstream-integrity")
                             .textBody("Upstream integrity verification failed")
                             .build()
                     );
                 }
-                // Upstream-404 must propagate as 404, not 503: RaceSlice's
+                // Upstream-404 must propagate as 404, not 5xx: RaceSlice's
                 // contract is "404 → try the next remote, non-404 → that
-                // remote wins." Mapping 404 → 503 caused a single remote's
+                // remote wins." Mapping 404 → 503/502 caused a single remote's
                 // 404 to short-circuit the race even when another remote
                 // had the artifact (e.g. .module on maven-central vs
                 // plugins.gradle.org). Other 4xx are also "doesn't have
@@ -685,9 +685,12 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                         ResponseBuilder.notFound().build()
                     );
                 }
-                // StorageUnavailable / anything else → 503; transient failure.
+                // StorageUnavailable / anything else → 502 Bad Gateway per
+                // group-resolution-redesign spec ("Index miss → proxy
+                // upstreams fail → 502"). pypi/composer adapters already
+                // use badGateway here; this brings maven into alignment.
                 return CompletableFuture.completedFuture(
-                    ResponseBuilder.unavailable()
+                    ResponseBuilder.badGateway()
                         .textBody("Upstream temporarily unavailable")
                         .build()
                 );

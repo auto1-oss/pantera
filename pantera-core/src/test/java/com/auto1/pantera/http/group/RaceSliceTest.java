@@ -62,14 +62,15 @@ final class RaceSliceTest {
 
     @Test
     @Timeout(1)
-    void returnsServiceUnavailableIfAllFailsWithException() {
+    void returnsBadGatewayIfAllFailsWithException() {
         // Exceptions and 5xx responses indicate "couldn't reach remote",
         // not "artifact doesn't exist". When ALL remotes fail this way,
-        // RaceSlice returns 503 (transient) so clients retry, rather than
-        // 404 which would imply definitive absence.
+        // RaceSlice returns 502 (Bad Gateway — upstream is the problem)
+        // per the group resolution spec, rather than 404 which would imply
+        // definitive absence.
         Slice s = (line, headers, body) -> CompletableFuture.failedFuture(new IllegalStateException());
 
-        Assertions.assertEquals(RsStatus.SERVICE_UNAVAILABLE,
+        Assertions.assertEquals(RsStatus.BAD_GATEWAY,
             new RaceSlice(s)
                 .response(new RequestLine(RqMethod.GET, "/faulty/path"), Headers.EMPTY, Content.EMPTY)
                 .join().status());
@@ -77,16 +78,17 @@ final class RaceSliceTest {
 
     @Test
     @Timeout(1)
-    void mixedFailuresWithAny5xxReturn503() {
+    void mixedFailuresWithAny5xxReturnBadGateway() {
         // One remote 404, one 5xx, one exception — race-continue all the way
-        // and surface 503 because at least one was a server-error / network
-        // failure (informative > silent absence).
+        // and surface 502 because at least one was a server-error / network
+        // failure (informative > silent absence). Per the group resolution
+        // spec: "Index miss → proxy upstreams fail → 502 Bad Gateway".
         Slice s404 = slice(RsStatus.NOT_FOUND, "miss", Duration.ZERO);
         Slice s500 = slice(RsStatus.INTERNAL_ERROR, "boom", Duration.ZERO);
         Slice sBoom = (line, headers, body) ->
             CompletableFuture.failedFuture(new IllegalStateException("net"));
 
-        Assertions.assertEquals(RsStatus.SERVICE_UNAVAILABLE,
+        Assertions.assertEquals(RsStatus.BAD_GATEWAY,
             new RaceSlice(s404, s500, sBoom)
                 .response(new RequestLine(RqMethod.GET, "/path"), Headers.EMPTY, Content.EMPTY)
                 .join().status());

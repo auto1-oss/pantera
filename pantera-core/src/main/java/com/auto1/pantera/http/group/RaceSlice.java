@@ -151,7 +151,7 @@ public final class RaceSlice implements Slice {
                                 // all 404'd, surface 404 (definitively absent).
                                 if (anyServerError.get()) {
                                     result.complete(
-                                        ResponseBuilder.unavailable()
+                                        ResponseBuilder.badGateway()
                                             .textBody("All upstream remotes failed")
                                             .build()
                                     );
@@ -193,7 +193,7 @@ public final class RaceSlice implements Slice {
                     if (failedCount.incrementAndGet() == this.targets.size()) {
                         if (anyServerError.get()) {
                             result.complete(
-                                ResponseBuilder.unavailable()
+                                ResponseBuilder.badGateway()
                                     .textBody("All upstream remotes failed")
                                     .build()
                             );
