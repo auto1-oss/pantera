@@ -829,6 +829,22 @@ final class CachedProxySlice implements Slice {
                             .build()
                     );
                 }
+                // Upstream-404 must propagate as 404, not 503: RaceSlice's
+                // contract is "404 → try the next remote, non-404 → that
+                // remote wins." Mapping 404 → 503 caused a single remote's
+                // 404 to short-circuit the race even when another remote
+                // had the artifact. For Go module proxies, 404 means the
+                // module/version genuinely doesn't exist at that remote —
+                // other 4xx (410 Gone, etc.) carry the same "not here"
+                // semantics. Surface them all as 404 so RaceSlice falls back.
+                if (err.fault() instanceof Fault.StorageUnavailable storageErr
+                    && storageErr.cause() instanceof UpstreamHttpException upstreamErr
+                    && upstreamErr.status() >= 400 && upstreamErr.status() < 500) {
+                    return CompletableFuture.completedFuture(
+                        ResponseBuilder.notFound().build()
+                    );
+                }
+                // StorageUnavailable / anything else → 502; transient failure.
                 return CompletableFuture.<Response>completedFuture(
                     ResponseBuilder.badGateway()
                         .textBody("Upstream temporarily unavailable")
@@ -857,9 +873,7 @@ final class CachedProxySlice implements Slice {
             .thenApply(resp -> {
                 if (!resp.status().success()) {
                     resp.body().asBytesFuture();
-                    throw new IllegalStateException(
-                        "Upstream returned HTTP " + resp.status().code()
-                    );
+                    throw new UpstreamHttpException(resp.status().code());
                 }
                 rshdr.set(resp.headers());
                 try {
@@ -924,5 +938,28 @@ final class CachedProxySlice implements Slice {
                 .log();
         }
         return null;
+    }
+
+    /**
+     * Carries the upstream HTTP status so {@link #fetchVerifyAndCache} can
+     * distinguish "this upstream truly doesn't have it" (404 → propagate as
+     * 404 to RaceSlice, so other remotes can serve) from "transient failure"
+     * (5xx, timeouts → surface as 503). Without this, every non-2xx upstream
+     * response was mapped to 503 by the cache writer, and RaceSlice treats
+     * 503 as a "winning" response (only 404 triggers race-continue), so a
+     * single 404 from a remote beat a 200 from another for Go module files.
+     */
+    private static final class UpstreamHttpException extends IllegalStateException {
+        private static final long serialVersionUID = 1L;
+        private final int status;
+
+        UpstreamHttpException(final int status) {
+            super("Upstream returned HTTP " + status);
+            this.status = status;
+        }
+
+        int status() {
+            return this.status;
+        }
     }
 }
