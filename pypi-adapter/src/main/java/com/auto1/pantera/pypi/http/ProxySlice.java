@@ -225,9 +225,10 @@ final class ProxySlice implements Slice {
         final String rname,
         final String rtype,
         final CooldownService cooldown,
-        final CooldownInspector inspector) {
+        final CooldownInspector inspector,
+        final Slice jsonApiUpstream) {
         this(clients, auth, origin, backend, cache, events, rname, rtype,
-            cooldown, inspector, CacheTimeControl.DEFAULT_TTL);
+            cooldown, inspector, jsonApiUpstream, CacheTimeControl.DEFAULT_TTL);
     }
 
     /**
@@ -242,6 +243,9 @@ final class ProxySlice implements Slice {
      * @param rtype Repository type
      * @param cooldown Cooldown service
      * @param inspector Cooldown inspector
+     * @param jsonApiUpstream Direct upstream slice for /pypi/{pkg}/{ver}/json
+     *  (used by PypiJsonHandler to filter blocked versions out of PyPI's JSON
+     *  metadata response — typically pypi.org regardless of the Simple-API mirror)
      * @param metadataTtl TTL for index page cache
      */
     ProxySlice(final ClientSlices clients, final Authenticator auth,
@@ -251,6 +255,7 @@ final class ProxySlice implements Slice {
         final String rtype,
         final CooldownService cooldown,
         final CooldownInspector inspector,
+        final Slice jsonApiUpstream,
         final Duration metadataTtl) {
         this.origin = origin;
         this.clients = clients;
@@ -286,11 +291,9 @@ final class ProxySlice implements Slice {
         this.simpleHandler = new PypiSimpleHandler(
             simpleUpstream, cooldown, inspector, rtype, rname
         );
-        // Publish dates now resolved via PublishDateRegistry (DbPublishDateRegistry +
-        // PyPiSource); the JSON-API metadataSlice that the per-adapter inspector used
-        // to expose is no longer needed here. The PypiJsonHandler is therefore disabled
-        // — release dates flow through inspector.releaseDate() via the registry.
-        this.jsonHandler = null;
+        this.jsonHandler = new PypiJsonHandler(
+            jsonApiUpstream, cooldown, inspector, rtype, rname
+        );
     }
 
     @Override

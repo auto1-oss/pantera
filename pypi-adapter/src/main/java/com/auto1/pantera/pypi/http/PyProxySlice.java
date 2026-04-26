@@ -129,7 +129,11 @@ public final class PyProxySlice extends Slice.Wrap {
                         rname,
                         rtype,
                         cooldown,
-                        inspector
+                        inspector,
+                        // PyPI JSON API upstream — always pypi.org, regardless of the
+                        // Simple-API mirror configured. Used by PypiJsonHandler to
+                        // serve cooldown-filtered /pypi/{pkg}/{ver}/json responses.
+                        new UriClientSlice(clients, jsonApiUri(remote))
                     )
                 ),
                 new RtRulePath(
@@ -138,6 +142,15 @@ public final class PyProxySlice extends Slice.Wrap {
                 )
             )
         );
+    }
+
+    private static URI jsonApiUri(final URI remote) {
+        final String scheme = remote.getScheme();
+        final String authority = remote.getRawAuthority();
+        if (scheme == null || authority == null) {
+            return remote;
+        }
+        return URI.create(String.format("%s://%s", scheme, authority));
     }
 
 }
