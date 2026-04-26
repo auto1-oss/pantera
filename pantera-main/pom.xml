@@ -416,6 +416,13 @@ SOFTWARE.
             <artifactId>java-jwt</artifactId>
             <version>4.5.1</version>
         </dependency>
+        <!-- WireMock: HTTP stub server for testing publish-date Source impls -->
+        <dependency>
+            <groupId>org.wiremock</groupId>
+            <artifactId>wiremock-standalone</artifactId>
+            <version>3.9.2</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
     <build>
         <resources>
