@@ -11,6 +11,7 @@
 package com.auto1.pantera.publishdate;
 
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.metrics.MicrometerMetrics;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 
@@ -61,19 +62,23 @@ public final class DbPublishDateRegistry implements PublishDateRegistry {
     public CompletableFuture<Optional<Instant>> publishDate(
         final String repoType, final String name, final String version
     ) {
+        final long startNanos = System.nanoTime();
         final CacheKey key = new CacheKey(repoType, name, version);
         final Instant l1hit = this.l1.getIfPresent(key);
         if (l1hit != null) {
+            recordOutcome(repoType, "l1_hit", startNanos);
             return CompletableFuture.completedFuture(Optional.of(l1hit));
         }
         return CompletableFuture.supplyAsync(() -> readDb(key))
             .thenCompose(dbHit -> {
                 if (dbHit.isPresent()) {
                     this.l1.put(key, dbHit.get());
+                    recordOutcome(repoType, "l2_hit", startNanos);
                     return CompletableFuture.completedFuture(dbHit);
                 }
                 final PublishDateSource src = this.sourcesByRepoType.get(repoType);
                 if (src == null) {
+                    recordOutcome(repoType, "source_miss", startNanos);
                     return CompletableFuture.completedFuture(Optional.<Instant>empty());
                 }
                 return src.fetch(name, version)
@@ -81,10 +86,14 @@ public final class DbPublishDateRegistry implements PublishDateRegistry {
                         if (opt.isPresent()) {
                             writeDb(key, opt.get(), src.sourceId());
                             this.l1.put(key, opt.get());
+                            recordOutcome(repoType, "source_hit", startNanos);
+                        } else {
+                            recordOutcome(repoType, "source_miss", startNanos);
                         }
                         return opt;
                     })
                     .exceptionally(err -> {
+                        recordOutcome(repoType, "source_error", startNanos);
                         EcsLogger.warn("com.auto1.pantera.publishdate")
                             .message("Source fetch failed for "
                                 + repoType + " " + name + "@" + version)
@@ -99,6 +108,13 @@ public final class DbPublishDateRegistry implements PublishDateRegistry {
                         return Optional.empty();
                     });
             });
+    }
+
+    private static void recordOutcome(final String repoType, final String outcome, final long startNanos) {
+        if (MicrometerMetrics.isInitialized()) {
+            final long durationMs = (System.nanoTime() - startNanos) / 1_000_000L;
+            MicrometerMetrics.getInstance().recordPublishDateLookup(repoType, outcome, durationMs);
+        }
     }
 
     private Optional<Instant> readDb(final CacheKey key) {

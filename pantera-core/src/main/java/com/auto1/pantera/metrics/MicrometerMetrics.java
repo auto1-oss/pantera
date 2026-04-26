@@ -328,7 +328,24 @@ public final class MicrometerMetrics {
             .increment();
     }
 
+    // ========== Publish-Date Registry Metrics ==========
 
+    /**
+     * Records one publish-date lookup outcome.
+     *
+     * @param repoType repo type ("maven", "npm", ...)
+     * @param outcome  one of: l1_hit, l2_hit, source_hit, source_miss, source_error
+     * @param durationMs total time spent in {@code publishDate(...)} for this call
+     */
+    public void recordPublishDateLookup(
+        final String repoType, final String outcome, final long durationMs
+    ) {
+        Timer.builder("pantera.publish_date.lookup")
+            .description("Publish-date registry lookup latency")
+            .tags("repository.type", repoType, "outcome", outcome)
+            .register(registry)
+            .record(java.time.Duration.ofMillis(durationMs));
+    }
 
     // ========== Storage Metrics ==========
 
