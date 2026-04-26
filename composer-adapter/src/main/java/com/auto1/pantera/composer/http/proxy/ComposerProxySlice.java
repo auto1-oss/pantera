@@ -34,6 +34,8 @@ import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
 import com.auto1.pantera.http.slice.SliceSimple;
+import com.auto1.pantera.publishdate.PublishDateRegistries;
+import com.auto1.pantera.publishdate.RegistryBackedInspector;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 
 import java.net.URI;
@@ -109,7 +111,7 @@ public class ComposerProxySlice implements Slice {
     ) {
         this(clients, remote, repo, auth, Cache.NOP, Optional.empty(), "composer", "php",
             com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE,
-            new NoopComposerCooldownInspector(),
+            new RegistryBackedInspector("composer", PublishDateRegistries.instance()),
             "http://localhost:8080");
     }
 
@@ -130,7 +132,7 @@ public class ComposerProxySlice implements Slice {
     ) {
         this(clients, remote, repository, auth, cache, Optional.empty(), "composer", "php",
             com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE,
-            new NoopComposerCooldownInspector(),
+            new RegistryBackedInspector("composer", PublishDateRegistries.instance()),
             "http://localhost:8080");
     }
     

@@ -20,6 +20,7 @@ import com.auto1.pantera.asto.cache.FromStorageCache;
 import com.auto1.pantera.asto.cache.Remote;
 import com.auto1.pantera.asto.blocking.BlockingStorage;
 import com.auto1.pantera.asto.ext.KeyLastPart;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.response.CooldownResponseRegistry;
 import com.auto1.pantera.cooldown.api.CooldownService;
@@ -157,7 +158,7 @@ final class ProxySlice implements Slice {
     /**
      * Cooldown inspector.
      */
-    private final PyProxyCooldownInspector inspector;
+    private final CooldownInspector inspector;
 
     /**
      * Mirror map repository path -> upstream URI.
@@ -224,7 +225,7 @@ final class ProxySlice implements Slice {
         final String rname,
         final String rtype,
         final CooldownService cooldown,
-        final PyProxyCooldownInspector inspector) {
+        final CooldownInspector inspector) {
         this(clients, auth, origin, backend, cache, events, rname, rtype,
             cooldown, inspector, CacheTimeControl.DEFAULT_TTL);
     }
@@ -249,7 +250,7 @@ final class ProxySlice implements Slice {
         final String rname,
         final String rtype,
         final CooldownService cooldown,
-        final PyProxyCooldownInspector inspector,
+        final CooldownInspector inspector,
         final Duration metadataTtl) {
         this.origin = origin;
         this.clients = clients;
@@ -285,10 +286,11 @@ final class ProxySlice implements Slice {
         this.simpleHandler = new PypiSimpleHandler(
             simpleUpstream, cooldown, inspector, rtype, rname
         );
-        final Slice jsonUpstream = this.inspector.metadataSlice();
-        this.jsonHandler = jsonUpstream == null
-            ? null
-            : new PypiJsonHandler(jsonUpstream, cooldown, inspector, rtype, rname);
+        // Publish dates now resolved via PublishDateRegistry (DbPublishDateRegistry +
+        // PyPiSource); the JSON-API metadataSlice that the per-adapter inspector used
+        // to expose is no longer needed here. The PypiJsonHandler is therefore disabled
+        // — release dates flow through inspector.releaseDate() via the registry.
+        this.jsonHandler = null;
     }
 
     @Override
@@ -1424,15 +1426,9 @@ final class ProxySlice implements Slice {
     }
 
     private void registerRelease(final ArtifactCoordinates coords, final Optional<Instant> release) {
-        if (release.isPresent()) {
-            this.inspector.register(
-                coords.artifact(),
-                coords.version(),
-                release.get()
-            );
-        } else if (!this.inspector.known(coords.artifact(), coords.version())) {
-            this.inspector.register(coords.artifact(), coords.version(), Instant.EPOCH);
-        }
+        // Publish dates are now persisted by PublishDateRegistry (DB + sources).
+        // The per-adapter inspector cache layer has been removed; this method is a no-op.
+        // Parameters retained for callers; remove as a follow-up cleanup.
     }
 
     private Optional<Instant> releaseInstant(final Headers headers) {

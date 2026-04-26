@@ -40,6 +40,8 @@ import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.publishdate.PublishDateRegistries;
+import com.auto1.pantera.publishdate.RegistryBackedInspector;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 import io.micrometer.core.instrument.MeterRegistry;
 
@@ -160,7 +162,7 @@ final class CachedProxySlice implements Slice {
     CachedProxySlice(Slice remote, Repository repo, Cache cache) {
         this(remote, repo, cache, Optional.empty(), "composer", "php",
             com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE,
-            new NoopComposerCooldownInspector(),
+            new RegistryBackedInspector("composer", PublishDateRegistries.instance()),
             "http://localhost:8080",
             "unknown"
         );

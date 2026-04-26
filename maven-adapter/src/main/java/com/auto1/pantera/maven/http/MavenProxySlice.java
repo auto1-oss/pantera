@@ -12,6 +12,7 @@ package com.auto1.pantera.maven.http;
 
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.cache.Cache;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.cache.ProxyCacheConfig;
@@ -25,6 +26,8 @@ import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
 import com.auto1.pantera.http.slice.SliceSimple;
+import com.auto1.pantera.publishdate.PublishDateRegistries;
+import com.auto1.pantera.publishdate.RegistryBackedInspector;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 
 import java.net.URI;
@@ -189,7 +192,9 @@ public final class MavenProxySlice extends Slice.Wrap {
     ) {
         super(
             buildRoute(remote, cache, events, rname, upstreamUrl, rtype,
-                cooldown, new MavenCooldownInspector(remote), storage, metadataTtl,
+                cooldown,
+                new RegistryBackedInspector("maven", PublishDateRegistries.instance()),
+                storage, metadataTtl,
                 cooldownMetadata)
         );
     }
@@ -206,7 +211,7 @@ public final class MavenProxySlice extends Slice.Wrap {
         final String upstreamUrl,
         final String rtype,
         final com.auto1.pantera.cooldown.api.CooldownService cooldown,
-        final MavenCooldownInspector inspector,
+        final CooldownInspector inspector,
         final Optional<Storage> storage,
         final Duration metadataTtl,
         final com.auto1.pantera.cooldown.metadata.CooldownMetadataService cooldownMetadata

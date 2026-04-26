@@ -265,6 +265,41 @@ public final class VertxMain {
                 new com.auto1.pantera.db.dao.AuthSettingsDao(ds)
             )
         );
+        // Install singleton PublishDateRegistry. Each adapter slice now resolves
+        // canonical publish dates via RegistryBackedInspector(repoType, registry)
+        // instead of HEAD-probing upstream — eliminates the per-cooldown-eval
+        // round-trip and gives us a single L1+L2 cache shared across adapters.
+        sharedDs.ifPresent(ds -> {
+            final io.vertx.ext.web.client.WebClient publishDateClient =
+                io.vertx.ext.web.client.WebClient.create(
+                    this.vertx.getDelegate(),
+                    new io.vertx.ext.web.client.WebClientOptions()
+                        .setUserAgent("pantera-publish-date/1.0")
+                        .setConnectTimeout(3_000)
+                        .setIdleTimeout(30)
+                );
+            final com.auto1.pantera.publishdate.DbPublishDateRegistry publishDates =
+                new com.auto1.pantera.publishdate.DbPublishDateRegistry(
+                    ds,
+                    Map.of(
+                        "maven",
+                        new com.auto1.pantera.publishdate.sources.MavenCentralSource(publishDateClient),
+                        "gradle",
+                        new com.auto1.pantera.publishdate.sources.MavenCentralSource(publishDateClient),
+                        "npm",
+                        new com.auto1.pantera.publishdate.sources.NpmRegistrySource(publishDateClient),
+                        "pypi",
+                        new com.auto1.pantera.publishdate.sources.PyPiSource(publishDateClient),
+                        "go",
+                        new com.auto1.pantera.publishdate.sources.GoProxySource(publishDateClient),
+                        "composer",
+                        new com.auto1.pantera.publishdate.sources.PackagistSource(publishDateClient),
+                        "gem",
+                        new com.auto1.pantera.publishdate.sources.RubyGemsSource(publishDateClient)
+                    )
+                );
+            com.auto1.pantera.publishdate.PublishDateRegistries.installDefault(publishDates);
+        });
         final RepositorySlices slices = new RepositorySlices(
             settings, repos, jwtTokens
         );

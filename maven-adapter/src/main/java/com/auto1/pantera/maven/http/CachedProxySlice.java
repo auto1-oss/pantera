@@ -39,6 +39,8 @@ import com.auto1.pantera.maven.cooldown.MavenMetadataFilter;
 import com.auto1.pantera.maven.cooldown.MavenMetadataParser;
 import com.auto1.pantera.maven.cooldown.MavenMetadataRequestDetector;
 import com.auto1.pantera.maven.cooldown.MavenMetadataRewriter;
+import com.auto1.pantera.publishdate.PublishDateRegistries;
+import com.auto1.pantera.publishdate.RegistryBackedInspector;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 
@@ -138,7 +140,7 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      * dates. Holding one instance avoids re-wrapping the remote slice on
      * every request.
      */
-    private final MavenCooldownInspector metadataInspector;
+    private final CooldownInspector metadataInspector;
 
     /**
      * Constructor with full configuration (no metadata filtering).
@@ -221,7 +223,8 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
             .orElse(null);
         this.cooldownMetadata = cooldownMetadata;
         this.metadataInspector = cooldownMetadata == null
-            ? null : new MavenCooldownInspector(client);
+            ? null
+            : new RegistryBackedInspector("maven", PublishDateRegistries.instance());
     }
 
     /**

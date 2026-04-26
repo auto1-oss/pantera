@@ -12,6 +12,7 @@ package com.auto1.pantera.http;
 
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.cache.Cache;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.http.client.ClientSlices;
 import com.auto1.pantera.http.client.UriClientSlice;
 import com.auto1.pantera.http.client.auth.AuthClientSlice;
@@ -22,6 +23,8 @@ import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
 import com.auto1.pantera.http.slice.SliceSimple;
+import com.auto1.pantera.publishdate.PublishDateRegistries;
+import com.auto1.pantera.publishdate.RegistryBackedInspector;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 
 import java.net.URI;
@@ -134,7 +137,10 @@ public final class GoProxySlice extends Slice.Wrap {
         final String rtype,
         final com.auto1.pantera.cooldown.api.CooldownService cooldown
     ) {
-        this(remote, cache, events, storage, rname, rtype, cooldown, new GoCooldownInspector(remote));
+        this(
+            remote, cache, events, storage, rname, rtype, cooldown,
+            new RegistryBackedInspector("go", PublishDateRegistries.instance())
+        );
     }
 
     GoProxySlice(
@@ -145,7 +151,7 @@ public final class GoProxySlice extends Slice.Wrap {
         final String rname,
         final String rtype,
         final com.auto1.pantera.cooldown.api.CooldownService cooldown,
-        final GoCooldownInspector inspector
+        final CooldownInspector inspector
     ) {
         super(
             new SliceRoute(

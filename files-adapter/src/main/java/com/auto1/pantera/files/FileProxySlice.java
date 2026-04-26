@@ -17,6 +17,7 @@ import com.auto1.pantera.asto.cache.CacheControl;
 import com.auto1.pantera.asto.cache.StreamThroughCache;
 import com.auto1.pantera.asto.cache.FromStorageCache;
 import com.auto1.pantera.asto.cache.Remote;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.response.CooldownResponseRegistry;
 import com.auto1.pantera.cooldown.api.CooldownService;
@@ -32,6 +33,8 @@ import com.auto1.pantera.http.client.auth.Authenticator;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.KeyFromPath;
+import com.auto1.pantera.publishdate.PublishDateRegistries;
+import com.auto1.pantera.publishdate.RegistryBackedInspector;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.scheduling.RepositoryEvents;
 import io.reactivex.Flowable;
@@ -81,7 +84,7 @@ public final class FileProxySlice implements Slice {
     /**
      * Cooldown inspector.
      */
-    private final FilesCooldownInspector inspector;
+    private final CooldownInspector inspector;
 
     /**
      * Upstream URL for metrics.
@@ -199,7 +202,7 @@ public final class FileProxySlice implements Slice {
         this.events = events;
         this.rname = rname;
         this.cooldown = cooldown;
-        this.inspector = new FilesCooldownInspector(remote);
+        this.inspector = new RegistryBackedInspector("file", PublishDateRegistries.instance());
         this.upstreamUrl = upstreamUrl;
         this.storage = storage;
     }
