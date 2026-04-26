@@ -19,8 +19,7 @@ import java.util.concurrent.CompletableFuture;
  * Docker cooldown inspector with bounded caches to prevent memory leaks.
  * Uses Caffeine cache with automatic eviction to limit Old Gen growth.
  */
-public final class DockerProxyCooldownInspector implements CooldownInspector,
-    com.auto1.pantera.cooldown.config.InspectorRegistry.InvalidatableInspector {
+public final class DockerProxyCooldownInspector implements CooldownInspector {
 
     /**
      * Bounded cache of image release dates.

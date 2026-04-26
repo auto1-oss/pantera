@@ -382,8 +382,8 @@ public final class DownloadPackageSlice implements Slice {
     /**
      * Apply cooldown filtering and build abbreviated response.
      * CooldownMetadataService handles JSON parsing and release date extraction internally.
-     * NpmCooldownInspector is required for cooldown evaluation - release dates are preloaded
-     * from metadata via ReleaseDateProvider, so no remote fetch is needed.
+     * Release dates are sourced from the canonical {@code PublishDateRegistry}
+     * (via {@code RegistryBackedInspector}), populated from upstream metadata.
      */
     private CompletableFuture<Response> applyFilterAndBuildResponse(
         final byte[] abbreviatedBytes,

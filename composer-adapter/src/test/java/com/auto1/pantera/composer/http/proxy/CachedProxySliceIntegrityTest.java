@@ -17,6 +17,8 @@ import com.auto1.pantera.asto.cache.FromStorageCache;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.composer.AstoRepository;
 import com.auto1.pantera.cooldown.impl.NoopCooldownService;
+import com.auto1.pantera.publishdate.PublishDateRegistries;
+import com.auto1.pantera.publishdate.RegistryBackedInspector;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
@@ -167,7 +169,7 @@ final class CachedProxySliceIntegrityTest {
             "composer-proxy-test",
             "php",
             NoopCooldownService.INSTANCE,
-            new NoopComposerCooldownInspector(),
+            new RegistryBackedInspector("composer", PublishDateRegistries.instance()),
             "http://localhost:8080",
             "https://packagist.example/composer"
         );

@@ -413,8 +413,7 @@ public final class GoLatestHandler {
     }
 
     /**
-     * Drain a reactive-streams body to a byte array. Mirrors the helper
-     * in {@link com.auto1.pantera.http.GoCooldownInspector}.
+     * Drain a reactive-streams body to a byte array.
      */
     private static CompletableFuture<byte[]> bodyBytes(
         final org.reactivestreams.Publisher<ByteBuffer> body

@@ -19,7 +19,6 @@ import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.cache.CooldownCache;
 import com.auto1.pantera.cooldown.config.CooldownCircuitBreaker;
 import com.auto1.pantera.cooldown.config.CooldownSettings;
-import com.auto1.pantera.cooldown.config.InspectorRegistry;
 import com.auto1.pantera.cooldown.metadata.FilteredMetadataCache;
 import com.auto1.pantera.cooldown.metrics.CooldownMetrics;
 import com.auto1.pantera.http.log.EcsLogger;
@@ -836,10 +835,6 @@ final class JdbcCooldownService implements CooldownService {
                 .error(err)
                 .log();
         }
-        // Invalidate inspector cache (same as unblockSingle does)
-        InspectorRegistry.instance()
-            .invalidate(record.repoType(), record.repoName(),
-                record.artifact(), record.version());
     }
 
     private void unblockSingle(
@@ -851,10 +846,6 @@ final class JdbcCooldownService implements CooldownService {
     ) {
         final Optional<DbBlockRecord> record = this.repository.find(repoType, repoName, artifact, version);
         record.ifPresent(value -> this.release(value, actor, Instant.now()));
-        
-        // Invalidate inspector cache (works for all adapters: Docker, NPM, PyPI, etc.)
-        InspectorRegistry.instance()
-            .invalidate(repoType, repoName, artifact, version);
     }
 
     private int unblockAllBlocking(
@@ -885,9 +876,6 @@ final class JdbcCooldownService implements CooldownService {
         // every unblocked row leaves a MANUAL_UNBLOCK history trail.
         final int count = this.repository.archiveAndDeleteByRepo(
             repoType, repoName, ArchiveReason.MANUAL_UNBLOCK, actor);
-        // Clear inspector cache (works for all adapters: Docker, NPM, PyPI, etc.)
-        InspectorRegistry.instance()
-            .clearAll(repoType, repoName);
         return count;
     }
 

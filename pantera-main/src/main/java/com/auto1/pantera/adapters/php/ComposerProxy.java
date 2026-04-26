@@ -66,13 +66,9 @@ public final class ComposerProxy implements Slice {
         this.slice = new RaceSlice(
             cfg.remotes().stream().map(
                 remote -> {
-                    final com.auto1.pantera.http.client.auth.Authenticator auth = 
+                    final com.auto1.pantera.http.client.auth.Authenticator auth =
                         GenericAuthenticator.create(client, remote.username(), remote.pwd());
-                    final Slice remoteSlice = new com.auto1.pantera.http.client.auth.AuthClientSlice(
-                        new com.auto1.pantera.http.client.UriClientSlice(client, remote.uri()),
-                        auth
-                    );
-                    
+
                     return asto.map(
                         cache -> new ComposerProxySlice(
                             client,
@@ -84,7 +80,10 @@ public final class ComposerProxy implements Slice {
                             cfg.name(),
                             cfg.type(),
                             cooldown,
-                            new com.auto1.pantera.composer.http.proxy.ComposerCooldownInspector(remoteSlice),
+                            new com.auto1.pantera.publishdate.RegistryBackedInspector(
+                                "composer",
+                                com.auto1.pantera.publishdate.PublishDateRegistries.instance()
+                            ),
                             baseUrl,
                             remote.uri().toString()
                         )
@@ -99,7 +98,10 @@ public final class ComposerProxy implements Slice {
                             cfg.name(),
                             cfg.type(),
                             cooldown,
-                            new com.auto1.pantera.composer.http.proxy.ComposerCooldownInspector(remoteSlice),
+                            new com.auto1.pantera.publishdate.RegistryBackedInspector(
+                                "composer",
+                                com.auto1.pantera.publishdate.PublishDateRegistries.instance()
+                            ),
                             baseUrl,
                             remote.uri().toString()
                         )
