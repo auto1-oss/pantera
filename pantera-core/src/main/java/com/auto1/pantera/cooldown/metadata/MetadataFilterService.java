@@ -286,9 +286,6 @@ public final class MetadataFilterService implements CooldownMetadataService {
                 releaseDates = Collections.emptyMap();
             }
 
-            // Step 2b: Preload release dates into inspector for later use
-            this.preloadReleaseDates(parser, parsed, inspectorOpt);
-
             // Step 2c: Pre-warm CooldownCache L1 with release dates from metadata.
             // Versions older than the cooldown period are guaranteed allowed (false).
             if (!releaseDates.isEmpty()) {
@@ -490,13 +487,6 @@ public final class MetadataFilterService implements CooldownMetadataService {
                     );
                 }
                 return FilteredMetadataCache.CacheEntry.noBlockedVersions(resultBytes, this.maxTtl);
-            }).whenComplete((result, error) -> {
-                // Clear preloaded dates
-                ctx.inspectorOpt.ifPresent(inspector -> {
-                    if (inspector instanceof MetadataAwareInspector) {
-                        ((MetadataAwareInspector) inspector).clearPreloadedDates();
-                    }
-                });
             });
     }
 
@@ -576,38 +566,6 @@ public final class MetadataFilterService implements CooldownMetadataService {
                 .eventAction("cache_prewarm")
                 .field("repository.name", repoName)
                 .field("package.name", packageName)
-                .log();
-        }
-    }
-
-    /**
-     * Preload release dates from metadata into inspector if supported.
-     */
-    @SuppressWarnings("unchecked")
-    private <T> void preloadReleaseDates(
-        final MetadataParser<T> parser,
-        final T parsed,
-        final Optional<CooldownInspector> inspectorOpt
-    ) {
-        if (inspectorOpt.isEmpty()) {
-            return;
-        }
-        final CooldownInspector inspector = inspectorOpt.get();
-        if (!(inspector instanceof MetadataAwareInspector)) {
-            return;
-        }
-        if (!(parser instanceof ReleaseDateProvider)) {
-            return;
-        }
-        final ReleaseDateProvider<T> provider = (ReleaseDateProvider<T>) parser;
-        final Map<String, Instant> releaseDates = provider.releaseDates(parsed);
-        if (!releaseDates.isEmpty()) {
-            ((MetadataAwareInspector) inspector).preloadReleaseDates(releaseDates);
-            EcsLogger.debug("com.auto1.pantera.cooldown.metadata")
-                .message(String.format(
-                    "Preloaded %d release dates from metadata", releaseDates.size()))
-                .eventCategory("database")
-                .eventAction("metadata_filter")
                 .log();
         }
     }
