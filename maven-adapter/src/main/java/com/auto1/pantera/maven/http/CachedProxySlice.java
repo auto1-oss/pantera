@@ -633,17 +633,18 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
     }
 
     /**
-     * Fetch the primary + every sidecar, verify, commit via
-     * {@link ProxyCacheWriter}, then stream the primary from the cache.
-     * Integrity failures and storage failures both collapse to a clean 502
-     * response (mirroring {@code FaultTranslator.UpstreamIntegrity} policy)
-     * and leave the cache empty for this key.
+     * Fetch the primary + every sidecar, verify via
+     * {@link ProxyCacheWriter#writeAndVerify}, then serve the primary
+     * directly from the verified temp file while committing to storage
+     * asynchronously. Integrity failures and storage failures both collapse
+     * to a clean 502 response (mirroring {@code FaultTranslator.UpstreamIntegrity}
+     * policy) and leave the cache empty for this key.
      */
     @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.CognitiveComplexity"})
     private CompletableFuture<Response> fetchVerifyAndCache(
         final RequestLine line, final Key key, final String path
     ) {
-        final Storage storage = this.rawStorage.orElseThrow();
+        this.rawStorage.orElseThrow(); // guard: storage must be configured
         final String upstreamUri = this.upstreamUrl() + path;
         final RequestContext ctx = new RequestContext(
             org.apache.logging.log4j.ThreadContext.get("trace.id"),
@@ -658,14 +659,14 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         sidecars.put(ChecksumAlgo.SHA256, () -> this.fetchSidecar(line, ".sha256"));
         sidecars.put(ChecksumAlgo.SHA512, () -> this.fetchSidecar(line, ".sha512"));
 
-        return this.cacheWriter.writeWithSidecars(
+        return this.cacheWriter.writeAndVerify(
             key,
             upstreamUri,
             () -> this.fetchPrimary(line),
             sidecars,
             ctx
         ).toCompletableFuture().thenCompose(result -> {
-            if (result instanceof Result.Err<Void> err) {
+            if (result instanceof Result.Err<ProxyCacheWriter.VerifiedArtifact> err) {
                 if (err.fault() instanceof Fault.UpstreamIntegrity) {
                     return CompletableFuture.completedFuture(
                         ResponseBuilder.badGateway()
@@ -698,16 +699,16 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                         .build()
                 );
             }
-            // Success path: enqueue a DB-index event so MavenProxyPackageProcessor
-            // records this artifact. Upstream headers are unavailable here so
-            // Headers.EMPTY is passed (no Last-Modified → processor falls back
-            // to System.currentTimeMillis() for created_date, same as pre-WI-07).
-            return storage.size(key)
-                .exceptionally(ignored -> 0L)
-                .thenCompose(size -> {
-                    this.enqueueEventForWriter(key, size);
-                    return this.serveFromCache(storage, key);
-                });
+            // Success path: serve directly from the verified temp file,
+            // commit to persistent storage asynchronously (fire-and-forget).
+            @SuppressWarnings("unchecked")
+            final ProxyCacheWriter.VerifiedArtifact artifact =
+                ((Result.Ok<ProxyCacheWriter.VerifiedArtifact>) result).value();
+            this.enqueueEventForWriter(key, artifact.size());
+            artifact.commitAsync();
+            return CompletableFuture.completedFuture(
+                ResponseBuilder.ok().body(artifact.contentFromTempFile()).build()
+            );
         });
     }
 
