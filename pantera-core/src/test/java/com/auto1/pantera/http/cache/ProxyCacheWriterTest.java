@@ -443,6 +443,9 @@ final class ProxyCacheWriterTest {
         assertThat(commitResult, instanceOf(Result.Ok.class));
         assertTrue(storage.exists(new Key.From("test/commit.jar")).join());
         assertTrue(storage.exists(new Key.From("test/commit.jar.sha256")).join());
+        // Temp file is cleaned up when the response content is consumed
+        assertTrue(Files.exists(artifact.tempFile()));
+        artifact.contentFromTempFile().asBytesFuture().join();
         assertFalse(Files.exists(artifact.tempFile()));
     }
 

@@ -859,14 +859,10 @@ final class CachedProxySlice implements Slice {
                     releaseDate.or(() -> this.parseLastModified(rshdr.get()))
                 );
             }
-            // Read the temp file eagerly before commitAsync deletes it.
-            final Content body = artifact.contentFromTempFile();
-            return body.asBytesFuture().thenApply(bytes -> {
-                artifact.commitAsync();
-                return ResponseBuilder.ok()
-                    .body(new Content.From(bytes))
-                    .build();
-            });
+            artifact.commitAsync();
+            return CompletableFuture.completedFuture(
+                ResponseBuilder.ok().body(artifact.contentFromTempFile()).build()
+            );
         });
     }
 

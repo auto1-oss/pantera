@@ -397,14 +397,35 @@ public final class ProxyCacheWriter {
         });
     }
 
-    /** Commit a previously verified artifact to storage. */
+    /**
+     * Commit a previously verified artifact to storage. Reads the temp file
+     * eagerly so the response Flowable (which also reads the temp file) is
+     * not racing with temp-file deletion.
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     CompletionStage<Result<Void>> commitVerified(final VerifiedArtifact artifact) {
-        return this.commit(
-            artifact.primaryKey(),
-            artifact.tempFile(),
-            artifact.sidecars(),
-            artifact.ctx()
-        );
+        final byte[] bytes;
+        try {
+            bytes = Files.readAllBytes(artifact.tempFile());
+        } catch (final IOException ex) {
+            return CompletableFuture.completedFuture(
+                Result.err(new Fault.StorageUnavailable(ex, artifact.primaryKey().string()))
+            );
+        }
+        return this.cache.save(artifact.primaryKey(), new Content.From(bytes))
+            .thenCompose(ignored -> this.saveSidecars(artifact.primaryKey(), artifact.sidecars()))
+            .handle((ignored, err) -> {
+                if (err == null) {
+                    this.logSuccess(artifact.primaryKey(), artifact.sidecars().keySet(), artifact.ctx());
+                    return Result.<Void>ok(null);
+                }
+                this.rollbackAfterPartialFailure(
+                    artifact.primaryKey(), artifact.sidecars().keySet(), err, artifact.ctx()
+                );
+                return Result.<Void>err(new Fault.StorageUnavailable(
+                    unwrap(err), artifact.primaryKey().string()
+                ));
+            });
     }
 
     /**
@@ -586,7 +607,11 @@ public final class ProxyCacheWriter {
 
     // ===== helpers =====
 
-    /** Create a {@link Content} backed by a temp file for immediate serving. */
+    /**
+     * Create a {@link Content} backed by a temp file for immediate serving.
+     * The disposer closes the channel AND deletes the temp file, so this
+     * Content owns the temp file lifecycle.
+     */
     static Content contentFromTempFile(final Path tempFile, final long size) {
         return new Content.From(
             Optional.of(size),
@@ -602,7 +627,10 @@ public final class ProxyCacheWriter {
                         emitter.onNext(buf);
                     }
                 }),
-                FileChannel::close
+                chan -> {
+                    chan.close();
+                    deleteQuietly(tempFile);
+                }
             )
         );
     }
