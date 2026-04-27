@@ -475,14 +475,14 @@ public final class CachedPyProxySlice implements Slice {
         sidecars.put(ChecksumAlgo.MD5, () -> this.fetchSidecar(line, ".md5"));
         sidecars.put(ChecksumAlgo.SHA512, () -> this.fetchSidecar(line, ".sha512"));
 
-        return this.cacheWriter.writeWithSidecars(
+        return this.cacheWriter.writeAndVerify(
             key,
             upstream,
             () -> this.fetchPrimary(line),
             sidecars,
             ctx
         ).toCompletableFuture().thenCompose(result -> {
-            if (result instanceof Result.Err<Void> err) {
+            if (result instanceof Result.Err<ProxyCacheWriter.VerifiedArtifact> err) {
                 if (err.fault() instanceof Fault.UpstreamIntegrity ui) {
                     return CompletableFuture.completedFuture(
                         ResponseBuilder.badGateway()
@@ -515,7 +515,12 @@ public final class CachedPyProxySlice implements Slice {
                         .build()
                 );
             }
-            return this.serveFromCache(storage, key);
+            final ProxyCacheWriter.VerifiedArtifact artifact =
+                ((Result.Ok<ProxyCacheWriter.VerifiedArtifact>) result).value();
+            artifact.commitAsync();
+            return CompletableFuture.completedFuture(
+                ResponseBuilder.ok().body(artifact.contentFromTempFile()).build()
+            );
         });
     }
 
