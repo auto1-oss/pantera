@@ -382,6 +382,94 @@ final class ProxyCacheWriterTest {
         );
     }
 
+    // ===== writeAndVerify / VerifiedArtifact =====
+
+    @Test
+    @DisplayName("writeAndVerify returns VerifiedArtifact with temp file before commit")
+    void writeAndVerifyReturnsTempFile() throws Exception {
+        final Storage storage = new InMemoryStorage();
+        final ProxyCacheWriter writer = new ProxyCacheWriter(storage, "test-repo");
+        final byte[] body = "hello-artifact".getBytes(StandardCharsets.UTF_8);
+        final String sha256 = HexFormat.of().formatHex(
+            MessageDigest.getInstance("SHA-256").digest(body)
+        );
+        final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> sidecars =
+            new EnumMap<>(ChecksumAlgo.class);
+        sidecars.put(ChecksumAlgo.SHA256, () -> CompletableFuture.completedFuture(
+            Optional.of(new ByteArrayInputStream(sha256.getBytes(StandardCharsets.UTF_8)))
+        ));
+        final Result<ProxyCacheWriter.VerifiedArtifact> result =
+            writer.writeAndVerify(
+                new Key.From("test/artifact.jar"),
+                "http://upstream/artifact.jar",
+                () -> CompletableFuture.completedFuture(new ByteArrayInputStream(body)),
+                sidecars,
+                null
+            ).toCompletableFuture().join();
+        assertThat(result, instanceOf(Result.Ok.class));
+        final ProxyCacheWriter.VerifiedArtifact artifact =
+            ((Result.Ok<ProxyCacheWriter.VerifiedArtifact>) result).value();
+        assertTrue(Files.exists(artifact.tempFile()));
+        assertEquals(body.length, Files.size(artifact.tempFile()));
+        assertFalse(storage.exists(new Key.From("test/artifact.jar")).join());
+        artifact.commitAsync().toCompletableFuture().join();
+    }
+
+    @Test
+    @DisplayName("commitAsync persists primary and sidecars to storage")
+    void commitAsyncPersistsToStorage() throws Exception {
+        final Storage storage = new InMemoryStorage();
+        final ProxyCacheWriter writer = new ProxyCacheWriter(storage, "test-repo");
+        final byte[] body = "commit-test".getBytes(StandardCharsets.UTF_8);
+        final String sha256 = HexFormat.of().formatHex(
+            MessageDigest.getInstance("SHA-256").digest(body)
+        );
+        final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> sidecars =
+            new EnumMap<>(ChecksumAlgo.class);
+        sidecars.put(ChecksumAlgo.SHA256, () -> CompletableFuture.completedFuture(
+            Optional.of(new ByteArrayInputStream(sha256.getBytes(StandardCharsets.UTF_8)))
+        ));
+        final Result<ProxyCacheWriter.VerifiedArtifact> result =
+            writer.writeAndVerify(
+                new Key.From("test/commit.jar"),
+                "http://upstream/commit.jar",
+                () -> CompletableFuture.completedFuture(new ByteArrayInputStream(body)),
+                sidecars,
+                null
+            ).toCompletableFuture().join();
+        final ProxyCacheWriter.VerifiedArtifact artifact =
+            ((Result.Ok<ProxyCacheWriter.VerifiedArtifact>) result).value();
+        final Result<Void> commitResult = artifact.commitAsync().toCompletableFuture().join();
+        assertThat(commitResult, instanceOf(Result.Ok.class));
+        assertTrue(storage.exists(new Key.From("test/commit.jar")).join());
+        assertTrue(storage.exists(new Key.From("test/commit.jar.sha256")).join());
+        assertFalse(Files.exists(artifact.tempFile()));
+    }
+
+    @Test
+    @DisplayName("writeAndVerify rejects on sidecar mismatch")
+    void writeAndVerifyRejectsOnMismatch() throws Exception {
+        final Storage storage = new InMemoryStorage();
+        final ProxyCacheWriter writer = new ProxyCacheWriter(storage, "test-repo");
+        final byte[] body = "mismatch-test".getBytes(StandardCharsets.UTF_8);
+        final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> sidecars =
+            new EnumMap<>(ChecksumAlgo.class);
+        sidecars.put(ChecksumAlgo.SHA256, () -> CompletableFuture.completedFuture(
+            Optional.of(new ByteArrayInputStream("deadbeef".getBytes(StandardCharsets.UTF_8)))
+        ));
+        final Result<ProxyCacheWriter.VerifiedArtifact> result =
+            writer.writeAndVerify(
+                new Key.From("test/bad.jar"),
+                "http://upstream/bad.jar",
+                () -> CompletableFuture.completedFuture(new ByteArrayInputStream(body)),
+                sidecars,
+                null
+            ).toCompletableFuture().join();
+        assertThat(result, instanceOf(Result.Err.class));
+        final Fault fault = ((Result.Err<ProxyCacheWriter.VerifiedArtifact>) result).fault();
+        assertThat(fault, instanceOf(Fault.UpstreamIntegrity.class));
+    }
+
     // ===== helpers =====
 
     private static void assertArrayEquals(

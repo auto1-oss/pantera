@@ -206,6 +206,53 @@ public final class ProxyCacheWriter {
     }
 
     /**
+     * Write + verify without committing; returns a {@link VerifiedArtifact}
+     * that the caller can serve from immediately, then commit async.
+     */
+    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.CyclomaticComplexity"})
+    public CompletionStage<Result<VerifiedArtifact>> writeAndVerify(
+        final Key primaryKey,
+        final String upstreamUri,
+        final Supplier<CompletionStage<InputStream>> fetchPrimary,
+        final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> fetchSidecars,
+        final RequestContext ctx
+    ) {
+        Objects.requireNonNull(primaryKey, "primaryKey");
+        Objects.requireNonNull(fetchPrimary, "fetchPrimary");
+        final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> sidecarFetchers =
+            fetchSidecars == null ? Collections.emptyMap() : fetchSidecars;
+        final Path tempFile;
+        try {
+            tempFile = Files.createTempFile("pantera-proxy-", ".tmp");
+        } catch (final IOException ex) {
+            return CompletableFuture.completedFuture(
+                Result.err(new Fault.StorageUnavailable(ex, primaryKey.string()))
+            );
+        }
+        return fetchPrimary.get()
+            .thenCompose(stream -> this.streamPrimary(stream, tempFile))
+            .thenCompose(digests -> this.verifyOnly(
+                primaryKey, upstreamUri, tempFile, digests, sidecarFetchers, ctx
+            ))
+            .exceptionally(err -> {
+                deleteQuietly(tempFile);
+                final Throwable cause = unwrap(err);
+                EcsLogger.warn("com.auto1.pantera.cache")
+                    .message("Proxy cache write-and-verify failed")
+                    .eventCategory("web")
+                    .eventAction("cache_write")
+                    .eventOutcome("failure")
+                    .field("repository.name", this.repoName)
+                    .field("url.path", primaryKey.string())
+                    .error(cause)
+                    .log();
+                return Result.err(new Fault.StorageUnavailable(
+                    cause, primaryKey.string()
+                ));
+            });
+    }
+
+    /**
      * Stream the upstream body into {@code tempFile} while computing all four
      * digests in a single pass.
      *
@@ -289,6 +336,75 @@ public final class ProxyCacheWriter {
             }
             return this.commit(primaryKey, tempFile, sidecars, ctx);
         });
+    }
+
+    /**
+     * Fetch sidecars and verify, but do NOT commit. Returns a
+     * {@link VerifiedArtifact} on success.
+     */
+    @SuppressWarnings({"PMD.CognitiveComplexity", "PMD.CyclomaticComplexity"})
+    private CompletionStage<Result<VerifiedArtifact>> verifyOnly(
+        final Key primaryKey,
+        final String upstreamUri,
+        final Path tempFile,
+        final Map<ChecksumAlgo, String> computed,
+        final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> sidecarFetchers,
+        final RequestContext ctx
+    ) {
+        final List<ChecksumAlgo> algos = new ArrayList<>(sidecarFetchers.keySet());
+        @SuppressWarnings("unchecked")
+        final CompletableFuture<SidecarFetch>[] futures =
+            new CompletableFuture[algos.size()];
+        for (int i = 0; i < algos.size(); i++) {
+            final ChecksumAlgo algo = algos.get(i);
+            futures[i] = sidecarFetchers.get(algo).get()
+                .toCompletableFuture()
+                .thenApply(opt -> new SidecarFetch(algo, opt.map(ProxyCacheWriter::readSmall)))
+                .exceptionally(err -> new SidecarFetch(algo, Optional.empty()));
+        }
+        return CompletableFuture.allOf(futures).thenCompose(ignored -> {
+            final Map<ChecksumAlgo, byte[]> sidecars = new EnumMap<>(ChecksumAlgo.class);
+            for (final CompletableFuture<SidecarFetch> f : futures) {
+                final SidecarFetch fetch = f.join();
+                fetch.bytes().ifPresent(b -> sidecars.put(fetch.algo(), b));
+            }
+            for (final Map.Entry<ChecksumAlgo, byte[]> entry : sidecars.entrySet()) {
+                final ChecksumAlgo algo = entry.getKey();
+                final String claim = normaliseSidecar(entry.getValue());
+                final String have = computed.get(algo);
+                if (!claim.equals(have)) {
+                    return this.rejectIntegrity(
+                        primaryKey, upstreamUri, tempFile, algo, claim, have, ctx
+                    ).thenApply(r -> r.map(v -> (VerifiedArtifact) null));
+                }
+            }
+            final long size;
+            try {
+                size = Files.size(tempFile);
+            } catch (final IOException ex) {
+                deleteQuietly(tempFile);
+                return CompletableFuture.completedFuture(
+                    Result.<VerifiedArtifact>err(
+                        new Fault.StorageUnavailable(ex, primaryKey.string())
+                    )
+                );
+            }
+            return CompletableFuture.completedFuture(
+                Result.ok(new VerifiedArtifact(
+                    tempFile, size, sidecars, primaryKey, ctx, this
+                ))
+            );
+        });
+    }
+
+    /** Commit a previously verified artifact to storage. */
+    CompletionStage<Result<Void>> commitVerified(final VerifiedArtifact artifact) {
+        return this.commit(
+            artifact.primaryKey(),
+            artifact.tempFile(),
+            artifact.sidecars(),
+            artifact.ctx()
+        );
     }
 
     /**
@@ -471,6 +587,27 @@ public final class ProxyCacheWriter {
 
     // ===== helpers =====
 
+    /** Create a {@link Content} backed by a temp file for immediate serving. */
+    static Content contentFromTempFile(final Path tempFile, final long size) {
+        return new Content.From(
+            Optional.of(size),
+            io.reactivex.Flowable.using(
+                () -> FileChannel.open(tempFile, StandardOpenOption.READ),
+                chan -> io.reactivex.Flowable.generate(emitter -> {
+                    final ByteBuffer buf = ByteBuffer.allocate(CHUNK_SIZE);
+                    final int read = chan.read(buf);
+                    if (read < 0) {
+                        emitter.onComplete();
+                    } else {
+                        buf.flip();
+                        emitter.onNext(buf);
+                    }
+                }),
+                FileChannel::close
+            )
+        );
+    }
+
     /** Construct the sidecar key from a primary key + algo extension. */
     static Key sidecarKey(final Key primary, final ChecksumAlgo algo) {
         return new Key.From(primary.string() + sidecarExtension(algo));
@@ -564,6 +701,26 @@ public final class ProxyCacheWriter {
 
     /** Tuple type for collecting per-algo sidecar fetches. */
     private record SidecarFetch(ChecksumAlgo algo, Optional<byte[]> bytes) {
+    }
+
+    /** A verified-but-not-yet-committed artifact that can be served immediately. */
+    public record VerifiedArtifact(
+        Path tempFile,
+        long size,
+        Map<ChecksumAlgo, byte[]> sidecars,
+        Key primaryKey,
+        RequestContext ctx,
+        ProxyCacheWriter writer
+    ) {
+        /** Create a {@link Content} from the temp file for immediate serving. */
+        public Content contentFromTempFile() {
+            return ProxyCacheWriter.contentFromTempFile(this.tempFile, this.size);
+        }
+
+        /** Commit the verified artifact to storage asynchronously. */
+        public CompletionStage<Result<Void>> commitAsync() {
+            return this.writer.commitVerified(this);
+        }
     }
 
     /**
