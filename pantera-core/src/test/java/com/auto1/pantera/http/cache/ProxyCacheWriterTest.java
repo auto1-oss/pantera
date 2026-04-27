@@ -470,6 +470,54 @@ final class ProxyCacheWriterTest {
         assertThat(fault, instanceOf(Fault.UpstreamIntegrity.class));
     }
 
+    // ===== saveSidecars parallel =====
+
+    @Test
+    @DisplayName("saveSidecars writes all four sidecar files")
+    void saveSidecarsWritesAll() throws Exception {
+        final Storage storage = new InMemoryStorage();
+        final ProxyCacheWriter writer = new ProxyCacheWriter(storage, "test-repo");
+        final byte[] body = "parallel-test".getBytes(StandardCharsets.UTF_8);
+        final String md5 = HexFormat.of().formatHex(
+            MessageDigest.getInstance("MD5").digest(body)
+        );
+        final String sha1 = HexFormat.of().formatHex(
+            MessageDigest.getInstance("SHA-1").digest(body)
+        );
+        final String sha256 = HexFormat.of().formatHex(
+            MessageDigest.getInstance("SHA-256").digest(body)
+        );
+        final String sha512 = HexFormat.of().formatHex(
+            MessageDigest.getInstance("SHA-512").digest(body)
+        );
+        final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> sidecars =
+            new EnumMap<>(ChecksumAlgo.class);
+        sidecars.put(ChecksumAlgo.MD5, () -> CompletableFuture.completedFuture(
+            Optional.of(new ByteArrayInputStream(md5.getBytes(StandardCharsets.UTF_8)))
+        ));
+        sidecars.put(ChecksumAlgo.SHA1, () -> CompletableFuture.completedFuture(
+            Optional.of(new ByteArrayInputStream(sha1.getBytes(StandardCharsets.UTF_8)))
+        ));
+        sidecars.put(ChecksumAlgo.SHA256, () -> CompletableFuture.completedFuture(
+            Optional.of(new ByteArrayInputStream(sha256.getBytes(StandardCharsets.UTF_8)))
+        ));
+        sidecars.put(ChecksumAlgo.SHA512, () -> CompletableFuture.completedFuture(
+            Optional.of(new ByteArrayInputStream(sha512.getBytes(StandardCharsets.UTF_8)))
+        ));
+        final Result<Void> result = writer.writeWithSidecars(
+            new Key.From("par/artifact.jar"),
+            "http://upstream/artifact.jar",
+            () -> CompletableFuture.completedFuture(new ByteArrayInputStream(body)),
+            sidecars,
+            null
+        ).toCompletableFuture().join();
+        assertThat(result, instanceOf(Result.Ok.class));
+        assertTrue(storage.exists(new Key.From("par/artifact.jar.md5")).join());
+        assertTrue(storage.exists(new Key.From("par/artifact.jar.sha1")).join());
+        assertTrue(storage.exists(new Key.From("par/artifact.jar.sha256")).join());
+        assertTrue(storage.exists(new Key.From("par/artifact.jar.sha512")).join());
+    }
+
     // ===== helpers =====
 
     private static void assertArrayEquals(

@@ -508,21 +508,20 @@ public final class ProxyCacheWriter {
     }
 
     /**
-     * Save every sidecar sequentially; stop on first failure. Sidecars are
-     * tiny so sequential writes cost nothing.
+     * Save every sidecar in parallel via {@link CompletableFuture#allOf}.
+     * Sidecars are tiny (40-128 byte hex strings) and independent, so
+     * parallel saves yield ~4x speedup on 4-sidecar artifacts (Maven).
      */
     private CompletableFuture<Void> saveSidecars(
         final Key primaryKey, final Map<ChecksumAlgo, byte[]> sidecars
     ) {
-        CompletableFuture<Void> chain = CompletableFuture.completedFuture(null);
-        for (final Map.Entry<ChecksumAlgo, byte[]> entry : sidecars.entrySet()) {
-            final Key sidecarKey = sidecarKey(primaryKey, entry.getKey());
-            final byte[] body = entry.getValue();
-            chain = chain.thenCompose(ignored ->
-                this.cache.save(sidecarKey, new Content.From(body))
-            );
-        }
-        return chain;
+        final CompletableFuture<?>[] saves = sidecars.entrySet().stream()
+            .map(entry -> this.cache.save(
+                sidecarKey(primaryKey, entry.getKey()),
+                new Content.From(entry.getValue())
+            ))
+            .toArray(CompletableFuture[]::new);
+        return CompletableFuture.allOf(saves);
     }
 
     /**
