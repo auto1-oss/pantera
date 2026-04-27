@@ -809,14 +809,14 @@ final class CachedProxySlice implements Slice {
         final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> sidecars =
             new EnumMap<>(ChecksumAlgo.class);
         sidecars.put(ChecksumAlgo.SHA256, () -> this.fetchSidecar(line, ".ziphash"));
-        return this.cacheWriter.writeWithSidecars(
+        return this.cacheWriter.writeAndVerify(
             key,
             key.string(),
             () -> this.fetchPrimary(line, rshdr),
             sidecars,
             ctx
         ).thenCompose(result -> {
-            if (result instanceof Result.Err<Void> err) {
+            if (result instanceof Result.Err<ProxyCacheWriter.VerifiedArtifact> err) {
                 if (err.fault() instanceof Fault.UpstreamIntegrity ui) {
                     return CompletableFuture.<Response>completedFuture(
                         ResponseBuilder.badGateway()
@@ -851,13 +851,22 @@ final class CachedProxySlice implements Slice {
                         .build()
                 );
             }
+            final ProxyCacheWriter.VerifiedArtifact artifact =
+                ((Result.Ok<ProxyCacheWriter.VerifiedArtifact>) result).value();
             if (artifactPath.isPresent()) {
                 this.enqueueEvent(
                     key, owner, artifactPath,
                     releaseDate.or(() -> this.parseLastModified(rshdr.get()))
                 );
             }
-            return this.serveFromCache(raw, key);
+            // Read the temp file eagerly before commitAsync deletes it.
+            final Content body = artifact.contentFromTempFile();
+            return body.asBytesFuture().thenApply(bytes -> {
+                artifact.commitAsync();
+                return ResponseBuilder.ok()
+                    .body(new Content.From(bytes))
+                    .build();
+            });
         });
     }
 
