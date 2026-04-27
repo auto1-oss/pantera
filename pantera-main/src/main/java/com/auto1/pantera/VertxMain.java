@@ -278,14 +278,24 @@ public final class VertxMain {
                         .setConnectTimeout(3_000)
                         .setIdleTimeout(30)
                 );
+            final com.auto1.pantera.publishdate.sources.MavenHeadSource mavenHead =
+                new com.auto1.pantera.publishdate.sources.MavenHeadSource(publishDateClient);
+            final com.auto1.pantera.publishdate.sources.JFrogStorageApiSource jfrogFallback =
+                new com.auto1.pantera.publishdate.sources.JFrogStorageApiSource(
+                    publishDateClient,
+                    "https://groovy.jfrog.io/artifactory",
+                    "plugins-release"
+                );
+            final com.auto1.pantera.publishdate.PublishDateSource mavenSource =
+                new com.auto1.pantera.publishdate.sources.ChainedPublishDateSource(
+                    mavenHead, jfrogFallback
+                );
             final com.auto1.pantera.publishdate.DbPublishDateRegistry publishDates =
                 new com.auto1.pantera.publishdate.DbPublishDateRegistry(
                     ds,
                     Map.of(
-                        "maven",
-                        new com.auto1.pantera.publishdate.sources.MavenCentralSource(publishDateClient),
-                        "gradle",
-                        new com.auto1.pantera.publishdate.sources.MavenCentralSource(publishDateClient),
+                        "maven", mavenSource,
+                        "gradle", mavenSource,
                         "npm",
                         new com.auto1.pantera.publishdate.sources.NpmRegistrySource(publishDateClient),
                         "pypi",

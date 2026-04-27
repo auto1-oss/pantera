@@ -614,7 +614,7 @@ final class JdbcCooldownService implements CooldownService {
     ) {
         // Async fetch release date with timeout to prevent hanging
         return inspector.releaseDate(request.artifact(), request.version())
-            .orTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+            .orTimeout(2, java.util.concurrent.TimeUnit.SECONDS)
             .exceptionally(error -> {
                 EcsLogger.warn("com.auto1.pantera.cooldown")
                     .message("Failed to fetch release date (allowing)")
