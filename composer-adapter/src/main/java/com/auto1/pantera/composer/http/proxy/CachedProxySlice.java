@@ -989,14 +989,14 @@ final class CachedProxySlice implements Slice {
             new EnumMap<>(ChecksumAlgo.class);
         sidecars.put(ChecksumAlgo.SHA256, () -> this.fetchSidecar(line, ".sha256"));
 
-        return this.cacheWriter.writeWithSidecars(
+        return this.cacheWriter.writeAndVerify(
             key,
             upstream,
             () -> this.fetchPrimary(line),
             sidecars,
             ctx
         ).thenCompose(result -> {
-            if (result instanceof Result.Err<Void> err) {
+            if (result instanceof Result.Err<ProxyCacheWriter.VerifiedArtifact> err) {
                 if (err.fault() instanceof Fault.UpstreamIntegrity ui) {
                     return CompletableFuture.<Response>completedFuture(
                         ResponseBuilder.badGateway()
@@ -1029,7 +1029,12 @@ final class CachedProxySlice implements Slice {
                         .build()
                 );
             }
-            return this.serveFromCache(storage, key);
+            final ProxyCacheWriter.VerifiedArtifact artifact =
+                ((Result.Ok<ProxyCacheWriter.VerifiedArtifact>) result).value();
+            artifact.commitAsync();
+            return CompletableFuture.completedFuture(
+                ResponseBuilder.ok().body(artifact.contentFromTempFile()).build()
+            );
         });
     }
 
