@@ -59,6 +59,10 @@ meta:
     repo_types:
       npm-proxy:
         enabled: true
+      maven-proxy:
+        enabled: true
+      gradle-proxy:
+        enabled: true
   
   artifacts_database:
     postgres_host: "pantera-db"

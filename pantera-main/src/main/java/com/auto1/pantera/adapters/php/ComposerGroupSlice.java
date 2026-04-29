@@ -287,7 +287,7 @@ public final class ComposerGroupSlice implements Slice {
                     final JsonObject json = future.join();  // ✅ Already complete - no blocking!
                     
                     // Handle Satis format (providers)
-                    if (json.containsKey("providers")) {
+                    if (json.containsKey("providers") && json.get("providers") instanceof JsonObject) {
                         hasSatisFormat = true;
                         final JsonObject providers = json.getJsonObject("providers");
                         providers.forEach((key, value) -> {
