@@ -734,7 +734,8 @@ public class RepositorySlices {
                     "npm-group",
                     this.sharedNegativeCache,
                     this::getOrCreateMemberRegistry,
-                    getOrCreateBulkhead(cfg.name()).drainExecutor()
+                    getOrCreateBulkhead(cfg.name()).drainExecutor(),
+                    membersStrategyFor(cfg)
                 );
                 // Create audit slice that aggregates results from ALL members
                 // This is critical for vulnerability scanning - local repos return {},
@@ -801,7 +802,8 @@ public class RepositorySlices {
                     cfg.type(),
                     this.sharedNegativeCache,
                     this::getOrCreateMemberRegistry,
-                    getOrCreateBulkhead(cfg.name()).drainExecutor()
+                    getOrCreateBulkhead(cfg.name()).drainExecutor(),
+                    membersStrategyFor(cfg)
                 );
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
@@ -839,7 +841,8 @@ public class RepositorySlices {
                     cfg.type(),
                     this.sharedNegativeCache,
                     this::getOrCreateMemberRegistry,
-                    getOrCreateBulkhead(cfg.name()).drainExecutor()
+                    getOrCreateBulkhead(cfg.name()).drainExecutor(),
+                    membersStrategyFor(cfg)
                 );
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
@@ -879,7 +882,8 @@ public class RepositorySlices {
                             cfg.type(),
                             this.sharedNegativeCache,
                             this::getOrCreateMemberRegistry,
-                            getOrCreateBulkhead(cfg.name()).drainExecutor()
+                            getOrCreateBulkhead(cfg.name()).drainExecutor(),
+                            membersStrategyFor(cfg)
                         ),
                         authentication(),
                         tokens.auth(),
@@ -1179,6 +1183,19 @@ public class RepositorySlices {
                     .orElse(List.of())
             );
         return flattener.flatten(groupName);
+    }
+
+    /**
+     * Read the {@code members_strategy} YAML key from a group's repo config
+     * and decode it via {@link com.auto1.pantera.group.GroupResolver.MembersStrategy#fromYaml}.
+     * Default (missing / blank value) is SEQUENTIAL.
+     */
+    private static com.auto1.pantera.group.GroupResolver.MembersStrategy
+            membersStrategyFor(final RepoConfig cfg) {
+        final String raw = cfg.settings()
+            .map(yaml -> yaml.string("members_strategy"))
+            .orElse(null);
+        return com.auto1.pantera.group.GroupResolver.MembersStrategy.fromYaml(raw);
     }
 
     /**
