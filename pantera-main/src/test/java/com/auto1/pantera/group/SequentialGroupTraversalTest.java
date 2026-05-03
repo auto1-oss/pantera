@@ -5,6 +5,8 @@
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
  */
 package com.auto1.pantera.group;
 
