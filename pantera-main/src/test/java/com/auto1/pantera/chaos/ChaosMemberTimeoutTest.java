@@ -196,7 +196,7 @@ final class ChaosMemberTimeoutTest {
             NegativeCacheConfig.DEFAULT_L2_MAX_SIZE,
             NegativeCacheConfig.DEFAULT_L2_TTL
         );
-        return new NegativeCache("group-negative", GROUP, config);
+        return new NegativeCache(config);
     }
 
     private static ArtifactIndex nopIndex(final Optional<List<String>> result) {

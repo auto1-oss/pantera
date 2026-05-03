@@ -10,58 +10,26 @@
  */
 package com.auto1.pantera.http.cache;
 
-import com.auto1.pantera.asto.Key;
-
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-
 /**
- * Global registry for the shared NegativeCache instance and per-repo legacy registrations.
+ * Global accessor for the single shared {@link NegativeCache} bean.
  *
- * <p>Starting from v2.2.0 (WI-06), a single {@link NegativeCache} bean is shared across
- * all scopes (hosted, proxy, group). The {@link #setSharedCache(NegativeCache)} method
- * is called once at startup from {@code RepositorySlices}; adapters obtain the shared
- * bean via {@link #sharedCache()}.
- *
- * <p>The legacy per-repo {@link #register} / {@link #invalidateGlobally} API is retained
- * for backward compatibility with callers that have not been migrated.
+ * <p>Set once at startup from {@code RepositorySlices}; adapters obtain it via
+ * {@link #sharedCache()}. Falls back to a default instance if the shared cache
+ * has not been initialized (used by tests and early startup).
  *
  * @since 1.20.13
  */
 public final class NegativeCacheRegistry {
 
-    /**
-     * Singleton instance.
-     */
     private static final NegativeCacheRegistry INSTANCE = new NegativeCacheRegistry();
 
-    /**
-     * Fallback instance used before the shared cache is initialized.
-     * Created once at class-load time via a static factory method.
-     */
     private static final NegativeCache FALLBACK = createFallback();
 
-    /**
-     * The single shared NegativeCache instance (set at startup).
-     */
     private volatile NegativeCache shared;
 
-    /**
-     * Legacy per-repo caches: key = "repoType:repoName".
-     */
-    private final ConcurrentMap<String, NegativeCache> caches;
-
-    /**
-     * Private ctor.
-     */
     private NegativeCacheRegistry() {
-        this.caches = new ConcurrentHashMap<>();
     }
 
-    /**
-     * Get singleton instance.
-     * @return Registry instance
-     */
     public static NegativeCacheRegistry instance() {
         return INSTANCE;
     }
@@ -75,8 +43,7 @@ public final class NegativeCacheRegistry {
     }
 
     /**
-     * Check whether a shared cache has been explicitly set via
-     * {@link #setSharedCache(NegativeCache)}.
+     * Check whether a shared cache has been explicitly set.
      * @return true if the shared cache is initialized
      */
     public boolean isSharedCacheSet() {
@@ -84,8 +51,8 @@ public final class NegativeCacheRegistry {
     }
 
     /**
-     * Get the shared NegativeCache bean.
-     * Falls back to a default instance if not initialized.
+     * Get the shared NegativeCache bean. Returns a default fallback if the
+     * shared bean has not been initialized yet (tests, early startup).
      * @return Shared NegativeCache
      */
     public NegativeCache sharedCache() {
@@ -93,83 +60,14 @@ public final class NegativeCacheRegistry {
         if (s != null) {
             return s;
         }
-        // Fallback for tests or early startup
         return FALLBACK;
     }
 
     /**
-     * Register a negative cache instance (legacy API).
-     * @param repoType Repository type
-     * @param repoName Repository name
-     * @param cache Negative cache instance
-     */
-    public void register(
-        final String repoType, final String repoName, final NegativeCache cache
-    ) {
-        this.caches.put(key(repoType, repoName), cache);
-    }
-
-    /**
-     * Unregister a negative cache instance.
-     * @param repoType Repository type
-     * @param repoName Repository name
-     */
-    public void unregister(final String repoType, final String repoName) {
-        this.caches.remove(key(repoType, repoName));
-    }
-
-    /**
-     * Invalidate a specific artifact path across ALL registered negative caches
-     * and the shared instance.
-     *
-     * @param artifactPath Artifact path to invalidate
-     */
-    public void invalidateGlobally(final String artifactPath) {
-        final Key artKey = new Key.From(artifactPath);
-        if (this.shared != null) {
-            this.shared.invalidate(artKey);
-        }
-        this.caches.values().forEach(cache -> cache.invalidate(artKey));
-    }
-
-    /**
-     * Invalidate a specific artifact path in a specific repository's negative cache.
-     *
-     * @param repoType Repository type
-     * @param repoName Repository name
-     * @param artifactPath Artifact path to invalidate
-     */
-    public void invalidate(
-        final String repoType, final String repoName, final String artifactPath
-    ) {
-        final NegativeCache cache = this.caches.get(key(repoType, repoName));
-        if (cache != null) {
-            cache.invalidate(new Key.From(artifactPath));
-        }
-        // Also invalidate in the shared instance
-        if (this.shared != null) {
-            this.shared.invalidate(new Key.From(artifactPath));
-        }
-    }
-
-    /**
-     * Get the number of registered caches (legacy).
-     * @return Count of registered caches
-     */
-    public int size() {
-        return this.caches.size();
-    }
-
-    /**
-     * Clear all registrations and the shared reference (for testing).
+     * Clear the shared reference (for testing).
      */
     public void clear() {
-        this.caches.clear();
         this.shared = null;
-    }
-
-    private static String key(final String repoType, final String repoName) {
-        return repoType + ":" + repoName;
     }
 
     private static NegativeCache createFallback() {

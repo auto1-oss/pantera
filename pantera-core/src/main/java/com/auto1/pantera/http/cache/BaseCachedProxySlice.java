@@ -203,12 +203,17 @@ public abstract class BaseCachedProxySlice implements Slice {
         this.metadataStore = storage.map(CachedArtifactMetadataStore::new);
         this.storageBacked = this.metadataStore.isPresent()
             && !Objects.equals(this.cache, Cache.NOP);
-        final NegativeCache registryCache = NegativeCacheRegistry.instance().isSharedCacheSet()
-            ? NegativeCacheRegistry.instance().sharedCache() : null;
-        this.negativeCache = config.negativeCacheEnabled()
-            ? (registryCache != null ? registryCache
-                : new NegativeCache(repoType, repoName))
-            : null;
+        if (!config.negativeCacheEnabled()) {
+            this.negativeCache = null;
+        } else if (NegativeCacheRegistry.instance().isSharedCacheSet()) {
+            this.negativeCache = NegativeCacheRegistry.instance().sharedCache();
+        } else {
+            // No shared bean wired (tests, early startup) — give this slice
+            // its own private cache so other slices' state cannot leak in.
+            this.negativeCache = new NegativeCache(
+                new com.auto1.pantera.cache.NegativeCacheConfig()
+            );
+        }
         this.cooldownService = cooldownService;
         this.cooldownInspector = cooldownInspector;
         // Zombie TTL honours PANTERA_DEDUP_MAX_AGE_MS (default 5 min). 10K max
@@ -248,11 +253,12 @@ public abstract class BaseCachedProxySlice implements Slice {
     ) {
         final String path = line.uri().getPath();
         if ("/".equals(path) || path.isEmpty()) {
-            return this.handleRootPath(line);
+            return this.handleRootPath(line, headers);
         }
         final Key key = new KeyFromPath(path);
         // Step 1: Negative cache fast-fail
-        if (this.negativeCache != null && this.negativeCache.isNotFound(key)) {
+        if (this.negativeCache != null
+            && this.negativeCache.isKnown404(this.negKey(path))) {
             this.logDebug("Negative cache hit", path);
             return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
         }
@@ -264,14 +270,48 @@ public abstract class BaseCachedProxySlice implements Slice {
         }
         // Step 3: Check if path is cacheable at all
         if (!this.isCacheable(path)) {
-            return this.fetchDirect(line, key, new Login(headers).getValue());
+            return this.fetchDirect(line, key, headers, new Login(headers).getValue());
         }
         // Step 4: Cache-first (offline-safe) — check cache before any network calls
         if (this.storageBacked) {
             return this.cacheFirstFlow(line, headers, key, path);
         }
         // No persistent storage — go directly to upstream
-        return this.fetchDirect(line, key, new Login(headers).getValue());
+        return this.fetchDirect(line, key, headers, new Login(headers).getValue());
+    }
+
+    /**
+     * Build the header set that should accompany an upstream proxy request.
+     * Forwards the client's {@code User-Agent} and {@code Accept} so the
+     * remote registry sees a native ecosystem tool (e.g. {@code npm/...},
+     * {@code Go-http-client/1.1}) rather than Pantera. When the inbound
+     * request omitted {@code User-Agent} entirely, falls back to a realistic
+     * default for this adapter's repo type — so an unidentified client
+     * still doesn't make us look like a bot to the upstream.
+     *
+     * <p>Everything else is dropped (Authorization, Cookie, Host,
+     * X-Forwarded-*, etc.) — those are local-to-Pantera and would either
+     * leak credentials or confuse the upstream router.
+     *
+     * @param incoming Headers from the client request to Pantera (may be empty)
+     * @return Headers safe to forward to the upstream proxy target
+     */
+    private Headers upstreamHeaders(final Headers incoming) {
+        final Headers out = new Headers();
+        final java.util.List<com.auto1.pantera.http.headers.Header> ua =
+            incoming.find("User-Agent");
+        if (ua.isEmpty()) {
+            out.add("User-Agent",
+                com.auto1.pantera.http.EcosystemUserAgents.defaultFor(this.repoType));
+        } else {
+            out.add(ua.get(0), true);
+        }
+        final java.util.List<com.auto1.pantera.http.headers.Header> accept =
+            incoming.find("Accept");
+        if (!accept.isEmpty()) {
+            out.add(accept.get(0), true);
+        }
+        return out;
     }
 
     // ===== Abstract hooks — adapters override these =====
@@ -439,7 +479,7 @@ public abstract class BaseCachedProxySlice implements Slice {
     ) {
         // Checksum sidecars: serve from storage if present, else try upstream
         if (this.isChecksumSidecar(path)) {
-            return this.serveChecksumFromStorage(line, key, new Login(headers).getValue());
+            return this.serveChecksumFromStorage(line, key, headers, new Login(headers).getValue());
         }
         final CachedArtifactMetadataStore store = this.metadataStore.orElseThrow();
         return this.cache.load(key, Remote.EMPTY, CacheControl.Standard.ALWAYS)
@@ -589,7 +629,7 @@ public abstract class BaseCachedProxySlice implements Slice {
     ) {
         final String owner = new Login(headers).getValue();
         final long startTime = System.currentTimeMillis();
-        return this.client.response(line, Headers.EMPTY, Content.EMPTY)
+        return this.client.response(line, this.upstreamHeaders(headers), Content.EMPTY)
             .thenCompose(resp -> {
                 final long duration = System.currentTimeMillis() - startTime;
                 if (resp.status().code() == 404) {
@@ -966,18 +1006,20 @@ public abstract class BaseCachedProxySlice implements Slice {
      * Fetch directly from upstream without caching (non-cacheable paths).
      */
     private CompletableFuture<Response> fetchDirect(
-        final RequestLine line, final Key key, final String owner
+        final RequestLine line, final Key key,
+        final Headers incomingHeaders, final String owner
     ) {
         final long startTime = System.currentTimeMillis();
-        return this.client.response(line, Headers.EMPTY, Content.EMPTY)
+        return this.client.response(line, this.upstreamHeaders(incomingHeaders), Content.EMPTY)
             .thenCompose(resp -> {
                 final long duration = System.currentTimeMillis() - startTime;
                 if (!resp.status().success()) {
                     if (resp.status().code() == 404) {
                         if (this.negativeCache != null
                             && !this.isChecksumSidecar(key.string())) {
+                            final NegativeCacheKey nk = this.negKey(line.uri().getPath());
                             resp.body().asBytesFuture().thenAccept(
-                                bytes -> this.negativeCache.cacheNotFound(key)
+                                bytes -> this.negativeCache.cacheNotFound(nk)
                             );
                         }
                         this.recordProxyMetric("not_found", duration);
@@ -1029,10 +1071,19 @@ public abstract class BaseCachedProxySlice implements Slice {
         this.recordProxyMetric("not_found", duration);
         return resp.body().asBytesFuture().thenApply(bytes -> {
             if (this.negativeCache != null && !this.isChecksumSidecar(key.string())) {
-                this.negativeCache.cacheNotFound(key);
+                this.negativeCache.cacheNotFound(this.negKey(key.string()));
             }
             return FetchSignal.NOT_FOUND;
         });
+    }
+
+    /**
+     * Build a structured negative-cache key for a request path. Stores the
+     * path as artifactName with empty version — sufficient for uniqueness
+     * and gives operators meaningful scope/repoType columns in the admin UI.
+     */
+    private NegativeCacheKey negKey(final String path) {
+        return NegativeCacheKey.fromPath(this.repoName, this.repoType, path);
     }
 
     private CompletableFuture<FetchSignal> handleNonSuccess(
@@ -1152,7 +1203,8 @@ public abstract class BaseCachedProxySlice implements Slice {
     }
 
     private CompletableFuture<Response> serveChecksumFromStorage(
-        final RequestLine line, final Key key, final String owner
+        final RequestLine line, final Key key,
+        final Headers incomingHeaders, final String owner
     ) {
         return this.cache.load(key, Remote.EMPTY, CacheControl.Standard.ALWAYS)
             .thenCompose(cached -> {
@@ -1164,12 +1216,14 @@ public abstract class BaseCachedProxySlice implements Slice {
                             .build()
                     );
                 }
-                return this.fetchDirect(line, key, owner);
+                return this.fetchDirect(line, key, incomingHeaders, owner);
             }).toCompletableFuture();
     }
 
-    private CompletableFuture<Response> handleRootPath(final RequestLine line) {
-        return this.client.response(line, Headers.EMPTY, Content.EMPTY)
+    private CompletableFuture<Response> handleRootPath(
+        final RequestLine line, final Headers headers
+    ) {
+        return this.client.response(line, this.upstreamHeaders(headers), Content.EMPTY)
             .thenCompose(resp -> {
                 if (resp.status().success()) {
                     return CompletableFuture.completedFuture(

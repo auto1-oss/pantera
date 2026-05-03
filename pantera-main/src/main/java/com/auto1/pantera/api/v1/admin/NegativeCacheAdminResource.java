@@ -136,36 +136,22 @@ public final class NegativeCacheAdminResource {
             final List<JsonObject> entries = new ArrayList<>();
             if (l1Cache != null) {
                 for (final String flat : l1Cache.asMap().keySet()) {
-                    final String[] parts = flat.split(":", 4);
-                    if (parts.length < 4) {
+                    final NegativeCacheKey nck = NegativeCacheKey.parse(flat);
+                    if (nck == null) {
                         continue;
                     }
-                    final String scope = parts[0];
-                    final String repoType = parts[1];
-                    final String artifactName = parts[2];
-                    final String version = parts[3];
-                    if (filterScope != null && !filterScope.isEmpty()
-                        && !scope.contains(filterScope)) {
-                        continue;
-                    }
-                    if (filterType != null && !filterType.isEmpty()
-                        && !repoType.contains(filterType)) {
-                        continue;
-                    }
-                    if (filterName != null && !filterName.isEmpty()
-                        && !artifactName.contains(filterName)) {
-                        continue;
-                    }
-                    if (filterVersion != null && !filterVersion.isEmpty()
-                        && !version.contains(filterVersion)) {
+                    if (!matchesFilter(nck.scope(), filterScope)
+                        || !matchesFilter(nck.repoType(), filterType)
+                        || !matchesFilter(nck.artifactName(), filterName)
+                        || !matchesFilter(nck.artifactVersion(), filterVersion)) {
                         continue;
                     }
                     entries.add(new JsonObject()
                         .put("key", new JsonObject()
-                            .put("scope", scope)
-                            .put("repoType", repoType)
-                            .put("artifactName", artifactName)
-                            .put("artifactVersion", version))
+                            .put("scope", nck.scope())
+                            .put("repoType", nck.repoType())
+                            .put("artifactName", nck.artifactName())
+                            .put("artifactVersion", nck.artifactVersion()))
                         .put("tier", "L1")
                         .put("ttlRemainingMs", -1L)
                     );
@@ -199,15 +185,12 @@ public final class NegativeCacheAdminResource {
                 "Query param 'key' is required (format: scope:type:name:version)");
             return;
         }
-        final String[] parts = keyParam.split(":", 4);
-        if (parts.length < 4) {
+        final NegativeCacheKey nck = NegativeCacheKey.parse(keyParam);
+        if (nck == null) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
-                "Key must have format scope:repoType:artifactName:version");
+                "Key must have format scope:repoType:artifactName:version (URL-encoded)");
             return;
         }
-        final NegativeCacheKey nck = new NegativeCacheKey(
-            parts[0], parts[1], parts[2], parts[3]
-        );
         this.cache.isKnown404Async(nck).whenComplete((found, err) -> {
             if (err != null) {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
@@ -316,17 +299,15 @@ public final class NegativeCacheAdminResource {
             final List<NegativeCacheKey> keysToInvalidate = new ArrayList<>();
             if (l1Cache != null) {
                 for (final String flat : new ArrayList<>(l1Cache.asMap().keySet())) {
-                    final String[] parts = flat.split(":", 4);
-                    if (parts.length < 4) {
+                    final NegativeCacheKey nck = NegativeCacheKey.parse(flat);
+                    if (nck == null) {
                         continue;
                     }
-                    if (matchesFilter(parts[0], filterScope)
-                        && matchesFilter(parts[1], filterType)
-                        && matchesFilter(parts[2], filterName)
-                        && matchesFilter(parts[3], filterVersion)) {
-                        keysToInvalidate.add(new NegativeCacheKey(
-                            parts[0], parts[1], parts[2], parts[3]
-                        ));
+                    if (matchesFilter(nck.scope(), filterScope)
+                        && matchesFilter(nck.repoType(), filterType)
+                        && matchesFilter(nck.artifactName(), filterName)
+                        && matchesFilter(nck.artifactVersion(), filterVersion)) {
+                        keysToInvalidate.add(nck);
                         l1Count.incrementAndGet();
                     }
                 }
@@ -439,15 +420,40 @@ public final class NegativeCacheAdminResource {
     }
 
     /**
-     * Check if a value matches a filter (null filter = match all).
+     * Check if a value matches a filter. Filter semantics:
+     * <ul>
+     *   <li>{@code null} or empty → match all</li>
+     *   <li>contains {@code *} → glob (e.g. {@code "github.com/*"} matches prefixes)</li>
+     *   <li>otherwise → exact match</li>
+     * </ul>
+     * No more {@code String.contains} — that produced runaway matches across
+     * unrelated entries when operators typed substrings.
      * @param value Value to check
-     * @param filter Filter string (null or empty = match all)
+     * @param filter Filter string (null/empty match all)
      * @return true if matches
      */
     private static boolean matchesFilter(
         final String value, final String filter
     ) {
-        return filter == null || filter.isEmpty() || value.contains(filter);
+        if (filter == null || filter.isEmpty()) {
+            return true;
+        }
+        if (filter.indexOf('*') < 0) {
+            return value.equals(filter);
+        }
+        // Treat * as the only wildcard; escape regex metacharacters in the rest.
+        final StringBuilder rx = new StringBuilder(filter.length() + 8);
+        for (int i = 0; i < filter.length(); i++) {
+            final char c = filter.charAt(i);
+            if (c == '*') {
+                rx.append(".*");
+            } else if ("\\.^$|?+()[]{}".indexOf(c) >= 0) {
+                rx.append('\\').append(c);
+            } else {
+                rx.append(c);
+            }
+        }
+        return value.matches(rx.toString());
     }
 
     /**

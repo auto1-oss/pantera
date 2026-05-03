@@ -10,7 +10,6 @@
  */
 package com.auto1.pantera.http.cache;
 
-import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.cache.GlobalCacheConfig;
 import com.auto1.pantera.cache.NegativeCacheConfig;
 import com.auto1.pantera.cache.ValkeyConnection;
@@ -27,37 +26,13 @@ import java.util.concurrent.TimeUnit;
 /**
  * Unified negative cache for 404 responses — single shared instance per JVM.
  *
- * <p>Keyed by {@link NegativeCacheKey} ({@code scope:repoType:artifactName:artifactVersion}).
- * Hosted, proxy, and group scopes all share one L1 Caffeine + optional L2 Valkey bean.
- *
- * <p>New callers should use the {@link NegativeCacheKey}-based API:
- * <ul>
- *   <li>{@link #isKnown404(NegativeCacheKey)}</li>
- *   <li>{@link #cacheNotFound(NegativeCacheKey)}</li>
- *   <li>{@link #invalidate(NegativeCacheKey)}</li>
- *   <li>{@link #invalidateBatch(List)}</li>
- * </ul>
- *
- * <p>Legacy {@link Key}-based methods are retained for backward compatibility but
- * delegate through a synthetic {@link NegativeCacheKey} built from the instance's
- * {@code repoType} and {@code repoName}.
- *
- * <p>Thread-safe, high-performance cache using Caffeine with automatic TTL expiry.
+ * <p>Keyed by {@link NegativeCacheKey} ({@code scope:repoType:artifactName:artifactVersion}),
+ * URL-encoded so embedded delimiters survive round-trips. Hosted, proxy, and group
+ * scopes all share one L1 Caffeine + optional L2 Valkey bean.
  *
  * @since 0.11
  */
-@SuppressWarnings("PMD.TooManyMethods")
 public final class NegativeCache {
-
-    /**
-     * Default TTL for negative cache (24 hours).
-     */
-    private static final Duration DEFAULT_TTL = Duration.ofHours(24);
-
-    /**
-     * Default maximum cache size (50,000 entries).
-     */
-    private static final int DEFAULT_MAX_SIZE = 50_000;
 
     /**
      * Sentinel value for negative cache (we only care about presence, not value).
@@ -91,225 +66,29 @@ public final class NegativeCache {
     private final Duration ttl;
 
     /**
-     * Repository type for legacy key construction.
-     */
-    private final String repoType;
-
-    /**
-     * Repository name for legacy key construction.
-     */
-    private final String repoName;
-
-    // -----------------------------------------------------------------------
-    //  Primary constructor (all others delegate here)
-    // -----------------------------------------------------------------------
-
-    /**
-     * Primary constructor.
-     *
-     * @param ttl TTL for L2 cache
-     * @param enabled Whether negative caching is enabled
-     * @param l1MaxSize Maximum size for L1 cache
-     * @param l1Ttl TTL for L1 cache
-     * @param l2Commands Redis commands for L2 cache (null for single-tier)
-     * @param repoType Repository type for legacy key namespacing
-     * @param repoName Repository name for legacy key isolation
-     */
-    @SuppressWarnings("PMD.NullAssignment")
-    private NegativeCache(final Duration ttl, final boolean enabled, final int l1MaxSize,
-            final Duration l1Ttl, final RedisAsyncCommands<String, byte[]> l2Commands,
-            final String repoType, final String repoName) {
-        this.enabled = enabled;
-        this.twoTier = l2Commands != null;
-        this.l2 = l2Commands;
-        this.ttl = ttl;
-        this.repoType = repoType != null ? repoType : "unknown";
-        this.repoName = repoName != null ? repoName : "default";
-        this.notFoundCache = Caffeine.newBuilder()
-            .maximumSize(l1MaxSize)
-            .expireAfterWrite(l1Ttl.toMillis(), TimeUnit.MILLISECONDS)
-            .recordStats()
-            .build();
-    }
-
-    // -----------------------------------------------------------------------
-    //  Public constructors — NEW (preferred)
-    // -----------------------------------------------------------------------
-
-    /**
      * Create negative cache from config (the single-instance wiring constructor).
      *
      * @param config Unified negative cache configuration
      */
+    @SuppressWarnings("PMD.NullAssignment")
     public NegativeCache(final NegativeCacheConfig config) {
-        this(
-            config.l2Ttl(),
-            true,
-            config.isValkeyEnabled() ? config.l1MaxSize() : config.maxSize(),
-            config.isValkeyEnabled() ? config.l1Ttl() : config.ttl(),
+        this.enabled = true;
+        this.ttl = config.l2Ttl();
+        final RedisAsyncCommands<String, byte[]> l2Commands =
             GlobalCacheConfig.valkeyConnection()
                 .filter(v -> config.isValkeyEnabled())
                 .map(ValkeyConnection::async)
-                .orElse(null),
-            "unified",
-            "shared"
-        );
+                .orElse(null);
+        this.l2 = l2Commands;
+        this.twoTier = l2Commands != null;
+        final int maxSize = config.isValkeyEnabled() ? config.l1MaxSize() : config.maxSize();
+        final Duration l1Ttl = config.isValkeyEnabled() ? config.l1Ttl() : config.ttl();
+        this.notFoundCache = Caffeine.newBuilder()
+            .maximumSize(maxSize)
+            .expireAfterWrite(l1Ttl.toMillis(), TimeUnit.MILLISECONDS)
+            .recordStats()
+            .build();
     }
-
-    // -----------------------------------------------------------------------
-    //  Public constructors — LEGACY (backward compat, delegate to primary)
-    // -----------------------------------------------------------------------
-
-    /**
-     * Create negative cache using unified NegativeCacheConfig.
-     * @param repoType Repository type for cache key namespacing (e.g., "npm", "pypi", "go")
-     * @param repoName Repository name for cache key isolation
-     */
-    public NegativeCache(final String repoType, final String repoName) {
-        this(repoType, repoName, NegativeCacheConfig.getInstance());
-    }
-
-    /**
-     * Create negative cache with explicit config.
-     * @param repoType Repository type for cache key namespacing (e.g., "npm", "pypi", "go")
-     * @param repoName Repository name for cache key isolation
-     * @param config Unified negative cache configuration
-     */
-    public NegativeCache(final String repoType, final String repoName, final NegativeCacheConfig config) {
-        this(
-            config.l2Ttl(),
-            true,
-            config.isValkeyEnabled() ? config.l1MaxSize() : config.maxSize(),
-            config.isValkeyEnabled() ? config.l1Ttl() : config.ttl(),
-            GlobalCacheConfig.valkeyConnection()
-                .filter(v -> config.isValkeyEnabled())
-                .map(ValkeyConnection::async)
-                .orElse(null),
-            repoType,
-            repoName
-        );
-    }
-
-    /**
-     * Create negative cache with default 24h TTL and 50K max size (enabled).
-     * @deprecated Use {@link #NegativeCache(NegativeCacheConfig)} instead
-     */
-    @Deprecated
-    public NegativeCache() {
-        this(DEFAULT_TTL, true, DEFAULT_MAX_SIZE, DEFAULT_TTL, null, "unknown", "default");
-    }
-
-    /**
-     * Create negative cache with Valkey connection (two-tier).
-     * @param valkey Valkey connection for L2 cache
-     * @deprecated Use {@link #NegativeCache(NegativeCacheConfig)} instead
-     */
-    @Deprecated
-    public NegativeCache(final ValkeyConnection valkey) {
-        this(
-            DEFAULT_TTL,
-            true,
-            valkey != null ? Math.max(1000, DEFAULT_MAX_SIZE / 10) : DEFAULT_MAX_SIZE,
-            valkey != null ? Duration.ofMinutes(5) : DEFAULT_TTL,
-            valkey != null ? valkey.async() : null,
-            "unknown",
-            "default"
-        );
-    }
-
-    /**
-     * Create negative cache with custom TTL and default max size.
-     * @param ttl Time-to-live for cached 404s
-     * @deprecated Use {@link #NegativeCache(NegativeCacheConfig)} instead
-     */
-    @Deprecated
-    public NegativeCache(final Duration ttl) {
-        this(ttl, true, DEFAULT_MAX_SIZE, ttl, null, "unknown", "default");
-    }
-
-    /**
-     * Create negative cache with custom TTL and enable flag.
-     * @param ttl Time-to-live for cached 404s
-     * @param enabled Whether negative caching is enabled
-     * @deprecated Use {@link #NegativeCache(NegativeCacheConfig)} instead
-     */
-    @Deprecated
-    public NegativeCache(final Duration ttl, final boolean enabled) {
-        this(ttl, enabled, DEFAULT_MAX_SIZE, ttl, null, "unknown", "default");
-    }
-
-    /**
-     * Create negative cache with custom TTL, enable flag, and max size.
-     * @param ttl Time-to-live for cached 404s
-     * @param enabled Whether negative caching is enabled
-     * @param maxSize Maximum number of entries (Window TinyLFU eviction)
-     * @param valkey Valkey connection for L2 cache (null uses GlobalCacheConfig)
-     * @deprecated Use {@link #NegativeCache(NegativeCacheConfig)} instead
-     */
-    @Deprecated
-    public NegativeCache(final Duration ttl, final boolean enabled, final int maxSize,
-            final ValkeyConnection valkey) {
-        this(
-            ttl,
-            enabled,
-            valkey != null ? Math.max(1000, maxSize / 10) : maxSize,
-            valkey != null ? Duration.ofMinutes(5) : ttl,
-            valkey != null ? valkey.async() : null,
-            "unknown",
-            "default"
-        );
-    }
-
-    /**
-     * Create negative cache with custom TTL, enable flag, max size, and repository name.
-     * @param ttl Time-to-live for cached 404s
-     * @param enabled Whether negative caching is enabled
-     * @param maxSize Maximum number of entries (Window TinyLFU eviction)
-     * @param valkey Valkey connection for L2 cache (null uses GlobalCacheConfig)
-     * @param repoName Repository name for cache key isolation
-     * @deprecated Use {@link #NegativeCache(NegativeCacheConfig)} instead
-     */
-    @Deprecated
-    public NegativeCache(final Duration ttl, final boolean enabled, final int maxSize,
-            final ValkeyConnection valkey, final String repoName) {
-        this(
-            ttl,
-            enabled,
-            valkey != null ? Math.max(1000, maxSize / 10) : maxSize,
-            valkey != null ? Duration.ofMinutes(5) : ttl,
-            valkey != null ? valkey.async() : null,
-            "unknown",
-            repoName
-        );
-    }
-
-    /**
-     * Create negative cache with custom TTL, enable flag, max size, repo type, and repository name.
-     * @param ttl Time-to-live for cached 404s
-     * @param enabled Whether negative caching is enabled
-     * @param maxSize Maximum number of entries (Window TinyLFU eviction)
-     * @param valkey Valkey connection for L2 cache (null uses GlobalCacheConfig)
-     * @param repoType Repository type for cache key namespacing (e.g., "npm", "pypi", "go")
-     * @param repoName Repository name for cache key isolation
-     * @deprecated Use {@link #NegativeCache(NegativeCacheConfig)} instead
-     */
-    @Deprecated
-    public NegativeCache(final Duration ttl, final boolean enabled, final int maxSize,
-            final ValkeyConnection valkey, final String repoType, final String repoName) {
-        this(
-            ttl,
-            enabled,
-            valkey != null ? Math.max(1000, maxSize / 10) : maxSize,
-            valkey != null ? Duration.ofMinutes(5) : ttl,
-            valkey != null ? valkey.async() : null,
-            repoType,
-            repoName
-        );
-    }
-
-    // -----------------------------------------------------------------------
-    //  NEW composite-key API
-    // -----------------------------------------------------------------------
 
     /**
      * Check if a composite key is in negative cache (known 404).
@@ -383,8 +162,57 @@ public final class NegativeCache {
     }
 
     /**
+     * Invalidate every cached entry whose {@code artifactName} matches the
+     * just-uploaded artifact. Called by upload slices after a successful
+     * {@code storage.save} so a request that 404'd before the upload (and
+     * cached the result) doesn't keep returning 404 once the artifact
+     * actually exists.
+     *
+     * <p>Match semantics:
+     * <ul>
+     *   <li><b>Exact</b>: cached name == uploaded name → always invalidate.</li>
+     *   <li><b>Parent prefix</b>: cached name is a parent of uploaded name
+     *       (e.g. cached {@code example.com}, uploaded {@code example.com/hello})
+     *       → invalidate. Go's tooling probes parent paths during module
+     *       resolution; once a child module exists, those probe-404s should
+     *       be re-evaluated.</li>
+     * </ul>
+     *
+     * @param artifactName Canonical artifact identifier just stored
+     * @return number of L1 entries invalidated (L2 may have additional)
+     */
+    public int invalidateByArtifactName(final String artifactName) {
+        if (!this.enabled || artifactName == null || artifactName.isEmpty()) {
+            return 0;
+        }
+        final java.util.List<String> matched = new java.util.ArrayList<>();
+        for (final String flat : this.notFoundCache.asMap().keySet()) {
+            final NegativeCacheKey nck = NegativeCacheKey.parse(flat);
+            if (nck != null && nameMatches(nck.artifactName(), artifactName)) {
+                matched.add(flat);
+            }
+        }
+        for (final String flat : matched) {
+            this.notFoundCache.invalidate(flat);
+        }
+        if (this.twoTier && !matched.isEmpty()) {
+            final String[] redisKeys = matched.stream()
+                .map(f -> "negative:" + f)
+                .toArray(String[]::new);
+            this.l2.del(redisKeys);
+        }
+        return matched.size();
+    }
+
+    private static boolean nameMatches(final String cached, final String uploaded) {
+        if (cached.equals(uploaded)) {
+            return true;
+        }
+        return uploaded.startsWith(cached + "/");
+    }
+
+    /**
      * Synchronously invalidate a batch of composite keys from L1 + L2.
-     * Returns a future that completes when both tiers are updated.
      *
      * @param keys List of composite keys to invalidate
      * @return future completing when invalidation is done
@@ -393,11 +221,9 @@ public final class NegativeCache {
         if (keys == null || keys.isEmpty()) {
             return CompletableFuture.completedFuture(null);
         }
-        // Invalidate L1 synchronously
         for (final NegativeCacheKey key : keys) {
             this.notFoundCache.invalidate(key.flat());
         }
-        // Invalidate L2 asynchronously
         if (this.twoTier) {
             final String[] redisKeys = keys.stream()
                 .map(k -> "negative:" + k.flat())
@@ -410,97 +236,6 @@ public final class NegativeCache {
         }
         return CompletableFuture.completedFuture(null);
     }
-
-    // -----------------------------------------------------------------------
-    //  LEGACY Key-based API (backward compat — delegates to composite-key API)
-    // -----------------------------------------------------------------------
-
-    /**
-     * Check if key is in negative cache (known 404).
-     *
-     * @param key Key to check
-     * @return True if cached in L1 as not found
-     */
-    public boolean isNotFound(final Key key) {
-        if (!this.enabled) {
-            return false;
-        }
-        final String flat = legacyFlat(key);
-        final long startNanos = System.nanoTime();
-        final boolean found = this.notFoundCache.getIfPresent(flat) != null;
-        recordL1Metrics(found, startNanos);
-        return found;
-    }
-
-    /**
-     * Async check if key is in negative cache (known 404).
-     * Checks both L1 and L2.
-     *
-     * @param key Key to check
-     * @return Future with true if cached as not found
-     */
-    public CompletableFuture<Boolean> isNotFoundAsync(final Key key) {
-        if (!this.enabled) {
-            return CompletableFuture.completedFuture(false);
-        }
-        final String flat = legacyFlat(key);
-        final long l1Start = System.nanoTime();
-        if (this.notFoundCache.getIfPresent(flat) != null) {
-            recordL1Metrics(true, l1Start);
-            return CompletableFuture.completedFuture(true);
-        }
-        recordL1Metrics(false, l1Start);
-        if (this.twoTier) {
-            return l2Get(flat);
-        }
-        return CompletableFuture.completedFuture(false);
-    }
-
-    /**
-     * Cache a key as not found (404).
-     *
-     * @param key Key to cache as not found
-     */
-    public void cacheNotFound(final Key key) {
-        if (!this.enabled) {
-            return;
-        }
-        final String flat = legacyFlat(key);
-        this.notFoundCache.put(flat, CACHED);
-        if (this.twoTier) {
-            l2Set("negative:" + flat);
-        }
-    }
-
-    /**
-     * Invalidate specific entry (e.g., when artifact is deployed).
-     *
-     * @param key Key to invalidate
-     */
-    public void invalidate(final Key key) {
-        final String flat = legacyFlat(key);
-        this.notFoundCache.invalidate(flat);
-        if (this.twoTier) {
-            this.l2.del("negative:" + flat);
-        }
-    }
-
-    /**
-     * Invalidate all entries matching a prefix pattern.
-     *
-     * @param prefix Key prefix to match
-     */
-    public void invalidatePrefix(final String prefix) {
-        final String pfx = this.repoType + ":" + this.repoName + ":" + prefix;
-        this.notFoundCache.asMap().keySet().removeIf(k -> k.startsWith(pfx));
-        if (this.twoTier) {
-            scanAndDelete("negative:" + pfx + "*");
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    //  Utility / lifecycle
-    // -----------------------------------------------------------------------
 
     /**
      * Clear entire cache.
@@ -546,17 +281,6 @@ public final class NegativeCache {
         return this.enabled;
     }
 
-    // -----------------------------------------------------------------------
-    //  Internal helpers
-    // -----------------------------------------------------------------------
-
-    /**
-     * Build a flat string for legacy Key-based calls.
-     */
-    private String legacyFlat(final Key key) {
-        return this.repoType + ":" + this.repoName + ":" + key.string();
-    }
-
     /**
      * L2 GET — returns true if found, promotes to L1.
      */
@@ -580,10 +304,18 @@ public final class NegativeCache {
     }
 
     /**
+     * L2 sentinel value — a single ASCII '1'. The value is presence-only;
+     * we use {@code '1'} (0x31) instead of byte {@code 0x01} so that
+     * {@code valkey-cli GET} renders it as the readable string {@code "1"}
+     * rather than the unreadable escape {@code \x01}.
+     */
+    private static final byte[] L2_SENTINEL = new byte[]{'1'};
+
+    /**
      * L2 SET with TTL.
      */
     private void l2Set(final String redisKey) {
-        this.l2.setex(redisKey, this.ttl.getSeconds(), new byte[]{1});
+        this.l2.setex(redisKey, this.ttl.getSeconds(), L2_SENTINEL);
     }
 
     private void recordL1Metrics(final boolean hit, final long startNanos) {

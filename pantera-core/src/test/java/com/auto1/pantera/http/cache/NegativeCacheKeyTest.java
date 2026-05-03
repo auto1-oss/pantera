@@ -28,7 +28,60 @@ final class NegativeCacheKeyTest {
         final NegativeCacheKey key = new NegativeCacheKey(
             "libs-release", "maven", "org.spring:spring-core", "5.3.0"
         );
-        assertEquals("libs-release:maven:org.spring:spring-core:5.3.0", key.flat());
+        // Embedded ':' in the artifactName is escaped as %3A so the four
+        // composite fields can be unambiguously recovered by parse().
+        assertEquals("libs-release:maven:org.spring%3Aspring-core:5.3.0", key.flat());
+    }
+
+    @Test
+    void parseRoundTripsAcrossEmbeddedColons() {
+        final NegativeCacheKey original = new NegativeCacheKey(
+            "libs-release", "maven", "org.spring:spring-core", "5.3.0"
+        );
+        final NegativeCacheKey parsed = NegativeCacheKey.parse(original.flat());
+        assertEquals(original, parsed);
+    }
+
+    @Test
+    void parseRejectsMalformed() {
+        assertEquals(null, NegativeCacheKey.parse("only:three:fields"));
+        assertEquals(null, NegativeCacheKey.parse(null));
+    }
+
+    @Test
+    void fromPathParsesMavenIntoNameAndVersion() {
+        final NegativeCacheKey key = NegativeCacheKey.fromPath(
+            "libs-release", "maven", "/org/spring/spring-core/5.3.0/spring-core-5.3.0.jar"
+        );
+        assertEquals("org/spring/spring-core", key.artifactName());
+        assertEquals("5.3.0", key.artifactVersion());
+    }
+
+    @Test
+    void fromPathParsesGoIntoNameAndVersion() {
+        final NegativeCacheKey key = NegativeCacheKey.fromPath(
+            "go_proxy", "go", "/example.com/hello/@v/v1.0.1.mod"
+        );
+        assertEquals("example.com/hello", key.artifactName());
+        assertEquals("1.0.1", key.artifactVersion());
+    }
+
+    @Test
+    void fromPathParsesNpmTarballIntoNameAndVersion() {
+        final NegativeCacheKey key = NegativeCacheKey.fromPath(
+            "npm-proxy", "npm", "/@scope/pkg/-/pkg-1.2.3.tgz"
+        );
+        assertEquals("@scope/pkg", key.artifactName());
+        assertEquals("1.2.3", key.artifactVersion());
+    }
+
+    @Test
+    void fromPathFallsBackToWholePathWhenNotRecognized() {
+        final NegativeCacheKey key = NegativeCacheKey.fromPath(
+            "raw-proxy", "raw", "/some/random/path"
+        );
+        assertEquals("some/random/path", key.artifactName());
+        assertEquals("", key.artifactVersion());
     }
 
     @Test

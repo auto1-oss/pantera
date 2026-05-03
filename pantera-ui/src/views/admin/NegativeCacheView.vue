@@ -217,11 +217,15 @@ onMounted(() => {
               </div>
             </template>
             <template #content>
+              <p class="text-xs text-gray-400 mb-2">
+                Filters use exact match. Use <code>*</code> as wildcard
+                (e.g. <code>github.com/*</code>).
+              </p>
               <div class="grid grid-cols-4 gap-3 mb-4">
-                <InputText v-model="filterScope" placeholder="Filter scope..." class="w-full" />
-                <InputText v-model="filterType" placeholder="Filter type..." class="w-full" />
-                <InputText v-model="filterName" placeholder="Filter artifact..." class="w-full" />
-                <InputText v-model="filterVersion" placeholder="Filter version..." class="w-full" />
+                <InputText v-model="filterScope" placeholder="Scope (repo name)..." class="w-full" />
+                <InputText v-model="filterType" placeholder="Repo type (maven, go...)" class="w-full" />
+                <InputText v-model="filterName" placeholder="Artifact name..." class="w-full" />
+                <InputText v-model="filterVersion" placeholder="Version (empty for metadata)" class="w-full" />
               </div>
               <DataTable :value="entries" :loading="entriesLoading" stripedRows>
                 <Column header="Scope">
@@ -238,7 +242,10 @@ onMounted(() => {
                   </template>
                 </Column>
                 <Column header="Version">
-                  <template #body="{ data }">{{ data.key.artifactVersion }}</template>
+                  <template #body="{ data }">
+                    <span v-if="data.key.artifactVersion">{{ data.key.artifactVersion }}</span>
+                    <span v-else class="text-gray-400 italic" title="Metadata endpoint (no version)">&mdash;</span>
+                  </template>
                 </Column>
                 <Column header="Tier">
                   <template #body="{ data }">
@@ -334,24 +341,25 @@ onMounted(() => {
             </template>
             <template #content>
               <p class="text-sm text-gray-400 mb-4">
-                Leave fields empty to match all. This will remove all matching entries from the cache.
+                Leave fields empty to match all. Each field uses exact match;
+                use <code>*</code> as wildcard (e.g. <code>github.com/*</code>).
               </p>
               <div class="grid grid-cols-2 gap-3 mb-4">
                 <div>
-                  <label class="block text-sm text-gray-500 mb-1">Scope</label>
+                  <label class="block text-sm text-gray-500 mb-1">Scope (repo name)</label>
                   <InputText v-model="patScope" placeholder="(all)" class="w-full" />
                 </div>
                 <div>
                   <label class="block text-sm text-gray-500 mb-1">Repo Type</label>
-                  <InputText v-model="patRepoType" placeholder="(all)" class="w-full" />
+                  <InputText v-model="patRepoType" placeholder="maven, go, npm... (all)" class="w-full" />
                 </div>
                 <div>
                   <label class="block text-sm text-gray-500 mb-1">Artifact Name</label>
-                  <InputText v-model="patArtifactName" placeholder="(all)" class="w-full" />
+                  <InputText v-model="patArtifactName" placeholder="github.com/* (all)" class="w-full" />
                 </div>
                 <div>
                   <label class="block text-sm text-gray-500 mb-1">Version</label>
-                  <InputText v-model="patVersion" placeholder="(all)" class="w-full" />
+                  <InputText v-model="patVersion" placeholder="(empty=metadata, all=*)" class="w-full" />
                 </div>
               </div>
               <Button

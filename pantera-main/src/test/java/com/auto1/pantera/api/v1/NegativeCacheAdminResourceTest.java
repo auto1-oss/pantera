@@ -78,7 +78,7 @@ public final class NegativeCacheAdminResourceTest extends AsyncApiTestBase {
         this.request(
             vertx, ctx,
             HttpMethod.GET,
-            "/api/v1/admin/neg-cache/probe?key=test-group:maven:com.example:foo:1.0.0",
+            "/api/v1/admin/neg-cache/probe?key=test-group:maven:com.example%253Afoo:1.0.0",
             res -> {
                 Assertions.assertEquals(200, res.statusCode(),
                     "Probe should return 200");
