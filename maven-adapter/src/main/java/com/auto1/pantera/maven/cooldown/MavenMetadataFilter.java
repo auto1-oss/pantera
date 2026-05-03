@@ -29,6 +29,11 @@ import java.util.Set;
  * <ul>
  *   <li>{@code <versions><version>} - removes blocked version nodes</li>
  *   <li>{@code <latest>} - updated when current latest is blocked</li>
+ *   <li>{@code <release>} - updated to the latest non-SNAPSHOT version
+ *       that survives the filter; Gradle's {@code latest.release}
+ *       resolution reads this element, so a stale {@code <release>}
+ *       still pointing at a blocked version makes the build pick a
+ *       version it cannot subsequently download (HTTP 403)</li>
  *   <li>{@code <lastUpdated>} - set to current timestamp on modification</li>
  * </ul>
  *
@@ -65,9 +70,48 @@ public final class MavenMetadataFilter implements MetadataFilter<Document> {
         final Document metadata, final String newLatest
     ) {
         MavenMetadataFilter.setElementText(metadata, "latest", newLatest);
+        // Recompute <release> from the filtered version list. <release> by
+        // Maven convention is the latest non-SNAPSHOT version actually
+        // available in the repository — the most-recent <version> entry that
+        // doesn't end with -SNAPSHOT. If newLatest itself qualifies, prefer
+        // that (consistent with the cooldown service's release-date ordering
+        // which gave us newLatest); otherwise scan the filtered version list.
+        final String newRelease = computeNewRelease(metadata, newLatest);
+        if (newRelease != null) {
+            MavenMetadataFilter.setElementText(metadata, "release", newRelease);
+        }
         final String now = ZonedDateTime.now(ZoneOffset.UTC).format(MAVEN_TS);
         MavenMetadataFilter.setElementText(metadata, "lastUpdated", now);
         return metadata;
+    }
+
+    /**
+     * Pick the new {@code <release>} value: latest non-SNAPSHOT version
+     * still present in the (already-filtered) {@code <versions>} list.
+     * Falls back to {@code newLatest} if it itself is non-SNAPSHOT and to
+     * {@code null} (no rewrite) if no non-SNAPSHOT survives.
+     */
+    private static String computeNewRelease(
+        final Document metadata, final String newLatest
+    ) {
+        if (newLatest != null && !newLatest.endsWith("-SNAPSHOT")) {
+            return newLatest;
+        }
+        final NodeList versionNodes = metadata.getElementsByTagName("version");
+        // Iterate in document order — Maven's metadata convention is
+        // ascending order, so the LAST non-SNAPSHOT entry is the newest.
+        String candidate = null;
+        for (int idx = 0; idx < versionNodes.getLength(); idx++) {
+            final String text = versionNodes.item(idx).getTextContent();
+            if (text == null) {
+                continue;
+            }
+            final String trimmed = text.trim();
+            if (!trimmed.isEmpty() && !trimmed.endsWith("-SNAPSHOT")) {
+                candidate = trimmed;
+            }
+        }
+        return candidate;
     }
 
     /**

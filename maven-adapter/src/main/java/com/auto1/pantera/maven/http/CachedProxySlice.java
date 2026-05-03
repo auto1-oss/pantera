@@ -442,7 +442,14 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                     .build()
             );
         }
-        final String packageName = pkgOpt.get();
+        // extractPackageName returns SLASHED format (com/google/guava/guava)
+        // — the MavenHeadSource that resolves release dates splits on the last
+        // DOT to derive groupId/artifactId, so a slashed name silently produces
+        // an empty inspector lookup and the filter fails open ("0 blocked"
+        // even when the version is well past its publish-date window). Convert
+        // to dotted before handing it to the metadata service. Mirrors the
+        // same conversion applied in MavenGroupSlice.applyCooldownFilter.
+        final String packageName = pkgOpt.get().replace('/', '.');
         return content.asBytesFuture().thenCompose(
             bytes -> this.cooldownMetadata.filterMetadata(
                 this.repoType(),

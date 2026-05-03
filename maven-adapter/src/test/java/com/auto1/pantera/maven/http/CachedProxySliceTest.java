@@ -567,9 +567,12 @@ final class CachedProxySliceTest {
             Content.EMPTY
         ).join();
         MatcherAssert.assertThat(
-            "Filter must be invoked with the group/artifact coordinate",
+            "Filter must be invoked with the DOTTED group/artifact coordinate "
+                + "— MavenHeadSource splits on the last dot to derive groupId/"
+                + "artifactId, so a slashed name yields an empty inspector "
+                + "lookup and the filter silently fails open.",
             capturedPackage.get(),
-            Matchers.is("com/google/guava/guava")
+            Matchers.is("com.google.guava.guava")
         );
         MatcherAssert.assertThat(
             "Filter must receive the raw upstream bytes",
