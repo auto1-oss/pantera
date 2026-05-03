@@ -72,6 +72,7 @@ public final class MavenCentralSource implements PublishDateSource {
             .addQueryParam("wt", "json")
             .addQueryParam("rows", "1")
             .ssl(ssl)
+            .putHeader("User-Agent", com.auto1.pantera.http.EcosystemUserAgents.MAVEN)
             .timeout(TIMEOUT_MS)
             .send(ar -> {
                 if (ar.failed()) {

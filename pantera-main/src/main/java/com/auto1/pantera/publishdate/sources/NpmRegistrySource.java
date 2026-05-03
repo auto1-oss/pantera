@@ -62,6 +62,7 @@ public final class NpmRegistrySource implements PublishDateSource {
         final CompletableFuture<Optional<Instant>> out = new CompletableFuture<>();
         this.client.get(port, base.getHost(), "/" + encoded)
             .ssl(ssl)
+            .putHeader("User-Agent", com.auto1.pantera.http.EcosystemUserAgents.NPM)
             .timeout(TIMEOUT_MS)
             .send(ar -> {
                 if (ar.failed()) {

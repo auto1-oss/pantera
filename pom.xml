@@ -446,6 +446,19 @@ Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
         <plugin>
           <artifactId>maven-jar-plugin</artifactId>
           <version>3.4.2</version>
+          <configuration>
+            <archive>
+              <manifest>
+                <!-- Surface ${project.version} as Implementation-Version on
+                     every module's MANIFEST.MF so runtime code (e.g.
+                     PanteraUserAgent) can read it via
+                     getPackage().getImplementationVersion() instead of
+                     falling back to "dev". -->
+                <addDefaultImplementationEntries>true</addDefaultImplementationEntries>
+                <addDefaultSpecificationEntries>true</addDefaultSpecificationEntries>
+              </manifest>
+            </archive>
+          </configuration>
         </plugin>
         <plugin>
           <artifactId>maven-install-plugin</artifactId>

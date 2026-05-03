@@ -36,7 +36,8 @@ final class MavenHeadSourceLiveTest {
     static void setUp() {
         vertx = Vertx.vertx();
         client = WebClient.create(vertx, new WebClientOptions()
-            .setUserAgent("pantera-publish-date/1.0")
+            .setUserAgent(com.auto1.pantera.http.PanteraUserAgent
+                .userAgentWithComponent("publish-date"))
             .setConnectTimeout(5_000));
     }
 

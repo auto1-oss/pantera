@@ -67,6 +67,7 @@ public final class PackagistSource implements PublishDateSource {
         final CompletableFuture<Optional<Instant>> out = new CompletableFuture<>();
         this.client.get(port, base.getHost(), "/p2/" + name + ".json")
             .ssl(ssl)
+            .putHeader("User-Agent", com.auto1.pantera.http.EcosystemUserAgents.COMPOSER)
             .timeout(TIMEOUT_MS)
             .send(ar -> {
                 if (ar.failed()) {

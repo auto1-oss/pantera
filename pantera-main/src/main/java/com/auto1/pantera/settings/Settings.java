@@ -94,6 +94,17 @@ public interface Settings extends AutoCloseable {
     Optional<MetadataEventQueues> artifactMetadata();
 
     /**
+     * Synchronous artifact-index writer used by upload slices to give the
+     * group resolver read-after-write consistency. Defaults to
+     * {@link com.auto1.pantera.index.SyncArtifactIndexer#NOOP} when no DB
+     * is configured (file-only deployments / tests).
+     * @return Synchronous artifact-index writer
+     */
+    default com.auto1.pantera.index.SyncArtifactIndexer syncArtifactIndexer() {
+        return com.auto1.pantera.index.SyncArtifactIndexer.NOOP;
+    }
+
+    /**
      * Crontab settings.
      * @return Yaml sequence of crontab strings.
      */

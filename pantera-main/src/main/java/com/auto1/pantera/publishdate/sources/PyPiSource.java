@@ -64,6 +64,7 @@ public final class PyPiSource implements PublishDateSource {
         final CompletableFuture<Optional<Instant>> out = new CompletableFuture<>();
         this.client.get(port, base.getHost(), "/pypi/" + encName + "/" + encVer + "/json")
             .ssl(ssl)
+            .putHeader("User-Agent", com.auto1.pantera.http.EcosystemUserAgents.PIP)
             .timeout(TIMEOUT_MS)
             .send(ar -> {
                 if (ar.failed()) {

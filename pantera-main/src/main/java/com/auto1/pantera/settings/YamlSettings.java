@@ -135,6 +135,15 @@ public final class YamlSettings implements Settings {
     private final Optional<MetadataEventQueues> events;
 
     /**
+     * Synchronous artifact-index writer. Wired to the same DataSource that
+     * backs the async {@link DbConsumer}, but writes inline with each
+     * upload so the group resolver sees the artifact immediately. Falls
+     * back to {@link com.auto1.pantera.index.SyncArtifactIndexer#NOOP} when
+     * no DB is configured.
+     */
+    private final com.auto1.pantera.index.SyncArtifactIndexer syncIndexer;
+
+    /**
      * Logging context.
      */
     private final LoggingContext lctx;
@@ -342,6 +351,10 @@ public final class YamlSettings implements Settings {
         this.events = eventsDs.flatMap(
             db -> YamlSettings.initArtifactsEvents(this.meta(), quartz, db)
         );
+        this.syncIndexer = eventsDs
+            .map(db -> (com.auto1.pantera.index.SyncArtifactIndexer)
+                new com.auto1.pantera.db.DbSyncArtifactIndexer(db))
+            .orElse(com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
         this.prefixesConfig = new PrefixesConfig(YamlSettings.readPrefixes(this.meta()));
         this.httpServerRequestTimeout = YamlSettings.parseRequestTimeout(this.meta());
     }
@@ -394,6 +407,11 @@ public final class YamlSettings implements Settings {
     @Override
     public PanteraCaches caches() {
         return this.acach;
+    }
+
+    @Override
+    public com.auto1.pantera.index.SyncArtifactIndexer syncArtifactIndexer() {
+        return this.syncIndexer;
     }
 
     @Override

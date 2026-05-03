@@ -349,7 +349,14 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
         // These prevent unlimited connection accumulation to upstream repositories
         result.setMaxConnectionsPerDestination(settings.maxConnectionsPerDestination());
         result.setMaxRequestsQueuedPerDestination(settings.maxRequestsQueuedPerDestination());
-        
+
+        // No client-wide User-Agent: per-request UA is set by upper-layer
+        // proxy slices, which forward the inbound client's UA so upstream
+        // registries see the native tool (npm, mvn, go, pip...) rather than
+        // a Pantera-branded UA — that latter triggers per-UA rate-limits.
+        // Suppress Jetty's default "Jetty/<version>" header as well.
+        result.setUserAgentField(null);
+
         return result;
     }
 }

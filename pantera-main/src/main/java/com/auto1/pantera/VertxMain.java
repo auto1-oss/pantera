@@ -270,13 +270,49 @@ public final class VertxMain {
         // instead of HEAD-probing upstream — eliminates the per-cooldown-eval
         // round-trip and gives us a single L1+L2 cache shared across adapters.
         sharedDs.ifPresent(ds -> {
+            // Publish-date WebClient: pool sizing comes from the same
+            // {@code http_client} block in pantera.yml that the proxy clients
+            // use, so operators have a single tuning knob. Default Vert.x
+            // maxPoolSize of 5 is far too small under `go get` fanout — a
+            // hundreds-of-deps resolution times out at the connection layer
+            // ("timeout getting a connection") long before any HTTP body
+            // arrives. We also negotiate HTTP/2 via ALPN so a few
+            // connections can multiplex many concurrent streams.
+            //
+            // Concurrency is scaled to a quarter of the proxy-traffic budget
+            // because publish-date lookups all hit the SAME upstream host
+            // (e.g. proxy.golang.org). Slamming a single registry with the
+            // full proxy quota triggers per-IP rate-limits / 429s and blocks.
+            // 25% keeps us well below the typical anonymous-bot thresholds.
+            final com.auto1.pantera.http.client.HttpClientSettings httpClientSettings =
+                this.settings.httpClientSettings();
+            final double publishDateConcurrencyFactor = 0.25;
+            final int maxPool = Math.max(32, (int) Math.round(
+                httpClientSettings.maxConnectionsPerDestination()
+                    * publishDateConcurrencyFactor));
+            final int idleSec = Math.max(30,
+                (int) (httpClientSettings.idleTimeout() / 1_000L));
+            final int connectMs = Math.max(1_000,
+                (int) httpClientSettings.connectTimeout());
             final io.vertx.ext.web.client.WebClient publishDateClient =
                 io.vertx.ext.web.client.WebClient.create(
                     this.vertx.getDelegate(),
                     new io.vertx.ext.web.client.WebClientOptions()
-                        .setUserAgent("pantera-publish-date/1.0")
-                        .setConnectTimeout(3_000)
-                        .setIdleTimeout(30)
+                        // Default UA only matters if a source forgets to set
+                        // a per-request one — every PublishDateSource above
+                        // overrides this with a native ecosystem UA so
+                        // upstream registries see e.g. "Go-http-client/1.1"
+                        // or "npm/10.5..." rather than a Pantera-branded
+                        // identity that gets per-UA-rate-limited at scale.
+                        .setUserAgent(com.auto1.pantera.http.EcosystemUserAgents.GO)
+                        .setConnectTimeout(connectMs)
+                        .setIdleTimeout(idleSec)
+                        .setKeepAlive(true)
+                        .setMaxPoolSize(maxPool)
+                        .setHttp2MaxPoolSize(Math.max(4, maxPool / 8))
+                        .setHttp2MultiplexingLimit(100)
+                        .setProtocolVersion(io.vertx.core.http.HttpVersion.HTTP_2)
+                        .setUseAlpn(true)
                 );
             final com.auto1.pantera.publishdate.sources.MavenHeadSource mavenHead =
                 new com.auto1.pantera.publishdate.sources.MavenHeadSource(publishDateClient);

@@ -80,6 +80,7 @@ public final class MavenHeadSource implements PublishDateSource {
         final CompletableFuture<Optional<Instant>> out = new CompletableFuture<>();
         this.client.head(port, base.getHost(), requestPath)
             .ssl(ssl)
+            .putHeader("User-Agent", com.auto1.pantera.http.EcosystemUserAgents.MAVEN)
             .timeout(TIMEOUT_MS)
             .send(ar -> {
                 if (ar.failed()) {
