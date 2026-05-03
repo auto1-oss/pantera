@@ -65,8 +65,11 @@ public final class UpdateSlice implements Slice {
      */
     private final Optional<Queue<ArtifactEvent>> events;
 
+    /** Synchronous artifact-index writer for read-after-write consistency. */
+    private final com.auto1.pantera.index.SyncArtifactIndexer syncIndex;
+
     /**
-     * Ctor.
+     * Legacy ctor (no synchronous index writer).
      * @param asto Abstract storage
      * @param config Repository configuration
      * @param events Artifact events
@@ -74,9 +77,24 @@ public final class UpdateSlice implements Slice {
     public UpdateSlice(
         final Storage asto, final Config config, final Optional<Queue<ArtifactEvent>> events
     ) {
+        this(asto, config, events, com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+    }
+
+    /**
+     * Ctor with synchronous index writer.
+     * @param asto Abstract storage
+     * @param config Repository configuration
+     * @param events Artifact events
+     * @param syncIndex Synchronous artifact-index writer
+     */
+    public UpdateSlice(
+        final Storage asto, final Config config, final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
+    ) {
         this.asto = asto;
         this.config = config;
         this.events = events;
+        this.syncIndex = syncIndex;
     }
 
     @Override
@@ -100,12 +118,15 @@ public final class UpdateSlice implements Slice {
                             nothing -> ResponseBuilder.badRequest().build()
                         );
                     } else {
-                        CompletionStage<Void> upd = this.generateIndexes(key, control, common);
-                        if (this.events.isPresent()) {
-                            upd = upd.thenCompose(
-                                nothing -> this.logEvents(key, control, common, headers)
-                            );
-                        }
+                        // Always run logEvents — it now also drives the
+                        // synchronous index UPSERT, which we must complete
+                        // before responding so a follow-up read sees the
+                        // package via the artifact index.
+                        final CompletionStage<Void> upd =
+                            this.generateIndexes(key, control, common)
+                                .thenCompose(nothing ->
+                                    this.logEvents(key, control, common, headers)
+                                );
                         res = upd.thenApply(nothing -> ResponseBuilder.ok().build())
                             .toCompletableFuture();
                     }
@@ -170,20 +191,20 @@ public final class UpdateSlice implements Slice {
         final Key artifact, final String control, final List<String> archs, final Headers hdrs
     ) {
         return this.asto.metadata(artifact).thenApply(meta -> meta.read(Meta.OP_SIZE).get())
-            .thenAccept(
-                size -> {
-                    final String name = new ControlField.Package().value(control).get(0);
-                    final String version = new ControlField.Version().value(control).get(0);
-                    final String owner = new Login(hdrs).getValue();
-                    archs.forEach(
-                        val -> this.events.get().add(
-                            new ArtifactEvent(
-                                UpdateSlice.REPO_TYPE, this.config.codename(), owner,
-                                String.join("_", name, val), version, size
-                            )
-                        )
+            .thenCompose(size -> {
+                final String name = new ControlField.Package().value(control).get(0);
+                final String version = new ControlField.Version().value(control).get(0);
+                final String owner = new Login(hdrs).getValue();
+                final java.util.List<CompletableFuture<Void>> syncs = new java.util.ArrayList<>();
+                archs.forEach(val -> {
+                    final ArtifactEvent event = new ArtifactEvent(
+                        UpdateSlice.REPO_TYPE, this.config.codename(), owner,
+                        String.join("_", name, val), version, size
                     );
-                }
-        );
+                    this.events.ifPresent(queue -> queue.add(event));
+                    syncs.add(this.syncIndex.recordSync(event));
+                });
+                return CompletableFuture.allOf(syncs.toArray(CompletableFuture[]::new));
+            });
     }
 }

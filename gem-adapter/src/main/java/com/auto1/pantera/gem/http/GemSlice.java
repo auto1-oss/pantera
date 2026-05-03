@@ -86,7 +86,8 @@ public final class GemSlice extends Slice.Wrap {
      * @param name Repository name
      */
     public GemSlice(Storage storage, Policy<?> policy, Authentication auth, String name) {
-        this(storage, policy, auth, null, name, Optional.empty());
+        this(storage, policy, auth, null, name, Optional.empty(),
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
     }
 
     /**
@@ -105,7 +106,8 @@ public final class GemSlice extends Slice.Wrap {
         final String name,
         final Optional<Queue<ArtifactEvent>> events
     ) {
-        this(storage, policy, auth, null, name, events);
+        this(storage, policy, auth, null, name, events,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
     }
 
     /**
@@ -126,6 +128,23 @@ public final class GemSlice extends Slice.Wrap {
         final String name,
         final Optional<Queue<ArtifactEvent>> events
     ) {
+        this(storage, policy, basicAuth, tokenAuth, name, events,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+    }
+
+    /**
+     * Ctor with synchronous artifact-index writer.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public GemSlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
+    ) {
         super(
             new SliceRoute(
                 new RtRulePath(
@@ -134,7 +153,7 @@ public final class GemSlice extends Slice.Wrap {
                         new RtRule.ByPath("/api/v1/gems")
                     ),
                     GemSlice.createAuthSlice(
-                        new SubmitGemSlice(storage, events, name),
+                        new SubmitGemSlice(storage, events, name, syncIndex),
                         basicAuth,
                         tokenAuth,
                         new OperationControl(

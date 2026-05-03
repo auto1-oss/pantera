@@ -61,11 +61,12 @@ final class AddArchiveSlice implements Slice {
      * @param rname Repository name
      */
     AddArchiveSlice(final Repository repository, final String rname) {
-        this(repository, Optional.empty(), rname);
+        this(repository, Optional.empty(), rname,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
     }
 
     /**
-     * Ctor.
+     * Legacy ctor (no synchronous index writer).
      * @param repository Repository
      * @param events Artifact events
      * @param rname Repository name
@@ -74,9 +75,29 @@ final class AddArchiveSlice implements Slice {
         final Repository repository, final Optional<Queue<ArtifactEvent>> events,
         final String rname
     ) {
+        this(repository, events, rname,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+    }
+
+    /** Synchronous artifact-index writer for read-after-write consistency. */
+    private final com.auto1.pantera.index.SyncArtifactIndexer syncIndex;
+
+    /**
+     * Ctor with synchronous index writer.
+     * @param repository Repository
+     * @param events Artifact events
+     * @param rname Repository name
+     * @param syncIndex Synchronous artifact-index writer
+     */
+    AddArchiveSlice(
+        final Repository repository, final Optional<Queue<ArtifactEvent>> events,
+        final String rname,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
+    ) {
         this.repository = repository;
         this.events = events;
         this.rname = rname;
+        this.syncIndex = syncIndex;
     }
 
     @Override
@@ -251,55 +272,52 @@ final class AddArchiveSlice implements Slice {
                         new Content.From(bytes)
                     );
                     
-                    // Record artifact event if enabled
-                    if (this.events.isPresent()) {
-                        res = res.thenAccept(
-                            nothing -> {
-                                final long size;
-                                try {
-                                    size = this.repository.storage()
-                                        .metadata(archive.name().artifact())
-                                        .thenApply(meta -> meta.read(Meta.OP_SIZE))
-                                        .join()
-                                        .map(Long::longValue)
-                                        .orElse(0L);
-                                } catch (final Exception e) {
-                                    EcsLogger.warn("com.auto1.pantera.composer")
-                                        .message("Failed to get file size for event")
-                                        .eventCategory("web")
-                                        .eventAction("event_creation")
-                                        .eventOutcome("failure")
-                                        .field("error.message", e.getMessage())
-                                        .log();
-                                    return;
-                                }
-                                final long created = System.currentTimeMillis();
-                                this.events.get().add(
-                                    new ArtifactEvent(
-                                        AddArchiveSlice.REPO_TYPE,
-                                        this.rname,
-                                        new Login(headers).getValue(),
-                                        packageName,
-                                        version,
-                                        size,
-                                        created,
-                                        (Long) null  // No release date for local uploads
-                                    )
-                                );
-                                EcsLogger.info("com.auto1.pantera.composer")
-                                    .message("Recorded Composer package upload event")
-                                    .eventCategory("web")
-                                    .eventAction("event_creation")
-                                    .eventOutcome("success")
-                                    .field("package.name", packageName)
-                                    .field("package.version", version)
-                                    .field("repository.name", this.rname)
-                                    .field("package.size", size)
-                                    .log();
-                            }
+                    // Record artifact event AND synchronously update index so
+                    // group resolver sees the new artifact immediately.
+                    res = res.thenCompose(nothing -> {
+                        final long size;
+                        try {
+                            size = this.repository.storage()
+                                .metadata(archive.name().artifact())
+                                .thenApply(meta -> meta.read(Meta.OP_SIZE))
+                                .join()
+                                .map(Long::longValue)
+                                .orElse(0L);
+                        } catch (final Exception e) {
+                            EcsLogger.warn("com.auto1.pantera.composer")
+                                .message("Failed to get file size for event")
+                                .eventCategory("web")
+                                .eventAction("event_creation")
+                                .eventOutcome("failure")
+                                .field("error.message", e.getMessage())
+                                .log();
+                            return CompletableFuture.completedFuture(null);
+                        }
+                        final long created = System.currentTimeMillis();
+                        final ArtifactEvent event = new ArtifactEvent(
+                            AddArchiveSlice.REPO_TYPE,
+                            this.rname,
+                            new Login(headers).getValue(),
+                            packageName,
+                            version,
+                            size,
+                            created,
+                            (Long) null  // No release date for local uploads
                         );
-                    }
-                    
+                        this.events.ifPresent(queue -> queue.add(event));
+                        EcsLogger.info("com.auto1.pantera.composer")
+                            .message("Recorded Composer package upload event")
+                            .eventCategory("web")
+                            .eventAction("event_creation")
+                            .eventOutcome("success")
+                            .field("package.name", packageName)
+                            .field("package.version", version)
+                            .field("repository.name", this.rname)
+                            .field("package.size", size)
+                            .log();
+                        return this.syncIndex.recordSync(event);
+                    });
+
                     return res.thenApply(nothing -> ResponseBuilder.created().build());
                 })
                 .exceptionally(error -> {

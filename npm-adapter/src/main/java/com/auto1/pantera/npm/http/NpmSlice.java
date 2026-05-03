@@ -124,7 +124,8 @@ public final class NpmSlice implements Slice {
         final String name,
         final Optional<Queue<ArtifactEvent>> events
     ) {
-        this(base, storage, policy, basicAuth, tokenAuth, name, events, false, null);
+        this(base, storage, policy, basicAuth, tokenAuth, name, events, false, null,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
     }
     
     /**
@@ -148,7 +149,8 @@ public final class NpmSlice implements Slice {
         final Optional<Queue<ArtifactEvent>> events,
         final boolean jwtOnly
     ) {
-        this(base, storage, policy, basicAuth, tokenAuth, name, events, jwtOnly, null);
+        this(base, storage, policy, basicAuth, tokenAuth, name, events, jwtOnly, null,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
     }
 
     /**
@@ -175,7 +177,28 @@ public final class NpmSlice implements Slice {
         final Optional<Queue<ArtifactEvent>> events,
         final boolean jwtOnly
     ) {
-        this(base, storage, policy, basicAuth, tokenAuth, name, events, jwtOnly, tokens);
+        this(base, storage, policy, basicAuth, tokenAuth, name, events, jwtOnly, tokens,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+    }
+
+    /**
+     * Ctor with synchronous artifact-index writer for read-after-write consistency.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public NpmSlice(
+        final URL base,
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final Tokens tokens,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final boolean jwtOnly,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
+    ) {
+        this(base, storage, policy, basicAuth, tokenAuth, name, events, jwtOnly, tokens,
+            syncIndex);
     }
 
     /**
@@ -190,6 +213,7 @@ public final class NpmSlice implements Slice {
      * @param jwtOnly Use JWT-only mode.
      * @param tokens Token service (optional).
      */
+    @SuppressWarnings("PMD.ExcessiveParameterList")
     private NpmSlice(
         final URL base,
         final Storage storage,
@@ -199,7 +223,8 @@ public final class NpmSlice implements Slice {
         final String name,
         final Optional<Queue<ArtifactEvent>> events,
         final boolean jwtOnly,
-        final Tokens tokens
+        final Tokens tokens,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
     ) {
         this.tokens = tokens;
         final TokenAuthentication npmTokenAuth = jwtOnly
@@ -296,7 +321,7 @@ public final class NpmSlice implements Slice {
                     )
                 ),
                 NpmSlice.createAuthSlice(
-                    new UploadSlice(new CliPublish(storage), storage, events, name),
+                    new UploadSlice(new CliPublish(storage), storage, events, name, syncIndex),
                     basicAuth,
                     npmTokenAuth,
                     new OperationControl(
@@ -344,7 +369,7 @@ public final class NpmSlice implements Slice {
                     new RtRule.ByPath(CurlPublish.PTRN)
                 ),
                 NpmSlice.createAuthSlice(
-                    new UploadSlice(new CurlPublish(storage), storage, events, name),
+                    new UploadSlice(new CurlPublish(storage), storage, events, name, syncIndex),
                     basicAuth,
                     npmTokenAuth,
                     new OperationControl(
@@ -360,7 +385,7 @@ public final class NpmSlice implements Slice {
                     new RtRule.ByPath("^/(@[^/]+/)?[^/]+$")  // Matches package names, not paths with /
                 ),
                 NpmSlice.createAuthSlice(
-                    new UploadSlice(new CliPublish(storage), storage, events, name),
+                    new UploadSlice(new CliPublish(storage), storage, events, name, syncIndex),
                     basicAuth,
                     npmTokenAuth,
                     new OperationControl(

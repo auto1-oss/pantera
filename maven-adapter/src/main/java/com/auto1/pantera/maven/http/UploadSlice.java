@@ -24,6 +24,7 @@ import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.ContentWithSize;
 import com.auto1.pantera.http.slice.KeyFromPath;
+import com.auto1.pantera.index.SyncArtifactIndexer;
 import com.auto1.pantera.maven.metadata.MavenTimestamp;
 import com.auto1.pantera.maven.metadata.Version;
 import com.auto1.pantera.scheduling.ArtifactEvent;
@@ -77,15 +78,24 @@ public final class UploadSlice implements Slice {
     private final String rname;
 
     /**
+     * Synchronous artifact-index writer. Runs inline with upload so the
+     * group resolver's index lookup sees the new artifact immediately —
+     * no stale-index window. Defaults to {@link SyncArtifactIndexer#NOOP}
+     * when no DB is configured.
+     */
+    private final SyncArtifactIndexer syncIndex;
+
+    /**
      * Ctor without events.
      * @param storage Abstract storage
      */
     public UploadSlice(final Storage storage) {
-        this(storage, Optional.empty(), "maven");
+        this(storage, Optional.empty(), "maven", SyncArtifactIndexer.NOOP);
     }
 
     /**
-     * Ctor with events.
+     * Legacy ctor — no synchronous index writer. Kept for callers that
+     * have not been updated yet; tests use this overload.
      * @param storage Storage
      * @param events Artifact events queue
      * @param rname Repository name
@@ -95,9 +105,26 @@ public final class UploadSlice implements Slice {
         final Optional<Queue<ArtifactEvent>> events,
         final String rname
     ) {
+        this(storage, events, rname, SyncArtifactIndexer.NOOP);
+    }
+
+    /**
+     * Ctor with synchronous index writer.
+     * @param storage Storage
+     * @param events Artifact events queue
+     * @param rname Repository name
+     * @param syncIndex Synchronous artifact-index writer
+     */
+    public UploadSlice(
+        final Storage storage,
+        final Optional<Queue<ArtifactEvent>> events,
+        final String rname,
+        final SyncArtifactIndexer syncIndex
+    ) {
         this.storage = storage;
         this.events = events;
         this.rname = rname;
+        this.syncIndex = syncIndex;
     }
 
     @Override
@@ -174,11 +201,9 @@ public final class UploadSlice implements Slice {
                         );
                     }
                 )
-            ).thenApply(
-                sha256 -> {
-                    this.addEvent(key, owner, size, sha256);
-                    return ResponseBuilder.created().build();
-                }
+            ).thenCompose(
+                sha256 -> this.addEvent(key, owner, size, sha256)
+                    .thenApply(ignored -> ResponseBuilder.created().build())
             ).exceptionally(
                 throwable -> {
                     EcsLogger.error("com.auto1.pantera.maven")
@@ -224,11 +249,9 @@ public final class UploadSlice implements Slice {
                     return CompletableFuture.<String>completedFuture(null);
                 }
             }
-        ).thenApply(
-            sha256 -> {
-                this.addEvent(key, owner, size, sha256);
-                return ResponseBuilder.created().build();
-            }
+        ).thenCompose(
+            sha256 -> this.addEvent(key, owner, size, sha256)
+                .thenApply(ignored -> ResponseBuilder.created().build())
         ).exceptionally(
             throwable -> {
                 EcsLogger.error("com.auto1.pantera.maven")
@@ -448,11 +471,9 @@ public final class UploadSlice implements Slice {
      * @param owner Owner
      * @param size Artifact size
      */
-    private void addEvent(final Key key, final String owner, final long size, final String sha256) {
-        if (this.events.isEmpty()) {
-            return;
-        }
-
+    private CompletableFuture<Void> addEvent(
+        final Key key, final String owner, final long size, final String sha256
+    ) {
         final String path = key.string().startsWith("/") ? key.string() : "/" + key.string();
 
         if (!this.isPrimaryArtifactPath(path)) {
@@ -462,12 +483,12 @@ public final class UploadSlice implements Slice {
                 .eventAction("event_creation")
                 .field("package.path", path)
                 .log();
-            return;
+            return CompletableFuture.completedFuture(null);
         }
 
         // pkg = "{groupId}/{artifactId}/{version}" (everything before the filename)
         final String pkg = path.substring(0, path.lastIndexOf('/'));
-        this.createAndAddEvent(pkg, owner, size, sha256);
+        return this.createAndAddEvent(pkg, owner, size, sha256);
     }
 
     /**
@@ -516,8 +537,9 @@ public final class UploadSlice implements Slice {
      * @param owner Owner
      * @param size Artifact size
      */
-    private void createAndAddEvent(final String pkg, final String owner, final long size,
-        final String sha256) {
+    private CompletableFuture<Void> createAndAddEvent(
+        final String pkg, final String owner, final long size, final String sha256
+    ) {
         // Extract version (last directory before the file)
         final String[] parts = pkg.split("/");
         final String version = parts.length > 0 ? parts[parts.length - 1] : "unknown";
@@ -533,7 +555,7 @@ public final class UploadSlice implements Slice {
         // Format artifact name as group.artifact (replacing / with .)
         final String artifactName = MavenSlice.EVENT_INFO.formatArtifactName(groupArtifact);
 
-        final ArtifactEvent event = new ArtifactEvent(
+        final ArtifactEvent base = new ArtifactEvent(
             "maven",
             this.rname,
             owner == null || owner.isBlank() ? ArtifactEvent.DEF_OWNER : owner,
@@ -543,9 +565,9 @@ public final class UploadSlice implements Slice {
             System.currentTimeMillis(),
             (Long) null  // No release date for uploads
         );
-        this.events.get().add(
-            sha256 == null ? event : event.withChecksum(sha256)
-        );
+        final ArtifactEvent event = sha256 == null ? base : base.withChecksum(sha256);
+        // Async path: queue for audit/metrics consumers (DbConsumer batches).
+        this.events.ifPresent(queue -> queue.add(event));
         EcsLogger.debug("com.auto1.pantera.maven")
             .message("Added artifact event")
             .eventCategory("web")
@@ -555,6 +577,9 @@ public final class UploadSlice implements Slice {
             .field("package.version", version)
             .field("package.size", size)
             .log();
+        // Sync path: write the index row inline so the next group lookup
+        // sees the artifact without waiting for the async batch.
+        return this.syncIndex.recordSync(event);
     }
 
     /**

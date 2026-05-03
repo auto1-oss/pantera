@@ -43,6 +43,17 @@ public final class HexSlice extends Slice.Wrap {
      */
     public HexSlice(final Storage storage, final Policy<?> policy, final Authentication users,
                     final Optional<Queue<ArtifactEvent>> events, final String name) {
+        this(storage, policy, users, events, name,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+    }
+
+    /**
+     * Ctor with synchronous artifact-index writer.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public HexSlice(final Storage storage, final Policy<?> policy, final Authentication users,
+                    final Optional<Queue<ArtifactEvent>> events, final String name,
+                    final com.auto1.pantera.index.SyncArtifactIndexer syncIndex) {
         super(new SliceRoute(
                 new RtRulePath(
                     new RtRule.All(
@@ -79,7 +90,7 @@ public final class HexSlice extends Slice.Wrap {
                         new RtRule.ByPath(UploadSlice.PUBLISH)
                     ),
                     new BasicAuthzSlice(
-                        new UploadSlice(storage, events, name),
+                        new UploadSlice(storage, events, name, syncIndex),
                         users,
                         new OperationControl(
                             policy, new AdapterBasicPermission(name, Action.Standard.WRITE)

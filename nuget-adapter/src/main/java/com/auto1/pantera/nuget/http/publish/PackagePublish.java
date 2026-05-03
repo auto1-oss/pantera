@@ -53,8 +53,11 @@ public final class PackagePublish implements Route {
      */
     private final Optional<Queue<ArtifactEvent>> events;
 
+    /** Synchronous artifact-index writer for read-after-write consistency. */
+    private final com.auto1.pantera.index.SyncArtifactIndexer syncIndex;
+
     /**
-     * Ctor.
+     * Legacy ctor (no synchronous index writer).
      *
      * @param repository Repository for adding package.
      * @param events Repository events queue
@@ -62,9 +65,24 @@ public final class PackagePublish implements Route {
      */
     public PackagePublish(final Repository repository, final Optional<Queue<ArtifactEvent>> events,
         final String name) {
+        this(repository, events, name, com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+    }
+
+    /**
+     * Ctor with synchronous index writer.
+     *
+     * @param repository Repository for adding package.
+     * @param events Repository events queue
+     * @param name Repository name
+     * @param syncIndex Synchronous artifact-index writer
+     */
+    public PackagePublish(final Repository repository, final Optional<Queue<ArtifactEvent>> events,
+        final String name,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex) {
         this.repository = repository;
         this.events = events;
         this.name = name;
+        this.syncIndex = syncIndex;
     }
 
     @Override
@@ -74,7 +92,7 @@ public final class PackagePublish implements Route {
 
     @Override
     public Resource resource(final String path) {
-        return new NewPackage(this.repository, this.events, this.name);
+        return new NewPackage(this.repository, this.events, this.name, this.syncIndex);
     }
 
     /**
@@ -98,18 +116,24 @@ public final class PackagePublish implements Route {
          */
         private final Optional<Queue<ArtifactEvent>> events;
 
+        /** Synchronous artifact-index writer. */
+        private final com.auto1.pantera.index.SyncArtifactIndexer syncIndex;
+
         /**
-         * Ctor.
+         * Ctor with synchronous index writer.
          *
          * @param repository Repository for adding package.
          * @param events Repository events
          * @param name Repository name
+         * @param syncIndex Synchronous artifact-index writer
          */
         public NewPackage(final Repository repository, final Optional<Queue<ArtifactEvent>> events,
-            final String name) {
+            final String name,
+            final com.auto1.pantera.index.SyncArtifactIndexer syncIndex) {
             this.repository = repository;
             this.events = events;
             this.name = name;
+            this.syncIndex = syncIndex;
         }
 
         @Override
@@ -121,22 +145,19 @@ public final class PackagePublish implements Route {
         public CompletableFuture<Response> put(Headers headers, Content body) {
             return CompletableFuture.supplyAsync(
                 () -> new Multipart(headers, body).first()
-            ).thenCompose(this.repository::add).handle(
-                (info, throwable) -> {
-                    if (throwable == null) {
-                        this.events.ifPresent(
-                            queue -> queue.add( // ok: unbounded ConcurrentLinkedDeque (ArtifactEvent queue)
-                                new ArtifactEvent(
-                                    PackagePublish.REPO_TYPE, this.name,
-                                    new Login(headers).getValue(), info.packageName(),
-                                    info.packageVersion(), info.zipSize()
-                                )
-                            )
-                        );
-                        return RsStatus.CREATED;
-                    }
-                    return toStatus(throwable.getCause());
+            ).thenCompose(this.repository::add).thenCompose(
+                info -> {
+                    final ArtifactEvent event = new ArtifactEvent(
+                        PackagePublish.REPO_TYPE, this.name,
+                        new Login(headers).getValue(), info.packageName(),
+                        info.packageVersion(), info.zipSize()
+                    );
+                    this.events.ifPresent(queue -> queue.add(event));
+                    return this.syncIndex.recordSync(event)
+                        .thenApply(ignored -> RsStatus.CREATED);
                 }
+            ).exceptionally(throwable ->
+                toStatus(throwable.getCause() == null ? throwable : throwable.getCause())
             ).thenApply(s -> ResponseBuilder.from(s).build());
         }
 

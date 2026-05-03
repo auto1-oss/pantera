@@ -51,6 +51,22 @@ public final class DebianSlice extends Slice.Wrap {
             final Config config,
             final Optional<Queue<ArtifactEvent>> events
     ) {
+        this(storage, policy, users, config, events,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+    }
+
+    /**
+     * Ctor with synchronous artifact-index writer.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public DebianSlice(
+            final Storage storage,
+            final Policy<?> policy,
+            final Authentication users,
+            final Config config,
+            final Optional<Queue<ArtifactEvent>> events,
+            final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
+    ) {
         super(
             new SliceRoute(
                 new RtRulePath(
@@ -69,7 +85,7 @@ public final class DebianSlice extends Slice.Wrap {
                         MethodRule.PUT, MethodRule.POST
                     ),
                     new BasicAuthzSlice(
-                        new ReleaseSlice(new UpdateSlice(storage, config, events), storage, config),
+                        new ReleaseSlice(new UpdateSlice(storage, config, events, syncIndex), storage, config),
                         users,
                         new OperationControl(
                             policy,

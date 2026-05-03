@@ -351,7 +351,8 @@ public final class ProxyDownloadSlice implements Slice {
         if (!ua.isEmpty()) {
             out.add(ua.getFirst(), true);
         } else {
-            out.add("User-Agent", "Pantera-Composer-Proxy");
+            out.add("User-Agent",
+                com.auto1.pantera.http.PanteraUserAgent.userAgentWithComponent("composer-proxy"));
         }
         out.add("Accept", "application/octet-stream, */*");
         return out;

@@ -88,17 +88,35 @@ public final class UploadSlice implements Slice {
      */
     private final String rname;
 
+    /** Synchronous artifact-index writer for read-after-write consistency. */
+    private final com.auto1.pantera.index.SyncArtifactIndexer syncIndex;
+
     /**
-     * Ctor.
+     * Legacy ctor (no synchronous index writer).
      * @param storage Repository storage.
      * @param events Artifact events
      * @param repoName Repository name
      */
     public UploadSlice(Storage storage, Optional<Queue<ArtifactEvent>> events,
                        String repoName) {
+        this(storage, events, repoName,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+    }
+
+    /**
+     * Ctor with synchronous index writer.
+     * @param storage Repository storage.
+     * @param events Artifact events
+     * @param repoName Repository name
+     * @param syncIndex Synchronous artifact-index writer
+     */
+    public UploadSlice(Storage storage, Optional<Queue<ArtifactEvent>> events,
+                       String repoName,
+                       com.auto1.pantera.index.SyncArtifactIndexer syncIndex) {
         this.storage = storage;
         this.events = events;
         this.rname = repoName;
+        this.syncIndex = syncIndex;
     }
 
     @Override
@@ -151,31 +169,28 @@ public final class UploadSlice implements Slice {
                             name, version, tarcontent
                         )
                     )
-                ).handle(
-                    (content, throwable) -> {
-                        final Response result;
-                        if (throwable == null) {
-                            result = ResponseBuilder.created()
+                ).thenCompose(
+                    content -> {
+                        final ArtifactEvent event = new ArtifactEvent(
+                            UploadSlice.REPO_TYPE, this.rname,
+                            new Login(headers).getValue(),
+                            name.get(), version.get(), tarcontent.get().length
+                        );
+                        this.events.ifPresent(queue -> queue.add(event));
+                        // Block on the index UPSERT before returning 201 so
+                        // the next group lookup sees the artifact.
+                        return this.syncIndex.recordSync(event).thenApply(ignored ->
+                            ResponseBuilder.created()
                                 .headers(new HexContentType(headers).fill())
                                 // todo https://github.com/pantera/pantera/issues/1435
                                 .header(new ContentLength(0))
-                                .build();
-                            this.events.ifPresent(
-                                queue -> queue.add( // ok: unbounded ConcurrentLinkedDeque (ArtifactEvent queue)
-                                    new ArtifactEvent(
-                                        UploadSlice.REPO_TYPE, this.rname,
-                                        new Login(headers).getValue(),
-                                        name.get(), version.get(), tarcontent.get().length
-                                    )
-                                )
-                            );
-                        } else {
-                            result = ResponseBuilder.internalError()
-                                .body(throwable.getMessage().getBytes())
-                                .build();
-                        }
-                        return result;
+                                .build()
+                        );
                     }
+                ).exceptionally(throwable ->
+                    ResponseBuilder.internalError()
+                        .body(throwable.getMessage().getBytes())
+                        .build()
                 ).toCompletableFuture();
         } else {
             res = ResponseBuilder.badRequest().completedFuture();

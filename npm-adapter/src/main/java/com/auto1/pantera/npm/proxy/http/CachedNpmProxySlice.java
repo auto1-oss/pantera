@@ -142,7 +142,7 @@ public final class CachedNpmProxySlice implements Slice {
         }
         final Key key = new KeyFromPath(path);
         // Check negative cache first (404s)
-        if (this.negativeCache.isNotFound(key)) {
+        if (this.negativeCache.isKnown404(this.negKey(path))) {
             return CompletableFuture.completedFuture(
                 ResponseBuilder.notFound().build()
             );
@@ -232,7 +232,7 @@ public final class CachedNpmProxySlice implements Slice {
             .thenApply(response -> {
                 final long duration = System.currentTimeMillis() - startTime;
                 if (response.status().code() == 404) {
-                    this.negativeCache.cacheNotFound(key);
+                    this.negativeCache.cacheNotFound(this.negKey(key.string()));
                     this.recordProxyMetric("not_found", duration);
                     return FetchSignal.NOT_FOUND;
                 }
@@ -351,5 +351,13 @@ public final class CachedNpmProxySlice implements Slice {
                 .error(ex)
                 .log();
         }
+    }
+
+    /**
+     * Build a structured negative-cache key for a request path.
+     */
+    private com.auto1.pantera.http.cache.NegativeCacheKey negKey(final String path) {
+        return com.auto1.pantera.http.cache.NegativeCacheKey.fromPath(
+            this.repoName, this.repoType, path);
     }
 }
