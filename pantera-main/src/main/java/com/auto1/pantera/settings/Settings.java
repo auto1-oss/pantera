@@ -173,6 +173,20 @@ public interface Settings extends AutoCloseable {
     }
 
     /**
+     * The L1 cache wrapping {@link #artifactIndex()}, when one is in play
+     * (i.e. when a real DB-backed index was constructed). Returned as
+     * {@link Optional} so callers — notably the sync upload indexer — can
+     * call {@link com.auto1.pantera.index.ArtifactIndexCache#invalidate} to
+     * drop a stale entry after a fresh write.
+     *
+     * @return Wrapping cache, or {@link Optional#empty()} when the index is
+     *     a NOP / no DB-backed index is configured.
+     */
+    default java.util.Optional<com.auto1.pantera.index.ArtifactIndexCache> artifactIndexCache() {
+        return java.util.Optional.empty();
+    }
+
+    /**
      * Optional Valkey connection for cache operations.
      * @return Valkey connection if configured
      */

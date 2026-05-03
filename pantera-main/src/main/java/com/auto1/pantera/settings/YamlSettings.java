@@ -48,6 +48,7 @@ import com.auto1.pantera.settings.cache.GuavaFiltersCache;
 import com.auto1.pantera.settings.cache.PublishingFiltersCache;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.index.ArtifactIndex;
+import com.auto1.pantera.index.ArtifactIndexCache;
 import com.auto1.pantera.index.DbArtifactIndex;
 import org.quartz.SchedulerException;
 
@@ -177,6 +178,14 @@ public final class YamlSettings implements Settings {
      * Artifact index (PostgreSQL-backed).
      */
     private final ArtifactIndex artifactIndex;
+
+    /**
+     * L1 cache wrapping {@link #artifactIndex}, present only when a real
+     * DB-backed index was constructed. Held separately so the sync upload
+     * indexer (B7) can reach in and call
+     * {@link ArtifactIndexCache#invalidate(String)} after a fresh write.
+     */
+    private final Optional<ArtifactIndexCache> artifactIndexCache;
 
     /**
      * Path to pantera.yaml config file.
@@ -334,16 +343,25 @@ public final class YamlSettings implements Settings {
         final boolean indexEnabled = indexConfig != null
             && "true".equals(indexConfig.string("enabled"));
         if (indexEnabled && this.artifactsDb.isPresent()) {
-            this.artifactIndex = new DbArtifactIndex(this.artifactsDb.get());
+            final ArtifactIndexCache cached = new ArtifactIndexCache(
+                new DbArtifactIndex(this.artifactsDb.get())
+            );
+            this.artifactIndex = cached;
+            this.artifactIndexCache = Optional.of(cached);
         } else if (indexEnabled) {
             throw new IllegalStateException(
                 "artifact_index.enabled=true requires artifacts_database to be configured"
             );
         } else if (this.artifactsDb.isPresent()) {
             // Auto-enable DB-backed index when database is configured
-            this.artifactIndex = new DbArtifactIndex(this.artifactsDb.get());
+            final ArtifactIndexCache cached = new ArtifactIndexCache(
+                new DbArtifactIndex(this.artifactsDb.get())
+            );
+            this.artifactIndex = cached;
+            this.artifactIndexCache = Optional.of(cached);
         } else {
             this.artifactIndex = ArtifactIndex.NOP;
+            this.artifactIndexCache = Optional.empty();
         }
         // Use the dedicated write pool for DbConsumer when provided;
         // fall back to the shared pool so single-pool deployments work unchanged.
@@ -473,6 +491,11 @@ public final class YamlSettings implements Settings {
     @Override
     public ArtifactIndex artifactIndex() {
         return this.artifactIndex;
+    }
+
+    @Override
+    public Optional<ArtifactIndexCache> artifactIndexCache() {
+        return this.artifactIndexCache;
     }
 
     @Override
