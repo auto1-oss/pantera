@@ -918,6 +918,9 @@ public final class GroupResolver implements Slice {
         final Content body,
         final boolean isTargetedLocalRead
     ) {
+        if (this.strategy == MembersStrategy.SEQUENTIAL) {
+            return querySequentially(targeted, line, headers, body, isTargetedLocalRead);
+        }
         return body.asBytesFuture().thenCompose(requestBytes -> {
             final CompletableFuture<Response> result = new CompletableFuture<>();
             final AtomicBoolean completed = new AtomicBoolean(false);
@@ -964,6 +967,99 @@ public final class GroupResolver implements Slice {
             });
 
             return result;
+        });
+    }
+
+    /**
+     * Sequential member walk: try each member in declared order, return the
+     * first 2xx (or 403, which is authoritative); 404 -> continue; 5xx /
+     * other failures -> record on the member's circuit and continue.
+     * Open-circuit members are skipped without an upstream call. Mirrors
+     * Nexus / JFrog group-resolution semantics. When every member exhausts:
+     * return 502 if any 5xx was observed, else 404.
+     *
+     * @param targeted             Members in declared YAML order.
+     * @param line                 Request line forwarded to {@link
+     *                             #queryMemberDirect}.
+     * @param headers              Request headers.
+     * @param body                 Request body (buffered once into a byte[]
+     *                             so it can be replayed to each member).
+     * @param isTargetedLocalRead  When true, open-circuit gating is bypassed
+     *                             (mirrors the parallel path's behaviour for
+     *                             local-read fallbacks).
+     */
+    @SuppressWarnings("PMD.CognitiveComplexity")
+    private CompletableFuture<Response> querySequentially(
+        final List<MemberSlice> targeted,
+        final RequestLine line,
+        final Headers headers,
+        final Content body,
+        final boolean isTargetedLocalRead
+    ) {
+        return body.asBytesFuture().thenCompose(requestBytes -> {
+            final CompletableFuture<Response> result = new CompletableFuture<>();
+            final java.util.concurrent.atomic.AtomicBoolean anyServerError =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
+            tryNextSequentialMember(
+                targeted.iterator(), line, headers, requestBytes,
+                isTargetedLocalRead, anyServerError, result
+            );
+            return result;
+        });
+    }
+
+    private void tryNextSequentialMember(
+        final java.util.Iterator<MemberSlice> iter,
+        final RequestLine line,
+        final Headers headers,
+        final byte[] requestBytes,
+        final boolean isTargetedLocalRead,
+        final java.util.concurrent.atomic.AtomicBoolean anyServerError,
+        final CompletableFuture<Response> result
+    ) {
+        if (!iter.hasNext()) {
+            if (anyServerError.get()) {
+                result.complete(ResponseBuilder.from(RsStatus.BAD_GATEWAY).build());
+            } else {
+                result.complete(ResponseBuilder.notFound().build());
+            }
+            return;
+        }
+        final MemberSlice member = iter.next();
+        if (!isTargetedLocalRead && member.isCircuitOpen()) {
+            tryNextSequentialMember(iter, line, headers, requestBytes,
+                isTargetedLocalRead, anyServerError, result);
+            return;
+        }
+        queryMemberDirect(member, line, headers, requestBytes).whenComplete((resp, err) -> {
+            if (err != null) {
+                if (!(err instanceof java.util.concurrent.CancellationException)) {
+                    member.recordFailure();
+                    anyServerError.set(true);
+                }
+                tryNextSequentialMember(iter, line, headers, requestBytes,
+                    isTargetedLocalRead, anyServerError, result);
+                return;
+            }
+            final RsStatus status = resp.status();
+            if (status == RsStatus.OK || status == RsStatus.PARTIAL_CONTENT
+                || status == RsStatus.NOT_MODIFIED || status == RsStatus.FORBIDDEN) {
+                member.recordSuccess();
+                result.complete(resp);
+                return;
+            }
+            if (status == RsStatus.NOT_FOUND) {
+                drainBody(member.name(), resp.body());
+                tryNextSequentialMember(iter, line, headers, requestBytes,
+                    isTargetedLocalRead, anyServerError, result);
+                return;
+            }
+            // Other 4xx or any 5xx -> record failure, cascade.
+            drainBody(member.name(), resp.body());
+            member.recordFailure();
+            anyServerError.set(true);
+            tryNextSequentialMember(iter, line, headers, requestBytes,
+                isTargetedLocalRead, anyServerError, result);
         });
     }
 
