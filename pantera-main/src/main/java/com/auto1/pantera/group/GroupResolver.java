@@ -744,13 +744,21 @@ public final class GroupResolver implements Slice {
     ) {
         return body.asBytesFuture().thenCompose(requestBytes -> {
             if (this.strategy == MembersStrategy.SEQUENTIAL) {
-                // Sequential walk over proxy members. On all-404 we still need to
-                // populate the negative cache (the parallel path does this in
-                // completeProxyIfAllExhausted via the outcomes list). Replicate
-                // the minimal contract here: 404 => cacheNotFound(negCacheKey)
-                // + return 404; everything else passes through unchanged.
                 return querySequentially(fanoutMembers, line, headers, body, false)
                     .thenApply(resp -> {
+                        if (resp.status().serverError()) {
+                            // Mirror parallel completeProxyIfAllExhausted's PATH B:
+                            // any 5xx in the sequential walk -> AllProxiesFailed
+                            // wrapped through FaultTranslator so the X-Pantera-Fault
+                            // header lands. querySequentially does not carry per-
+                            // member outcomes through; pass an empty outcomes list
+                            // so FaultTranslator picks no winning failure (the
+                            // synthesized 502 response stays as the body).
+                            final Fault.AllProxiesFailed fault = new Fault.AllProxiesFailed(
+                                this.group, java.util.List.of(), java.util.Optional.empty()
+                            );
+                            return FaultTranslator.translate(fault, null);
+                        }
                         if (resp.status() == RsStatus.NOT_FOUND) {
                             this.negativeCache.cacheNotFound(negCacheKey);
                         }
