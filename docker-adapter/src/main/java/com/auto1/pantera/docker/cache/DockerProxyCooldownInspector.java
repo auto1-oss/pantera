@@ -21,6 +21,13 @@ import java.util.concurrent.CompletableFuture;
  */
 public final class DockerProxyCooldownInspector implements CooldownInspector {
 
+    @FunctionalInterface
+    public interface ReleaseDateCallback {
+        void onRelease(String artifact, String version, Instant release);
+    }
+
+    private volatile ReleaseDateCallback releaseDateCallback;
+
     /**
      * Bounded cache of image release dates.
      * Max 10,000 entries, expire after 24 hours.
@@ -87,12 +94,24 @@ public final class DockerProxyCooldownInspector implements CooldownInspector {
         digest.ifPresent(value -> this.digestOwners.put(digestKey(repoName, value), owner));
     }
 
+    public void setReleaseDateCallback(final ReleaseDateCallback callback) {
+        this.releaseDateCallback = callback;
+    }
+
     public void recordRelease(final String artifact, final String version, final Instant release) {
         final String key = key(artifact, version);
         if (this.seen.getIfPresent(key) == null) {
             this.seen.put(key, Boolean.TRUE);
         }
         this.releases.put(key, release);
+        final ReleaseDateCallback cb = this.releaseDateCallback;
+        if (cb != null) {
+            try {
+                cb.onRelease(artifact, version, release);
+            } catch (final Exception ignored) {
+                // persistence failure must not break the hot path
+            }
+        }
     }
 
     public Optional<String> ownerFor(final String repoName, final String digest) {

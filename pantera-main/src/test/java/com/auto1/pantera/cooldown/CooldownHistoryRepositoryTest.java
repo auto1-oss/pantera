@@ -475,7 +475,7 @@ final class CooldownHistoryRepositoryTest {
         final DbBlockRecord rec = this.repository.insertBlock(
             repoType, repoName, artifact, version,
             reason, blockedAt, blockedUntil, blockedBy,
-            Optional.empty()
+            Optional.empty(), Optional.empty()
         );
         return rec.id();
     }

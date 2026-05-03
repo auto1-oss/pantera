@@ -28,6 +28,7 @@ import java.util.Optional;
  * @param blockedAt Instant the block was created.
  * @param blockedUntil Instant the block was scheduled to expire.
  * @param installedBy Optional actor that initiated install.
+ * @param releaseDate Optional instant the artifact was published upstream.
  * @param archivedAt Instant the row was archived.
  * @param archiveReason Reason the block was archived.
  * @param archivedBy Actor that archived the row.
@@ -45,6 +46,7 @@ public record DbHistoryRecord(
     Instant blockedAt,
     Instant blockedUntil,
     Optional<String> installedBy,
+    Optional<Instant> releaseDate,
     Instant archivedAt,
     ArchiveReason archiveReason,
     String archivedBy

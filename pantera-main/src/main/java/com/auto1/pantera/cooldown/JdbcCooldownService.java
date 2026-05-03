@@ -612,9 +612,12 @@ final class JdbcCooldownService implements CooldownService {
         final CooldownRequest request,
         final CooldownInspector inspector
     ) {
-        // Async fetch release date with timeout to prevent hanging
+        // Async fetch release date with timeout to prevent hanging.
+        // Budget is slightly larger than the per-source HTTP timeout so the
+        // source's own timeout fires (populating its negative cache) rather
+        // than the parent cancelling first and leaving the source dangling.
         return inspector.releaseDate(request.artifact(), request.version())
-            .orTimeout(2, java.util.concurrent.TimeUnit.SECONDS)
+            .orTimeout(1_700, java.util.concurrent.TimeUnit.MILLISECONDS)
             .exceptionally(error -> {
                 EcsLogger.warn("com.auto1.pantera.cooldown")
                     .message("Failed to fetch release date (allowing)")
@@ -628,7 +631,7 @@ final class JdbcCooldownService implements CooldownService {
                 return Optional.empty();
             })
             .thenCompose(release -> {
-                return this.shouldBlockNewArtifact(request, inspector, release);
+                    return this.shouldBlockNewArtifact(request, inspector, release);
             });
     }
 
@@ -692,7 +695,7 @@ final class JdbcCooldownService implements CooldownService {
                 .field("package.release_date", date.toString())
                 .log();
             // Create block in database (async)
-            return this.createBlockInDatabase(request, CooldownReason.FRESH_RELEASE, until)
+            return this.createBlockInDatabase(request, CooldownReason.FRESH_RELEASE, until, release)
                 .thenApply(success -> {
                     // Cache as blocked with dynamic TTL (until block expires)
                     this.cache.putBlocked(request.repoName(), request.artifact(),
@@ -740,7 +743,8 @@ final class JdbcCooldownService implements CooldownService {
     private CompletableFuture<Boolean> createBlockInDatabase(
         final CooldownRequest request,
         final CooldownReason reason,
-        final Instant blockedUntil
+        final Instant blockedUntil,
+        final Optional<Instant> releaseDate
     ) {
         return CompletableFuture.supplyAsync(() -> {
             final Instant now = request.requestedAt();
@@ -756,7 +760,8 @@ final class JdbcCooldownService implements CooldownService {
                 now,
                 blockedUntil,
                 SYSTEM_ACTOR,
-                installedBy
+                installedBy,
+                releaseDate
             );
             return true;
         }, this.executor).thenApply(result -> {

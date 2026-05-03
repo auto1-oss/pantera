@@ -418,7 +418,7 @@ final class JdbcCooldownServiceTest {
             "maven-proxy", "central", "com.expire.me", "1.0.0",
             CooldownReason.FRESH_RELEASE,
             pastBlockedAt, pastBlockedUntil, "system",
-            Optional.empty()
+            Optional.empty(), Optional.empty()
         );
         // Trigger the expire path: evaluate() -> checkExistingBlockWithTimestamp()
         // sees blocked_until < now and calls expire().
@@ -466,7 +466,7 @@ final class JdbcCooldownServiceTest {
             "npm-proxy", "npm", "left-pad", "1.1.0",
             CooldownReason.FRESH_RELEASE,
             now, now.plus(Duration.ofHours(72)), "system",
-            Optional.empty()
+            Optional.empty(), Optional.empty()
         );
         this.service.unblock("npm-proxy", "npm", "left-pad", "1.1.0", "alice").join();
         MatcherAssert.assertThat(
@@ -501,13 +501,13 @@ final class JdbcCooldownServiceTest {
             this.repository.insertBlock(
                 "npm-proxy", "npm", "pkg" + i, "1.0." + i,
                 CooldownReason.FRESH_RELEASE,
-                now, until, "system", Optional.empty()
+                now, until, "system", Optional.empty(), Optional.empty()
             );
         }
         this.repository.insertBlock(
             "npm-proxy", "other-repo", "keep-me", "9.9.9",
             CooldownReason.FRESH_RELEASE,
-            now, until, "system", Optional.empty()
+            now, until, "system", Optional.empty(), Optional.empty()
         );
         this.service.unblockAll("npm-proxy", "npm", "alice").join();
         MatcherAssert.assertThat(
@@ -660,7 +660,7 @@ final class JdbcCooldownServiceTest {
             "npm-proxy", "npm", "envelope-pkg", "2.0.0",
             CooldownReason.FRESH_RELEASE,
             now, now.plus(Duration.ofHours(72)), "system",
-            Optional.empty()
+            Optional.empty(), Optional.empty()
         );
         final TrackingCache trackingCache = new TrackingCache();
         this.service.setEnvelopeInvalidator(trackingCache);
@@ -681,7 +681,7 @@ final class JdbcCooldownServiceTest {
             "npm-proxy", "npm", "another-pkg", "3.0.0",
             CooldownReason.FRESH_RELEASE,
             now, now.plus(Duration.ofHours(72)), "system",
-            Optional.empty()
+            Optional.empty(), Optional.empty()
         );
         this.service.unblockAll("npm-proxy", "npm", "alice").join();
         MatcherAssert.assertThat(

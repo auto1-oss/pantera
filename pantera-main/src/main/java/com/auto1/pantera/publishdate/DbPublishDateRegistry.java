@@ -45,6 +45,34 @@ public final class DbPublishDateRegistry implements PublishDateRegistry {
     private final DataSource ds;
     private final Map<String, PublishDateSource> sourcesByRepoType;
     private final Cache<CacheKey, Instant> l1;
+    /**
+     * Short-TTL cache of recent fetch failures. Avoids hammering a slow or
+     * unreachable upstream registry once we know it's not answering for a
+     * given (repoType, name, version). Sentinel-only: presence means "we
+     * just tried and failed, don't try again for {@link #NEGATIVE_TTL}".
+     */
+    private final Cache<CacheKey, Boolean> negativeL1;
+    private static final java.time.Duration NEGATIVE_TTL = java.time.Duration.ofSeconds(60);
+
+    /**
+     * In-flight upstream lookups, keyed by {@link CacheKey}. Coalesces
+     * concurrent {@link #publishDate} calls for the same key into one
+     * upstream HTTP request: the first caller starts the fetch, subsequent
+     * callers attach to the same future.
+     *
+     * <p>Without this, a {@code go get} fanout that probes the same module
+     * version from multiple goroutines (transitive resolution probes parent
+     * paths and version aliases) fires N redundant requests to
+     * proxy.golang.org. The upstream throttles at ~100 concurrent and our
+     * own per-request timeout (1500ms) fires before any of them complete —
+     * everything fails open and we never populate the L1/L2 cache.
+     *
+     * <p>Entries are removed from this map on completion (success or
+     * failure) so memory cannot grow unbounded.
+     */
+    private final java.util.concurrent.ConcurrentMap<CacheKey,
+        CompletableFuture<Optional<Instant>>> inFlight =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     public DbPublishDateRegistry(
         final DataSource ds,
@@ -54,6 +82,11 @@ public final class DbPublishDateRegistry implements PublishDateRegistry {
         this.sourcesByRepoType = Map.copyOf(sourcesByRepoType);
         this.l1 = Caffeine.newBuilder()
             .maximumSize(100_000)
+            .recordStats()
+            .build();
+        this.negativeL1 = Caffeine.newBuilder()
+            .maximumSize(50_000)
+            .expireAfterWrite(NEGATIVE_TTL)
             .recordStats()
             .build();
     }
@@ -69,6 +102,13 @@ public final class DbPublishDateRegistry implements PublishDateRegistry {
             recordOutcome(repoType, "l1_hit", startNanos);
             return CompletableFuture.completedFuture(Optional.of(l1hit));
         }
+        // Recent fetch failure within negative TTL — short-circuit, don't
+        // retry the upstream fetch. Lets cooldown fail-open instantly when
+        // the registry is degraded and avoids retry storms.
+        if (this.negativeL1.getIfPresent(key) != null) {
+            recordOutcome(repoType, "negative_hit", startNanos);
+            return CompletableFuture.completedFuture(Optional.empty());
+        }
         return CompletableFuture.supplyAsync(() -> readDb(key))
             .thenCompose(dbHit -> {
                 if (dbHit.isPresent()) {
@@ -81,33 +121,72 @@ public final class DbPublishDateRegistry implements PublishDateRegistry {
                     recordOutcome(repoType, "source_miss", startNanos);
                     return CompletableFuture.completedFuture(Optional.<Instant>empty());
                 }
-                return src.fetch(name, version)
-                    .thenApply(opt -> {
-                        if (opt.isPresent()) {
-                            writeDb(key, opt.get(), src.sourceId());
-                            this.l1.put(key, opt.get());
-                            recordOutcome(repoType, "source_hit", startNanos);
-                        } else {
-                            recordOutcome(repoType, "source_miss", startNanos);
-                        }
-                        return opt;
-                    })
-                    .exceptionally(err -> {
-                        recordOutcome(repoType, "source_error", startNanos);
-                        EcsLogger.warn("com.auto1.pantera.publishdate")
-                            .message("Source fetch failed for "
-                                + repoType + " " + name + "@" + version)
-                            .eventCategory("network")
-                            .eventAction("publish_date_fetch")
-                            .eventOutcome("failure")
-                            .field("repository.type", repoType)
-                            .field("package.name", name)
-                            .field("package.version", version)
-                            .error(err)
-                            .log();
-                        return Optional.empty();
-                    });
+                return coalescedFetch(key, src, name, version, repoType, startNanos);
             });
+    }
+
+    /**
+     * Issue one upstream fetch per (repoType, name, version) at a time.
+     * Subsequent concurrent callers receive the in-flight future, avoiding
+     * redundant HTTP calls that would otherwise trigger upstream rate-limits
+     * during high-fanout dependency resolution.
+     *
+     * <p>Uses {@code putIfAbsent} (not {@code computeIfAbsent}) because the
+     * cleanup callback removes the same entry — that would be a "recursive
+     * update" inside {@code computeIfAbsent} and ConcurrentHashMap rejects
+     * those at runtime.
+     */
+    private CompletableFuture<Optional<Instant>> coalescedFetch(
+        final CacheKey key, final PublishDateSource src,
+        final String name, final String version,
+        final String repoType, final long startNanos
+    ) {
+        final CompletableFuture<Optional<Instant>> ours = new CompletableFuture<>();
+        final CompletableFuture<Optional<Instant>> existing =
+            this.inFlight.putIfAbsent(key, ours);
+        if (existing != null) {
+            return existing;
+        }
+        // We won the slot — fire the actual fetch and pipe the outcome
+        // into `ours`. The in-flight map entry is cleared on completion
+        // (success, miss, or exception) so future callers re-fetch.
+        src.fetch(name, version)
+            .thenApply(opt -> {
+                if (opt.isPresent()) {
+                    writeDb(key, opt.get(), src.sourceId());
+                    this.l1.put(key, opt.get());
+                    recordOutcome(repoType, "source_hit", startNanos);
+                } else {
+                    this.negativeL1.put(key, Boolean.TRUE);
+                    recordOutcome(repoType, "source_miss", startNanos);
+                }
+                return opt;
+            })
+            .exceptionally(err -> {
+                this.negativeL1.put(key, Boolean.TRUE);
+                recordOutcome(repoType, "source_error", startNanos);
+                EcsLogger.warn("com.auto1.pantera.publishdate")
+                    .message("Source fetch failed for "
+                        + repoType + " " + name + "@" + version)
+                    .eventCategory("network")
+                    .eventAction("publish_date_fetch")
+                    .eventOutcome("failure")
+                    .field("repository.type", repoType)
+                    .field("package.name", name)
+                    .field("package.version", version)
+                    .error(err)
+                    .log();
+                return Optional.<Instant>empty();
+            })
+            .whenComplete((opt, err) -> {
+                this.inFlight.remove(key);
+                if (err != null) {
+                    ours.completeExceptionally(err);
+                } else {
+                    ours.complete(opt);
+                }
+            });
+        return ours;
     }
 
     private static void recordOutcome(final String repoType, final String outcome, final long startNanos) {
@@ -158,6 +237,16 @@ public final class DbPublishDateRegistry implements PublishDateRegistry {
                 .error(ex)
                 .log();
         }
+    }
+
+    public void persist(
+        final String repoType, final String name, final String version,
+        final Instant when, final String source
+    ) {
+        final CacheKey key = new CacheKey(repoType, name, version);
+        this.l1.put(key, when);
+        this.negativeL1.invalidate(key);
+        writeDb(key, when, source);
     }
 
     private record CacheKey(String repoType, String name, String version) { }

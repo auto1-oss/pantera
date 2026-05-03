@@ -43,7 +43,7 @@ public final class CooldownRepository {
     ) {
         final String sql =
             "SELECT id, repo_type, repo_name, artifact, version, reason, status, blocked_by, "
-                + "blocked_at, blocked_until, unblocked_at, unblocked_by, installed_by "
+                + "blocked_at, blocked_until, unblocked_at, unblocked_by, installed_by, release_date "
                 + "FROM artifact_cooldowns WHERE repo_type = ? AND repo_name = ? "
                 + "AND artifact = ? AND version = ?";
         try (Connection conn = this.dataSource.getConnection();
@@ -72,12 +72,13 @@ public final class CooldownRepository {
         final Instant blockedAt,
         final Instant blockedUntil,
         final String blockedBy,
-        final Optional<String> installedBy
+        final Optional<String> installedBy,
+        final Optional<Instant> releaseDate
     ) {
         final String sql =
             "INSERT INTO artifact_cooldowns(" +
-                "repo_type, repo_name, artifact, version, reason, status, blocked_by, blocked_at, blocked_until, installed_by"
-                + ") VALUES (?,?,?,?,?,?,?,?,?,?)";
+                "repo_type, repo_name, artifact, version, reason, status, blocked_by, blocked_at, blocked_until, installed_by, release_date"
+                + ") VALUES (?,?,?,?,?,?,?,?,?,?,?)";
         try (Connection conn = this.dataSource.getConnection();
             PreparedStatement stmt = conn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
             stmt.setString(1, repoType);
@@ -93,6 +94,11 @@ public final class CooldownRepository {
                 stmt.setString(10, installedBy.get());
             } else {
                 stmt.setNull(10, java.sql.Types.VARCHAR);
+            }
+            if (releaseDate.isPresent()) {
+                stmt.setLong(11, releaseDate.get().toEpochMilli());
+            } else {
+                stmt.setNull(11, java.sql.Types.BIGINT);
             }
             stmt.executeUpdate();
             try (ResultSet keys = stmt.getGeneratedKeys()) {
@@ -111,7 +117,8 @@ public final class CooldownRepository {
                         blockedUntil,
                         Optional.empty(),
                         Optional.empty(),
-                        installedBy
+                        installedBy,
+                        releaseDate
                     );
                 }
                 throw new IllegalStateException("No id returned for cooldown block");
@@ -143,10 +150,10 @@ public final class CooldownRepository {
             + "INSERT INTO artifact_cooldowns_history ("
             + "original_id, repo_type, repo_name, artifact, version, "
             + "reason, blocked_by, blocked_at, blocked_until, "
-            + "installed_by, archived_at, archive_reason, archived_by"
+            + "installed_by, release_date, archived_at, archive_reason, archived_by"
             + ") SELECT c.id, c.repo_type, c.repo_name, c.artifact, c.version, "
             + "c.reason, c.blocked_by, c.blocked_at, c.blocked_until, "
-            + "c.installed_by, ?, ?, ? "
+            + "c.installed_by, c.release_date, ?, ?, ? "
             + "FROM artifact_cooldowns c JOIN victims v ON v.id = c.id "
             + "RETURNING original_id) "
             + "DELETE FROM artifact_cooldowns c USING archived a "
@@ -184,10 +191,10 @@ public final class CooldownRepository {
             + "INSERT INTO artifact_cooldowns_history ("
             + "original_id, repo_type, repo_name, artifact, version, "
             + "reason, blocked_by, blocked_at, blocked_until, "
-            + "installed_by, archived_at, archive_reason, archived_by"
+            + "installed_by, release_date, archived_at, archive_reason, archived_by"
             + ") SELECT c.id, c.repo_type, c.repo_name, c.artifact, c.version, "
             + "c.reason, c.blocked_by, c.blocked_at, c.blocked_until, "
-            + "c.installed_by, ?, ?, ? "
+            + "c.installed_by, c.release_date, ?, ?, ? "
             + "FROM artifact_cooldowns c JOIN victims v ON v.id = c.id "
             + "RETURNING original_id) "
             + "DELETE FROM artifact_cooldowns c USING archived a "
@@ -221,10 +228,10 @@ public final class CooldownRepository {
             + "INSERT INTO artifact_cooldowns_history ("
             + "original_id, repo_type, repo_name, artifact, version, "
             + "reason, blocked_by, blocked_at, blocked_until, "
-            + "installed_by, archived_at, archive_reason, archived_by"
+            + "installed_by, release_date, archived_at, archive_reason, archived_by"
             + ") SELECT c.id, c.repo_type, c.repo_name, c.artifact, c.version, "
             + "c.reason, c.blocked_by, c.blocked_at, c.blocked_until, "
-            + "c.installed_by, ?, ?, ? "
+            + "c.installed_by, c.release_date, ?, ?, ? "
             + "FROM artifact_cooldowns c JOIN victims v ON v.id = c.id "
             + "RETURNING original_id) "
             + "DELETE FROM artifact_cooldowns c USING archived a "
@@ -244,7 +251,7 @@ public final class CooldownRepository {
     List<DbBlockRecord> findActiveForRepo(final String repoType, final String repoName) {
         final String sql =
             "SELECT id, repo_type, repo_name, artifact, version, reason, status, blocked_by, "
-                + "blocked_at, blocked_until, unblocked_at, unblocked_by, installed_by "
+                + "blocked_at, blocked_until, unblocked_at, unblocked_by, installed_by, release_date "
                 + "FROM artifact_cooldowns WHERE repo_type = ? AND repo_name = ? AND status = ?";
         try (Connection conn = this.dataSource.getConnection();
             PreparedStatement stmt = conn.prepareStatement(sql)) {
@@ -429,7 +436,7 @@ public final class CooldownRepository {
      */
     private static final java.util.Set<String> SORTABLE_COLS = java.util.Set.of(
         "artifact", "version", "repo_name", "repo_type", "reason",
-        "blocked_until", "blocked_at"
+        "blocked_until", "blocked_at", "release_date"
     );
 
     /**
@@ -451,8 +458,8 @@ public final class CooldownRepository {
         final String dir = sortAsc ? "ASC" : "DESC";
         final String orderBy = " ORDER BY " + col + " " + dir;
         final String base = "SELECT id, repo_type, repo_name, artifact, version, reason, status,"
-            + " blocked_by, blocked_at, blocked_until, unblocked_at, unblocked_by, installed_by"
-            + " FROM artifact_cooldowns WHERE status = ?";
+            + " blocked_by, blocked_at, blocked_until, unblocked_at, unblocked_by, installed_by,"
+            + " release_date FROM artifact_cooldowns WHERE status = ?";
         final String sql;
         if (hasSearch) {
             sql = base + " AND (artifact ILIKE ? OR repo_name ILIKE ? OR version ILIKE ?)"
@@ -594,23 +601,28 @@ public final class CooldownRepository {
         "repo_type",     "repo_type",
         "reason",        "reason",
         "blocked_until", "blocked_until",
-        "blocked_at",    "blocked_at"
+        "blocked_at",    "blocked_at",
+        "release_date",  "release_date"
     );
 
     /**
      * Allowed sort columns for findHistoryPaginated (allowlist).
      */
-    private static final Map<String, String> HISTORY_SORT_COL_MAP = Map.of(
-        "artifact",       "artifact",
-        "version",        "version",
-        "repo_name",      "repo_name",
-        "repo_type",      "repo_type",
-        "reason",         "reason",
-        "archived_at",    "archived_at",
-        "archive_reason", "archive_reason",
-        "blocked_at",     "blocked_at",
-        "blocked_until",  "blocked_until"
-    );
+    private static final Map<String, String> HISTORY_SORT_COL_MAP;
+    static {
+        final Map<String, String> m = new java.util.HashMap<>();
+        m.put("artifact", "artifact");
+        m.put("version", "version");
+        m.put("repo_name", "repo_name");
+        m.put("repo_type", "repo_type");
+        m.put("reason", "reason");
+        m.put("archived_at", "archived_at");
+        m.put("archive_reason", "archive_reason");
+        m.put("blocked_at", "blocked_at");
+        m.put("blocked_until", "blocked_until");
+        m.put("release_date", "release_date");
+        HISTORY_SORT_COL_MAP = Collections.unmodifiableMap(m);
+    }
 
     /**
      * SELECT list used by the legacy {@link #readRecord(ResultSet)} mapper.
@@ -620,11 +632,11 @@ public final class CooldownRepository {
     private static final String ACTIVE_SELECT_COLS =
         "SELECT id, repo_type, repo_name, artifact, version, reason, status, "
             + "blocked_by, blocked_at, blocked_until, unblocked_at, unblocked_by, "
-            + "installed_by FROM artifact_cooldowns";
+            + "installed_by, release_date FROM artifact_cooldowns";
 
     private static final String HISTORY_SELECT_COLS =
         "SELECT id, original_id, repo_type, repo_name, artifact, version, reason, "
-            + "blocked_by, blocked_at, blocked_until, installed_by, archived_at, "
+            + "blocked_by, blocked_at, blocked_until, installed_by, release_date, archived_at, "
             + "archive_reason, archived_by FROM artifact_cooldowns_history";
 
     /**
@@ -648,10 +660,10 @@ public final class CooldownRepository {
         final String archiveSql = "INSERT INTO artifact_cooldowns_history ("
             + "original_id, repo_type, repo_name, artifact, version, "
             + "reason, blocked_by, blocked_at, blocked_until, "
-            + "installed_by, archived_at, archive_reason, archived_by"
+            + "installed_by, release_date, archived_at, archive_reason, archived_by"
             + ") SELECT id, repo_type, repo_name, artifact, version, "
             + "reason, blocked_by, blocked_at, blocked_until, "
-            + "installed_by, ?, ?, ? "
+            + "installed_by, release_date, ?, ?, ? "
             + "FROM artifact_cooldowns WHERE id = ?";
         final String deleteSql = "DELETE FROM artifact_cooldowns WHERE id = ?";
         try (Connection conn = this.dataSource.getConnection()) {
@@ -815,10 +827,10 @@ public final class CooldownRepository {
             + "INSERT INTO artifact_cooldowns_history ("
             + "original_id, repo_type, repo_name, artifact, version, "
             + "reason, blocked_by, blocked_at, blocked_until, "
-            + "installed_by, archived_at, archive_reason, archived_by"
+            + "installed_by, release_date, archived_at, archive_reason, archived_by"
             + ") SELECT c.id, c.repo_type, c.repo_name, c.artifact, c.version, "
             + "c.reason, c.blocked_by, c.blocked_at, c.blocked_until, "
-            + "c.installed_by, ?, 'EXPIRED', 'system' "
+            + "c.installed_by, c.release_date, ?, 'EXPIRED', 'system' "
             + "FROM artifact_cooldowns c JOIN victims v ON v.id = c.id "
             + "RETURNING original_id) "
             + "DELETE FROM artifact_cooldowns c USING archived a "
@@ -857,6 +869,31 @@ public final class CooldownRepository {
             return stmt.executeUpdate();
         } catch (final SQLException err) {
             throw new IllegalStateException("Failed to purge history", err);
+        }
+    }
+
+    /**
+     * Purge rows from {@code artifact_publish_dates} whose {@code fetched_at}
+     * is older than the given cutoff, up to the given limit. Publish dates are
+     * an L2 cache — the upstream registry is the source of truth, so stale
+     * rows can be safely dropped and re-fetched on demand.
+     * @param cutoff Cutoff instant — fetched_at strictly before is purged.
+     * @param limit Maximum rows to delete per batch.
+     * @return Number of rows deleted.
+     */
+    public int purgePublishDatesOlderThan(final Instant cutoff, final int limit) {
+        final String sql = "DELETE FROM artifact_publish_dates "
+            + "WHERE ctid IN ("
+            + "SELECT ctid FROM artifact_publish_dates "
+            + "WHERE fetched_at < ? "
+            + "ORDER BY fetched_at LIMIT ?)";
+        try (Connection conn = this.dataSource.getConnection();
+            PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setTimestamp(1, java.sql.Timestamp.from(cutoff));
+            stmt.setInt(2, limit);
+            return stmt.executeUpdate();
+        } catch (final SQLException err) {
+            throw new IllegalStateException("Failed to purge publish dates", err);
         }
     }
 
@@ -1016,6 +1053,10 @@ public final class CooldownRepository {
 
     private static DbHistoryRecord mapHistoryRow(final ResultSet rs) throws SQLException {
         final String installedBy = rs.getString("installed_by");
+        final long relDateRaw = rs.getLong("release_date");
+        final Optional<Instant> releaseDate = rs.wasNull()
+            ? Optional.empty()
+            : Optional.of(Instant.ofEpochMilli(relDateRaw));
         return new DbHistoryRecord(
             rs.getLong("id"),
             rs.getLong("original_id"),
@@ -1028,6 +1069,7 @@ public final class CooldownRepository {
             Instant.ofEpochMilli(rs.getLong("blocked_at")),
             Instant.ofEpochMilli(rs.getLong("blocked_until")),
             installedBy == null ? Optional.empty() : Optional.of(installedBy),
+            releaseDate,
             Instant.ofEpochMilli(rs.getLong("archived_at")),
             ArchiveReason.valueOf(rs.getString("archive_reason")),
             rs.getString("archived_by")
@@ -1057,6 +1099,10 @@ public final class CooldownRepository {
         final Optional<String> installedBy = rs.wasNull()
             ? Optional.empty()
             : Optional.of(installedByRaw);
+        final long relDateRaw = rs.getLong("release_date");
+        final Optional<Instant> releaseDate = rs.wasNull()
+            ? Optional.empty()
+            : Optional.of(Instant.ofEpochMilli(relDateRaw));
         return new DbBlockRecord(
             id,
             repoType,
@@ -1070,7 +1116,8 @@ public final class CooldownRepository {
             blockedUntil,
             unblockedAt,
             unblockedBy,
-            installedBy
+            installedBy,
+            releaseDate
         );
     }
 }

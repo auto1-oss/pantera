@@ -456,6 +456,12 @@ onMounted(() => {
                 <Tag :value="data.reason" severity="info" />
               </template>
             </Column>
+            <Column field="release_date" header="Release Date" sortable>
+              <template #body="{ data }">
+                <span v-if="data.release_date">{{ new Date(data.release_date).toLocaleDateString() }}</span>
+                <span v-else class="text-gray-400">&mdash;</span>
+              </template>
+            </Column>
             <Column
               v-if="mode === 'active'"
               field="blocked_date"

@@ -146,7 +146,7 @@ final class DbPublishDateRegistryTest {
     }
 
     @Test
-    void sourceFailureReturnsEmptyAndDoesNotCache() throws Exception {
+    void sourceFailureIsBrieflyCachedToPreventRetryStorms() throws Exception {
         final AtomicInteger sourceCalls = new AtomicInteger();
         final PublishDateSource flaky = stubSource("maven", "fake",
             (n, v) -> {
@@ -156,8 +156,12 @@ final class DbPublishDateRegistryTest {
         final DbPublishDateRegistry reg = new DbPublishDateRegistry(this.ds, Map.of("maven", flaky));
 
         assertEquals(Optional.empty(), reg.publishDate("maven", "x.y", "1.0").get());
+        // Within the 60s negative TTL, repeated lookups short-circuit on the
+        // negative L1 cache instead of hammering the failing upstream — this
+        // is the fix for "many timeout errors" under degraded upstream.
         assertEquals(Optional.empty(), reg.publishDate("maven", "x.y", "1.0").get());
-        assertEquals(2, sourceCalls.get(), "transient failure must not be cached");
+        assertEquals(1, sourceCalls.get(),
+            "second lookup must hit negativeL1, not call source again");
     }
 
     private static PublishDateSource stubSource(

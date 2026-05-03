@@ -186,6 +186,7 @@ export interface BlockedArtifact {
   blocked_date: string
   blocked_until: string
   remaining_hours: number
+  release_date?: string
 }
 
 // Cooldown history — same as BlockedArtifact plus archive metadata.

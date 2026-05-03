@@ -458,7 +458,8 @@ public final class CooldownHandler {
         "repo", "repo_name",
         "repo_type", "repo_type",
         "reason", "reason",
-        "remaining_hours", "blocked_until"
+        "remaining_hours", "blocked_until",
+        "release_date", "release_date"
     );
 
     /**
@@ -474,7 +475,8 @@ public final class CooldownHandler {
         "repo_type", "repo_type",
         "reason", "reason",
         "archived_at", "archived_at",
-        "archive_reason", "archive_reason"
+        "archive_reason", "archive_reason",
+        "release_date", "release_date"
     );
 
     /**
@@ -543,7 +545,7 @@ public final class CooldownHandler {
             for (final DbBlockRecord rec : rows) {
                 final long remainingSecs =
                     Duration.between(now, rec.blockedUntil()).getSeconds();
-                items.add(new JsonObject()
+                final JsonObject item = new JsonObject()
                     .put("package_name", rec.artifact())
                     .put("version", rec.version())
                     .put("repo", rec.repoName())
@@ -552,7 +554,10 @@ public final class CooldownHandler {
                     .put("blocked_date", rec.blockedAt().toString())
                     .put("blocked_until", rec.blockedUntil().toString())
                     .put("remaining_hours",
-                        Math.max(0, remainingSecs / 3600)));
+                        Math.max(0, remainingSecs / 3600));
+                rec.releaseDate().ifPresent(rd ->
+                    item.put("release_date", rd.toString()));
+                items.add(item);
             }
             return ApiResponse.paginated(items, page, size, (int) total);
         }, HandlerExecutor.get()).whenComplete((result, err) -> {
@@ -630,7 +635,7 @@ public final class CooldownHandler {
             );
             final JsonArray items = new JsonArray();
             for (final DbHistoryRecord rec : rows) {
-                items.add(new JsonObject()
+                final JsonObject item = new JsonObject()
                     .put("package_name", rec.artifact())
                     .put("version", rec.version())
                     .put("repo", rec.repoName())
@@ -640,7 +645,10 @@ public final class CooldownHandler {
                     .put("blocked_until", rec.blockedUntil().toString())
                     .put("archived_at", rec.archivedAt().toString())
                     .put("archive_reason", rec.archiveReason().name())
-                    .put("archived_by", rec.archivedBy()));
+                    .put("archived_by", rec.archivedBy());
+                rec.releaseDate().ifPresent(rd ->
+                    item.put("release_date", rd.toString()));
+                items.add(item);
             }
             return ApiResponse.paginated(items, page, size, (int) total);
         }, HandlerExecutor.get()).whenComplete((result, err) -> {

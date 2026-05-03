@@ -58,6 +58,7 @@ public final class CooldownCleanupFallback {
     private final CooldownRepository repo;
     private final CooldownSettings settings;
     private final AtomicLong lastPurgeAt = new AtomicLong(0L);
+    private final AtomicLong lastPublishDatePurgeAt = new AtomicLong(0L);
 
     private Long cleanupTimerId;
     private Long purgeTimerId;
@@ -119,7 +120,10 @@ public final class CooldownCleanupFallback {
 
     private void dispatchPurgeCheck() {
         CompletableFuture
-            .runAsync(this::maybePurgeHistory, HandlerExecutor.get())
+            .runAsync(() -> {
+                this.maybePurgeHistory();
+                this.maybePurgePublishDates();
+            }, HandlerExecutor.get())
             .exceptionally(this::logPurgeError);
     }
 
@@ -192,6 +196,49 @@ public final class CooldownCleanupFallback {
         if (totalPurged > 0L) {
             EcsLogger.info("com.auto1.pantera.cooldown.history")
                 .message("fallback history purge completed"
+                    + " (purged=" + totalPurged
+                    + ", retention_days=" + retentionDays + ")")
+                .log();
+        }
+    }
+
+    /**
+     * Purge stale publish-date cache rows (same 24h gate as history purge).
+     * Uses the same retention period as cooldown history — publish dates are
+     * an L2 cache and can be re-fetched from the upstream registry on demand.
+     */
+    void maybePurgePublishDates() {
+        final long now = Instant.now().toEpochMilli();
+        if (now - this.lastPublishDatePurgeAt.get() < ONE_DAY_MS) {
+            return;
+        }
+        final int retentionDays = this.settings.historyRetentionDays();
+        final int batchLimit = this.settings.cleanupBatchLimit();
+        final Instant cutoff = Instant.now()
+            .minus(retentionDays, ChronoUnit.DAYS);
+        long totalPurged = 0L;
+        for (int i = 0; i < MAX_BATCH_ITERATIONS; i++) {
+            final int purged;
+            try {
+                purged = this.repo.purgePublishDatesOlderThan(cutoff, batchLimit);
+            } catch (final RuntimeException err) {
+                EcsLogger.error("com.auto1.pantera.publishdate")
+                    .message("fallback publish-date purge iteration failed"
+                        + " (iteration=" + i
+                        + ", total_purged=" + totalPurged + ")")
+                    .error(err)
+                    .log();
+                return;
+            }
+            totalPurged += purged;
+            if (purged < batchLimit) {
+                break;
+            }
+        }
+        this.lastPublishDatePurgeAt.set(now);
+        if (totalPurged > 0L) {
+            EcsLogger.info("com.auto1.pantera.publishdate")
+                .message("fallback publish-date purge completed"
                     + " (purged=" + totalPurged
                     + ", retention_days=" + retentionDays + ")")
                 .log();
