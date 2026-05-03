@@ -111,6 +111,28 @@ public final class GroupResolver implements Slice {
     private final java.util.concurrent.Executor drainExecutor;
 
     /**
+     * Group fanout strategy. PARALLEL races every member at once and returns the
+     * first 2xx (current behaviour, retained for federated topologies with no
+     * clear member affinity). SEQUENTIAL walks members in declared order, falling
+     * through on 404 or open-circuit, stopping on the first 2xx — Nexus /
+     * Artifactory style. SEQUENTIAL is the default because the typical Pantera
+     * deployment has a "primary" upstream (e.g. Maven Central) that holds 99% of
+     * artifacts; PARALLEL multiplies upstream traffic by group size for marginal
+     * latency benefit.
+     */
+    public enum MembersStrategy {
+        PARALLEL,
+        SEQUENTIAL;
+
+        public static MembersStrategy fromYaml(final String value) {
+            if (value == null || value.isBlank()) {
+                return SEQUENTIAL;
+            }
+            return MembersStrategy.valueOf(value.trim().toUpperCase(java.util.Locale.ROOT));
+        }
+    }
+
+    /**
      * Full constructor.
      *
      * @param group Group repository name
