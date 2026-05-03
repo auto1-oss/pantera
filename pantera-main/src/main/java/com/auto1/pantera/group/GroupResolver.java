@@ -109,6 +109,7 @@ public final class GroupResolver implements Slice {
     private final NegativeCache negativeCache;
     private final SingleFlight<String, Void> inFlightFanouts;
     private final java.util.concurrent.Executor drainExecutor;
+    private final MembersStrategy strategy;
 
     /**
      * Group fanout strategy. PARALLEL races every member at once and returns the
@@ -143,6 +144,40 @@ public final class GroupResolver implements Slice {
      * @param proxyMembers Names of proxy repository members
      * @param negativeCache Negative cache for 404 results
      * @param drainExecutor Per-repo drain executor from {@link com.auto1.pantera.http.resilience.RepoBulkhead}
+     * @param strategy Group fanout strategy (PARALLEL or SEQUENTIAL)
+     */
+    @SuppressWarnings("PMD.ExcessiveParameterList")
+    public GroupResolver(
+        final String group,
+        final List<MemberSlice> members,
+        final List<RoutingRule> routingRules,
+        final Optional<ArtifactIndex> artifactIndex,
+        final String repoType,
+        final Set<String> proxyMembers,
+        final NegativeCache negativeCache,
+        final java.util.concurrent.Executor drainExecutor,
+        final MembersStrategy strategy
+    ) {
+        this.group = Objects.requireNonNull(group, "group");
+        this.members = Objects.requireNonNull(members, "members");
+        this.routingRules = routingRules != null ? routingRules : Collections.emptyList();
+        this.artifactIndex = artifactIndex != null ? artifactIndex : Optional.empty();
+        this.repoType = repoType != null ? repoType : "";
+        this.proxyMembers = proxyMembers != null ? proxyMembers : Collections.emptySet();
+        this.negativeCache = Objects.requireNonNull(negativeCache, "negativeCache");
+        this.drainExecutor = Objects.requireNonNull(drainExecutor, "drainExecutor");
+        this.strategy = strategy == null ? MembersStrategy.SEQUENTIAL : strategy;
+        this.inFlightFanouts = new SingleFlight<>(
+            Duration.ofMinutes(5),
+            10_000,
+            ContextualExecutor.contextualize(ForkJoinPool.commonPool())
+        );
+    }
+
+    /**
+     * Backward-compat constructor (retains the pre-strategy signature so existing
+     * test stubs and any non-RepositorySlices caller keep compiling). Defaults to
+     * {@link MembersStrategy#SEQUENTIAL}.
      */
     @SuppressWarnings("PMD.ExcessiveParameterList")
     public GroupResolver(
@@ -155,19 +190,8 @@ public final class GroupResolver implements Slice {
         final NegativeCache negativeCache,
         final java.util.concurrent.Executor drainExecutor
     ) {
-        this.group = Objects.requireNonNull(group, "group");
-        this.members = Objects.requireNonNull(members, "members");
-        this.routingRules = routingRules != null ? routingRules : Collections.emptyList();
-        this.artifactIndex = artifactIndex != null ? artifactIndex : Optional.empty();
-        this.repoType = repoType != null ? repoType : "";
-        this.proxyMembers = proxyMembers != null ? proxyMembers : Collections.emptySet();
-        this.negativeCache = Objects.requireNonNull(negativeCache, "negativeCache");
-        this.drainExecutor = Objects.requireNonNull(drainExecutor, "drainExecutor");
-        this.inFlightFanouts = new SingleFlight<>(
-            Duration.ofMinutes(5),
-            10_000,
-            ContextualExecutor.contextualize(ForkJoinPool.commonPool())
-        );
+        this(group, members, routingRules, artifactIndex, repoType,
+            proxyMembers, negativeCache, drainExecutor, MembersStrategy.SEQUENTIAL);
     }
 
     /**
@@ -196,6 +220,40 @@ public final class GroupResolver implements Slice {
      * @param registrySupplier Function mapping member name to its shared
      *                         {@link AutoBlockRegistry} (may be {@code null})
      * @param repoDrainExecutor Per-repo drain executor
+     * @param strategy Group fanout strategy (PARALLEL or SEQUENTIAL)
+     */
+    @SuppressWarnings("PMD.ExcessiveParameterList")
+    public GroupResolver(
+        final SliceResolver resolver,
+        final String group,
+        final List<String> memberNames,
+        final int port,
+        final int depth,
+        final long timeoutSeconds,
+        final List<RoutingRule> routingRules,
+        final Optional<ArtifactIndex> artifactIndex,
+        final Set<String> proxyMembers,
+        final String repoType,
+        final NegativeCache negativeCache,
+        final Function<String, AutoBlockRegistry> registrySupplier,
+        final java.util.concurrent.Executor repoDrainExecutor,
+        final MembersStrategy strategy
+    ) {
+        this(
+            group,
+            buildMembers(resolver, memberNames, port, proxyMembers, registrySupplier),
+            routingRules,
+            artifactIndex,
+            repoType,
+            proxyMembers,
+            negativeCache,
+            repoDrainExecutor,
+            strategy
+        );
+    }
+
+    /**
+     * Backward-compat wiring constructor (defaults to SEQUENTIAL).
      */
     @SuppressWarnings("PMD.ExcessiveParameterList")
     public GroupResolver(
@@ -213,16 +271,10 @@ public final class GroupResolver implements Slice {
         final Function<String, AutoBlockRegistry> registrySupplier,
         final java.util.concurrent.Executor repoDrainExecutor
     ) {
-        this(
-            group,
-            buildMembers(resolver, memberNames, port, proxyMembers, registrySupplier),
-            routingRules,
-            artifactIndex,
-            repoType,
-            proxyMembers,
-            negativeCache,
-            repoDrainExecutor
-        );
+        this(resolver, group, memberNames, port, depth, timeoutSeconds,
+            routingRules, artifactIndex, proxyMembers, repoType,
+            negativeCache, registrySupplier, repoDrainExecutor,
+            MembersStrategy.SEQUENTIAL);
     }
 
     /**
