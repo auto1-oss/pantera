@@ -35,12 +35,14 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Supplier;
@@ -101,6 +103,31 @@ public final class ProxyCacheWriter {
 
     /** Shared hex formatter for digest comparison. */
     private static final HexFormat HEX = HexFormat.of();
+
+    /**
+     * Sidecar algorithms that are NOT load-bearing for the serve path.
+     * Maven Central (and most upstreams) only publishes {@code .sha1} and
+     * {@code .md5}; {@code .sha256} / {@code .sha512} usually 404 in
+     * 200-300ms — and {@link #verifyOnly} previously waited on those slow
+     * 404s before serving the primary. That alone added ~20s to a 720-
+     * artifact cold {@code mvn dependency:resolve} (300ms × 720 ÷ 5 maven
+     * worker threads ≈ 43s, overlap-amortized).
+     *
+     * <p>For algos in this set the writer fires the upstream sidecar fetch
+     * but does NOT block the {@link VerifiedArtifact} return on it. If the
+     * upstream eventually returns 200 we verify the claim against the
+     * already-computed digest and persist the sidecar in the background;
+     * disagreement is logged + counted but does not retroactively reject
+     * the primary (the primary integrity is already proven by the required
+     * sidecars below).</p>
+     *
+     * <p>If a deployment requires strict {@code .sha256}/{@code .sha512}
+     * blocking, use {@link #writeAndVerify(Key, String, Supplier, Map, Set,
+     * RequestContext)} and pass {@link java.util.Collections#emptySet()} to
+     * make every supplied sidecar load-bearing.</p>
+     */
+    private static final EnumSet<ChecksumAlgo> NON_BLOCKING_DEFAULT =
+        EnumSet.of(ChecksumAlgo.SHA256, ChecksumAlgo.SHA512);
 
     /** Repository name used in log fields and metric tags. */
     private final String repoName;
@@ -208,8 +235,11 @@ public final class ProxyCacheWriter {
     /**
      * Write + verify without committing; returns a {@link VerifiedArtifact}
      * that the caller can serve from immediately, then commit async.
+     *
+     * <p>Uses the default {@link #NON_BLOCKING_DEFAULT} non-blocking set
+     * ({@code SHA256}, {@code SHA512}). To override, call
+     * {@link #writeAndVerify(Key, String, Supplier, Map, Set, RequestContext)}.</p>
      */
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.CyclomaticComplexity"})
     public CompletionStage<Result<VerifiedArtifact>> writeAndVerify(
         final Key primaryKey,
         final String upstreamUri,
@@ -217,10 +247,35 @@ public final class ProxyCacheWriter {
         final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> fetchSidecars,
         final RequestContext ctx
     ) {
+        return this.writeAndVerify(
+            primaryKey, upstreamUri, fetchPrimary, fetchSidecars,
+            NON_BLOCKING_DEFAULT, ctx
+        );
+    }
+
+    /**
+     * Write + verify without committing; returns a {@link VerifiedArtifact}
+     * that the caller can serve from immediately, then commit async.
+     *
+     * @param nonBlockingAlgos sidecar algorithms whose upstream fetch must NOT
+     *     block the {@link VerifiedArtifact} return — they save themselves in
+     *     the background if/when the upstream eventually responds.
+     */
+    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.CyclomaticComplexity"})
+    public CompletionStage<Result<VerifiedArtifact>> writeAndVerify(
+        final Key primaryKey,
+        final String upstreamUri,
+        final Supplier<CompletionStage<InputStream>> fetchPrimary,
+        final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> fetchSidecars,
+        final Set<ChecksumAlgo> nonBlockingAlgos,
+        final RequestContext ctx
+    ) {
         Objects.requireNonNull(primaryKey, "primaryKey");
         Objects.requireNonNull(fetchPrimary, "fetchPrimary");
         final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> sidecarFetchers =
             fetchSidecars == null ? Collections.emptyMap() : fetchSidecars;
+        final Set<ChecksumAlgo> nonBlocking = nonBlockingAlgos == null
+            ? Collections.emptySet() : nonBlockingAlgos;
         final Path tempFile;
         try {
             tempFile = Files.createTempFile("pantera-proxy-", ".tmp");
@@ -232,7 +287,8 @@ public final class ProxyCacheWriter {
         return fetchPrimary.get()
             .thenCompose(stream -> this.streamPrimary(stream, tempFile))
             .thenCompose(digests -> this.verifyOnly(
-                primaryKey, upstreamUri, tempFile, digests, sidecarFetchers, ctx
+                primaryKey, upstreamUri, tempFile, digests,
+                sidecarFetchers, nonBlocking, ctx
             ))
             .exceptionally(err -> {
                 deleteQuietly(tempFile);
@@ -340,7 +396,9 @@ public final class ProxyCacheWriter {
 
     /**
      * Fetch sidecars and verify, but do NOT commit. Returns a
-     * {@link VerifiedArtifact} on success.
+     * {@link VerifiedArtifact} on success. Sidecars in {@code nonBlocking}
+     * are fired in parallel but their futures do NOT gate the return — they
+     * verify and persist themselves once the upstream eventually responds.
      */
     @SuppressWarnings({"PMD.CognitiveComplexity", "PMD.CyclomaticComplexity"})
     private CompletionStage<Result<VerifiedArtifact>> verifyOnly(
@@ -349,14 +407,28 @@ public final class ProxyCacheWriter {
         final Path tempFile,
         final Map<ChecksumAlgo, String> computed,
         final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> sidecarFetchers,
+        final Set<ChecksumAlgo> nonBlocking,
         final RequestContext ctx
     ) {
-        final List<ChecksumAlgo> algos = new ArrayList<>(sidecarFetchers.keySet());
+        final List<ChecksumAlgo> blockingAlgos = new ArrayList<>();
+        final List<ChecksumAlgo> deferredAlgos = new ArrayList<>();
+        for (final ChecksumAlgo algo : sidecarFetchers.keySet()) {
+            if (nonBlocking.contains(algo)) {
+                deferredAlgos.add(algo);
+            } else {
+                blockingAlgos.add(algo);
+            }
+        }
+        for (final ChecksumAlgo algo : deferredAlgos) {
+            this.dispatchDeferredSidecar(
+                primaryKey, upstreamUri, algo, sidecarFetchers.get(algo), computed, ctx
+            );
+        }
         @SuppressWarnings("unchecked")
         final CompletableFuture<SidecarFetch>[] futures =
-            new CompletableFuture[algos.size()];
-        for (int i = 0; i < algos.size(); i++) {
-            final ChecksumAlgo algo = algos.get(i);
+            new CompletableFuture[blockingAlgos.size()];
+        for (int i = 0; i < blockingAlgos.size(); i++) {
+            final ChecksumAlgo algo = blockingAlgos.get(i);
             futures[i] = sidecarFetchers.get(algo).get()
                 .toCompletableFuture()
                 .thenApply(opt -> new SidecarFetch(algo, opt.map(ProxyCacheWriter::readSmall)))
@@ -395,6 +467,74 @@ public final class ProxyCacheWriter {
                 ))
             );
         });
+    }
+
+    /**
+     * Background path for {@link #NON_BLOCKING_DEFAULT} sidecars: fire the
+     * upstream fetch but don't gate the primary serve on it. When the
+     * upstream eventually responds, verify the claim against the
+     * already-computed digest and persist the sidecar to storage. A
+     * disagreement is logged + counted (so operators retain visibility) but
+     * does NOT retroactively reject the primary — the primary's integrity is
+     * already proven by the synchronously-verified sidecars (sha1 / md5 in
+     * the default config). 404 / IO error → no-op (sidecar absent upstream).
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private void dispatchDeferredSidecar(
+        final Key primaryKey,
+        final String upstreamUri,
+        final ChecksumAlgo algo,
+        final Supplier<CompletionStage<Optional<InputStream>>> fetcher,
+        final Map<ChecksumAlgo, String> computed,
+        final RequestContext ctx
+    ) {
+        fetcher.get()
+            .toCompletableFuture()
+            .thenApply(opt -> opt.map(ProxyCacheWriter::readSmall))
+            .thenCompose(maybeBytes -> {
+                if (maybeBytes.isEmpty()) {
+                    return CompletableFuture.completedFuture(null);
+                }
+                final byte[] bytes = maybeBytes.get();
+                final String claim = normaliseSidecar(bytes);
+                final String have = computed.get(algo);
+                if (!claim.equals(have)) {
+                    final String tag = algo.name().toLowerCase(Locale.ROOT);
+                    EcsLogger.warn("com.auto1.pantera.cache")
+                        .message(
+                            "Deferred sidecar disagrees with computed digest;"
+                            + " primary already served (algo=" + tag
+                            + ", sidecar_claim=" + claim
+                            + ", computed=" + have + ")"
+                        )
+                        .eventCategory("web")
+                        .eventAction("cache_write")
+                        .eventOutcome("integrity_failure")
+                        .field("repository.name", this.repoName)
+                        .field("url.path", primaryKey.string())
+                        .field("url.full", upstreamUri == null
+                            ? primaryKey.string() : upstreamUri)
+                        .field("trace.id", traceId(ctx))
+                        .log();
+                    this.incrementIntegrityFailure(tag);
+                    return CompletableFuture.completedFuture(null);
+                }
+                return this.cache.save(
+                    sidecarKey(primaryKey, algo), new Content.From(bytes)
+                ).toCompletableFuture();
+            })
+            .exceptionally(err -> {
+                EcsLogger.debug("com.auto1.pantera.cache")
+                    .message("Deferred sidecar fetch/save failed; primary unaffected")
+                    .eventCategory("web")
+                    .eventAction("cache_write")
+                    .eventOutcome("failure")
+                    .field("repository.name", this.repoName)
+                    .field("url.path", primaryKey.string())
+                    .error(err)
+                    .log();
+                return null;
+            });
     }
 
     /**

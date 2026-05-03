@@ -42,6 +42,7 @@ import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.instanceOf;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -450,14 +451,16 @@ final class ProxyCacheWriterTest {
     }
 
     @Test
-    @DisplayName("writeAndVerify rejects on sidecar mismatch")
+    @DisplayName("writeAndVerify rejects on blocking sidecar mismatch (sha1/md5)")
     void writeAndVerifyRejectsOnMismatch() throws Exception {
+        // SHA1 / MD5 are load-bearing in the default config — a mismatch
+        // must reject the primary before it is ever served.
         final Storage storage = new InMemoryStorage();
         final ProxyCacheWriter writer = new ProxyCacheWriter(storage, "test-repo");
         final byte[] body = "mismatch-test".getBytes(StandardCharsets.UTF_8);
         final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> sidecars =
             new EnumMap<>(ChecksumAlgo.class);
-        sidecars.put(ChecksumAlgo.SHA256, () -> CompletableFuture.completedFuture(
+        sidecars.put(ChecksumAlgo.SHA1, () -> CompletableFuture.completedFuture(
             Optional.of(new ByteArrayInputStream("deadbeef".getBytes(StandardCharsets.UTF_8)))
         ));
         final Result<ProxyCacheWriter.VerifiedArtifact> result =
@@ -466,6 +469,66 @@ final class ProxyCacheWriterTest {
                 "http://upstream/bad.jar",
                 () -> CompletableFuture.completedFuture(new ByteArrayInputStream(body)),
                 sidecars,
+                null
+            ).toCompletableFuture().join();
+        assertThat(result, instanceOf(Result.Err.class));
+        final Fault fault = ((Result.Err<ProxyCacheWriter.VerifiedArtifact>) result).fault();
+        assertThat(fault, instanceOf(Fault.UpstreamIntegrity.class));
+    }
+
+    @Test
+    @DisplayName("writeAndVerify does NOT block on sha256 mismatch (deferred)")
+    void writeAndVerifyDoesNotBlockOnDeferredSidecarMismatch() throws Exception {
+        // SHA256 is in NON_BLOCKING_DEFAULT — a bogus claim must not delay
+        // (or fail) the primary serve. The integrity disagreement is logged
+        // / counted but does not retroactively reject the artifact.
+        final Storage storage = new InMemoryStorage();
+        final ProxyCacheWriter writer = new ProxyCacheWriter(storage, "test-repo");
+        final byte[] body = "deferred-mismatch".getBytes(StandardCharsets.UTF_8);
+        final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> sidecars =
+            new EnumMap<>(ChecksumAlgo.class);
+        sidecars.put(ChecksumAlgo.SHA256, () -> CompletableFuture.completedFuture(
+            Optional.of(new ByteArrayInputStream("deadbeef".getBytes(StandardCharsets.UTF_8)))
+        ));
+        final Result<ProxyCacheWriter.VerifiedArtifact> result =
+            writer.writeAndVerify(
+                new Key.From("test/deferred.jar"),
+                "http://upstream/deferred.jar",
+                () -> CompletableFuture.completedFuture(new ByteArrayInputStream(body)),
+                sidecars,
+                null
+            ).toCompletableFuture().join();
+        assertThat(result, instanceOf(Result.Ok.class));
+        final ProxyCacheWriter.VerifiedArtifact artifact =
+            ((Result.Ok<ProxyCacheWriter.VerifiedArtifact>) result).value();
+        assertThat(artifact.size(), equalTo((long) body.length));
+        // SHA256 was rejected silently, so it must not have been persisted.
+        assertThat(
+            storage.exists(new Key.From("test/deferred.jar.sha256")).join(),
+            equalTo(false)
+        );
+    }
+
+    @Test
+    @DisplayName("writeAndVerify rejects on sha256 mismatch when overload makes it blocking")
+    void writeAndVerifyRejectsOnSha256MismatchWhenBlocking() throws Exception {
+        // Operator can opt into strict sha256/sha512 verification by passing
+        // an empty non-blocking set to the overload.
+        final Storage storage = new InMemoryStorage();
+        final ProxyCacheWriter writer = new ProxyCacheWriter(storage, "test-repo");
+        final byte[] body = "strict-mismatch".getBytes(StandardCharsets.UTF_8);
+        final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> sidecars =
+            new EnumMap<>(ChecksumAlgo.class);
+        sidecars.put(ChecksumAlgo.SHA256, () -> CompletableFuture.completedFuture(
+            Optional.of(new ByteArrayInputStream("deadbeef".getBytes(StandardCharsets.UTF_8)))
+        ));
+        final Result<ProxyCacheWriter.VerifiedArtifact> result =
+            writer.writeAndVerify(
+                new Key.From("test/strict.jar"),
+                "http://upstream/strict.jar",
+                () -> CompletableFuture.completedFuture(new ByteArrayInputStream(body)),
+                sidecars,
+                java.util.Collections.emptySet(),
                 null
             ).toCompletableFuture().join();
         assertThat(result, instanceOf(Result.Err.class));
