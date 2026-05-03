@@ -115,27 +115,48 @@ public final class ArtifactIndexCache implements ArtifactIndex {
         if (this.negative.getIfPresent(artifactName) != null) {
             return CompletableFuture.completedFuture(Optional.of(Collections.emptyList()));
         }
-        return this.inFlight.computeIfAbsent(artifactName, this::dispatchAndPopulate);
+        // Coalesce concurrent lookups onto a single in-flight promise. We register
+        // an empty promise inside computeIfAbsent (cheap, no recursion risk), then
+        // dispatch the delegate outside it. The mapping function MUST NOT call
+        // ConcurrentHashMap mutators on `this.inFlight` — see JDK-8062841.
+        final CompletableFuture<Optional<List<String>>>[] created = new CompletableFuture[1];
+        final CompletableFuture<Optional<List<String>>> shared =
+            this.inFlight.computeIfAbsent(artifactName, name -> {
+                final CompletableFuture<Optional<List<String>>> promise = new CompletableFuture<>();
+                created[0] = promise;
+                return promise;
+            });
+        if (created[0] != null) {
+            this.dispatchAndPopulate(artifactName, created[0]);
+        }
+        return shared;
     }
 
-    private CompletableFuture<Optional<List<String>>> dispatchAndPopulate(final String name) {
-        return this.delegate.locateByName(name)
-            .whenComplete((opt, err) -> {
-                this.inFlight.remove(name);
-                if (err != null || opt == null) {
-                    return;
-                }
-                if (opt.isEmpty()) {
-                    // DB error — do NOT cache. Caller will retry / fanout.
-                    return;
-                }
+    private void dispatchAndPopulate(
+        final String name,
+        final CompletableFuture<Optional<List<String>>> promise
+    ) {
+        this.delegate.locateByName(name).whenComplete((opt, err) -> {
+            // Remove from in-flight BEFORE completing the promise so any waiter
+            // that wakes up and re-queries sees a clean map. Safe here because
+            // this callback runs outside any computeIfAbsent on `inFlight`.
+            this.inFlight.remove(name);
+            if (err == null && opt != null && opt.isPresent()) {
                 final List<String> result = opt.get();
                 if (result.isEmpty()) {
                     this.negative.put(name, Boolean.TRUE);
                 } else {
                     this.positive.put(name, result);
                 }
-            });
+            }
+            // Optional.empty() means DB error — do NOT cache, but DO complete
+            // the promise so callers can fall back to fanout.
+            if (err != null) {
+                promise.completeExceptionally(err);
+            } else {
+                promise.complete(opt == null ? Optional.empty() : opt);
+            }
+        });
     }
 
     /**
