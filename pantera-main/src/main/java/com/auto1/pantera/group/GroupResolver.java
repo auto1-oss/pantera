@@ -493,6 +493,40 @@ public final class GroupResolver implements Slice {
             .log();
 
         return body.asBytesFuture().thenCompose(requestBytes -> {
+            if (this.strategy == MembersStrategy.SEQUENTIAL) {
+                // Sequential walk over targeted members. The TOCTOU postprocessing
+                // below only inspects the response status, so we can plug the
+                // sequential result into the same .thenCompose chain. Pass
+                // isTargetedLocalRead=true so open-circuit gating is bypassed
+                // (mirrors the parallel path's behaviour for index-hit reads).
+                return querySequentially(targeted, line, headers, body, true)
+                    .thenCompose(resp -> {
+                        if (resp.status().success()
+                            || resp.status() == RsStatus.NOT_MODIFIED
+                            || resp.status() == RsStatus.FORBIDDEN) {
+                            return CompletableFuture.completedFuture(resp);
+                        }
+                        if (resp.status() == RsStatus.NOT_FOUND) {
+                            EcsLogger.debug("com.auto1.pantera.group")
+                                .message("TOCTOU drift (sequential): index hit but no "
+                                    + "member returned bytes, falling through to proxy fanout")
+                                .eventCategory("web")
+                                .eventAction("group_toctou_fallthrough")
+                                .field("url.path", line.uri().getPath())
+                                .log();
+                            return proxyOnlyFanout(line, headers, body, artifactName, negCacheKey);
+                        }
+                        if (resp.status().serverError()) {
+                            return CompletableFuture.completedFuture(
+                                FaultTranslator.translate(
+                                    new Fault.StorageUnavailable(null, line.uri().getPath()),
+                                    null
+                                )
+                            );
+                        }
+                        return CompletableFuture.completedFuture(resp);
+                    });
+            }
             final CompletableFuture<Response> result = new CompletableFuture<>();
             final AtomicBoolean completed = new AtomicBoolean(false);
             final AtomicInteger pending = new AtomicInteger(targeted.size());
@@ -709,6 +743,20 @@ public final class GroupResolver implements Slice {
         final NegativeCacheKey negCacheKey
     ) {
         return body.asBytesFuture().thenCompose(requestBytes -> {
+            if (this.strategy == MembersStrategy.SEQUENTIAL) {
+                // Sequential walk over proxy members. On all-404 we still need to
+                // populate the negative cache (the parallel path does this in
+                // completeProxyIfAllExhausted via the outcomes list). Replicate
+                // the minimal contract here: 404 => cacheNotFound(negCacheKey)
+                // + return 404; everything else passes through unchanged.
+                return querySequentially(fanoutMembers, line, headers, body, false)
+                    .thenApply(resp -> {
+                        if (resp.status() == RsStatus.NOT_FOUND) {
+                            this.negativeCache.cacheNotFound(negCacheKey);
+                        }
+                        return resp;
+                    });
+            }
             final CompletableFuture<Response> result = new CompletableFuture<>();
             final AtomicBoolean completed = new AtomicBoolean(false);
             final AtomicInteger pending = new AtomicInteger(fanoutMembers.size());
