@@ -698,16 +698,68 @@ public final class MetadataFilterService implements CooldownMetadataService {
     }
     
     /**
-     * Check if version is a prerelease (alpha, beta, rc, canary, etc.).
+     * Known prerelease qualifier tokens. Match is case-insensitive and on a
+     * full token (delimited by {@code -}, {@code .}, or {@code +}), NOT a
+     * substring — otherwise classifier-style suffixes such as Guava's
+     * {@code -jre}/{@code -android} or substrings inside legitimate words
+     * (the {@code rc} in {@code archived}, the {@code dev} in {@code
+     * developer}, etc.) are wrongly flagged and the cooldown service falls
+     * back to the wrong "stable" version.
+     */
+    private static final Set<String> PRERELEASE_QUALIFIERS = Set.of(
+        "alpha", "beta", "rc", "milestone", "snapshot",
+        "canary", "next", "dev", "preview", "pre", "cr", "ea"
+    );
+
+    /**
+     * Maven milestone shorthand: {@code 1.0-M3}, {@code 2.0-m1}. Requires at
+     * least one digit after the {@code m} so we don't snag classifier
+     * tokens that simply start with {@code m} (e.g. {@code -macos}).
+     */
+    private static final java.util.regex.Pattern MAVEN_MILESTONE =
+        java.util.regex.Pattern.compile("(?i)m\\d+");
+
+    /**
+     * Check if a version is a prerelease (alpha, beta, rc, snapshot, etc.).
+     *
+     * <p>Tokenises on {@code -}, {@code .}, and {@code +} (the SemVer / Maven
+     * qualifier separators) and checks each token against {@link
+     * #PRERELEASE_QUALIFIERS} or the milestone shorthand. The first token —
+     * which is always the version core (e.g. {@code 33.5.0}, {@code r09}) —
+     * is skipped so a leading numeric or {@code rN} segment cannot be
+     * mistaken for a qualifier.</p>
      *
      * @param version Version string
-     * @return true if prerelease
+     * @return {@code true} if any post-core token is a known prerelease
+     *     qualifier; {@code false} for stable, classifier-suffixed, or
+     *     unknown formats (treat-as-stable is the safer default for the
+     *     "pick the new latest" path — a misclassified prerelease at worst
+     *     surfaces a slightly newer-than-expected version, while a
+     *     misclassified classifier collapses {@code latest} to a decade-old
+     *     release as in the Guava 33.x → r09 regression).
      */
-    private static boolean isPrerelease(final String version) {
-        final String v = version.toLowerCase(java.util.Locale.ROOT);
-        return v.contains("-") || v.contains("alpha") || v.contains("beta")
-            || v.contains("rc") || v.contains("canary") || v.contains("next")
-            || v.contains("dev") || v.contains("snapshot");
+    static boolean isPrerelease(final String version) {
+        if (version == null || version.isEmpty()) {
+            return false;
+        }
+        final String[] tokens = version.split("[-.+]");
+        for (int idx = 1; idx < tokens.length; idx++) {
+            final String token = tokens[idx];
+            if (token.isEmpty()) {
+                continue;
+            }
+            final String lower = token.toLowerCase(java.util.Locale.ROOT);
+            // Strip a trailing numeric run (rc1 → rc, beta02 → beta) so
+            // numbered qualifiers still match the keyword set.
+            final String stripped = lower.replaceAll("\\d+$", "");
+            if (PRERELEASE_QUALIFIERS.contains(stripped)) {
+                return true;
+            }
+            if (MAVEN_MILESTONE.matcher(token).matches()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

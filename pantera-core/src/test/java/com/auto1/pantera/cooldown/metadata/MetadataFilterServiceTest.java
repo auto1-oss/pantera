@@ -36,6 +36,7 @@ import java.util.concurrent.ForkJoinPool;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.is;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
@@ -435,6 +436,54 @@ final class MetadataFilterServiceTest {
         // 3.0.0 should no longer be blocked after revalidation
         assertThat("3.0.0 should not be blocked after expiry + revalidation",
             filter.lastBlockedVersions.contains("3.0.0"), equalTo(false));
+    }
+
+    @Test
+    void isPrereleaseRecognisesStandardQualifiers() {
+        assertThat(MetadataFilterService.isPrerelease("1.0.0-alpha"), is(true));
+        assertThat(MetadataFilterService.isPrerelease("1.0.0-beta.2"), is(true));
+        assertThat(MetadataFilterService.isPrerelease("2.5.0-rc1"), is(true));
+        assertThat(MetadataFilterService.isPrerelease("2.5.0-RC2"), is(true));
+        assertThat(MetadataFilterService.isPrerelease("3.0.0-SNAPSHOT"), is(true));
+        assertThat(MetadataFilterService.isPrerelease("4.1.0-canary"), is(true));
+        assertThat(MetadataFilterService.isPrerelease("4.1.0-next.5"), is(true));
+        assertThat(MetadataFilterService.isPrerelease("1.0.0-pre"), is(true));
+        assertThat(MetadataFilterService.isPrerelease("1.0-M3"), is(true));
+        assertThat(MetadataFilterService.isPrerelease("1.0-milestone"), is(true));
+    }
+
+    @Test
+    void isPrereleaseTreatsClassifierSuffixesAsStable() {
+        // The Guava 33.x → r09 regression: "-jre"/"-android" are classifier
+        // suffixes, not prerelease qualifiers. Misclassifying them collapses
+        // the "newest stable" pick to a decade-old release.
+        assertThat(MetadataFilterService.isPrerelease("33.5.0-jre"), is(false));
+        assertThat(MetadataFilterService.isPrerelease("33.6.0-android"), is(false));
+        assertThat(MetadataFilterService.isPrerelease("2.5.0.RELEASE"), is(false));
+        // Spring style: legitimate suffix that historically tripped the
+        // contains("rc") check (the substring "RELEASE" contains "EA"/"RE",
+        // not "rc", but the principle is the same — token-based, not
+        // substring-based).
+        assertThat(MetadataFilterService.isPrerelease("2.5.0-RELEASE"), is(false));
+    }
+
+    @Test
+    void isPrereleaseDoesNotMatchSubstringInsideUnrelatedWords() {
+        // Guard against the contains("rc") / contains("dev") regression:
+        // "archived" contains "rc"; "developer" contains "dev"; etc.
+        assertThat(MetadataFilterService.isPrerelease("1.0.0-archived"), is(false));
+        assertThat(MetadataFilterService.isPrerelease("1.0.0-developer"), is(false));
+        assertThat(MetadataFilterService.isPrerelease("1.0.0-macos"), is(false));
+        assertThat(MetadataFilterService.isPrerelease("1.0.0-betaflight"), is(false));
+    }
+
+    @Test
+    void isPrereleaseHandlesPlainStableVersions() {
+        assertThat(MetadataFilterService.isPrerelease("1.0.0"), is(false));
+        assertThat(MetadataFilterService.isPrerelease("33.5.0"), is(false));
+        assertThat(MetadataFilterService.isPrerelease("r09"), is(false));
+        assertThat(MetadataFilterService.isPrerelease(""), is(false));
+        assertThat(MetadataFilterService.isPrerelease(null), is(false));
     }
 
     // Test implementations
