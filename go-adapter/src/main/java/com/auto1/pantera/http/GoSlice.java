@@ -104,6 +104,39 @@ public final class GoSlice implements Slice {
         final String name,
         final Optional<Queue<ArtifactEvent>> events
     ) {
+        this(storage, policy, basicAuth, tokenAuth, name, events,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+    }
+
+    /**
+     * Ctor with synchronous artifact-index writer.
+     *
+     * <p>The {@code syncIndex} closes the read-after-write window between
+     * upload and group-resolver index lookup: by the time this slice's
+     * {@code 201 Created} response is composed, the index already shows
+     * the new artifact, so the next group request for the same module-
+     * version finds it via the proxy-only optimisation rather than via a
+     * 404-then-fanout-to-hosted dance. Tests and file-only deployments
+     * pass {@link com.auto1.pantera.index.SyncArtifactIndexer#NOOP}.
+     *
+     * @param storage Storage
+     * @param policy Security policy
+     * @param basicAuth Basic authentication
+     * @param tokenAuth Token authentication
+     * @param name Repository name
+     * @param events Artifact events queue
+     * @param syncIndex Synchronous artifact-index writer
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public GoSlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
+    ) {
         this.origin = new SliceRoute(
             GoSlice.pathGet(
                 ".+/@v/v.*\\.info",
@@ -134,7 +167,7 @@ public final class GoSlice implements Slice {
             new RtRulePath(
                 MethodRule.PUT,
                 GoSlice.createAuthSlice(
-                    new GoUploadSlice(storage, name, events),
+                    new GoUploadSlice(storage, name, events, syncIndex),
                     basicAuth,
                     tokenAuth,
                     new OperationControl(

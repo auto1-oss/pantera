@@ -27,7 +27,12 @@ import java.util.concurrent.CompletableFuture;
 public final class GoProxySource implements PublishDateSource {
 
     private static final String DEFAULT_BASE_URL = "https://proxy.golang.org";
-    private static final long TIMEOUT_MS = 5_000L;
+    /**
+     * Per-source HTTP timeout. Sized to fit inside the cooldown service's
+     * publish-date fetch budget so the source-level timeout fires naturally
+     * (and L1 negative caching kicks in) rather than the parent cancelling.
+     */
+    private static final long TIMEOUT_MS = 1_500L;
 
     private final WebClient client;
     private final String baseUrl;
@@ -57,11 +62,18 @@ public final class GoProxySource implements PublishDateSource {
         final boolean ssl = "https".equals(base.getScheme());
         final int port = base.getPort() == -1 ? (ssl ? 443 : 80) : base.getPort();
         final String escaped = escapeModulePath(name);
-        final String path = "/" + escaped + "/@v/" + version + ".info";
+        // Go's module proxy protocol REQUIRES versions to be prefixed with
+        // "v" in the URL (e.g. /foo/@v/v0.29.0.info). Upstream callers in
+        // Pantera carry the version without the prefix because that's how
+        // it's stored in artifact metadata, so we add it back here. Without
+        // this, proxy.golang.org returns 404 and we waste a roundtrip.
+        final String prefixed = version.startsWith("v") ? version : "v" + version;
+        final String path = "/" + escaped + "/@v/" + prefixed + ".info";
 
         final CompletableFuture<Optional<Instant>> out = new CompletableFuture<>();
         this.client.get(port, base.getHost(), path)
             .ssl(ssl)
+            .putHeader("User-Agent", com.auto1.pantera.http.EcosystemUserAgents.GO)
             .timeout(TIMEOUT_MS)
             .send(ar -> {
                 if (ar.failed()) {
