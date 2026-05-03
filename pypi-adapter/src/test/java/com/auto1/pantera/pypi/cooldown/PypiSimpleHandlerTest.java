@@ -117,6 +117,23 @@ final class PypiSimpleHandlerTest {
     }
 
     @Test
+    void normalisesPackageNameBeforeCooldownLookup() throws Exception {
+        // Upstream serves the same content whether the request is for the raw
+        // or normalized form — PyPI tolerates both. The handler must canon-
+        // icalize before consulting cooldown, otherwise a request for
+        // "/simple/Foo_Bar/" would look up release dates under "Foo_Bar"
+        // while the publish path stored them under "foo-bar" (PEP 503).
+        this.upstream.put(
+            "/simple/Foo_Bar/",
+            simpleHtml("foo-bar", "1.0.0")
+        );
+        this.handler.handle(
+            new RequestLine(RqMethod.GET, "/simple/Foo_Bar/"), "alice"
+        ).get();
+        assertThat(this.cooldown.lastArtifact(), equalTo("foo-bar"));
+    }
+
+    @Test
     void upstream404ForwardedUnchanged() throws Exception {
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/simple/missing/"), "alice"
@@ -174,6 +191,7 @@ final class PypiSimpleHandlerTest {
     /** Scripted cooldown service. */
     private static final class ScriptedCooldown implements CooldownService {
         private final Set<String> blocked = new HashSet<>();
+        private volatile String lastArtifact;
 
         void block(final String... versions) {
             for (final String v : versions) {
@@ -181,10 +199,15 @@ final class PypiSimpleHandlerTest {
             }
         }
 
+        String lastArtifact() {
+            return this.lastArtifact;
+        }
+
         @Override
         public CompletableFuture<CooldownResult> evaluate(
             final CooldownRequest request, final CooldownInspector inspector
         ) {
+            this.lastArtifact = request.artifact();
             if (!this.blocked.contains(request.version())) {
                 return CompletableFuture.completedFuture(CooldownResult.allowed());
             }

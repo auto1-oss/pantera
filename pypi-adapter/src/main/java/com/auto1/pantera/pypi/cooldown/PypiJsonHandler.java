@@ -164,9 +164,18 @@ public final class PypiJsonHandler {
      */
     public CompletableFuture<Response> handle(final RequestLine line, final String user) {
         final String path = line.uri().getPath();
-        final String pkg = this.detector.extractPackageName(path).orElseThrow(
-            () -> new IllegalArgumentException("Not a /pypi/<name>/json path: " + path)
-        );
+        // PEP 503 normalization (lowercase + collapse runs of [-_.] to single
+        // '-'): the artifact-publish path stores release dates under the
+        // canonical name (see ProxySlice's NormalizedProjectName.Simple uses),
+        // so the cooldown lookup must use the same form. A request for
+        // /pypi/Foo_Bar/json with raw name "Foo_Bar" otherwise misses the DB
+        // row for "foo-bar" and the filter silently falls open ("0 blocked"),
+        // leaking blocked versions to pip / Poetry clients.
+        final String pkg = new com.auto1.pantera.pypi.NormalizedProjectName.Simple(
+            this.detector.extractPackageName(path).orElseThrow(
+                () -> new IllegalArgumentException("Not a /pypi/<name>/json path: " + path)
+            )
+        ).value();
         return this.upstream.response(line, Headers.EMPTY, Content.EMPTY)
             .thenCompose(resp -> {
                 if (!resp.status().success()) {

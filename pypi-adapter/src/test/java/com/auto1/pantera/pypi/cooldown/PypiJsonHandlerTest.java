@@ -152,6 +152,23 @@ final class PypiJsonHandlerTest {
     }
 
     @Test
+    void normalisesPackageNameBeforeCooldownLookup() throws Exception {
+        // PyPI tolerates non-canonical names in the URL but the publish-date
+        // path stores entries under the PEP 503 canonical name. The handler
+        // must normalize "Foo_Bar" -> "foo-bar" before consulting cooldown,
+        // otherwise the inspector lookup misses the DB row and the filter
+        // silently falls open.
+        this.upstream.put(
+            "/pypi/Foo_Bar/json",
+            pypiJson("1.0.0", "1.0.0")
+        );
+        this.handler.handle(
+            new RequestLine(RqMethod.GET, "/pypi/Foo_Bar/json"), "alice"
+        ).get();
+        assertThat(this.cooldown.lastArtifact(), equalTo("foo-bar"));
+    }
+
+    @Test
     void blockedNonLatestDroppedLatestUnchanged() throws Exception {
         this.upstream.put(
             "/pypi/foo/json",
@@ -228,6 +245,7 @@ final class PypiJsonHandlerTest {
     /** Scripted cooldown service. */
     private static final class ScriptedCooldown implements CooldownService {
         private final Set<String> blocked = new HashSet<>();
+        private volatile String lastArtifact;
 
         void block(final String... versions) {
             for (final String v : versions) {
@@ -235,10 +253,15 @@ final class PypiJsonHandlerTest {
             }
         }
 
+        String lastArtifact() {
+            return this.lastArtifact;
+        }
+
         @Override
         public CompletableFuture<CooldownResult> evaluate(
             final CooldownRequest request, final CooldownInspector inspector
         ) {
+            this.lastArtifact = request.artifact();
             if (!this.blocked.contains(request.version())) {
                 return CompletableFuture.completedFuture(CooldownResult.allowed());
             }
