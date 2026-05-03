@@ -27,6 +27,8 @@ import com.auto1.pantera.index.ArtifactDocument;
 import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.index.SearchResult;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import java.time.Duration;
 import java.util.Collections;
@@ -40,6 +42,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -481,6 +484,37 @@ final class GroupResolverTest {
 
         assertEquals(404, resp.status().code(),
             "Empty members must return 404");
+    }
+
+    // ---- Parametric tests for strategy coverage ----
+
+    @ParameterizedTest
+    @EnumSource(GroupResolver.MembersStrategy.class)
+    void singleMemberWithArtifactSucceedsUnderEitherStrategy(
+        final GroupResolver.MembersStrategy strategy
+    ) throws Exception {
+        final byte[] payload = "ok".getBytes();
+        final Slice only = (line, headers, body) ->
+            CompletableFuture.completedFuture(ResponseBuilder.ok().body(payload).build());
+        final List<MemberSlice> members = List.of(
+            new MemberSlice("only", only, true)
+        );
+        final GroupResolver resolver = new GroupResolver(
+            GROUP,
+            members,
+            Collections.emptyList(),
+            Optional.empty(),
+            REPO_TYPE,
+            Set.of("only"),
+            buildNegativeCache(),
+            java.util.concurrent.ForkJoinPool.commonPool(),
+            strategy
+        );
+        final Response resp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        assertEquals(200, resp.status().code());
+        assertArrayEquals(payload, resp.body().asBytes());
     }
 
     // ---- Helpers ----
