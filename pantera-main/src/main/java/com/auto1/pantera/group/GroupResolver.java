@@ -18,6 +18,7 @@ import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.cache.NegativeCache;
+import com.auto1.pantera.http.cache.NegativeCacheKey;
 import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.fault.Fault;
 import com.auto1.pantera.http.fault.FaultTranslator;
@@ -300,8 +301,16 @@ public final class GroupResolver implements Slice {
         final String artifactName = parsedName.get();
 
         // ---- STEP 1: Negative cache check ----
-        final Key negCacheKey = new Key.From(this.group + ":" + artifactName);
-        if (this.negativeCache.isNotFound(negCacheKey)) {
+        // Best-effort version extraction from the URL so the admin UI has a
+        // real Version column. Uses NegativeCacheKey.fromPath solely to parse
+        // the path; we keep our own (ArtifactNameParser-derived) artifactName
+        // to stay consistent with the index lookup format.
+        final String parsedVersion = NegativeCacheKey
+            .fromPath(this.group, this.repoType, path).artifactVersion();
+        final NegativeCacheKey negCacheKey = new NegativeCacheKey(
+            this.group, this.repoType, artifactName, parsedVersion
+        );
+        if (this.negativeCache.isKnown404(negCacheKey)) {
             EcsLogger.debug("com.auto1.pantera.group")
                 .message("Negative cache hit, returning 404 without DB query")
                 .eventCategory("database")
@@ -330,7 +339,7 @@ public final class GroupResolver implements Slice {
         final Content body,
         final String path,
         final String artifactName,
-        final Key negCacheKey
+        final NegativeCacheKey negCacheKey
     ) {
         return switch (outcome) {
             case IndexOutcome.Hit hit -> targetedLocalRead(
@@ -386,7 +395,7 @@ public final class GroupResolver implements Slice {
         final Content body,
         final String path,
         final String artifactName,
-        final Key negCacheKey
+        final NegativeCacheKey negCacheKey
     ) {
         final Set<String> wanted = new HashSet<>(repos);
         final List<MemberSlice> targeted = this.members.stream()
@@ -555,18 +564,25 @@ public final class GroupResolver implements Slice {
      *   <li>Index returns Miss (artifact not in any hosted repo)</li>
      *   <li>Index hit but targeted member 404 (TOCTOU drift)</li>
      * </ul>
+     *
+     * <p>Skipping hosted members is the optimization that keeps the group
+     * fast — it relies on the artifact_index being authoritative for
+     * "what's in hosted". Upload-side index maintenance must be synchronous
+     * for this to be safe; otherwise a freshly-uploaded artifact whose
+     * event hasn't yet been consumed by {@code DbConsumer} will not appear
+     * in the index, fanout will skip hosted, and the request 404s.
      */
     private CompletableFuture<Response> proxyOnlyFanout(
         final RequestLine line,
         final Headers headers,
         final Content body,
         final String artifactName,
-        final Key negCacheKey
+        final NegativeCacheKey negCacheKey
     ) {
-        final List<MemberSlice> proxyOnly = this.members.stream()
+        final List<MemberSlice> fanoutMembers = this.members.stream()
             .filter(MemberSlice::isProxy)
             .toList();
-        if (proxyOnly.isEmpty()) {
+        if (fanoutMembers.isEmpty()) {
             this.negativeCache.cacheNotFound(negCacheKey);
             EcsLogger.debug("com.auto1.pantera.group")
                 .message("No proxy members, caching 404 and returning")
@@ -591,12 +607,12 @@ public final class GroupResolver implements Slice {
         if (isLeader[0]) {
             EcsLogger.debug("com.auto1.pantera.group")
                 .message("Index miss: fanning out to "
-                    + proxyOnly.size() + " proxy member(s)")
+                    + fanoutMembers.size() + " proxy member(s)")
                 .eventCategory("network")
                 .eventAction("group_index_miss")
                 .field("url.path", line.uri().getPath())
                 .log();
-            return executeProxyFanout(proxyOnly, line, headers, body, negCacheKey)
+            return executeProxyFanout(fanoutMembers, line, headers, body, negCacheKey)
                 .whenComplete((resp, err) -> leaderGate.complete(null));
         }
         EcsLogger.debug("com.auto1.pantera.group")
@@ -612,22 +628,22 @@ public final class GroupResolver implements Slice {
      * Execute the proxy fanout, returning the result with Fault-typed errors.
      */
     private CompletableFuture<Response> executeProxyFanout(
-        final List<MemberSlice> proxyOnly,
+        final List<MemberSlice> fanoutMembers,
         final RequestLine line,
         final Headers headers,
         final Content body,
-        final Key negCacheKey
+        final NegativeCacheKey negCacheKey
     ) {
         return body.asBytesFuture().thenCompose(requestBytes -> {
             final CompletableFuture<Response> result = new CompletableFuture<>();
             final AtomicBoolean completed = new AtomicBoolean(false);
-            final AtomicInteger pending = new AtomicInteger(proxyOnly.size());
+            final AtomicInteger pending = new AtomicInteger(fanoutMembers.size());
             final List<Fault.MemberOutcome> outcomes =
-                Collections.synchronizedList(new ArrayList<>(proxyOnly.size()));
+                Collections.synchronizedList(new ArrayList<>(fanoutMembers.size()));
             final List<CompletableFuture<Response>> memberFutures =
-                new ArrayList<>(proxyOnly.size());
+                new ArrayList<>(fanoutMembers.size());
 
-            for (final MemberSlice member : proxyOnly) {
+            for (final MemberSlice member : fanoutMembers) {
                 if (member.isCircuitOpen()) {
                     outcomes.add(Fault.MemberOutcome.threw(
                         member.name(), Fault.MemberOutcome.Kind.CIRCUIT_OPEN, null
@@ -669,7 +685,7 @@ public final class GroupResolver implements Slice {
         final AtomicInteger pending,
         final List<Fault.MemberOutcome> outcomes,
         final CompletableFuture<Response> result,
-        final Key negCacheKey,
+        final NegativeCacheKey negCacheKey,
         final List<CompletableFuture<Response>> memberFutures
     ) {
         final RsStatus status = resp.status();
@@ -718,7 +734,7 @@ public final class GroupResolver implements Slice {
         final AtomicInteger pending,
         final List<Fault.MemberOutcome> outcomes,
         final CompletableFuture<Response> result,
-        final Key negCacheKey
+        final NegativeCacheKey negCacheKey
     ) {
         if (err instanceof CancellationException) {
             outcomes.add(Fault.MemberOutcome.threw(
@@ -747,7 +763,7 @@ public final class GroupResolver implements Slice {
         final AtomicBoolean completed,
         final List<Fault.MemberOutcome> outcomes,
         final CompletableFuture<Response> result,
-        final Key negCacheKey
+        final NegativeCacheKey negCacheKey
     ) {
         if (pending.decrementAndGet() == 0 && !completed.get()) {
             final boolean anyFiveXxOrException = outcomes.stream()

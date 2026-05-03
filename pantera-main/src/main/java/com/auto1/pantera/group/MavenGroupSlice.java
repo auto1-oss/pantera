@@ -32,6 +32,7 @@ import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ForkJoinPool;
 
@@ -138,13 +139,10 @@ public final class MavenGroupSlice implements Slice {
         final int port,
         final int depth
     ) {
-        this.delegate = delegate;
-        this.group = group;
-        this.members = members;
-        this.resolver = resolver;
-        this.port = port;
-        this.depth = depth;
-        this.metadataCache = new GroupMetadataCache(group);
+        this(delegate, group, members, resolver, port, depth,
+            new GroupMetadataCache(group),
+            com.auto1.pantera.cooldown.metadata.NoopCooldownMetadataService.INSTANCE,
+            "maven-group");
     }
 
     /**
@@ -166,6 +164,49 @@ public final class MavenGroupSlice implements Slice {
         final int depth,
         final GroupMetadataCache cache
     ) {
+        this(delegate, group, members, resolver, port, depth, cache,
+            com.auto1.pantera.cooldown.metadata.NoopCooldownMetadataService.INSTANCE,
+            "maven-group");
+    }
+
+    /** Cooldown metadata service applied to the merged result. */
+    private final com.auto1.pantera.cooldown.metadata.CooldownMetadataService cooldownMetadata;
+
+    /** Repo type used for cooldown lookups (maven-group / gradle-group). */
+    private final String repoType;
+
+    /**
+     * Constructor with cooldown metadata filtering.
+     *
+     * <p>After merging member metadata, the result is run through
+     * {@link com.auto1.pantera.maven.cooldown.MavenMetadataFilter} so blocked
+     * versions never reach the client. Without this, a hosted member (which
+     * does not run the per-proxy cooldown filter) can re-introduce blocked
+     * versions into the merged response and the client would resolve to a
+     * version it cannot subsequently download (403 from the artifact gate).
+     *
+     * @param delegate Delegate group slice
+     * @param group Group repository name
+     * @param members Member repository names
+     * @param resolver Slice resolver
+     * @param port Server port
+     * @param depth Nesting depth
+     * @param cache Group metadata cache to use
+     * @param cooldownMetadata Cooldown metadata filter service (NOOP to disable)
+     * @param repoType Repo type ("maven-group" or "gradle-group")
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public MavenGroupSlice(
+        final Slice delegate,
+        final String group,
+        final List<String> members,
+        final SliceResolver resolver,
+        final int port,
+        final int depth,
+        final GroupMetadataCache cache,
+        final com.auto1.pantera.cooldown.metadata.CooldownMetadataService cooldownMetadata,
+        final String repoType
+    ) {
         this.delegate = delegate;
         this.group = group;
         this.members = members;
@@ -173,6 +214,8 @@ public final class MavenGroupSlice implements Slice {
         this.port = port;
         this.depth = depth;
         this.metadataCache = cache;
+        this.cooldownMetadata = cooldownMetadata;
+        this.repoType = repoType;
     }
 
     @Override
@@ -447,11 +490,16 @@ public final class MavenGroupSlice implements Slice {
                     // StAX streaming merge — see {@link StreamingMetadataMerger}.
                     // Peak heap is O(unique versions), not O(sum of body sizes).
                     return mergeStreaming(metadataList)
+                        .thenCompose(rawMerged ->
+                            applyCooldownFilter(path, rawMerged))
                         .thenApply(mergedBytes -> {
                             final long mergeDuration = System.currentTimeMillis() - mergeStartTime;
                             final long totalDuration = fetchDuration + mergeDuration;
 
-                            // Cache the merged result (L1 + L2)
+                            // Cache the merged result (L1 + L2) AFTER the
+                            // cooldown filter has stripped blocked versions —
+                            // we never want to serve a cached unfiltered blob
+                            // that pre-dates the current cooldown policy.
                             MavenGroupSlice.this.metadataCache.put(cacheKey, mergedBytes);
 
                             // Record metadata merge metrics (total for backward compatibility)
@@ -535,6 +583,82 @@ public final class MavenGroupSlice implements Slice {
                 merger.mergeMember(new ByteArrayInputStream(body));
             }
             return merger.toXml();
+        });
+    }
+
+    /**
+     * Run the merged metadata through the cooldown filter so any version that
+     * is currently blocked by a per-artifact cooldown (whether it survived
+     * because a hosted member's metadata is unfiltered, or because a stale
+     * cached blob from before the policy change leaked through) is stripped
+     * before reaching the client.
+     *
+     * <p>If the filter throws {@code AllVersionsBlockedException}, the merged
+     * bytes are returned unmodified rather than failing the request — the
+     * caller's metadata cache+serve flow then matches the proxy slice's
+     * fall-through behaviour. Any other failure is logged and we return the
+     * unfiltered bytes (defence in depth: a filter bug must not break the
+     * group response).
+     */
+    private CompletableFuture<byte[]> applyCooldownFilter(
+        final String path, final byte[] mergedBytes
+    ) {
+        if (this.cooldownMetadata
+            instanceof com.auto1.pantera.cooldown.metadata.NoopCooldownMetadataService) {
+            return CompletableFuture.completedFuture(mergedBytes);
+        }
+        final Optional<String> pkgOpt =
+            new com.auto1.pantera.maven.cooldown.MavenMetadataRequestDetector()
+                .extractPackageName(path);
+        if (pkgOpt.isEmpty()) {
+            return CompletableFuture.completedFuture(mergedBytes);
+        }
+        // Convert slashed groupId/artifactId path (e.g. "com/google/guava/guava")
+        // to the dotted Maven coordinate ("com.google.guava.guava") that the
+        // publish-date sources and cooldown DB blocks both use as the canonical
+        // key. Without this, MavenHeadSource.fetch() splits on the last dot
+        // and returns empty (no dot in the slashed form), the inspector returns
+        // empty, cooldown.evaluate() fails open, and nothing gets filtered.
+        final String dottedPackage = pkgOpt.get().replace('/', '.');
+        // Base repo type ("maven" or "gradle") — the cooldown SPI is keyed
+        // by base type, not the group suffix. Without the strip,
+        // settings.enabledFor("maven-group") returns false and the filter
+        // is skipped entirely.
+        final String baseType = this.repoType.endsWith("-group")
+            ? this.repoType.substring(0, this.repoType.length() - "-group".length())
+            : this.repoType;
+        // Inspector wired to the global publish-date registry so the filter
+        // can resolve "is this version too fresh?" without requiring a
+        // pre-existing per-member block in the cooldown DB. At the group
+        // layer there's no canonical "member repo" to look up blocks
+        // under — every member's blocks are independent — so we evaluate
+        // by publish date directly.
+        final com.auto1.pantera.cooldown.api.CooldownInspector inspector =
+            new com.auto1.pantera.publishdate.RegistryBackedInspector(
+                baseType,
+                com.auto1.pantera.publishdate.PublishDateRegistries.instance()
+            );
+        return this.cooldownMetadata.filterMetadata(
+            baseType,
+            this.group,
+            dottedPackage,
+            mergedBytes,
+            new com.auto1.pantera.maven.cooldown.MavenMetadataParser(),
+            new com.auto1.pantera.maven.cooldown.MavenMetadataFilter(),
+            new com.auto1.pantera.maven.cooldown.MavenMetadataRewriter(),
+            Optional.of(inspector)
+        ).exceptionally(err -> {
+            EcsLogger.warn("com.auto1.pantera.maven")
+                .message("Cooldown filter on merged group metadata failed; "
+                    + "serving unfiltered bytes")
+                .eventCategory("database")
+                .eventAction("metadata_filter")
+                .eventOutcome("failure")
+                .field("repository.name", this.group)
+                .field("url.path", path)
+                .error(err)
+                .log();
+            return mergedBytes;
         });
     }
 

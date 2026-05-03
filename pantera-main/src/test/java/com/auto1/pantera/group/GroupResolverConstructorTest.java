@@ -50,8 +50,6 @@ final class GroupResolverConstructorTest {
             (Key name, int port, int depth) -> okSlice;
 
         final NegativeCache negCache = new NegativeCache(
-            "group-negative",
-            GROUP,
             new NegativeCacheConfig(
                 Duration.ofMinutes(5),
                 10_000,

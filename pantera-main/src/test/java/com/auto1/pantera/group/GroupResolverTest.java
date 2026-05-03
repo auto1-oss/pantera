@@ -69,6 +69,12 @@ final class GroupResolverTest {
     private static final String JAR_PATH =
         "/com/google/guava/guava/31.1/guava-31.1.jar";
     private static final String PARSED_NAME = "com.google.guava.guava";
+    /**
+     * Version that {@link com.auto1.pantera.http.cache.NegativeCacheKey#fromPath}
+     * extracts from {@link #JAR_PATH}. GroupResolver populates the cache with
+     * this version so the admin UI shows it as a separate column.
+     */
+    private static final String PARSED_VERSION = "31.1";
 
     // ---- PATH A: negativeCacheHit_returns404WithoutDbQuery ----
 
@@ -77,7 +83,8 @@ final class GroupResolverTest {
         final RecordingIndex idx = new RecordingIndex(Optional.of(List.of(HOSTED)));
         final NegativeCache negCache = buildNegativeCache();
         // Pre-populate the negative cache
-        negCache.cacheNotFound(new Key.From(GROUP + ":" + PARSED_NAME));
+        negCache.cacheNotFound(new com.auto1.pantera.http.cache.NegativeCacheKey(
+            GROUP, REPO_TYPE, PARSED_NAME, PARSED_VERSION));
 
         final GroupResolver resolver = buildResolver(
             idx, List.of(HOSTED, PROXY_A), Set.of(PROXY_A), negCache,
@@ -198,8 +205,9 @@ final class GroupResolverTest {
 
         assertEquals(404, resp.status().code(),
             "All-proxy-404 must return 404");
-        final Key negKey = new Key.From(GROUP + ":" + PARSED_NAME);
-        assertTrue(negCache.isNotFound(negKey),
+        final com.auto1.pantera.http.cache.NegativeCacheKey negKey =
+            new com.auto1.pantera.http.cache.NegativeCacheKey(GROUP, REPO_TYPE, PARSED_NAME, PARSED_VERSION);
+        assertTrue(negCache.isKnown404(negKey),
             "Negative cache must be populated after all-proxy-404");
     }
 
@@ -304,8 +312,9 @@ final class GroupResolverTest {
             "Index miss with no proxy members must return 404");
         assertEquals(0, hostedCount.get(),
             "Hosted member must NOT be queried on index miss (fully indexed)");
-        final Key negKey = new Key.From(GROUP + ":" + PARSED_NAME);
-        assertTrue(negCache.isNotFound(negKey),
+        final com.auto1.pantera.http.cache.NegativeCacheKey negKey =
+            new com.auto1.pantera.http.cache.NegativeCacheKey(GROUP, REPO_TYPE, PARSED_NAME, PARSED_VERSION);
+        assertTrue(negCache.isKnown404(negKey),
             "Negative cache must be populated");
     }
 
@@ -524,7 +533,7 @@ final class GroupResolverTest {
             NegativeCacheConfig.DEFAULT_L2_MAX_SIZE,
             NegativeCacheConfig.DEFAULT_L2_TTL
         );
-        return new NegativeCache("group-negative", GROUP, config);
+        return new NegativeCache(config);
     }
 
     private static Slice okSlice() {

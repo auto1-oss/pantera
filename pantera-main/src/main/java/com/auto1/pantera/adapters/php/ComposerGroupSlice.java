@@ -94,6 +94,47 @@ public final class ComposerGroupSlice implements Slice {
         final int port,
         final String globalPrefix
     ) {
+        this(delegate, resolver, group, members, port, globalPrefix,
+            com.auto1.pantera.cooldown.metadata.NoopCooldownMetadataService.INSTANCE,
+            "php-group");
+    }
+
+    /** Cooldown metadata service applied to merged packages.json. */
+    private final com.auto1.pantera.cooldown.metadata.CooldownMetadataService cooldownMetadata;
+
+    /** Repo type for cooldown lookups (php-group / file-group). */
+    private final String repoType;
+
+    /**
+     * Ctor with cooldown metadata filtering on the merged response.
+     *
+     * <p>Composer resolves package versions from {@code packages.json} (or the
+     * {@code provider-includes} indirection used by Satis). Without filtering
+     * the merged document, a hosted member can re-introduce versions that the
+     * proxy member's per-request filter had stripped, and the client would
+     * resolve to a version it cannot subsequently download (403 from the
+     * artifact gate). Symmetric to MavenGroupSlice's filter.
+     *
+     * @param delegate Delegate group slice
+     * @param resolver Slice resolver
+     * @param group Group repository name
+     * @param members List of member repository names
+     * @param port Server port
+     * @param globalPrefix Global URL prefix
+     * @param cooldownMetadata Cooldown metadata filter service (NOOP to disable)
+     * @param repoType Repo type ("php-group" or "file-group")
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public ComposerGroupSlice(
+        final Slice delegate,
+        final SliceResolver resolver,
+        final String group,
+        final List<String> members,
+        final int port,
+        final String globalPrefix,
+        final com.auto1.pantera.cooldown.metadata.CooldownMetadataService cooldownMetadata,
+        final String repoType
+    ) {
         this.delegate = delegate;
         this.resolver = resolver;
         this.group = group;
@@ -104,6 +145,8 @@ public final class ComposerGroupSlice implements Slice {
         } else {
             this.basePath = "/" + group;
         }
+        this.cooldownMetadata = cooldownMetadata;
+        this.repoType = repoType;
     }
 
     @Override

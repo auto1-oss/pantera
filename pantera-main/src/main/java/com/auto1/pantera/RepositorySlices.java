@@ -493,7 +493,8 @@ public class RepositorySlices {
             case "npm":
                 slice = browsableTrimPathSlice(
                     new NpmSlice(
-                        cfg.url(), cfg.storage(), securityPolicy(), authentication(), tokens.auth(), tokens, cfg.name(), artifactEvents(), true
+                        cfg.url(), cfg.storage(), securityPolicy(), authentication(), tokens.auth(), tokens, cfg.name(), artifactEvents(), true,
+                        this.settings.syncArtifactIndexer()
                     ),
                     cfg.storage()
                 );
@@ -506,7 +507,8 @@ public class RepositorySlices {
                         authentication(),
                         tokens.auth(),
                         cfg.name(),
-                        artifactEvents()
+                        artifactEvents(),
+                        this.settings.syncArtifactIndexer()
                     ),
                     cfg.storage()
                 );
@@ -514,7 +516,8 @@ public class RepositorySlices {
             case "helm":
                 slice = browsableTrimPathSlice(
                     new HelmSlice(
-                        cfg.storage(), cfg.url().toString(), securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents()
+                        cfg.storage(), cfg.url().toString(), securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents(),
+                        this.settings.syncArtifactIndexer()
                     ),
                     cfg.storage()
                 );
@@ -522,7 +525,9 @@ public class RepositorySlices {
             case "rpm":
                 slice = browsableTrimPathSlice(
                     new RpmSlice(cfg.storage(), securityPolicy(), authentication(),
-                        tokens.auth(), new com.auto1.pantera.rpm.RepoConfig.FromYaml(cfg.settings(), cfg.name()), Optional.empty()),
+                        tokens.auth(), new com.auto1.pantera.rpm.RepoConfig.FromYaml(cfg.settings(), cfg.name()),
+                        artifactEvents(),
+                        this.settings.syncArtifactIndexer()),
                     cfg.storage()
                 );
                 break;
@@ -555,7 +560,8 @@ public class RepositorySlices {
                             authentication(),
                             tokens.auth(),
                             cfg.name(),
-                            artifactEvents()
+                            artifactEvents(),
+                            this.settings.syncArtifactIndexer()
                         ),
                         "direct-dists"
                     ),
@@ -584,7 +590,8 @@ public class RepositorySlices {
                 slice = browsableTrimPathSlice(
                     new NuGet(
                         cfg.url(), new com.auto1.pantera.nuget.AstoRepository(cfg.storage()),
-                        securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents()
+                        securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents(),
+                        this.settings.syncArtifactIndexer()
                     ),
                     cfg.storage()
                 );
@@ -593,7 +600,8 @@ public class RepositorySlices {
             case "maven":
                 slice = browsableTrimPathSlice(
                     new MavenSlice(cfg.storage(), securityPolicy(),
-                        authentication(), tokens.auth(), cfg.name(), artifactEvents()),
+                        authentication(), tokens.auth(), cfg.name(), artifactEvents(),
+                        this.settings.syncArtifactIndexer()),
                     cfg.storage()
                 );
                 break;
@@ -631,7 +639,8 @@ public class RepositorySlices {
                         authentication(),
                         tokens.auth(),
                         cfg.name(),
-                        artifactEvents()
+                        artifactEvents(),
+                        this.settings.syncArtifactIndexer()
                     ),
                     cfg.storage()
                 );
@@ -800,7 +809,9 @@ public class RepositorySlices {
                             composerDelegate,
                             this::slice, cfg.name(), cfg.members(), port,
                             this.settings.prefixes().prefixes().stream()
-                                .findFirst().orElse("")
+                                .findFirst().orElse(""),
+                            this.cooldownMetadata,
+                            cfg.type()
                         ),
                         authentication(),
                         tokens.auth(),
@@ -812,7 +823,12 @@ public class RepositorySlices {
                 );
                 break;
             case "maven-group":
-                // Maven groups need special metadata merging
+            case "gradle-group":
+                // Maven AND Gradle groups need maven-metadata.xml merge +
+                // cooldown filter on the merged result. Gradle uses the same
+                // metadata format as Maven, so it routes through the same
+                // slice — previously gradle-group fell into the generic
+                // GroupResolver case which can't merge metadata.
                 final List<String> mavenFlatMembers = flattenMembers(cfg.name(), cfg.members());
                 final GroupResolver mavenDelegate = new GroupResolver(
                     this::slice, cfg.name(), mavenFlatMembers, port, depth,
@@ -820,7 +836,7 @@ public class RepositorySlices {
                     java.util.Collections.emptyList(),
                     Optional.of(this.settings.artifactIndex()),
                     proxyMembers(mavenFlatMembers),
-                    "maven-group",
+                    cfg.type(),
                     this.sharedNegativeCache,
                     this::getOrCreateMemberRegistry,
                     getOrCreateBulkhead(cfg.name()).drainExecutor()
@@ -833,7 +849,10 @@ public class RepositorySlices {
                             cfg.members(),
                             this::slice,
                             port,
-                            depth
+                            depth,
+                            new com.auto1.pantera.group.GroupMetadataCache(cfg.name()),
+                            this.cooldownMetadata,
+                            cfg.type()
                         ),
                         authentication(),
                         tokens.auth(),
@@ -846,7 +865,6 @@ public class RepositorySlices {
                 break;
             case "gem-group":
             case "go-group":
-            case "gradle-group":
             case "pypi-group":
             case "docker-group":
                 final List<String> genericFlatMembers = flattenMembers(cfg.name(), cfg.members());
@@ -906,12 +924,14 @@ public class RepositorySlices {
                 );
                 if (cfg.port().isPresent()) {
                     slice = new DockerSlice(docker, securityPolicy(),
-                        new CombinedAuthScheme(authentication(), tokens.auth()), artifactEvents());
+                        new CombinedAuthScheme(authentication(), tokens.auth()), artifactEvents(),
+                        this.settings.syncArtifactIndexer());
                 } else {
                     slice = new DockerRoutingSlice.Reverted(
                         new DockerSlice(new TrimmedDocker(docker, cfg.name()),
                             securityPolicy(), new CombinedAuthScheme(authentication(), tokens.auth()),
-                            artifactEvents())
+                            artifactEvents(),
+                            this.settings.syncArtifactIndexer())
                     );
                 }
                 break;
@@ -936,14 +956,16 @@ public class RepositorySlices {
                     new DebianSlice(
                         cfg.storage(), securityPolicy(), authentication(),
                         new com.auto1.pantera.debian.Config.FromYaml(cfg.name(), cfg.settings(), settings.configStorage()),
-                        artifactEvents()
+                        artifactEvents(),
+                        this.settings.syncArtifactIndexer()
                     )
                 );
                 break;
             case "conda":
                 slice = new CondaSlice(
                     cfg.storage(), securityPolicy(), authentication(), tokens,
-                    cfg.url().toString(), cfg.name(), artifactEvents()
+                    cfg.url().toString(), cfg.name(), artifactEvents(),
+                    this.settings.syncArtifactIndexer()
                 );
                 break;
             case "conan":
@@ -964,7 +986,8 @@ public class RepositorySlices {
             case "hexpm":
                 slice = trimPathSlice(
                     new HexSlice(cfg.storage(), securityPolicy(), authentication(),
-                        artifactEvents(), cfg.name())
+                        artifactEvents(), cfg.name(),
+                        this.settings.syncArtifactIndexer())
                 );
                 break;
             case "pypi":
@@ -972,7 +995,8 @@ public class RepositorySlices {
                     new PathPrefixStripSlice(
                         new com.auto1.pantera.pypi.http.PySlice(
                             cfg.storage(), securityPolicy(), authentication(),
-                            cfg.name(), artifactEvents()
+                            null, cfg.name(), artifactEvents(),
+                            this.settings.syncArtifactIndexer()
                         ),
                         "simple"
                     )
