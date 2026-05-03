@@ -12,12 +12,14 @@ package com.auto1.pantera.db;
 
 import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.index.ArtifactIndexCache;
 import com.auto1.pantera.index.SyncArtifactIndexer;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import javax.sql.DataSource;
 
@@ -49,8 +51,18 @@ public final class DbSyncArtifactIndexer implements SyncArtifactIndexer {
 
     private final DataSource dataSource;
 
+    private final Optional<ArtifactIndexCache> cache;
+
     public DbSyncArtifactIndexer(final DataSource dataSource) {
+        this(dataSource, Optional.empty());
+    }
+
+    public DbSyncArtifactIndexer(
+        final DataSource dataSource,
+        final Optional<ArtifactIndexCache> cache
+    ) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
+        this.cache = Objects.requireNonNull(cache, "cache");
     }
 
     @Override
@@ -61,7 +73,16 @@ public final class DbSyncArtifactIndexer implements SyncArtifactIndexer {
         }
         return CompletableFuture.runAsync(
             () -> upsert(event), HandlerExecutor.get()
-        ).exceptionally(err -> {
+        ).thenRun(() -> {
+            // Drop both positive and negative L1 entries for this artifact
+            // name so the next read sees the fresh DB row, not a stale
+            // (possibly negative) cache entry. No-op when no cache is wired.
+            this.cache.ifPresent(c -> {
+                if (event.artifactName() != null) {
+                    c.invalidate(event.artifactName());
+                }
+            });
+        }).exceptionally(err -> {
             // Fall through silently — the async DbConsumer path is still
             // running and will retry on its own batch cycle. The failure
             // here only delays read-after-write consistency, it doesn't

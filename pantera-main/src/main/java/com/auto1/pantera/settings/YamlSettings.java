@@ -371,7 +371,7 @@ public final class YamlSettings implements Settings {
         );
         this.syncIndexer = eventsDs
             .map(db -> (com.auto1.pantera.index.SyncArtifactIndexer)
-                new com.auto1.pantera.db.DbSyncArtifactIndexer(db))
+                new com.auto1.pantera.db.DbSyncArtifactIndexer(db, this.artifactIndexCache))
             .orElse(com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
         this.prefixesConfig = new PrefixesConfig(YamlSettings.readPrefixes(this.meta()));
         this.httpServerRequestTimeout = YamlSettings.parseRequestTimeout(this.meta());
