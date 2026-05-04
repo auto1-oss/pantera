@@ -239,6 +239,24 @@ public class RepositorySlices {
     private final Supplier<HttpTuning> httpTuningSupplier;
 
     /**
+     * When {@code true}, {@link SharedJettyClients} routes
+     * {@link SharedClient} construction through the legacy 1-arg
+     * {@link JettyClientSlices#JettyClientSlices(HttpClientSettings)} ctor,
+     * which preserves the pre-Task-9 contract of using
+     * {@code settings.maxConnectionsPerDestination()} from YAML for the
+     * connection-pool cap. Set by the 3-/4-arg legacy {@code RepositorySlices}
+     * constructors so callers that did not opt into the runtime tuning
+     * supplier keep their YAML-driven pool sizing
+     * (typically 20-50) instead of silently dropping to
+     * {@link HttpTuning#defaults()}'s {@code h2MaxPoolSize == 1}.
+     *
+     * <p>Cleared (false) for the 5-arg ctor used by {@code VertxMain},
+     * which threads {@link HttpTuning} through the 4-arg
+     * {@link JettyClientSlices} ctor as designed in Phase 2 / Task 9.</p>
+     */
+    private final boolean useLegacyHttpClientCtor;
+
+    /**
      * @param settings Pantera settings
      * @param repos Repositories
      * @param tokens Tokens: authentication and generation
@@ -271,7 +289,12 @@ public class RepositorySlices {
             com.auto1.pantera.http.timeout.AutoBlockSettings
         > circuitBreakerSettings
     ) {
-        this(settings, repos, tokens, circuitBreakerSettings, HttpTuning::defaults);
+        // Legacy 4-arg ctor: route SharedClient construction through the
+        // legacy 1-arg JettyClientSlices(HttpClientSettings) ctor so the
+        // YAML-driven settings.maxConnectionsPerDestination() (typically
+        // 20-50) is preserved. Without this flag the supplier fallback
+        // would silently apply HttpTuning.defaults().h2MaxPoolSize() == 1.
+        this(settings, repos, tokens, circuitBreakerSettings, HttpTuning::defaults, true);
     }
 
     /**
@@ -297,8 +320,46 @@ public class RepositorySlices {
         > circuitBreakerSettings,
         final Supplier<HttpTuning> httpTuningSupplier
     ) {
+        // 5-arg ctor (current production path used by VertxMain): the caller
+        // supplied a real HttpTuning supplier, so we want SharedClient
+        // construction to use the 4-arg JettyClientSlices ctor and pull
+        // h2MaxPoolSize/h2MultiplexingLimit/protocol from the supplier on
+        // every cache miss. useLegacyHttpClientCtor=false.
+        this(settings, repos, tokens, circuitBreakerSettings, httpTuningSupplier, false);
+    }
+
+    /**
+     * Internal canonical constructor — all public ctors funnel here. The
+     * {@code useLegacyHttpClientCtor} flag selects between the legacy 1-arg
+     * {@link JettyClientSlices} ctor (preserves YAML
+     * {@code maxConnectionsPerDestination}) and the 4-arg ctor (uses
+     * {@link HttpTuning} from the supplier). Kept package-private so tests
+     * can force either path explicitly.
+     *
+     * @param settings Pantera settings
+     * @param repos Repositories
+     * @param tokens Tokens: authentication and generation
+     * @param circuitBreakerSettings Supplier returning the current circuit-
+     *                               breaker settings
+     * @param httpTuningSupplier Supplier returning the current HTTP-client
+     *                           tuning snapshot
+     * @param useLegacyHttpClientCtor When true, route through the legacy
+     *                                {@code JettyClientSlices(HttpClientSettings)}
+     *                                ctor; otherwise use the 4-arg ctor.
+     */
+    RepositorySlices(
+        final Settings settings,
+        final Repositories repos,
+        final Tokens tokens,
+        final java.util.function.Supplier<
+            com.auto1.pantera.http.timeout.AutoBlockSettings
+        > circuitBreakerSettings,
+        final Supplier<HttpTuning> httpTuningSupplier,
+        final boolean useLegacyHttpClientCtor
+    ) {
         this.circuitBreakerSettings = circuitBreakerSettings;
         this.httpTuningSupplier = httpTuningSupplier;
+        this.useLegacyHttpClientCtor = useLegacyHttpClientCtor;
         this.settings = settings;
         this.repos = repos;
         this.tokens = tokens;
@@ -312,7 +373,7 @@ public class RepositorySlices {
                 );
             }
         }
-        this.sharedClients = new SharedJettyClients(httpTuningSupplier);
+        this.sharedClients = new SharedJettyClients(httpTuningSupplier, useLegacyHttpClientCtor);
         // Load negative cache config once at construction time.
         // Reads repo-negative first; falls back to group-negative with deprecation WARN.
         this.negativeCacheConfig = loadNegativeCacheConfig(settings);
@@ -1355,9 +1416,25 @@ public class RepositorySlices {
         private final ConcurrentMap<HttpClientSettingsKey, SharedClient> clients = new ConcurrentHashMap<>();
         private final AtomicReference<MeterRegistry> metrics = new AtomicReference<>();
         private final Supplier<HttpTuning> httpTuningSupplier;
+        /**
+         * When true, build {@link SharedClient}s via the legacy
+         * {@link JettyClientSlices#JettyClientSlices(HttpClientSettings)} ctor
+         * so the YAML {@code maxConnectionsPerDestination} is preserved
+         * (pre-Task-9 behaviour). Set by the legacy 3-/4-arg
+         * {@link RepositorySlices} constructors.
+         */
+        private final boolean useLegacyHttpClientCtor;
 
         SharedJettyClients(final Supplier<HttpTuning> httpTuningSupplier) {
+            this(httpTuningSupplier, false);
+        }
+
+        SharedJettyClients(
+            final Supplier<HttpTuning> httpTuningSupplier,
+            final boolean useLegacyHttpClientCtor
+        ) {
             this.httpTuningSupplier = httpTuningSupplier;
+            this.useLegacyHttpClientCtor = useLegacyHttpClientCtor;
         }
 
         /**
@@ -1376,7 +1453,9 @@ public class RepositorySlices {
                 (ignored, existing) -> {
                     if (existing == null) {
                         final HttpTuning tuning = this.httpTuningSupplier.get();
-                        final SharedClient created = new SharedClient(key, tuning);
+                        final SharedClient created = new SharedClient(
+                            key, tuning, this.useLegacyHttpClientCtor
+                        );
                         created.retain();
                         return created;
                     }
@@ -1551,13 +1630,31 @@ public class RepositorySlices {
             private final AtomicBoolean evicted = new AtomicBoolean(false);
 
             SharedClient(final HttpClientSettingsKey key, final HttpTuning tuning) {
+                this(key, tuning, false);
+            }
+
+            SharedClient(
+                final HttpClientSettingsKey key,
+                final HttpTuning tuning,
+                final boolean useLegacyHttpClientCtor
+            ) {
                 this.key = key;
-                this.client = new JettyClientSlices(
-                    key.toSettings(),
-                    mapProtocol(tuning.protocol()),
-                    tuning.h2MaxPoolSize(),
-                    tuning.h2MultiplexingLimit()
-                );
+                if (useLegacyHttpClientCtor) {
+                    // Legacy path (3-/4-arg RepositorySlices ctors): use the
+                    // 1-arg JettyClientSlices ctor so the connection-pool cap
+                    // continues to come from settings.maxConnectionsPerDestination()
+                    // (the YAML override) rather than the supplier-provided
+                    // HttpTuning.h2MaxPoolSize() (which falls back to 1 when
+                    // no runtime cache is wired).
+                    this.client = new JettyClientSlices(key.toSettings());
+                } else {
+                    this.client = new JettyClientSlices(
+                        key.toSettings(),
+                        mapProtocol(tuning.protocol()),
+                        tuning.h2MaxPoolSize(),
+                        tuning.h2MultiplexingLimit()
+                    );
+                }
                 // Start the Jetty client on the dedicated resolve executor to avoid
                 // blocking the Vert.x event loop. The start() call can take 100ms+
                 // due to SSL context initialization and socket setup.

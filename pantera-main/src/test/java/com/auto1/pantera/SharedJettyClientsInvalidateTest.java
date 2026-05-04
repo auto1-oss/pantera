@@ -112,4 +112,49 @@ final class SharedJettyClientsInvalidateTest {
         pool.invalidateAll();
         assertThat(pool.cachedClientCount(), equalTo(0));
     }
+
+    /**
+     * Regression test for code-review Important #1 on commit
+     * {@code 8d31e197a}: when callers construct {@code RepositorySlices}
+     * via the 3-/4-arg legacy ctors (no {@code HttpTuning} supplier), the
+     * resulting {@code SharedClient} must use the legacy 1-arg
+     * {@link JettyClientSlices#JettyClientSlices(HttpClientSettings)} ctor
+     * so the YAML-driven {@code maxConnectionsPerDestination} (typically
+     * 20-50) is preserved — instead of silently dropping to
+     * {@link HttpTuning#defaults()}'s {@code h2MaxPoolSize == 1}.
+     */
+    @Test
+    void legacyConstructorPreservesYamlMaxConnectionsPerDestination() {
+        final int yamlMaxConns = 37;
+        final HttpClientSettings settings = new HttpClientSettings()
+            .setMaxConnectionsPerDestination(yamlMaxConns);
+        // Legacy fallback path: useLegacyHttpClientCtor=true forces routing
+        // through new JettyClientSlices(HttpClientSettings).
+        final RepositorySlices.SharedJettyClients legacyPool =
+            new RepositorySlices.SharedJettyClients(HttpTuning::defaults, true);
+        try (RepositorySlices.SharedJettyClients.Lease lease =
+                 legacyPool.acquire(settings)) {
+            final JettyClientSlices client = lease.client();
+            assertThat(
+                "legacy ctor preserves YAML maxConnectionsPerDestination,"
+                    + " not HttpTuning.defaults().h2MaxPoolSize() (1)",
+                client.httpClient().getMaxConnectionsPerDestination(),
+                equalTo(yamlMaxConns)
+            );
+        }
+        // Sanity: the new (default) path uses the supplier value, so it
+        // should NOT preserve the YAML max — it'd cap at h2MaxPoolSize == 1.
+        final RepositorySlices.SharedJettyClients newPool =
+            new RepositorySlices.SharedJettyClients(HttpTuning::defaults);
+        try (RepositorySlices.SharedJettyClients.Lease lease =
+                 newPool.acquire(settings)) {
+            final JettyClientSlices client = lease.client();
+            assertThat(
+                "non-legacy ctor uses HttpTuning.defaults().h2MaxPoolSize() == 1,"
+                    + " ignoring the YAML value",
+                client.httpClient().getMaxConnectionsPerDestination(),
+                equalTo(HttpTuning.defaults().h2MaxPoolSize())
+            );
+        }
+    }
 }
