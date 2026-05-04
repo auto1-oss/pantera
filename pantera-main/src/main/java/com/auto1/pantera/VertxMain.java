@@ -814,9 +814,27 @@ public final class VertxMain {
                     this.settingsCache::circuitBreakerTuning
                 );
             // Cooldown gate: stub allow-all (see CONCERN-task19-stub-cooldown-gate
-            // in the audit doc). Real wiring is Phase 6 / Task 25.B.
+            // in the audit doc). Real wiring is deferred to v2.3 — wiring the
+            // per-ecosystem CooldownInspector through RepositorySlices needs a
+            // dedicated factory the adapters do not yet expose. Until that lands,
+            // prefetch issues upstream GETs even for cooldown-blocked artifacts;
+            // foreground requests still hit the real cooldown gate so user-
+            // visible blocking is preserved. Emit a one-shot operator-visible
+            // WARN at boot so this is not invisible in production.
             final com.auto1.pantera.prefetch.PrefetchCoordinator.CooldownGate cooldownGate =
                 task -> java.util.concurrent.CompletableFuture.completedFuture(Boolean.FALSE);
+            EcsLogger.warn("com.auto1.pantera.prefetch")
+                .message(
+                    "Prefetch cooldown gate is the stubbed allow-all instance — "
+                        + "prefetch may issue upstream GETs for cooldown-blocked "
+                        + "artifacts. Foreground requests still honour cooldown. "
+                        + "Real per-ecosystem inspector wiring is deferred to v2.3."
+                )
+                .eventCategory("configuration")
+                .eventAction("prefetch_init")
+                .eventOutcome("success")
+                .field("cooldown.gate", "stub-allow-all")
+                .log();
             // Upstream caller: invoke the resolved repository slice directly
             // and stamp a system-level Authorization header so the outer
             // auth wrapper (CombinedAuthzSliceWrap) lets the prefetch through.
