@@ -24,10 +24,12 @@ import com.auto1.pantera.settings.JwtSettings;
 import com.auto1.pantera.settings.MetricsContext;
 import com.auto1.pantera.settings.PrefixesPersistence;
 import com.auto1.pantera.settings.Settings;
+import com.auto1.pantera.settings.runtime.SettingsKey;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
+import java.io.StringReader;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -184,6 +186,20 @@ public final class SettingsHandler {
         router.put("/api/v1/auth-providers/:id/config")
             .handler(new AuthzHandler(this.policy, admin))
             .handler(this::updateAuthProviderConfig);
+        // Runtime tunables — key/value catalog backed by the settings DB.
+        // Routed under /api/v1/settings/runtime/* to avoid colliding with
+        // the legacy section-based endpoints above (/api/v1/settings,
+        // /api/v1/settings/ui, /api/v1/settings/:section).
+        router.get("/api/v1/settings/runtime")
+            .handler(this::handleRuntimeList);
+        router.get("/api/v1/settings/runtime/:key")
+            .handler(this::handleRuntimeGet);
+        router.patch("/api/v1/settings/runtime/:key")
+            .handler(new AuthzHandler(this.policy, admin))
+            .handler(this::handleRuntimePatch);
+        router.delete("/api/v1/settings/runtime/:key")
+            .handler(new AuthzHandler(this.policy, admin))
+            .handler(this::handleRuntimeDelete);
     }
 
     /**
@@ -620,6 +636,247 @@ public final class SettingsHandler {
             return "***";
         }
         return value.substring(0, 2) + "***" + value.substring(value.length() - 2);
+    }
+
+    /**
+     * GET /api/v1/settings/runtime — list all runtime-tunable keys.
+     * Each entry contains the current value (or default if unset),
+     * the spec default, and the {@code source} ({@code "db"} or
+     * {@code "default"}).
+     * @param ctx Routing context
+     */
+    private void handleRuntimeList(final RoutingContext ctx) {
+        if (this.settingsDao == null) {
+            ApiResponse.sendError(ctx, 503, "UNAVAILABLE",
+                "Database not configured");
+            return;
+        }
+        CompletableFuture.supplyAsync(this.settingsDao::listAll,
+            HandlerExecutor.get())
+            .whenComplete((rows, err) -> {
+                if (err != null) {
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
+                        err.getMessage());
+                    return;
+                }
+                final JsonObject body = new JsonObject();
+                for (final SettingsKey k : SettingsKey.values()) {
+                    final boolean present = rows.containsKey(k.key());
+                    final String value;
+                    if (present) {
+                        value = extractValueRepr(rows.get(k.key()));
+                    } else {
+                        value = k.defaultRepr();
+                    }
+                    body.put(k.key(), new JsonObject()
+                        .put("value", value)
+                        .put("default", k.defaultRepr())
+                        .put("source", present ? "db" : "default"));
+                }
+                ctx.response()
+                    .setStatusCode(HttpStatus.OK_200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(body.encode());
+            });
+    }
+
+    /**
+     * GET /api/v1/settings/runtime/:key — single runtime-tunable key.
+     * @param ctx Routing context
+     */
+    private void handleRuntimeGet(final RoutingContext ctx) {
+        final String key = ctx.pathParam("key");
+        if (!SettingsKey.allKeys().contains(key)) {
+            ApiResponse.sendError(ctx, 404, "NOT_FOUND",
+                "Unknown setting key: " + key);
+            return;
+        }
+        if (this.settingsDao == null) {
+            ApiResponse.sendError(ctx, 503, "UNAVAILABLE",
+                "Database not configured");
+            return;
+        }
+        CompletableFuture.supplyAsync(() -> this.settingsDao.get(key),
+            HandlerExecutor.get())
+            .whenComplete((row, err) -> {
+                if (err != null) {
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
+                        err.getMessage());
+                    return;
+                }
+                final JsonObject body = new JsonObject().put("key", key);
+                if (row.isPresent()) {
+                    body.put("value", extractValueRepr(row.get()));
+                    body.put("source", "db");
+                } else {
+                    body.put("value", defaultRepr(key));
+                    body.put("source", "default");
+                }
+                ctx.response()
+                    .setStatusCode(HttpStatus.OK_200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(body.encode());
+            });
+    }
+
+    /**
+     * PATCH /api/v1/settings/runtime/:key — update a runtime-tunable.
+     * Admin-gated by {@link AuthzHandler} ahead of this method.
+     * Body: {@code {"value": <typed>}}.
+     * @param ctx Routing context
+     */
+    private void handleRuntimePatch(final RoutingContext ctx) {
+        final String key = ctx.pathParam("key");
+        if (!SettingsKey.allKeys().contains(key)) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                "Unknown setting key: " + key);
+            return;
+        }
+        if (this.settingsDao == null) {
+            ApiResponse.sendError(ctx, 503, "UNAVAILABLE",
+                "Database not configured");
+            return;
+        }
+        final JsonObject body = ctx.body().asJsonObject();
+        if (body == null || !body.containsKey("value")) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                "Missing 'value' field");
+            return;
+        }
+        final Object value = body.getValue("value");
+        if (!validateRuntime(key, value)) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                "Value out of range for key '" + key + "'");
+            return;
+        }
+        final String actor = ctx.user() != null
+            ? ctx.user().principal().getString("sub", "unknown")
+            : "unknown";
+        CompletableFuture.runAsync(() -> {
+            final javax.json.JsonObject jakarta = Json.createReader(
+                new StringReader(body.encode())
+            ).readObject();
+            this.settingsDao.put(key, jakarta, actor);
+        }, HandlerExecutor.get())
+            .whenComplete((ignored, err) -> {
+                if (err != null) {
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
+                        err.getMessage());
+                } else {
+                    ctx.response()
+                        .setStatusCode(HttpStatus.OK_200)
+                        .putHeader("Content-Type", "application/json")
+                        .end(body.encode());
+                }
+            });
+    }
+
+    /**
+     * DELETE /api/v1/settings/runtime/:key — remove a runtime-tunable
+     * row, causing subsequent reads to return the spec default.
+     * Admin-gated by {@link AuthzHandler} ahead of this method.
+     * @param ctx Routing context
+     */
+    private void handleRuntimeDelete(final RoutingContext ctx) {
+        final String key = ctx.pathParam("key");
+        if (!SettingsKey.allKeys().contains(key)) {
+            ApiResponse.sendError(ctx, 404, "NOT_FOUND",
+                "Unknown setting key: " + key);
+            return;
+        }
+        if (this.settingsDao == null) {
+            ApiResponse.sendError(ctx, 503, "UNAVAILABLE",
+                "Database not configured");
+            return;
+        }
+        CompletableFuture.runAsync(() -> this.settingsDao.delete(key),
+            HandlerExecutor.get())
+            .whenComplete((ignored, err) -> {
+                if (err != null) {
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
+                        err.getMessage());
+                } else {
+                    ctx.response().setStatusCode(204).end();
+                }
+            });
+    }
+
+    /**
+     * Extract the {@code value} field from a stored settings row as the
+     * JSON literal repr. The row is shaped {@code {"value": <typed>}}.
+     * Returns the JSON literal so it round-trips with {@link SettingsKey}'s
+     * {@code defaultRepr} (e.g. {@code "\"h2\""} for strings,
+     * {@code "1"} for numbers).
+     */
+    private static String extractValueRepr(final javax.json.JsonObject row) {
+        final javax.json.JsonValue v = row.get("value");
+        return v == null ? "null" : v.toString();
+    }
+
+    /** Look up the {@code defaultRepr} for a known catalog key. */
+    private static String defaultRepr(final String key) {
+        for (final SettingsKey k : SettingsKey.values()) {
+            if (k.key().equals(key)) {
+                return k.defaultRepr();
+            }
+        }
+        return "null";
+    }
+
+    /**
+     * Per-key range/type validator. Vert.x's {@link JsonObject#getValue}
+     * returns {@code Number} (concrete subclass varies by encoded value)
+     * for JSON numbers, {@code Boolean} for booleans, {@code String} for
+     * strings. We accept any integral {@code Number} for int-valued keys,
+     * rejecting fractional values since runtime tunables are all ints.
+     *
+     * @param key Catalog key (assumed already to exist)
+     * @param value Decoded JSON value
+     * @return true iff {@code value} is a valid setting for {@code key}
+     */
+    @SuppressWarnings({"PMD.CyclomaticComplexity", "PMD.NcssCount"})
+    private static boolean validateRuntime(final String key, final Object value) {
+        return switch (key) {
+            case "http_client.protocol" ->
+                value instanceof String s
+                    && ("h2".equals(s) || "h1".equals(s) || "auto".equals(s));
+            case "http_client.http2_max_pool_size" ->
+                isIntInRange(value, 1, 8);
+            case "http_client.http2_multiplexing_limit" ->
+                isIntInRange(value, 1, 1000);
+            case "prefetch.enabled" -> value instanceof Boolean;
+            case "prefetch.concurrency.global" ->
+                isIntInRange(value, 1, 512);
+            case "prefetch.concurrency.per_upstream" ->
+                isIntInRange(value, 1, 128);
+            case "prefetch.queue.capacity" ->
+                isIntInRange(value, 128, 16_384);
+            case "prefetch.worker_threads" ->
+                isIntInRange(value, 1, 32);
+            case "prefetch.circuit_breaker.drop_threshold_per_sec" ->
+                isIntInRange(value, 1, 10_000);
+            case "prefetch.circuit_breaker.window_seconds" ->
+                isIntInRange(value, 1, 600);
+            case "prefetch.circuit_breaker.disable_minutes" ->
+                isIntInRange(value, 1, 1440);
+            default -> false;
+        };
+    }
+
+    /**
+     * Returns true iff {@code value} is a {@link Number} representable as
+     * an int (no fractional part) and falls within {@code [min, max]}.
+     */
+    private static boolean isIntInRange(final Object value, final int min, final int max) {
+        if (!(value instanceof Number n)) {
+            return false;
+        }
+        final double d = n.doubleValue();
+        if (d != Math.floor(d) || Double.isInfinite(d)) {
+            return false;
+        }
+        final long asLong = n.longValue();
+        return asLong >= min && asLong <= max;
     }
 
     /**
