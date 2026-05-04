@@ -656,14 +656,18 @@ public class RepositorySlices {
     }
 
     /**
-     * Per-repo prefetch enable flag. Until Task 20 lands a
-     * {@code RepoConfig.prefetchEnabled()} accessor, every proxy repo is
-     * considered eligible. The global kill-switch
-     * ({@code prefetch.enabled} from {@link com.auto1.pantera.settings.runtime.RuntimeSettingsCache})
-     * remains the only off-switch.
+     * Per-repo prefetch enable flag. Reads the
+     * {@link com.auto1.pantera.settings.repo.RepoConfig#prefetchEnabled()}
+     * accessor — which honours an explicit {@code settings.prefetch}
+     * boolean and falls back to {@code true} for {@code *-proxy} types
+     * and {@code false} for everything else. The global kill-switch
+     * ({@code prefetch.enabled} from
+     * {@link com.auto1.pantera.settings.runtime.RuntimeSettingsCache})
+     * remains the master off-switch.
      *
      * @param name Repo name to resolve.
-     * @return {@code Boolean.TRUE} for known proxy repos, {@code Boolean.FALSE} otherwise.
+     * @return {@code Boolean.TRUE} when the repo opts in to prefetch,
+     *     {@code Boolean.FALSE} otherwise (including unknown repos).
      * @since 2.2.0
      */
     public Boolean prefetchEnabledFor(final String name) {
@@ -671,7 +675,7 @@ public class RepositorySlices {
             return Boolean.FALSE;
         }
         return this.repos.config(name)
-            .map(cfg -> cfg.type() != null && cfg.type().endsWith("-proxy"))
+            .map(RepoConfig::prefetchEnabled)
             .orElse(Boolean.FALSE);
     }
 

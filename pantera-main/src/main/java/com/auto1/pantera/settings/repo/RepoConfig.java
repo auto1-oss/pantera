@@ -265,6 +265,35 @@ public final class RepoConfig {
     }
 
     /**
+     * Whether prefetch is enabled for this repository. Reads
+     * {@code settings.prefetch} (boolean) from the per-repo YAML/JSONB
+     * config. When the field is absent the default depends on the repo
+     * {@link #type() type}: proxy types ({@code *-proxy}) default to
+     * {@code true} (preserving the v2.1 heuristic that any proxy repo
+     * was eligible for prefetch); all other types (hosted, group)
+     * default to {@code false} since prefetch is meaningless for them.
+     *
+     * <p>Explicit settings always win — a hosted repo with
+     * {@code settings.prefetch: true} returns {@code true}, and a
+     * proxy repo with {@code settings.prefetch: false} returns
+     * {@code false}.</p>
+     *
+     * @return {@code true} if prefetch should be considered for this
+     *     repo, {@code false} otherwise.
+     * @since 2.2.0
+     */
+    public boolean prefetchEnabled() {
+        final Optional<YamlMapping> cfg = this.settings();
+        if (cfg.isPresent()) {
+            final String explicit = cfg.get().string("prefetch");
+            if (explicit != null && !explicit.isBlank()) {
+                return Boolean.parseBoolean(explicit);
+            }
+        }
+        return this.type != null && this.type.endsWith("-proxy");
+    }
+
+    /**
      * Group routing rules for directing requests to specific members
      * based on path prefix or pattern matching.
      *
