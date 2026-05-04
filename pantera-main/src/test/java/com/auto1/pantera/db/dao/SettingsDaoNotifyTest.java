@@ -11,6 +11,8 @@
 package com.auto1.pantera.db.dao;
 
 import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.Statement;
 import java.time.Instant;
 import java.util.Map;
@@ -30,6 +32,7 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -83,9 +86,10 @@ final class SettingsDaoNotifyTest {
             Json.createObjectBuilder().add("value", 1).build(),
             "ayd"
         );
-        Thread.sleep(50L);
-        final Instant cutoff = Instant.now();
-        Thread.sleep(50L);
+        // Derive cutoff from the row itself: getChangedSince uses strict
+        // `updated_at > ?`, so passing alpha's exact timestamp guarantees
+        // alpha is excluded without depending on wall-clock granularity.
+        final Instant cutoff = readUpdatedAt("alpha");
         this.dao.put(
             "beta",
             Json.createObjectBuilder().add("value", 2).build(),
@@ -94,8 +98,19 @@ final class SettingsDaoNotifyTest {
         final Map<String, JsonObject> changed = this.dao.getChangedSince(cutoff);
         assertEquals(1, changed.size(), "only one key should be returned");
         assertTrue(changed.containsKey("beta"), "result should contain 'beta'");
-        assertTrue(!changed.containsKey("alpha"), "result must not contain 'alpha'");
+        assertFalse(changed.containsKey("alpha"), "result must not contain 'alpha'");
         assertEquals(2, changed.get("beta").getInt("value"));
+    }
+
+    private Instant readUpdatedAt(final String key) throws Exception {
+        try (Connection conn = ds.getConnection();
+             PreparedStatement ps = conn.prepareStatement(
+                 "SELECT updated_at FROM settings WHERE key = ?")) {
+            ps.setString(1, key);
+            final ResultSet rs = ps.executeQuery();
+            assertTrue(rs.next(), "row for key '" + key + "' must exist");
+            return rs.getTimestamp("updated_at").toInstant();
+        }
     }
 
     @Test
@@ -114,7 +129,6 @@ final class SettingsDaoNotifyTest {
             try (Statement poke = conn.createStatement()) {
                 poke.execute("SELECT 1");
             }
-            Thread.sleep(100L);
             final PGNotification[] notifs =
                 conn.unwrap(PGConnection.class).getNotifications();
             assertNotNull(notifs, "notifications array must not be null");
