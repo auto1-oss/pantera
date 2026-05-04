@@ -29,9 +29,9 @@ public record CircuitBreakerTuning(
 
     public static CircuitBreakerTuning fromMap(final Map<String, JsonObject> rows) {
         return new CircuitBreakerTuning(
-            PrefetchTuning.getInt(rows, "prefetch.circuit_breaker.drop_threshold_per_sec", 100),
-            PrefetchTuning.getInt(rows, "prefetch.circuit_breaker.window_seconds", 30),
-            PrefetchTuning.getInt(rows, "prefetch.circuit_breaker.disable_minutes", 5)
+            JsonReads.intOr(rows, "prefetch.circuit_breaker.drop_threshold_per_sec", 100),
+            JsonReads.intOr(rows, "prefetch.circuit_breaker.window_seconds", 30),
+            JsonReads.intOr(rows, "prefetch.circuit_breaker.disable_minutes", 5)
         );
     }
 }

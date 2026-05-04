@@ -39,18 +39,28 @@ public enum SettingsKey {
     PREFETCH_CB_WINDOW_SECONDS("prefetch.circuit_breaker.window_seconds", "30"),
     PREFETCH_CB_DISABLE_MINUTES("prefetch.circuit_breaker.disable_minutes", "5");
 
-    public final String key;
-    public final String defaultRepr;
+    private static final Set<String> ALL_KEYS = Arrays.stream(values())
+        .map(SettingsKey::key)
+        .collect(Collectors.toUnmodifiableSet());
+
+    private final String key;
+    private final String defaultRepr;
 
     SettingsKey(final String key, final String defaultRepr) {
         this.key = key;
         this.defaultRepr = defaultRepr;
     }
 
+    public String key() {
+        return this.key;
+    }
+
+    public String defaultRepr() {
+        return this.defaultRepr;
+    }
+
     public static Set<String> allKeys() {
-        return Arrays.stream(values())
-            .map(k -> k.key)
-            .collect(Collectors.toUnmodifiableSet());
+        return ALL_KEYS;
     }
 
     public static boolean isHttpKey(final String k) {

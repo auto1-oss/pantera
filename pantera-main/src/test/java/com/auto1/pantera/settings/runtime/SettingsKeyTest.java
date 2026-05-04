@@ -10,12 +10,16 @@
  */
 package com.auto1.pantera.settings.runtime;
 
+import java.io.StringReader;
 import java.util.Map;
 import javax.json.Json;
 import javax.json.JsonObject;
+import javax.json.JsonReader;
+import javax.json.JsonValue;
 import com.auto1.pantera.settings.runtime.HttpTuning.Protocol;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -57,5 +61,16 @@ final class SettingsKeyTest {
         assertEquals(4, t.h2MaxPoolSize(), "pool size must parse from JSON value");
         assertEquals(100, t.h2MultiplexingLimit(),
             "multiplexing limit absent from input → keep default 100");
+    }
+
+    @Test
+    void allDefaultReprsParseAsJsonValues() {
+        for (SettingsKey k : SettingsKey.values()) {
+            try (JsonReader reader = Json.createReader(new StringReader(k.defaultRepr()))) {
+                final JsonValue v = reader.readValue();
+                assertNotNull(v,
+                    "defaultRepr for " + k.key() + " did not parse to a non-null JsonValue");
+            }
+        }
     }
 }

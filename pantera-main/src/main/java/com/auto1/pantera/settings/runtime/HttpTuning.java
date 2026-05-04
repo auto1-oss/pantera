@@ -11,8 +11,8 @@
 package com.auto1.pantera.settings.runtime;
 
 import io.vertx.core.http.HttpVersion;
+import java.util.Locale;
 import java.util.Map;
-import java.util.function.Function;
 import javax.json.JsonObject;
 
 /**
@@ -37,11 +37,15 @@ public record HttpTuning(
         }
 
         public static Protocol fromString(final String s) {
-            return switch (s.toLowerCase()) {
+            if (s == null) {
+                throw new IllegalArgumentException("http_client.protocol value is null");
+            }
+            return switch (s.toLowerCase(Locale.ROOT)) {
                 case "h2" -> H2;
                 case "h1" -> H1;
                 case "auto" -> AUTO;
-                default -> throw new IllegalArgumentException("unknown protocol: " + s);
+                default -> throw new IllegalArgumentException(
+                    "unknown http_client.protocol value: " + s + " (expected one of h2, h1, auto)");
             };
         }
     }
@@ -52,22 +56,12 @@ public record HttpTuning(
 
     public static HttpTuning fromMap(final Map<String, JsonObject> rows) {
         return new HttpTuning(
-            jsonValueOr(rows, "http_client.protocol",
+            JsonReads.valueOr(rows, "http_client.protocol",
                 v -> Protocol.fromString(v.getString("value")), Protocol.H2),
-            jsonValueOr(rows, "http_client.http2_max_pool_size",
+            JsonReads.valueOr(rows, "http_client.http2_max_pool_size",
                 v -> v.getInt("value"), 1),
-            jsonValueOr(rows, "http_client.http2_multiplexing_limit",
+            JsonReads.valueOr(rows, "http_client.http2_multiplexing_limit",
                 v -> v.getInt("value"), 100)
         );
-    }
-
-    private static <T> T jsonValueOr(
-        final Map<String, JsonObject> rows,
-        final String key,
-        final Function<JsonObject, T> extractor,
-        final T fallback
-    ) {
-        final JsonObject row = rows.get(key);
-        return row == null ? fallback : extractor.apply(row);
     }
 }

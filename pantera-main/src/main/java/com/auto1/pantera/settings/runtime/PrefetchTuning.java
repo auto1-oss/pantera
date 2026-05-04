@@ -31,21 +31,11 @@ public record PrefetchTuning(
 
     public static PrefetchTuning fromMap(final Map<String, JsonObject> rows) {
         return new PrefetchTuning(
-            getBool(rows, "prefetch.enabled", true),
-            getInt(rows, "prefetch.concurrency.global", 64),
-            getInt(rows, "prefetch.concurrency.per_upstream", 16),
-            getInt(rows, "prefetch.queue.capacity", 2048),
-            getInt(rows, "prefetch.worker_threads", 8)
+            JsonReads.boolOr(rows, "prefetch.enabled", true),
+            JsonReads.intOr(rows, "prefetch.concurrency.global", 64),
+            JsonReads.intOr(rows, "prefetch.concurrency.per_upstream", 16),
+            JsonReads.intOr(rows, "prefetch.queue.capacity", 2048),
+            JsonReads.intOr(rows, "prefetch.worker_threads", 8)
         );
-    }
-
-    static boolean getBool(final Map<String, JsonObject> r, final String k, final boolean d) {
-        final JsonObject row = r.get(k);
-        return row == null ? d : row.getBoolean("value");
-    }
-
-    static int getInt(final Map<String, JsonObject> r, final String k, final int d) {
-        final JsonObject row = r.get(k);
-        return row == null ? d : row.getInt("value");
     }
 }
