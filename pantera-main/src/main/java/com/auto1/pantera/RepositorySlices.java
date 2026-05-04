@@ -80,6 +80,7 @@ import com.auto1.pantera.scheduling.MetadataEventQueues;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.Settings;
 import com.auto1.pantera.settings.repo.RepoConfig;
+import com.auto1.pantera.settings.runtime.HttpTuning;
 import com.auto1.pantera.security.perms.Action;
 import com.auto1.pantera.security.perms.AdapterBasicPermission;
 import com.auto1.pantera.settings.repo.Repositories;
@@ -109,6 +110,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import java.util.function.ToIntFunction;
 import java.util.stream.Collectors;
 import java.util.regex.Pattern;
@@ -220,6 +222,23 @@ public class RepositorySlices {
     > circuitBreakerSettings;
 
     /**
+     * Supplier of upstream HTTP-client tuning sourced from the v2.2
+     * {@code RuntimeSettingsCache}. Each call to
+     * {@link SharedJettyClients#acquire(HttpClientSettings)} reads the current
+     * snapshot to construct the underlying {@link JettyClientSlices} with the
+     * negotiated protocol, h2 pool size, and h2 multiplexing limit.
+     *
+     * <p>When {@code http_client.*} settings change, the boot wiring in
+     * {@code VertxMain} subscribes a listener that calls
+     * {@link #invalidateUpstreamClients()} so subsequent acquires miss the
+     * cache and rebuild with the new tuning.</p>
+     *
+     * <p>Defaults to {@link HttpTuning#defaults()} for tests and legacy boot
+     * paths that don't provide a runtime cache.</p>
+     */
+    private final Supplier<HttpTuning> httpTuningSupplier;
+
+    /**
      * @param settings Pantera settings
      * @param repos Repositories
      * @param tokens Tokens: authentication and generation
@@ -252,7 +271,34 @@ public class RepositorySlices {
             com.auto1.pantera.http.timeout.AutoBlockSettings
         > circuitBreakerSettings
     ) {
+        this(settings, repos, tokens, circuitBreakerSettings, HttpTuning::defaults);
+    }
+
+    /**
+     * @param settings Pantera settings
+     * @param repos Repositories
+     * @param tokens Tokens: authentication and generation
+     * @param circuitBreakerSettings Supplier returning the current circuit-
+     *                               breaker settings; used by
+     *                               {@link AutoBlockRegistry} on every
+     *                               record to pick up admin-time updates
+     * @param httpTuningSupplier Supplier returning the current HTTP-client
+     *                           tuning snapshot from the runtime settings
+     *                           cache. Read on every
+     *                           {@link SharedJettyClients#acquire(HttpClientSettings)}
+     *                           so cache misses rebuild with the latest values.
+     */
+    public RepositorySlices(
+        final Settings settings,
+        final Repositories repos,
+        final Tokens tokens,
+        final java.util.function.Supplier<
+            com.auto1.pantera.http.timeout.AutoBlockSettings
+        > circuitBreakerSettings,
+        final Supplier<HttpTuning> httpTuningSupplier
+    ) {
         this.circuitBreakerSettings = circuitBreakerSettings;
+        this.httpTuningSupplier = httpTuningSupplier;
         this.settings = settings;
         this.repos = repos;
         this.tokens = tokens;
@@ -266,7 +312,7 @@ public class RepositorySlices {
                 );
             }
         }
-        this.sharedClients = new SharedJettyClients();
+        this.sharedClients = new SharedJettyClients(httpTuningSupplier);
         // Load negative cache config once at construction time.
         // Reads repo-negative first; falls back to group-negative with deprecation WARN.
         this.negativeCacheConfig = loadNegativeCacheConfig(settings);
@@ -400,6 +446,41 @@ public class RepositorySlices {
 
     public void enableJettyMetrics(final MeterRegistry registry) {
         this.sharedClients.enableMetrics(registry);
+    }
+
+    /**
+     * Drop every cached upstream Jetty client so subsequent
+     * {@link SharedJettyClients#acquire(HttpClientSettings)} calls miss
+     * the cache and rebuild with the latest {@link HttpTuning} snapshot.
+     *
+     * <p>Active leases keep using their existing client until released —
+     * the eviction marks each {@code SharedClient} so the per-lease
+     * {@code release()} path stops the client when its last lease closes.
+     * Subsequent acquires after this method returns will see new clients
+     * built with the current tuning.</p>
+     *
+     * <p>Called from the boot wiring's {@code RuntimeSettingsCache}
+     * listener on every {@code http_client.*} change.</p>
+     */
+    public void invalidateUpstreamClients() {
+        this.sharedClients.invalidateAll();
+    }
+
+    /**
+     * Maps the runtime-settings {@link HttpTuning.Protocol} enum onto the
+     * http-client module's {@link JettyClientSlices.HttpProtocol}. The two
+     * mirror each other deliberately — http-client cannot depend on the
+     * pantera-main settings.runtime package without creating a cycle.
+     *
+     * @param protocol Protocol selector from the runtime tuning snapshot.
+     * @return Equivalent http-client primitive.
+     */
+    static JettyClientSlices.HttpProtocol mapProtocol(final HttpTuning.Protocol protocol) {
+        return switch (protocol) {
+            case H1 -> JettyClientSlices.HttpProtocol.H1;
+            case H2 -> JettyClientSlices.HttpProtocol.H2;
+            case AUTO -> JettyClientSlices.HttpProtocol.AUTO;
+        };
     }
 
     /**
@@ -1263,11 +1344,30 @@ public class RepositorySlices {
 
     /**
      * Stores and shares Jetty clients per unique HTTP client configuration.
+     *
+     * <p>Package-private (rather than {@code private}) so unit tests in the
+     * same package — see {@code SharedJettyClientsInvalidateTest} — can
+     * exercise {@link #invalidateAll} directly without going through the
+     * heavyweight slice construction path.</p>
      */
-    private static final class SharedJettyClients {
+    static final class SharedJettyClients {
 
         private final ConcurrentMap<HttpClientSettingsKey, SharedClient> clients = new ConcurrentHashMap<>();
         private final AtomicReference<MeterRegistry> metrics = new AtomicReference<>();
+        private final Supplier<HttpTuning> httpTuningSupplier;
+
+        SharedJettyClients(final Supplier<HttpTuning> httpTuningSupplier) {
+            this.httpTuningSupplier = httpTuningSupplier;
+        }
+
+        /**
+         * Test hook: number of currently cached shared clients (one per
+         * unique {@link HttpClientSettingsKey}). Drops to zero immediately
+         * after {@link #invalidateAll} returns.
+         */
+        int cachedClientCount() {
+            return this.clients.size();
+        }
 
         Lease acquire(final HttpClientSettings settings) {
             final HttpClientSettingsKey key = HttpClientSettingsKey.from(settings);
@@ -1275,7 +1375,8 @@ public class RepositorySlices {
                 key,
                 (ignored, existing) -> {
                     if (existing == null) {
-                        final SharedClient created = new SharedClient(key);
+                        final HttpTuning tuning = this.httpTuningSupplier.get();
+                        final SharedClient created = new SharedClient(key, tuning);
                         created.retain();
                         return created;
                     }
@@ -1288,6 +1389,48 @@ public class RepositorySlices {
                 holder.registerMetrics(registry);
             }
             return new Lease(this, key, holder);
+        }
+
+        /**
+         * Drop every cached client so the next {@link #acquire} miss
+         * rebuilds with the latest {@link HttpTuning}. Active leases
+         * keep their reference; the per-lease {@code release()} path
+         * stops the client once refs hit zero.
+         */
+        void invalidateAll() {
+            // Snapshot keys to avoid concurrent-modification surprises while
+            // we mutate the map.
+            final java.util.List<HttpClientSettingsKey> keys =
+                new java.util.ArrayList<>(this.clients.keySet());
+            int evictedNoRefs = 0;
+            int evictedHeld = 0;
+            for (final HttpClientSettingsKey key : keys) {
+                final SharedClient[] removedRef = new SharedClient[1];
+                this.clients.computeIfPresent(key, (k, existing) -> {
+                    existing.markEvicted();
+                    removedRef[0] = existing;
+                    return null;
+                });
+                final SharedClient removed = removedRef[0];
+                if (removed != null && removed.referenceCount() == 0) {
+                    // Race-safe: stop() is idempotent (guarded by
+                    // JettyClientSlices.stopped). If a release() ran
+                    // between markEvicted and this check it may have
+                    // stopped already; that's fine.
+                    removed.stop();
+                    evictedNoRefs += 1;
+                } else if (removed != null) {
+                    evictedHeld += 1;
+                }
+            }
+            EcsLogger.info("com.auto1.pantera")
+                .message("Upstream Jetty client pool invalidated")
+                .eventCategory("configuration")
+                .eventAction("http_client_invalidate")
+                .eventOutcome("success")
+                .field("clients.evicted_no_refs", evictedNoRefs)
+                .field("clients.evicted_with_active_leases", evictedHeld)
+                .log();
         }
 
         void enableMetrics(final MeterRegistry registry) {
@@ -1331,10 +1474,27 @@ public class RepositorySlices {
         }
 
         private void release(final HttpClientSettingsKey key, final SharedClient shared) {
+            // Evicted clients have already been removed from the cache map;
+            // their lifecycle is no longer tied to the map entry. Release
+            // the lease's ref and stop when the last lease drops it.
+            if (shared.isEvicted()) {
+                final int remaining = shared.release();
+                if (remaining == 0) {
+                    shared.stop();
+                }
+                return;
+            }
             this.clients.computeIfPresent(
                 key,
                 (ignored, existing) -> {
                     if (existing != shared) {
+                        // The cached entry was replaced (evict + new acquire
+                        // for the same key). Drop the lease's ref against
+                        // the original SharedClient and stop if last.
+                        final int remaining = shared.release();
+                        if (remaining == 0) {
+                            shared.stop();
+                        }
                         return existing;
                     }
                     final int remaining = existing.release();
@@ -1381,10 +1541,23 @@ public class RepositorySlices {
             private final CompletableFuture<Void> startFuture;
             private final AtomicInteger references = new AtomicInteger(0);
             private final AtomicBoolean metricsRegistered = new AtomicBoolean(false);
+            /**
+             * True once this client has been removed from the cache map by
+             * {@link SharedJettyClients#invalidateAll()}. The ref-counted
+             * lifecycle still applies — active leases keep using the client
+             * until released — but the {@link SharedJettyClients#release}
+             * path skips the map lookup and stops directly at refs==0.
+             */
+            private final AtomicBoolean evicted = new AtomicBoolean(false);
 
-            SharedClient(final HttpClientSettingsKey key) {
+            SharedClient(final HttpClientSettingsKey key, final HttpTuning tuning) {
                 this.key = key;
-                this.client = new JettyClientSlices(key.toSettings());
+                this.client = new JettyClientSlices(
+                    key.toSettings(),
+                    mapProtocol(tuning.protocol()),
+                    tuning.h2MaxPoolSize(),
+                    tuning.h2MultiplexingLimit()
+                );
                 // Start the Jetty client on the dedicated resolve executor to avoid
                 // blocking the Vert.x event loop. The start() call can take 100ms+
                 // due to SSL context initialization and socket setup.
@@ -1407,6 +1580,18 @@ public class RepositorySlices {
                         .log();
                 }
                 return remaining;
+            }
+
+            int referenceCount() {
+                return this.references.get();
+            }
+
+            void markEvicted() {
+                this.evicted.set(true);
+            }
+
+            boolean isEvicted() {
+                return this.evicted.get();
             }
 
             JettyClientSlices client() {

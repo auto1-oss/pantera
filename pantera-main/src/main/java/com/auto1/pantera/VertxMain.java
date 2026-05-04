@@ -374,9 +374,36 @@ public final class VertxMain {
                 );
             com.auto1.pantera.publishdate.PublishDateRegistries.installDefault(publishDates);
         });
+        // Wire RepositorySlices with the runtime HTTP tuning supplier so
+        // every new SharedClient picks up the latest http_client.* values.
+        // When no DB-backed cache is configured (legacy YAML-only boot),
+        // fall back to HttpTuning.defaults() so behaviour matches v2.1.
+        final java.util.function.Supplier<
+            com.auto1.pantera.settings.runtime.HttpTuning
+        > httpTuningSupplier = this.settingsCache != null
+            ? this.settingsCache::httpTuning
+            : com.auto1.pantera.settings.runtime.HttpTuning::defaults;
         final RepositorySlices slices = new RepositorySlices(
-            settings, repos, jwtTokens
+            settings, repos, jwtTokens,
+            com.auto1.pantera.circuit.CircuitBreakerSettingsLoader.activeSupplier(),
+            httpTuningSupplier
         );
+        // Hot-reload: any http_client.* settings change drops every cached
+        // upstream Jetty client so the next acquire rebuilds with the new
+        // protocol / pool size / multiplexing limit. Active leases keep
+        // their existing client until release; this is the v2.2 mechanism
+        // that RuntimeSettingsCache was designed to enable.
+        if (this.settingsCache != null) {
+            this.settingsCache.addListener("http_client.", changedKey -> {
+                EcsLogger.info("com.auto1.pantera")
+                    .message("http_client.* setting changed; invalidating upstream client pool")
+                    .eventCategory("configuration")
+                    .eventAction("http_client_settings_change")
+                    .field("settings.key", changedKey)
+                    .log();
+                slices.invalidateUpstreamClients();
+            });
+        }
         // Cooldown cleanup fallback: if pg_cron is not running the
         // cleanup job, start the Vertx-periodic fallback so expired
         // blocks still get archived and history still gets purged.
