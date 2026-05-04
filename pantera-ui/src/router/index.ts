@@ -126,6 +126,12 @@ export const routes: RouteRecordRaw[] = [
     meta: { requiresAdmin: true },
   },
   {
+    path: '/admin/performance-tuning',
+    name: 'admin-performance-tuning',
+    component: () => import('@/views/admin/PerformanceTuningView.vue'),
+    meta: { requiresAdmin: true },
+  },
+  {
     path: '/admin/auth-providers',
     name: 'admin-auth-providers',
     component: () => import('@/views/admin/AuthProvidersView.vue'),
