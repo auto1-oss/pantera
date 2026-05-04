@@ -461,6 +461,53 @@ class PrefetchCoordinatorTest {
         hold.countDown();
     }
 
+    @Test
+    void applyTuning_drainedTasksAreCountedPerRepo() {
+        // Don't start workers — pending tasks must stay in the queue until
+        // applyTuning drains them, so we can observe the drop count.
+        // Capacity 8 lets two repos contribute three tasks each.
+        this.tuningRef.set(new PrefetchTuning(true, 4, 4, 8, 1));
+        this.coordinator = newCoordinator();
+        // Intentionally do not call start() — tasks pile up in the queue.
+
+        for (int idx = 0; idx < 3; idx += 1) {
+            this.coordinator.submit(taskWithUrl(
+                coord("g.id" + idx, "art", "1.0"),
+                "https://repo1.maven.org/maven2", "repoA"
+            ));
+            this.coordinator.submit(taskWithUrl(
+                coord("g.id" + idx, "art", "1.0"),
+                "https://repo1.maven.org/maven2", "repoB"
+            ));
+        }
+        MatcherAssert.assertThat(this.coordinator.queueDepth(), new IsEqual<>(6));
+
+        // Trigger a tuning swap with a different snapshot — queueCapacity
+        // change forces buildRuntime, which drains the old queue.
+        this.coordinator.applyTuning(new PrefetchTuning(true, 4, 4, 16, 1));
+
+        MatcherAssert.assertThat(
+            "old queue items must be drained — new runtime starts empty",
+            this.coordinator.queueDepth(),
+            new IsEqual<>(0)
+        );
+        MatcherAssert.assertThat(
+            "repoA's three tasks counted as tuning_swap drops",
+            this.metrics.droppedCount("repoA", PrefetchCoordinator.REASON_TUNING_SWAP),
+            new IsEqual<>(3L)
+        );
+        MatcherAssert.assertThat(
+            "repoB's three tasks counted as tuning_swap drops",
+            this.metrics.droppedCount("repoB", PrefetchCoordinator.REASON_TUNING_SWAP),
+            new IsEqual<>(3L)
+        );
+        MatcherAssert.assertThat(
+            "in-flight set is cleaned up so the same coordinates can be re-submitted later",
+            this.coordinator.inFlightCount(),
+            new IsEqual<>(0)
+        );
+    }
+
     // ============================================================
     //  Helpers
     // ============================================================

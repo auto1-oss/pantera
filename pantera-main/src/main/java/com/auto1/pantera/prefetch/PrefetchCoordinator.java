@@ -79,6 +79,15 @@ public final class PrefetchCoordinator {
     public static final String REASON_DEDUP = "dedup_in_flight";
     public static final String REASON_QUEUE_FULL = "queue_full";
     public static final String REASON_SEMAPHORE = "semaphore_saturated";
+    /**
+     * Drop reason recorded for tasks that were sitting in the bounded queue
+     * when {@link #applyTuning(PrefetchTuning)} swapped the runtime out from
+     * under them. The submitter saw "accepted" but the new worker pool
+     * cannot see them; this counter makes that loss observable.
+     *
+     * @since 2.2.0
+     */
+    public static final String REASON_TUNING_SWAP = "tuning_swap";
 
     /**
      * Outcome labels used with {@link PrefetchMetrics#completed(String, String, String)}.
@@ -287,9 +296,23 @@ public final class PrefetchCoordinator {
      * Apply a new tuning snapshot. Swaps queue + semaphores atomically and
      * (if {@code workerThreads} changed) replaces the worker pool. Tasks
      * sitting in the previous queue are drained and dropped &mdash; they
-     * would otherwise be invisible to the new worker pool.
+     * would otherwise be invisible to the new worker pool. Each drained
+     * task is counted against {@link #REASON_TUNING_SWAP} per repo so the
+     * loss is visible to operators on the {@code pantera_prefetch_dropped_total}
+     * counter.
      *
-     * @param next Updated tuning snapshot.
+     * <p><b>Supplier contract.</b> Callers should not pass a {@code next}
+     * snapshot that diverges from the {@link Supplier Supplier&lt;PrefetchTuning&gt;}
+     * passed to the constructor. The settings-listener path
+     * ({@link #subscribe(RuntimeSettingsCache)}) calls {@code applyTuning(supplier.get())}
+     * — every caller should follow the same shape so a follow-up listener
+     * fire cannot silently overwrite a manual swap. Direct calls with a
+     * one-off snapshot are supported but will be replaced on the next
+     * {@code prefetch.*} settings change.</p>
+     *
+     * @param next Updated tuning snapshot. Must come from the same supplier
+     *             that was passed to the constructor (or be temporarily
+     *             replacing it for a controlled test).
      */
     public synchronized void applyTuning(final PrefetchTuning next) {
         final Runtime prev = this.runtime.get();
@@ -300,8 +323,14 @@ public final class PrefetchCoordinator {
         // Drop pending old-queue items. We cannot move them into the new
         // queue safely since semaphore/concurrency assumptions changed; the
         // submitter saw "accepted" but the dispatcher will silently lose
-        // them. Acceptable per spec — drops are bounded to the queue size.
-        prev.queue.clear();
+        // them. Count each drained task by repo so the loss surfaces on
+        // pantera_prefetch_dropped_total{reason="tuning_swap"}.
+        final java.util.List<PrefetchTask> drained = new java.util.ArrayList<>();
+        prev.queue.drainTo(drained);
+        for (final PrefetchTask drainedTask : drained) {
+            this.inFlight.remove(dedupKey(drainedTask));
+            this.metrics.dropped(drainedTask.repoName(), REASON_TUNING_SWAP);
+        }
         // Stop old workers; new pool starts only if previous was running.
         prev.shutdown();
         this.runtime.set(fresh);
@@ -315,6 +344,7 @@ public final class PrefetchCoordinator {
             .field("per_upstream_concurrency", next.perUpstreamConcurrency())
             .field("queue_capacity", next.queueCapacity())
             .field("worker_threads", next.workerThreads())
+            .field("drained_tasks", drained.size())
             .eventCategory("configuration")
             .eventAction("prefetch_tune")
             .log();
