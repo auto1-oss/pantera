@@ -14,6 +14,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.io.StringReader;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -82,6 +83,25 @@ public final class SettingsDao {
             }
         } catch (final Exception ex) {
             throw new IllegalStateException("Failed to list settings", ex);
+        }
+        return result;
+    }
+
+    public Map<String, JsonObject> getChangedSince(final Instant since) {
+        final Map<String, JsonObject> result = new LinkedHashMap<>();
+        final String sql = "SELECT key, value FROM settings WHERE updated_at > ? ORDER BY key";
+        try (Connection conn = this.source.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setObject(1, java.sql.Timestamp.from(since));
+            final ResultSet rs = ps.executeQuery();
+            while (rs.next()) {
+                result.put(
+                    rs.getString("key"),
+                    Json.createReader(new StringReader(rs.getString("value"))).readObject()
+                );
+            }
+        } catch (final Exception ex) {
+            throw new IllegalStateException("Failed to query changed settings", ex);
         }
         return result;
     }
