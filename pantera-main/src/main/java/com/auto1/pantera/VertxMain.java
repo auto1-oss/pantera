@@ -127,6 +127,12 @@ public final class VertxMain {
     private Vertx vertx;
 
     /**
+     * Runtime settings cache (LISTEN/NOTIFY-driven snapshot of pantera_settings).
+     * Null when no DataSource is configured (DB-less boot, tests).
+     */
+    private com.auto1.pantera.settings.runtime.RuntimeSettingsCache settingsCache;
+
+    /**
      * Ctor.
      *
      * @param config Config file path.
@@ -184,6 +190,21 @@ public final class VertxMain {
             new YamlToDbMigrator(
                 ds, securityDir, reposDir, this.config.toAbsolutePath()
             ).migrate();
+            // Runtime-tunable settings: seed defaults on first boot, then start
+            // the LISTEN/NOTIFY-backed cache so PATCHes via the Settings API
+            // propagate to all consumers without a server restart. Construction
+            // happens here (before any verticle deploys or slice warmup) so
+            // future subscribers (Phase 2 HTTP/2 client, Phase 4 prefetch) can
+            // reliably resolve the singleton via the boot wiring.
+            final com.auto1.pantera.db.dao.SettingsDao settingsDao =
+                new com.auto1.pantera.db.dao.SettingsDao(ds);
+            new com.auto1.pantera.settings.runtime.SettingsBootstrap(settingsDao)
+                .seedIfMissing();
+            this.settingsCache =
+                new com.auto1.pantera.settings.runtime.RuntimeSettingsCache(
+                    settingsDao, ds
+                );
+            this.settingsCache.start();
             quartz = new QuartzService(ds);
             EcsLogger.info("com.auto1.pantera")
                 .message("Quartz JDBC clustering enabled with shared DataSource")
@@ -734,6 +755,28 @@ public final class VertxMain {
                     .message("Failed to stop QuartzService")
                     .eventCategory("web")
                     .eventAction("quartz_stop")
+                    .eventOutcome("failure")
+                    .error(e)
+                    .log();
+            }
+        }
+        // 3b. Stop RuntimeSettingsCache (releases LISTEN connection + poller).
+        //     Must run before settings.close() / DataSource shutdown so the
+        //     listener thread can return its connection to the pool cleanly.
+        if (this.settingsCache != null) {
+            try {
+                this.settingsCache.stop();
+                EcsLogger.info("com.auto1.pantera.settings.runtime")
+                    .message("RuntimeSettingsCache stopped")
+                    .eventCategory("web")
+                    .eventAction("settings_cache_stop")
+                    .eventOutcome("success")
+                    .log();
+            } catch (final Exception e) {
+                EcsLogger.error("com.auto1.pantera.settings.runtime")
+                    .message("Failed to stop RuntimeSettingsCache")
+                    .eventCategory("web")
+                    .eventAction("settings_cache_stop")
                     .eventOutcome("failure")
                     .error(e)
                     .log();
