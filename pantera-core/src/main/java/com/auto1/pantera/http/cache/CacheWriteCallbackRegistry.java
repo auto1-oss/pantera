@@ -30,6 +30,18 @@ import java.util.function.Consumer;
  * Set-once semantics are enforced by the boot wiring (a second call simply
  * replaces the consumer — useful for tests but not expected in production).</p>
  *
+ * <p><b>Test-fork hygiene.</b> Because the registry is a process-wide
+ * singleton, a Surefire fork that boots {@code VertxMain} (or installs a
+ * dispatcher directly via {@link #setSharedCallback(Consumer)}) without a
+ * subsequent {@link #clear()} can leak a stale dispatcher into later tests
+ * running in the same JVM. The leaked dispatcher closes over slices /
+ * coordinator / metrics from the torn-down VertxMain and can fire on
+ * unrelated cache writes. {@link com.auto1.pantera.VertxMain#stop()} calls
+ * {@link #clear()} as part of teardown; tests that exercise the registry
+ * directly should call {@link #clear()} in their {@code @AfterEach} (or
+ * a shared base class) to keep forks isolated. See
+ * CONCERN-task19-surefire-fork-registry-leak in the v2.2.0 audit doc.</p>
+ *
  * @since 2.2.0
  */
 public final class CacheWriteCallbackRegistry {

@@ -522,6 +522,19 @@ public class RepositorySlices {
      *
      * <p>Called from the boot wiring's {@code RuntimeSettingsCache}
      * listener on every {@code http_client.*} change.</p>
+     *
+     * <p><b>Slow-drain semantics (intentional).</b> The slice
+     * {@link com.google.common.cache.LoadingCache} held in this class
+     * caches per-repo lease references; warm slices keep using their
+     * already-acquired clients until the slice cache itself evicts (the
+     * 30-minute idle-eviction TTL applied via
+     * {@code .expireAfterAccess(30, MINUTES)} in the slice-cache builder)
+     * or a settings change triggers a slice rebuild. We deliberately do
+     * not force-evict warm slices here: doing so would interrupt in-flight
+     * upstream requests on those leases. The trade-off is that a
+     * {@code http_client.*} setting flip can take up to 30 minutes to
+     * propagate to a long-warm slice. See CONCERN-task9-slice-cache-lag in
+     * the v2.2.0 perf-pack audit doc.</p>
      */
     public void invalidateUpstreamClients() {
         this.sharedClients.invalidateAll();
