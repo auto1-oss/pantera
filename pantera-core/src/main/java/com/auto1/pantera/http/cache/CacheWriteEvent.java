@@ -24,6 +24,10 @@ import java.time.Instant;
  * logs any throwable from the callback, but slow callbacks would still
  * stall the response if they ran inline.
  *
+ * <p>The callback may be invoked concurrently from any thread that
+ * completes a write (typically a {@code ForkJoinPool.commonPool} worker).
+ * Consumers MUST be thread-safe.
+ *
  * <p>{@code bytesOnDisk} points at the local file from which the cache
  * was just populated. The file is deleted shortly after this event is
  * fired (in the sync path the writer cleans up the temp file once it
@@ -37,10 +41,21 @@ import java.time.Instant;
  *                    reference to the writer.
  * @param urlPath     The URL path of the artifact (e.g.
  *                    "com/google/guava/guava/33.4.0-jre/guava-33.4.0-jre.pom").
- * @param bytesOnDisk Filesystem path of the freshly-written cache file
- *                    (the source temp file in the sync path; the
+ * @param bytesOnDisk Filesystem path of the freshly-written cache file.
+ *                    <strong>Lifetime:</strong> in the {@code commit()}
+ *                    path the file is guaranteed alive at the moment the
+ *                    consumer receives the event; in the
+ *                    {@code commitVerified()} path the lifecycle is owned
+ *                    by the response Flowable's disposer and may race
+ *                    with the callback. Consumers that need the bytes
+ *                    reliably should either copy them eagerly during the
+ *                    callback, or — preferably — re-read via
+ *                    {@link com.auto1.pantera.asto.Storage} using the
+ *                    cached key, treating {@code bytesOnDisk} as a
+ *                    best-effort hint. The source is the temp file in
+ *                    the sync path; the
  *                    {@link ProxyCacheWriter.VerifiedArtifact#tempFile()}
- *                    in the verified-artifact path).
+ *                    in the verified-artifact path.
  * @param sizeBytes   Size in bytes of the primary artifact.
  * @param writtenAt   When the write completed.
  *

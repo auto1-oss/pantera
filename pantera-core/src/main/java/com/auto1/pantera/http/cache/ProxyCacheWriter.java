@@ -593,6 +593,9 @@ public final class ProxyCacheWriter {
                 if (err == null) {
                     // Temp file is still alive — the response Flowable owns
                     // its disposal. Safe to expose to the onWrite consumer.
+                    // NOTE: bytesOnDisk passed to onCacheWrite from this path is best-effort —
+                    // the response Flowable's disposer can race with the callback. Consumers
+                    // MUST follow the lifetime contract documented on CacheWriteEvent#bytesOnDisk.
                     this.fireOnWrite(
                         artifact.primaryKey(), artifact.tempFile(), artifact.size()
                     );
