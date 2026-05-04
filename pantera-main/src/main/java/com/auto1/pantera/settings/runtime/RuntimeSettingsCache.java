@@ -53,11 +53,24 @@ public final class RuntimeSettingsCache {
             return t;
         });
 
-    private volatile HttpTuning httpSnapshot = HttpTuning.defaults();
-    private volatile PrefetchTuning prefetchSnapshot = PrefetchTuning.defaults();
-    private volatile CircuitBreakerTuning cbSnapshot = CircuitBreakerTuning.defaults();
-    private volatile Map<String, JsonObject> raw = Map.of();
+    private volatile Snapshot snapshot = Snapshot.defaults();
     private volatile Instant lastReadAt = Instant.EPOCH;
+
+    private record Snapshot(
+        HttpTuning http,
+        PrefetchTuning prefetch,
+        CircuitBreakerTuning cb,
+        Map<String, JsonObject> raw
+    ) {
+        static Snapshot defaults() {
+            return new Snapshot(
+                HttpTuning.defaults(),
+                PrefetchTuning.defaults(),
+                CircuitBreakerTuning.defaults(),
+                Map.of()
+            );
+        }
+    }
 
     public RuntimeSettingsCache(final SettingsDao dao, final DataSource listenSource) {
         this.dao = dao;
@@ -74,7 +87,7 @@ public final class RuntimeSettingsCache {
         this.poller.scheduleAtFixedRate(this::pollFallback,
             POLL_FALLBACK_SECONDS, POLL_FALLBACK_SECONDS, TimeUnit.SECONDS);
         EcsLogger.info("com.auto1.pantera.settings.runtime")
-            .message("RuntimeSettingsCache started with " + this.raw.size() + " keys")
+            .message("RuntimeSettingsCache started with " + this.snapshot.raw().size() + " keys")
             .log();
     }
 
@@ -85,19 +98,19 @@ public final class RuntimeSettingsCache {
     }
 
     public HttpTuning httpTuning() {
-        return this.httpSnapshot;
+        return this.snapshot.http();
     }
 
     public PrefetchTuning prefetchTuning() {
-        return this.prefetchSnapshot;
+        return this.snapshot.prefetch();
     }
 
     public CircuitBreakerTuning circuitBreakerTuning() {
-        return this.cbSnapshot;
+        return this.snapshot.cb();
     }
 
     public Map<String, JsonObject> raw() {
-        return this.raw;
+        return this.snapshot.raw();
     }
 
     /**
@@ -143,12 +156,15 @@ public final class RuntimeSettingsCache {
     }
 
     private synchronized void rereadAll() {
+        final Instant now = Instant.now();
         final Map<String, JsonObject> rows = this.dao.listAll();
-        this.raw = Map.copyOf(rows);
-        this.httpSnapshot = HttpTuning.fromMap(rows);
-        this.prefetchSnapshot = PrefetchTuning.fromMap(rows);
-        this.cbSnapshot = CircuitBreakerTuning.fromMap(rows);
-        this.lastReadAt = Instant.now();
+        this.snapshot = new Snapshot(
+            HttpTuning.fromMap(rows),
+            PrefetchTuning.fromMap(rows),
+            CircuitBreakerTuning.fromMap(rows),
+            Map.copyOf(rows)
+        );
+        this.lastReadAt = now;
     }
 
     private void pollFallback() {

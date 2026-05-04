@@ -65,17 +65,26 @@ public final class PgListenNotify {
     }
 
     /**
-     * Signals the worker to stop. The worker thread observes the running flag at
-     * the next poll boundary, so shutdown latency is bounded by
-     * {@value #POLL_INTERVAL_MS} ms during normal operation. The thread interrupt
-     * is needed only to wake the {@value #LISTEN_BACKOFF_MS} ms reconnect backoff
-     * if a connection failure is in progress; JDBC socket reads do not honour
+     * Signals the worker to stop AND waits up to 2s for it to exit.
+     * Returns when the worker thread has terminated, or when the wait
+     * times out — at which point the caller can safely close the
+     * underlying DataSource without races against in-flight callbacks.
+     *
+     * <p>The thread interrupt is needed only to wake the
+     * {@value #LISTEN_BACKOFF_MS} ms reconnect backoff if a connection
+     * failure is in progress; JDBC socket reads do not honour
      * {@link Thread#interrupt()} directly.
      */
     public void stop() {
         this.running.set(false);
-        if (this.thread != null) {
-            this.thread.interrupt();
+        final Thread t = this.thread;
+        if (t != null) {
+            t.interrupt();
+            try {
+                t.join(2_000L);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            }
         }
     }
 
