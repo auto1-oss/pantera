@@ -7,7 +7,7 @@ import Button from 'primevue/button'
 import { useNotificationStore } from '@/stores/notifications'
 import {
   getPrefetchStats,
-  patchPrefetchEnabled,
+  setPrefetchEnabled,
   type PrefetchStats,
 } from '@/api/prefetch'
 
@@ -15,15 +15,16 @@ import {
  * Per-repo "Performance" panel rendered on the repo edit page (Phase 5
  * Task 23). Surfaces two pieces of state:
  *
- *  1. A pre-fetch toggle — round-trips through {@code PATCH
- *     /api/v1/repositories/:name {"settings":{"prefetch":bool}}}.
+ *  1. A pre-fetch toggle — round-trips through {@code PUT
+ *     /api/v1/repositories/:name} (read-modify-write of the full
+ *     envelope; the server has no PATCH route).
  *  2. A 24h stats grid — refreshed on mount and every 30s while the
  *     panel is mounted.
  *
  * The panel does not own the repo-config envelope; the parent owns it.
  * The {@code initialEnabled} prop seeds the toggle from the loaded
  * config and the panel emits {@code update:enabled} after a successful
- * PATCH so the parent's view of the config can stay in sync without
+ * write so the parent's view of the config can stay in sync without
  * forcing a full reload.
  */
 const props = defineProps<{
@@ -84,7 +85,7 @@ async function onTogglePrefetch(next: boolean) {
   // we treat the new value as the desired state and roll back on failure.
   saving.value = true
   try {
-    await patchPrefetchEnabled(props.name, next)
+    await setPrefetchEnabled(props.name, next)
     emit('update:enabled', next)
     notify.success(
       `Prefetch ${next ? 'enabled' : 'disabled'}`,

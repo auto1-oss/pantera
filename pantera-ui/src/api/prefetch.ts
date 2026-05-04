@@ -34,17 +34,42 @@ export async function getPrefetchStats(name: string): Promise<PrefetchStats> {
 }
 
 /**
- * PATCH /api/v1/repositories/:name with a settings.prefetch toggle.
+ * Toggle {@code settings.prefetch} on a repository via the existing
+ * PUT /api/v1/repositories/:name endpoint (server has no PATCH route —
+ * see RepositoryHandler.register, Task 21 commit b9bf92d63).
  *
- * Body shape: {@code {"settings": {"prefetch": <boolean>}}}.
- * The server merges the body into the existing JSONB config — other
- * fields (storage, remotes, members, cooldown) are left untouched.
+ * The server stores the body verbatim (generic JSONB upsert), so a
+ * partial body would clobber storage/remotes/members. We therefore do
+ * a read-modify-write:
+ *
+ *   1. GET /repositories/:name           — full envelope
+ *   2. mutate envelope.repo.settings.prefetch
+ *   3. PUT /repositories/:name           — full envelope back
+ *
+ * The body shape on the wire is exactly what the server's PUT
+ * round-trip test expects:
+ * {@code {"repo": {"type": "...", "storage": ..., "settings": {"prefetch": <bool>}, ...}}}.
  */
-export async function patchPrefetchEnabled(
+export async function setPrefetchEnabled(
   name: string,
   enabled: boolean,
 ): Promise<void> {
-  await getApiClient().patch(`/repositories/${name}`, {
-    settings: { prefetch: enabled },
-  })
+  const client = getApiClient()
+  const { data } = await client.get<Record<string, unknown>>(
+    `/repositories/${name}`,
+  )
+  // The handler returns either {repo: {...}} or the bare repo object
+  // depending on the CRUD impl. Normalise to the envelope shape PUT
+  // requires.
+  const envelope: Record<string, unknown> = (
+    data && typeof data === 'object' && 'repo' in data
+      ? data
+      : { repo: data ?? {} }
+  ) as Record<string, unknown>
+  const repo = (envelope.repo ?? {}) as Record<string, unknown>
+  const settings = (repo.settings ?? {}) as Record<string, unknown>
+  settings.prefetch = enabled
+  repo.settings = settings
+  envelope.repo = repo
+  await client.put(`/repositories/${name}`, envelope)
 }

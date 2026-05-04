@@ -9,11 +9,11 @@ import Aura from '@primeuix/themes/aura'
 // Mock the prefetch API at module level so we can observe + control
 // every round-trip the panel makes.
 const getStatsMock = vi.fn()
-const patchMock = vi.fn()
+const setEnabledMock = vi.fn()
 
 vi.mock('@/api/prefetch', () => ({
   getPrefetchStats: (...args: unknown[]) => getStatsMock(...args),
-  patchPrefetchEnabled: (...args: unknown[]) => patchMock(...args),
+  setPrefetchEnabled: (...args: unknown[]) => setEnabledMock(...args),
 }))
 
 function mountPanel(initialEnabled?: boolean) {
@@ -30,7 +30,7 @@ describe('PrefetchPanel', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     getStatsMock.mockReset()
-    patchMock.mockReset()
+    setEnabledMock.mockReset()
     getStatsMock.mockResolvedValue({
       repo: 'maven-proxy',
       window: '24h',
@@ -42,7 +42,7 @@ describe('PrefetchPanel', () => {
       dropped_circuit_open: 0,
       last_fetch_at: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
     })
-    patchMock.mockResolvedValue(undefined)
+    setEnabledMock.mockResolvedValue(undefined)
   })
 
   it('renders the toggle in the on state when initialEnabled=true', async () => {
@@ -101,7 +101,7 @@ describe('PrefetchPanel', () => {
     expect(tile.text()).toContain('—')
   })
 
-  it('PATCHes prefetch_enabled with the right body when toggled', async () => {
+  it('writes prefetch_enabled with the right (name, value) when toggled', async () => {
     const wrapper = mountPanel(false)
     await flushPromises()
 
@@ -112,21 +112,21 @@ describe('PrefetchPanel', () => {
     // boundary instead — emitting the same event the panel's
     // {@code @update:modelValue} listener is bound to. This is the
     // narrowest possible contract test: it asserts the panel calls
-    // PATCH when the InputSwitch reports a new value, regardless of
-    // PrimeVue internals.
+    // setPrefetchEnabled when the InputSwitch reports a new value,
+    // regardless of PrimeVue internals.
     const sw = wrapper.findComponent(InputSwitch)
     expect(sw.exists()).toBe(true)
     sw.vm.$emit('update:modelValue', true)
     await flushPromises()
 
-    expect(patchMock).toHaveBeenCalledTimes(1)
-    expect(patchMock).toHaveBeenCalledWith('maven-proxy', true)
+    expect(setEnabledMock).toHaveBeenCalledTimes(1)
+    expect(setEnabledMock).toHaveBeenCalledWith('maven-proxy', true)
     expect(wrapper.emitted('update:enabled')).toBeTruthy()
     expect(wrapper.emitted('update:enabled')![0]).toEqual([true])
   })
 
-  it('rolls back the toggle when PATCH fails', async () => {
-    patchMock.mockRejectedValueOnce(new Error('boom'))
+  it('rolls back the toggle when the write fails', async () => {
+    setEnabledMock.mockRejectedValueOnce(new Error('boom'))
     const wrapper = mountPanel(false)
     await flushPromises()
 
@@ -134,7 +134,7 @@ describe('PrefetchPanel', () => {
     sw.vm.$emit('update:modelValue', true)
     await flushPromises()
 
-    expect(patchMock).toHaveBeenCalledTimes(1)
+    expect(setEnabledMock).toHaveBeenCalledTimes(1)
     // Toggle must revert to false — the error rolled back.
     // Inspect the local ref via the DOM data-p-checked attribute the
     // PrimeVue switch sets when the bound value is true.

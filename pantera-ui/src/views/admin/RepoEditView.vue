@@ -24,11 +24,11 @@ const loadError = ref('')
 const saveError = ref('')
 
 // Prefetch toggle state — extracted from the loaded JSONB config and
-// surfaced to the PrefetchPanel. The panel owns the round-trip to
-// PATCH /repositories/:name {settings.prefetch} and tells us via
-// update:enabled when it changes so we keep the local mirror in sync
-// (so that closing/reopening the page reflects the new value without
-// a refetch).
+// surfaced to the PrefetchPanel. The panel owns the round-trip
+// (PUT /repositories/:name with read-modify-write of settings.prefetch)
+// and tells us via update:enabled when it changes so we keep the local
+// mirror in sync (so that closing/reopening the page reflects the new
+// value without a refetch).
 const prefetchEnabled = ref<boolean | undefined>(undefined)
 
 // Pre-fetch is only meaningful for repos that proxy upstreams. Hosted
