@@ -60,6 +60,22 @@ SOFTWARE.
       <artifactId>jetty-http</artifactId>
       <version>${jetty.version}</version>
     </dependency>
+    <!--
+      HTTP/2 client dependencies. Used by JettyClientSlices to build a
+      HttpClientTransportDynamic with ALPN-negotiated h2/h1.1 fallback
+      when the runtime HttpTuning protocol is H2 or AUTO. See task 8 of
+      docs/superpowers/plans/2026-05-04-pantera-http2-prefetch.md.
+    -->
+    <dependency>
+      <groupId>org.eclipse.jetty.http2</groupId>
+      <artifactId>jetty-http2-client</artifactId>
+      <version>${jetty.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.eclipse.jetty.http2</groupId>
+      <artifactId>jetty-http2-client-transport</artifactId>
+      <version>${jetty.version}</version>
+    </dependency>
     <dependency>
       <groupId>org.eclipse.jetty.http3</groupId>
       <artifactId>jetty-http3-client</artifactId>
