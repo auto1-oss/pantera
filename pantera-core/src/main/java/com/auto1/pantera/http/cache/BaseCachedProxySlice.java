@@ -62,6 +62,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
@@ -166,7 +167,20 @@ public abstract class BaseCachedProxySlice implements Slice {
     private final Optional<Storage> storage;
 
     /**
-     * Constructor.
+     * Optional post-write callback (Phase-4 / Task-19a extension point). Fires
+     * once per successful primary cache-write; callback exceptions are caught +
+     * logged and never propagate to the cache-write path. Defaults to a no-op.
+     *
+     * <p>This mirrors {@link ProxyCacheWriter#fireOnWrite} for the actual
+     * production cache-write path used by every proxy adapter.
+     */
+    private final Consumer<CacheWriteEvent> onCacheWrite;
+
+    /** No-op {@link CacheWriteEvent} consumer used when no callback is supplied. */
+    private static final Consumer<CacheWriteEvent> NO_OP_ON_CACHE_WRITE = event -> { };
+
+    /**
+     * Constructor with cooldown + post-write callback.
      *
      * @param client Upstream remote slice
      * @param cache Asto cache for artifact storage
@@ -178,6 +192,9 @@ public abstract class BaseCachedProxySlice implements Slice {
      * @param config Unified proxy configuration
      * @param cooldownService Cooldown service (nullable, required if cooldown enabled)
      * @param cooldownInspector Cooldown inspector (nullable, required if cooldown enabled)
+     * @param onCacheWrite Optional post-write callback. May be {@code null}
+     *     (treated as no-op). Throwables propagated from the callback are
+     *     caught + logged and do NOT affect the cache-write outcome.
      */
     @SuppressWarnings("PMD.ExcessiveParameterList")
     protected BaseCachedProxySlice(
@@ -190,7 +207,8 @@ public abstract class BaseCachedProxySlice implements Slice {
         final Optional<Queue<ProxyArtifactEvent>> events,
         final ProxyCacheConfig config,
         final CooldownService cooldownService,
-        final CooldownInspector cooldownInspector
+        final CooldownInspector cooldownInspector,
+        final Consumer<CacheWriteEvent> onCacheWrite
     ) {
         this.client = Objects.requireNonNull(client, "client");
         this.cache = Objects.requireNonNull(cache, "cache");
@@ -216,6 +234,7 @@ public abstract class BaseCachedProxySlice implements Slice {
         }
         this.cooldownService = cooldownService;
         this.cooldownInspector = cooldownInspector;
+        this.onCacheWrite = onCacheWrite == null ? NO_OP_ON_CACHE_WRITE : onCacheWrite;
         // Zombie TTL honours PANTERA_DEDUP_MAX_AGE_MS (default 5 min). 10K max
         // in-flight entries bounds memory. Completion hops via
         // ForkJoinPool.commonPool() — the same executor pattern used by the
@@ -230,7 +249,29 @@ public abstract class BaseCachedProxySlice implements Slice {
     }
 
     /**
-     * Convenience constructor without cooldown (for adapters that don't use it).
+     * Constructor with cooldown; no post-write callback (no-op default).
+     */
+    @SuppressWarnings("PMD.ExcessiveParameterList")
+    protected BaseCachedProxySlice(
+        final Slice client,
+        final Cache cache,
+        final String repoName,
+        final String repoType,
+        final String upstreamUrl,
+        final Optional<Storage> storage,
+        final Optional<Queue<ProxyArtifactEvent>> events,
+        final ProxyCacheConfig config,
+        final CooldownService cooldownService,
+        final CooldownInspector cooldownInspector
+    ) {
+        this(client, cache, repoName, repoType, upstreamUrl,
+            storage, events, config, cooldownService, cooldownInspector,
+            NO_OP_ON_CACHE_WRITE);
+    }
+
+    /**
+     * Convenience constructor without cooldown or post-write callback (for
+     * adapters that don't use either).
      */
     @SuppressWarnings("PMD.ExcessiveParameterList")
     protected BaseCachedProxySlice(
@@ -244,7 +285,7 @@ public abstract class BaseCachedProxySlice implements Slice {
         final ProxyCacheConfig config
     ) {
         this(client, cache, repoName, repoType, upstreamUrl,
-            storage, events, config, null, null);
+            storage, events, config, null, null, NO_OP_ON_CACHE_WRITE);
     }
 
     @Override
@@ -865,6 +906,11 @@ public abstract class BaseCachedProxySlice implements Slice {
                     return CompletableFuture.allOf(writes);
                 }).thenApply(ignored -> {
                     this.enqueueEvent(key, resp.headers(), size, owner);
+                    // Fire onCacheWrite BEFORE deleting the temp file: the
+                    // CacheWriteEvent.bytesOnDisk() must still be a valid
+                    // path at the moment the consumer receives it. Mirrors
+                    // ProxyCacheWriter.commit() ordering (Task 11).
+                    this.fireOnCacheWrite(key, tempFile, size);
                     deleteTempQuietly(tempFile);
                     return FetchSignal.SUCCESS;
                 });
@@ -1236,6 +1282,36 @@ public abstract class BaseCachedProxySlice implements Slice {
                 return resp.body().asBytesFuture()
                     .thenApply(ignored -> ResponseBuilder.notFound().build());
             });
+    }
+
+    /**
+     * Invoke the configured {@link Consumer} with a fresh
+     * {@link CacheWriteEvent}. Any throwable from the consumer is caught
+     * and logged at WARN — it MUST NOT propagate, otherwise the cache-
+     * write outcome would be tied to the consumer's correctness. Mirrors
+     * the contract pinned by {@link ProxyCacheWriter#fireOnWrite}.
+     *
+     * @param key      Cache key of the primary artifact just written.
+     * @param tempFile Filesystem path of the source bytes (alive at fire
+     *                 time; deleted by the caller immediately after this
+     *                 method returns).
+     * @param size     Size in bytes of the primary.
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private void fireOnCacheWrite(final Key key, final Path tempFile, final long size) {
+        try {
+            this.onCacheWrite.accept(new CacheWriteEvent(
+                this.repoName, key.string(), tempFile, size, Instant.now()
+            ));
+        } catch (final Exception thrown) {
+            EcsLogger.warn("com.auto1.pantera.http.cache")
+                .message("BaseCachedProxySlice onCacheWrite callback threw: "
+                    + thrown.getMessage())
+                .field("repository.name", this.repoName)
+                .field("url.path", key.string())
+                .error(thrown)
+                .log();
+        }
     }
 
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
