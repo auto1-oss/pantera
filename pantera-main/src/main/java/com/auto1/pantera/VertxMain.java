@@ -133,6 +133,15 @@ public final class VertxMain {
     private com.auto1.pantera.settings.runtime.RuntimeSettingsCache settingsCache;
 
     /**
+     * Prefetch coordinator (Phase 4 / Task 17). Null until
+     * {@link #installPrefetch} succeeds; held here so {@link #stop()} can
+     * shut down the worker pool cleanly between
+     * {@link com.auto1.pantera.settings.runtime.RuntimeSettingsCache#stop()}
+     * and {@code DataSource} shutdown.
+     */
+    private com.auto1.pantera.prefetch.PrefetchCoordinator prefetchCoordinator;
+
+    /**
      * Ctor.
      *
      * @param config Config file path.
@@ -403,6 +412,32 @@ public final class VertxMain {
                     .log();
                 slices.invalidateUpstreamClients();
             });
+        }
+        // Phase 4 / Task 19b+c — Prefetch subsystem boot wiring.
+        //
+        // Construct PrefetchMetrics → PrefetchCircuitBreaker → PrefetchCoordinator
+        // → PrefetchDispatcher and register the dispatcher's onCacheWrite hook
+        // via CacheWriteCallbackRegistry so every BaseCachedProxySlice cache
+        // write fires the prefetch path. Subscribes the coordinator to
+        // prefetch.* settings so admins can hot-tune queue capacity, worker
+        // threads, and the kill-switch without a restart.
+        //
+        // Cooldown gate: STUBBED to "always allow" for now. Constructing the
+        // real CooldownInspector per ecosystem from VertxMain is non-trivial
+        // (the inspectors live inside the per-repo adapter constructors).
+        // Foreground requests still hit the real cooldown gate when the
+        // artifact is requested, so blocking semantics are preserved at the
+        // user-visible layer — but prefetch may waste upstream bandwidth on
+        // artifacts the cooldown will subsequently block. Phase 6 / Task 25.B
+        // will replace this with the proper RepositorySlices-routed adapter.
+        if (this.settingsCache != null) {
+            this.installPrefetch(slices, jwtTokens);
+        } else {
+            EcsLogger.info("com.auto1.pantera.prefetch")
+                .message("Skipping prefetch wiring — no RuntimeSettingsCache (DB-less boot)")
+                .eventCategory("configuration")
+                .eventAction("prefetch_init_skip")
+                .log();
         }
         // Cooldown cleanup fallback: if pg_cron is not running the
         // cleanup job, start the Vertx-periodic fallback so expired
@@ -730,6 +765,156 @@ public final class VertxMain {
         return main;
     }
 
+    /**
+     * Wire up the Phase 4 prefetch subsystem against an already-constructed
+     * {@link RepositorySlices}. Builds the metrics/breaker/coordinator/
+     * dispatcher chain, registers the dispatcher's
+     * {@code onCacheWrite} callback into
+     * {@link com.auto1.pantera.http.cache.CacheWriteCallbackRegistry} so every
+     * {@link com.auto1.pantera.http.cache.BaseCachedProxySlice} adapter
+     * picks it up automatically, and subscribes the coordinator to live
+     * settings updates.
+     *
+     * <p>Cooldown gate is currently stubbed to "always allow" — see
+     * Phase 6 / Task 25.B follow-up. Foreground requests still hit the
+     * real cooldown service on the user-visible request path.</p>
+     *
+     * @param slices Slices registry whose accessors back the dispatcher.
+     */
+    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.CognitiveComplexity"})
+    private void installPrefetch(
+        final RepositorySlices slices,
+        final com.auto1.pantera.auth.JwtTokens jwtTokens
+    ) {
+        try {
+            final java.time.Clock clock = java.time.Clock.systemUTC();
+            final com.auto1.pantera.prefetch.PrefetchMetrics metrics =
+                new com.auto1.pantera.prefetch.PrefetchMetrics(clock);
+            final com.auto1.pantera.prefetch.PrefetchCircuitBreaker breaker =
+                new com.auto1.pantera.prefetch.PrefetchCircuitBreaker(
+                    this.settingsCache::circuitBreakerTuning
+                );
+            // Cooldown gate: stub allow-all (see CONCERN-task19-stub-cooldown-gate
+            // in the audit doc). Real wiring is Phase 6 / Task 25.B.
+            final com.auto1.pantera.prefetch.PrefetchCoordinator.CooldownGate cooldownGate =
+                task -> java.util.concurrent.CompletableFuture.completedFuture(Boolean.FALSE);
+            // Upstream caller: invoke the resolved repository slice directly
+            // and stamp a system-level Authorization header so the outer
+            // auth wrapper (CombinedAuthzSliceWrap) lets the prefetch through.
+            //
+            // Why direct slice invocation: going through the JVM-resolved
+            // slice — rather than the loopback HTTP endpoint — keeps the
+            // call inside the same Vert.x context as the foreground request
+            // that triggered it, avoids socket-layer overhead, and still
+            // routes the response through the normal BaseCachedProxySlice /
+            // ProxyCacheWriter pipeline so the cache-write completes the
+            // same way a foreground request would have populated it.
+            //
+            // Why a system Authorization header: the slice chain wraps the
+            // inner adapter in CombinedAuthzSliceWrap which rejects
+            // anonymous requests with 401. We mint a one-shot service JWT
+            // for the "pantera" system user (created during DB bootstrap
+            // with admin role) so prefetch passes the auth gate without
+            // hardcoding admin credentials. TODO(Phase 6 / Task 25.B):
+            // replace this with a dedicated prefetch-internal slice
+            // accessor that bypasses the outer auth wrapper entirely.
+            final int loopbackPort = this.port;
+            final String systemAuth = "Bearer "
+                + jwtTokens.generate(
+                    new com.auto1.pantera.http.auth.AuthUser("pantera", "internal-prefetch")
+                );
+            final com.auto1.pantera.prefetch.PrefetchCoordinator.UpstreamCaller upstream =
+                task -> {
+                    final java.util.concurrent.CompletableFuture<Integer> out =
+                        new java.util.concurrent.CompletableFuture<>();
+                    try {
+                        final com.auto1.pantera.http.Slice repoSlice = slices.slice(
+                            new com.auto1.pantera.asto.Key.From(task.repoName()),
+                            loopbackPort
+                        );
+                        // Match the public URL format the foreground HTTP server
+                        // would route through TrimPathSlice / Browsable wrappers:
+                        // "/<repoName>/<artifact path>". The slice() return is
+                        // the same TrimPathSlice the public server hits, so the
+                        // leading "/<repoName>" prefix is stripped before the
+                        // inner MavenProxy sees the artifact path.
+                        final String urlPath = "/" + task.repoName() + "/" + task.coord().path();
+                        final com.auto1.pantera.http.rq.RequestLine line =
+                            new com.auto1.pantera.http.rq.RequestLine(
+                                com.auto1.pantera.http.rq.RqMethod.GET, urlPath
+                            );
+                        final com.auto1.pantera.http.Headers headers =
+                            new com.auto1.pantera.http.Headers();
+                        headers.add("Authorization", systemAuth);
+                        repoSlice.response(line, headers, com.auto1.pantera.asto.Content.EMPTY)
+                            .whenComplete((response, err) -> {
+                                if (err != null) {
+                                    out.completeExceptionally(err);
+                                } else if (response == null) {
+                                    out.completeExceptionally(
+                                        new IllegalStateException("null response")
+                                    );
+                                } else {
+                                    out.complete(response.status().code());
+                                }
+                            });
+                    } catch (final Exception ex) {
+                        out.completeExceptionally(ex);
+                    }
+                    return out;
+                };
+            this.prefetchCoordinator = new com.auto1.pantera.prefetch.PrefetchCoordinator(
+                metrics,
+                breaker,
+                slices.negativeCache(),
+                cooldownGate,
+                upstream,
+                this.settingsCache::prefetchTuning
+            );
+            this.prefetchCoordinator.start();
+            this.prefetchCoordinator.subscribe(this.settingsCache);
+            // Parser registry: maven + gradle share MavenPomParser. NPM parser
+            // remains uninstalled until Phase 6 wires the metadata lookup
+            // (see Phase 6 audit notes).
+            final java.util.Map<String,
+                com.auto1.pantera.prefetch.parser.PrefetchParser> parsers = java.util.Map.of(
+                "maven-proxy", new com.auto1.pantera.prefetch.parser.MavenPomParser(),
+                "gradle-proxy", new com.auto1.pantera.prefetch.parser.MavenPomParser()
+            );
+            final com.auto1.pantera.prefetch.PrefetchDispatcher dispatcher =
+                new com.auto1.pantera.prefetch.PrefetchDispatcher(
+                    this.settingsCache::prefetchTuning,
+                    slices::prefetchEnabledFor,
+                    slices::upstreamUrlOf,
+                    parsers,
+                    slices::repoTypeOf,
+                    this.prefetchCoordinator::submit
+                );
+            // Register the dispatcher's onCacheWrite hook globally so every
+            // BaseCachedProxySlice adapter — Maven CachedProxySlice today,
+            // future adapters too — receives the callback without per-
+            // adapter ctor surgery.
+            com.auto1.pantera.http.cache.CacheWriteCallbackRegistry.instance()
+                .setSharedCallback(dispatcher::onCacheWrite);
+            EcsLogger.info("com.auto1.pantera.prefetch")
+                .message("Prefetch subsystem started (Task 19b+c)")
+                .eventCategory("configuration")
+                .eventAction("prefetch_init")
+                .eventOutcome("success")
+                .field("parsers.count", parsers.size())
+                .field("loopback.port", loopbackPort)
+                .log();
+        } catch (final Exception ex) {
+            EcsLogger.error("com.auto1.pantera.prefetch")
+                .message("Failed to start prefetch subsystem; continuing without prefetch")
+                .eventCategory("configuration")
+                .eventAction("prefetch_init")
+                .eventOutcome("failure")
+                .error(ex)
+                .log();
+        }
+    }
+
     public void stop() {
         EcsLogger.info("com.auto1.pantera")
             .message("Stopping Pantera and cleaning up resources")
@@ -789,6 +974,33 @@ public final class VertxMain {
                     .message("Failed to stop QuartzService")
                     .eventCategory("web")
                     .eventAction("quartz_stop")
+                    .eventOutcome("failure")
+                    .error(e)
+                    .log();
+            }
+        }
+        // 3a. Stop PrefetchCoordinator (drains worker threads).
+        //     Must run before RuntimeSettingsCache.stop() so the coordinator's
+        //     prefetch.* listener doesn't fire during shutdown, and before
+        //     DataSource close so any in-flight cooldown lookup completes.
+        //     Drop the shared CacheWriteCallback first so an in-flight
+        //     cache-write that completes during shutdown can't dispatch to
+        //     a coordinator we're tearing down.
+        com.auto1.pantera.http.cache.CacheWriteCallbackRegistry.instance().clear();
+        if (this.prefetchCoordinator != null) {
+            try {
+                this.prefetchCoordinator.stop();
+                EcsLogger.info("com.auto1.pantera.prefetch")
+                    .message("PrefetchCoordinator stopped")
+                    .eventCategory("web")
+                    .eventAction("prefetch_stop")
+                    .eventOutcome("success")
+                    .log();
+            } catch (final Exception e) {
+                EcsLogger.error("com.auto1.pantera.prefetch")
+                    .message("Failed to stop PrefetchCoordinator")
+                    .eventCategory("web")
+                    .eventAction("prefetch_stop")
                     .eventOutcome("failure")
                     .error(e)
                     .log();

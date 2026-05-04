@@ -249,7 +249,15 @@ public abstract class BaseCachedProxySlice implements Slice {
     }
 
     /**
-     * Constructor with cooldown; no post-write callback (no-op default).
+     * Constructor with cooldown; no explicit post-write callback. Delegates
+     * to the 11-arg ctor with the {@link CacheWriteCallbackRegistry} shared
+     * callback so the prefetch dispatcher (Task 19b) is wired in for every
+     * adapter that uses this overload — Maven CachedProxySlice — without
+     * threading a {@code Consumer} through 4 levels of adapter ctors.
+     *
+     * <p>When the registry has no shared callback (tests, DB-less boot,
+     * early startup), the registry returns a no-op consumer, so behaviour is
+     * unchanged from the pre-Task-19 default.</p>
      */
     @SuppressWarnings("PMD.ExcessiveParameterList")
     protected BaseCachedProxySlice(
@@ -266,12 +274,14 @@ public abstract class BaseCachedProxySlice implements Slice {
     ) {
         this(client, cache, repoName, repoType, upstreamUrl,
             storage, events, config, cooldownService, cooldownInspector,
-            NO_OP_ON_CACHE_WRITE);
+            CacheWriteCallbackRegistry.instance().sharedCallback());
     }
 
     /**
-     * Convenience constructor without cooldown or post-write callback (for
-     * adapters that don't use either).
+     * Convenience constructor without cooldown or explicit post-write
+     * callback. Delegates with the {@link CacheWriteCallbackRegistry} shared
+     * callback so the prefetch dispatcher (Task 19b) is wired in for every
+     * adapter that uses this overload without per-adapter ctor surgery.
      */
     @SuppressWarnings("PMD.ExcessiveParameterList")
     protected BaseCachedProxySlice(
@@ -285,7 +295,8 @@ public abstract class BaseCachedProxySlice implements Slice {
         final ProxyCacheConfig config
     ) {
         this(client, cache, repoName, repoType, upstreamUrl,
-            storage, events, config, null, null, NO_OP_ON_CACHE_WRITE);
+            storage, events, config, null, null,
+            CacheWriteCallbackRegistry.instance().sharedCallback());
     }
 
     @Override

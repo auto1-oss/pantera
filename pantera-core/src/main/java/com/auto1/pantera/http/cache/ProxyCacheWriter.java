@@ -176,7 +176,11 @@ public final class ProxyCacheWriter {
     }
 
     /**
-     * Ctor with metrics; no post-write callback.
+     * Ctor with metrics; no explicit post-write callback. Falls back to the
+     * shared callback installed in {@link CacheWriteCallbackRegistry} so the
+     * prefetch dispatcher (Task 19b) wires in here too without surgery on
+     * each adapter that constructs its own writer (Maven CachedProxySlice,
+     * Go CachedProxySlice, Pypi CachedPyProxySlice, Composer CachedProxySlice).
      *
      * @param cache    Storage receiving the primary artifact and its sidecars.
      * @param repoName Repository name, emitted as {@code repository.name} in
@@ -187,17 +191,19 @@ public final class ProxyCacheWriter {
     public ProxyCacheWriter(
         final Storage cache, final String repoName, final MeterRegistry metrics
     ) {
-        this(cache, repoName, metrics, NO_OP_ON_WRITE);
+        this(cache, repoName, metrics, CacheWriteCallbackRegistry.instance().sharedCallback());
     }
 
     /**
-     * Convenience ctor without metrics or post-write callback.
+     * Convenience ctor without metrics or explicit post-write callback.
+     * Falls back to the shared callback installed in
+     * {@link CacheWriteCallbackRegistry}.
      *
      * @param cache    Storage.
      * @param repoName Repository name.
      */
     public ProxyCacheWriter(final Storage cache, final String repoName) {
-        this(cache, repoName, null, NO_OP_ON_WRITE);
+        this(cache, repoName, null, CacheWriteCallbackRegistry.instance().sharedCallback());
     }
 
     /**
@@ -576,8 +582,16 @@ public final class ProxyCacheWriter {
      * Commit a previously verified artifact to storage. Reads the temp file
      * eagerly so the response Flowable (which also reads the temp file) is
      * not racing with temp-file deletion.
+     *
+     * <p>We materialise a dedicated callback temp file from the in-memory
+     * byte buffer before firing {@link #fireOnWrite}; the original
+     * {@code artifact.tempFile()} is owned by the response Flowable's
+     * disposer and may be deleted before the onWrite consumer schedules its
+     * read. The callback temp file is deleted after the consumer finishes
+     * (best-effort cleanup; consumers that need bytes should copy them
+     * synchronously inside the callback).</p>
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.CognitiveComplexity"})
     CompletionStage<Result<Void>> commitVerified(final VerifiedArtifact artifact) {
         final byte[] bytes;
         try {
@@ -587,20 +601,29 @@ public final class ProxyCacheWriter {
                 Result.err(new Fault.StorageUnavailable(ex, artifact.primaryKey().string()))
             );
         }
+        // Write a callback-owned copy so the consumer sees a stable file
+        // regardless of when the response Flowable disposer runs.
+        final Path callbackFile = materialiseCallbackTempFile(bytes, artifact.primaryKey());
         return this.cache.save(artifact.primaryKey(), new Content.From(bytes))
             .thenCompose(ignored -> this.saveSidecars(artifact.primaryKey(), artifact.sidecars()))
             .handle((ignored, err) -> {
                 if (err == null) {
-                    // Temp file is still alive — the response Flowable owns
-                    // its disposal. Safe to expose to the onWrite consumer.
-                    // NOTE: bytesOnDisk passed to onCacheWrite from this path is best-effort —
-                    // the response Flowable's disposer can race with the callback. Consumers
-                    // MUST follow the lifetime contract documented on CacheWriteEvent#bytesOnDisk.
+                    // Use the callback-owned file (still on disk) instead of
+                    // the response Flowable's temp file (which may have been
+                    // disposed by the time we land here).
                     this.fireOnWrite(
-                        artifact.primaryKey(), artifact.tempFile(), artifact.size()
+                        artifact.primaryKey(),
+                        callbackFile == null ? artifact.tempFile() : callbackFile,
+                        artifact.size()
                     );
+                    if (callbackFile != null) {
+                        deleteQuietly(callbackFile);
+                    }
                     this.logSuccess(artifact.primaryKey(), artifact.sidecars().keySet(), artifact.ctx());
                     return Result.<Void>ok(null);
+                }
+                if (callbackFile != null) {
+                    deleteQuietly(callbackFile);
                 }
                 this.rollbackAfterPartialFailure(
                     artifact.primaryKey(), artifact.sidecars().keySet(), err, artifact.ctx()
@@ -609,6 +632,27 @@ public final class ProxyCacheWriter {
                     unwrap(err), artifact.primaryKey().string()
                 ));
             });
+    }
+
+    /**
+     * Write the in-memory bytes to a fresh temp file dedicated to the
+     * onCacheWrite consumer. Returns {@code null} on IO failure (callback
+     * falls back to the response Flowable's path with the existing
+     * best-effort lifetime contract).
+     */
+    private static Path materialiseCallbackTempFile(final byte[] bytes, final Key key) {
+        try {
+            final Path tmp = Files.createTempFile("pantera-prefetch-", ".bin");
+            Files.write(tmp, bytes);
+            return tmp;
+        } catch (final IOException ex) {
+            EcsLogger.debug("com.auto1.pantera.cache")
+                .message("Failed to materialise onCacheWrite temp file; using response Flowable path")
+                .field("url.path", key.string())
+                .error(ex)
+                .log();
+            return null;
+        }
     }
 
     /**

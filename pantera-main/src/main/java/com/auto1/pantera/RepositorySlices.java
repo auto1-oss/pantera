@@ -598,6 +598,96 @@ public class RepositorySlices {
         return this.repos;
     }
 
+    /**
+     * Shared {@link NegativeCache} bean. Returned for use by the prefetch
+     * coordinator so its negative-cache short-circuit shares the same
+     * 404 cache the proxies populate. Never null after construction.
+     *
+     * @return shared NegativeCache instance.
+     * @since 2.2.0
+     */
+    public NegativeCache negativeCache() {
+        return this.sharedNegativeCache;
+    }
+
+    /**
+     * Look up a repo's type ({@code "maven-proxy"}, {@code "npm-proxy"}, etc.)
+     * by repo name. Returns {@code null} when the repo is not configured
+     * (e.g., recently deleted) so the dispatcher's null-guard short-circuits.
+     *
+     * @param name Repo name to resolve.
+     * @return Repo type or {@code null} when unknown.
+     * @since 2.2.0
+     */
+    public String repoTypeOf(final String name) {
+        if (name == null) {
+            return null;
+        }
+        return this.repos.config(name).map(RepoConfig::type).orElse(null);
+    }
+
+    /**
+     * Look up the upstream URL for a repo. Returns the first
+     * {@link com.auto1.pantera.http.client.RemoteConfig#uri()} for proxy
+     * repos; an empty string for non-proxy or unknown repos.
+     *
+     * <p>Used by the dispatcher to stamp every {@link com.auto1.pantera.prefetch.PrefetchTask#upstreamUrl()}
+     * so the coordinator can route the GET via the right per-host
+     * semaphore bucket.</p>
+     *
+     * @param name Repo name to resolve.
+     * @return Upstream URL string, or empty when unknown / not a proxy.
+     * @since 2.2.0
+     */
+    public String upstreamUrlOf(final String name) {
+        if (name == null) {
+            return "";
+        }
+        final Optional<RepoConfig> cfg = this.repos.config(name);
+        if (cfg.isEmpty()) {
+            return "";
+        }
+        final List<com.auto1.pantera.http.client.RemoteConfig> remotes = cfg.get().remotes();
+        if (remotes == null || remotes.isEmpty()) {
+            return "";
+        }
+        final java.net.URI uri = remotes.get(0).uri();
+        return uri == null ? "" : uri.toString();
+    }
+
+    /**
+     * Per-repo prefetch enable flag. Until Task 20 lands a
+     * {@code RepoConfig.prefetchEnabled()} accessor, every proxy repo is
+     * considered eligible. The global kill-switch
+     * ({@code prefetch.enabled} from {@link com.auto1.pantera.settings.runtime.RuntimeSettingsCache})
+     * remains the only off-switch.
+     *
+     * @param name Repo name to resolve.
+     * @return {@code Boolean.TRUE} for known proxy repos, {@code Boolean.FALSE} otherwise.
+     * @since 2.2.0
+     */
+    public Boolean prefetchEnabledFor(final String name) {
+        if (name == null) {
+            return Boolean.FALSE;
+        }
+        return this.repos.config(name)
+            .map(cfg -> cfg.type() != null && cfg.type().endsWith("-proxy"))
+            .orElse(Boolean.FALSE);
+    }
+
+    /**
+     * Cooldown service used by the proxy adapters. Exposed for the prefetch
+     * coordinator's {@code CooldownGate} adapter so prefetch decisions
+     * honour the same admin-configured cooldown windows the foreground
+     * requests are gated by.
+     *
+     * @return shared CooldownService.
+     * @since 2.2.0
+     */
+    public CooldownService cooldownService() {
+        return this.cooldown;
+    }
+
     private Optional<Queue<ArtifactEvent>> artifactEvents() {
         return this.settings.artifactMetadata()
             .map(MetadataEventQueues::eventQueue);
