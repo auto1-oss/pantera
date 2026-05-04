@@ -11,11 +11,11 @@
 package com.auto1.pantera.settings.runtime;
 
 import java.io.StringReader;
-import java.util.Set;
 import javax.json.Json;
 import javax.json.JsonObject;
 import javax.json.JsonValue;
 import com.auto1.pantera.db.dao.SettingsDao;
+import com.auto1.pantera.http.log.EcsLogger;
 
 /**
  * Seeds the settings table with spec defaults on first boot. Idempotent —
@@ -34,13 +34,23 @@ public final class SettingsBootstrap {
     }
 
     public void seedIfMissing() {
-        final Set<String> existing = this.dao.listAll().keySet();
+        int seeded = 0;
+        int existing = 0;
         for (SettingsKey k : SettingsKey.values()) {
-            if (existing.contains(k.key())) {
-                continue;
+            final boolean inserted = this.dao.putIfAbsent(
+                k.key(), defaultJson(k.defaultRepr()), "bootstrap");
+            if (inserted) {
+                seeded++;
+            } else {
+                existing++;
             }
-            this.dao.put(k.key(), defaultJson(k.defaultRepr()), "bootstrap");
         }
+        EcsLogger.info("com.auto1.pantera.settings.runtime")
+            .message("SettingsBootstrap complete: " + seeded + " keys seeded, "
+                + existing + " keys already present")
+            .field("settings.seeded", seeded)
+            .field("settings.existing", existing)
+            .log();
     }
 
     private JsonObject defaultJson(final String repr) {

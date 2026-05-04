@@ -50,6 +50,30 @@ public final class SettingsDao {
         }
     }
 
+    /**
+     * Inserts a new setting only if the key is absent. Returns true if a new
+     * row was created; false if an existing row was kept untouched.
+     *
+     * <p>Differs from {@link #put}: that method upserts (overwrites). Use this
+     * for idempotent boot-time seeding where existing operator-tuned values
+     * must be preserved across restarts and across cluster nodes.
+     */
+    public boolean putIfAbsent(final String key, final JsonObject value, final String actor) {
+        final String sql = String.join(" ",
+            "INSERT INTO settings (key, value, updated_by) VALUES (?, ?::jsonb, ?)",
+            "ON CONFLICT (key) DO NOTHING"
+        );
+        try (Connection conn = this.source.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, key);
+            ps.setString(2, value.toString());
+            ps.setString(3, actor);
+            return ps.executeUpdate() == 1;
+        } catch (final Exception ex) {
+            throw new IllegalStateException("Failed to putIfAbsent setting: " + key, ex);
+        }
+    }
+
     public Optional<JsonObject> get(final String key) {
         try (Connection conn = this.source.getConnection();
              PreparedStatement ps = conn.prepareStatement(
