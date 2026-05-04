@@ -92,6 +92,21 @@ public final class CacheWriteCallbackRegistry {
     }
 
     /**
+     * Reference-equality check against the registry's no-op sentinel. Used by
+     * {@link ProxyCacheWriter#commitVerified} to skip the synchronous temp-
+     * file materialisation when the captured callback is the registry's
+     * no-op (i.e., no consumer was installed at the time the writer was
+     * constructed).
+     *
+     * @param callback Consumer to test; {@code null} treated as no-op.
+     * @return {@code true} if the consumer is the registry's no-op sentinel
+     *     (or null).
+     */
+    public boolean isNoOp(final Consumer<CacheWriteEvent> callback) {
+        return callback == null || callback == NO_OP;
+    }
+
+    /**
      * Clear the shared reference (for tests).
      */
     public void clear() {

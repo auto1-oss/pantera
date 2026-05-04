@@ -43,19 +43,24 @@ import java.time.Instant;
  *                    "com/google/guava/guava/33.4.0-jre/guava-33.4.0-jre.pom").
  * @param bytesOnDisk Filesystem path of the freshly-written cache file.
  *                    <strong>Lifetime:</strong> in the {@code commit()}
- *                    path the file is guaranteed alive at the moment the
- *                    consumer receives the event; in the
- *                    {@code commitVerified()} path the lifecycle is owned
- *                    by the response Flowable's disposer and may race
- *                    with the callback. Consumers that need the bytes
- *                    reliably should either copy them eagerly during the
- *                    callback, or — preferably — re-read via
- *                    {@link com.auto1.pantera.asto.Storage} using the
- *                    cached key, treating {@code bytesOnDisk} as a
- *                    best-effort hint. The source is the temp file in
- *                    the sync path; the
- *                    {@link ProxyCacheWriter.VerifiedArtifact#tempFile()}
- *                    in the verified-artifact path.
+ *                    path the file is the writer's primary temp file and
+ *                    is guaranteed alive at the moment the consumer
+ *                    receives the event (deleted by the writer
+ *                    immediately after the callback returns). In the
+ *                    {@code commitVerified()} path the writer materialises
+ *                    a dedicated <em>callback-owned</em> temp file from
+ *                    the in-memory bytes before firing the callback and
+ *                    deletes it as soon as the callback returns; the
+ *                    consumer therefore sees a stable file for the
+ *                    synchronous duration of its callback invocation,
+ *                    with no disposer race against the response
+ *                    Flowable's temp file. Either way, consumers that
+ *                    need the bytes after the callback returns should
+ *                    copy them eagerly inside the callback or re-read
+ *                    via {@link com.auto1.pantera.asto.Storage} using
+ *                    the cached key. When no callback is installed the
+ *                    {@code commitVerified()} path skips the
+ *                    materialisation entirely (no event is fired).
  * @param sizeBytes   Size in bytes of the primary artifact.
  * @param writtenAt   When the write completed.
  *

@@ -583,13 +583,18 @@ public final class ProxyCacheWriter {
      * eagerly so the response Flowable (which also reads the temp file) is
      * not racing with temp-file deletion.
      *
-     * <p>We materialise a dedicated callback temp file from the in-memory
-     * byte buffer before firing {@link #fireOnWrite}; the original
-     * {@code artifact.tempFile()} is owned by the response Flowable's
-     * disposer and may be deleted before the onWrite consumer schedules its
-     * read. The callback temp file is deleted after the consumer finishes
-     * (best-effort cleanup; consumers that need bytes should copy them
-     * synchronously inside the callback).</p>
+     * <p>When a callback is installed (per-instance or via
+     * {@link CacheWriteCallbackRegistry}) we materialise a dedicated
+     * callback-owned temp file from the in-memory byte buffer before firing
+     * {@link #fireOnWrite}; the original {@code artifact.tempFile()} is
+     * owned by the response Flowable's disposer and may be deleted before
+     * the onWrite consumer schedules its read. The callback temp file is
+     * deleted right after the consumer returns.</p>
+     *
+     * <p><b>Fast path:</b> when both the per-instance callback AND the
+     * registry's shared callback are no-ops, the materialise step is
+     * skipped entirely &mdash; no {@code Files.createTempFile + write +
+     * deleteQuietly} on the proxy hot path.</p>
      */
     @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.CognitiveComplexity"})
     CompletionStage<Result<Void>> commitVerified(final VerifiedArtifact artifact) {
@@ -601,23 +606,34 @@ public final class ProxyCacheWriter {
                 Result.err(new Fault.StorageUnavailable(ex, artifact.primaryKey().string()))
             );
         }
+        // Fast path: when no callback is installed (per-instance or
+        // shared), skip the synchronous temp-file materialisation that
+        // would otherwise hit the disk for nothing on every cache write.
+        final boolean hasCallback = this.onWrite != NO_OP_ON_WRITE
+            && !CacheWriteCallbackRegistry.instance().isNoOp(this.onWrite);
         // Write a callback-owned copy so the consumer sees a stable file
-        // regardless of when the response Flowable disposer runs.
-        final Path callbackFile = materialiseCallbackTempFile(bytes, artifact.primaryKey());
+        // regardless of when the response Flowable disposer runs. Skipped
+        // when no callback would observe it.
+        final Path callbackFile = hasCallback
+            ? materialiseCallbackTempFile(bytes, artifact.primaryKey())
+            : null;
         return this.cache.save(artifact.primaryKey(), new Content.From(bytes))
             .thenCompose(ignored -> this.saveSidecars(artifact.primaryKey(), artifact.sidecars()))
             .handle((ignored, err) -> {
                 if (err == null) {
-                    // Use the callback-owned file (still on disk) instead of
-                    // the response Flowable's temp file (which may have been
-                    // disposed by the time we land here).
-                    this.fireOnWrite(
-                        artifact.primaryKey(),
-                        callbackFile == null ? artifact.tempFile() : callbackFile,
-                        artifact.size()
-                    );
-                    if (callbackFile != null) {
-                        deleteQuietly(callbackFile);
+                    if (hasCallback) {
+                        // Use the callback-owned file (still on disk)
+                        // instead of the response Flowable's temp file
+                        // (which may have been disposed by the time we
+                        // land here).
+                        this.fireOnWrite(
+                            artifact.primaryKey(),
+                            callbackFile == null ? artifact.tempFile() : callbackFile,
+                            artifact.size()
+                        );
+                        if (callbackFile != null) {
+                            deleteQuietly(callbackFile);
+                        }
                     }
                     this.logSuccess(artifact.primaryKey(), artifact.sidecars().keySet(), artifact.ctx());
                     return Result.<Void>ok(null);

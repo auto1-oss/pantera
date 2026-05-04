@@ -819,10 +819,11 @@ public final class VertxMain {
             // replace this with a dedicated prefetch-internal slice
             // accessor that bypasses the outer auth wrapper entirely.
             final int loopbackPort = this.port;
-            final String systemAuth = "Bearer "
-                + jwtTokens.generate(
-                    new com.auto1.pantera.http.auth.AuthUser("pantera", "internal-prefetch")
-                );
+            // Re-mint the system JWT per upstream call. The token has a 1h
+            // TTL (defaultAccessTtl=3600s); capturing it once at boot would
+            // silently 401 every prefetch after the first hour. JWT minting
+            // is a single HMAC — cheap enough to do per call without a
+            // cache. See review-v2.2.0 C1.
             final com.auto1.pantera.prefetch.PrefetchCoordinator.UpstreamCaller upstream =
                 task -> {
                     final java.util.concurrent.CompletableFuture<Integer> out =
@@ -845,6 +846,12 @@ public final class VertxMain {
                             );
                         final com.auto1.pantera.http.Headers headers =
                             new com.auto1.pantera.http.Headers();
+                        final String systemAuth = "Bearer "
+                            + jwtTokens.generate(
+                                new com.auto1.pantera.http.auth.AuthUser(
+                                    "pantera", "internal-prefetch"
+                                )
+                            );
                         headers.add("Authorization", systemAuth);
                         repoSlice.response(line, headers, com.auto1.pantera.asto.Content.EMPTY)
                             .whenComplete((response, err) -> {
