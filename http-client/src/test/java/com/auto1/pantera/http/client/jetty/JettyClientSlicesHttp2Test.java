@@ -15,6 +15,8 @@ import org.eclipse.jetty.client.HttpClient;
 import org.eclipse.jetty.client.HttpClientTransport;
 import org.eclipse.jetty.client.transport.HttpClientTransportDynamic;
 import org.eclipse.jetty.client.transport.HttpClientTransportOverHTTP;
+import org.eclipse.jetty.http2.client.HTTP2Client;
+import org.eclipse.jetty.util.component.ContainerLifeCycle;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
@@ -143,5 +145,70 @@ final class JettyClientSlicesHttp2Test {
         } finally {
             clients.stop();
         }
+    }
+
+    @Test
+    void h2MultiplexingLimitReachesUnderlyingHttp2Client() throws Exception {
+        // Regression guard: the 4-arg ctor's h2MultiplexingLimit MUST plumb
+        // through to the underlying HTTP2Client.setMaxLocalStreams(...) — the
+        // existing tests only checked the transport class, which would happily
+        // pass even if the multiplexing knob was silently dropped on the floor.
+        final JettyClientSlices clients = new JettyClientSlices(
+            new HttpClientSettings(),
+            JettyClientSlices.HttpProtocol.H2,
+            /* h2MaxPoolSize */ 1,
+            /* h2MultiplexingLimit */ 73
+        );
+        try {
+            final HttpClient client = clients.httpClient();
+            final HttpClientTransport transport = client.getTransport();
+            Assertions.assertTrue(
+                transport instanceof HttpClientTransportDynamic,
+                "expected HttpClientTransportDynamic for H2 protocol, got "
+                    + transport.getClass()
+            );
+            // Walk the bean tree of the dynamic transport to find the
+            // HTTP2Client. Jetty 12 registers the HTTP/2 ClientConnectionFactory
+            // (and its HTTP2Client) as managed beans of the transport.
+            final HTTP2Client found = findFirstBean(
+                (ContainerLifeCycle) transport, HTTP2Client.class
+            );
+            Assertions.assertNotNull(
+                found, "HTTP2Client bean not found under transport"
+            );
+            Assertions.assertEquals(
+                73, found.getMaxLocalStreams(),
+                "max-local-streams should match the multiplexing limit passed to ctor"
+            );
+            Assertions.assertEquals(
+                0, found.getMaxConcurrentPushedStreams(),
+                "server push should be disabled"
+            );
+        } finally {
+            clients.stop();
+        }
+    }
+
+    /**
+     * Recursively search a Jetty {@link ContainerLifeCycle} bean tree for the
+     * first bean assignable to {@code type}. Used to assert that the
+     * HTTP/2 multiplexing knob actually reaches the underlying
+     * {@link HTTP2Client} — direct field reflection would be more brittle.
+     */
+    private static <T> T findFirstBean(
+        final ContainerLifeCycle root, final Class<T> type
+    ) {
+        for (final Object bean : root.getBeans()) {
+            if (type.isInstance(bean)) {
+                return type.cast(bean);
+            }
+            if (bean instanceof ContainerLifeCycle child) {
+                final T nested = findFirstBean(child, type);
+                if (nested != null) {
+                    return nested;
+                }
+            }
+        }
+        return null;
     }
 }

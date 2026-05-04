@@ -126,6 +126,16 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
      * @param settings Settings.
      */
     public JettyClientSlices(final HttpClientSettings settings) {
+        // TODO(perf-pack-changelog): the legacy 1-arg constructor used to
+        // produce pure HTTP/1.1 clients. As of v2.2.0 perf-pack it produces
+        // an ALPN-negotiated dynamic transport (h2 over TLS, h1.1 fallback).
+        // Production traffic to all upstream registries (Maven/npm/PyPI/Docker
+        // proxies via RepositorySlices) will collapse from many h1.1
+        // connections per destination to one multiplexed h2 connection per
+        // destination after deploy. Operators should re-baseline
+        // connection-count alerting and watch for any upstream that misbehaves
+        // on h2. CHANGELOG entry will land in Task 26 (Phase 8) under
+        // "BEHAVIOR CHANGE".
         this(settings, HttpProtocol.H2, settings.maxConnectionsPerDestination(), 100);
     }
 
