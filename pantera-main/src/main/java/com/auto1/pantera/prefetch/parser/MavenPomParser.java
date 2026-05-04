@@ -54,13 +54,13 @@ public final class MavenPomParser implements PrefetchParser {
                 reader.close();
             }
         } catch (final Exception ex) {
-            EcsLogger.warn("com.auto1.pantera.prefetch.parser")
-                .message("Failed to parse pom.xml; returning empty coordinate list")
+            EcsLogger.warn("com.auto1.pantera.prefetch")
+                .message("Maven POM parse failed: " + ex.getMessage())
                 .eventCategory("file")
                 .eventAction("parse")
                 .eventOutcome("failure")
                 .field("file.path", bytesOnDisk.toString())
-                .field("error.message", ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage())
+                .field("error.type", ex.getClass().getName())
                 .log();
             return List.of();
         }
@@ -70,9 +70,16 @@ public final class MavenPomParser implements PrefetchParser {
     /**
      * Drive the StAX state machine: walk to {@code <dependencies>}, then
      * collect each {@code <dependency>}.
+     *
+     * <p>Top-level {@code <dependencies>} only: {@code <dependencyManagement>}
+     * subtrees are skipped via a depth counter so we don't emit managed deps
+     * as if they were runtime deps. {@code <profiles>} are reached after
+     * {@code <dependencies>} in the natural document order, so the parser
+     * exits cleanly at EOF.</p>
      */
     private void readDependencies(final XMLStreamReader reader, final List<Coordinate> out) throws XMLStreamException {
         boolean inDependencies = false;
+        int skipDepth = 0;
         DependencyAcc cur = null;
         StringBuilder text = null;
         String currentChild = null;
@@ -81,7 +88,11 @@ public final class MavenPomParser implements PrefetchParser {
             switch (event) {
                 case XMLStreamConstants.START_ELEMENT -> {
                     final String name = reader.getLocalName();
-                    if ("dependencies".equals(name)) {
+                    if ("dependencyManagement".equals(name)) {
+                        skipDepth++;
+                    } else if (skipDepth > 0) {
+                        // Inside a <dependencyManagement> subtree — ignore everything.
+                    } else if ("dependencies".equals(name)) {
                         inDependencies = true;
                     } else if (inDependencies && "dependency".equals(name)) {
                         cur = new DependencyAcc();
@@ -97,7 +108,11 @@ public final class MavenPomParser implements PrefetchParser {
                 }
                 case XMLStreamConstants.END_ELEMENT -> {
                     final String name = reader.getLocalName();
-                    if (cur != null && currentChild != null && currentChild.equals(name)) {
+                    if ("dependencyManagement".equals(name) && skipDepth > 0) {
+                        skipDepth--;
+                    } else if (skipDepth > 0) {
+                        // Still inside <dependencyManagement> — skip closing tags too.
+                    } else if (cur != null && currentChild != null && currentChild.equals(name)) {
                         cur.set(currentChild, text == null ? "" : text.toString().trim());
                         currentChild = null;
                         text = null;
@@ -107,9 +122,7 @@ public final class MavenPomParser implements PrefetchParser {
                         }
                         cur = null;
                     } else if ("dependencies".equals(name)) {
-                        // Stop after the first <dependencies> block — the top-level one.
-                        // Anything deeper (e.g. inside <profile>) is ignored intentionally.
-                        return;
+                        inDependencies = false;
                     }
                 }
                 default -> {

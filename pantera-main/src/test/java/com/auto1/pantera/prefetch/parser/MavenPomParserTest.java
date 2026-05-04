@@ -46,4 +46,23 @@ class MavenPomParserTest {
         final List<Coordinate> deps = new MavenPomParser().parse(missing);
         MatcherAssert.assertThat(deps, new IsEmptyCollection<>());
     }
+
+    @Test
+    void extractsTopLevelDepsAndIgnoresDependencyManagement() {
+        final Path pom = Paths.get("src/test/resources/prefetch/poms/with-dep-mgmt.pom");
+        final List<Coordinate> coords = new MavenPomParser().parse(pom);
+        MatcherAssert.assertThat(coords, Matchers.hasSize(1));
+        MatcherAssert.assertThat(coords, Matchers.contains(
+            Coordinate.maven("com.google.guava", "guava", "33.4.0-jre")));
+        // explicit negative assertion
+        MatcherAssert.assertThat(coords.toString(), Matchers.not(Matchers.containsString("managed-thing")));
+        MatcherAssert.assertThat(coords.toString(), Matchers.not(Matchers.containsString("spring-boot-dependencies")));
+    }
+
+    @Test
+    void returnsEmptyOnMalformedXml() {
+        final Path pom = Paths.get("src/test/resources/prefetch/poms/malformed.pom");
+        final List<Coordinate> deps = new MavenPomParser().parse(pom);
+        MatcherAssert.assertThat(deps, new IsEmptyCollection<>());
+    }
 }
