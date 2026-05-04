@@ -450,5 +450,32 @@ public final class MicrometerMetrics {
             .register(registry)
             .record(java.time.Duration.ofMillis(durationMs));
     }
+
+    // ========== HTTP/2 Negotiation Metrics ==========
+
+    /**
+     * Record an upstream HTTP response for ALPN-protocol observability.
+     *
+     * <p>Increments {@code pantera_http2_negotiated_total{upstream_host,version}}
+     * exactly once per upstream response received via {@code JettyClientSlice}.
+     * The {@code version} label uses ALPN canonical names ({@code "h2"} for
+     * HTTP/2, {@code "http/1.1"} for HTTP/1.1) so dashboards can compute the
+     * h2-adoption ratio per upstream host.
+     *
+     * <p>Counter creation is idempotent — Micrometer returns the same counter
+     * for the same name+tags tuple, so calling this on every response is safe
+     * (the per-call cost is a small ConcurrentHashMap lookup keyed on the tag
+     * tuple).
+     *
+     * @param upstreamHost the host of the upstream server (e.g. {@code "repo1.maven.org"})
+     * @param version ALPN protocol identifier ({@code "h2"} or {@code "http/1.1"})
+     */
+    public void recordHttp2Negotiation(final String upstreamHost, final String version) {
+        Counter.builder("pantera.http2.negotiated")
+            .description("Upstream responses received, labelled by negotiated ALPN protocol")
+            .tags("upstream_host", upstreamHost, "version", version)
+            .register(registry)
+            .increment();
+    }
 }
 

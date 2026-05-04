@@ -21,6 +21,7 @@ import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.trace.TraceHeaders;
+import com.auto1.pantera.metrics.MicrometerMetrics;
 import io.reactivex.Flowable;
 import io.reactivex.processors.UnicastProcessor;
 import org.apache.hc.core5.net.URIBuilder;
@@ -28,6 +29,7 @@ import org.eclipse.jetty.client.AsyncRequestContent;
 import org.eclipse.jetty.client.HttpClient;
 import org.eclipse.jetty.client.Request;
 import org.eclipse.jetty.http.HttpFields;
+import org.eclipse.jetty.http.HttpVersion;
 import org.eclipse.jetty.io.Content;
 import org.eclipse.jetty.util.Callback;
 import java.net.URI;
@@ -117,6 +119,11 @@ final class JettyClientSlice implements Slice {
                 );
             request.body(async);
         }
+        // Record ALPN-negotiated protocol exactly once per upstream response.
+        // onResponseBegin fires when the response status line is received,
+        // BEFORE any body chunks or completion callbacks — this gives a
+        // single, race-free counter tick for every response that arrives.
+        request.onResponseBegin(JettyClientSlice::recordHttp2Negotiation);
         request.onResponseContentSource(
                 (response, source) -> {
                     // Complete the response future NOW with headers + streaming body.
@@ -442,6 +449,44 @@ final class JettyClientSlice implements Slice {
         copy.put(slice);
         copy.flip();
         return copy;
+    }
+
+    /**
+     * Increment {@code pantera_http2_negotiated_total{upstream_host,version}}
+     * for an upstream response, using ALPN canonical names for the version
+     * label ({@code "h2"} for HTTP/2, {@code "http/1.1"} for HTTP/1.1).
+     *
+     * <p>Jetty's {@link HttpVersion} enum stringifies as {@code "HTTP/2.0"}
+     * and {@code "HTTP/1.1"}, but the v2.2.0 perf-pack metric spec and
+     * standard Prometheus dashboards use the ALPN identifiers, so we map
+     * here.
+     *
+     * <p>No-op when {@link MicrometerMetrics} is not initialized (e.g. in
+     * unit tests that don't bring up the full metrics stack).
+     *
+     * @param response the Jetty client response (non-null on success path)
+     */
+    private static void recordHttp2Negotiation(
+        final org.eclipse.jetty.client.Response response
+    ) {
+        if (!MicrometerMetrics.isInitialized()) {
+            return;
+        }
+        final HttpVersion version = response.getVersion();
+        final String label;
+        if (version == HttpVersion.HTTP_2) {
+            label = "h2";
+        } else if (version == HttpVersion.HTTP_1_1) {
+            label = "http/1.1";
+        } else {
+            // HTTP/1.0, HTTP/3, or unknown — pass through Jetty's canonical
+            // string so we still see distribution rather than dropping it.
+            label = version == null ? "unknown" : version.asString();
+        }
+        final String host = response.getRequest().getURI().getHost();
+        MicrometerMetrics.getInstance().recordHttp2Negotiation(
+            host == null ? "unknown" : host, label
+        );
     }
 
     /**
