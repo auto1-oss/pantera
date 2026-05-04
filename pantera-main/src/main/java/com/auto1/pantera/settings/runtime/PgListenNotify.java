@@ -12,6 +12,9 @@ package com.auto1.pantera.settings.runtime;
 
 import java.sql.Connection;
 import java.sql.Statement;
+import java.time.Duration;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import javax.sql.DataSource;
 import com.auto1.pantera.http.log.EcsLogger;
@@ -40,7 +43,8 @@ public final class PgListenNotify {
     private final DataSource source;
     private final SettingsChangeListener listener;
     private final AtomicBoolean running = new AtomicBoolean(false);
-    private Thread thread;
+    private final CountDownLatch listening = new CountDownLatch(1);
+    private volatile Thread thread;
 
     public PgListenNotify(final DataSource source, final SettingsChangeListener listener) {
         this.source = source;
@@ -61,8 +65,12 @@ public final class PgListenNotify {
     }
 
     /**
-     * Signals the worker to stop and interrupts it. Safe to call multiple
-     * times. Does not join the thread.
+     * Signals the worker to stop. The worker thread observes the running flag at
+     * the next poll boundary, so shutdown latency is bounded by
+     * {@value #POLL_INTERVAL_MS} ms during normal operation. The thread interrupt
+     * is needed only to wake the {@value #LISTEN_BACKOFF_MS} ms reconnect backoff
+     * if a connection failure is in progress; JDBC socket reads do not honour
+     * {@link Thread#interrupt()} directly.
      */
     public void stop() {
         this.running.set(false);
@@ -71,12 +79,25 @@ public final class PgListenNotify {
         }
     }
 
+    /**
+     * Blocks the calling thread until {@code LISTEN settings_changed} has been
+     * issued on the worker connection (or the timeout elapses).
+     * Returns true if listening is active, false if the timeout was reached.
+     *
+     * <p>Useful for tests that need a deterministic happens-before between
+     * worker startup and the first NOTIFY.
+     */
+    public boolean awaitListening(final Duration timeout) throws InterruptedException {
+        return this.listening.await(timeout.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
     private void loop() {
         while (this.running.get()) {
             try (Connection conn = this.source.getConnection()) {
                 try (Statement st = conn.createStatement()) {
                     st.execute("LISTEN settings_changed");
                 }
+                this.listening.countDown();
                 final PGConnection pg = conn.unwrap(PGConnection.class);
                 while (this.running.get()) {
                     final PGNotification[] notifications =

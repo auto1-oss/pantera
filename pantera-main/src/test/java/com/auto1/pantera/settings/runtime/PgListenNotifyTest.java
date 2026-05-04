@@ -12,6 +12,7 @@ package com.auto1.pantera.settings.runtime;
 
 import java.sql.Connection;
 import java.sql.Statement;
+import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -32,6 +33,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.is;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Tests for the long-lived LISTEN settings_changed worker that delivers
@@ -91,8 +93,10 @@ final class PgListenNotifyTest {
             latch.countDown();
         });
         this.pln.start();
-        // Brief grace period so the worker thread issues LISTEN before we NOTIFY.
-        Thread.sleep(400L);
+        assertTrue(
+            this.pln.awaitListening(Duration.ofSeconds(2)),
+            "worker did not register LISTEN within 2 seconds"
+        );
         this.dao.put(
             "delta",
             Json.createObjectBuilder().add("value", 1).build(),
