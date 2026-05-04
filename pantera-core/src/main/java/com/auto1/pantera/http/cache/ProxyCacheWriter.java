@@ -31,6 +31,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -45,6 +46,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /**
@@ -129,6 +131,9 @@ public final class ProxyCacheWriter {
     private static final EnumSet<ChecksumAlgo> NON_BLOCKING_DEFAULT =
         EnumSet.of(ChecksumAlgo.SHA256, ChecksumAlgo.SHA512);
 
+    /** No-op {@link CacheWriteEvent} consumer used when no callback is supplied. */
+    private static final Consumer<CacheWriteEvent> NO_OP_ON_WRITE = event -> { };
+
     /** Repository name used in log fields and metric tags. */
     private final String repoName;
 
@@ -139,7 +144,39 @@ public final class ProxyCacheWriter {
     private final MeterRegistry metrics;
 
     /**
+     * Optional post-write callback (Phase-3 extension point). Fires once per
+     * successful primary cache-write; callback exceptions are caught + logged
+     * and never propagate to the cache-write path. Defaults to a no-op.
+     */
+    private final Consumer<CacheWriteEvent> onWrite;
+
+    /**
      * Ctor.
+     *
+     * @param cache    Storage receiving the primary artifact and its sidecars.
+     * @param repoName Repository name, emitted as {@code repository.name} in
+     *                 log events and {@code repo} in metric tags.
+     * @param metrics  Optional meter registry. May be {@code null} if the
+     *                 caller does not want metrics.
+     * @param onWrite  Optional post-write callback. May be {@code null} (
+     *                 treated as no-op). Throwables propagated from the
+     *                 callback are caught + logged and do NOT affect the
+     *                 cache-write outcome.
+     */
+    public ProxyCacheWriter(
+        final Storage cache,
+        final String repoName,
+        final MeterRegistry metrics,
+        final Consumer<CacheWriteEvent> onWrite
+    ) {
+        this.cache = Objects.requireNonNull(cache, "cache");
+        this.repoName = Objects.requireNonNull(repoName, "repoName");
+        this.metrics = metrics;
+        this.onWrite = onWrite == null ? NO_OP_ON_WRITE : onWrite;
+    }
+
+    /**
+     * Ctor with metrics; no post-write callback.
      *
      * @param cache    Storage receiving the primary artifact and its sidecars.
      * @param repoName Repository name, emitted as {@code repository.name} in
@@ -150,19 +187,17 @@ public final class ProxyCacheWriter {
     public ProxyCacheWriter(
         final Storage cache, final String repoName, final MeterRegistry metrics
     ) {
-        this.cache = Objects.requireNonNull(cache, "cache");
-        this.repoName = Objects.requireNonNull(repoName, "repoName");
-        this.metrics = metrics;
+        this(cache, repoName, metrics, NO_OP_ON_WRITE);
     }
 
     /**
-     * Convenience ctor without metrics.
+     * Convenience ctor without metrics or post-write callback.
      *
      * @param cache    Storage.
      * @param repoName Repository name.
      */
     public ProxyCacheWriter(final Storage cache, final String repoName) {
-        this(cache, repoName, null);
+        this(cache, repoName, null, NO_OP_ON_WRITE);
     }
 
     /**
@@ -556,6 +591,11 @@ public final class ProxyCacheWriter {
             .thenCompose(ignored -> this.saveSidecars(artifact.primaryKey(), artifact.sidecars()))
             .handle((ignored, err) -> {
                 if (err == null) {
+                    // Temp file is still alive — the response Flowable owns
+                    // its disposal. Safe to expose to the onWrite consumer.
+                    this.fireOnWrite(
+                        artifact.primaryKey(), artifact.tempFile(), artifact.size()
+                    );
                     this.logSuccess(artifact.primaryKey(), artifact.sidecars().keySet(), artifact.ctx());
                     return Result.<Void>ok(null);
                 }
@@ -656,11 +696,16 @@ public final class ProxyCacheWriter {
         return this.cache.save(primaryKey, primaryContent)
             .thenCompose(ignored -> this.saveSidecars(primaryKey, sidecars))
             .handle((ignored, err) -> {
-                deleteQuietly(tempFile);
                 if (err == null) {
+                    // Fire onWrite BEFORE deleting the temp file: the
+                    // CacheWriteEvent.bytesOnDisk() must still be a valid
+                    // path at the moment the consumer receives it.
+                    this.fireOnWrite(primaryKey, tempFile, size);
+                    deleteQuietly(tempFile);
                     this.logSuccess(primaryKey, sidecars.keySet(), ctx);
                     return Result.<Void>ok(null);
                 }
+                deleteQuietly(tempFile);
                 this.rollbackAfterPartialFailure(primaryKey, sidecars.keySet(), err, ctx);
                 return Result.<Void>err(new Fault.StorageUnavailable(
                     unwrap(err), primaryKey.string()
@@ -715,6 +760,32 @@ public final class ProxyCacheWriter {
                 .tags(Tags.of("repo", this.repoName))
                 .register(this.metrics)
                 .increment();
+        }
+    }
+
+    /**
+     * Invoke the configured {@link Consumer} with a fresh
+     * {@link CacheWriteEvent}. Any throwable from the consumer is caught
+     * and logged at WARN — it MUST NOT propagate, otherwise the cache-
+     * write outcome would be tied to the consumer's correctness.
+     *
+     * @param primaryKey Cache key of the primary artifact just written.
+     * @param tempFile   Filesystem path of the source bytes.
+     * @param size       Size in bytes of the primary.
+     */
+    @SuppressWarnings("PMD.AvoidCatchingThrowable")
+    private void fireOnWrite(final Key primaryKey, final Path tempFile, final long size) {
+        try {
+            this.onWrite.accept(new CacheWriteEvent(
+                this.repoName, primaryKey.string(), tempFile, size, Instant.now()
+            ));
+        } catch (final Throwable thrown) {
+            EcsLogger.warn("com.auto1.pantera.http.cache")
+                .message("ProxyCacheWriter onWrite callback threw: " + thrown.getMessage())
+                .field("repository.name", this.repoName)
+                .field("url.path", primaryKey.string())
+                .error(thrown)
+                .log();
         }
     }
 
