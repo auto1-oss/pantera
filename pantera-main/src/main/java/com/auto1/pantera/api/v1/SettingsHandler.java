@@ -643,6 +643,13 @@ public final class SettingsHandler {
      * Each entry contains the current value (or default if unset),
      * the spec default, and the {@code source} ({@code "db"} or
      * {@code "default"}).
+     *
+     * <p><b>Value format:</b> the {@code value} field is the JSON literal repr
+     * of the stored value (e.g. {@code "\"h2\""} for the protocol string,
+     * {@code "100"} for an integer, {@code "true"} for a boolean), matching the
+     * {@code defaultRepr} format used by {@link SettingsKey}. Consumers may
+     * round-trip via {@code Json.createReader(new StringReader(value)).readValue()}.
+     *
      * @param ctx Routing context
      */
     private void handleRuntimeList(final RoutingContext ctx) {
@@ -682,6 +689,13 @@ public final class SettingsHandler {
 
     /**
      * GET /api/v1/settings/runtime/:key — single runtime-tunable key.
+     *
+     * <p><b>Value format:</b> the {@code value} field is the JSON literal repr
+     * of the stored value (e.g. {@code "\"h2\""} for the protocol string,
+     * {@code "100"} for an integer, {@code "true"} for a boolean), matching the
+     * {@code defaultRepr} format used by {@link SettingsKey}. Consumers may
+     * round-trip via {@code Json.createReader(new StringReader(value)).readValue()}.
+     *
      * @param ctx Routing context
      */
     private void handleRuntimeGet(final RoutingContext ctx) {
@@ -723,6 +737,24 @@ public final class SettingsHandler {
      * PATCH /api/v1/settings/runtime/:key — update a runtime-tunable.
      * Admin-gated by {@link AuthzHandler} ahead of this method.
      * Body: {@code {"value": <typed>}}.
+     *
+     * <p><b>Response shape:</b> on success, returns the same
+     * {@code {key, value, source: "db"}} envelope that
+     * {@link #handleRuntimeGet} returns, so a UI can re-render directly
+     * from the response without a follow-up GET. The {@code value} field
+     * is the JSON literal repr (e.g. {@code "\"h2\""} for strings,
+     * {@code "100"} for ints, {@code "true"} for booleans), matching the
+     * {@code defaultRepr} format used by {@link SettingsKey}.
+     *
+     * <p><b>Eventual consistency:</b> persists the new value to the
+     * {@code settings} table immediately, then returns 200. The in-process
+     * {@code RuntimeSettingsCache} on this node refreshes within ~few ms via
+     * {@code LISTEN settings_changed}; remote nodes in a clustered deployment
+     * converge over the next NOTIFY round-trip (typically &lt; 1s). Consumers
+     * that need a strict happens-before should verify with a follow-up GET if
+     * needed; for routine UI use the response is the canonical post-patch
+     * state.
+     *
      * @param ctx Routing context
      */
     private void handleRuntimePatch(final RoutingContext ctx) {
@@ -763,10 +795,19 @@ public final class SettingsHandler {
                     ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
                         err.getMessage());
                 } else {
+                    // Return the canonical GET-shaped response so a UI can
+                    // re-render from the response without a re-fetch. The
+                    // {@code value} is the JSON literal repr of the stored
+                    // value, matching {@link SettingsKey#defaultRepr}.
+                    final JsonObject responseBody = new JsonObject()
+                        .put("key", key)
+                        .put("value", io.vertx.core.json.Json
+                            .encode(body.getValue("value")))
+                        .put("source", "db");
                     ctx.response()
                         .setStatusCode(HttpStatus.OK_200)
                         .putHeader("Content-Type", "application/json")
-                        .end(body.encode());
+                        .end(responseBody.encode());
                 }
             });
     }

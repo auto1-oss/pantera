@@ -230,6 +230,43 @@ final class SettingsHandlerRuntimeTest {
                         Matchers.is(k.defaultRepr())
                     );
                 }
+                // Lock the value-as-JSON-literal-string contract: protocol
+                // is the quoted JSON string "\"h2\"", not the bare string "h2".
+                final JsonObject protoEntry =
+                    body.getJsonObject("http_client.protocol");
+                MatcherAssert.assertThat(protoEntry.getString("value"),
+                    Matchers.is("\"h2\""));
+                MatcherAssert.assertThat(protoEntry.getString("default"),
+                    Matchers.is("\"h2\""));
+                MatcherAssert.assertThat(protoEntry.getString("source"),
+                    Matchers.is("default"));
+                // For an integer key, the value is the JSON literal "1",
+                // not the integer 1.
+                final JsonObject poolEntry =
+                    body.getJsonObject("http_client.http2_max_pool_size");
+                MatcherAssert.assertThat(poolEntry.getString("value"),
+                    Matchers.is("1"));
+            }
+        );
+    }
+
+    @Test
+    void patchResponseHasGetShapeNotRequestEcho(
+        final Vertx vertx, final VertxTestContext ctx) throws Exception {
+        adminGranted = true;
+        this.request(vertx, ctx, HttpMethod.PATCH,
+            "/api/v1/settings/runtime/http_client.protocol",
+            new JsonObject().put("value", "h1"),
+            res -> {
+                Assertions.assertEquals(200, res.statusCode(),
+                    "Expected 200, got body: " + res.bodyAsString());
+                final JsonObject body = res.bodyAsJsonObject();
+                MatcherAssert.assertThat(body.getString("key"),
+                    Matchers.is("http_client.protocol"));
+                MatcherAssert.assertThat(body.getString("value"),
+                    Matchers.is("\"h1\""));
+                MatcherAssert.assertThat(body.getString("source"),
+                    Matchers.is("db"));
             }
         );
     }
