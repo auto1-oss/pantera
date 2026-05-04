@@ -87,13 +87,22 @@ public final class RuntimeSettingsCache {
         this.poller.scheduleAtFixedRate(this::pollFallback,
             POLL_FALLBACK_SECONDS, POLL_FALLBACK_SECONDS, TimeUnit.SECONDS);
         EcsLogger.info("com.auto1.pantera.settings.runtime")
-            .message("RuntimeSettingsCache started with " + this.snapshot.raw().size() + " keys")
+            .message("RuntimeSettingsCache started")
+            .eventCategory("process")
+            .eventAction("settings_cache_start")
+            .eventOutcome("success")
+            .field("settings.keys", this.snapshot.raw().size())
             .log();
     }
 
     /** Stops the polling fallback and the LISTEN worker. */
     public void stop() {
         this.poller.shutdownNow();
+        try {
+            this.poller.awaitTermination(2, TimeUnit.SECONDS);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+        }
         this.listener.stop();
     }
 

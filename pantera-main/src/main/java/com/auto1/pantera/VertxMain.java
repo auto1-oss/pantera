@@ -200,6 +200,13 @@ public final class VertxMain {
                 new com.auto1.pantera.db.dao.SettingsDao(ds);
             new com.auto1.pantera.settings.runtime.SettingsBootstrap(settingsDao)
                 .seedIfMissing();
+            // NOTE: PgListenNotify holds one Hikari connection indefinitely (the LISTEN
+            // connection has to stay open). With pool leak detection enabled
+            // (PANTERA_DB_LEAK_DETECTION_MS=5000 by default), Hikari logs a WARN every
+            // 5s for this connection. The warning is benign — the listener is doing
+            // exactly what it's designed to do — but it's noisy in dev logs.
+            // TODO(perf-pack): give PgListenNotify a dedicated DriverManager.getConnection
+            // (bypass the pool entirely) to silence the warning. Tracked separately.
             this.settingsCache =
                 new com.auto1.pantera.settings.runtime.RuntimeSettingsCache(
                     settingsDao, ds
