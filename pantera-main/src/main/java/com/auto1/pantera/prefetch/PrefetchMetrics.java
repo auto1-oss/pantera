@@ -20,6 +20,7 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ConcurrentSkipListMap;
@@ -79,9 +80,41 @@ public final class PrefetchMetrics {
     private static final String BUCKET_DROPPED = "dropped:";
 
     /**
-     * Outcome value for a successful prefetch (used by {@link #lastFetchAt}).
+     * Outcome label: upstream returned 200 — the cache was warmed.
+     * Single source of truth shared with {@link PrefetchCoordinator}.
      */
-    private static final String OUTCOME_SUCCESS = "success";
+    public static final String OUTCOME_FETCHED_200 = "fetched_200";
+
+    /**
+     * Outcome label: upstream returned 404 (cached as known-miss).
+     */
+    public static final String OUTCOME_NEG_404 = "neg_cached_404";
+
+    /**
+     * Outcome label: cooldown gate blocked the prefetch.
+     */
+    public static final String OUTCOME_COOLDOWN_BLOCKED = "cooldown_blocked";
+
+    /**
+     * Outcome label: upstream returned 5xx or threw a non-timeout error.
+     */
+    public static final String OUTCOME_UPSTREAM_5XX = "upstream_5xx";
+
+    /**
+     * Outcome label: upstream call timed out.
+     */
+    public static final String OUTCOME_TIMEOUT = "timeout";
+
+    /**
+     * Outcome label: any other exceptional outcome (worker throwable, null
+     * status, unknown HTTP code, …).
+     */
+    public static final String OUTCOME_ERROR = "error";
+
+    /**
+     * Outcomes that count as a "successful fetch" for {@link #lastFetchAt}.
+     */
+    private static final Set<String> SUCCESS_OUTCOMES = Set.of(OUTCOME_FETCHED_200);
 
     private final Clock clock;
 
@@ -144,11 +177,14 @@ public final class PrefetchMetrics {
      *
      * @param repo Originating repo name.
      * @param ecosystem Ecosystem ("maven", "npm", ...).
-     * @param outcome Outcome label ({@code "success"}, {@code "error"}, {@code "timeout"}, ...).
+     * @param outcome Outcome label — one of the {@code OUTCOME_*} constants
+     *     ({@link #OUTCOME_FETCHED_200}, {@link #OUTCOME_NEG_404},
+     *     {@link #OUTCOME_COOLDOWN_BLOCKED}, {@link #OUTCOME_UPSTREAM_5XX},
+     *     {@link #OUTCOME_TIMEOUT}, {@link #OUTCOME_ERROR}).
      */
     public void completed(final String repo, final String ecosystem, final String outcome) {
         record(repo, BUCKET_COMPLETED + outcome);
-        if (OUTCOME_SUCCESS.equals(outcome)) {
+        if (SUCCESS_OUTCOMES.contains(outcome)) {
             this.lastFetch
                 .computeIfAbsent(repo, key -> new AtomicLong(0L))
                 .set(this.clock.instant().toEpochMilli());

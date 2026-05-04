@@ -15,18 +15,22 @@ import com.auto1.pantera.http.cache.NegativeCacheKey;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.settings.runtime.PrefetchTuning;
 import com.auto1.pantera.settings.runtime.RuntimeSettingsCache;
+import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
@@ -78,13 +82,38 @@ public final class PrefetchCoordinator {
 
     /**
      * Outcome labels used with {@link PrefetchMetrics#completed(String, String, String)}.
+     * Re-exposed here so existing call sites and tests can stay on
+     * {@code PrefetchCoordinator.OUTCOME_*}; {@link PrefetchMetrics} owns
+     * the canonical values so the metric guards (e.g. {@code lastFetchAt})
+     * cannot drift out of sync.
      */
-    public static final String OUTCOME_FETCHED_200 = "fetched_200";
-    public static final String OUTCOME_NEG_404 = "neg_cached_404";
-    public static final String OUTCOME_COOLDOWN_BLOCKED = "cooldown_blocked";
-    public static final String OUTCOME_UPSTREAM_5XX = "upstream_5xx";
-    public static final String OUTCOME_TIMEOUT = "timeout";
-    public static final String OUTCOME_ERROR = "error";
+    public static final String OUTCOME_FETCHED_200 = PrefetchMetrics.OUTCOME_FETCHED_200;
+    public static final String OUTCOME_NEG_404 = PrefetchMetrics.OUTCOME_NEG_404;
+    public static final String OUTCOME_COOLDOWN_BLOCKED = PrefetchMetrics.OUTCOME_COOLDOWN_BLOCKED;
+    public static final String OUTCOME_UPSTREAM_5XX = PrefetchMetrics.OUTCOME_UPSTREAM_5XX;
+    public static final String OUTCOME_TIMEOUT = PrefetchMetrics.OUTCOME_TIMEOUT;
+    public static final String OUTCOME_ERROR = PrefetchMetrics.OUTCOME_ERROR;
+
+    /**
+     * Cooldown-evaluation timeout. A stuck cooldown service must not pin
+     * worker threads or stall the in-flight set forever. On timeout we
+     * fall through to "not blocked" so the upstream attempt happens; the
+     * foreground request that triggered the prefetch will re-evaluate
+     * cooldown on its own path.
+     *
+     * <p>TODO(Phase 6 audit): consider promoting to a settings key if
+     * production tuning ever needs to vary this.</p>
+     */
+    public static final long COOLDOWN_TIMEOUT_SECONDS = 2L;
+
+    /**
+     * Upstream GET timeout. Bounds how long a single prefetch can hold a
+     * semaphore permit. Hard-coded for now.
+     *
+     * <p>TODO(Phase 6 audit): consider promoting to a settings key if
+     * production tuning ever needs to vary this.</p>
+     */
+    public static final long UPSTREAM_TIMEOUT_SECONDS = 30L;
 
     /**
      * Cooldown gate &mdash; abstracts the {@link com.auto1.pantera.cooldown.api.CooldownService#evaluate}
@@ -131,6 +160,16 @@ public final class PrefetchCoordinator {
     private final CooldownGate cooldown;
     private final UpstreamCaller upstream;
     private final Supplier<PrefetchTuning> tuningSupplier;
+    /**
+     * Cooldown timeout — overridable via the test seam constructor; defaults
+     * to {@link #COOLDOWN_TIMEOUT_SECONDS}.
+     */
+    private final Duration cooldownTimeout;
+    /**
+     * Upstream timeout — overridable via the test seam constructor; defaults
+     * to {@link #UPSTREAM_TIMEOUT_SECONDS}.
+     */
+    private final Duration upstreamTimeout;
 
     /**
      * In-flight dedup set. Key: {@code repoName + "|" + coordinate path}.
@@ -164,12 +203,46 @@ public final class PrefetchCoordinator {
         final UpstreamCaller upstream,
         final Supplier<PrefetchTuning> tuningSupplier
     ) {
+        this(
+            metrics, breaker, negativeCache, cooldown, upstream, tuningSupplier,
+            Duration.ofSeconds(COOLDOWN_TIMEOUT_SECONDS),
+            Duration.ofSeconds(UPSTREAM_TIMEOUT_SECONDS)
+        );
+    }
+
+    /**
+     * Test seam: override the cooldown / upstream timeouts. Production code
+     * should use the 6-arg constructor; this overload is for unit tests
+     * that need the timeouts to fire in less than a wall-clock second.
+     *
+     * @param metrics         Metrics sink.
+     * @param breaker         Circuit breaker.
+     * @param negativeCache   Shared 404 cache.
+     * @param cooldown        Cooldown gate.
+     * @param upstream        Upstream HTTP caller.
+     * @param tuningSupplier  Tuning supplier.
+     * @param cooldownTimeout Cooldown evaluation timeout.
+     * @param upstreamTimeout Upstream call timeout.
+     */
+    @SuppressWarnings("PMD.ExcessiveParameterList")
+    PrefetchCoordinator(
+        final PrefetchMetrics metrics,
+        final PrefetchCircuitBreaker breaker,
+        final NegativeCache negativeCache,
+        final CooldownGate cooldown,
+        final UpstreamCaller upstream,
+        final Supplier<PrefetchTuning> tuningSupplier,
+        final Duration cooldownTimeout,
+        final Duration upstreamTimeout
+    ) {
         this.metrics = metrics;
         this.breaker = breaker;
         this.negativeCache = negativeCache;
         this.cooldown = cooldown;
         this.upstream = upstream;
         this.tuningSupplier = tuningSupplier;
+        this.cooldownTimeout = cooldownTimeout;
+        this.upstreamTimeout = upstreamTimeout;
         this.runtime.set(buildRuntime(tuningSupplier.get()));
     }
 
@@ -292,7 +365,8 @@ public final class PrefetchCoordinator {
             tuning,
             new ArrayBlockingQueue<>(tuning.queueCapacity()),
             new Semaphore(tuning.globalConcurrency()),
-            new Semaphore(tuning.perUpstreamConcurrency())
+            new ConcurrentHashMap<>(),
+            tuning.perUpstreamConcurrency()
         );
     }
 
@@ -344,8 +418,21 @@ public final class PrefetchCoordinator {
             this.metrics.completed(task.repoName(), ecosystem, OUTCOME_NEG_404);
             return;
         }
-        // 2) Cooldown.
-        this.cooldown.isBlocked(task).whenComplete((blocked, cdErr) -> {
+        // 2) Cooldown — bounded so a stuck cooldown service can't pin the
+        // worker thread or leak the in-flight slot. On timeout we treat
+        // the coordinate as "not blocked" and let the upstream attempt
+        // happen; the foreground request that triggered this prefetch
+        // re-evaluates cooldown on its own path.
+        final CompletableFuture<Boolean> cooldownFuture = this.cooldown.isBlocked(task)
+            .orTimeout(this.cooldownTimeout.toMillis(), TimeUnit.MILLISECONDS)
+            .exceptionally(err -> {
+                EcsLogger.warn("com.auto1.pantera.prefetch.PrefetchCoordinator")
+                    .message("Cooldown check timed out / failed: " + err.getMessage())
+                    .field("repository.name", task.repoName())
+                    .log();
+                return false;
+            });
+        cooldownFuture.whenComplete((blocked, cdErr) -> {
             if (cdErr != null) {
                 this.inFlight.remove(key);
                 this.metrics.completed(task.repoName(), ecosystem, OUTCOME_ERROR);
@@ -357,23 +444,49 @@ public final class PrefetchCoordinator {
                 this.metrics.completed(task.repoName(), ecosystem, OUTCOME_COOLDOWN_BLOCKED);
                 return;
             }
-            // 3) Acquire semaphores.
-            if (!curr.perUpstream.tryAcquire()) {
+            // 3) Acquire semaphores: per-host first, then global.
+            final String host = upstreamHost(task);
+            final Semaphore perHost = curr.perUpstream.computeIfAbsent(
+                host, h -> new Semaphore(curr.perUpstreamCap)
+            );
+            if (!perHost.tryAcquire()) {
                 this.inFlight.remove(key);
                 this.metrics.dropped(task.repoName(), REASON_SEMAPHORE);
                 this.breaker.recordDrop();
                 return;
             }
             if (!curr.global.tryAcquire()) {
-                curr.perUpstream.release();
+                perHost.release();
                 this.inFlight.remove(key);
                 this.metrics.dropped(task.repoName(), REASON_SEMAPHORE);
                 this.breaker.recordDrop();
                 return;
             }
             // 4) Fire upstream.
-            fireUpstream(task, curr, ecosystem, key, nck);
+            fireUpstream(task, curr, ecosystem, key, nck, perHost);
         });
+    }
+
+    /**
+     * Resolve the host key used for per-upstream throttling. Falls back
+     * to the repo name if {@code task.upstreamUrl()} is malformed or has
+     * no host (so a misconfigured upstream still gets bounded, and
+     * tests that pass through {@code "https://repo1.maven.org/maven2"}
+     * still bucket by host).
+     */
+    private static String upstreamHost(final PrefetchTask task) {
+        final String url = task.upstreamUrl();
+        if (url != null && !url.isEmpty()) {
+            try {
+                final String host = URI.create(url).getHost();
+                if (host != null && !host.isEmpty()) {
+                    return host;
+                }
+            } catch (final IllegalArgumentException ex) {
+                // fall through to repo-name fallback
+            }
+        }
+        return task.repoName();
     }
 
     private void fireUpstream(
@@ -381,15 +494,20 @@ public final class PrefetchCoordinator {
         final Runtime curr,
         final String ecosystem,
         final String key,
-        final NegativeCacheKey nck
+        final NegativeCacheKey nck,
+        final Semaphore perHost
     ) {
         final PrefetchMetrics.InflightHandle handle = this.metrics.inflight(task.repoName());
         handle.inc();
         final Instant started = Instant.now();
-        this.upstream.get(task).whenComplete((status, err) -> {
+        final CompletableFuture<Integer> upstreamFuture = this.upstream.get(task)
+            .orTimeout(this.upstreamTimeout.toMillis(), TimeUnit.MILLISECONDS);
+        upstreamFuture.whenComplete((status, err) -> {
             try {
                 if (err != null) {
-                    final String outcome = (err instanceof java.util.concurrent.TimeoutException)
+                    final Throwable cause = err instanceof CompletionException
+                        ? err.getCause() : err;
+                    final String outcome = (cause instanceof TimeoutException)
                         ? OUTCOME_TIMEOUT : OUTCOME_UPSTREAM_5XX;
                     this.metrics.completed(task.repoName(), ecosystem, outcome);
                 } else if (status == null) {
@@ -407,7 +525,7 @@ public final class PrefetchCoordinator {
                 this.metrics.recordFetch(task.repoName(), Duration.between(started, Instant.now()));
             } finally {
                 curr.global.release();
-                curr.perUpstream.release();
+                perHost.release();
                 handle.dec();
                 this.inFlight.remove(key);
             }
@@ -448,7 +566,14 @@ public final class PrefetchCoordinator {
         final PrefetchTuning tuning;
         final BlockingQueue<PrefetchTask> queue;
         final Semaphore global;
-        final Semaphore perUpstream;
+        /**
+         * Per-host semaphore map (spec §5). Keyed by upstream URL host;
+         * each value caps concurrent in-flight prefetches against that
+         * host at {@link #perUpstreamCap}. The map is populated lazily
+         * via {@code computeIfAbsent} on first sight of a host.
+         */
+        final ConcurrentMap<String, Semaphore> perUpstream;
+        final int perUpstreamCap;
         final ExecutorService workers;
         final java.util.concurrent.atomic.AtomicBoolean started =
             new java.util.concurrent.atomic.AtomicBoolean(false);
@@ -459,12 +584,14 @@ public final class PrefetchCoordinator {
             final PrefetchTuning tuning,
             final BlockingQueue<PrefetchTask> queue,
             final Semaphore global,
-            final Semaphore perUpstream
+            final ConcurrentMap<String, Semaphore> perUpstream,
+            final int perUpstreamCap
         ) {
             this.tuning = tuning;
             this.queue = queue;
             this.global = global;
             this.perUpstream = perUpstream;
+            this.perUpstreamCap = perUpstreamCap;
             this.workers = Executors.newFixedThreadPool(
                 Math.max(1, tuning.workerThreads()),
                 new NamedThreadFactory()

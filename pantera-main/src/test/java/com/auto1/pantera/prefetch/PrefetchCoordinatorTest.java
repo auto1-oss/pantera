@@ -269,6 +269,148 @@ class PrefetchCoordinatorTest {
     }
 
     @Test
+    void submit_dropsOnPerHostSemaphoreSaturation() throws Exception {
+        // perUpstreamConcurrency=1, globalConcurrency=8 — proves the
+        // per-host cap is independent of the global cap. Two tasks per
+        // host: 1 of each (4 total) holds the per-host permit; the
+        // other 1 of each (2 total) drops with semaphore_saturated.
+        this.tuningRef.set(new PrefetchTuning(true, 8, 1, 16, 4));
+        this.cooldown.delegate = task -> CompletableFuture.completedFuture(false);
+        // First two upstream calls (one per host) hang; subsequent
+        // submits to the same host can't acquire the per-host permit.
+        final CompletableFuture<Integer> hangA = new CompletableFuture<>();
+        final CompletableFuture<Integer> hangB = new CompletableFuture<>();
+        final java.util.concurrent.ConcurrentHashMap<String, CompletableFuture<Integer>> hangs =
+            new java.util.concurrent.ConcurrentHashMap<>();
+        hangs.put("repo-a.example.com", hangA);
+        hangs.put("repo-b.example.com", hangB);
+        final java.util.concurrent.ConcurrentHashMap<String, AtomicInteger> hits =
+            new java.util.concurrent.ConcurrentHashMap<>();
+        this.upstream.delegate = task -> {
+            final String host = java.net.URI.create(task.upstreamUrl()).getHost();
+            hits.computeIfAbsent(host, h -> new AtomicInteger()).incrementAndGet();
+            return hangs.get(host);
+        };
+        this.coordinator = newCoordinator();
+        this.coordinator.start();
+
+        this.coordinator.submit(taskWithUrl(coord("g.a1", "art", "1.0"),
+            "https://repo-a.example.com/maven2", "repo-a"));
+        this.coordinator.submit(taskWithUrl(coord("g.b1", "art", "1.0"),
+            "https://repo-b.example.com/maven2", "repo-b"));
+        // Wait until both first-tasks are in-flight on their respective hosts.
+        for (int idx = 0; idx < 200
+            && (this.metrics.inflight("repo-a").get() == 0L
+                || this.metrics.inflight("repo-b").get() == 0L);
+            idx += 1
+        ) {
+            Thread.sleep(10L);
+        }
+        MatcherAssert.assertThat(
+            "host A first task in-flight",
+            this.metrics.inflight("repo-a").get(), new IsEqual<>(1L)
+        );
+        MatcherAssert.assertThat(
+            "host B first task in-flight",
+            this.metrics.inflight("repo-b").get(), new IsEqual<>(1L)
+        );
+        // Submit a SECOND task per host — must drop on per-host saturation.
+        this.coordinator.submit(taskWithUrl(coord("g.a2", "art", "1.0"),
+            "https://repo-a.example.com/maven2", "repo-a"));
+        this.coordinator.submit(taskWithUrl(coord("g.b2", "art", "1.0"),
+            "https://repo-b.example.com/maven2", "repo-b"));
+        // Wait for both drops.
+        for (int idx = 0; idx < 200
+            && (this.metrics.droppedCount("repo-a", PrefetchCoordinator.REASON_SEMAPHORE) == 0L
+                || this.metrics.droppedCount("repo-b", PrefetchCoordinator.REASON_SEMAPHORE) == 0L);
+            idx += 1
+        ) {
+            Thread.sleep(10L);
+        }
+        MatcherAssert.assertThat(
+            "host A second task dropped on per-host semaphore",
+            this.metrics.droppedCount("repo-a", PrefetchCoordinator.REASON_SEMAPHORE),
+            new IsEqual<>(1L)
+        );
+        MatcherAssert.assertThat(
+            "host B second task dropped on per-host semaphore",
+            this.metrics.droppedCount("repo-b", PrefetchCoordinator.REASON_SEMAPHORE),
+            new IsEqual<>(1L)
+        );
+        // Each host's upstream was hit exactly once (the second submit
+        // was dropped before reaching upstream.get()).
+        MatcherAssert.assertThat(hits.get("repo-a.example.com").get(), new IsEqual<>(1));
+        MatcherAssert.assertThat(hits.get("repo-b.example.com").get(), new IsEqual<>(1));
+        hangA.complete(200);
+        hangB.complete(200);
+    }
+
+    @Test
+    void submit_recordsTimeoutOutcomeOnUpstreamHang() throws Exception {
+        // Wire a never-completing upstream future, but inject a 200ms
+        // upstream timeout so the test resolves in real time. The
+        // outcome must be OUTCOME_TIMEOUT (not OUTCOME_UPSTREAM_5XX),
+        // which proves that the CompletionException-wrapped
+        // TimeoutException is unwrapped correctly.
+        this.cooldown.delegate = task -> CompletableFuture.completedFuture(false);
+        this.upstream.delegate = task -> new CompletableFuture<>();
+        this.coordinator = new PrefetchCoordinator(
+            this.metrics, this.breaker, this.negCache,
+            this.cooldown, this.upstream,
+            this.tuningRef::get,
+            Duration.ofSeconds(2),
+            Duration.ofMillis(200)
+        );
+        this.coordinator.start();
+
+        this.coordinator.submit(task(coord("g.timeout", "art", "1.0")));
+        awaitCompletedOrDropped(PrefetchCoordinator.OUTCOME_TIMEOUT);
+        MatcherAssert.assertThat(
+            "upstream hang must record OUTCOME_TIMEOUT",
+            this.metrics.completedCount(REPO, PrefetchCoordinator.OUTCOME_TIMEOUT),
+            new IsEqual<>(1L)
+        );
+        MatcherAssert.assertThat(
+            "must NOT mis-classify the timeout as a 5xx",
+            this.metrics.completedCount(REPO, PrefetchCoordinator.OUTCOME_UPSTREAM_5XX),
+            new IsEqual<>(0L)
+        );
+        // After the timeout fires, the in-flight slot is freed.
+        for (int idx = 0; idx < 100 && this.coordinator.inFlightCount() > 0; idx += 1) {
+            Thread.sleep(10L);
+        }
+        MatcherAssert.assertThat(
+            "in-flight count returns to 0 after timeout",
+            this.coordinator.inFlightCount(), new IsEqual<>(0)
+        );
+    }
+
+    @Test
+    void submit_treatsCooldownTimeoutAsNotBlocked() throws Exception {
+        // A cooldown service that hangs forever must NOT pin the worker.
+        // Inject 100ms cooldown timeout; the coordinator falls through to
+        // upstream (which returns 200 immediately).
+        this.cooldown.delegate = task -> new CompletableFuture<>();
+        this.upstream.delegate = task -> CompletableFuture.completedFuture(200);
+        this.coordinator = new PrefetchCoordinator(
+            this.metrics, this.breaker, this.negCache,
+            this.cooldown, this.upstream,
+            this.tuningRef::get,
+            Duration.ofMillis(100),
+            Duration.ofSeconds(2)
+        );
+        this.coordinator.start();
+
+        this.coordinator.submit(task(coord("g.cdtimeout", "art", "1.0")));
+        awaitCompletedOrDropped(PrefetchCoordinator.OUTCOME_FETCHED_200);
+        MatcherAssert.assertThat(
+            "cooldown timeout falls through to upstream",
+            this.metrics.completedCount(REPO, PrefetchCoordinator.OUTCOME_FETCHED_200),
+            new IsEqual<>(1L)
+        );
+    }
+
+    @Test
     void settingsChangeResizesSemaphores() throws Exception {
         // Start with concurrency=2 — would only allow 2 concurrent tasks.
         this.tuningRef.set(new PrefetchTuning(true, 2, 2, 64, 4));
@@ -343,6 +485,15 @@ class PrefetchCoordinatorTest {
             REPO, REPO_TYPE,
             "https://repo1.maven.org/maven2",
             coord, MultiMap.caseInsensitiveMultiMap(), Instant.now()
+        );
+    }
+
+    private static PrefetchTask taskWithUrl(
+        final Coordinate coord, final String upstreamUrl, final String repo
+    ) {
+        return new PrefetchTask(
+            repo, REPO_TYPE, upstreamUrl, coord,
+            MultiMap.caseInsensitiveMultiMap(), Instant.now()
         );
     }
 

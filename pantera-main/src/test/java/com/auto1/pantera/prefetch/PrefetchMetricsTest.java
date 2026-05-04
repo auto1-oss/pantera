@@ -87,13 +87,13 @@ class PrefetchMetricsTest {
     void lastFetchAtTracksMostRecentSuccess() {
         final MutableClock clock = new MutableClock(Instant.parse("2026-05-04T10:00:00Z"));
         final PrefetchMetrics metrics = new PrefetchMetrics(clock);
-        metrics.completed("maven-central", "maven", "success");
+        metrics.completed("maven-central", "maven", PrefetchMetrics.OUTCOME_FETCHED_200);
         clock.advance(Duration.ofMinutes(15));
-        metrics.completed("maven-central", "maven", "success");
+        metrics.completed("maven-central", "maven", PrefetchMetrics.OUTCOME_FETCHED_200);
         final Instant expected = clock.instant();
         clock.advance(Duration.ofMinutes(30));
         // A failed completion must not bump lastFetchAt.
-        metrics.completed("maven-central", "maven", "error");
+        metrics.completed("maven-central", "maven", PrefetchMetrics.OUTCOME_ERROR);
         MatcherAssert.assertThat(
             metrics.lastFetchAt("maven-central").isPresent(),
             new IsEqual<>(true)
@@ -101,6 +101,37 @@ class PrefetchMetricsTest {
         MatcherAssert.assertThat(
             metrics.lastFetchAt("maven-central").get(),
             new IsEqual<>(expected)
+        );
+    }
+
+    @Test
+    void lastFetchAtAdvancesOnFetched200Outcome() {
+        // Regression: PrefetchCoordinator emits OUTCOME_FETCHED_200 on success,
+        // but PrefetchMetrics used to gate lastFetchAt on the literal string
+        // "success" — which never matched. This test pins the contract so a
+        // future rename of OUTCOME_FETCHED_200 has to update both call sites.
+        final MutableClock clock = new MutableClock(Instant.parse("2026-05-04T10:00:00Z"));
+        final PrefetchMetrics metrics = new PrefetchMetrics(clock);
+        metrics.completed("maven-central", "maven", PrefetchMetrics.OUTCOME_FETCHED_200);
+        MatcherAssert.assertThat(
+            "lastFetchAt must advance on the outcome the coordinator actually emits",
+            metrics.lastFetchAt("maven-central").isPresent(),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void lastFetchAtIgnoresNonSuccessOutcomes() {
+        final MutableClock clock = new MutableClock(Instant.parse("2026-05-04T10:00:00Z"));
+        final PrefetchMetrics metrics = new PrefetchMetrics(clock);
+        metrics.completed("maven-central", "maven", PrefetchMetrics.OUTCOME_NEG_404);
+        metrics.completed("maven-central", "maven", PrefetchMetrics.OUTCOME_TIMEOUT);
+        metrics.completed("maven-central", "maven", PrefetchMetrics.OUTCOME_UPSTREAM_5XX);
+        metrics.completed("maven-central", "maven", PrefetchMetrics.OUTCOME_COOLDOWN_BLOCKED);
+        metrics.completed("maven-central", "maven", PrefetchMetrics.OUTCOME_ERROR);
+        MatcherAssert.assertThat(
+            metrics.lastFetchAt("maven-central").isPresent(),
+            new IsEqual<>(false)
         );
     }
 
