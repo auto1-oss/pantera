@@ -142,6 +142,17 @@ public final class VertxMain {
     private com.auto1.pantera.prefetch.PrefetchCoordinator prefetchCoordinator;
 
     /**
+     * Prefetch metrics (Phase 4 / Task 15). Null until
+     * {@link #installPrefetch} succeeds; passed into
+     * {@link com.auto1.pantera.api.v1.AsyncApiVerticle} so the
+     * {@link com.auto1.pantera.api.v1.PrefetchStatsHandler} (Task 22)
+     * can read 24h sliding-window counts.
+     *
+     * @since 2.2.0
+     */
+    private com.auto1.pantera.prefetch.PrefetchMetrics prefetchMetrics;
+
+    /**
      * Ctor.
      *
      * @param config Config file path.
@@ -623,7 +634,10 @@ public final class VertxMain {
         final DeploymentOptions deployOpts = new DeploymentOptions()
             .setInstances(apiInstances);
         this.vertx.deployVerticle(
-            () -> new AsyncApiVerticle(settings, apiPort, null, sharedDs.orElse(null), jwtTokens),
+            () -> new AsyncApiVerticle(
+                settings, apiPort, null, sharedDs.orElse(null), jwtTokens,
+                this.prefetchMetrics
+            ),
             deployOpts,
             result -> {
                 if (result.succeeded()) {
@@ -790,6 +804,11 @@ public final class VertxMain {
             final java.time.Clock clock = java.time.Clock.systemUTC();
             final com.auto1.pantera.prefetch.PrefetchMetrics metrics =
                 new com.auto1.pantera.prefetch.PrefetchMetrics(clock);
+            // Lift onto the VertxMain field so the PrefetchStatsHandler
+            // wired into AsyncApiVerticle can read this same instance
+            // (Task 22). The verticle is deployed AFTER this method
+            // returns, so the field is set before the deploy reads it.
+            this.prefetchMetrics = metrics;
             final com.auto1.pantera.prefetch.PrefetchCircuitBreaker breaker =
                 new com.auto1.pantera.prefetch.PrefetchCircuitBreaker(
                     this.settingsCache::circuitBreakerTuning

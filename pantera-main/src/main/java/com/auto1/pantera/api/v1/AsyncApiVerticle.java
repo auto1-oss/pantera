@@ -30,6 +30,7 @@ import com.auto1.pantera.db.dao.UserDao;
 import com.auto1.pantera.db.dao.UserTokenDao;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.index.ArtifactIndex;
+import com.auto1.pantera.prefetch.PrefetchMetrics;
 import com.auto1.pantera.scheduling.MetadataEventQueues;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.PanteraSecurity;
@@ -127,7 +128,67 @@ public final class AsyncApiVerticle extends AbstractVerticle {
     private final JwtTokens jwtTokens;
 
     /**
+     * Prefetch metrics for the {@link PrefetchStatsHandler} 24h sliding-window
+     * stats endpoint. Nullable: when the prefetch subsystem is not wired
+     * (DB-less boot, tests without a coordinator), the stats handler returns
+     * zero counts.
+     *
+     * @since 2.2.0
+     */
+    private final PrefetchMetrics prefetchMetrics;
+
+    /**
      * Primary constructor.
+     * @param caches Pantera settings caches
+     * @param configsStorage Pantera settings storage
+     * @param port Port to run API on
+     * @param security Pantera security
+     * @param keystore KeyStore
+     * @param jwt JWT authentication provider (Vert.x, for route protection)
+     * @param events Artifact metadata events queue
+     * @param cooldown Cooldown service
+     * @param settings Pantera settings
+     * @param artifactIndex Artifact index for search
+     * @param dataSource Database data source, nullable
+     * @param jwtTokens RS256 tokens provider for token issuance
+     * @param prefetchMetrics Prefetch metrics for the stats handler, nullable
+     */
+    @SuppressWarnings("PMD.ExcessiveParameterList")
+    public AsyncApiVerticle(
+        final PanteraCaches caches,
+        final Storage configsStorage,
+        final int port,
+        final PanteraSecurity security,
+        final Optional<KeyStore> keystore,
+        final JWTAuth jwt,
+        final Optional<MetadataEventQueues> events,
+        final CooldownService cooldown,
+        final Settings settings,
+        final ArtifactIndex artifactIndex,
+        final DataSource dataSource,
+        final JwtTokens jwtTokens,
+        final PrefetchMetrics prefetchMetrics
+    ) {
+        this.caches = caches;
+        this.configsStorage = configsStorage;
+        this.port = port;
+        this.security = security;
+        this.keystore = keystore;
+        this.jwt = jwt;
+        this.events = events;
+        this.cooldown = cooldown;
+        this.cooldownMetadata = CooldownSupport.createMetadataService(cooldown, settings);
+        this.settings = settings;
+        this.artifactIndex = artifactIndex;
+        this.dataSource = dataSource;
+        this.jwtTokens = jwtTokens;
+        this.prefetchMetrics = prefetchMetrics;
+    }
+
+    /**
+     * Backwards-compatible constructor — defaults
+     * {@code prefetchMetrics} to {@code null}. Used by tests and
+     * the older convenience constructor.
      * @param caches Pantera settings caches
      * @param configsStorage Pantera settings storage
      * @param port Port to run API on
@@ -156,19 +217,11 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         final DataSource dataSource,
         final JwtTokens jwtTokens
     ) {
-        this.caches = caches;
-        this.configsStorage = configsStorage;
-        this.port = port;
-        this.security = security;
-        this.keystore = keystore;
-        this.jwt = jwt;
-        this.events = events;
-        this.cooldown = cooldown;
-        this.cooldownMetadata = CooldownSupport.createMetadataService(cooldown, settings);
-        this.settings = settings;
-        this.artifactIndex = artifactIndex;
-        this.dataSource = dataSource;
-        this.jwtTokens = jwtTokens;
+        this(
+            caches, configsStorage, port, security, keystore, jwt,
+            events, cooldown, settings, artifactIndex, dataSource,
+            jwtTokens, null
+        );
     }
 
     /**
@@ -178,10 +231,12 @@ public final class AsyncApiVerticle extends AbstractVerticle {
      * @param jwt JWT authentication provider
      * @param dataSource Database data source, nullable
      * @param jwtTokens RS256 tokens provider for token issuance, nullable
+     * @param prefetchMetrics Prefetch metrics for the stats handler, nullable
      */
     public AsyncApiVerticle(final Settings settings, final int port,
         final JWTAuth jwt, final DataSource dataSource,
-        final JwtTokens jwtTokens) {
+        final JwtTokens jwtTokens,
+        final PrefetchMetrics prefetchMetrics) {
         this(
             settings.caches(), settings.configStorage(),
             port, settings.authz(), settings.keyStore(), jwt,
@@ -190,8 +245,24 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             settings,
             settings.artifactIndex(),
             dataSource,
-            jwtTokens
+            jwtTokens,
+            prefetchMetrics
         );
+    }
+
+    /**
+     * Backwards-compatible convenience constructor — defaults
+     * {@code prefetchMetrics} to {@code null}.
+     * @param settings Pantera settings
+     * @param port Port to start verticle on
+     * @param jwt JWT authentication provider
+     * @param dataSource Database data source, nullable
+     * @param jwtTokens RS256 tokens provider for token issuance, nullable
+     */
+    public AsyncApiVerticle(final Settings settings, final int port,
+        final JWTAuth jwt, final DataSource dataSource,
+        final JwtTokens jwtTokens) {
+        this(settings, port, jwt, dataSource, jwtTokens, null);
     }
 
     /**
@@ -474,6 +545,12 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         new com.auto1.pantera.api.v1.admin.NegativeCacheAdminResource(
             this.security.policy()
         ).register(router);
+        // Phase 5 / Task 22 — read-only 24h prefetch stats per repo for the
+        // Repo edit Performance panel (Task 23). Wired with the prefetch
+        // metrics singleton from VertxMain.installPrefetch when the
+        // prefetch subsystem is up; nullable in DB-less boot / tests
+        // (handler returns zero counts).
+        new PrefetchStatsHandler(this.prefetchMetrics).register(router);
         // Start server
         final HttpServer server;
         final String schema;
