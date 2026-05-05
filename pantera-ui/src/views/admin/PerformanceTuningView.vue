@@ -20,13 +20,14 @@ import {
 /**
  * Admin-only Performance Tuning page (Phase 5 Task 24).
  *
- * Surfaces the eleven runtime-tunable keys catalogued in
- * {@code SettingsKey} (server: pantera-main/.../SettingsKey.java) as
- * editable fields grouped into two cards:
+ * Surfaces the runtime-tunable keys catalogued in {@code SettingsKey}
+ * (server: pantera-main/.../SettingsKey.java) as editable fields grouped
+ * into two cards:
  *
  *   1. HTTP Upstream Client — protocol + H2 pool/multiplexing knobs.
- *   2. Pre-fetch — global toggle, concurrency caps, queue depth,
- *      worker threads, and circuit-breaker thresholds.
+ *   2. Pre-fetch — global toggle, concurrency caps (global +
+ *      per-upstream + per-ecosystem overrides), queue depth, worker
+ *      threads, and circuit-breaker thresholds.
  *
  * Each field tracks its dirty state so "Save" only PATCHes what has
  * actually changed. "Reset" issues DELETE for the key, reverting to
@@ -72,6 +73,9 @@ const INT_RANGES: Record<RuntimeSettingKey, IntRange | null> = {
   'prefetch.enabled': null,
   'prefetch.concurrency.global': { min: 1, max: 512 },
   'prefetch.concurrency.per_upstream': { min: 1, max: 128 },
+  'prefetch.concurrency.per_upstream.maven': { min: 1, max: 128 },
+  'prefetch.concurrency.per_upstream.gradle': { min: 1, max: 128 },
+  'prefetch.concurrency.per_upstream.npm': { min: 1, max: 128 },
   'prefetch.queue.capacity': { min: 128, max: 16_384 },
   'prefetch.worker_threads': { min: 1, max: 32 },
   'prefetch.circuit_breaker.drop_threshold_per_sec': { min: 1, max: 10_000 },
@@ -89,6 +93,9 @@ const PREFETCH_KEYS: RuntimeSettingKey[] = [
   'prefetch.enabled',
   'prefetch.concurrency.global',
   'prefetch.concurrency.per_upstream',
+  'prefetch.concurrency.per_upstream.maven',
+  'prefetch.concurrency.per_upstream.gradle',
+  'prefetch.concurrency.per_upstream.npm',
   'prefetch.queue.capacity',
   'prefetch.worker_threads',
   'prefetch.circuit_breaker.drop_threshold_per_sec',
@@ -102,7 +109,10 @@ const LABELS: Record<RuntimeSettingKey, string> = {
   'http_client.http2_multiplexing_limit': 'HTTP/2 multiplexing limit',
   'prefetch.enabled': 'Pre-fetch enabled',
   'prefetch.concurrency.global': 'Global concurrency',
-  'prefetch.concurrency.per_upstream': 'Per-upstream concurrency',
+  'prefetch.concurrency.per_upstream': 'Per-upstream concurrency (default)',
+  'prefetch.concurrency.per_upstream.maven': 'Per-upstream concurrency: maven',
+  'prefetch.concurrency.per_upstream.gradle': 'Per-upstream concurrency: gradle',
+  'prefetch.concurrency.per_upstream.npm': 'Per-upstream concurrency: npm',
   'prefetch.queue.capacity': 'Queue capacity',
   'prefetch.worker_threads': 'Worker threads',
   'prefetch.circuit_breaker.drop_threshold_per_sec':
@@ -132,7 +142,17 @@ const HELP: Partial<Record<RuntimeSettingKey, string>> = {
   'prefetch.concurrency.global':
     'Maximum number of in-flight prefetch tasks across all upstreams.',
   'prefetch.concurrency.per_upstream':
-    'Maximum number of in-flight prefetch tasks against any single upstream.',
+    'Maximum number of in-flight prefetch tasks against any single upstream. '
+    + 'Used as the fallback for ecosystems without an explicit override below.',
+  'prefetch.concurrency.per_upstream.maven':
+    'Per-upstream cap for maven prefetch fetches. Overrides the global default.',
+  'prefetch.concurrency.per_upstream.gradle':
+    'Per-upstream cap for gradle prefetch fetches. Overrides the global default.',
+  'prefetch.concurrency.per_upstream.npm':
+    'Per-upstream cap for npm prefetch fetches. Default is intentionally low (4) '
+    + 'so npm install\'s bursty parallel tarball wave wins the upstream pool race; '
+    + 'reserving most upstream slots for the foreground keeps cold-install latency '
+    + 'competitive with direct registry.npmjs.org.',
   'prefetch.queue.capacity':
     'Bounded queue size. New tasks dropped when full — see the per-repo '
     + 'panel for queue-full counters.',

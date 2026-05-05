@@ -888,7 +888,10 @@ public final class SettingsHandler {
             case "prefetch.enabled" -> value instanceof Boolean;
             case "prefetch.concurrency.global" ->
                 isIntInRange(value, 1, 512);
-            case "prefetch.concurrency.per_upstream" ->
+            case "prefetch.concurrency.per_upstream",
+                 "prefetch.concurrency.per_upstream.maven",
+                 "prefetch.concurrency.per_upstream.gradle",
+                 "prefetch.concurrency.per_upstream.npm" ->
                 isIntInRange(value, 1, 128);
             case "prefetch.queue.capacity" ->
                 isIntInRange(value, 128, 16_384);

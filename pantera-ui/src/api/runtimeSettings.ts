@@ -13,6 +13,9 @@ export type RuntimeSettingKey =
   | 'prefetch.enabled'
   | 'prefetch.concurrency.global'
   | 'prefetch.concurrency.per_upstream'
+  | 'prefetch.concurrency.per_upstream.maven'
+  | 'prefetch.concurrency.per_upstream.gradle'
+  | 'prefetch.concurrency.per_upstream.npm'
   | 'prefetch.queue.capacity'
   | 'prefetch.worker_threads'
   | 'prefetch.circuit_breaker.drop_threshold_per_sec'
@@ -147,6 +150,9 @@ export const SPEC_DEFAULTS: Record<RuntimeSettingKey, RuntimeValue> = {
   'prefetch.enabled': true,
   'prefetch.concurrency.global': 64,
   'prefetch.concurrency.per_upstream': 16,
+  'prefetch.concurrency.per_upstream.maven': 16,
+  'prefetch.concurrency.per_upstream.gradle': 16,
+  'prefetch.concurrency.per_upstream.npm': 4,
   'prefetch.queue.capacity': 2048,
   'prefetch.worker_threads': 8,
   'prefetch.circuit_breaker.drop_threshold_per_sec': 100,

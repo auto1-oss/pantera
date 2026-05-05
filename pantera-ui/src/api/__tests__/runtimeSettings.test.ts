@@ -148,9 +148,10 @@ describe('runtimeSettings API wrappers', () => {
   })
 
   describe('SPEC_DEFAULTS', () => {
-    it('catalogues all 11 server-side keys', () => {
+    it('catalogues all server-side keys', () => {
       const keys = Object.keys(SPEC_DEFAULTS)
-      expect(keys.length).toBe(11)
+      // 11 original + 3 per-ecosystem perUpstream overrides (v2.2.0 perf-pack)
+      expect(keys.length).toBe(14)
       // Must include every documented key from SettingsKey.java
       expect(keys).toContain('http_client.protocol')
       expect(keys).toContain('http_client.http2_max_pool_size')
@@ -158,11 +159,24 @@ describe('runtimeSettings API wrappers', () => {
       expect(keys).toContain('prefetch.enabled')
       expect(keys).toContain('prefetch.concurrency.global')
       expect(keys).toContain('prefetch.concurrency.per_upstream')
+      expect(keys).toContain('prefetch.concurrency.per_upstream.maven')
+      expect(keys).toContain('prefetch.concurrency.per_upstream.gradle')
+      expect(keys).toContain('prefetch.concurrency.per_upstream.npm')
       expect(keys).toContain('prefetch.queue.capacity')
       expect(keys).toContain('prefetch.worker_threads')
       expect(keys).toContain('prefetch.circuit_breaker.drop_threshold_per_sec')
       expect(keys).toContain('prefetch.circuit_breaker.window_seconds')
       expect(keys).toContain('prefetch.circuit_breaker.disable_minutes')
+    })
+
+    it('npm per-upstream default is 4 (lower than the global 16)', () => {
+      // The lower default is the v2.2.0 perf-pack fix for the cold-cache
+      // npm regression — npm install's bursty parallel tarball wave wins
+      // the upstream pool race when prefetch is reserved a smaller slice.
+      expect(SPEC_DEFAULTS['prefetch.concurrency.per_upstream.npm']).toBe(4)
+      expect(SPEC_DEFAULTS['prefetch.concurrency.per_upstream.maven']).toBe(16)
+      expect(SPEC_DEFAULTS['prefetch.concurrency.per_upstream.gradle']).toBe(16)
+      expect(SPEC_DEFAULTS['prefetch.concurrency.per_upstream']).toBe(16)
     })
   })
 })

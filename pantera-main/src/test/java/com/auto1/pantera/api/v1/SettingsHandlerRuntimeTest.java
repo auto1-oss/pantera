@@ -72,7 +72,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  * {@link SettingsHandler} (Task 6 of the v2.2.0 perf-pack):
  *
  * <ul>
- *   <li>{@code GET    /api/v1/settings/runtime} — list all 11 keys</li>
+ *   <li>{@code GET    /api/v1/settings/runtime} — list all catalog keys</li>
  *   <li>{@code GET    /api/v1/settings/runtime/:key} — single key</li>
  *   <li>{@code PATCH  /api/v1/settings/runtime/:key} — admin-only update</li>
  *   <li>{@code DELETE /api/v1/settings/runtime/:key} — admin-only reset</li>
@@ -200,7 +200,7 @@ final class SettingsHandlerRuntimeTest {
     }
 
     @Test
-    void getListReturnsAllElevenKeysWithValueDefaultSource(
+    void getListReturnsAllCatalogKeysWithValueDefaultSource(
         final Vertx vertx, final VertxTestContext ctx) throws Exception {
         this.request(vertx, ctx, HttpMethod.GET,
             "/api/v1/settings/runtime", null,
@@ -209,7 +209,7 @@ final class SettingsHandlerRuntimeTest {
                     "Expected 200, got body: " + res.bodyAsString());
                 final JsonObject body = res.bodyAsJsonObject();
                 MatcherAssert.assertThat(
-                    "List endpoint must return all 11 catalog keys",
+                    "List endpoint must return all catalog keys",
                     body.fieldNames(),
                     Matchers.hasSize(SettingsKey.values().length)
                 );
@@ -248,7 +248,59 @@ final class SettingsHandlerRuntimeTest {
                     body.getJsonObject("http_client.http2_max_pool_size");
                 MatcherAssert.assertThat(poolEntry.getString("value"),
                     Matchers.is("4"));
+                // Per-ecosystem perUpstream overrides (v2.2.0 perf-pack).
+                // Maven / gradle inherit the global default (16); npm is
+                // capped at 4 so npm install's bursty foreground tarball
+                // wave wins the upstream pool race.
+                MatcherAssert.assertThat(
+                    body.getJsonObject("prefetch.concurrency.per_upstream.maven")
+                        .getString("value"),
+                    Matchers.is("16"));
+                MatcherAssert.assertThat(
+                    body.getJsonObject("prefetch.concurrency.per_upstream.gradle")
+                        .getString("value"),
+                    Matchers.is("16"));
+                MatcherAssert.assertThat(
+                    body.getJsonObject("prefetch.concurrency.per_upstream.npm")
+                        .getString("value"),
+                    Matchers.is("4"));
             }
+        );
+    }
+
+    @Test
+    void patchPerEcosystemNpmKeyAcceptsValidValue(
+        final Vertx vertx, final VertxTestContext ctx) throws Exception {
+        adminGranted = true;
+        this.request(vertx, ctx, HttpMethod.PATCH,
+            "/api/v1/settings/runtime/prefetch.concurrency.per_upstream.npm",
+            new JsonObject().put("value", 8),
+            res -> Assertions.assertEquals(200, res.statusCode(),
+                "Expected 200, got body: " + res.bodyAsString())
+        );
+    }
+
+    @Test
+    void patchPerEcosystemNpmKeyRejectsZero(
+        final Vertx vertx, final VertxTestContext ctx) throws Exception {
+        adminGranted = true;
+        this.request(vertx, ctx, HttpMethod.PATCH,
+            "/api/v1/settings/runtime/prefetch.concurrency.per_upstream.npm",
+            new JsonObject().put("value", 0),
+            res -> Assertions.assertEquals(400, res.statusCode(),
+                "Expected 400, got body: " + res.bodyAsString())
+        );
+    }
+
+    @Test
+    void patchPerEcosystemNpmKeyRejectsAboveRange(
+        final Vertx vertx, final VertxTestContext ctx) throws Exception {
+        adminGranted = true;
+        this.request(vertx, ctx, HttpMethod.PATCH,
+            "/api/v1/settings/runtime/prefetch.concurrency.per_upstream.npm",
+            new JsonObject().put("value", 999),
+            res -> Assertions.assertEquals(400, res.statusCode(),
+                "Expected 400, got body: " + res.bodyAsString())
         );
     }
 
