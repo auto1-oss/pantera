@@ -39,6 +39,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -446,6 +447,25 @@ public final class FileStorage implements Storage {
     @Override
     public String identifier() {
         return this.id;
+    }
+
+    /**
+     * Returns the on-disk path of the artifact under {@code key}.
+     *
+     * <p>The returned path is the storage-managed location — callers MUST
+     * treat it as read-only and MUST NOT delete it. The path is computed
+     * via the same mapping used by {@link #save(Key, Content)} and friends
+     * (i.e. {@code dir.resolve(key.string())}); race-handling is the
+     * caller's responsibility (file may be evicted between lookup and
+     * read).</p>
+     *
+     * @param key Artifact key
+     * @return Storage-owned path for this key
+     * @since 2.2.0
+     */
+    @Override
+    public Optional<Path> pathFor(final Key key) {
+        return Optional.of(this.dir.resolve(key.string()));
     }
 
     /**

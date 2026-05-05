@@ -15,9 +15,11 @@ import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.http.cache.CacheWriteCallbackRegistry;
 import com.auto1.pantera.http.cache.CacheWriteEvent;
 import com.auto1.pantera.http.log.EcsLogger;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.Optional;
 import java.util.function.Consumer;
 
 /**
@@ -32,15 +34,19 @@ import java.util.function.Consumer;
  * {@code e9eb477c7} parses the npm tarball but is never invoked because no
  * {@code CacheWriteEvent} ever fires for npm.</p>
  *
- * <p>Materialises the freshly-saved asset bytes from {@link Storage} to a
- * dedicated temp file and fires the event synchronously, mirroring
- * {@code ProxyCacheWriter.materialiseCallbackTempFile} +
- * {@code BaseCachedProxySlice.fireOnCacheWrite}. The file is deleted after
- * the consumer returns; consumers that need the bytes past that point copy
- * eagerly inside their callback, per {@link CacheWriteEvent} contract.</p>
+ * <p><b>Zero-copy passthrough (Phase 11).</b> When the backing storage
+ * exposes an on-disk path via {@link Storage#pathFor(Key)} (i.e.
+ * {@code FileStorage}), the bridge fires {@link CacheWriteEvent} with
+ * {@code callerOwnsSnapshot=false} and the storage-owned path directly —
+ * no read-back, no temp-file materialisation, no dispatcher snapshot copy.
+ * The {@link com.auto1.pantera.prefetch.PrefetchDispatcher} parses the
+ * path in place and the storage owns lifetime. For non-FileStorage
+ * backends ({@code Optional.empty()} from {@code pathFor}) the bridge
+ * falls back to the legacy materialise-temp-file path with
+ * {@code callerOwnsSnapshot=true}.</p>
  *
  * <p>Skip when no callback is installed (registry returns the no-op sentinel)
- * — no point materialising a temp file just to throw it away.</p>
+ * — no point doing any work just to throw it away.</p>
  *
  * @since 2.2.0
  */
@@ -75,9 +81,20 @@ public final class NpmCacheWriteBridge {
     }
 
     /**
-     * Read the saved asset bytes from storage, materialise to a temp file,
-     * fire the event, and delete the temp file. Any throwable is logged and
-     * swallowed — never propagates to the serve path.
+     * Fire a {@link CacheWriteEvent} for the just-saved asset.
+     *
+     * <p><b>Fast path (Phase 11).</b> When the storage exposes an on-disk
+     * path via {@link Storage#pathFor(Key)}, hand that path straight to the
+     * shared callback with {@code callerOwnsSnapshot=false}. No read-back,
+     * no temp-file materialisation, no dispatcher snapshot copy.</p>
+     *
+     * <p><b>Fallback path.</b> For non-FileStorage backends, materialise the
+     * bytes to a dedicated temp file, fire the event with
+     * {@code callerOwnsSnapshot=true}, and delete the temp file after the
+     * consumer returns.</p>
+     *
+     * <p>Any throwable is logged and swallowed — never propagates to the
+     * serve path.</p>
      */
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void onAssetSaved(final String assetPath) {
@@ -95,6 +112,45 @@ public final class NpmCacheWriteBridge {
             .field("url.path", assetPath)
             .log();
         final Key key = new Key.From(assetPath);
+        // --- Fast path: storage-owned path passthrough (zero-copy). ---
+        final Optional<Path> storagePath = this.storage.pathFor(key);
+        if (storagePath.isPresent()) {
+            try {
+                final long size = Files.size(storagePath.get());
+                shared.accept(new CacheWriteEvent(
+                    this.repoName,
+                    assetPath,
+                    storagePath.get(),
+                    size,
+                    Instant.now(),
+                    false
+                ));
+            } catch (final IOException ex) {
+                // File evicted between save and stat — race with another
+                // writer/eviction. Skip the event; the artifact is still
+                // served correctly.
+                EcsLogger.debug("com.auto1.pantera.adapters.npm")
+                    .message("npm cache-write bridge: storage path passthrough race; skipping CacheWriteEvent")
+                    .field("repository.name", this.repoName)
+                    .field("url.path", assetPath)
+                    .error(ex)
+                    .log();
+            } catch (final Exception ex) {
+                EcsLogger.warn("com.auto1.pantera.adapters.npm")
+                    .message("Failed to fire npm CacheWriteEvent (zero-copy path)")
+                    .eventCategory("process")
+                    .eventAction("cache_write_event")
+                    .eventOutcome("failure")
+                    .field("repository.name", this.repoName)
+                    .field("url.path", assetPath)
+                    .error(ex)
+                    .log();
+            } finally {
+                recordPhase("bridge_total", entryNs);
+            }
+            return;
+        }
+        // --- Fallback: materialise-temp-file path (non-FileStorage). ---
         final long readNs = System.nanoTime();
         this.storage.value(key)
             .thenCompose(content -> content.asBytesFuture())

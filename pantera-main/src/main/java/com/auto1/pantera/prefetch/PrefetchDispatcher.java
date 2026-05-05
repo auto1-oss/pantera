@@ -253,37 +253,48 @@ public final class PrefetchDispatcher {
             if (parser == null) {
                 return;
             }
-            // 5) Snapshot the cached bytes synchronously — the source
-            // temp file is deleted as soon as this callback returns
-            // (see CacheWriteEvent contract). The async stage owns and
-            // deletes the snapshot.
+            // 5) Decide who owns the bytes-on-disk path:
+            //    - callerOwnsSnapshot=true: the writer's temp file is deleted
+            //      as soon as this callback returns; we must snapshot it now.
+            //    - callerOwnsSnapshot=false: storage owns the path (zero-copy
+            //      passthrough from NpmCacheWriteBridge); we read it directly
+            //      and do not delete it.
             // Phase 10.5: time the synchronous snapshot copy. This runs on
             // the response thread for npm (ForkJoinPool common pool dispatch
             // for npm-bridge → here) so it's a real wall contributor.
-            final long snapNs = System.nanoTime();
-            final Path snapshot;
-            try {
-                snapshot = snapshotBytes(event.bytesOnDisk());
-                recordPhase(event.repoName(), "dispatcher_snapshot_copy", snapNs);
-            } catch (final IOException ioe) {
-                EcsLogger.warn(LOGGER_NAME)
-                    .message("Failed to snapshot cached bytes for async dispatch")
-                    .field("repository.name", event.repoName())
-                    .field("url.path", event.urlPath())
-                    .field("error.message", String.valueOf(ioe.getMessage()))
-                    .eventCategory("process")
-                    .eventAction("prefetch_dispatch")
-                    .log();
-                return;
+            final Path workingPath;
+            if (event.callerOwnsSnapshot()) {
+                final long snapNs = System.nanoTime();
+                try {
+                    workingPath = snapshotBytes(event.bytesOnDisk());
+                    recordPhase(event.repoName(), "dispatcher_snapshot_copy", snapNs);
+                } catch (final IOException ioe) {
+                    EcsLogger.warn(LOGGER_NAME)
+                        .message("Failed to snapshot cached bytes for async dispatch")
+                        .field("repository.name", event.repoName())
+                        .field("url.path", event.urlPath())
+                        .field("error.message", String.valueOf(ioe.getMessage()))
+                        .eventCategory("process")
+                        .eventAction("prefetch_dispatch")
+                        .log();
+                    return;
+                }
+            } else {
+                // Storage-owned path; no copy. Parser failures (e.g.
+                // NoSuchFileException from a concurrent eviction) are
+                // caught by dispatchAsync and logged at WARN.
+                workingPath = event.bytesOnDisk();
             }
             // 6) Hand off to the dispatch executor.
             try {
                 this.dispatchExecutor.execute(
-                    () -> dispatchAsync(event, repoType, parser, snapshot)
+                    () -> dispatchAsync(event, repoType, parser, workingPath)
                 );
             } catch (final RejectedExecutionException rex) {
                 this.droppedEvents.incrementAndGet();
-                deleteQuietly(snapshot);
+                if (event.callerOwnsSnapshot()) {
+                    deleteQuietly(workingPath);
+                }
                 EcsLogger.warn(LOGGER_NAME)
                     .message("Prefetch dispatch queue full; dropping event")
                     .field("repository.name", event.repoName())
@@ -307,18 +318,20 @@ public final class PrefetchDispatcher {
     }
 
     /**
-     * Async dispatch body — runs on the dispatch executor. Owns the
-     * snapshot file lifetime: parses, submits, deletes.
+     * Async dispatch body — runs on the dispatch executor. Honours
+     * {@link CacheWriteEvent#callerOwnsSnapshot()}: when true the path is
+     * a dispatcher-owned snapshot deleted on exit; when false the path is
+     * storage-owned and left untouched.
      */
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void dispatchAsync(
         final CacheWriteEvent event,
         final String repoType,
         final PrefetchParser parser,
-        final Path snapshot
+        final Path workingPath
     ) {
         try {
-            final List<Coordinate> coords = parser.parse(snapshot);
+            final List<Coordinate> coords = parser.parse(workingPath);
             if (coords == null || coords.isEmpty()) {
                 return;
             }
@@ -346,7 +359,10 @@ public final class PrefetchDispatcher {
                 .eventAction("prefetch_dispatch")
                 .log();
         } finally {
-            deleteQuietly(snapshot);
+            if (event.callerOwnsSnapshot()) {
+                deleteQuietly(workingPath);
+            }
+            // Storage-owned paths: lifetime is the storage's; do nothing.
         }
     }
 

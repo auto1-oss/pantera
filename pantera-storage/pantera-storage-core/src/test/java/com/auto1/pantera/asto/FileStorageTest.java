@@ -436,4 +436,58 @@ final class FileStorageTest {
             new IsEmptyCollection<>()
         );
     }
+
+    @Test
+    void pathForReturnsOnDiskPathOfSavedArtifact() throws Exception {
+        // Phase 11: storage zero-copy passthrough — verify pathFor() exposes
+        // the same on-disk file the save() machinery wrote, with matching
+        // size and bytes.
+        final byte[] content = "hello phase 11 zero-copy".getBytes(StandardCharsets.UTF_8);
+        final Key key = new Key.From("npm", "express", "express-4.21.0.tgz");
+        new BlockingStorage(this.storage).save(key, content);
+        final java.util.Optional<Path> path = this.storage.pathFor(key);
+        MatcherAssert.assertThat(
+            "FileStorage.pathFor must expose a path",
+            path.isPresent(),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "Path size must match the saved bytes length",
+            Files.size(path.get()),
+            new IsEqual<>((long) content.length)
+        );
+        MatcherAssert.assertThat(
+            "Path bytes must match the saved content",
+            Files.readAllBytes(path.get()),
+            new IsEqual<>(content)
+        );
+        MatcherAssert.assertThat(
+            "Path must live under the storage root directory",
+            path.get().startsWith(this.tmp),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void pathForReturnsPathEvenWhenKeyIsNotYetSaved() {
+        // pathFor is a pure key→path mapping; existence is the caller's
+        // problem (race-handle NoSuchFileException).
+        final Key key = new Key.From("not", "yet", "saved.bin");
+        final java.util.Optional<Path> path = this.storage.pathFor(key);
+        MatcherAssert.assertThat(
+            "pathFor returns the would-be path even for absent keys",
+            path.isPresent(),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "Path must live under the storage root",
+            path.get().startsWith(this.tmp),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "Path must NOT exist on disk yet",
+            Files.exists(path.get()),
+            new IsEqual<>(false)
+        );
+    }
 }

@@ -13,6 +13,7 @@ package com.auto1.pantera.asto;
 import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.fs.FileStorage;
 import java.util.Collection;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
@@ -212,6 +213,26 @@ public interface Storage {
     }
 
     /**
+     * Returns the on-disk path of the artifact under {@code key}, when the
+     * storage implementation can offer one (e.g. {@link FileStorage}).
+     *
+     * <p>Callers MUST treat the returned path as <strong>read-only</strong>
+     * and MUST NOT delete it. The storage owns lifetime and may evict the
+     * file at any time. Callers reading the path concurrently with eviction
+     * must handle {@link java.nio.file.NoSuchFileException} gracefully.</p>
+     *
+     * <p>Default implementation returns {@link Optional#empty()} for
+     * storages that don't have a single file path (e.g. blob, memory).</p>
+     *
+     * @param key Artifact key
+     * @return Path if the storage exposes a single file for this key, empty otherwise
+     * @since 2.2.0
+     */
+    default Optional<java.nio.file.Path> pathFor(final Key key) {
+        return Optional.empty();
+    }
+
+    /**
      * Forwarding decorator for {@link Storage}.
      *
      * @since 0.18
@@ -302,6 +323,11 @@ public interface Storage {
         @Override
         public String identifier() {
             return this.delegate.identifier();
+        }
+
+        @Override
+        public Optional<java.nio.file.Path> pathFor(final Key key) {
+            return this.delegate.pathFor(key);
         }
     }
 }

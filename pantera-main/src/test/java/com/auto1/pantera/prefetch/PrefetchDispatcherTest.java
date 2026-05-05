@@ -329,6 +329,98 @@ class PrefetchDispatcherTest {
         }
     }
 
+    // ============================================================
+    //  Phase 11 (storage zero-copy passthrough) tests
+    // ============================================================
+
+    /**
+     * Storage-owned path (callerOwnsSnapshot=false): the dispatcher MUST
+     * NOT make a snapshot copy and MUST NOT delete the path after the
+     * async parse runs. The parser receives the storage path verbatim.
+     */
+    @Test
+    void onCacheWrite_storageOwned_skipsSnapshotCopy() throws Exception {
+        final RecordingSubmitter submitter = new RecordingSubmitter();
+        // Capture the path the parser actually sees.
+        final java.util.concurrent.atomic.AtomicReference<Path> seenByParser =
+            new java.util.concurrent.atomic.AtomicReference<>();
+        final PrefetchParser capturingParser = bytesOnDisk -> {
+            seenByParser.set(bytesOnDisk);
+            return List.of(Coordinate.maven("com.example", "z", "1.0"));
+        };
+        final PrefetchDispatcher dispatcher = new PrefetchDispatcher(
+            PrefetchTuning::defaults,
+            repo -> Boolean.TRUE,
+            repo -> UPSTREAM,
+            Map.of(REPO_TYPE, capturingParser),
+            repo -> REPO_TYPE,
+            submitter,
+            this.executor
+        );
+
+        final CacheWriteEvent storageOwned = new CacheWriteEvent(
+            REPO, URL_PATH, this.eventFile, 42L, Instant.now(), false
+        );
+        dispatcher.onCacheWrite(storageOwned);
+        drain(this.executor);
+
+        MatcherAssert.assertThat(
+            "parser must see the storage-owned path verbatim (no copy)",
+            seenByParser.get(), Matchers.equalTo(this.eventFile)
+        );
+        MatcherAssert.assertThat(
+            "submitter must still fire for parsed coordinates",
+            submitter.submitCount(), Matchers.equalTo(1)
+        );
+        MatcherAssert.assertThat(
+            "storage-owned path MUST NOT be deleted by the dispatcher",
+            Files.exists(this.eventFile), Matchers.is(true)
+        );
+    }
+
+    /**
+     * Caller-owned path (default 5-arg ctor): legacy semantics — dispatcher
+     * snapshots the source to its own temp file and deletes that snapshot
+     * after the async parse runs. The original event path is also still
+     * on disk (the writer's temp file lifecycle is the writer's problem).
+     */
+    @Test
+    void onCacheWrite_callerOwned_snapshotsAndDeletesItsOwnCopy() throws Exception {
+        final RecordingSubmitter submitter = new RecordingSubmitter();
+        final java.util.concurrent.atomic.AtomicReference<Path> seenByParser =
+            new java.util.concurrent.atomic.AtomicReference<>();
+        final PrefetchParser capturingParser = bytesOnDisk -> {
+            seenByParser.set(bytesOnDisk);
+            return List.of(Coordinate.maven("com.example", "y", "1.0"));
+        };
+        final PrefetchDispatcher dispatcher = new PrefetchDispatcher(
+            PrefetchTuning::defaults,
+            repo -> Boolean.TRUE,
+            repo -> UPSTREAM,
+            Map.of(REPO_TYPE, capturingParser),
+            repo -> REPO_TYPE,
+            submitter,
+            this.executor
+        );
+
+        // Default 5-arg ctor → callerOwnsSnapshot=true.
+        final CacheWriteEvent callerOwned = new CacheWriteEvent(
+            REPO, URL_PATH, this.eventFile, 42L, Instant.now()
+        );
+        dispatcher.onCacheWrite(callerOwned);
+        drain(this.executor);
+
+        MatcherAssert.assertThat(
+            "parser must see a dispatcher-owned snapshot, NOT the source path",
+            seenByParser.get(), Matchers.not(Matchers.equalTo(this.eventFile))
+        );
+        MatcherAssert.assertThat(
+            "dispatcher snapshot file MUST be deleted after async parse",
+            Files.exists(seenByParser.get()), Matchers.is(false)
+        );
+        MatcherAssert.assertThat(submitter.submitCount(), Matchers.equalTo(1));
+    }
+
     /**
      * stop() must drain in-flight async dispatches before returning.
      */
