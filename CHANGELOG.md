@@ -8,6 +8,54 @@
 
 Target-architecture alignment release (v2.2 plan §12). Ships nine work items — WI-00 (queue/log hotfix), WI-01 (Fault + Result sum types), WI-02 (full RequestContext + Deadline + ContextualExecutor), WI-03 (StructuredLogger 5-tier + LevelPolicy + AuditAction), WI-04 (`GroupResolver` replaces `GroupSlice` at every production site), WI-05 (SingleFlight coalescer), WI-07 (ProxyCacheWriter + Maven checksum integrity), WI-post-05 (retire RequestDeduplicator), WI-post-07 (wire ProxyCacheWriter into pypi/go/composer). Also lands: **serve-before-commit** across all proxy adapters (writeAndVerify + async cache commit + parallel sidecar saves), **publish-date registry** replacing per-adapter cooldown inspectors with a DB-backed registry + 6 upstream source implementations, **search & browse overhaul** (natural sort, artifact classification, DB-hydrated tree browser), **group RaceSlice priority fix** (2xx > 403 > 5xx > 404), **ECS log field compliance** (488 fields migrated), **preemptive Basic auth** for Maven/Gradle, plus a **P0 production-readiness pass** (Groups A–H) and full admin / developer / user documentation.
 
+### ⚡ Performance pack (cold-cache build wall time)
+
+- **Cold pom-heavy `mvn dependency:resolve` median ~14 s**, down from 66 s on the h1 + no-prefetch baseline measured against the same hardware and POM (Phase 7 cold-bench, commit `aab1d3415`). Direct `mvn` → Maven Central baseline on the same hardware: 9 s. Bench command: `mvn dependency:resolve -Dartifact=org.codehaus.mojo:sonar-maven-plugin:4.0.0.4121` through `maven_group → remotes → maven_proxy → Maven Central` with a fully cold `m2`, fully cold filesystem cache, and `TRUNCATE artifacts` between every run. The h2-only step alone took the wall from 66 s to 28 s (60% reduction); subsequent prefetch + parallel-sidecar + sequential-fanout work brought it to ~14 s. Per-stage handler-latency profiling (commit `140c1708e`) confirmed the remaining ~5 s above the direct-mvn baseline is dominated by upstream RTT, not pantera CPU.
+- **HTTP/2 (h2) over TLS for all upstream proxy traffic, ALPN-negotiated.** `JettyClientSlices` now requests `h2` via ALPN with HTTP/1.1 fallback; pool sizing and multiplexing are runtime-tunable.
+- **Speculative direct-dependency pre-fetch** for maven / gradle / npm proxies. On a 200 cache-write the `BaseCachedProxySlice.onCacheWrite` extension fires a `CacheWriteEvent` to `PrefetchDispatcher`; the dispatcher parses direct deps from the just-cached artifact (`MavenPomParser`, `NpmPackageParser`) and queues a bounded fetch via `PrefetchCoordinator`. Per-host semaphores, bounded coordinator queue, and an auto-disabling circuit breaker cap drop spikes.
+- **Parallel primary + `.sha1` sidecar fetch on cache miss** (`ProxyCacheWriter`). The previous serial chain cost 1 RTT per miss; this alone took the cold pom-heavy walk from 21 s to 14 s.
+- **Speculative `.md5 / .sha256 / .sha512` upstream fetches removed from the cold path.** Maven only verifies against `.sha1` by default; the others are proxied on demand if a client explicitly requests them.
+- **Synchronous `fsync` dropped on regenerable cache writes.** Cache files are reproducible from the upstream — durability is not load-bearing for them.
+- **Sequential-only group fanout (BREAKING).** The `MembersStrategy` enum is removed; group resolution now matches Nexus / JFrog semantics. Members are tried in declared order; first 2xx wins; subsequent members are only consulted on 404. Eliminates the cold-cache traffic amplification PARALLEL used to cause when a group fanned out to 2+ proxies for every miss. **Operator action required**: order group `members:` lists with the highest-likelihood-of-having-the-artifact member first (typically: hosted before proxy, primary upstream before niche). Configs with `members_strategy: parallel|sequential` are accepted at parse time with a one-time WARN per group; the key is otherwise ignored. See [`docs/admin-guide/group-member-ordering.md`](docs/admin-guide/group-member-ordering.md).
+
+#### Operational tunables (hot-reloadable, admin UI editable)
+
+All settings round-trip through `RuntimeSettingsCache` with PostgreSQL `LISTEN/NOTIFY settings_changed` (Flyway V127 trigger) for cluster-wide hot-reload; no restart required for runtime flips.
+
+| Key                                                            | Default | Notes                                                  |
+|----------------------------------------------------------------|---------|--------------------------------------------------------|
+| `http_client.protocol`                                         | `h2`    | `h1` to disable HTTP/2 globally                        |
+| `http_client.http2_max_pool_size`                              | 4       | Per upstream                                           |
+| `http_client.http2_multiplexing_limit`                         | 100     | Streams per connection                                 |
+| `prefetch.enabled`                                             | true    | Master switch                                          |
+| `prefetch.concurrency.global`                                  | 64      | Coordinator-wide concurrent fetches                    |
+| `prefetch.concurrency.per_upstream`                            | 16      | Per-host semaphore                                     |
+| `prefetch.queue.capacity`                                      | 2048    | Bounded coordinator queue                              |
+| `prefetch.worker_threads`                                      | 8       | Dedicated worker pool                                  |
+| `prefetch.circuit_breaker.drop_threshold_per_sec`              | 50      | Drops/s above which the breaker disables prefetch      |
+| `prefetch.circuit_breaker.window_seconds`                      | 10      | Sliding window for drop-rate                           |
+| `prefetch.circuit_breaker.disable_minutes`                     | 5       | Cool-down on auto-disable                              |
+
+Per-repo override: `RepoConfig.prefetchEnabled` (default true) — toggleable from the repo edit page.
+
+#### Notable internals
+
+- New `RuntimeSettingsCache` with PostgreSQL `LISTEN/NOTIFY` hot-reload (Flyway V127 trigger).
+- `JettyClientSlices` now ALPN-negotiates HTTP/2 with HTTP/1.1 fallback.
+- `BaseCachedProxySlice.cacheResponse` fires an `onCacheWrite(CacheWriteEvent)` extension point consumed by the prefetch dispatcher.
+- `ProxyCacheWriter` parallelises primary + `.sha1` sidecar fetch on cache miss (was sequential — saves 1 RTT per miss).
+- Speculative `.md5 / .sha256 / .sha512` upstream fetches removed from the cold-cache path; they're proxied on demand if a client asks.
+- Per-host upstream semaphores + bounded coordinator queue with auto-disabling circuit breaker on drop spikes.
+- `GroupResolver` parallel branch + outcome-aggregation helpers (`handleProxyMember*`, `completeProxyIfAllExhausted`, `handleFanoutMemberResponse`, `completeFanoutIfAllExhausted`, `handleTargetedMemberResponse`, `completeTargetedIfAllExhausted`) deleted; `querySequentially` is the only fanout primitive.
+- `RepositorySlices.warnIfLegacyMembersStrategy` logs the one-time tolerated-`members_strategy` WARN; one entry per group repo per process.
+
+#### Operator notes
+
+- To disable HTTP/2 globally: `PATCH /api/v1/settings/runtime/http_client.protocol` with `{"value":"h1"}` (admin token).
+- To disable pre-fetch globally: `PATCH /api/v1/settings/runtime/prefetch.enabled` with `{"value":false}`.
+- To disable pre-fetch for a single repo: PUT the repo config with `settings.prefetch: false`.
+- Performance Tuning admin UI page exposes all of the above.
+
 ### 🏗️ Architectural changes
 
 - **Circuit breaker: rate-over-sliding-window replaces consecutive-count.** The pre-2.2.0 design tripped at any `N` consecutive failures regardless of total volume — a cold-start burst of 3 TCP timeouts on a novel upstream would open the circuit for 40 s, producing silent 503s for every in-flight client during that window. Reproduced against `gradle_proxy` during a Gradle smoke test. Replaced with the Hystrix / Resilience4j pattern: each remote keeps a ring buffer of per-second buckets over a configurable window; the breaker opens only when `failures/total ≥ failureRateThreshold` AND `total ≥ minimumNumberOfCalls`. The minimum-volume gate is what makes cold-start bursts harmless — a handful of failures at startup is below the gate and never trips. Sustained failure (≥50% across 20+ calls in 30s by default) trips as fast as before. Flaky upstreams running below the rate threshold never trip, regardless of duration. Fibonacci back-off on repeat trips (initial → 2x → 3x → 5x → … → cap at `maxBlockDuration`) is preserved. Settings are DB-persisted in `auth_settings` under `circuit_breaker_*` keys (Flyway V122), fall through to `PANTERA_CIRCUIT_BREAKER_*` env vars, fall through to `AutoBlockSettings.defaults()` as the last fallback. Admin UI exposes all 5 tunables at `SettingsView` → Circuit Breaker panel; the `PUT /api/v1/admin/circuit-breaker-settings` endpoint round-trips proposed values through the `AutoBlockSettings` record constructor for invariant validation before persisting. In-memory loader cache invalidates on PUT so next outcome across every upstream picks up the new values — no restart. Defaults: `failureRateThreshold=0.5`, `minimumNumberOfCalls=20`, `slidingWindowSeconds=30`, `initialBlockDuration=20s` (halved from the prior 40s), `maxBlockDuration=5min` (unchanged). 17 registry tests + 5 member-slice tests cover trips, recovery, Fibonacci, concurrent writers, min-volume gate, rate-boundary semantics, and block cap.
