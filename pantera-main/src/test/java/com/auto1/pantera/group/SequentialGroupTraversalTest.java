@@ -36,9 +36,8 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * Unit tests for {@link GroupResolver#querySequentially} — the Nexus-style
- * sequential member traversal added under {@link
- * GroupResolver.MembersStrategy#SEQUENTIAL}.
+ * Unit tests for {@link GroupResolver}'s Nexus-style sequential member
+ * traversal — the only fanout mode in v2.2.0+ (parallel removed).
  *
  * @since 2.2.0
  */
@@ -147,8 +146,7 @@ final class SequentialGroupTraversalTest {
             REPO_TYPE,
             Set.of("downed", "live"),
             buildNegativeCache(),
-            ForkJoinPool.commonPool(),
-            GroupResolver.MembersStrategy.SEQUENTIAL
+            ForkJoinPool.commonPool()
         );
         final Response resp = resolver.response(
             new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
@@ -180,8 +178,7 @@ final class SequentialGroupTraversalTest {
             REPO_TYPE,
             Set.copyOf(memberNames),
             buildNegativeCache(),
-            ForkJoinPool.commonPool(),
-            GroupResolver.MembersStrategy.SEQUENTIAL
+            ForkJoinPool.commonPool()
         );
     }
 

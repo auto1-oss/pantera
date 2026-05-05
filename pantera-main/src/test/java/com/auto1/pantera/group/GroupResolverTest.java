@@ -27,8 +27,6 @@ import com.auto1.pantera.index.ArtifactDocument;
 import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.index.SearchResult;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
 
 import java.time.Duration;
 import java.util.Collections;
@@ -486,13 +484,10 @@ final class GroupResolverTest {
             "Empty members must return 404");
     }
 
-    // ---- Parametric tests for strategy coverage ----
+    // ---- Single-member smoke (sequential is the only fanout mode in v2.2.0+) ----
 
-    @ParameterizedTest
-    @EnumSource(GroupResolver.MembersStrategy.class)
-    void singleMemberWithArtifactSucceedsUnderEitherStrategy(
-        final GroupResolver.MembersStrategy strategy
-    ) throws Exception {
+    @Test
+    void singleMemberWithArtifactSucceeds() throws Exception {
         final byte[] payload = "ok".getBytes();
         final Slice only = (line, headers, body) ->
             CompletableFuture.completedFuture(ResponseBuilder.ok().body(payload).build());
@@ -507,8 +502,7 @@ final class GroupResolverTest {
             REPO_TYPE,
             Set.of("only"),
             buildNegativeCache(),
-            java.util.concurrent.ForkJoinPool.commonPool(),
-            strategy
+            java.util.concurrent.ForkJoinPool.commonPool()
         );
         final Response resp = resolver.response(
             new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY

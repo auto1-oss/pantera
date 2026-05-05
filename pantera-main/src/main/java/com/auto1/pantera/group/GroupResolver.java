@@ -41,11 +41,8 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -109,32 +106,16 @@ public final class GroupResolver implements Slice {
     private final NegativeCache negativeCache;
     private final SingleFlight<String, Void> inFlightFanouts;
     private final java.util.concurrent.Executor drainExecutor;
-    private final MembersStrategy strategy;
-
-    /**
-     * Group fanout strategy. PARALLEL races every member at once and returns the
-     * first 2xx (current behaviour, retained for federated topologies with no
-     * clear member affinity). SEQUENTIAL walks members in declared order, falling
-     * through on 404 or open-circuit, stopping on the first 2xx — Nexus /
-     * Artifactory style. SEQUENTIAL is the default because the typical Pantera
-     * deployment has a "primary" upstream (e.g. Maven Central) that holds 99% of
-     * artifacts; PARALLEL multiplies upstream traffic by group size for marginal
-     * latency benefit.
-     */
-    public enum MembersStrategy {
-        PARALLEL,
-        SEQUENTIAL;
-
-        public static MembersStrategy fromYaml(final String value) {
-            if (value == null || value.isBlank()) {
-                return SEQUENTIAL;
-            }
-            return MembersStrategy.valueOf(value.trim().toUpperCase(java.util.Locale.ROOT));
-        }
-    }
 
     /**
      * Full constructor.
+     *
+     * <p><b>Sequential-only fanout (v2.2.0).</b> Members are tried in declared
+     * order; the first 2xx wins; subsequent members are only consulted on 404
+     * from the previous one. There is no parallel mode — the legacy
+     * {@code MembersStrategy} enum and the {@code members_strategy} YAML key
+     * have been removed (the YAML key is still tolerated at parse time with a
+     * one-time WARN, see {@link com.auto1.pantera.RepositorySlices}).
      *
      * @param group Group repository name
      * @param members Flattened member slices with circuit breakers
@@ -144,40 +125,6 @@ public final class GroupResolver implements Slice {
      * @param proxyMembers Names of proxy repository members
      * @param negativeCache Negative cache for 404 results
      * @param drainExecutor Per-repo drain executor from {@link com.auto1.pantera.http.resilience.RepoBulkhead}
-     * @param strategy Group fanout strategy (PARALLEL or SEQUENTIAL)
-     */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
-    public GroupResolver(
-        final String group,
-        final List<MemberSlice> members,
-        final List<RoutingRule> routingRules,
-        final Optional<ArtifactIndex> artifactIndex,
-        final String repoType,
-        final Set<String> proxyMembers,
-        final NegativeCache negativeCache,
-        final java.util.concurrent.Executor drainExecutor,
-        final MembersStrategy strategy
-    ) {
-        this.group = Objects.requireNonNull(group, "group");
-        this.members = Objects.requireNonNull(members, "members");
-        this.routingRules = routingRules != null ? routingRules : Collections.emptyList();
-        this.artifactIndex = artifactIndex != null ? artifactIndex : Optional.empty();
-        this.repoType = repoType != null ? repoType : "";
-        this.proxyMembers = proxyMembers != null ? proxyMembers : Collections.emptySet();
-        this.negativeCache = Objects.requireNonNull(negativeCache, "negativeCache");
-        this.drainExecutor = Objects.requireNonNull(drainExecutor, "drainExecutor");
-        this.strategy = strategy == null ? MembersStrategy.SEQUENTIAL : strategy;
-        this.inFlightFanouts = new SingleFlight<>(
-            Duration.ofMinutes(5),
-            10_000,
-            ContextualExecutor.contextualize(ForkJoinPool.commonPool())
-        );
-    }
-
-    /**
-     * Backward-compat constructor (retains the pre-strategy signature so existing
-     * test stubs and any non-RepositorySlices caller keep compiling). Defaults to
-     * {@link MembersStrategy#SEQUENTIAL}.
      */
     @SuppressWarnings("PMD.ExcessiveParameterList")
     public GroupResolver(
@@ -190,8 +137,19 @@ public final class GroupResolver implements Slice {
         final NegativeCache negativeCache,
         final java.util.concurrent.Executor drainExecutor
     ) {
-        this(group, members, routingRules, artifactIndex, repoType,
-            proxyMembers, negativeCache, drainExecutor, MembersStrategy.SEQUENTIAL);
+        this.group = Objects.requireNonNull(group, "group");
+        this.members = Objects.requireNonNull(members, "members");
+        this.routingRules = routingRules != null ? routingRules : Collections.emptyList();
+        this.artifactIndex = artifactIndex != null ? artifactIndex : Optional.empty();
+        this.repoType = repoType != null ? repoType : "";
+        this.proxyMembers = proxyMembers != null ? proxyMembers : Collections.emptySet();
+        this.negativeCache = Objects.requireNonNull(negativeCache, "negativeCache");
+        this.drainExecutor = Objects.requireNonNull(drainExecutor, "drainExecutor");
+        this.inFlightFanouts = new SingleFlight<>(
+            Duration.ofMinutes(5),
+            10_000,
+            ContextualExecutor.contextualize(ForkJoinPool.commonPool())
+        );
     }
 
     /**
@@ -220,40 +178,6 @@ public final class GroupResolver implements Slice {
      * @param registrySupplier Function mapping member name to its shared
      *                         {@link AutoBlockRegistry} (may be {@code null})
      * @param repoDrainExecutor Per-repo drain executor
-     * @param strategy Group fanout strategy (PARALLEL or SEQUENTIAL)
-     */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
-    public GroupResolver(
-        final SliceResolver resolver,
-        final String group,
-        final List<String> memberNames,
-        final int port,
-        final int depth,
-        final long timeoutSeconds,
-        final List<RoutingRule> routingRules,
-        final Optional<ArtifactIndex> artifactIndex,
-        final Set<String> proxyMembers,
-        final String repoType,
-        final NegativeCache negativeCache,
-        final Function<String, AutoBlockRegistry> registrySupplier,
-        final java.util.concurrent.Executor repoDrainExecutor,
-        final MembersStrategy strategy
-    ) {
-        this(
-            group,
-            buildMembers(resolver, memberNames, port, proxyMembers, registrySupplier),
-            routingRules,
-            artifactIndex,
-            repoType,
-            proxyMembers,
-            negativeCache,
-            repoDrainExecutor,
-            strategy
-        );
-    }
-
-    /**
-     * Backward-compat wiring constructor (defaults to SEQUENTIAL).
      */
     @SuppressWarnings("PMD.ExcessiveParameterList")
     public GroupResolver(
@@ -271,10 +195,16 @@ public final class GroupResolver implements Slice {
         final Function<String, AutoBlockRegistry> registrySupplier,
         final java.util.concurrent.Executor repoDrainExecutor
     ) {
-        this(resolver, group, memberNames, port, depth, timeoutSeconds,
-            routingRules, artifactIndex, proxyMembers, repoType,
-            negativeCache, registrySupplier, repoDrainExecutor,
-            MembersStrategy.SEQUENTIAL);
+        this(
+            group,
+            buildMembers(resolver, memberNames, port, proxyMembers, registrySupplier),
+            routingRules,
+            artifactIndex,
+            repoType,
+            proxyMembers,
+            negativeCache,
+            repoDrainExecutor
+        );
     }
 
     /**
@@ -541,90 +471,24 @@ public final class GroupResolver implements Slice {
             .field("url.path", path)
             .log();
 
-        return body.asBytesFuture().thenCompose(requestBytes -> {
-            if (this.strategy == MembersStrategy.SEQUENTIAL) {
-                // Sequential walk over targeted members. The TOCTOU postprocessing
-                // below only inspects the response status, so we can plug the
-                // sequential result into the same .thenCompose chain. Pass
-                // isTargetedLocalRead=true so open-circuit gating is bypassed
-                // (mirrors the parallel path's behaviour for index-hit reads).
-                return querySequentially(targeted, line, headers, body, true)
-                    .thenCompose(resp -> {
-                        if (resp.status().success()
-                            || resp.status() == RsStatus.NOT_MODIFIED
-                            || resp.status() == RsStatus.FORBIDDEN) {
-                            return CompletableFuture.completedFuture(resp);
-                        }
-                        if (resp.status() == RsStatus.NOT_FOUND) {
-                            EcsLogger.debug("com.auto1.pantera.group")
-                                .message("TOCTOU drift (sequential): index hit but no "
-                                    + "member returned bytes, falling through to proxy fanout")
-                                .eventCategory("web")
-                                .eventAction("group_toctou_fallthrough")
-                                .field("url.path", line.uri().getPath())
-                                .log();
-                            return proxyOnlyFanout(line, headers, body, artifactName, negCacheKey);
-                        }
-                        if (resp.status().serverError()) {
-                            return CompletableFuture.completedFuture(
-                                FaultTranslator.translate(
-                                    new Fault.StorageUnavailable(null, line.uri().getPath()),
-                                    null
-                                )
-                            );
-                        }
-                        return CompletableFuture.completedFuture(resp);
-                    });
-            }
-            final CompletableFuture<Response> result = new CompletableFuture<>();
-            final AtomicBoolean completed = new AtomicBoolean(false);
-            final AtomicInteger pending = new AtomicInteger(targeted.size());
-            final AtomicBoolean anyServerError = new AtomicBoolean(false);
-            final AtomicBoolean anyNotFound = new AtomicBoolean(false);
-            final List<CompletableFuture<Response>> memberFutures = new ArrayList<>(targeted.size());
-
-            for (final MemberSlice member : targeted) {
-                final CompletableFuture<Response> mf = queryMemberDirect(
-                    member, line, headers, requestBytes
-                );
-                memberFutures.add(mf);
-                mf.whenComplete((resp, err) -> {
-                    if (err != null) {
-                        if (!(err instanceof CancellationException)) {
-                            member.recordFailure();
-                            anyServerError.set(true);
-                        }
-                        completeTargetedIfAllExhausted(
-                            pending, completed, anyServerError, anyNotFound, result
-                        );
-                    } else {
-                        handleTargetedMemberResponse(
-                            member, resp, completed, pending, anyServerError,
-                            anyNotFound, result, memberFutures
-                        );
-                    }
-                });
-            }
-
-            // When the targeted read completes, check for TOCTOU fallthrough
-            return result.thenCompose(resp -> {
-                // Cancel remaining futures
-                for (final CompletableFuture<Response> f : memberFutures) {
-                    if (!f.isDone()) {
-                        f.cancel(true);
-                    }
-                }
+        // Sequential-only fanout (v2.2.0). Walk targeted members in declared
+        // order. The TOCTOU postprocessing below only inspects the response
+        // status, so we plug the sequential result into the same .thenCompose
+        // chain. isTargetedLocalRead=true bypasses open-circuit gating because
+        // index-hit reads are authoritative on hosted state — a tripped
+        // breaker against the hosted member would otherwise mask the
+        // index-vs-storage drift behind a fanout.
+        return querySequentially(targeted, line, headers, body, true)
+            .thenCompose(resp -> {
                 if (resp.status().success()
                     || resp.status() == RsStatus.NOT_MODIFIED
                     || resp.status() == RsStatus.FORBIDDEN) {
                     return CompletableFuture.completedFuture(resp);
                 }
                 if (resp.status() == RsStatus.NOT_FOUND) {
-                    // TOCTOU drift: index said it exists but member says 404.
-                    // Fall through to proxy fanout (A11 fix).
                     EcsLogger.debug("com.auto1.pantera.group")
-                        .message("TOCTOU drift: index hit but member returned 404, "
-                            + "falling through to proxy fanout")
+                        .message("TOCTOU drift (sequential): index hit but no "
+                            + "member returned bytes, falling through to proxy fanout")
                         .eventCategory("web")
                         .eventAction("group_toctou_fallthrough")
                         .field("url.path", line.uri().getPath())
@@ -632,8 +496,6 @@ public final class GroupResolver implements Slice {
                     return proxyOnlyFanout(line, headers, body, artifactName, negCacheKey);
                 }
                 if (resp.status().serverError()) {
-                    // Targeted member 5xx: return StorageUnavailable.
-                    // The bytes are supposed to be local -- this is a real local failure.
                     return CompletableFuture.completedFuture(
                         FaultTranslator.translate(
                             new Fault.StorageUnavailable(null, line.uri().getPath()),
@@ -643,74 +505,6 @@ public final class GroupResolver implements Slice {
                 }
                 return CompletableFuture.completedFuture(resp);
             });
-        });
-    }
-
-    /**
-     * Handle a response from a targeted member (index hit path).
-     */
-    private void handleTargetedMemberResponse(
-        final MemberSlice member,
-        final Response resp,
-        final AtomicBoolean completed,
-        final AtomicInteger pending,
-        final AtomicBoolean anyServerError,
-        final AtomicBoolean anyNotFound,
-        final CompletableFuture<Response> result,
-        final List<CompletableFuture<Response>> memberFutures
-    ) {
-        final RsStatus status = resp.status();
-        if (status == RsStatus.OK || status == RsStatus.PARTIAL_CONTENT
-            || status == RsStatus.NOT_MODIFIED) {
-            if (completed.compareAndSet(false, true)) {
-                member.recordSuccess();
-                result.complete(resp);
-            } else {
-                drainBody(member.name(), resp.body());
-            }
-            completeTargetedIfAllExhausted(pending, completed, anyServerError, anyNotFound, result);
-        } else if (status == RsStatus.FORBIDDEN) {
-            if (completed.compareAndSet(false, true)) {
-                member.recordSuccess();
-                result.complete(resp);
-            } else {
-                drainBody(member.name(), resp.body());
-            }
-            completeTargetedIfAllExhausted(pending, completed, anyServerError, anyNotFound, result);
-        } else if (status == RsStatus.NOT_FOUND) {
-            anyNotFound.set(true);
-            drainBody(member.name(), resp.body());
-            completeTargetedIfAllExhausted(pending, completed, anyServerError, anyNotFound, result);
-        } else {
-            member.recordFailure();
-            anyServerError.set(true);
-            drainBody(member.name(), resp.body());
-            completeTargetedIfAllExhausted(pending, completed, anyServerError, anyNotFound, result);
-        }
-    }
-
-    /**
-     * Complete the targeted-read result when all members are exhausted.
-     * Returns an intermediate Response that the caller interprets:
-     * - 404 signals TOCTOU fallthrough
-     * - 5xx signals StorageUnavailable
-     */
-    private static void completeTargetedIfAllExhausted(
-        final AtomicInteger pending,
-        final AtomicBoolean completed,
-        final AtomicBoolean anyServerError,
-        final AtomicBoolean anyNotFound,
-        final CompletableFuture<Response> result
-    ) {
-        if (pending.decrementAndGet() == 0 && !completed.get()) {
-            if (anyServerError.get()) {
-                result.complete(ResponseBuilder.internalError()
-                    .textBody("Targeted member read failed").build());
-            } else {
-                // All 404 (TOCTOU case)
-                result.complete(ResponseBuilder.notFound().build());
-            }
-        }
     }
 
     /**
@@ -803,182 +597,36 @@ public final class GroupResolver implements Slice {
         final Content body,
         final NegativeCacheKey negCacheKey
     ) {
-        return body.asBytesFuture().thenCompose(requestBytes -> {
-            if (this.strategy == MembersStrategy.SEQUENTIAL) {
-                return querySequentially(fanoutMembers, line, headers, body, false)
-                    .thenApply(resp -> {
-                        if (resp.status().serverError()) {
-                            // Mirror parallel completeProxyIfAllExhausted's PATH B:
-                            // any 5xx in the sequential walk -> AllProxiesFailed
-                            // wrapped through FaultTranslator so the X-Pantera-Fault
-                            // header lands. querySequentially does not carry per-
-                            // member outcomes through; pass an empty outcomes list
-                            // so FaultTranslator picks no winning failure (the
-                            // synthesized 502 response stays as the body).
-                            final Fault.AllProxiesFailed fault = new Fault.AllProxiesFailed(
-                                this.group, java.util.List.of(), java.util.Optional.empty()
-                            );
-                            return FaultTranslator.translate(fault, null);
-                        }
-                        if (resp.status() == RsStatus.NOT_FOUND) {
-                            this.negativeCache.cacheNotFound(negCacheKey);
-                        }
-                        return resp;
-                    });
-            }
-            final CompletableFuture<Response> result = new CompletableFuture<>();
-            final AtomicBoolean completed = new AtomicBoolean(false);
-            final AtomicInteger pending = new AtomicInteger(fanoutMembers.size());
-            final List<Fault.MemberOutcome> outcomes =
-                Collections.synchronizedList(new ArrayList<>(fanoutMembers.size()));
-            final List<CompletableFuture<Response>> memberFutures =
-                new ArrayList<>(fanoutMembers.size());
-
-            for (final MemberSlice member : fanoutMembers) {
-                if (member.isCircuitOpen()) {
-                    outcomes.add(Fault.MemberOutcome.threw(
-                        member.name(), Fault.MemberOutcome.Kind.CIRCUIT_OPEN, null
-                    ));
-                    completeProxyIfAllExhausted(
-                        pending, completed, outcomes, result, negCacheKey
+        // Sequential-only fanout (v2.2.0). The previous parallel branch and
+        // its outcome-aggregation helpers (handleProxyMemberResponse,
+        // handleProxyMemberFailure, completeProxyIfAllExhausted) are removed;
+        // querySequentially walks members in declared order and FaultTranslator
+        // is invoked here on a 5xx terminal to preserve the X-Pantera-Fault
+        // header behaviour of the legacy parallel path.
+        return querySequentially(fanoutMembers, line, headers, body, false)
+            .thenApply(resp -> {
+                if (resp.status().serverError()) {
+                    // Sequential walk reached terminal 5xx: any member 5xx in
+                    // the walk -> AllProxiesFailed wrapped through
+                    // FaultTranslator. querySequentially does not carry per-
+                    // member outcomes through; pass an empty outcomes list so
+                    // FaultTranslator picks no winning failure (the synthesized
+                    // 502 response stays as the body).
+                    final Fault.AllProxiesFailed fault = new Fault.AllProxiesFailed(
+                        this.group, java.util.List.of(), java.util.Optional.empty()
                     );
-                    continue;
+                    return FaultTranslator.translate(fault, null);
                 }
-                final CompletableFuture<Response> mf = queryMemberDirect(
-                    member, line, headers, requestBytes
-                );
-                memberFutures.add(mf);
-                mf.whenComplete((resp, err) -> {
-                    if (err != null) {
-                        handleProxyMemberFailure(
-                            member, err, completed, pending, outcomes, result, negCacheKey
-                        );
-                    } else {
-                        handleProxyMemberResponse(
-                            member, resp, completed, pending, outcomes, result,
-                            negCacheKey, memberFutures
-                        );
-                    }
-                });
-            }
-
-            return result;
-        });
-    }
-
-    /**
-     * Handle a response from a proxy member in the fanout.
-     */
-    private void handleProxyMemberResponse(
-        final MemberSlice member,
-        final Response resp,
-        final AtomicBoolean completed,
-        final AtomicInteger pending,
-        final List<Fault.MemberOutcome> outcomes,
-        final CompletableFuture<Response> result,
-        final NegativeCacheKey negCacheKey,
-        final List<CompletableFuture<Response>> memberFutures
-    ) {
-        final RsStatus status = resp.status();
-        if (status == RsStatus.OK || status == RsStatus.PARTIAL_CONTENT
-            || status == RsStatus.NOT_MODIFIED) {
-            outcomes.add(Fault.MemberOutcome.responded(
-                member.name(), Fault.MemberOutcome.Kind.OK, resp
-            ));
-            if (completed.compareAndSet(false, true)) {
-                member.recordSuccess();
-                // Cancel remaining futures
-                for (final CompletableFuture<Response> f : memberFutures) {
-                    if (!f.isDone()) {
-                        f.cancel(true);
-                    }
+                if (resp.status() == RsStatus.NOT_FOUND) {
+                    this.negativeCache.cacheNotFound(negCacheKey);
+                    EcsLogger.debug("com.auto1.pantera.group")
+                        .message("All proxies returned 404, caching negative result")
+                        .eventCategory("database")
+                        .eventAction("group_negative_cache_populate")
+                        .log();
                 }
-                result.complete(resp);
-            } else {
-                drainBody(member.name(), resp.body());
-            }
-            completeProxyIfAllExhausted(pending, completed, outcomes, result, negCacheKey);
-        } else if (status == RsStatus.NOT_FOUND) {
-            outcomes.add(Fault.MemberOutcome.responded(
-                member.name(), Fault.MemberOutcome.Kind.NOT_FOUND, resp
-            ));
-            drainBody(member.name(), resp.body());
-            completeProxyIfAllExhausted(pending, completed, outcomes, result, negCacheKey);
-        } else {
-            // 5xx or other error status
-            outcomes.add(Fault.MemberOutcome.responded(
-                member.name(), Fault.MemberOutcome.Kind.FIVE_XX, resp
-            ));
-            member.recordFailure();
-            // Do NOT drain body -- FaultTranslator may pass it through
-            completeProxyIfAllExhausted(pending, completed, outcomes, result, negCacheKey);
-        }
-    }
-
-    /**
-     * Handle member query failure in the proxy fanout.
-     */
-    private void handleProxyMemberFailure(
-        final MemberSlice member,
-        final Throwable err,
-        final AtomicBoolean completed,
-        final AtomicInteger pending,
-        final List<Fault.MemberOutcome> outcomes,
-        final CompletableFuture<Response> result,
-        final NegativeCacheKey negCacheKey
-    ) {
-        if (err instanceof CancellationException) {
-            outcomes.add(Fault.MemberOutcome.threw(
-                member.name(), Fault.MemberOutcome.Kind.CANCELLED, err
-            ));
-        } else {
-            outcomes.add(Fault.MemberOutcome.threw(
-                member.name(), Fault.MemberOutcome.Kind.EXCEPTION, err
-            ));
-            member.recordFailure();
-        }
-        completeProxyIfAllExhausted(pending, completed, outcomes, result, negCacheKey);
-    }
-
-    /**
-     * Complete the proxy fanout result when all members are exhausted.
-     *
-     * <p>Policy:
-     * <ul>
-     *   <li>All 404 / circuit-open / cancelled -> cache negative + 404 [PATH A]</li>
-     *   <li>Any 5xx / exception (no 2xx) -> AllProxiesFailed [PATH B]</li>
-     * </ul>
-     */
-    private void completeProxyIfAllExhausted(
-        final AtomicInteger pending,
-        final AtomicBoolean completed,
-        final List<Fault.MemberOutcome> outcomes,
-        final CompletableFuture<Response> result,
-        final NegativeCacheKey negCacheKey
-    ) {
-        if (pending.decrementAndGet() == 0 && !completed.get()) {
-            final boolean anyFiveXxOrException = outcomes.stream()
-                .anyMatch(o -> o.kind() == Fault.MemberOutcome.Kind.FIVE_XX
-                    || o.kind() == Fault.MemberOutcome.Kind.EXCEPTION);
-            if (anyFiveXxOrException) {
-                // PATH B: AllProxiesFailed -- pass-through best 5xx
-                final Optional<Fault.AllProxiesFailed.ProxyFailure> winning =
-                    FaultTranslator.pickWinningFailure(outcomes);
-                final Fault.AllProxiesFailed fault = new Fault.AllProxiesFailed(
-                    this.group, List.copyOf(outcomes), winning
-                );
-                result.complete(FaultTranslator.translate(fault, null));
-            } else {
-                // PATH A: all 404 / skipped / cancelled -- cache negative
-                this.negativeCache.cacheNotFound(negCacheKey);
-                EcsLogger.debug("com.auto1.pantera.group")
-                    .message("All proxies returned 404, caching negative result")
-                    .eventCategory("database")
-                    .eventAction("group_negative_cache_populate")
-                    .log();
-                result.complete(ResponseBuilder.notFound().build());
-            }
-        }
+                return resp;
+            });
     }
 
     /**
@@ -1028,8 +676,9 @@ public final class GroupResolver implements Slice {
     }
 
     /**
-     * Query a list of members in parallel -- the classic fanout path.
-     * Used for full two-phase fanout only (not the indexed path).
+     * Query a list of members sequentially (v2.2.0: parallel mode removed).
+     * Used for full two-phase fanout only (not the indexed path); thin wrapper
+     * around {@link #querySequentially}.
      */
     private CompletableFuture<Response> queryTargetedMembers(
         final List<MemberSlice> targeted,
@@ -1038,56 +687,7 @@ public final class GroupResolver implements Slice {
         final Content body,
         final boolean isTargetedLocalRead
     ) {
-        if (this.strategy == MembersStrategy.SEQUENTIAL) {
-            return querySequentially(targeted, line, headers, body, isTargetedLocalRead);
-        }
-        return body.asBytesFuture().thenCompose(requestBytes -> {
-            final CompletableFuture<Response> result = new CompletableFuture<>();
-            final AtomicBoolean completed = new AtomicBoolean(false);
-            final AtomicInteger pending = new AtomicInteger(targeted.size());
-            final AtomicBoolean anyServerError = new AtomicBoolean(false);
-            final List<CompletableFuture<Response>> memberFutures =
-                new ArrayList<>(targeted.size());
-
-            for (final MemberSlice member : targeted) {
-                if (!isTargetedLocalRead && member.isCircuitOpen()) {
-                    completeFanoutIfAllExhausted(
-                        pending, completed, anyServerError, result, isTargetedLocalRead
-                    );
-                    continue;
-                }
-                final CompletableFuture<Response> mf = queryMemberDirect(
-                    member, line, headers, requestBytes
-                );
-                memberFutures.add(mf);
-                mf.whenComplete((resp, err) -> {
-                    if (err != null) {
-                        if (!(err instanceof CancellationException)) {
-                            member.recordFailure();
-                            anyServerError.set(true);
-                        }
-                        completeFanoutIfAllExhausted(
-                            pending, completed, anyServerError, result, isTargetedLocalRead
-                        );
-                    } else {
-                        handleFanoutMemberResponse(
-                            member, resp, completed, pending, anyServerError,
-                            result, isTargetedLocalRead, memberFutures
-                        );
-                    }
-                });
-            }
-
-            result.whenComplete((resp, err) -> {
-                for (final CompletableFuture<Response> f : memberFutures) {
-                    if (!f.isDone()) {
-                        f.cancel(true);
-                    }
-                }
-            });
-
-            return result;
-        });
+        return querySequentially(targeted, line, headers, body, isTargetedLocalRead);
     }
 
     /**
@@ -1181,81 +781,6 @@ public final class GroupResolver implements Slice {
             tryNextSequentialMember(iter, line, headers, requestBytes,
                 isTargetedLocalRead, anyServerError, result);
         });
-    }
-
-    /**
-     * Handle a response from a member in the fanout path.
-     */
-    private void handleFanoutMemberResponse(
-        final MemberSlice member,
-        final Response resp,
-        final AtomicBoolean completed,
-        final AtomicInteger pending,
-        final AtomicBoolean anyServerError,
-        final CompletableFuture<Response> result,
-        final boolean isTargetedLocalRead,
-        final List<CompletableFuture<Response>> memberFutures
-    ) {
-        final RsStatus status = resp.status();
-        if (status == RsStatus.OK || status == RsStatus.PARTIAL_CONTENT
-            || status == RsStatus.NOT_MODIFIED) {
-            if (completed.compareAndSet(false, true)) {
-                member.recordSuccess();
-                result.complete(resp);
-            } else {
-                drainBody(member.name(), resp.body());
-            }
-            completeFanoutIfAllExhausted(
-                pending, completed, anyServerError, result, isTargetedLocalRead
-            );
-        } else if (status == RsStatus.FORBIDDEN) {
-            if (completed.compareAndSet(false, true)) {
-                member.recordSuccess();
-                result.complete(resp);
-            } else {
-                drainBody(member.name(), resp.body());
-            }
-            completeFanoutIfAllExhausted(
-                pending, completed, anyServerError, result, isTargetedLocalRead
-            );
-        } else if (status == RsStatus.NOT_FOUND) {
-            drainBody(member.name(), resp.body());
-            completeFanoutIfAllExhausted(
-                pending, completed, anyServerError, result, isTargetedLocalRead
-            );
-        } else {
-            member.recordFailure();
-            anyServerError.set(true);
-            drainBody(member.name(), resp.body());
-            completeFanoutIfAllExhausted(
-                pending, completed, anyServerError, result, isTargetedLocalRead
-            );
-        }
-    }
-
-    /**
-     * Complete the fanout result when all members are exhausted.
-     */
-    private static void completeFanoutIfAllExhausted(
-        final AtomicInteger pending,
-        final AtomicBoolean completed,
-        final AtomicBoolean anyServerError,
-        final CompletableFuture<Response> result,
-        final boolean isTargetedLocalRead
-    ) {
-        if (pending.decrementAndGet() == 0 && !completed.get()) {
-            if (anyServerError.get()) {
-                if (isTargetedLocalRead) {
-                    result.complete(ResponseBuilder.internalError()
-                        .textBody("Targeted member read failed").build());
-                } else {
-                    result.complete(ResponseBuilder.badGateway()
-                        .textBody("All upstream members failed").build());
-                }
-            } else {
-                result.complete(ResponseBuilder.notFound().build());
-            }
-        }
     }
 
     /**
