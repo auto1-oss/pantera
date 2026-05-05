@@ -705,6 +705,43 @@ public class RepositorySlices {
         return this.cooldown;
     }
 
+    /**
+     * Snapshot of every {@code npm-proxy} repository's storage in
+     * configuration order, paired with its repo name. Used by the prefetch
+     * subsystem's {@link com.auto1.pantera.prefetch.parser.CachedNpmMetadataLookup}
+     * to resolve npm version ranges against locally-cached packuments
+     * without ever issuing an upstream metadata fetch.
+     *
+     * <p>The result is computed afresh on every call so live repo additions
+     * or removals (config reloads) are picked up by callers that wrap the
+     * accessor in a {@code Supplier}. Repos with no storage configured are
+     * skipped silently.</p>
+     *
+     * @return Ordered list of (repoName, storage) pairs for npm-proxy
+     *     repositories; empty when no npm-proxy is configured.
+     * @since 2.2.0
+     */
+    public java.util.List<
+        com.auto1.pantera.prefetch.parser.CachedNpmMetadataLookup.NamedStorage
+    > npmProxyStorages() {
+        final java.util.List<
+            com.auto1.pantera.prefetch.parser.CachedNpmMetadataLookup.NamedStorage
+        > out = new java.util.ArrayList<>();
+        for (final RepoConfig cfg : this.repos.configs()) {
+            if (!"npm-proxy".equals(cfg.type())) {
+                continue;
+            }
+            cfg.storageOpt().ifPresent(
+                store -> out.add(
+                    new com.auto1.pantera.prefetch.parser.CachedNpmMetadataLookup.NamedStorage(
+                        cfg.name(), store
+                    )
+                )
+            );
+        }
+        return out;
+    }
+
     private Optional<Queue<ArtifactEvent>> artifactEvents() {
         return this.settings.artifactMetadata()
             .map(MetadataEventQueues::eventQueue);

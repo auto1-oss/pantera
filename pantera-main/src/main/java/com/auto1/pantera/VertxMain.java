@@ -917,13 +917,22 @@ public final class VertxMain {
             );
             this.prefetchCoordinator.start();
             this.prefetchCoordinator.subscribe(this.settingsCache);
-            // Parser registry: maven + gradle share MavenPomParser. NPM parser
-            // remains uninstalled until Phase 6 wires the metadata lookup
-            // (see Phase 6 audit notes).
+            // Parser registry: maven + gradle share MavenPomParser; npm uses
+            // NpmPackageParser fronted by CachedNpmMetadataLookup, which
+            // resolves version ranges against locally-cached packuments
+            // (NEVER initiates an upstream metadata fetch — pre-fetch must
+            // stay strictly local). The lookup snapshots the npm-proxy
+            // storages on every call so live config reloads (a new
+            // npm-proxy added at runtime) are picked up automatically.
+            final com.auto1.pantera.prefetch.parser.NpmMetadataLookup npmLookup =
+                new com.auto1.pantera.prefetch.parser.CachedNpmMetadataLookup(
+                    slices::npmProxyStorages
+                );
             final java.util.Map<String,
                 com.auto1.pantera.prefetch.parser.PrefetchParser> parsers = java.util.Map.of(
                 "maven-proxy", new com.auto1.pantera.prefetch.parser.MavenPomParser(),
-                "gradle-proxy", new com.auto1.pantera.prefetch.parser.MavenPomParser()
+                "gradle-proxy", new com.auto1.pantera.prefetch.parser.MavenPomParser(),
+                "npm-proxy", new com.auto1.pantera.prefetch.parser.NpmPackageParser(npmLookup)
             );
             final com.auto1.pantera.prefetch.PrefetchDispatcher dispatcher =
                 new com.auto1.pantera.prefetch.PrefetchDispatcher(
