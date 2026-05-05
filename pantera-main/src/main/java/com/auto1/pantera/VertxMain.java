@@ -142,6 +142,14 @@ public final class VertxMain {
     private com.auto1.pantera.prefetch.PrefetchCoordinator prefetchCoordinator;
 
     /**
+     * Prefetch dispatcher (Phase 10). Null until {@link #installPrefetch}
+     * succeeds; held here so {@link #stop()} can drain its async
+     * dispatch executor in-between {@link com.auto1.pantera.prefetch.PrefetchCoordinator#stop()}
+     * and {@link com.auto1.pantera.settings.runtime.RuntimeSettingsCache#stop()}.
+     */
+    private com.auto1.pantera.prefetch.PrefetchDispatcher prefetchDispatcher;
+
+    /**
      * Prefetch metrics (Phase 4 / Task 15). Null until
      * {@link #installPrefetch} succeeds; passed into
      * {@link com.auto1.pantera.api.v1.AsyncApiVerticle} so the
@@ -934,21 +942,20 @@ public final class VertxMain {
                 "gradle-proxy", new com.auto1.pantera.prefetch.parser.MavenPomParser(),
                 "npm-proxy", new com.auto1.pantera.prefetch.parser.NpmPackageParser(npmLookup)
             );
-            final com.auto1.pantera.prefetch.PrefetchDispatcher dispatcher =
-                new com.auto1.pantera.prefetch.PrefetchDispatcher(
-                    this.settingsCache::prefetchTuning,
-                    slices::prefetchEnabledFor,
-                    slices::upstreamUrlOf,
-                    parsers,
-                    slices::repoTypeOf,
-                    this.prefetchCoordinator::submit
-                );
+            this.prefetchDispatcher = new com.auto1.pantera.prefetch.PrefetchDispatcher(
+                this.settingsCache::prefetchTuning,
+                slices::prefetchEnabledFor,
+                slices::upstreamUrlOf,
+                parsers,
+                slices::repoTypeOf,
+                this.prefetchCoordinator::submit
+            );
             // Register the dispatcher's onCacheWrite hook globally so every
             // BaseCachedProxySlice adapter — Maven CachedProxySlice today,
             // future adapters too — receives the callback without per-
             // adapter ctor surgery.
             com.auto1.pantera.http.cache.CacheWriteCallbackRegistry.instance()
-                .setSharedCallback(dispatcher::onCacheWrite);
+                .setSharedCallback(this.prefetchDispatcher::onCacheWrite);
             EcsLogger.info("com.auto1.pantera.prefetch")
                 .message("Prefetch subsystem started (Task 19b+c)")
                 .eventCategory("configuration")
@@ -1054,6 +1061,29 @@ public final class VertxMain {
                     .message("Failed to stop PrefetchCoordinator")
                     .eventCategory("web")
                     .eventAction("prefetch_stop")
+                    .eventOutcome("failure")
+                    .error(e)
+                    .log();
+            }
+        }
+        // 3a-bis. Drain the async PrefetchDispatcher executor (Phase 10).
+        //         Runs after coordinator.stop() so any in-flight dispatch
+        //         that lands a submit during drain hits a stopped
+        //         coordinator queue gracefully (already log-and-swallow).
+        if (this.prefetchDispatcher != null) {
+            try {
+                this.prefetchDispatcher.stop();
+                EcsLogger.info("com.auto1.pantera.prefetch")
+                    .message("PrefetchDispatcher stopped")
+                    .eventCategory("web")
+                    .eventAction("prefetch_dispatcher_stop")
+                    .eventOutcome("success")
+                    .log();
+            } catch (final Exception e) {
+                EcsLogger.error("com.auto1.pantera.prefetch")
+                    .message("Failed to stop PrefetchDispatcher")
+                    .eventCategory("web")
+                    .eventAction("prefetch_dispatcher_stop")
                     .eventOutcome("failure")
                     .error(e)
                     .log();

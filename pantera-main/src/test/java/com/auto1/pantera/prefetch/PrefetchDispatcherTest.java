@@ -13,16 +13,25 @@ package com.auto1.pantera.prefetch;
 import com.auto1.pantera.http.cache.CacheWriteEvent;
 import com.auto1.pantera.prefetch.parser.PrefetchParser;
 import com.auto1.pantera.settings.runtime.PrefetchTuning;
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -33,8 +42,13 @@ import org.junit.jupiter.api.Test;
  * submitted tasks; {@link RecordingParser} records calls and may either
  * return a fixed list or throw, per-test.</p>
  *
+ * <p>Tests use a single-thread executor (or a deliberately-tight
+ * bounded executor for queue-full scenarios) so the async dispatch
+ * completes deterministically before assertions.</p>
+ *
  * @since 2.2.0
  */
+@SuppressWarnings({"PMD.AvoidUsingHardCodedIP", "PMD.TooManyMethods", "PMD.ExcessiveImports"})
 class PrefetchDispatcherTest {
 
     private static final String REPO = "maven-central";
@@ -42,8 +56,33 @@ class PrefetchDispatcherTest {
     private static final String UPSTREAM = "https://repo1.maven.org/maven2";
     private static final String URL_PATH = "com/example/foo/1.0/foo-1.0.pom";
 
+    private Path eventFile;
+    private ExecutorService executor;
+
+    @BeforeEach
+    void setUp() throws IOException {
+        this.eventFile = Files.createTempFile("pantera-prefetch-test-", ".bin");
+        Files.writeString(this.eventFile, "fake pom bytes");
+        this.executor = Executors.newSingleThreadExecutor();
+    }
+
+    @AfterEach
+    void tearDown() throws IOException {
+        if (this.executor != null && !this.executor.isShutdown()) {
+            this.executor.shutdown();
+            try {
+                this.executor.awaitTermination(2, TimeUnit.SECONDS);
+            } catch (final InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        if (this.eventFile != null) {
+            Files.deleteIfExists(this.eventFile);
+        }
+    }
+
     @Test
-    void noOpWhenGlobalKillSwitchOff() {
+    void noOpWhenGlobalKillSwitchOff() throws Exception {
         final PrefetchTuning off = new PrefetchTuning(
             false, 64, 16,
             java.util.Map.of("maven", 16, "gradle", 16, "npm", 4),
@@ -59,10 +98,12 @@ class PrefetchDispatcherTest {
             repo -> UPSTREAM,
             Map.of(REPO_TYPE, parser),
             repo -> REPO_TYPE,
-            submitter
+            submitter,
+            this.executor
         );
 
         dispatcher.onCacheWrite(event());
+        drain(this.executor);
 
         MatcherAssert.assertThat("submitter must not see any submits when global flag is off",
             submitter.submitCount(), Matchers.equalTo(0));
@@ -71,7 +112,7 @@ class PrefetchDispatcherTest {
     }
 
     @Test
-    void noOpWhenPerRepoFlagFalse() {
+    void noOpWhenPerRepoFlagFalse() throws Exception {
         final RecordingSubmitter submitter = new RecordingSubmitter();
         final RecordingParser parser = new RecordingParser(
             List.of(Coordinate.maven("com.example", "bar", "1.0"))
@@ -82,10 +123,12 @@ class PrefetchDispatcherTest {
             repo -> UPSTREAM,
             Map.of(REPO_TYPE, parser),
             repo -> REPO_TYPE,
-            submitter
+            submitter,
+            this.executor
         );
 
         dispatcher.onCacheWrite(event());
+        drain(this.executor);
 
         MatcherAssert.assertThat(submitter.submitCount(), Matchers.equalTo(0));
         MatcherAssert.assertThat("parser must NOT be invoked when repo flag is false",
@@ -93,7 +136,7 @@ class PrefetchDispatcherTest {
     }
 
     @Test
-    void noOpWhenNoParserRegisteredForRepoType() {
+    void noOpWhenNoParserRegisteredForRepoType() throws Exception {
         final RecordingSubmitter submitter = new RecordingSubmitter();
         final PrefetchDispatcher dispatcher = new PrefetchDispatcher(
             PrefetchTuning::defaults,
@@ -101,16 +144,18 @@ class PrefetchDispatcherTest {
             repo -> UPSTREAM,
             Map.of(),
             repo -> "file-proxy",
-            submitter
+            submitter,
+            this.executor
         );
 
         Assertions.assertDoesNotThrow(() -> dispatcher.onCacheWrite(event()));
+        drain(this.executor);
 
         MatcherAssert.assertThat(submitter.submitCount(), Matchers.equalTo(0));
     }
 
     @Test
-    void submitsOneTaskPerParsedDependency() {
+    void submitsOneTaskPerParsedDependency() throws Exception {
         final List<Coordinate> three = List.of(
             Coordinate.maven("com.example", "a", "1.0"),
             Coordinate.maven("com.example", "b", "2.0"),
@@ -124,10 +169,12 @@ class PrefetchDispatcherTest {
             repo -> UPSTREAM,
             Map.of(REPO_TYPE, parser),
             repo -> REPO_TYPE,
-            submitter
+            submitter,
+            this.executor
         );
 
         dispatcher.onCacheWrite(event());
+        drain(this.executor);
 
         MatcherAssert.assertThat(parser.parseCount(), Matchers.equalTo(1));
         MatcherAssert.assertThat(submitter.submitCount(), Matchers.equalTo(3));
@@ -147,7 +194,7 @@ class PrefetchDispatcherTest {
     }
 
     @Test
-    void swallowsThrowableFromCallback() {
+    void swallowsThrowableFromCallback() throws Exception {
         final RecordingSubmitter submitter = new RecordingSubmitter();
         final RecordingParser parser = new RecordingParser(null) {
             @Override
@@ -162,12 +209,14 @@ class PrefetchDispatcherTest {
             repo -> UPSTREAM,
             Map.of(REPO_TYPE, parser),
             repo -> REPO_TYPE,
-            submitter
+            submitter,
+            this.executor
         );
 
         // Hard contract from Task 11: a misbehaving callback must NEVER
         // bubble up to the cache-write path. We assert no throw.
         Assertions.assertDoesNotThrow(() -> dispatcher.onCacheWrite(event()));
+        drain(this.executor);
 
         MatcherAssert.assertThat(parser.parseCount(), Matchers.equalTo(1));
         MatcherAssert.assertThat("no tasks submitted when parser failed",
@@ -175,11 +224,169 @@ class PrefetchDispatcherTest {
     }
 
     // ============================================================
+    //  Phase 10 (async dispatch) tests
+    // ============================================================
+
+    /**
+     * Verifies the cache-write hot path returns immediately even when the
+     * parser is artificially slow. With sync dispatch, this test would
+     * block ~100ms; with async dispatch the hot path completes in ms.
+     */
+    @Test
+    void onCacheWrite_returnsImmediately_evenWhenParserIsSlow() throws Exception {
+        final long parserSleepMs = 200L;
+        final RecordingSubmitter submitter = new RecordingSubmitter();
+        final RecordingParser slow = new RecordingParser(
+            List.of(Coordinate.maven("com.example", "x", "1.0"))
+        ) {
+            @Override
+            public List<Coordinate> parse(final Path bytesOnDisk) {
+                try {
+                    Thread.sleep(parserSleepMs);
+                } catch (final InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
+                return super.parse(bytesOnDisk);
+            }
+        };
+        final PrefetchDispatcher dispatcher = new PrefetchDispatcher(
+            PrefetchTuning::defaults,
+            repo -> Boolean.TRUE,
+            repo -> UPSTREAM,
+            Map.of(REPO_TYPE, slow),
+            repo -> REPO_TYPE,
+            submitter,
+            this.executor
+        );
+
+        final long t0 = System.nanoTime();
+        dispatcher.onCacheWrite(event());
+        final long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0);
+
+        MatcherAssert.assertThat(
+            "hot path must return well before the parser sleep elapses (sync would be >= "
+                + parserSleepMs + "ms)",
+            elapsedMs, Matchers.lessThan(parserSleepMs / 2)
+        );
+        // Drain the executor so the slow parse completes before tearDown
+        // shuts the pool down.
+        drain(this.executor);
+        MatcherAssert.assertThat("parser eventually invoked off-thread",
+            slow.parseCount(), Matchers.equalTo(1));
+        MatcherAssert.assertThat("submit eventually fires off-thread",
+            submitter.submitCount(), Matchers.equalTo(1));
+    }
+
+    /**
+     * Saturates a 1-thread executor with a 1-slot queue and a parser that
+     * blocks on a latch — additional submits should reject and increment
+     * the dropped-events counter.
+     */
+    @Test
+    void onCacheWrite_dropsWhenQueueFull() throws Exception {
+        final ThreadPoolExecutor tight = new ThreadPoolExecutor(
+            1, 1, 0L, TimeUnit.MILLISECONDS,
+            new ArrayBlockingQueue<>(1),
+            new ThreadPoolExecutor.AbortPolicy()
+        );
+        final CountDownLatch holdParser = new CountDownLatch(1);
+        final RecordingSubmitter submitter = new RecordingSubmitter();
+        final RecordingParser blocking = new RecordingParser(List.of()) {
+            @Override
+            public List<Coordinate> parse(final Path bytesOnDisk) {
+                try {
+                    holdParser.await(2, TimeUnit.SECONDS);
+                } catch (final InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
+                return super.parse(bytesOnDisk);
+            }
+        };
+        final PrefetchDispatcher dispatcher = new PrefetchDispatcher(
+            PrefetchTuning::defaults,
+            repo -> Boolean.TRUE,
+            repo -> UPSTREAM,
+            Map.of(REPO_TYPE, blocking),
+            repo -> REPO_TYPE,
+            submitter,
+            tight
+        );
+
+        try {
+            // Burst: 1 occupies the worker, 1 fills the queue, the rest reject.
+            for (int i = 0; i < 6; i++) {
+                dispatcher.onCacheWrite(event());
+            }
+
+            MatcherAssert.assertThat(
+                "queue-full burst must increment droppedEventsTotal",
+                dispatcher.droppedEventsTotal(), Matchers.greaterThanOrEqualTo(1L)
+            );
+        } finally {
+            holdParser.countDown();
+            tight.shutdown();
+            tight.awaitTermination(2, TimeUnit.SECONDS);
+        }
+    }
+
+    /**
+     * stop() must drain in-flight async dispatches before returning.
+     */
+    @Test
+    void stop_drainsInflightDispatches() throws Exception {
+        // Use this dispatcher's own executor (not the field one) so we
+        // can shut it down explicitly via dispatcher.stop().
+        final ExecutorService ownExec = Executors.newFixedThreadPool(2);
+        final RecordingSubmitter submitter = new RecordingSubmitter();
+        final long parserSleepMs = 50L;
+        final RecordingParser slow = new RecordingParser(
+            List.of(Coordinate.maven("com.example", "y", "1.0"))
+        ) {
+            @Override
+            public List<Coordinate> parse(final Path bytesOnDisk) {
+                try {
+                    Thread.sleep(parserSleepMs);
+                } catch (final InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
+                return super.parse(bytesOnDisk);
+            }
+        };
+        final PrefetchDispatcher dispatcher = new PrefetchDispatcher(
+            PrefetchTuning::defaults,
+            repo -> Boolean.TRUE,
+            repo -> UPSTREAM,
+            Map.of(REPO_TYPE, slow),
+            repo -> REPO_TYPE,
+            submitter,
+            ownExec
+        );
+
+        for (int i = 0; i < 5; i++) {
+            dispatcher.onCacheWrite(event());
+        }
+        dispatcher.stop();
+
+        MatcherAssert.assertThat("all 5 dispatches must have run before stop returned",
+            slow.parseCount(), Matchers.equalTo(5));
+        MatcherAssert.assertThat("all 5 submits must have fired before stop returned",
+            submitter.submitCount(), Matchers.equalTo(5));
+    }
+
+    // ============================================================
     //  Helpers
     // ============================================================
 
-    private static CacheWriteEvent event() {
-        return new CacheWriteEvent(REPO, URL_PATH, Paths.get("/tmp/fake.pom"), 42L, Instant.now());
+    private CacheWriteEvent event() {
+        return new CacheWriteEvent(REPO, URL_PATH, this.eventFile, 42L, Instant.now());
+    }
+
+    /** Drain the executor so async work finishes before assertions. */
+    private static void drain(final ExecutorService exec) throws InterruptedException {
+        exec.shutdown();
+        if (!exec.awaitTermination(5, TimeUnit.SECONDS)) {
+            throw new IllegalStateException("Executor did not drain in time");
+        }
     }
 
     /**

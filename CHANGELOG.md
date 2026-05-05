@@ -31,7 +31,10 @@ All settings round-trip through `RuntimeSettingsCache` with PostgreSQL `LISTEN/N
 | `http_client.http2_multiplexing_limit`                         | 100     | Streams per connection                                 |
 | `prefetch.enabled`                                             | true    | Master switch                                          |
 | `prefetch.concurrency.global`                                  | 64      | Coordinator-wide concurrent fetches                    |
-| `prefetch.concurrency.per_upstream`                            | 16      | Per-host semaphore                                     |
+| `prefetch.concurrency.per_upstream`                            | 16      | Per-host semaphore (fallback for ecosystems without override) |
+| `prefetch.concurrency.per_upstream.maven`                      | 16      | maven per-host cap (overrides global)                  |
+| `prefetch.concurrency.per_upstream.gradle`                     | 16      | gradle per-host cap (overrides global)                 |
+| `prefetch.concurrency.per_upstream.npm`                        | 4       | npm per-host cap — lower so foreground install wins    |
 | `prefetch.queue.capacity`                                      | 2048    | Bounded coordinator queue                              |
 | `prefetch.worker_threads`                                      | 8       | Dedicated worker pool                                  |
 | `prefetch.circuit_breaker.drop_threshold_per_sec`              | 50      | Drops/s above which the breaker disables prefetch      |
@@ -57,6 +60,50 @@ Per-repo override: `RepoConfig.prefetchEnabled` (default true) — toggleable fr
 - To disable pre-fetch globally: `PATCH /api/v1/settings/runtime/prefetch.enabled` with `{"value":false}`.
 - To disable pre-fetch for a single repo: PUT the repo config with `settings.prefetch: false`.
 - Performance Tuning admin UI page exposes all of the above.
+
+### Per-ecosystem prefetch concurrency tunables (new)
+
+Three new runtime settings let operators tune `prefetch.concurrency.per_upstream`
+per ecosystem. The global key remains as the fallback for ecosystems without
+an explicit override.
+
+| Setting                                    | Default | Effect                                                                       |
+|--------------------------------------------|---------|------------------------------------------------------------------------------|
+| `prefetch.concurrency.per_upstream.maven`  | 16      | Cap on in-flight maven prefetch GETs to one upstream host                    |
+| `prefetch.concurrency.per_upstream.gradle` | 16      | Same, gradle                                                                 |
+| `prefetch.concurrency.per_upstream.npm`    | **4**   | Lower default — npm install issues bursty parallel tarball requests; reserving most upstream slots for the foreground keeps cold-install latency competitive with direct npmjs |
+
+Lookup at submit-time uses the lower-cased ecosystem name (`Coordinate.Ecosystem.name()`);
+unknown ecosystems fall back to the global `prefetch.concurrency.per_upstream`. The
+per-host semaphore is created with the ecosystem-specific cap on first sight of a
+host, so two upstreams of different ecosystems get different caps and two upstreams
+of the same ecosystem share the same cap value (with distinct semaphore instances).
+
+Cold-cache `npm install express` (10-iteration median, 2026-05-05):
+- Before this change (npm prefetch with global 16): 5.53 s p50 (4.37× direct)
+- After (npm = 4, this commit): 5.76 s p50 (4.74× direct) — within run-to-run noise
+- After (npm = 2, manual override): 5.09 s p50 (3.92× direct)
+- After (npm = 1, manual override): 5.17 s p50 (3.95× direct)
+- Direct registry.npmjs.org baseline: 1.21 s p50
+
+The acceptance bar of ≤1.5× was **not met** at any setting. Lowering the npm
+per-upstream cap below 4 produced no further improvement (3.92× at 2; 3.95× at
+1). This rules out upstream pool contention from prefetch as the dominant
+cause of the cold-cache npm regression — at npm=1 the dispatcher can issue
+at most one in-flight prefetch per host, leaving 99 % of the upstream pool
+free for the foreground install, and the ratio still sits at 3.95×. The
+residual latency must therefore be in the per-request handler chain (group
+fanout, single-flight dedup, cooldown filter, cache writer) for npm
+metadata + tarball requests, not in the prefetch coordinator. The keys are
+shipped at the npm=4 default anyway; they cost nothing when the bottleneck
+is elsewhere and they are immediately useful the day a prefetch-vs-foreground
+pool fight does become the dominant cost.
+
+Maven `sonar-maven-plugin` cold bench unchanged (10-iteration median): 13.74 s
+(maven default still 16; range 13.34–15.53 s, mean 14.00 s, stdev 0.66 s).
+Within run-to-run noise of the baseline 13.01 s — no regression.
+Bench artefacts: `performance/results/cold-bench-npm-10x.{csv,md}`,
+`performance/results/cold-bench-10x.{csv,md}`.
 
 ### 🏗️ Architectural changes
 
