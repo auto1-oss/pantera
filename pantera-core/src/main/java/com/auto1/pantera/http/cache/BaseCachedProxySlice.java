@@ -303,33 +303,57 @@ public abstract class BaseCachedProxySlice implements Slice {
     public final CompletableFuture<Response> response(
         final RequestLine line, final Headers headers, final Content body
     ) {
+        final long entryNs = System.nanoTime();
         final String path = line.uri().getPath();
         if ("/".equals(path) || path.isEmpty()) {
-            return this.handleRootPath(line, headers);
+            return this.handleRootPath(line, headers)
+                .whenComplete((r, e) -> recordProxyPhase("root_path", entryNs));
         }
         final Key key = new KeyFromPath(path);
         // Step 1: Negative cache fast-fail
         if (this.negativeCache != null
             && this.negativeCache.isKnown404(this.negKey(path))) {
             this.logDebug("Negative cache hit", path);
+            recordProxyPhase("negative_cache_short_circuit", entryNs);
             return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
         }
         // Step 2: Pre-process hook (adapter-specific short-circuit)
+        final long preProcessNs = System.nanoTime();
         final Optional<CompletableFuture<Response>> pre =
             this.preProcess(line, headers, key, path);
         if (pre.isPresent()) {
-            return pre.get();
+            return pre.get().whenComplete(
+                (r, e) -> recordProxyPhase("pre_process_branch", preProcessNs)
+            );
         }
         // Step 3: Check if path is cacheable at all
         if (!this.isCacheable(path)) {
-            return this.fetchDirect(line, key, headers, new Login(headers).getValue());
+            return this.fetchDirect(line, key, headers, new Login(headers).getValue())
+                .whenComplete((r, e) -> recordProxyPhase("fetch_direct_uncacheable", entryNs));
         }
         // Step 4: Cache-first (offline-safe) — check cache before any network calls
         if (this.storageBacked) {
-            return this.cacheFirstFlow(line, headers, key, path);
+            return this.cacheFirstFlow(line, headers, key, path)
+                .whenComplete((r, e) -> recordProxyPhase("cache_first_flow", entryNs));
         }
         // No persistent storage — go directly to upstream
-        return this.fetchDirect(line, key, headers, new Login(headers).getValue());
+        return this.fetchDirect(line, key, headers, new Login(headers).getValue())
+            .whenComplete((r, e) -> recordProxyPhase("fetch_direct_no_storage", entryNs));
+    }
+
+    /**
+     * Phase 7.5 profiler helper — record per-phase latency on the proxy
+     * cache slice. Tagged with {@code repo_name} so individual proxies are
+     * separable in the dashboard.
+     *
+     * @param phase   phase name (e.g. {@code "cache_first_flow"})
+     * @param startNs nanoTime captured at phase start
+     */
+    private void recordProxyPhase(final String phase, final long startNs) {
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
+                .recordProxyPhaseDuration(this.repoName, phase, System.nanoTime() - startNs);
+        }
     }
 
     /**
@@ -531,15 +555,21 @@ public abstract class BaseCachedProxySlice implements Slice {
     ) {
         // Checksum sidecars: serve from storage if present, else try upstream
         if (this.isChecksumSidecar(path)) {
-            return this.serveChecksumFromStorage(line, key, headers, new Login(headers).getValue());
+            final long sidecarStartNs = System.nanoTime();
+            return this.serveChecksumFromStorage(line, key, headers, new Login(headers).getValue())
+                .whenComplete((r, e) -> recordProxyPhase("serve_checksum_sidecar", sidecarStartNs));
         }
         final CachedArtifactMetadataStore store = this.metadataStore.orElseThrow();
+        final long cacheLoadStartNs = System.nanoTime();
         return this.cache.load(key, Remote.EMPTY, CacheControl.Standard.ALWAYS)
             .thenCompose(cached -> {
+                recordProxyPhase("cache_load", cacheLoadStartNs);
                 if (cached.isPresent()) {
                     this.logDebug("Cache hit", path);
                     // Fast path: serve from cache with async metadata
+                    final long metaStartNs = System.nanoTime();
                     return store.load(key).thenApply(meta -> {
+                        recordProxyPhase("metadata_load_on_hit", metaStartNs);
                         final ResponseBuilder builder = ResponseBuilder.ok()
                             .body(cached.get());
                         meta.ifPresent(m -> builder.headers(stripContentEncoding(m.headers())));
@@ -547,7 +577,9 @@ public abstract class BaseCachedProxySlice implements Slice {
                     });
                 }
                 // Cache miss: evaluate cooldown then fetch
-                return this.evaluateCooldownAndFetch(line, headers, key, path, store);
+                final long missStartNs = System.nanoTime();
+                return this.evaluateCooldownAndFetch(line, headers, key, path, store)
+                    .whenComplete((r, e) -> recordProxyPhase("cooldown_and_fetch_miss", missStartNs));
             }).toCompletableFuture();
     }
 

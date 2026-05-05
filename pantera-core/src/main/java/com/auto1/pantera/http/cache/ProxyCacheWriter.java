@@ -335,11 +335,39 @@ public final class ProxyCacheWriter {
                 Result.err(new Fault.StorageUnavailable(ex, primaryKey.string()))
             );
         }
+        // Phase 7.5 perf (2026-05): fire blocking sidecar fetches IN PARALLEL
+        // with the primary fetch instead of waiting for the primary to finish
+        // streaming before kicking off the sidecar request. The primary +
+        // .sha1 are independent upstream resources sharing the same H2 pool;
+        // serialising them added one full RTT (~30 ms) per cache miss, which
+        // measured as 7-8 s of wall time across a 263-cache-miss cold mvn
+        // walk (Phase 7.5 profiler: pre_process_branch_sum 31.45 s / 478
+        // calls). Non-blocking sidecars (md5, sha256, sha512 by default) are
+        // already deferred — only blocking sidecars (sha1) need to overlap.
+        final Map<ChecksumAlgo, CompletableFuture<SidecarFetch>> blockingSidecarFutures =
+            new EnumMap<>(ChecksumAlgo.class);
+        for (final Map.Entry<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> entry
+                : sidecarFetchers.entrySet()) {
+            if (nonBlocking.contains(entry.getKey())) {
+                continue;
+            }
+            blockingSidecarFutures.put(
+                entry.getKey(),
+                entry.getValue().get()
+                    .toCompletableFuture()
+                    .thenApply(opt -> new SidecarFetch(
+                        entry.getKey(), opt.map(ProxyCacheWriter::readSmall)
+                    ))
+                    .exceptionally(err -> new SidecarFetch(
+                        entry.getKey(), Optional.empty()
+                    ))
+            );
+        }
         return fetchPrimary.get()
             .thenCompose(stream -> this.streamPrimary(stream, tempFile))
             .thenCompose(digests -> this.verifyOnly(
                 primaryKey, upstreamUri, tempFile, digests,
-                sidecarFetchers, nonBlocking, ctx
+                sidecarFetchers, nonBlocking, blockingSidecarFutures, ctx
             ))
             .exceptionally(err -> {
                 deleteQuietly(tempFile);
@@ -463,15 +491,13 @@ public final class ProxyCacheWriter {
         final Map<ChecksumAlgo, String> computed,
         final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> sidecarFetchers,
         final Set<ChecksumAlgo> nonBlocking,
+        final Map<ChecksumAlgo, CompletableFuture<SidecarFetch>> blockingSidecarFutures,
         final RequestContext ctx
     ) {
-        final List<ChecksumAlgo> blockingAlgos = new ArrayList<>();
         final List<ChecksumAlgo> deferredAlgos = new ArrayList<>();
         for (final ChecksumAlgo algo : sidecarFetchers.keySet()) {
             if (nonBlocking.contains(algo)) {
                 deferredAlgos.add(algo);
-            } else {
-                blockingAlgos.add(algo);
             }
         }
         for (final ChecksumAlgo algo : deferredAlgos) {
@@ -479,16 +505,13 @@ public final class ProxyCacheWriter {
                 primaryKey, upstreamUri, algo, sidecarFetchers.get(algo), computed, ctx
             );
         }
+        // Phase 7.5 perf: blocking sidecar fetches were started in parallel
+        // with the primary fetch in writeAndVerify(); just wait on the
+        // already-in-flight futures here.
         @SuppressWarnings("unchecked")
         final CompletableFuture<SidecarFetch>[] futures =
-            new CompletableFuture[blockingAlgos.size()];
-        for (int i = 0; i < blockingAlgos.size(); i++) {
-            final ChecksumAlgo algo = blockingAlgos.get(i);
-            futures[i] = sidecarFetchers.get(algo).get()
-                .toCompletableFuture()
-                .thenApply(opt -> new SidecarFetch(algo, opt.map(ProxyCacheWriter::readSmall)))
-                .exceptionally(err -> new SidecarFetch(algo, Optional.empty()));
-        }
+            blockingSidecarFutures.values()
+                .toArray(new CompletableFuture[0]);
         return CompletableFuture.allOf(futures).thenCompose(ignored -> {
             final Map<ChecksumAlgo, byte[]> sidecars = new EnumMap<>(ChecksumAlgo.class);
             for (final CompletableFuture<SidecarFetch> f : futures) {

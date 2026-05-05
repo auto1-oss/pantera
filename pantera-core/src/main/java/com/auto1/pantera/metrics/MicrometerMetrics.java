@@ -451,6 +451,58 @@ public final class MicrometerMetrics {
             .record(java.time.Duration.ofMillis(durationMs));
     }
 
+    /**
+     * Record the duration of a single phase inside the group-resolution
+     * handler chain (Phase 7.5 profiler instrumentation).
+     *
+     * <p>Emits {@code pantera_handler_phase_seconds{group_name,phase}} so
+     * dashboards can compute per-phase wall contribution as
+     * {@code phase_sum / total_count}. Phases overlap when async work runs
+     * concurrently — the sum across phases will exceed wall time when this
+     * happens, which is itself a useful signal.
+     *
+     * @param groupName group repository name
+     * @param phase     phase name (e.g. {@code "index_lookup"},
+     *                  {@code "targeted_local_read"},
+     *                  {@code "proxy_only_fanout"},
+     *                  {@code "full_two_phase_fanout"})
+     * @param durationNs phase duration in nanoseconds
+     */
+    public void recordHandlerPhaseDuration(
+        final String groupName, final String phase, final long durationNs
+    ) {
+        Timer.builder("pantera.handler.phase")
+            .description("Per-stage latency inside the group-resolution handler "
+                + "(Phase 7.5 profiler instrumentation)")
+            .tags("group_name", groupName, "phase", phase)
+            .register(registry)
+            .record(java.time.Duration.ofNanos(durationNs));
+    }
+
+    /**
+     * Record per-phase latency on a proxy cache slice
+     * ({@link com.auto1.pantera.http.cache.BaseCachedProxySlice}).
+     *
+     * <p>Emits {@code pantera_proxy_phase_seconds{repo_name,phase}} so we
+     * can decompose the in-pantera per-request handler time on the
+     * member-slice side (cache-hit serve, pre-process branch, fetch-direct,
+     * etc.) — the missing half of the Phase 7.5 profiler.
+     *
+     * @param repoName  repository name (e.g. {@code "maven_proxy"})
+     * @param phase     phase name (e.g. {@code "cache_first_flow"})
+     * @param durationNs phase duration in nanoseconds
+     */
+    public void recordProxyPhaseDuration(
+        final String repoName, final String phase, final long durationNs
+    ) {
+        Timer.builder("pantera.proxy.phase")
+            .description("Per-stage latency inside the proxy cache slice "
+                + "(Phase 7.5 profiler instrumentation)")
+            .tags("repo_name", repoName, "phase", phase)
+            .register(registry)
+            .record(java.time.Duration.ofNanos(durationNs));
+    }
+
     // ========== HTTP/2 Negotiation Metrics ==========
 
     /**

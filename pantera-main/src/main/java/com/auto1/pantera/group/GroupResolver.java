@@ -355,9 +355,14 @@ public final class GroupResolver implements Slice {
         final Content body,
         final String path
     ) {
+        // Phase 7.5 profiler: total resolve() wall — should track
+        // pantera_group_resolution_duration_seconds_sum, but with
+        // strictly-equal counts so per-phase ratios are honest.
+        final long resolveStartNs = System.nanoTime();
         // ---- No index configured → full two-phase fanout ----
         if (this.artifactIndex.isEmpty()) {
-            return fullTwoPhaseFanout(line, headers, body);
+            return fullTwoPhaseFanout(line, headers, body)
+                .whenComplete((r, e) -> recordPhase("resolve_total", resolveStartNs));
         }
 
         final ArtifactIndex idx = this.artifactIndex.get();
@@ -369,7 +374,8 @@ public final class GroupResolver implements Slice {
                 .eventAction("group_direct_fanout")
                 .field("url.path", path)
                 .log();
-            return fullTwoPhaseFanout(line, headers, body);
+            return fullTwoPhaseFanout(line, headers, body)
+                .whenComplete((r, e) -> recordPhase("resolve_total", resolveStartNs));
         }
 
         final String artifactName = parsedName.get();
@@ -379,28 +385,54 @@ public final class GroupResolver implements Slice {
         // real Version column. Uses NegativeCacheKey.fromPath solely to parse
         // the path; we keep our own (ArtifactNameParser-derived) artifactName
         // to stay consistent with the index lookup format.
+        final long negCacheStartNs = System.nanoTime();
         final String parsedVersion = NegativeCacheKey
             .fromPath(this.group, this.repoType, path).artifactVersion();
         final NegativeCacheKey negCacheKey = new NegativeCacheKey(
             this.group, this.repoType, artifactName, parsedVersion
         );
-        if (this.negativeCache.isKnown404(negCacheKey)) {
+        final boolean known404 = this.negativeCache.isKnown404(negCacheKey);
+        recordPhase("negative_cache_check", negCacheStartNs);
+        if (known404) {
             EcsLogger.debug("com.auto1.pantera.group")
                 .message("Negative cache hit, returning 404 without DB query")
                 .eventCategory("database")
                 .eventAction("group_negative_cache_hit")
                 .field("url.path", path)
                 .log();
+            recordPhase("resolve_total", resolveStartNs);
             return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
         }
 
         // ---- STEP 2: Query index ----
+        // Phase 7.5 profiler: time the index lookup itself, separate from
+        // the downstream targeted/fanout work. Recorded both on success
+        // and on failure paths so the sum / count metric is honest.
+        final long indexStartNs = System.nanoTime();
         return idx.locateByName(artifactName)
             .thenApply(IndexOutcome::fromLegacy)
             .exceptionally(ex -> new IndexOutcome.DBFailure(ex, "locateByName:" + artifactName))
-            .thenCompose(outcome -> handleIndexOutcome(
-                outcome, line, headers, body, path, artifactName, negCacheKey
-            ));
+            .thenCompose(outcome -> {
+                recordPhase("index_lookup", indexStartNs);
+                return handleIndexOutcome(
+                    outcome, line, headers, body, path, artifactName, negCacheKey
+                );
+            }).whenComplete((r, e) -> recordPhase("resolve_total", resolveStartNs));
+    }
+
+    /**
+     * Phase 7.5 profiler helper — record a phase end-time delta against
+     * {@link com.auto1.pantera.metrics.MicrometerMetrics#recordHandlerPhaseDuration}.
+     * Cheap when metrics are not initialized (single static volatile read).
+     *
+     * @param phase   phase name tag (e.g. {@code "index_lookup"})
+     * @param startNs nanoTime captured at phase start
+     */
+    private void recordPhase(final String phase, final long startNs) {
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
+                .recordHandlerPhaseDuration(this.group, phase, System.nanoTime() - startNs);
+        }
     }
 
     /**
@@ -463,6 +495,23 @@ public final class GroupResolver implements Slice {
      * change from the old GroupSlice.
      */
     private CompletableFuture<Response> targetedLocalRead(
+        final List<String> repos,
+        final RequestLine line,
+        final Headers headers,
+        final Content body,
+        final String path,
+        final String artifactName,
+        final NegativeCacheKey negCacheKey
+    ) {
+        // Phase 7.5 profiler: time the targeted local-read path end-to-end
+        // including the (possible) TOCTOU fallthrough into proxy fanout.
+        final long phaseStartNs = System.nanoTime();
+        return targetedLocalReadInternal(
+            repos, line, headers, body, path, artifactName, negCacheKey
+        ).whenComplete((r, e) -> recordPhase("targeted_local_read", phaseStartNs));
+    }
+
+    private CompletableFuture<Response> targetedLocalReadInternal(
         final List<String> repos,
         final RequestLine line,
         final Headers headers,
@@ -681,6 +730,18 @@ public final class GroupResolver implements Slice {
      * in the index, fanout will skip hosted, and the request 404s.
      */
     private CompletableFuture<Response> proxyOnlyFanout(
+        final RequestLine line,
+        final Headers headers,
+        final Content body,
+        final String artifactName,
+        final NegativeCacheKey negCacheKey
+    ) {
+        final long phaseStartNs = System.nanoTime();
+        return proxyOnlyFanoutInternal(line, headers, body, artifactName, negCacheKey)
+            .whenComplete((r, e) -> recordPhase("proxy_only_fanout", phaseStartNs));
+    }
+
+    private CompletableFuture<Response> proxyOnlyFanoutInternal(
         final RequestLine line,
         final Headers headers,
         final Content body,
@@ -929,11 +990,14 @@ public final class GroupResolver implements Slice {
         final Headers headers,
         final Content body
     ) {
+        final long phaseStartNs = System.nanoTime();
         final List<MemberSlice> eligible = filterByRoutingRules(line.uri().getPath());
         if (eligible.isEmpty()) {
+            recordPhase("full_two_phase_fanout", phaseStartNs);
             return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
         }
-        return queryHostedFirstThenProxy(eligible, line, headers, body);
+        return queryHostedFirstThenProxy(eligible, line, headers, body)
+            .whenComplete((r, e) -> recordPhase("full_two_phase_fanout", phaseStartNs));
     }
 
     /**
