@@ -90,11 +90,27 @@ public final class NpmProxyAdapter implements Slice {
                             "npm-proxy requires storage to be set"
                         )
                     );
+                    // Phase 11.5: wire fine-grained sub-phase profiler so
+                    // /metrics/vertx exposes pantera_proxy_phase_seconds for
+                    // npm_storage_* sub-phases tagged by repo name. This
+                    // decomposes the asset_total observed in Phase 10.5 into
+                    // cache_check / upstream_fetch_open / save_meta /
+                    // save_data / reload (read_data_open + read_meta) so we
+                    // can tell if save→reload is the actual bottleneck.
+                    final String repoName = cfg.name();
+                    final java.util.function.BiConsumer<String, Long> phaseRecorder =
+                        (phase, durationNs) -> {
+                            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                                com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
+                                    .recordProxyPhaseDuration(repoName, phase, durationNs);
+                            }
+                        };
                     final NpmProxy npmProxy = new NpmProxy(
                         npmStorage,
                         remoteSlice,
                         NpmProxy.DEFAULT_METADATA_TTL,
-                        new NpmCacheWriteBridge(npmStorage, cfg.name()).hook()
+                        new NpmCacheWriteBridge(npmStorage, cfg.name()).hook(),
+                        phaseRecorder
                     );
                     
                     // Wrap with NpmProxySlice

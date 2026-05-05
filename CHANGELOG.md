@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+- **Phase 11: zero-copy storage passthrough for the npm cache_write hook.**
+  `Storage.pathFor(Key)` now lets `FileStorage`-backed proxies hand the
+  on-disk path directly to the prefetch dispatcher — no read-back, no
+  temp-file materialise, no dispatcher snapshot copy. `CacheWriteEvent`
+  carries a `callerOwnsSnapshot` flag (true for `ProxyCacheWriter`'s
+  caller-deletes-after-fire path; false for storage-owned). For
+  non-FileStorage backends (Blob, Memory, etc.), the bridge falls back to
+  the legacy materialise-temp-file path. Eliminates 2.12 s of bridge work
+  and the 0.67 s `dispatcher_snapshot_copy` budget across 74 cache misses
+  on a cold `npm install express` (Phase 10.5 profiler), moved off the
+  storage executor pool so it cannot contend with foreground tarball
+  writes during burst loads.
+
+  10-iteration cold-cache `npm install express` (10 iter):
+  before (Phase 10.5): pantera p50 3.62 s (2.60× direct, direct p50 1.39 s);
+  after (Phase 11):    pantera p50 3.79 s (2.67× direct, direct p50 1.42 s);
+  difference is within the natural variance band (post stdev 2.97 s — one
+  12.97 s outlier in run 6; pre stdev 1.03 s). Cold p50 is dominated by
+  network RTT to npmjs.org + storage save (`asset_total` 13.65 s / 252
+  reqs in the Phase 10.5 single-run profile), not by the bridge. Maven
+  cold-cache (`mvn dependency:resolve sonar-maven-plugin`, 10 iter)
+  unchanged: p50 14.61 s vs prior 14.51 s — also within stdev. Maven
+  continues to use `ProxyCacheWriter`'s caller-owned-snapshot path
+  (`callerOwnsSnapshot=true`); the dispatcher still snapshots there
+  because the writer deletes its temp file as soon as `fireOnWrite`
+  returns.
+
 ---
 
 ## Version 2.2.0

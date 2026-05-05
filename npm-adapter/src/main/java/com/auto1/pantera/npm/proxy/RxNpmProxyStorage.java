@@ -28,6 +28,7 @@ import javax.json.Json;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
+import java.util.function.BiConsumer;
 
 /**
  * Base NPM Proxy storage implementation. It encapsulates storage format details
@@ -41,11 +42,53 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
     private final RxStorage storage;
 
     /**
+     * Phase 11.5 — fine-grained sub-phase recorder. Receives
+     * (phase name, durationNs). No-op default so existing call sites and
+     * tests stay unchanged.
+     */
+    private final BiConsumer<String, Long> phaseRecorder;
+
+    /**
      * Ctor.
      * @param storage Underlying storage
      */
     public RxNpmProxyStorage(final RxStorage storage) {
+        this(storage, null);
+    }
+
+    /**
+     * Ctor with phase recorder for Phase 11.5 sub-phase profiling.
+     *
+     * @param storage Underlying storage
+     * @param phaseRecorder (phase, durationNs) recorder; null treated as no-op
+     */
+    public RxNpmProxyStorage(
+        final RxStorage storage,
+        final BiConsumer<String, Long> phaseRecorder
+    ) {
         this.storage = storage;
+        this.phaseRecorder = phaseRecorder == null ? (phase, ns) -> { } : phaseRecorder;
+    }
+
+    /**
+     * Phase 11.5 — emit sub-phase duration via the configured recorder.
+     * Recorder failures are swallowed so the serve path is never affected.
+     *
+     * @param phase phase name (e.g. {@code "npm_storage_save_meta"})
+     * @param startNs nanoTime captured at phase entry
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private void recordPhase(final String phase, final long startNs) {
+        try {
+            this.phaseRecorder.accept(phase, System.nanoTime() - startNs);
+        } catch (final Exception thrown) {
+            // Never break serve path on a profiler failure.
+            EcsLogger.debug("com.auto1.pantera.npm")
+                .message("npm storage phaseRecorder threw; serve path unaffected")
+                .field("phase", phase)
+                .error(thrown)
+                .log();
+        }
     }
 
     @Override
@@ -138,18 +181,24 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
         // the tgz file, the .meta file already exists. This prevents validation
         // failures where the background processor tries to read metadata that
         // doesn't exist yet.
-        return Completable.concatArray(
-            this.storage.save(
+        // Phase 11.5: time meta-save and data-save (data-save fuses upstream
+        // body streaming + disk write since asset.dataPublisher() is the live
+        // upstream Publisher<ByteBuffer>).
+        return Completable.defer(() -> {
+            final long metaStartNs = System.nanoTime();
+            return this.storage.save(
                 metaKey,
                 new Content.From(
                     asset.meta().json().encode().getBytes(StandardCharsets.UTF_8)
                 )
-            ),
-            this.storage.save(
+            ).doOnComplete(() -> recordPhase("npm_storage_save_meta", metaStartNs));
+        }).andThen(Completable.defer(() -> {
+            final long dataStartNs = System.nanoTime();
+            return this.storage.save(
                 key,
                 new Content.From(asset.dataPublisher())
-            )
-        );
+            ).doOnComplete(() -> recordPhase("npm_storage_save_data", dataStartNs));
+        }));
     }
 
     @Override
@@ -162,10 +211,16 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
 
     @Override
     public Maybe<NpmAsset> getAsset(final String path) {
-        return this.storage.exists(new Key.From(path))
-            .flatMapMaybe(
-                exists -> exists ? this.readAsset(path).toMaybe() : Maybe.empty()
-            );
+        // Phase 11.5: time the storage.exists probe separately from readAsset
+        // so the cache_check timer reflects only the existence test, not the
+        // metadata + data stream open that follows on a hit.
+        return Single.defer(() -> {
+            final long existsStartNs = System.nanoTime();
+            return this.storage.exists(new Key.From(path))
+                .doOnSuccess(exists -> recordPhase("npm_storage_exists", existsStartNs));
+        }).flatMapMaybe(
+            exists -> exists ? this.readAsset(path).toMaybe() : Maybe.empty()
+        );
     }
 
     @Override
@@ -254,19 +309,30 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
      * @return NPM asset
      */
     private Single<NpmAsset> readAsset(final String path) {
-        return this.storage.value(new Key.From(path))
-            .zipWith(
-                this.storage.value(new Key.From(String.format("%s.meta", path)))
-                    .flatMap(content -> RxFuture.single(content.asBytesFuture()))
-                    .map(metadata -> new String(metadata, StandardCharsets.UTF_8))
-                    .map(JsonObject::new),
-                (content, metadata) ->
-                    new NpmAsset(
-                        path,
-                        content,
-                        new NpmAsset.Metadata(metadata)
-                    )
-            );
+        // Phase 11.5: time the data-stream open and meta read+parse separately
+        // so the reload phase can be decomposed (the data Single resolves once
+        // the stream is opened — it does NOT include downstream client-side
+        // streaming, which is part of asset_total minus the sub-phases).
+        final long dataOpenStartNs = System.nanoTime();
+        final Single<com.auto1.pantera.asto.Content> dataSingle =
+            this.storage.value(new Key.From(path))
+                .doOnSuccess(c -> recordPhase("npm_storage_read_data_open", dataOpenStartNs));
+        final long metaReadStartNs = System.nanoTime();
+        final Single<JsonObject> metaSingle =
+            this.storage.value(new Key.From(String.format("%s.meta", path)))
+                .flatMap(content -> RxFuture.single(content.asBytesFuture()))
+                .map(metadata -> new String(metadata, StandardCharsets.UTF_8))
+                .map(JsonObject::new)
+                .doOnSuccess(j -> recordPhase("npm_storage_read_meta", metaReadStartNs));
+        return dataSingle.zipWith(
+            metaSingle,
+            (content, metadata) ->
+                new NpmAsset(
+                    path,
+                    content,
+                    new NpmAsset.Metadata(metadata)
+                )
+        );
     }
 
 }

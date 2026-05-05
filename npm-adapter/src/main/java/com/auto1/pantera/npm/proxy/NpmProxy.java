@@ -29,6 +29,7 @@ import java.time.OffsetDateTime;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 /**
@@ -91,6 +92,18 @@ public class NpmProxy {
      * serve path.</p>
      */
     private final Consumer<String> cacheWriteHook;
+
+    /**
+     * Phase 11.5 — fine-grained sub-phase recorder for the cold-cache asset
+     * path (cache_check / upstream_fetch_and_save / save / reload). Receives
+     * (phase name, durationNs). Default = no-op so existing constructors and
+     * tests stay unchanged. Production wiring (see {@code NpmProxyAdapter})
+     * installs a consumer that bridges to
+     * {@link com.auto1.pantera.metrics.MicrometerMetrics#recordProxyPhaseDuration}.
+     *
+     * <p>Phase 11.5 instrumentation only — no behaviour change.
+     */
+    private final BiConsumer<String, Long> phaseRecorder;
 
     /**
      * Ctor.
@@ -159,7 +172,40 @@ public class NpmProxy {
             new RxNpmProxyStorage(new RxStorageWrapper(storage)),
             new HttpNpmRemote(client),
             metadataTtl,
-            cacheWriteHook
+            cacheWriteHook,
+            null
+        );
+    }
+
+    /**
+     * Production ctor with phase recorder (Phase 11.5).
+     *
+     * <p>Wires fine-grained sub-phase timers for the cold-cache asset path
+     * (cache_check / upstream_fetch_and_save / save / reload) into the
+     * supplied {@code BiConsumer<phase, durationNs>}. Used by
+     * {@code NpmProxyAdapter} to bridge into
+     * {@link com.auto1.pantera.metrics.MicrometerMetrics#recordProxyPhaseDuration}
+     * tagged by repository name.
+     *
+     * @param storage Adapter storage
+     * @param client Client slice
+     * @param metadataTtl Metadata TTL duration
+     * @param cacheWriteHook Post-save hook on cache-miss writes; null treated as no-op
+     * @param phaseRecorder Sub-phase timer recorder; null treated as no-op
+     */
+    public NpmProxy(
+        final Storage storage,
+        final Slice client,
+        final Duration metadataTtl,
+        final Consumer<String> cacheWriteHook,
+        final BiConsumer<String, Long> phaseRecorder
+    ) {
+        this(
+            new RxNpmProxyStorage(new RxStorageWrapper(storage), phaseRecorder),
+            new HttpNpmRemote(client),
+            metadataTtl,
+            cacheWriteHook,
+            phaseRecorder
         );
     }
 
@@ -169,7 +215,7 @@ public class NpmProxy {
      * @param remote Remote repository client
      */
     NpmProxy(final NpmProxyStorage storage, final NpmRemote remote) {
-        this(storage, remote, DEFAULT_METADATA_TTL, null);
+        this(storage, remote, DEFAULT_METADATA_TTL, null, null);
     }
 
     /**
@@ -179,7 +225,7 @@ public class NpmProxy {
      * @param metadataTtl Metadata TTL duration
      */
     NpmProxy(final NpmProxyStorage storage, final NpmRemote remote, final Duration metadataTtl) {
-        this(storage, remote, metadataTtl, null);
+        this(storage, remote, metadataTtl, null, null);
     }
 
     /**
@@ -195,6 +241,26 @@ public class NpmProxy {
         final Duration metadataTtl,
         final Consumer<String> cacheWriteHook
     ) {
+        this(storage, remote, metadataTtl, cacheWriteHook, null);
+    }
+
+    /**
+     * Default-scoped ctor with TTL, cache-write hook, and phase recorder.
+     * Phase 11.5 fine-grained sub-phase profiling.
+     *
+     * @param storage NPM storage
+     * @param remote Remote repository client
+     * @param metadataTtl Metadata TTL duration
+     * @param cacheWriteHook Post-save hook on cache-miss writes; null treated as no-op
+     * @param phaseRecorder (phase, durationNs) recorder; null treated as no-op
+     */
+    NpmProxy(
+        final NpmProxyStorage storage,
+        final NpmRemote remote,
+        final Duration metadataTtl,
+        final Consumer<String> cacheWriteHook,
+        final BiConsumer<String, Long> phaseRecorder
+    ) {
         this.storage = storage;
         this.remote = remote;
         this.metadataTtl = metadataTtl;
@@ -205,6 +271,7 @@ public class NpmProxy {
         final Executor ctxExec = ContextualExecutor.contextualize(ForkJoinPool.commonPool());
         this.backgroundScheduler = Schedulers.from(ctxExec);
         this.cacheWriteHook = cacheWriteHook == null ? path -> { } : cacheWriteHook;
+        this.phaseRecorder = phaseRecorder == null ? (phase, ns) -> { } : phaseRecorder;
     }
 
     /**
@@ -403,15 +470,64 @@ public class NpmProxy {
      * @return Asset data (cached or downloaded from remote repository)
      */
     public Maybe<NpmAsset> getAsset(final String path) {
-        return this.storage.getAsset(path).switchIfEmpty(
-            Maybe.defer(
-                () -> this.remote.loadAsset(path, null).flatMap(
-                    asset -> this.storage.save(asset)
-                        .doOnComplete(() -> this.fireCacheWriteHook(path))
-                        .andThen(Maybe.defer(() -> this.storage.getAsset(path)))
-                )
-            )
-        );
+        // Phase 11.5: time each sub-phase of the cold-cache asset path so the
+        // 54ms/req asset_total observed in Phase 10.5 can be decomposed.
+        // Timers use Maybe.defer / Single.defer so duration reflects actual
+        // subscription time (per-request), not assembly time.
+        final long checkStartNs = System.nanoTime();
+        return this.storage.getAsset(path)
+            .doOnEvent((asset, err) -> recordPhase(
+                "npm_storage_cache_check", checkStartNs
+            ))
+            .switchIfEmpty(
+                Maybe.defer(() -> {
+                    // Cache miss path. Time upstream HTTP fetch (header phase),
+                    // then save (which fuses upstream-body-stream with disk
+                    // write since the asset wraps the upstream Publisher),
+                    // then reload (storage.getAsset → readAsset).
+                    final long fetchStartNs = System.nanoTime();
+                    return this.remote.loadAsset(path, null)
+                        .doOnEvent((asset, err) -> recordPhase(
+                            "npm_upstream_fetch_open", fetchStartNs
+                        ))
+                        .flatMap(asset -> {
+                            final long saveStartNs = System.nanoTime();
+                            return this.storage.save(asset)
+                                .doOnComplete(() -> recordPhase(
+                                    "npm_storage_save", saveStartNs
+                                ))
+                                .doOnComplete(() -> this.fireCacheWriteHook(path))
+                                .andThen(Maybe.defer(() -> {
+                                    final long reloadStartNs = System.nanoTime();
+                                    return this.storage.getAsset(path)
+                                        .doOnEvent((a, err) -> recordPhase(
+                                            "npm_storage_reload", reloadStartNs
+                                        ));
+                                }));
+                        });
+                })
+            );
+    }
+
+    /**
+     * Phase 11.5 — emit sub-phase duration via the configured recorder.
+     * No-op when recorder is the default (null in ctor).
+     *
+     * @param phase phase name (e.g. {@code "npm_storage_save"})
+     * @param startNs nanoTime captured at phase entry
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private void recordPhase(final String phase, final long startNs) {
+        try {
+            this.phaseRecorder.accept(phase, System.nanoTime() - startNs);
+        } catch (final Exception thrown) {
+            // Recorder must never break the serve path.
+            EcsLogger.debug("com.auto1.pantera.npm.proxy")
+                .message("npm phaseRecorder threw; serve path unaffected")
+                .field("phase", phase)
+                .error(thrown)
+                .log();
+        }
     }
 
     /**
