@@ -239,8 +239,9 @@ final class CachedProxySliceTest {
         final InMemoryStorage storage = new InMemoryStorage();
         final LinkedBlockingQueue<ProxyArtifactEvent> queue = new LinkedBlockingQueue<>();
         // Upstream returns the artifact bytes on the primary request;
-        // sidecar requests (sha1, sha256, md5, sha512) return 404 so the
-        // writer skips verification and commits the primary only.
+        // the only eagerly fetched sidecar (.sha1) returns 404 so the writer
+        // skips verification and commits the primary only. Phase 7 perf:
+        // .md5/.sha256/.sha512 are no longer registered for eager fetching.
         final CachedProxySlice slice = new CachedProxySlice(
             (line, headers, body) -> {
                 final String reqPath = line.uri().getPath();
@@ -249,7 +250,7 @@ final class CachedProxySliceTest {
                         ResponseBuilder.ok().body(artifactBytes).build()
                     );
                 }
-                // Sidecar requests (sha1/sha256/md5/sha512): 404 so writer skips
+                // Sidecar request (.sha1 only since Phase 7): 404 so writer skips
                 return CompletableFuture.completedFuture(
                     ResponseBuilder.notFound().build()
                 );

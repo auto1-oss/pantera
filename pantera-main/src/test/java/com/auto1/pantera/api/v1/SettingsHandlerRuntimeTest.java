@@ -240,12 +240,14 @@ final class SettingsHandlerRuntimeTest {
                     Matchers.is("\"h2\""));
                 MatcherAssert.assertThat(protoEntry.getString("source"),
                     Matchers.is("default"));
-                // For an integer key, the value is the JSON literal "1",
-                // not the integer 1.
+                // For an integer key, the value is the JSON literal "4",
+                // not the integer 4. (Default raised from 1 → 4 in the
+                // v2.2.0 perf bench, 2026-05, to enable real upstream
+                // parallelism through the H2 client.)
                 final JsonObject poolEntry =
                     body.getJsonObject("http_client.http2_max_pool_size");
                 MatcherAssert.assertThat(poolEntry.getString("value"),
-                    Matchers.is("1"));
+                    Matchers.is("4"));
             }
         );
     }

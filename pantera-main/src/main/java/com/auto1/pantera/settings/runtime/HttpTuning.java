@@ -51,7 +51,13 @@ public record HttpTuning(
     }
 
     public static HttpTuning defaults() {
-        return new HttpTuning(Protocol.H2, 1, 100);
+        // h2MaxPoolSize=4 (Phase 7 perf bench, 2026-05): a single TCP
+        // connection per upstream multiplexed h2 streams via Vert.x, but
+        // RTT-bound per-stream serialisation throttled real parallelism on
+        // a cold Maven-Central walk. Bumping the default to 4 enables true
+        // upstream parallelism without overwhelming origins. Operators on
+        // low-latency networks can still lower it via the runtime settings UI.
+        return new HttpTuning(Protocol.H2, 4, 100);
     }
 
     public static HttpTuning fromMap(final Map<String, JsonObject> rows) {
@@ -59,7 +65,7 @@ public record HttpTuning(
             JsonReads.valueOr(rows, "http_client.protocol",
                 v -> Protocol.fromString(v.getString("value")), Protocol.H2),
             JsonReads.valueOr(rows, "http_client.http2_max_pool_size",
-                v -> v.getInt("value"), 1),
+                v -> v.getInt("value"), 4),
             JsonReads.valueOr(rows, "http_client.http2_multiplexing_limit",
                 v -> v.getInt("value"), 100)
         );

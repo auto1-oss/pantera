@@ -115,6 +115,16 @@ public final class ProxyCacheWriter {
      * artifact cold {@code mvn dependency:resolve} (300ms × 720 ÷ 5 maven
      * worker threads ≈ 43s, overlap-amortized).
      *
+     * <p>{@code MD5} is also deferred (Phase 7 perf bench, 2026-05): the
+     * {@code .sha1} sidecar already proves primary integrity, so blocking
+     * the foreground response on a second redundant integrity check costs
+     * one extra upstream RTT per primary artifact for no additional
+     * security guarantee. {@code .md5} still verifies + persists in the
+     * background; clients that ask for the {@code .md5} after the fact
+     * read it from cache (or, in the narrow window before the deferred
+     * fetch completes, fall through to the standard cache-miss path which
+     * proxies it through).</p>
+     *
      * <p>For algos in this set the writer fires the upstream sidecar fetch
      * but does NOT block the {@link VerifiedArtifact} return on it. If the
      * upstream eventually returns 200 we verify the claim against the
@@ -123,13 +133,13 @@ public final class ProxyCacheWriter {
      * the primary (the primary integrity is already proven by the required
      * sidecars below).</p>
      *
-     * <p>If a deployment requires strict {@code .sha256}/{@code .sha512}
+     * <p>If a deployment requires strict {@code .md5}/{@code .sha256}/{@code .sha512}
      * blocking, use {@link #writeAndVerify(Key, String, Supplier, Map, Set,
      * RequestContext)} and pass {@link java.util.Collections#emptySet()} to
      * make every supplied sidecar load-bearing.</p>
      */
     private static final EnumSet<ChecksumAlgo> NON_BLOCKING_DEFAULT =
-        EnumSet.of(ChecksumAlgo.SHA256, ChecksumAlgo.SHA512);
+        EnumSet.of(ChecksumAlgo.MD5, ChecksumAlgo.SHA256, ChecksumAlgo.SHA512);
 
     /** No-op {@link CacheWriteEvent} consumer used when no callback is supplied. */
     private static final Consumer<CacheWriteEvent> NO_OP_ON_WRITE = event -> { };

@@ -451,10 +451,12 @@ final class ProxyCacheWriterTest {
     }
 
     @Test
-    @DisplayName("writeAndVerify rejects on blocking sidecar mismatch (sha1/md5)")
+    @DisplayName("writeAndVerify rejects on blocking sidecar mismatch (sha1)")
     void writeAndVerifyRejectsOnMismatch() throws Exception {
-        // SHA1 / MD5 are load-bearing in the default config — a mismatch
-        // must reject the primary before it is ever served.
+        // SHA1 is the only load-bearing sidecar in the default config (md5
+        // joined sha256/sha512 in the deferred set in v2.2.0 perf bench
+        // 2026-05) — a mismatch must reject the primary before it is ever
+        // served.
         final Storage storage = new InMemoryStorage();
         final ProxyCacheWriter writer = new ProxyCacheWriter(storage, "test-repo");
         final byte[] body = "mismatch-test".getBytes(StandardCharsets.UTF_8);

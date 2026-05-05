@@ -659,12 +659,17 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
             this.repoName(),
             path
         );
+        // Phase 7 perf (2026-05): only .sha1 is eagerly fetched alongside the
+        // primary. mvn does NOT request .md5/.sha256/.sha512 for resolution —
+        // eagerly fetching those 3 extra sidecars per primary inflated upstream
+        // amplification to ~3.6×, contended with primary downloads, and
+        // serialised the foreground walk through the upstream H2 pool.
+        // If a client explicitly requests .md5/.sha256/.sha512, the request
+        // falls through the standard cache-miss path and is proxied on demand
+        // (same behaviour as Maven Central).
         final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> sidecars =
             new EnumMap<>(ChecksumAlgo.class);
         sidecars.put(ChecksumAlgo.SHA1, () -> this.fetchSidecar(line, ".sha1"));
-        sidecars.put(ChecksumAlgo.MD5, () -> this.fetchSidecar(line, ".md5"));
-        sidecars.put(ChecksumAlgo.SHA256, () -> this.fetchSidecar(line, ".sha256"));
-        sidecars.put(ChecksumAlgo.SHA512, () -> this.fetchSidecar(line, ".sha512"));
 
         return this.cacheWriter.writeAndVerify(
             key,

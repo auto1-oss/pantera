@@ -28,7 +28,7 @@ import java.util.stream.Collectors;
  */
 public enum SettingsKey {
     HTTP_CLIENT_PROTOCOL("http_client.protocol", "\"h2\""),
-    HTTP_CLIENT_H2_MAX_POOL_SIZE("http_client.http2_max_pool_size", "1"),
+    HTTP_CLIENT_H2_MAX_POOL_SIZE("http_client.http2_max_pool_size", "4"),
     HTTP_CLIENT_H2_MULTIPLEXING_LIMIT("http_client.http2_multiplexing_limit", "100"),
     PREFETCH_ENABLED("prefetch.enabled", "true"),
     PREFETCH_CONCURRENCY_GLOBAL("prefetch.concurrency.global", "64"),
