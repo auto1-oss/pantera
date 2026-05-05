@@ -38,7 +38,7 @@ public enum SettingsKey {
     PREFETCH_CONCURRENCY_PER_UPSTREAM_GRADLE(
         "prefetch.concurrency.per_upstream.gradle", "16"),
     PREFETCH_CONCURRENCY_PER_UPSTREAM_NPM(
-        "prefetch.concurrency.per_upstream.npm", "4"),
+        "prefetch.concurrency.per_upstream.npm", "32"),
     PREFETCH_QUEUE_CAPACITY("prefetch.queue.capacity", "2048"),
     PREFETCH_WORKER_THREADS("prefetch.worker_threads", "8"),
     PREFETCH_CB_DROP_THRESHOLD("prefetch.circuit_breaker.drop_threshold_per_sec", "100"),

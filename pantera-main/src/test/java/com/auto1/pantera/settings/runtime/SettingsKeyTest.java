@@ -46,14 +46,16 @@ final class SettingsKeyTest {
             "default per-upstream concurrency must be 16");
         assertEquals(2048, p.queueCapacity(), "default queue capacity must be 2048");
         assertEquals(8, p.workerThreads(), "default worker threads must be 8");
-        // Per-ecosystem overrides: maven/gradle inherit 16, npm reduced to 4
-        // so npm install's foreground tarball burst wins the upstream pool race.
+        // Per-ecosystem overrides: maven/gradle stay at 16; npm raised to 32
+        // (Phase 13.5 sweep) since prefetch uses tryAcquire (non-blocking)
+        // and foreground requests do not share the semaphore — a larger cap
+        // warms more packuments without contending with the foreground pool.
         assertEquals(16, p.perUpstreamFor("maven"),
             "maven default per-upstream cap must be 16");
         assertEquals(16, p.perUpstreamFor("gradle"),
             "gradle default per-upstream cap must be 16");
-        assertEquals(4, p.perUpstreamFor("npm"),
-            "npm default per-upstream cap must be 4");
+        assertEquals(32, p.perUpstreamFor("npm"),
+            "npm default per-upstream cap must be 32");
         assertEquals(16, p.perUpstreamFor("MAVEN"),
             "ecosystem lookup must be case-insensitive");
         assertEquals(16, p.perUpstreamFor("pypi"),

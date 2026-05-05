@@ -85,7 +85,7 @@ class PrefetchDispatcherTest {
     void noOpWhenGlobalKillSwitchOff() throws Exception {
         final PrefetchTuning off = new PrefetchTuning(
             false, 64, 16,
-            java.util.Map.of("maven", 16, "gradle", 16, "npm", 4),
+            java.util.Map.of("maven", 16, "gradle", 16, "npm", 32),
             2048, 8
         );
         final RecordingSubmitter submitter = new RecordingSubmitter();

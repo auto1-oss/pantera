@@ -250,8 +250,10 @@ final class SettingsHandlerRuntimeTest {
                     Matchers.is("4"));
                 // Per-ecosystem perUpstream overrides (v2.2.0 perf-pack).
                 // Maven / gradle inherit the global default (16); npm is
-                // capped at 4 so npm install's bursty foreground tarball
-                // wave wins the upstream pool race.
+                // raised to 32 (Phase 13.5 sweep) since prefetch uses
+                // tryAcquire (non-blocking) and foreground requests do not
+                // share the semaphore, so a larger cap warms more
+                // packuments without contending with the foreground pool.
                 MatcherAssert.assertThat(
                     body.getJsonObject("prefetch.concurrency.per_upstream.maven")
                         .getString("value"),
@@ -263,7 +265,7 @@ final class SettingsHandlerRuntimeTest {
                 MatcherAssert.assertThat(
                     body.getJsonObject("prefetch.concurrency.per_upstream.npm")
                         .getString("value"),
-                    Matchers.is("4"));
+                    Matchers.is("32"));
             }
         );
     }

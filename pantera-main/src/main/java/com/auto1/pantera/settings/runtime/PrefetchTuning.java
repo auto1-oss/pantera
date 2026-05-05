@@ -38,7 +38,7 @@ public record PrefetchTuning(
     public static PrefetchTuning defaults() {
         return new PrefetchTuning(
             true, 64, 16,
-            Map.of("maven", 16, "gradle", 16, "npm", 4),
+            Map.of("maven", 16, "gradle", 16, "npm", 32),
             2048, 8
         );
     }
@@ -66,7 +66,7 @@ public record PrefetchTuning(
         final Map<String, Integer> byEco = Map.of(
             "maven",  JsonReads.intOr(rows, "prefetch.concurrency.per_upstream.maven",  16),
             "gradle", JsonReads.intOr(rows, "prefetch.concurrency.per_upstream.gradle", 16),
-            "npm",    JsonReads.intOr(rows, "prefetch.concurrency.per_upstream.npm",    4)
+            "npm",    JsonReads.intOr(rows, "prefetch.concurrency.per_upstream.npm",    32)
         );
         return new PrefetchTuning(
             JsonReads.boolOr(rows, "prefetch.enabled", true),
