@@ -388,6 +388,117 @@ public final class MavenGroupSliceTest {
     }
 
     @Test
+    void sequentialFirstSkipsLaterMembersOn200() throws Exception {
+        // Phase 9 sequential-first: when member 1 returns 200, member 2 is
+        // NEVER queried. Verifies the merge-fanout removal — previously this
+        // test would have expected both members to be hit and their version
+        // lists union'd.
+        final AtomicInteger member1Calls = new AtomicInteger(0);
+        final AtomicInteger member2Calls = new AtomicInteger(0);
+        final Map<String, Slice> members = new HashMap<>();
+        members.put("repo1", new CountingSlice(member1Calls, new FakeMetadataSlice(
+            "<?xml version=\"1.0\"?><metadata>"
+                + "<groupId>com.test</groupId><artifactId>seq</artifactId>"
+                + "<versioning><versions><version>1.0-from-repo1</version></versions></versioning>"
+                + "</metadata>"
+        )));
+        members.put("repo2", new CountingSlice(member2Calls, new FakeMetadataSlice(
+            "<?xml version=\"1.0\"?><metadata>"
+                + "<groupId>com.test</groupId><artifactId>seq</artifactId>"
+                + "<versioning><versions><version>2.0-from-repo2</version></versions></versioning>"
+                + "</metadata>"
+        )));
+
+        final MavenGroupSlice slice = new MavenGroupSlice(
+            new FakeGroupSlice(),
+            "seq-test-group",
+            List.of("repo1", "repo2"),
+            new MapResolver(members),
+            8080,
+            0
+        );
+
+        final Response response = slice.response(
+            new RequestLine("GET", "/com/test/seq-skip/maven-metadata.xml"),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).get(10, TimeUnit.SECONDS);
+
+        MatcherAssert.assertThat(
+            "Response is OK",
+            response.status(), Matchers.equalTo(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "First member queried exactly once",
+            member1Calls.get(), Matchers.equalTo(1)
+        );
+        MatcherAssert.assertThat(
+            "Second member NEVER queried (sequential-first wins on first 200)",
+            member2Calls.get(), Matchers.equalTo(0)
+        );
+
+        // Body must NOT contain merged versions: only repo1's version is served.
+        final String body = new String(response.body().asBytes(), StandardCharsets.UTF_8);
+        MatcherAssert.assertThat(
+            "Body contains repo1's version",
+            body, Matchers.containsString("1.0-from-repo1")
+        );
+        MatcherAssert.assertThat(
+            "Body does NOT contain repo2's version (no merge)",
+            body, Matchers.not(Matchers.containsString("2.0-from-repo2"))
+        );
+    }
+
+    @Test
+    void sequentialFirstFallsThroughOn404() throws Exception {
+        // Phase 9 sequential-first: member 1 returns 404, fall through to
+        // member 2 which returns 200. The two responses are NOT merged.
+        final AtomicInteger member1Calls = new AtomicInteger(0);
+        final AtomicInteger member2Calls = new AtomicInteger(0);
+        final Map<String, Slice> members = new HashMap<>();
+        members.put("repo1", new CountingSlice(member1Calls, new StaticSlice(RsStatus.NOT_FOUND)));
+        members.put("repo2", new CountingSlice(member2Calls, new FakeMetadataSlice(
+            "<?xml version=\"1.0\"?><metadata>"
+                + "<groupId>com.test</groupId><artifactId>fall</artifactId>"
+                + "<versioning><versions><version>9.9-fallthrough</version></versions></versioning>"
+                + "</metadata>"
+        )));
+
+        final MavenGroupSlice slice = new MavenGroupSlice(
+            new FakeGroupSlice(),
+            "fall-test-group",
+            List.of("repo1", "repo2"),
+            new MapResolver(members),
+            8080,
+            0
+        );
+
+        final Response response = slice.response(
+            new RequestLine("GET", "/com/test/seq-fall/maven-metadata.xml"),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).get(10, TimeUnit.SECONDS);
+
+        MatcherAssert.assertThat(
+            "Response is OK (member 2 answered)",
+            response.status(), Matchers.equalTo(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "First member queried exactly once",
+            member1Calls.get(), Matchers.equalTo(1)
+        );
+        MatcherAssert.assertThat(
+            "Second member queried exactly once after 404 fall-through",
+            member2Calls.get(), Matchers.equalTo(1)
+        );
+        final String body = new String(response.body().asBytes(), StandardCharsets.UTF_8);
+        MatcherAssert.assertThat(
+            "Body contains member 2's version (single winner, no merge)",
+            body, Matchers.containsString("9.9-fallthrough")
+        );
+    }
+
+    @Test
     void returnsStaleMetadataWhenAllMembersFailAndCacheExpired() throws Exception {
         // Pre-populate a GroupMetadataCache with stale data
         final GroupMetadataCache cache = new GroupMetadataCache("stale-test-group");

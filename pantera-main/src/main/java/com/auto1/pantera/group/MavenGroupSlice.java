@@ -12,7 +12,6 @@ package com.auto1.pantera.group;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
-import com.auto1.pantera.group.merge.StreamingMetadataMerger;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
@@ -24,33 +23,43 @@ import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.log.EcsLogger;
 import io.micrometer.core.instrument.DistributionSummary;
 
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.ByteBuffer;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ForkJoinPool;
 
 /**
- * Maven-specific group slice with metadata merging support.
- * Extends basic GroupResolver behavior with Maven metadata aggregation.
+ * Maven-specific group slice with sequential-first metadata fetch.
  *
  * <p>For maven-metadata.xml requests:
  * <ul>
- *   <li>Fetches metadata from ALL members (not just first)</li>
- *   <li>Merges all metadata files using external MetadataMerger</li>
- *   <li>Caches merged result (12 hour TTL, L1+L2)</li>
- *   <li>Returns merged metadata to client</li>
+ *   <li>Tries members sequentially in declared order; returns the first
+ *       successful response (cooldown-filtered).</li>
+ *   <li>Caches the filtered winning bytes (12 hour TTL, L1+L2).</li>
+ *   <li>If no member returns 200, falls back to last-known-good stale
+ *       cache, otherwise 404.</li>
  * </ul>
+ *
+ * <p><b>v2.2.0 BREAKING:</b> previously this slice fanned out to ALL members
+ * in parallel and merged every member's {@code maven-metadata.xml} version
+ * list into a union. That added per-request upstream amplification with no
+ * real benefit — in well-organised configs (the only kind we support) the
+ * chance two members both serve the same artifact is near-zero, member
+ * namespaces are disjoint, and merge collisions land back on whichever
+ * member would have answered first anyway. JFrog Artifactory and Sonatype
+ * Nexus virtual repos behave the same way (sequential-first, no merge).
+ * Cooldown filtering is preserved on the single winning response so blocked
+ * versions still never reach the client.
  *
  * <p>For all other requests:
  * <ul>
- *   <li>Returns first successful response (standard group behavior)</li>
+ *   <li>Returns first successful response (standard group behavior via
+ *       {@link Slice} delegate).</li>
  * </ul>
  *
  * @since 1.0
@@ -379,9 +388,16 @@ public final class MavenGroupSlice implements Slice {
     }
 
     /**
-     * Perform the actual N-member fetch + merge.  Only the coalescer leader
-     * runs this path; followers re-enter {@link #response} after the leader
-     * populates the cache.
+     * Try members in declared order; return the first successful response
+     * (cooldown-filtered) as the group's authoritative
+     * {@code maven-metadata.xml}. Only the coalescer leader runs this path;
+     * followers re-enter {@link #response} after the leader populates the
+     * cache.
+     *
+     * <p>v2.2.0 sequential-first replacement for the previous fanout+merge —
+     * see class javadoc. Cooldown filter applies to the single winning
+     * response so behaviour is unchanged from a client perspective for the
+     * 99 %+ of artifacts that live in a single member.
      */
     private CompletableFuture<Response> fetchAndMergeFromMembers(
         final RequestLine line,
@@ -389,201 +405,176 @@ public final class MavenGroupSlice implements Slice {
         final String path,
         final String cacheKey
     ) {
-        // Cache MISS - fetch and merge from members
-        // CRITICAL: Consume original body to prevent OneTimePublisher errors
-        // GET requests for maven-metadata.xml have empty bodies, but Content is still reference-counted
-        return CompletableFuture.completedFuture((byte[]) null).thenCompose(requestBytes -> {
-            // Track fetch duration separately from merge duration
+        // CRITICAL: Consume original body to prevent OneTimePublisher errors.
+        // GET requests for maven-metadata.xml have empty bodies, but Content
+        // is still reference-counted.
+        return CompletableFuture.completedFuture((byte[]) null).thenCompose(ignored -> {
             final long fetchStartTime = System.currentTimeMillis();
-
-            // Fetch metadata from all members in parallel with Content.EMPTY
-            final List<CompletableFuture<byte[]>> futures = new ArrayList<>();
-
-            for (String member : this.members) {
-                final Slice memberSlice = this.resolver.slice(
-                    new Key.From(member),
-                    this.port,
-                    this.depth + 1
-                );
-
-                // CRITICAL: Member slices are wrapped in TrimPathSlice which expects paths with member prefix
-                // Example: /member/org/apache/maven/plugins/maven-metadata.xml
-                // We must add the member prefix to the path before calling the member slice
-                final RequestLine memberLine = rewritePath(line, member);
-
-                final CompletableFuture<byte[]> memberFuture = memberSlice
-                    .response(memberLine, dropFullPathHeader(headers), Content.EMPTY)
-                    .thenCompose(resp -> {
-                        if (resp.status() == RsStatus.OK) {
-                            return readResponseBody(resp.body());
-                        } else {
-                            // Drain non-OK response body to release upstream connection
-                            return resp.body().asBytesFuture()
-                                .thenApply(ignored -> (byte[]) null);
-                        }
-                    })
-                    .exceptionally(err -> {
-                        EcsLogger.warn("com.auto1.pantera.maven")
-                            .message("Member failed to fetch metadata: " + member)
-                            .eventCategory("web")
-                            .eventAction("metadata_fetch")
-                            .eventOutcome("failure")
-                            .field("repository.name", this.group)
-                            .error(err)
-                            .log();
-                        return null;
-                    });
-
-                futures.add(memberFuture);
-            }
-
-            // Wait for all members and merge results
-            return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
-                .thenCompose(v -> {
-                    final List<byte[]> metadataList = new ArrayList<>();
-                    for (CompletableFuture<byte[]> future : futures) {
-                        final byte[] metadata = future.getNow(null);
-                        if (metadata != null && metadata.length > 0) {
-                            metadataList.add(metadata);
-                        }
-                    }
-
-                    // Calculate fetch duration (time to get data from all members)
-                    final long fetchDuration = System.currentTimeMillis() - fetchStartTime;
-
-                    if (metadataList.isEmpty()) {
-                        // All members failed — try last-known-good stale fallback
-                        return MavenGroupSlice.this.metadataCache.getStale(cacheKey)
-                            .thenApply(stale -> {
-                                if (stale.isPresent()) {
-                                    EcsLogger.warn("com.auto1.pantera.maven")
-                                        .message("Returning stale metadata (all members failed)")
-                                        .eventCategory("web")
-                                        .eventAction("metadata_merge")
-                                        .eventOutcome("success")
-                                        .field("event.reason", "stale_cache_fallback")
-                                        .field("repository.name", MavenGroupSlice.this.group)
-                                        .field("url.path", path)
-                                        .field("event.duration", fetchDuration)
-                                        .log();
-                                    return ResponseBuilder.ok()
-                                        .header("Content-Type", "application/xml")
-                                        .body(stale.get())
-                                        .build();
-                                }
-                                EcsLogger.warn("com.auto1.pantera.maven")
-                                    .message("No metadata found in any member and no stale fallback")
-                                    .eventCategory("web")
-                                    .eventAction("metadata_merge")
-                                    .eventOutcome("failure")
-                                    .field("repository.name", MavenGroupSlice.this.group)
-                                    .field("url.path", path)
-                                    .field("event.duration", fetchDuration)
-                                    .log();
-                                return ResponseBuilder.notFound().build();
-                            });
-                    }
-
-                    // Track merge duration separately (actual XML processing time)
-                    final long mergeStartTime = System.currentTimeMillis();
-
-                    // StAX streaming merge — see {@link StreamingMetadataMerger}.
-                    // Peak heap is O(unique versions), not O(sum of body sizes).
-                    return mergeStreaming(metadataList)
-                        .thenCompose(rawMerged ->
-                            applyCooldownFilter(path, rawMerged))
-                        .thenApply(mergedBytes -> {
-                            final long mergeDuration = System.currentTimeMillis() - mergeStartTime;
-                            final long totalDuration = fetchDuration + mergeDuration;
-
-                            // Cache the merged result (L1 + L2) AFTER the
-                            // cooldown filter has stripped blocked versions —
-                            // we never want to serve a cached unfiltered blob
-                            // that pre-dates the current cooldown policy.
-                            MavenGroupSlice.this.metadataCache.put(cacheKey, mergedBytes);
-
-                            // Record metadata merge metrics (total for backward compatibility)
-                            recordMetadataOperation("merge", totalDuration);
-
-                            // Log slow fetches (>500ms) - expected for proxy repos
-                            if (fetchDuration > 500) {
-                                EcsLogger.debug("com.auto1.pantera.maven")
-                                    .message(String.format("Slow member fetch (%d members), merge took %dms", metadataList.size(), mergeDuration))
-                                    .eventCategory("web")
-                                    .eventAction("metadata_fetch")
-                                    .eventOutcome("success")
-                                    .field("repository.name", this.group)
-                                    .field("url.path", path)
-                                    .field("event.duration", fetchDuration)
-                                    .log();
-                            }
-
-                            // Log slow merges (>50ms) - indicates actual performance issue
-                            if (mergeDuration > 50) {
-                                EcsLogger.warn("com.auto1.pantera.maven")
-                                    .message(String.format("Slow metadata merge (%d members), fetch took %dms", metadataList.size(), fetchDuration))
-                                    .eventCategory("web")
-                                    .eventAction("metadata_merge")
-                                    .eventOutcome("success")
-                                    .field("repository.name", this.group)
-                                    .field("url.path", path)
-                                    .field("event.duration", mergeDuration)
-                                    .log();
-                            }
-
-                            return ResponseBuilder.ok()
-                                .header("Content-Type", "application/xml")
-                                .body(mergedBytes)
-                                .build();
-                        });
-                })
+            return tryMembersSequentially(line, headers, path, cacheKey, 0, fetchStartTime)
                 .exceptionally(err -> {
-                    // Unwrap CompletionException to get the real cause
                     final Throwable cause = err.getCause() != null ? err.getCause() : err;
                     EcsLogger.error("com.auto1.pantera.maven")
-                        .message("Failed to merge metadata")
+                        .message("Failed to fetch metadata sequentially")
                         .eventCategory("web")
-                        .eventAction("metadata_merge")
+                        .eventAction("metadata_fetch")
                         .eventOutcome("failure")
                         .field("repository.name", this.group)
                         .field("url.path", path)
                         .error(cause)
                         .log();
                     return ResponseBuilder.internalError()
-                        .textBody("Failed to merge metadata: " + cause.getMessage())
+                        .textBody("Failed to fetch metadata: " + cause.getMessage())
                         .build();
                 });
         });
     }
 
     /**
-     * Merge metadata via the StAX streaming merger.
-     *
-     * <p>Each member byte array is fed once into a single
-     * {@link StreamingMetadataMerger}; only the deduplicated version set
-     * + scalar maxes survive past the {@code mergeMember} call. Peak
-     * memory is O(unique versions), not O(sum of body sizes).
-     *
-     * <p>Per-member body size is recorded as the alert-only histogram
-     * {@code pantera.maven.group.member_metadata_size_bytes} (when
-     * Micrometer is initialised).
-     *
-     * <p>The returned future is always successful: the merger tolerates
-     * malformed members internally and emits a minimal {@code <metadata/>}
-     * if every member parse failed.
+     * Sequentially try {@code members[idx]}; on 200 apply the cooldown filter
+     * + cache, on 404/5xx drain the body and recurse to the next member.
+     * Once the index walks past the end, fall back to the last-known-good
+     * stale cache, then 404.
      */
-    private CompletableFuture<byte[]> mergeStreaming(final List<byte[]> metadataList) {
-        return CompletableFuture.supplyAsync(() -> {
-            final StreamingMetadataMerger merger = new StreamingMetadataMerger();
-            for (final byte[] body : metadataList) {
-                if (body == null || body.length == 0) {
-                    continue;
+    private CompletableFuture<Response> tryMembersSequentially(
+        final RequestLine line,
+        final Headers headers,
+        final String path,
+        final String cacheKey,
+        final int idx,
+        final long fetchStartTime
+    ) {
+        if (idx >= this.members.size()) {
+            return staleFallbackOrNotFound(path, cacheKey, fetchStartTime);
+        }
+        final String member = this.members.get(idx);
+        final Slice memberSlice = this.resolver.slice(
+            new Key.From(member), this.port, this.depth + 1
+        );
+        // Member slices are wrapped in TrimPathSlice which expects paths
+        // with the member name as the first segment.
+        final RequestLine memberLine = rewritePath(line, member);
+        return memberSlice.response(memberLine, dropFullPathHeader(headers), Content.EMPTY)
+            .thenCompose(resp -> {
+                if (resp.status() == RsStatus.OK) {
+                    return readResponseBody(resp.body())
+                        .thenCompose(rawBytes -> {
+                            this.recordMemberBodySize(rawBytes.length);
+                            return applyCooldownFilter(path, rawBytes)
+                                .thenApply(filteredBytes -> {
+                                    final long fetchDuration =
+                                        System.currentTimeMillis() - fetchStartTime;
+                                    // Cache the filtered winning bytes so
+                                    // late callers + the L2 cache see the
+                                    // post-cooldown view, never an
+                                    // unfiltered blob that pre-dates the
+                                    // current cooldown policy.
+                                    MavenGroupSlice.this.metadataCache.put(
+                                        cacheKey, filteredBytes
+                                    );
+                                    recordMetadataOperation("fetch", fetchDuration);
+                                    if (fetchDuration > 500) {
+                                        EcsLogger.debug("com.auto1.pantera.maven")
+                                            .message("Slow sequential metadata fetch")
+                                            .eventCategory("web")
+                                            .eventAction("metadata_fetch")
+                                            .eventOutcome("success")
+                                            .field("repository.name", this.group)
+                                            .field("url.path", path)
+                                            .field("event.duration", fetchDuration)
+                                            .field("repository.member", member)
+                                            .log();
+                                    }
+                                    return ResponseBuilder.ok()
+                                        .header("Content-Type", "application/xml")
+                                        .body(filteredBytes)
+                                        .build();
+                                });
+                        });
                 }
-                this.recordMemberBodySize(body.length);
-                merger.mergeMember(new ByteArrayInputStream(body));
-            }
-            return merger.toXml();
-        });
+                // Non-OK: drain body to release upstream connection, then
+                // recurse to the next member. 404 is normal (artifact not
+                // present in this member); 5xx logs at WARN and falls
+                // through identically — the next member may still answer.
+                if (resp.status() != RsStatus.NOT_FOUND) {
+                    EcsLogger.warn("com.auto1.pantera.maven")
+                        .message("Member returned non-OK status; trying next")
+                        .eventCategory("web")
+                        .eventAction("metadata_fetch")
+                        .eventOutcome("failure")
+                        .field("repository.name", this.group)
+                        .field("repository.member", member)
+                        .field("http.response.status_code", resp.status().code())
+                        .field("url.path", path)
+                        .log();
+                }
+                return resp.body().asBytesFuture()
+                    .thenCompose(drained -> tryMembersSequentially(
+                        line, headers, path, cacheKey, idx + 1, fetchStartTime
+                    ));
+            })
+            .exceptionally(err -> {
+                EcsLogger.warn("com.auto1.pantera.maven")
+                    .message("Member fetch threw; trying next: " + member)
+                    .eventCategory("web")
+                    .eventAction("metadata_fetch")
+                    .eventOutcome("failure")
+                    .field("repository.name", this.group)
+                    .field("repository.member", member)
+                    .field("url.path", path)
+                    .error(err)
+                    .log();
+                return null;
+            })
+            .thenCompose(resp -> {
+                if (resp != null) {
+                    return CompletableFuture.completedFuture(resp);
+                }
+                // Exception path collapsed to null — try next.
+                return tryMembersSequentially(
+                    line, headers, path, cacheKey, idx + 1, fetchStartTime
+                );
+            });
+    }
+
+    /**
+     * All members exhausted: return last-known-good stale bytes if the L2
+     * cache has them, otherwise 404.
+     */
+    private CompletableFuture<Response> staleFallbackOrNotFound(
+        final String path,
+        final String cacheKey,
+        final long fetchStartTime
+    ) {
+        final long fetchDuration = System.currentTimeMillis() - fetchStartTime;
+        return this.metadataCache.getStale(cacheKey)
+            .thenApply(stale -> {
+                if (stale.isPresent()) {
+                    EcsLogger.warn("com.auto1.pantera.maven")
+                        .message("Returning stale metadata (all members 404)")
+                        .eventCategory("web")
+                        .eventAction("metadata_fetch")
+                        .eventOutcome("success")
+                        .field("event.reason", "stale_cache_fallback")
+                        .field("repository.name", this.group)
+                        .field("url.path", path)
+                        .field("event.duration", fetchDuration)
+                        .log();
+                    return ResponseBuilder.ok()
+                        .header("Content-Type", "application/xml")
+                        .body(stale.get())
+                        .build();
+                }
+                EcsLogger.warn("com.auto1.pantera.maven")
+                    .message("No member returned metadata and no stale fallback")
+                    .eventCategory("web")
+                    .eventAction("metadata_fetch")
+                    .eventOutcome("failure")
+                    .field("repository.name", this.group)
+                    .field("url.path", path)
+                    .field("event.duration", fetchDuration)
+                    .log();
+                return ResponseBuilder.notFound().build();
+            });
     }
 
     /**
