@@ -926,10 +926,11 @@ public final class VertxMain {
             this.prefetchCoordinator.start();
             this.prefetchCoordinator.subscribe(this.settingsCache);
             // Parser registry: maven + gradle share MavenPomParser; npm uses
-            // NpmPackageParser fronted by CachedNpmMetadataLookup, which
-            // resolves version ranges against locally-cached packuments
-            // (NEVER initiates an upstream metadata fetch — pre-fetch must
-            // stay strictly local). The lookup snapshots the npm-proxy
+            // NpmCompositeParser which dispatches by file shape (gzip magic
+            // → tarball parser; otherwise → packument parser, Phase 13).
+            // Metadata-range resolution is fronted by CachedNpmMetadataLookup
+            // and stays strictly local — pre-fetch never initiates an
+            // upstream metadata fetch. The lookup snapshots the npm-proxy
             // storages on every call so live config reloads (a new
             // npm-proxy added at runtime) are picked up automatically.
             final com.auto1.pantera.prefetch.parser.NpmMetadataLookup npmLookup =
@@ -940,7 +941,7 @@ public final class VertxMain {
                 com.auto1.pantera.prefetch.parser.PrefetchParser> parsers = java.util.Map.of(
                 "maven-proxy", new com.auto1.pantera.prefetch.parser.MavenPomParser(),
                 "gradle-proxy", new com.auto1.pantera.prefetch.parser.MavenPomParser(),
-                "npm-proxy", new com.auto1.pantera.prefetch.parser.NpmPackageParser(npmLookup)
+                "npm-proxy", new com.auto1.pantera.prefetch.parser.NpmCompositeParser(npmLookup)
             );
             this.prefetchDispatcher = new com.auto1.pantera.prefetch.PrefetchDispatcher(
                 this.settingsCache::prefetchTuning,

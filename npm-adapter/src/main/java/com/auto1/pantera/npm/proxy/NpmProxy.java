@@ -94,6 +94,25 @@ public class NpmProxy {
     private final Consumer<String> cacheWriteHook;
 
     /**
+     * Optional packument-write hook fired after a successful packument save
+     * (cache miss → upstream fetch → persist {@code <name>/meta.json}).
+     * Receives the package name so the consumer can fire a
+     * {@link com.auto1.pantera.http.cache.CacheWriteEvent} keyed at the
+     * packument file (Phase 13 speculative packument prefetch).
+     *
+     * <p>The packument waterfall is the dominant cold-cache npm bottleneck
+     * (Phase 12.5: 8.45s of 12.9s wall = 65%). This hook lets the
+     * prefetch dispatcher parse the packument JSON, identify direct-dep
+     * package names, and dispatch packument GETs for those deps so that
+     * by the time {@code npm install} walks the tree the metadata is
+     * already warm.</p>
+     *
+     * <p>Default is a no-op so existing constructors and tests stay
+     * unchanged.</p>
+     */
+    private final Consumer<String> packumentWriteHook;
+
+    /**
      * Phase 11.5 — fine-grained sub-phase recorder for the cold-cache asset
      * path (cache_check / upstream_fetch_and_save / save / reload). Receives
      * (phase name, durationNs). Default = no-op so existing constructors and
@@ -173,6 +192,7 @@ public class NpmProxy {
             new HttpNpmRemote(client),
             metadataTtl,
             cacheWriteHook,
+            null,
             null
         );
     }
@@ -205,6 +225,41 @@ public class NpmProxy {
             new HttpNpmRemote(client),
             metadataTtl,
             cacheWriteHook,
+            null,
+            phaseRecorder
+        );
+    }
+
+    /**
+     * Production ctor with packument write hook (Phase 13).
+     *
+     * <p>Adds a packument-write hook fired after a successful packument
+     * save so the prefetch dispatcher can parse the packument JSON and
+     * issue speculative packument GETs for direct deps. See
+     * {@link #packumentWriteHook} for rationale.</p>
+     *
+     * @param storage Adapter storage
+     * @param client Client slice
+     * @param metadataTtl Metadata TTL duration
+     * @param cacheWriteHook Post-save hook on cache-miss tarball writes; null treated as no-op
+     * @param packumentWriteHook Post-save hook on packument writes; null treated as no-op
+     * @param phaseRecorder Sub-phase timer recorder; null treated as no-op
+     */
+    @SuppressWarnings("PMD.ExcessiveParameterList")
+    public NpmProxy(
+        final Storage storage,
+        final Slice client,
+        final Duration metadataTtl,
+        final Consumer<String> cacheWriteHook,
+        final Consumer<String> packumentWriteHook,
+        final BiConsumer<String, Long> phaseRecorder
+    ) {
+        this(
+            new RxNpmProxyStorage(new RxStorageWrapper(storage), phaseRecorder),
+            new HttpNpmRemote(client),
+            metadataTtl,
+            cacheWriteHook,
+            packumentWriteHook,
             phaseRecorder
         );
     }
@@ -215,7 +270,7 @@ public class NpmProxy {
      * @param remote Remote repository client
      */
     NpmProxy(final NpmProxyStorage storage, final NpmRemote remote) {
-        this(storage, remote, DEFAULT_METADATA_TTL, null, null);
+        this(storage, remote, DEFAULT_METADATA_TTL, null, null, null);
     }
 
     /**
@@ -225,7 +280,7 @@ public class NpmProxy {
      * @param metadataTtl Metadata TTL duration
      */
     NpmProxy(final NpmProxyStorage storage, final NpmRemote remote, final Duration metadataTtl) {
-        this(storage, remote, metadataTtl, null, null);
+        this(storage, remote, metadataTtl, null, null, null);
     }
 
     /**
@@ -241,12 +296,12 @@ public class NpmProxy {
         final Duration metadataTtl,
         final Consumer<String> cacheWriteHook
     ) {
-        this(storage, remote, metadataTtl, cacheWriteHook, null);
+        this(storage, remote, metadataTtl, cacheWriteHook, null, null);
     }
 
     /**
      * Default-scoped ctor with TTL, cache-write hook, and phase recorder.
-     * Phase 11.5 fine-grained sub-phase profiling.
+     * Phase 11.5 fine-grained sub-phase profiling. Packument hook left null.
      *
      * @param storage NPM storage
      * @param remote Remote repository client
@@ -261,6 +316,29 @@ public class NpmProxy {
         final Consumer<String> cacheWriteHook,
         final BiConsumer<String, Long> phaseRecorder
     ) {
+        this(storage, remote, metadataTtl, cacheWriteHook, null, phaseRecorder);
+    }
+
+    /**
+     * Default-scoped ctor with TTL, cache-write hook, packument-write hook,
+     * and phase recorder. Phase 13 — speculative packument prefetch.
+     *
+     * @param storage NPM storage
+     * @param remote Remote repository client
+     * @param metadataTtl Metadata TTL duration
+     * @param cacheWriteHook Post-save hook on cache-miss tarball writes; null treated as no-op
+     * @param packumentWriteHook Post-save hook on packument writes; null treated as no-op
+     * @param phaseRecorder (phase, durationNs) recorder; null treated as no-op
+     */
+    @SuppressWarnings("PMD.ExcessiveParameterList")
+    NpmProxy(
+        final NpmProxyStorage storage,
+        final NpmRemote remote,
+        final Duration metadataTtl,
+        final Consumer<String> cacheWriteHook,
+        final Consumer<String> packumentWriteHook,
+        final BiConsumer<String, Long> phaseRecorder
+    ) {
         this.storage = storage;
         this.remote = remote;
         this.metadataTtl = metadataTtl;
@@ -271,6 +349,7 @@ public class NpmProxy {
         final Executor ctxExec = ContextualExecutor.contextualize(ForkJoinPool.commonPool());
         this.backgroundScheduler = Schedulers.from(ctxExec);
         this.cacheWriteHook = cacheWriteHook == null ? path -> { } : cacheWriteHook;
+        this.packumentWriteHook = packumentWriteHook == null ? name -> { } : packumentWriteHook;
         this.phaseRecorder = phaseRecorder == null ? (phase, ns) -> { } : phaseRecorder;
     }
 
@@ -608,7 +687,9 @@ public class NpmProxy {
             res = Maybe.empty();
         } else {
             res = pckg.flatMap(
-                pkg -> this.storage.save(pkg).andThen(Maybe.just(pkg))
+                pkg -> this.storage.save(pkg)
+                    .doOnComplete(() -> this.firePackumentWriteHook(pkg.name()))
+                    .andThen(Maybe.just(pkg))
             );
         }
         return res;
@@ -631,7 +712,9 @@ public class NpmProxy {
             return Maybe.empty();
         }
         return pckg.flatMap(
-            pkg -> this.storage.save(pkg).andThen(Maybe.just(Boolean.TRUE))
+            pkg -> this.storage.save(pkg)
+                .doOnComplete(() -> this.firePackumentWriteHook(pkg.name()))
+                .andThen(Maybe.just(Boolean.TRUE))
         );
     }
 
@@ -652,7 +735,31 @@ public class NpmProxy {
             return Maybe.empty();
         }
         return pckg.flatMap(
-            pkg -> this.storage.save(pkg).andThen(Maybe.just(pkg.meta()))
+            pkg -> this.storage.save(pkg)
+                .doOnComplete(() -> this.firePackumentWriteHook(pkg.name()))
+                .andThen(Maybe.just(pkg.meta()))
         );
+    }
+
+    /**
+     * Fire the packument-write hook with the freshly-saved package name.
+     * Throws are swallowed: a broken consumer must never break the serve path.
+     *
+     * @param name Package name that was just saved
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private void firePackumentWriteHook(final String name) {
+        try {
+            this.packumentWriteHook.accept(name);
+        } catch (final Exception thrown) {
+            EcsLogger.warn("com.auto1.pantera.npm.proxy")
+                .message("npm packumentWriteHook threw; serve path unaffected")
+                .eventCategory("process")
+                .eventAction("packument_write_hook")
+                .eventOutcome("failure")
+                .field("package.name", name)
+                .error(thrown)
+                .log();
+        }
     }
 }

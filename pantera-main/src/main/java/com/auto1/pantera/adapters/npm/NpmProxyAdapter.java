@@ -105,11 +105,14 @@ public final class NpmProxyAdapter implements Slice {
                                     .recordProxyPhaseDuration(repoName, phase, durationNs);
                             }
                         };
+                    final NpmCacheWriteBridge bridge =
+                        new NpmCacheWriteBridge(npmStorage, cfg.name());
                     final NpmProxy npmProxy = new NpmProxy(
                         npmStorage,
                         remoteSlice,
                         NpmProxy.DEFAULT_METADATA_TTL,
-                        new NpmCacheWriteBridge(npmStorage, cfg.name()).hook(),
+                        bridge.hook(),
+                        bridge.packumentHook(),
                         phaseRecorder
                     );
                     

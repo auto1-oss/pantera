@@ -43,4 +43,29 @@ class CoordinateTest {
             new IsEqual<>("react/-/react-18.0.0.tgz")
         );
     }
+
+    @Test
+    void npmPackumentUnscopedPath() {
+        MatcherAssert.assertThat(
+            Coordinate.npmPackument("express").path(),
+            new IsEqual<>("express")
+        );
+    }
+
+    @Test
+    void npmPackumentScopedPath() {
+        MatcherAssert.assertThat(
+            Coordinate.npmPackument("@types/node").path(),
+            new IsEqual<>("@types/node")
+        );
+    }
+
+    @Test
+    void npmPackumentEcosystemAndVersion() {
+        final Coordinate coord = Coordinate.npmPackument("express");
+        MatcherAssert.assertThat(
+            coord.ecosystem(), new IsEqual<>(Coordinate.Ecosystem.NPM_PACKUMENT)
+        );
+        MatcherAssert.assertThat(coord.version(), new IsEqual<>(""));
+    }
 }

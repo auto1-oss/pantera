@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+- **Phase 13: speculative packument prefetch on the cold-cache npm
+  critical path.** Phase 12.5 profiling pinpointed the packument
+  waterfall (8.45 s of 12.9 s wall = 65 %) as the dominant cold-cache
+  npm cost: `npm install` walks each dep's packument serially before
+  fetching tarballs, and the existing tarball prefetch (Phase 9) fires
+  too late to warm the metadata path. JFrog/Verdaccio do this; pantera
+  did not.
+
+  Implementation:
+  1. `NpmProxy` gains a second hook (`packumentWriteHook`) fired after a
+     successful packument save (`storage.save(NpmPackage)`). Symmetric to
+     the existing tarball `cacheWriteHook` (Phase 9).
+  2. `NpmCacheWriteBridge.packumentHook()` mirrors `hook()` for tarballs
+     — fires `CacheWriteEvent` with `urlPath = packageName` and
+     `bytesOnDisk = pathFor(<name>/meta.json)` via `Storage.pathFor`
+     (zero-copy passthrough, Phase 11).
+  3. New `Coordinate.npmPackument(name)` factory + `NPM_PACKUMENT`
+     ecosystem render the canonical packument URL (`<scope>/<name>` —
+     no `/-/<file>.tgz` suffix). The coordinator's per-upstream
+     concurrency cap and metric labels normalize `NPM_PACKUMENT` →
+     `"npm"` so packument prefetches share the same registry.npmjs.org
+     budget as tarball prefetches (4-cap by default).
+  4. `NpmPackumentParser` reads the packument JSON, picks
+     `dist-tags.latest` (falls back to highest stable semver), and
+     emits packument coords for each direct dep. devDependencies and
+     older versions intentionally ignored.
+  5. `NpmCompositeParser` dispatches to the right sub-parser by file
+     shape: gzip magic (`0x1F`) → tarball parser; otherwise → packument
+     parser. Both events arrive on the same `npm-proxy` repo type.
+
+  10-iteration cold-cache `npm install express`:
+  before (Phase 12):  pantera p50 3.02 s (2.44× direct, direct p50 1.24 s);
+  after  (Phase 13):  pantera p50 3.39 s (2.70× direct, direct p50 1.25 s).
+  108 packument prefetches dispatched per cold install (35 fetched 200,
+  73 dropped on `semaphore_saturated`, 24 deduped). Wall change is
+  within the per-iteration noise band (stdev 4.27 s — two 13 s outliers
+  in 10 runs). Excluding the outliers, pantera p50 ≈ 3.05 s — flat
+  vs. baseline. Maven cold-cache (`mvn dependency:resolve
+  sonar-maven-plugin`, 10 iter) unchanged: p50 13.63 s.
+
+  Diagnostic finding: per-upstream cap of 4 (npm) means the
+  speculative prefetch loses the `tryAcquire` race against foreground
+  npm install for most slots, hence the high `semaphore_saturated`
+  drop count. Net wall-time benefit on this benchmark is therefore
+  negligible. The Phase 13 plumbing is complete and structurally
+  sound — addressing the semaphore contention (separate prefetch
+  connection pool, or foreground-priority semaphore) is left for a
+  follow-up. Above the v2.2.0 ≤1.5× target.
+
 - **Phase 12: tee upstream stream to disk + client; parallelise meta + data writes.**
   Phase 11.5 sub-phase profiling pinpointed two hotspots in the
   `RxNpmProxyStorage` cold-cache path: `save_meta` at ~46 ms/req (sequential

@@ -289,7 +289,7 @@ public final class PrefetchCoordinator {
             this.breaker.recordDrop();
             return;
         }
-        this.metrics.dispatched(task.repoName(), task.coord().ecosystem().name().toLowerCase(java.util.Locale.ROOT));
+        this.metrics.dispatched(task.repoName(), ecosystemKey(task.coord()));
     }
 
     /**
@@ -426,7 +426,7 @@ public final class PrefetchCoordinator {
                 this.inFlight.remove(dedupKey(task));
                 this.metrics.completed(
                     task.repoName(),
-                    task.coord().ecosystem().name().toLowerCase(java.util.Locale.ROOT),
+                    ecosystemKey(task.coord()),
                     OUTCOME_ERROR
                 );
                 EcsLogger.warn("com.auto1.pantera.prefetch.PrefetchCoordinator")
@@ -439,7 +439,7 @@ public final class PrefetchCoordinator {
 
     private void process(final PrefetchTask task, final Runtime curr) {
         final String key = dedupKey(task);
-        final String ecosystem = task.coord().ecosystem().name().toLowerCase(java.util.Locale.ROOT);
+        final String ecosystem = ecosystemKey(task.coord());
         // 1) Negative cache short-circuit.
         final NegativeCacheKey nck = negKey(task);
         if (this.negativeCache.isKnown404(nck)) {
@@ -571,6 +571,21 @@ public final class PrefetchCoordinator {
         return task.repoName() + '|' + task.coord().path();
     }
 
+    /**
+     * Resolve the ecosystem key used for per-upstream concurrency lookup
+     * and metric labels. Phase 13 packument coords share the same upstream
+     * registry as tarball coords (registry.npmjs.org), so they MUST bucket
+     * under the same per-host cap as NPM tarballs ({@code "npm"} = 4 by
+     * default) — otherwise packument prefetches would silently fall back
+     * to the global default (16) and oversaturate the upstream pool.
+     */
+    private static String ecosystemKey(final Coordinate coord) {
+        return switch (coord.ecosystem()) {
+            case NPM, NPM_PACKUMENT -> "npm";
+            case MAVEN -> "maven";
+        };
+    }
+
     private static NegativeCacheKey negKey(final PrefetchTask task) {
         final Coordinate coord = task.coord();
         final String name;
@@ -579,6 +594,7 @@ public final class PrefetchCoordinator {
                 name = coord.groupOrNamespace() + '/' + coord.name();
                 break;
             case NPM:
+            case NPM_PACKUMENT:
             default:
                 name = coord.groupOrNamespace().isEmpty()
                     ? coord.name() : coord.groupOrNamespace() + '/' + coord.name();

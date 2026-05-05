@@ -154,6 +154,68 @@ final class NpmCacheWriteBridgeTest {
     }
 
     @Test
+    void packumentHook_firesEventWithStoragePath_pointingAtMetaJson() throws Exception {
+        // Save a fake packument meta.json directly through FileStorage so
+        // the on-disk path returned by pathFor(<name>/meta.json) actually
+        // exists.
+        final FileStorage storage = new FileStorage(this.tmp);
+        final byte[] packument = "{\"name\":\"express\",\"versions\":{}}".getBytes();
+        final Key metaKey = new Key.From("express", "meta.json");
+        storage.save(metaKey, new Content.From(packument)).join();
+
+        final Path storageOwnedPath = storage.pathFor(metaKey).orElseThrow();
+        MatcherAssert.assertThat(
+            "precondition: storage path must exist on disk after save",
+            Files.exists(storageOwnedPath), Matchers.is(true)
+        );
+
+        final NpmCacheWriteBridge bridge = new NpmCacheWriteBridge(storage, REPO);
+        bridge.packumentHook().accept("express");
+
+        MatcherAssert.assertThat(
+            "exactly one CacheWriteEvent must fire for the packument",
+            this.captured.events.size(), Matchers.equalTo(1)
+        );
+        final CacheWriteEvent event = this.captured.events.get(0);
+        MatcherAssert.assertThat(event.repoName(), Matchers.equalTo(REPO));
+        MatcherAssert.assertThat(
+            "url.path on a packument event is the package name",
+            event.urlPath(), Matchers.equalTo("express")
+        );
+        MatcherAssert.assertThat(
+            "bytesOnDisk must point at <name>/meta.json (zero-copy passthrough)",
+            event.bytesOnDisk(), Matchers.equalTo(storageOwnedPath)
+        );
+        MatcherAssert.assertThat(
+            "callerOwnsSnapshot must be false for storage-owned passthrough",
+            event.callerOwnsSnapshot(), Matchers.is(false)
+        );
+        MatcherAssert.assertThat(
+            "sizeBytes must match the saved packument length",
+            event.sizeBytes(), Matchers.equalTo((long) packument.length)
+        );
+        MatcherAssert.assertThat(
+            "storage-owned path MUST still exist (not deleted by the bridge)",
+            Files.exists(storageOwnedPath), Matchers.is(true)
+        );
+    }
+
+    @Test
+    void packumentHook_noOpRegistry_skipsEventEntirely() {
+        CacheWriteCallbackRegistry.instance().clear();
+        final FileStorage storage = new FileStorage(this.tmp);
+        storage.save(new Key.From("express", "meta.json"), new Content.From("{}".getBytes())).join();
+        final NpmCacheWriteBridge bridge = new NpmCacheWriteBridge(storage, REPO);
+
+        bridge.packumentHook().accept("express");
+
+        MatcherAssert.assertThat(
+            "no event fires when registry callback is a no-op",
+            this.captured.events.size(), Matchers.equalTo(0)
+        );
+    }
+
+    @Test
     void noOpRegistry_skipsEventEntirely() {
         // Clear the registry so the shared callback is the no-op sentinel.
         CacheWriteCallbackRegistry.instance().clear();

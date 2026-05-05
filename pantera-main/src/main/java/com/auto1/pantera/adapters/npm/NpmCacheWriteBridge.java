@@ -81,6 +81,21 @@ public final class NpmCacheWriteBridge {
     }
 
     /**
+     * Build a hook for {@code NpmProxy} that fires {@code CacheWriteEvent} on
+     * each packument cache-miss save (Phase 13 speculative packument prefetch).
+     * The fired event's {@code urlPath} is the package name (e.g. {@code express}
+     * or {@code @scope/name}) and {@code bytesOnDisk} points at the
+     * {@code <name>/meta.json} packument file via {@link Storage#pathFor}.
+     *
+     * <p>Skips when no callback is installed.</p>
+     *
+     * @return Consumer suitable for {@code NpmProxy}'s {@code packumentWriteHook}
+     */
+    public Consumer<String> packumentHook() {
+        return this::onPackumentSaved;
+    }
+
+    /**
      * Fire a {@link CacheWriteEvent} for the just-saved asset.
      *
      * <p><b>Fast path (Phase 11).</b> When the storage exposes an on-disk
@@ -189,6 +204,115 @@ public final class NpmCacheWriteBridge {
                     .message("npm cache-write bridge: failed to read just-saved asset")
                     .field("repository.name", this.repoName)
                     .field("url.path", assetPath)
+                    .error(err)
+                    .log();
+                return null;
+            });
+    }
+
+    /**
+     * Fire a {@link CacheWriteEvent} for a freshly-saved npm packument
+     * (Phase 13). The event's {@code urlPath} is the package name and
+     * {@code bytesOnDisk} points at {@code <name>/meta.json} which holds the
+     * packument JSON. Uses the FileStorage zero-copy passthrough path when
+     * available; falls back to materialising a temp file otherwise.
+     *
+     * <p>Any throwable is logged and swallowed — never propagates to the
+     * serve path.</p>
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private void onPackumentSaved(final String packageName) {
+        final long entryNs = System.nanoTime();
+        final Consumer<CacheWriteEvent> shared =
+            CacheWriteCallbackRegistry.instance().sharedCallback();
+        if (CacheWriteCallbackRegistry.instance().isNoOp(shared)) {
+            return;
+        }
+        EcsLogger.debug("com.auto1.pantera.adapters.npm")
+            .message("npm packument bridge: firing CacheWriteEvent")
+            .eventCategory("process")
+            .eventAction("packument_write_event")
+            .field("repository.name", this.repoName)
+            .field("package.name", packageName)
+            .log();
+        // The packument JSON lives at <name>/meta.json under the npm-proxy
+        // storage. The url.path carried on the event is the package name
+        // itself (matches the upstream URL <registry>/<name>) so the
+        // dispatcher can route by URL shape.
+        final Key key = new Key.From(packageName, "meta.json");
+        final Optional<Path> storagePath = this.storage.pathFor(key);
+        if (storagePath.isPresent()) {
+            try {
+                final long size = Files.size(storagePath.get());
+                shared.accept(new CacheWriteEvent(
+                    this.repoName,
+                    packageName,
+                    storagePath.get(),
+                    size,
+                    Instant.now(),
+                    false
+                ));
+            } catch (final IOException ex) {
+                EcsLogger.debug("com.auto1.pantera.adapters.npm")
+                    .message("npm packument bridge: storage path passthrough race; skipping CacheWriteEvent")
+                    .field("repository.name", this.repoName)
+                    .field("package.name", packageName)
+                    .error(ex)
+                    .log();
+            } catch (final Exception ex) {
+                EcsLogger.warn("com.auto1.pantera.adapters.npm")
+                    .message("Failed to fire npm packument CacheWriteEvent (zero-copy path)")
+                    .eventCategory("process")
+                    .eventAction("packument_write_event")
+                    .eventOutcome("failure")
+                    .field("repository.name", this.repoName)
+                    .field("package.name", packageName)
+                    .error(ex)
+                    .log();
+            } finally {
+                recordPhase("bridge_packument_total", entryNs);
+            }
+            return;
+        }
+        // Fallback: materialise temp file from storage value().
+        final long readNs = System.nanoTime();
+        this.storage.value(key)
+            .thenCompose(content -> content.asBytesFuture())
+            .whenComplete((b, e) -> recordPhase("bridge_packument_storage_read", readNs))
+            .thenAccept(bytes -> {
+                final long writeNs = System.nanoTime();
+                Path tmp = null;
+                try {
+                    tmp = Files.createTempFile("pantera-npm-packument-", ".json");
+                    Files.write(tmp, bytes);
+                    recordPhase("bridge_packument_temp_write", writeNs);
+                    shared.accept(new CacheWriteEvent(
+                        this.repoName,
+                        packageName,
+                        tmp,
+                        bytes.length,
+                        Instant.now()
+                    ));
+                } catch (final Exception ex) {
+                    EcsLogger.warn("com.auto1.pantera.adapters.npm")
+                        .message("Failed to fire npm packument CacheWriteEvent")
+                        .eventCategory("process")
+                        .eventAction("packument_write_event")
+                        .eventOutcome("failure")
+                        .field("repository.name", this.repoName)
+                        .field("package.name", packageName)
+                        .error(ex)
+                        .log();
+                } finally {
+                    deleteQuietly(tmp);
+                    recordPhase("bridge_packument_total", entryNs);
+                }
+            })
+            .exceptionally(err -> {
+                EcsLogger.debug("com.auto1.pantera.adapters.npm")
+                    .message("npm packument bridge: failed to read just-saved packument")
+                    .field("repository.name", this.repoName)
+                    .field("package.name", packageName)
                     .error(err)
                     .log();
                 return null;
