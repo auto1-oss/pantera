@@ -29,6 +29,7 @@ import java.time.OffsetDateTime;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
+import java.util.function.Consumer;
 
 /**
  * NPM Proxy.
@@ -72,6 +73,26 @@ public class NpmProxy {
     private final Scheduler backgroundScheduler;
 
     /**
+     * Optional cache-write hook fired after a successful asset save (cache miss
+     * → upstream fetch → persist to storage). Receives the asset path so the
+     * consumer can materialise the freshly-saved bytes (typically into a temp
+     * file) and fire a {@link com.auto1.pantera.http.cache.CacheWriteEvent}.
+     *
+     * <p>Default is a no-op so existing constructors and tests stay unchanged.
+     * Production wiring (see {@code NpmProxyAdapter}) installs a consumer that
+     * bridges to {@link com.auto1.pantera.http.cache.CacheWriteCallbackRegistry}
+     * for prefetch dispatch — mirrors the path
+     * {@code BaseCachedProxySlice} / {@code ProxyCacheWriter} use for the other
+     * proxy adapters.
+     *
+     * <p>Hook is invoked synchronously after {@code storage.save} completes,
+     * before the asset is reloaded for the response. Throws are swallowed by
+     * the consumer per the {@code CacheWriteEvent} contract — never on the
+     * serve path.</p>
+     */
+    private final Consumer<String> cacheWriteHook;
+
+    /**
      * Ctor.
      * @param remote Uri remote
      * @param storage Adapter storage
@@ -113,12 +134,42 @@ public class NpmProxy {
     }
 
     /**
+     * Ctor with cache-write hook.
+     *
+     * <p>Used by production wiring to fire {@code CacheWriteEvent} after each
+     * successful asset save so the speculative-prefetch dispatcher can warm
+     * the cache for direct dependencies. The hook receives the asset path
+     * (e.g. {@code @scope/pkg/-/pkg-1.2.3.tgz}) immediately after
+     * {@code storage.save(asset)} completes and is responsible for
+     * materialising the bytes + invoking the registry callback.</p>
+     *
+     * @param storage Adapter storage
+     * @param client Client slice
+     * @param metadataTtl Metadata TTL duration
+     * @param cacheWriteHook Post-save hook invoked with the asset path on
+     *                       cache-miss writes; null treated as no-op
+     */
+    public NpmProxy(
+        final Storage storage,
+        final Slice client,
+        final Duration metadataTtl,
+        final Consumer<String> cacheWriteHook
+    ) {
+        this(
+            new RxNpmProxyStorage(new RxStorageWrapper(storage)),
+            new HttpNpmRemote(client),
+            metadataTtl,
+            cacheWriteHook
+        );
+    }
+
+    /**
      * Default-scoped ctor (for tests).
      * @param storage NPM storage
      * @param remote Remote repository client
      */
     NpmProxy(final NpmProxyStorage storage, final NpmRemote remote) {
-        this(storage, remote, DEFAULT_METADATA_TTL);
+        this(storage, remote, DEFAULT_METADATA_TTL, null);
     }
 
     /**
@@ -128,6 +179,22 @@ public class NpmProxy {
      * @param metadataTtl Metadata TTL duration
      */
     NpmProxy(final NpmProxyStorage storage, final NpmRemote remote, final Duration metadataTtl) {
+        this(storage, remote, metadataTtl, null);
+    }
+
+    /**
+     * Default-scoped ctor with TTL and cache-write hook (for tests + wiring).
+     * @param storage NPM storage
+     * @param remote Remote repository client
+     * @param metadataTtl Metadata TTL duration
+     * @param cacheWriteHook Post-save hook on cache-miss writes; null treated as no-op
+     */
+    NpmProxy(
+        final NpmProxyStorage storage,
+        final NpmRemote remote,
+        final Duration metadataTtl,
+        final Consumer<String> cacheWriteHook
+    ) {
         this.storage = storage;
         this.remote = remote;
         this.metadataTtl = metadataTtl;
@@ -137,6 +204,7 @@ public class NpmProxy {
         // and APM span. This replaces the per-call MDC capture/restore.
         final Executor ctxExec = ContextualExecutor.contextualize(ForkJoinPool.commonPool());
         this.backgroundScheduler = Schedulers.from(ctxExec);
+        this.cacheWriteHook = cacheWriteHook == null ? path -> { } : cacheWriteHook;
     }
 
     /**
@@ -320,6 +388,17 @@ public class NpmProxy {
 
     /**
      * Retrieve asset.
+     *
+     * <p>On cache miss the asset is fetched from the upstream remote, persisted
+     * to storage, and reloaded for the response. Immediately after the save
+     * completes (and before the reload) the configured
+     * {@link #cacheWriteHook} is fired with the asset path so production
+     * wiring can dispatch a {@link com.auto1.pantera.http.cache.CacheWriteEvent}
+     * for speculative pre-fetch — symmetric with how
+     * {@code BaseCachedProxySlice} fires its own callback after a successful
+     * proxy cache write. The hook NEVER blocks the serve path: any throwable
+     * is swallowed by the consumer per the registry contract.</p>
+     *
      * @param path Asset path
      * @return Asset data (cached or downloaded from remote repository)
      */
@@ -328,10 +407,33 @@ public class NpmProxy {
             Maybe.defer(
                 () -> this.remote.loadAsset(path, null).flatMap(
                     asset -> this.storage.save(asset)
+                        .doOnComplete(() -> this.fireCacheWriteHook(path))
                         .andThen(Maybe.defer(() -> this.storage.getAsset(path)))
                 )
             )
         );
+    }
+
+    /**
+     * Fire the cache-write hook with the freshly-saved asset path. Throws are
+     * swallowed: a broken consumer must never break the serve path.
+     *
+     * @param path Asset path that was just saved
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private void fireCacheWriteHook(final String path) {
+        try {
+            this.cacheWriteHook.accept(path);
+        } catch (final Exception thrown) {
+            EcsLogger.warn("com.auto1.pantera.npm.proxy")
+                .message("npm cacheWriteHook threw; serve path unaffected")
+                .eventCategory("process")
+                .eventAction("cache_write_hook")
+                .eventOutcome("failure")
+                .field("url.path", path)
+                .error(thrown)
+                .log();
+        }
     }
 
     /**

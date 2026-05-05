@@ -79,13 +79,22 @@ public final class NpmProxyAdapter implements Slice {
                         GenericAuthenticator.create(client, remote.username(), remote.pwd())
                     );
                     
-                    // Create NpmProxy for this remote with 12h metadata TTL
-                    final NpmProxy npmProxy = new NpmProxy(
-                        asto.orElseThrow(() -> new IllegalStateException(
+                    // Create NpmProxy for this remote with 12h metadata TTL.
+                    // Wire a CacheWriteEvent bridge so speculative pre-fetch
+                    // (PrefetchDispatcher.onCacheWrite) fires for npm tarballs
+                    // — symmetric with how BaseCachedProxySlice fires for
+                    // maven/pypi/etc. Without this, the v2.2.0 npm-prefetch
+                    // parser is wired but never invoked.
+                    final Storage npmStorage = asto.orElseThrow(
+                        () -> new IllegalStateException(
                             "npm-proxy requires storage to be set"
-                        )),
+                        )
+                    );
+                    final NpmProxy npmProxy = new NpmProxy(
+                        npmStorage,
                         remoteSlice,
-                        NpmProxy.DEFAULT_METADATA_TTL
+                        NpmProxy.DEFAULT_METADATA_TTL,
+                        new NpmCacheWriteBridge(npmStorage, cfg.name()).hook()
                     );
                     
                     // Wrap with NpmProxySlice
