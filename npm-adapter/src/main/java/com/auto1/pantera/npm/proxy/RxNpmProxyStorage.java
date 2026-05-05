@@ -177,28 +177,177 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
     public Completable save(final NpmAsset asset) {
         final Key key = new Key.From(asset.path());
         final Key metaKey = new Key.From(String.format("%s.meta", asset.path()));
-        // Save metadata FIRST, then data. This ensures that when a reader sees
-        // the tgz file, the .meta file already exists. This prevents validation
-        // failures where the background processor tries to read metadata that
-        // doesn't exist yet.
-        // Phase 11.5: time meta-save and data-save (data-save fuses upstream
-        // body streaming + disk write since asset.dataPublisher() is the live
-        // upstream Publisher<ByteBuffer>).
-        return Completable.defer(() -> {
-            final long metaStartNs = System.nanoTime();
-            return this.storage.save(
-                metaKey,
-                new Content.From(
-                    asset.meta().json().encode().getBytes(StandardCharsets.UTF_8)
-                )
-            ).doOnComplete(() -> recordPhase("npm_storage_save_meta", metaStartNs));
-        }).andThen(Completable.defer(() -> {
-            final long dataStartNs = System.nanoTime();
-            return this.storage.save(
-                key,
-                new Content.From(asset.dataPublisher())
-            ).doOnComplete(() -> recordPhase("npm_storage_save_data", dataStartNs));
-        }));
+        // Phase 12: parallelise meta + data writes via mergeArray.
+        //
+        // Previously this was concatArray(meta, data) which forced the small
+        // meta write (with directory allocation + atomic move) onto the
+        // critical path BEFORE the larger tarball write started. Phase 11.5
+        // profiling showed save_meta = 46 ms/req vs save_data of similar
+        // magnitude — meta-then-data wasted ~46 ms on every cache miss.
+        //
+        // Safety: the existing meta-then-data ordering existed to make the
+        // .meta file visible whenever the .tgz is visible. With parallel
+        // writes, meta and data may finish in either order, and a concurrent
+        // reader could in principle observe data without meta. This is safe
+        // because:
+        //   1. SingleFlight dedup (NpmProxy.refreshing / DownloadAsset) makes
+        //      a second cache-miss read for the same key wait for the first.
+        //   2. RxNpmProxyStorage.getAsset checks storage.exists(data) THEN
+        //      reads both data + meta via zipWith. If meta is missing, the
+        //      zip fails and the caller treats it as a miss → re-fetch. The
+        //      same is true for the post-save reload, but that path waits
+        //      for BOTH save Completables (mergeArray semantics) to complete
+        //      before subscribing.
+        //   3. The Phase 12 stream-through (saveStreamThrough) eliminates the
+        //      post-save reload entirely — meta is written in parallel with
+        //      the data tee.
+        return Completable.mergeArray(
+            Completable.defer(() -> {
+                final long metaStartNs = System.nanoTime();
+                return this.storage.save(
+                    metaKey,
+                    new Content.From(
+                        asset.meta().json().encode().getBytes(StandardCharsets.UTF_8)
+                    )
+                ).doOnComplete(() -> recordPhase("npm_storage_save_meta", metaStartNs));
+            }),
+            Completable.defer(() -> {
+                final long dataStartNs = System.nanoTime();
+                return this.storage.save(
+                    key,
+                    new Content.From(asset.dataPublisher())
+                ).doOnComplete(() -> recordPhase("npm_storage_save_data", dataStartNs));
+            })
+        );
+    }
+
+    /**
+     * Phase 12 — stream-through cache write.
+     *
+     * <p>Instead of consuming the upstream Publisher into storage and then
+     * reloading from disk to serve the client, this method tees the upstream
+     * byte stream so the client receives bytes as they arrive while the same
+     * bytes accumulate in memory and are persisted to storage on completion.
+     * This eliminates the {@code save → reload} round-trip (Phase 11.5
+     * measured ~23 ms/req) and gets the first byte to the client as fast as
+     * the upstream remote can deliver it.
+     *
+     * <p>The returned {@link NpmAsset} carries a tee'd
+     * {@code Publisher<ByteBuffer>} as its data publisher. When the client
+     * subscribes (typically via {@code DownloadAssetSlice} → response body),
+     * each chunk is forwarded downstream AND a copy is appended to an
+     * in-memory buffer. On stream completion the buffered bytes are
+     * persisted to storage via {@link #save(NpmAsset)} which writes meta +
+     * data in parallel (see {@code mergeArray} above). Errors abort the
+     * client stream and skip the storage save (no partial write is
+     * committed).
+     *
+     * <p>Mirrors the {@code FromStorageCache.teeContent} pattern used by the
+     * Maven proxy cache; the buffer-then-save trade-off is acceptable for
+     * npm tarballs (typical size 10 KB–1 MB; ~50 MB worst case) and matches
+     * the existing memory profile of the code path.
+     *
+     * @param asset Asset whose data publisher is tee'd to client + storage
+     * @return Asset with a tee'd data publisher; subscribing drives both
+     *     client delivery and background storage save
+     */
+    @Override
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    public Maybe<NpmAsset> saveStreamThrough(final NpmAsset asset) {
+        return Maybe.just(this.streamThrough(asset));
+    }
+
+    /**
+     * Build a tee'd asset for {@link #saveStreamThrough(NpmAsset)}. Extracted
+     * so the non-Maybe form can be unit-tested directly without needing to
+     * subscribe to the wrapping {@link Maybe}.
+     *
+     * @param asset Upstream asset
+     * @return Asset with tee'd data publisher; meta save is fired immediately
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    NpmAsset streamThrough(final NpmAsset asset) {
+        final Key key = new Key.From(asset.path());
+        final Key metaKey = new Key.From(
+            String.format("%s.meta", asset.path())
+        );
+        // Phase 12: kick the meta save IMMEDIATELY (not after data). The
+        // metadata bytes are known before the upstream body starts flowing
+        // (lastModified + contentType were extracted from response headers
+        // by HttpNpmRemote), so there is no reason to gate the meta write on
+        // the data tee. Fire-and-forget; failures are logged but never break
+        // the serve path.
+        final long metaStartNs = System.nanoTime();
+        this.storage.save(
+            metaKey,
+            new Content.From(
+                asset.meta().json().encode().getBytes(StandardCharsets.UTF_8)
+            )
+        ).subscribe(
+            () -> recordPhase("npm_storage_save_meta", metaStartNs),
+            err -> EcsLogger.warn("com.auto1.pantera.npm")
+                .message("Stream-through: meta save failed; serve path unaffected")
+                .eventCategory("database")
+                .eventAction("stream_through_meta_save")
+                .eventOutcome("failure")
+                .field("url.path", asset.path())
+                .error(err)
+                .log()
+        );
+        // Phase 12: tee the upstream Publisher. Bytes flow to the client as
+        // they arrive; copies accumulate in a ByteArrayOutputStream. On
+        // upstream completion, fire storage.save(data) — at most once via
+        // saveFired CAS — to persist the tarball.
+        final java.io.ByteArrayOutputStream buffer =
+            new java.io.ByteArrayOutputStream();
+        final java.util.concurrent.atomic.AtomicBoolean saveFired =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+        final long dataStartNs = System.nanoTime();
+        final io.reactivex.Flowable<java.nio.ByteBuffer> teed =
+            io.reactivex.Flowable.fromPublisher(asset.dataPublisher())
+                .doOnNext(buf -> {
+                    // Use a read-only view so the original buffer's position
+                    // is preserved for downstream subscribers — this is the
+                    // exact pattern FromStorageCache.teeContent uses.
+                    final java.nio.ByteBuffer copy = buf.asReadOnlyBuffer();
+                    final byte[] bytes = new byte[copy.remaining()];
+                    copy.get(bytes);
+                    buffer.write(bytes);
+                })
+                .doOnComplete(() -> {
+                    if (saveFired.compareAndSet(false, true)) {
+                        try {
+                            this.storage.save(
+                                key,
+                                new Content.From(buffer.toByteArray())
+                            ).subscribe(
+                                () -> recordPhase("npm_storage_save_data", dataStartNs),
+                                err -> EcsLogger.warn("com.auto1.pantera.npm")
+                                    .message(String.format(
+                                        "Stream-through: data save failed for key '%s'; client already served",
+                                        key.string()
+                                    ))
+                                    .eventCategory("database")
+                                    .eventAction("stream_through_data_save")
+                                    .eventOutcome("failure")
+                                    .error(err)
+                                    .log()
+                            );
+                        } catch (final Exception ex) {
+                            EcsLogger.warn("com.auto1.pantera.npm")
+                                .message(String.format(
+                                    "Stream-through: exception initiating data save for key '%s'",
+                                    key.string()
+                                ))
+                                .eventCategory("database")
+                                .eventAction("stream_through_data_save")
+                                .eventOutcome("failure")
+                                .error(ex)
+                                .log();
+                        }
+                    }
+                });
+        return new NpmAsset(asset.path(), teed, asset.meta());
     }
 
     @Override

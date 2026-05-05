@@ -481,10 +481,11 @@ public class NpmProxy {
             ))
             .switchIfEmpty(
                 Maybe.defer(() -> {
-                    // Cache miss path. Time upstream HTTP fetch (header phase),
-                    // then save (which fuses upstream-body-stream with disk
-                    // write since the asset wraps the upstream Publisher),
-                    // then reload (storage.getAsset → readAsset).
+                    // Phase 12: cache-miss path now uses stream-through so the
+                    // client receives bytes AS the upstream delivers them and
+                    // the same byte stream is persisted to storage on
+                    // completion. Eliminates the legacy save → reload
+                    // round-trip (~23 ms/req in Phase 11.5 profiling).
                     final long fetchStartNs = System.nanoTime();
                     return this.remote.loadAsset(path, null)
                         .doOnEvent((asset, err) -> recordPhase(
@@ -492,18 +493,25 @@ public class NpmProxy {
                         ))
                         .flatMap(asset -> {
                             final long saveStartNs = System.nanoTime();
-                            return this.storage.save(asset)
-                                .doOnComplete(() -> recordPhase(
+                            // Wrap the upstream data publisher so the
+                            // cache-write hook fires on the SAME completion
+                            // signal that commits the stream-through save —
+                            // i.e. the client has consumed the full body
+                            // (and the buffered copy has been handed to
+                            // storage.save). If the client disconnects
+                            // mid-stream the hook does NOT fire, mirroring
+                            // the legacy save-then-hook semantics where the
+                            // hook only fires after a successful save.
+                            final NpmAsset hooked = new NpmAsset(
+                                asset.path(),
+                                io.reactivex.Flowable.fromPublisher(asset.dataPublisher())
+                                    .doOnComplete(() -> this.fireCacheWriteHook(path)),
+                                asset.meta()
+                            );
+                            return this.storage.saveStreamThrough(hooked)
+                                .doOnEvent((a, err) -> recordPhase(
                                     "npm_storage_save", saveStartNs
-                                ))
-                                .doOnComplete(() -> this.fireCacheWriteHook(path))
-                                .andThen(Maybe.defer(() -> {
-                                    final long reloadStartNs = System.nanoTime();
-                                    return this.storage.getAsset(path)
-                                        .doOnEvent((a, err) -> recordPhase(
-                                            "npm_storage_reload", reloadStartNs
-                                        ));
-                                }));
+                                ));
                         });
                 })
             );

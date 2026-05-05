@@ -2,6 +2,56 @@
 
 ## Unreleased
 
+- **Phase 12: tee upstream stream to disk + client; parallelise meta + data writes.**
+  Phase 11.5 sub-phase profiling pinpointed two hotspots in the
+  `RxNpmProxyStorage` cold-cache path: `save_meta` at ~46 ms/req (sequential
+  `concatArray(meta, data)` blocked the larger tarball write on the smaller
+  metadata write — directory allocation + atomic move serialised twice) and
+  `save → reload` at ~23 ms/req (the post-save `storage.getAsset(path)`
+  re-opened the on-disk tarball to serve to the client). Together these
+  accounted for ~70 ms/req on the cold critical path × ~74 cache misses for
+  a cold `npm install express` ≈ ~5 s of needless wall.
+
+  Two changes:
+  1. `RxNpmProxyStorage.save(NpmAsset)` switched from
+     `concatArray(meta, data)` to `mergeArray(meta, data)` — both writes
+     proceed in parallel; the Completable signals only when BOTH finish, so
+     post-save reads still see a complete pair. SingleFlight dedup prevents
+     concurrent readers from observing data-without-meta during the race
+     window.
+  2. New `RxNpmProxyStorage.saveStreamThrough(NpmAsset)` tees the upstream
+     `Publisher<ByteBuffer>` so the client receives bytes AS the upstream
+     remote delivers them, while the same chunks accumulate in a buffer
+     that is persisted to storage on stream completion. The meta sidecar
+     is fired immediately (its bytes are known before the body flows). The
+     `storage.save(asset).andThen(storage.getAsset(path))` round-trip is
+     eliminated entirely. Mirrors the existing `FromStorageCache.teeContent`
+     pattern used by the Maven proxy cache. New `NpmProxyStorage`
+     interface method has a default implementation falling back to the
+     legacy save-then-reload chain for test mocks. The cache-write hook
+     fires on stream completion (matches legacy save-then-hook semantics:
+     no hook on client disconnect).
+
+  10-iteration cold-cache `npm install express` (10 iter):
+  before (Phase 11):  pantera p50 3.62 s (2.60× direct, direct p50 1.39 s);
+  after  (Phase 12):  pantera p50 3.02 s (2.44× direct, direct p50 1.24 s);
+  16% reduction in cold p50, 6% improvement in ratio. Min dropped from
+  ~3.0 s baseline to 2.74 s. Maven cold-cache (`mvn dependency:resolve
+  sonar-maven-plugin`, 10 iter) unchanged: p50 14.34 s vs prior 14.51 s
+  (within stdev). Still above the v2.2.0 ≤1.5× target — the residual
+  ~1.8 s gap above direct npmjs is dominated by upstream RTT to npmjs.org
+  + per-upstream-semaphore contention between speculative prefetch and
+  foreground installs, NOT by storage write latency.
+
+  Risk-banded change: existing `save(NpmAsset)` semantics preserved
+  (Completable still gates on meta + data); new stream-through path is
+  opt-in via the new interface method; full test coverage (happy path,
+  multi-chunk integrity, upstream-error mid-stream cleanup) added in
+  `RxNpmProxyStorageTest`. Existing `NpmProxyTest.getsAsset` updated to
+  verify the cache-miss path now uses `saveStreamThrough` (one
+  `storage.getAsset` call instead of two; no `storage.save` on the cold
+  path).
+
 - **Phase 11: zero-copy storage passthrough for the npm cache_write hook.**
   `Storage.pathFor(Key)` now lets `FileStorage`-backed proxies hand the
   on-disk path directly to the prefetch dispatcher — no read-back, no

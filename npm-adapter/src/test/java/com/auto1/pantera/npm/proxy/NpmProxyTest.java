@@ -29,9 +29,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.Mockito;
-import org.mockito.invocation.InvocationOnMock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.mockito.stubbing.Answer;
 
 /**
  * Test NPM Proxy works.
@@ -92,37 +90,28 @@ public final class NpmProxyTest {
 
     @Test
     public void getsAsset() {
+        // Phase 12: cache-miss path now uses storage.saveStreamThrough(asset)
+        // instead of storage.save(asset).andThen(storage.getAsset(path)) so
+        // the client receives bytes as the upstream delivers them — no
+        // post-save reload. Verify the stream-through path is taken.
         final String path = "asdas/-/asdas-1.0.0.tgz";
         final NpmAsset loaded = defaultAsset();
-        final NpmAsset expected = defaultAsset();
-        Mockito.when(this.storage.getAsset(path)).thenAnswer(
-            new Answer<Maybe<NpmAsset>>() {
-                private boolean first = true;
-
-                @Override
-                public Maybe<NpmAsset> answer(final InvocationOnMock invocation) {
-                    final Maybe<NpmAsset> result;
-                    if (this.first) {
-                        this.first = false;
-                        result = Maybe.empty();
-                    } else {
-                        result = Maybe.just(expected);
-                    }
-                    return result;
-                }
-            }
-        );
+        final NpmAsset streamed = defaultAsset();
+        Mockito.when(this.storage.getAsset(path)).thenReturn(Maybe.empty());
         Mockito.when(
             this.remote.loadAsset(Mockito.eq(path), Mockito.any())
         ).thenReturn(Maybe.just(loaded));
-        Mockito.when(this.storage.save(loaded)).thenReturn(Completable.complete());
+        Mockito.when(this.storage.saveStreamThrough(Mockito.any(NpmAsset.class)))
+            .thenReturn(Maybe.just(streamed));
         MatcherAssert.assertThat(
             this.npm.getAsset(path).blockingGet(),
-            new IsSame<>(expected)
+            new IsSame<>(streamed)
         );
-        Mockito.verify(this.storage, Mockito.times(2)).getAsset(path);
+        Mockito.verify(this.storage).getAsset(path);
         Mockito.verify(this.remote).loadAsset(Mockito.eq(path), Mockito.any());
-        Mockito.verify(this.storage).save(loaded);
+        Mockito.verify(this.storage).saveStreamThrough(Mockito.any(NpmAsset.class));
+        // Critical Phase 12 assertion: NO post-save reload.
+        Mockito.verify(this.storage, Mockito.never()).save(Mockito.any(NpmAsset.class));
     }
 
     @Test
