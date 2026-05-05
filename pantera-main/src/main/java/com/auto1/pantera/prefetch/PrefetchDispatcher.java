@@ -257,9 +257,14 @@ public final class PrefetchDispatcher {
             // temp file is deleted as soon as this callback returns
             // (see CacheWriteEvent contract). The async stage owns and
             // deletes the snapshot.
+            // Phase 10.5: time the synchronous snapshot copy. This runs on
+            // the response thread for npm (ForkJoinPool common pool dispatch
+            // for npm-bridge → here) so it's a real wall contributor.
+            final long snapNs = System.nanoTime();
             final Path snapshot;
             try {
                 snapshot = snapshotBytes(event.bytesOnDisk());
+                recordPhase(event.repoName(), "dispatcher_snapshot_copy", snapNs);
             } catch (final IOException ioe) {
                 EcsLogger.warn(LOGGER_NAME)
                     .message("Failed to snapshot cached bytes for async dispatch")
@@ -357,6 +362,20 @@ public final class PrefetchDispatcher {
             throw ioe;
         }
         return tmp;
+    }
+
+    /**
+     * Phase 10.5 profiler — emit a phase histogram tagged by repo so the
+     * dispatcher's hot-path stages are visible alongside the npm slice and
+     * bridge phases under the same {@code pantera_proxy_phase_seconds} metric.
+     */
+    private static void recordPhase(
+        final String repoName, final String phase, final long startNs
+    ) {
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
+                .recordProxyPhaseDuration(repoName, phase, System.nanoTime() - startNs);
+        }
     }
 
     /** Best-effort temp-file delete; silent on failure. */

@@ -135,6 +135,8 @@ public final class DownloadPackageSlice implements Slice {
 
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
+        // Phase 10.5 profiler — total npm packument wall time per request.
+        final long entryNs = System.nanoTime();
         // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
         return body.asBytesFuture().thenCompose(ignored -> {
             // P0.1: Check if client requests abbreviated format
@@ -169,7 +171,8 @@ public final class DownloadPackageSlice implements Slice {
                 // FULL PATH: Load and process full metadata
                 return this.serveFull(rawPackageName, headers, clientETag);
             }
-        }).exceptionally(error -> {
+        }).whenComplete((r, e) -> recordPhase("packument_total", entryNs))
+        .exceptionally(error -> {
             // CRITICAL: Convert exceptions to proper HTTP responses to prevent
             // "Parse Error: Expected HTTP/" errors in npm client.
             // Without this, exceptions propagate up and Vert.x closes the connection
@@ -230,7 +233,10 @@ public final class DownloadPackageSlice implements Slice {
         final Headers headers,
         final Optional<String> clientETag
     ) {
+        // Phase 10.5: time the metadata-only fetch (drives upstream when cache miss).
+        final long metaNs = System.nanoTime();
         return this.npm.getPackageMetadataOnly(packageName)
+            .doOnEvent((m, e) -> recordPhase("packument_metadata_fetch", metaNs))
             .flatMap(metadata -> {
                 // PERF: Early 304 exit - skip content loading if derived ETag matches
                 if (clientETag.isPresent() && metadata.abbreviatedHash().isPresent()) {
@@ -949,6 +955,21 @@ public final class DownloadPackageSlice implements Slice {
             prefix = this.assetPrefix(host);
         }
         return new ClientContent(data, prefix).value().toString();
+    }
+
+    /**
+     * Phase 10.5 profiler — emit per-phase histogram tagged by repo so the
+     * npm cold-cache wall can be decomposed without bringing
+     * {@link com.auto1.pantera.http.cache.BaseCachedProxySlice} into the
+     * structurally-different npm path. Repo name may be null in legacy
+     * test ctors (no cooldownMetadata wiring) — guard with a label fallback.
+     */
+    private void recordPhase(final String phase, final long startNs) {
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            final String label = this.repoName == null ? "npm_proxy_unknown" : this.repoName;
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
+                .recordProxyPhaseDuration(label, phase, System.nanoTime() - startNs);
+        }
     }
 
     /**

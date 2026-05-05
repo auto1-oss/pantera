@@ -81,6 +81,7 @@ public final class NpmCacheWriteBridge {
      */
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void onAssetSaved(final String assetPath) {
+        final long entryNs = System.nanoTime();
         final Consumer<CacheWriteEvent> shared =
             CacheWriteCallbackRegistry.instance().sharedCallback();
         if (CacheWriteCallbackRegistry.instance().isNoOp(shared)) {
@@ -94,19 +95,17 @@ public final class NpmCacheWriteBridge {
             .field("url.path", assetPath)
             .log();
         final Key key = new Key.From(assetPath);
-        // Read the just-saved bytes from storage.
-        // RxNpmProxyStorage.save() persists the tarball at the asset path,
-        // so storage.value(key) returns the same bytes the caller will later
-        // serve. asBytesFuture() is a one-shot consumer that fully drains
-        // the storage publisher; we materialise once into a temp file so
-        // the consumer receives a stable Path per CacheWriteEvent contract.
+        final long readNs = System.nanoTime();
         this.storage.value(key)
             .thenCompose(content -> content.asBytesFuture())
+            .whenComplete((b, e) -> recordPhase("bridge_storage_read", readNs))
             .thenAccept(bytes -> {
+                final long writeNs = System.nanoTime();
                 Path tmp = null;
                 try {
                     tmp = Files.createTempFile("pantera-npm-prefetch-", ".tgz");
                     Files.write(tmp, bytes);
+                    recordPhase("bridge_temp_write", writeNs);
                     shared.accept(new CacheWriteEvent(
                         this.repoName,
                         assetPath,
@@ -126,6 +125,7 @@ public final class NpmCacheWriteBridge {
                         .log();
                 } finally {
                     deleteQuietly(tmp);
+                    recordPhase("bridge_total", entryNs);
                 }
             })
             .exceptionally(err -> {
@@ -137,6 +137,18 @@ public final class NpmCacheWriteBridge {
                     .log();
                 return null;
             });
+    }
+
+    /**
+     * Phase 10.5 profiler — emit per-phase histogram for the bridge stages
+     * under the same {@code pantera_proxy_phase_seconds} histogram used by
+     * the rest of the npm path, tagged by repo name.
+     */
+    private void recordPhase(final String phase, final long startNs) {
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
+                .recordProxyPhaseDuration(this.repoName, phase, System.nanoTime() - startNs);
+        }
     }
 
     /**

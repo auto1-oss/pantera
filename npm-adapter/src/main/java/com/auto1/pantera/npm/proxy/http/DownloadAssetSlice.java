@@ -101,6 +101,8 @@ public final class DownloadAssetSlice implements Slice {
     public CompletableFuture<Response> response(final RequestLine line,
                                                 final Headers rqheaders,
                                                 final Content body) {
+        // Phase 10.5 profiler — total npm tarball wall time per request.
+        final long entryNs = System.nanoTime();
         // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
         return body.asBytesFuture().thenCompose(ignored -> {
             // URL-decode path to handle scoped packages like @authn8%2fmcp-server -> @authn8/mcp-server
@@ -109,7 +111,8 @@ public final class DownloadAssetSlice implements Slice {
             // CRITICAL FIX: Check cache FIRST before any network calls (cooldown/inspector)
             // This ensures offline mode works - serve cached content even when upstream is down
             return this.checkCacheFirst(tgz, rqheaders);
-        }).exceptionally(error -> {
+        }).whenComplete((r, e) -> recordPhase("asset_total", entryNs))
+        .exceptionally(error -> {
             // CRITICAL: Convert exceptions to proper HTTP responses to prevent
             // "Parse Error: Expected HTTP/" errors in npm client.
             final Throwable cause = unwrapException(error);
@@ -167,7 +170,10 @@ public final class DownloadAssetSlice implements Slice {
         // NpmProxy.getAsset checks storage first internally, but we need to check BEFORE
         // calling cooldown.evaluate() which may make network calls.
         // Convert RxJava Maybe at the NpmProxy boundary to CompletionStage.
+        // Phase 10.5: time the storage cache existence probe.
+        final long cacheCheckNs = System.nanoTime();
         return this.npm.getAssetAsync(tgz)
+            .whenComplete((r, e) -> recordPhase("asset_cache_check", cacheCheckNs))
             .thenCompose(optAsset -> {
                 if (optAsset.isEmpty()) {
                     // Cache miss — evaluate cooldown then fetch from upstream
@@ -244,7 +250,10 @@ public final class DownloadAssetSlice implements Slice {
 
     private CompletableFuture<Response> serveAsset(final String tgz, final Headers headers) {
         // Convert RxJava Maybe at the NpmProxy boundary to CompletionStage.
+        // Phase 10.5: this call drives upstream fetch + storage save when missing.
+        final long upstreamNs = System.nanoTime();
         return this.npm.getAssetAsync(tgz)
+            .whenComplete((r, e) -> recordPhase("asset_upstream_fetch_and_save", upstreamNs))
             .thenApply(optAsset -> {
                 if (optAsset.isEmpty()) {
                     return ResponseBuilder.notFound().build();
@@ -320,6 +329,19 @@ public final class DownloadAssetSlice implements Slice {
                     .log();
             }
         });
+    }
+
+    /**
+     * Phase 10.5 profiler — emit per-phase histogram tagged by repo so the
+     * npm cold-cache wall can be decomposed without bringing
+     * {@link com.auto1.pantera.http.cache.BaseCachedProxySlice} into the
+     * structurally-different npm path.
+     */
+    private void recordPhase(final String phase, final long startNs) {
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
+                .recordProxyPhaseDuration(this.repoName, phase, System.nanoTime() - startNs);
+        }
     }
 
     private Optional<CooldownRequest> cooldownRequest(final String original, final Headers headers) {
