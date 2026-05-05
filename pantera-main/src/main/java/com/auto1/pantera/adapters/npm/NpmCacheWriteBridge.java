@@ -86,6 +86,13 @@ public final class NpmCacheWriteBridge {
         if (CacheWriteCallbackRegistry.instance().isNoOp(shared)) {
             return;
         }
+        EcsLogger.debug("com.auto1.pantera.adapters.npm")
+            .message("npm cache-write bridge: firing CacheWriteEvent")
+            .eventCategory("process")
+            .eventAction("cache_write_event")
+            .field("repository.name", this.repoName)
+            .field("url.path", assetPath)
+            .log();
         final Key key = new Key.From(assetPath);
         // Read the just-saved bytes from storage.
         // RxNpmProxyStorage.save() persists the tarball at the asset path,
