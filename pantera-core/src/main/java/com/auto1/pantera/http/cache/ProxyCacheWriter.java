@@ -380,7 +380,11 @@ public final class ProxyCacheWriter {
                         channel.write(buf);
                     }
                 }
-                channel.force(true);
+                // Intentionally NO fsync. The cache is a regenerable mirror of
+                // upstream — if a crash leaves the temp file unflushed we'll
+                // refetch on the next miss. fsync per primary added 5-10s
+                // wall on macOS APFS to a 500-artifact cold mvn walk
+                // (Phase 7 acceptance bench debug, 2026-05).
             } catch (final IOException ex) {
                 throw new PrimaryStreamException(ex);
             }
