@@ -44,7 +44,11 @@ class PrefetchDispatcherTest {
 
     @Test
     void noOpWhenGlobalKillSwitchOff() {
-        final PrefetchTuning off = new PrefetchTuning(false, 64, 16, 2048, 8);
+        final PrefetchTuning off = new PrefetchTuning(
+            false, 64, 16,
+            java.util.Map.of("maven", 16, "gradle", 16, "npm", 4),
+            2048, 8
+        );
         final RecordingSubmitter submitter = new RecordingSubmitter();
         final RecordingParser parser = new RecordingParser(
             List.of(Coordinate.maven("com.example", "bar", "1.0"))

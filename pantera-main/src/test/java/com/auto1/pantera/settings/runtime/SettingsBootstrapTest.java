@@ -79,7 +79,7 @@ final class SettingsBootstrapTest {
         new SettingsBootstrap(this.dao).seedIfMissing();
         final Map<String, JsonObject> rows = this.dao.listAll();
         assertThat(
-            "all 11 keys must be seeded on a fresh DB",
+            "all catalog keys must be seeded on a fresh DB",
             rows.size(),
             equalTo(SettingsKey.allKeys().size())
         );

@@ -63,9 +63,7 @@ class PrefetchCoordinatorTest {
         this.negCache = new NegativeCache(new NegativeCacheConfig());
         this.cooldown = new FakeCooldown();
         this.upstream = new FakeUpstream();
-        this.tuningRef = new AtomicReference<>(
-            new PrefetchTuning(true, 8, 4, 16, 2)
-        );
+        this.tuningRef = new AtomicReference<>(tuning(8, 4, 16, 2));
     }
 
     @AfterEach
@@ -80,7 +78,7 @@ class PrefetchCoordinatorTest {
         // Tiny queue; do NOT start workers so nothing drains. Submitting
         // capacity+1 tasks must produce exactly one queue_full drop.
         final int capacity = 4;
-        this.tuningRef.set(new PrefetchTuning(true, 8, 4, capacity, 1));
+        this.tuningRef.set(tuning(8, 4, capacity, 1));
         this.coordinator = newCoordinator();
         // Intentionally do not call start().
 
@@ -128,7 +126,7 @@ class PrefetchCoordinatorTest {
     @Test
     void submit_dropsOnSemaphoreSaturation() throws Exception {
         // global=1 — the second concurrent task can't acquire and is dropped.
-        this.tuningRef.set(new PrefetchTuning(true, 1, 1, 16, 1));
+        this.tuningRef.set(tuning(1, 1, 16, 1));
         this.cooldown.delegate = task -> CompletableFuture.completedFuture(false);
         // First upstream call hangs; second won't even be issued because
         // the global semaphore is held by the first.
@@ -274,7 +272,7 @@ class PrefetchCoordinatorTest {
         // per-host cap is independent of the global cap. Two tasks per
         // host: 1 of each (4 total) holds the per-host permit; the
         // other 1 of each (2 total) drops with semaphore_saturated.
-        this.tuningRef.set(new PrefetchTuning(true, 8, 1, 16, 4));
+        this.tuningRef.set(tuning(8, 1, 16, 4));
         this.cooldown.delegate = task -> CompletableFuture.completedFuture(false);
         // First two upstream calls (one per host) hang; subsequent
         // submits to the same host can't acquire the per-host permit.
@@ -346,6 +344,106 @@ class PrefetchCoordinatorTest {
     }
 
     @Test
+    void perUpstreamCap_isResolvedPerEcosystem() throws Exception {
+        // Global perUpstream is high (16) but npm-specific cap is forced to
+        // 1 via the per-ecosystem map. A maven task to host A and an npm task
+        // to host B both go in-flight; a SECOND npm task to host B must drop
+        // on the per-host semaphore (cap=1 for npm), while a SECOND maven
+        // task to host A is allowed (cap=16 for maven).
+        this.tuningRef.set(new PrefetchTuning(
+            true, 8, 16,
+            java.util.Map.of("maven", 16, "gradle", 16, "npm", 1),
+            16, 4
+        ));
+        this.cooldown.delegate = task -> CompletableFuture.completedFuture(false);
+        final java.util.concurrent.ConcurrentHashMap<String, AtomicInteger> hits =
+            new java.util.concurrent.ConcurrentHashMap<>();
+        final CompletableFuture<Integer> hangNpm = new CompletableFuture<>();
+        final CompletableFuture<Integer> hangMaven1 = new CompletableFuture<>();
+        final CompletableFuture<Integer> hangMaven2 = new CompletableFuture<>();
+        final java.util.concurrent.atomic.AtomicInteger mavenSeq =
+            new java.util.concurrent.atomic.AtomicInteger();
+        this.upstream.delegate = task -> {
+            final String host = java.net.URI.create(task.upstreamUrl()).getHost();
+            hits.computeIfAbsent(host, h -> new AtomicInteger()).incrementAndGet();
+            if ("npm.example.com".equals(host)) {
+                return hangNpm;
+            }
+            return mavenSeq.getAndIncrement() == 0 ? hangMaven1 : hangMaven2;
+        };
+        this.coordinator = newCoordinator();
+        this.coordinator.start();
+
+        // Maven task to host A — uses maven cap (16).
+        this.coordinator.submit(taskWithUrl(
+            Coordinate.maven("g.a", "art", "1.0"),
+            "https://maven.example.com/maven2", "maven-repo"
+        ));
+        // npm task to host B — uses npm cap (1).
+        this.coordinator.submit(new PrefetchTask(
+            "npm-repo", "npm-proxy",
+            "https://npm.example.com",
+            Coordinate.npm("react", "18.0.0"),
+            io.vertx.core.MultiMap.caseInsensitiveMultiMap(),
+            Instant.now()
+        ));
+        // Wait for both first tasks to be in-flight.
+        for (int idx = 0; idx < 200
+            && (this.metrics.inflight("maven-repo").get() == 0L
+                || this.metrics.inflight("npm-repo").get() == 0L);
+            idx += 1
+        ) {
+            Thread.sleep(10L);
+        }
+        MatcherAssert.assertThat(this.metrics.inflight("maven-repo").get(), new IsEqual<>(1L));
+        MatcherAssert.assertThat(this.metrics.inflight("npm-repo").get(), new IsEqual<>(1L));
+
+        // SECOND npm task to host B — must drop on per-host semaphore (cap=1).
+        this.coordinator.submit(new PrefetchTask(
+            "npm-repo", "npm-proxy",
+            "https://npm.example.com",
+            Coordinate.npm("lodash", "4.17.0"),
+            io.vertx.core.MultiMap.caseInsensitiveMultiMap(),
+            Instant.now()
+        ));
+        // SECOND maven task to host A — allowed (cap=16).
+        this.coordinator.submit(taskWithUrl(
+            Coordinate.maven("g.a", "art2", "1.0"),
+            "https://maven.example.com/maven2", "maven-repo"
+        ));
+        // Wait for the npm drop AND for the second maven task to enter
+        // upstream (hits["maven.example.com"] reaches 2).
+        for (int idx = 0; idx < 200
+            && (this.metrics.droppedCount("npm-repo", PrefetchCoordinator.REASON_SEMAPHORE) == 0L
+                || hits.getOrDefault("maven.example.com", new AtomicInteger()).get() < 2);
+            idx += 1
+        ) {
+            Thread.sleep(10L);
+        }
+        MatcherAssert.assertThat(
+            "npm second task must drop on per-host semaphore (cap=1)",
+            this.metrics.droppedCount("npm-repo", PrefetchCoordinator.REASON_SEMAPHORE),
+            new IsEqual<>(1L)
+        );
+        MatcherAssert.assertThat(
+            "maven second task must NOT drop (cap=16 leaves headroom)",
+            this.metrics.droppedCount("maven-repo", PrefetchCoordinator.REASON_SEMAPHORE),
+            new IsEqual<>(0L)
+        );
+        MatcherAssert.assertThat(
+            "maven host hit twice (both submissions reached upstream.get())",
+            hits.get("maven.example.com").get(), new IsEqual<>(2)
+        );
+        MatcherAssert.assertThat(
+            "npm host hit only once (the second was dropped before upstream.get())",
+            hits.get("npm.example.com").get(), new IsEqual<>(1)
+        );
+        hangNpm.complete(200);
+        hangMaven1.complete(200);
+        hangMaven2.complete(200);
+    }
+
+    @Test
     void submit_recordsTimeoutOutcomeOnUpstreamHang() throws Exception {
         // Wire a never-completing upstream future, but inject a 200ms
         // upstream timeout so the test resolves in real time. The
@@ -413,7 +511,7 @@ class PrefetchCoordinatorTest {
     @Test
     void settingsChangeResizesSemaphores() throws Exception {
         // Start with concurrency=2 — would only allow 2 concurrent tasks.
-        this.tuningRef.set(new PrefetchTuning(true, 2, 2, 64, 4));
+        this.tuningRef.set(tuning(2, 2, 64, 4));
         // Cooldown is fast; upstream blocks on a latch we control so we can
         // observe how many concurrent acquires happen.
         this.cooldown.delegate = task -> CompletableFuture.completedFuture(false);
@@ -438,7 +536,7 @@ class PrefetchCoordinatorTest {
         this.coordinator.start();
 
         // Bump concurrency to 8 BEFORE submitting so all 8 can acquire.
-        this.tuningRef.set(new PrefetchTuning(true, 8, 8, 64, 4));
+        this.tuningRef.set(tuning(8, 8, 64, 4));
         this.coordinator.applyTuning(this.tuningRef.get());
 
         for (int idx = 0; idx < total; idx += 1) {
@@ -466,7 +564,7 @@ class PrefetchCoordinatorTest {
         // Don't start workers — pending tasks must stay in the queue until
         // applyTuning drains them, so we can observe the drop count.
         // Capacity 8 lets two repos contribute three tasks each.
-        this.tuningRef.set(new PrefetchTuning(true, 4, 4, 8, 1));
+        this.tuningRef.set(tuning(4, 4, 8, 1));
         this.coordinator = newCoordinator();
         // Intentionally do not call start() — tasks pile up in the queue.
 
@@ -484,7 +582,7 @@ class PrefetchCoordinatorTest {
 
         // Trigger a tuning swap with a different snapshot — queueCapacity
         // change forces buildRuntime, which drains the old queue.
-        this.coordinator.applyTuning(new PrefetchTuning(true, 4, 4, 16, 1));
+        this.coordinator.applyTuning(tuning(4, 4, 16, 1));
 
         MatcherAssert.assertThat(
             "old queue items must be drained — new runtime starts empty",
@@ -546,6 +644,30 @@ class PrefetchCoordinatorTest {
 
     private static Coordinate coord(final String group, final String name, final String version) {
         return Coordinate.maven(group, name, version);
+    }
+
+    /**
+     * Build a {@link PrefetchTuning} where every ecosystem inherits the
+     * supplied {@code perUpstreamConcurrency}. The pre-2.2.0-perf-pack
+     * tests in this class expect the global per-upstream cap to apply
+     * uniformly; this helper keeps that contract while the per-ecosystem
+     * map is the production default.
+     */
+    private static PrefetchTuning tuning(
+        final int globalConcurrency,
+        final int perUpstreamConcurrency,
+        final int queueCapacity,
+        final int workerThreads
+    ) {
+        return new PrefetchTuning(
+            true, globalConcurrency, perUpstreamConcurrency,
+            java.util.Map.of(
+                "maven", perUpstreamConcurrency,
+                "gradle", perUpstreamConcurrency,
+                "npm", perUpstreamConcurrency
+            ),
+            queueCapacity, workerThreads
+        );
     }
 
     private void awaitCompletedOrDropped(final String outcome) throws InterruptedException {

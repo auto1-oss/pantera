@@ -395,8 +395,7 @@ public final class PrefetchCoordinator {
             tuning,
             new ArrayBlockingQueue<>(tuning.queueCapacity()),
             new Semaphore(tuning.globalConcurrency()),
-            new ConcurrentHashMap<>(),
-            tuning.perUpstreamConcurrency()
+            new ConcurrentHashMap<>()
         );
     }
 
@@ -475,9 +474,15 @@ public final class PrefetchCoordinator {
                 return;
             }
             // 3) Acquire semaphores: per-host first, then global.
+            // The per-host cap is ecosystem-specific (npm=4, maven/gradle=16
+            // by default) so the cap is resolved at semaphore-creation time.
+            // Two upstreams of different ecosystems get different caps;
+            // two upstreams of the same ecosystem share the same cap value
+            // but distinct semaphore instances.
             final String host = upstreamHost(task);
+            final int perHostCap = curr.tuning.perUpstreamFor(ecosystem);
             final Semaphore perHost = curr.perUpstream.computeIfAbsent(
-                host, h -> new Semaphore(curr.perUpstreamCap)
+                host, h -> new Semaphore(perHostCap)
             );
             if (!perHost.tryAcquire()) {
                 this.inFlight.remove(key);
@@ -599,11 +604,12 @@ public final class PrefetchCoordinator {
         /**
          * Per-host semaphore map (spec §5). Keyed by upstream URL host;
          * each value caps concurrent in-flight prefetches against that
-         * host at {@link #perUpstreamCap}. The map is populated lazily
-         * via {@code computeIfAbsent} on first sight of a host.
+         * host at the ecosystem-specific cap resolved via
+         * {@link PrefetchTuning#perUpstreamFor(String)} at first-sight
+         * of the host. The map is populated lazily via
+         * {@code computeIfAbsent}.
          */
         final ConcurrentMap<String, Semaphore> perUpstream;
-        final int perUpstreamCap;
         final ExecutorService workers;
         final java.util.concurrent.atomic.AtomicBoolean started =
             new java.util.concurrent.atomic.AtomicBoolean(false);
@@ -614,14 +620,12 @@ public final class PrefetchCoordinator {
             final PrefetchTuning tuning,
             final BlockingQueue<PrefetchTask> queue,
             final Semaphore global,
-            final ConcurrentMap<String, Semaphore> perUpstream,
-            final int perUpstreamCap
+            final ConcurrentMap<String, Semaphore> perUpstream
         ) {
             this.tuning = tuning;
             this.queue = queue;
             this.global = global;
             this.perUpstream = perUpstream;
-            this.perUpstreamCap = perUpstreamCap;
             this.workers = Executors.newFixedThreadPool(
                 Math.max(1, tuning.workerThreads()),
                 new NamedThreadFactory()
