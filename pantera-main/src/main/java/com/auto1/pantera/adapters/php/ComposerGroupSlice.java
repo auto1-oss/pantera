@@ -33,10 +33,25 @@ import java.util.concurrent.CompletableFuture;
 
 /**
  * Composer group repository slice.
- * 
- * Handles Composer-specific group behavior:
- * - Merges packages.json from all members
- * - Falls back to sequential member trial for other requests
+ *
+ * <p>Handles Composer-specific group behavior:
+ * <ul>
+ *   <li>{@code packages.json}: sequential-first across members; the first
+ *       member that returns 200 wins. Its body is parsed, the
+ *       {@code metadata-url} / {@code providers-url} fields are rewritten
+ *       to point at the group's own basePath (so p2 fetches stay inside
+ *       pantera), and the result is served.</li>
+ *   <li>{@code /p2/...}: sequential trial across members.</li>
+ *   <li>Everything else: delegated to {@code GroupResolver}.</li>
+ * </ul>
+ *
+ * <p><b>v2.2.0 BREAKING:</b> previously this slice fanned out to ALL members
+ * in parallel and merged every member's {@code packages.json} into a
+ * union. That was symmetric with the maven-metadata.xml merge in
+ * {@code MavenGroupSlice}; both are now sequential-first for the same
+ * reasons (member namespaces are typically disjoint, JFrog/Nexus virtual
+ * repos behave the same way, the union added per-request upstream
+ * amplification with no real benefit).
  *
  * @since 1.0
  */
@@ -220,204 +235,206 @@ public final class ComposerGroupSlice implements Slice {
     }
 
     /**
-     * Merge packages.json from all members.
+     * Try members in declared order for {@code packages.json}; the first
+     * member that returns 200 wins. The winning JSON is rewritten so
+     * {@code metadata-url} / {@code providers-url} point at the group's own
+     * basePath — without that, Composer would follow the upstream's URL and
+     * bypass pantera entirely (cooldown filter + cache + auth).
+     *
+     * <p>v2.2.0 sequential-first replacement for the previous fanout+merge —
+     * see class javadoc.
      *
      * @param line Request line
      * @param headers Headers
      * @param body Body
-     * @return Merged response
+     * @return Single-member response, packages-url rewritten to group basePath
      */
     private CompletableFuture<Response> mergePackagesJson(
         final RequestLine line,
         final Headers headers,
         final Content body
     ) {
-        // CRITICAL: Consume original body to prevent OneTimePublisher errors
-        // GET requests have empty bodies, but Content is still reference-counted
-        return body.asBytesFuture().thenCompose(requestBytes -> {
-            // Fetch packages.json from all members in parallel with Content.EMPTY
-            final List<CompletableFuture<JsonObject>> futures = this.members.stream()
-                .map(member -> {
-                    final Slice memberSlice = this.resolver.slice(new Key.From(member), this.port, 0);
-                    final RequestLine rewritten = rewritePath(line, member);
-                    final Headers sanitized = dropFullPathHeader(headers);
+        // CRITICAL: Consume original body to prevent OneTimePublisher errors.
+        // GET requests have empty bodies, but Content is still reference-counted.
+        return body.asBytesFuture().thenCompose(ignored ->
+            tryMembersForPackagesJson(line, headers, 0)
+        );
+    }
 
-                    EcsLogger.debug("com.auto1.pantera.composer")
-                        .message("Fetching packages.json from member: " + member)
-                        .eventCategory("web")
-                        .eventAction("packages_fetch")
-                        .log();
+    /**
+     * Sequentially try {@code members[idx]} for the {@code packages.json}
+     * path; on 200 parse + rewrite + return, on non-OK drain the body and
+     * recurse to the next member. Falls through to 404 once the index walks
+     * past the end.
+     */
+    private CompletableFuture<Response> tryMembersForPackagesJson(
+        final RequestLine line,
+        final Headers headers,
+        final int idx
+    ) {
+        if (idx >= this.members.size()) {
+            EcsLogger.warn("com.auto1.pantera.composer")
+                .message("No member returned packages.json")
+                .eventCategory("web")
+                .eventAction("packages_fetch")
+                .eventOutcome("failure")
+                .field("repository.name", this.group)
+                .log();
+            return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
+        }
+        final String member = this.members.get(idx);
+        final Slice memberSlice = this.resolver.slice(new Key.From(member), this.port, 0);
+        final RequestLine rewritten = rewritePath(line, member);
+        final Headers sanitized = dropFullPathHeader(headers);
 
-                    return memberSlice.response(rewritten, sanitized, Content.EMPTY)
-                    .thenCompose(resp -> {
-                        if (resp.status() == RsStatus.OK) {
-                            return resp.body().asBytesFuture()
-                                .thenApply(bytes -> {
-                                    try (JsonReader reader = Json.createReader(
-                                        new ByteArrayInputStream(bytes)
-                                    )) {
-                                        final JsonObject json = reader.readObject();
-                                        
-                                        // Safely count packages - handle both array (Satis) and object (traditional)
-                                        int packageCount = 0;
-                                        if (json.containsKey("packages")) {
-                                            final var packagesValue = json.get("packages");
-                                            if (packagesValue instanceof JsonObject) {
-                                                packageCount = ((JsonObject) packagesValue).size();
-                                            } else if (json.containsKey("provider-includes")) {
-                                                // Satis format - count provider-includes instead
-                                                packageCount = json.getJsonObject("provider-includes").size();
-                                            }
-                                        }
+        EcsLogger.debug("com.auto1.pantera.composer")
+            .message("Trying member for packages.json: " + member)
+            .eventCategory("web")
+            .eventAction("packages_fetch")
+            .field("repository.name", this.group)
+            .log();
 
-                                        EcsLogger.debug("com.auto1.pantera.composer")
-                                            .message("Member '" + member + "' returned packages.json (" + packageCount + " packages)")
-                                            .eventCategory("web")
-                                            .eventAction("packages_fetch")
-                                            .eventOutcome("success")
-                                            .log();
-                                        return json;
-                                    } catch (Exception e) {
-                                        EcsLogger.warn("com.auto1.pantera.composer")
-                                            .message("Failed to parse packages.json from member: " + member)
-                                            .eventCategory("web")
-                                            .eventAction("packages_parse")
-                                            .eventOutcome("failure")
-                                            .field("error.message", e.getMessage())
-                                            .log();
-                                        return Json.createObjectBuilder().build();
-                                    }
-                                });
-                        } else {
-                            EcsLogger.debug("com.auto1.pantera.composer")
-                                .message("Member '" + member + "' returned non-OK status for packages.json")
-                                .eventCategory("web")
-                                .eventAction("packages_fetch")
-                                .eventOutcome("failure")
-                                .field("http.response.status_code", resp.status().code())
-                                .log();
-                            // Drain non-OK response body to release upstream connection
-                            return resp.body().asBytesFuture().thenApply(ignored ->
-                                Json.createObjectBuilder().build()
-                            );
-                        }
-                    })
-                    .exceptionally(ex -> {
-                        EcsLogger.warn("com.auto1.pantera.composer")
-                            .message("Error fetching packages.json from member: " + member)
-                            .eventCategory("web")
-                            .eventAction("packages_fetch")
-                            .eventOutcome("failure")
-                            .field("error.message", ex.getMessage())
-                            .log();
-                        return Json.createObjectBuilder().build();
-                    });
+        return memberSlice.response(rewritten, sanitized, Content.EMPTY)
+            .thenCompose(resp -> {
+                if (resp.status() == RsStatus.OK) {
+                    return resp.body().asBytesFuture()
+                        .thenApply(bytes -> rewritePackagesJson(member, bytes));
+                }
+                EcsLogger.debug("com.auto1.pantera.composer")
+                    .message("Member '" + member + "' non-OK; trying next")
+                    .eventCategory("web")
+                    .eventAction("packages_fetch")
+                    .eventOutcome("failure")
+                    .field("http.response.status_code", resp.status().code())
+                    .field("repository.name", this.group)
+                    .log();
+                // Drain non-OK body to release upstream connection, then recurse.
+                return resp.body().asBytesFuture()
+                    .thenCompose(drained -> tryMembersForPackagesJson(line, headers, idx + 1));
             })
-            .toList();
-
-        // Wait for all responses and merge them
-        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
-            .thenApply(v -> {
-                final JsonObjectBuilder merged = Json.createObjectBuilder();
-                final JsonObjectBuilder packagesBuilder = Json.createObjectBuilder();
-                final JsonObjectBuilder providersBuilder = Json.createObjectBuilder();
-                
-                boolean hasSatisFormat = false;
-
-                // Merge all packages from all members
-                // Note: futures are already complete at this point (after allOf)
-                for (CompletableFuture<JsonObject> future : futures) {
-                    final JsonObject json = future.join();  // ✅ Already complete - no blocking!
-                    
-                    // Handle Satis format (providers)
-                    if (json.containsKey("providers") && json.get("providers") instanceof JsonObject) {
-                        hasSatisFormat = true;
-                        final JsonObject providers = json.getJsonObject("providers");
-                        providers.forEach((key, value) -> {
-                            providersBuilder.add(key, value);
-                        });
-                        EcsLogger.debug("com.auto1.pantera.composer")
-                            .message("Member returned Satis format (" + providers.size() + " providers)")
-                            .eventCategory("web")
-                            .eventAction("packages_merge")
-                            .log();
-                    }
-                    
-                    // Handle traditional format (packages object)
-                    if (json.containsKey("packages")) {
-                        final var packagesValue = json.get("packages");
-                        // Check if it's an object (traditional) or array (Satis empty)
-                        if (packagesValue instanceof JsonObject) {
-                            final JsonObject packages = (JsonObject) packagesValue;
-                            packages.forEach((name, versionsObj) -> {
-                                // Add UIDs to each package version
-                                final JsonObject versions = (JsonObject) versionsObj;
-                                final JsonObjectBuilder pkgWithUids = Json.createObjectBuilder();
-                                versions.forEach((version, versionData) -> {
-                                    final JsonObject versionObj = (JsonObject) versionData;
-                                    final JsonObjectBuilder versionWithUid = Json.createObjectBuilder(versionObj);
-                                    if (!versionObj.containsKey("uid")) {
-                                        versionWithUid.add("uid", UUID.randomUUID().toString());
-                                    }
-                                    pkgWithUids.add(version, versionWithUid.build());
-                                });
-                                packagesBuilder.add(name, pkgWithUids.build());
-                            });
-                        }
-                    }
-                    
-                    // Preserve other fields from the first non-empty response
-                    // But do NOT preserve metadata-url/providers-url - we'll rewrite them
-                    if (merged.build().isEmpty()) {
-                        json.forEach((key, value) -> {
-                            if (!"packages".equals(key) 
-                                && !"metadata-url".equals(key) 
-                                && !"providers-url".equals(key)
-                                && !"providers".equals(key)) {
-                                merged.add(key, value);
-                            }
-                        });
-                    }
+            .exceptionally(ex -> {
+                EcsLogger.warn("com.auto1.pantera.composer")
+                    .message("Member '" + member + "' threw; trying next")
+                    .eventCategory("web")
+                    .eventAction("packages_fetch")
+                    .eventOutcome("failure")
+                    .field("error.message", ex.getMessage())
+                    .field("repository.name", this.group)
+                    .log();
+                return null;
+            })
+            .thenCompose(resp -> {
+                if (resp != null) {
+                    return CompletableFuture.completedFuture(resp);
                 }
-
-                // Build appropriate response format
-                if (hasSatisFormat) {
-                    // Use Satis format for group
-                    merged.add("packages", Json.createObjectBuilder()); // Empty object
-                    merged.add("providers-url", this.basePath + "/p2/%package%.json");
-                    merged.add("providers", providersBuilder.build());
-                    EcsLogger.debug("com.auto1.pantera.composer")
-                        .message("Using Satis format for group (" + providersBuilder.build().size() + " providers)")
-                        .eventCategory("web")
-                        .eventAction("packages_merge")
-                        .eventOutcome("success")
-                        .field("repository.name", this.group)
-                        .log();
-                } else {
-                    // Use host-absolute metadata-url including global prefix.
-                    // Composer (especially v1) needs absolute paths, not relative.
-                    merged.add("metadata-url", this.basePath + "/p2/%package%.json");
-                    merged.add("packages", packagesBuilder.build());
-                    EcsLogger.debug("com.auto1.pantera.composer")
-                        .message("Using traditional format for group (" + packagesBuilder.build().size() + " packages)")
-                        .eventCategory("web")
-                        .eventAction("packages_merge")
-                        .eventOutcome("success")
-                        .field("repository.name", this.group)
-                        .log();
-                }
-                
-                final JsonObject result = merged.build();
-
-                final String jsonString = result.toString();
-                final byte[] bytes = jsonString.getBytes(StandardCharsets.UTF_8);
-                
-                return ResponseBuilder.ok()
-                    .header("Content-Type", "application/json")
-                    .body(bytes)
-                    .build();
+                // Exception path collapsed to null — try next.
+                return tryMembersForPackagesJson(line, headers, idx + 1);
             });
-        }); // Close thenCompose lambda for body consumption
+    }
+
+    /**
+     * Parse the winning member's {@code packages.json} bytes, rewrite
+     * {@code metadata-url} / {@code providers-url} (and group-level
+     * {@code providers}) to point at the group's own basePath, and emit the
+     * resulting bytes as a 200. This rewrite is essential — without it,
+     * Composer would follow the upstream's metadata-url and bypass pantera
+     * entirely (cooldown filter + cache + auth).
+     *
+     * <p>UID injection on package versions is preserved: Composer v1 uses
+     * the {@code uid} field for cache invalidation; we inject a stable UUID
+     * if the upstream omitted it.</p>
+     */
+    private Response rewritePackagesJson(final String member, final byte[] bytes) {
+        final JsonObject json;
+        try (JsonReader reader = Json.createReader(new ByteArrayInputStream(bytes))) {
+            json = reader.readObject();
+        } catch (Exception e) {
+            EcsLogger.warn("com.auto1.pantera.composer")
+                .message("Failed to parse packages.json from member: " + member)
+                .eventCategory("web")
+                .eventAction("packages_parse")
+                .eventOutcome("failure")
+                .field("error.message", e.getMessage())
+                .field("repository.name", this.group)
+                .log();
+            return ResponseBuilder.notFound().build();
+        }
+
+        final JsonObjectBuilder out = Json.createObjectBuilder();
+        // Copy every field except the URL fields we rewrite.
+        json.forEach((key, value) -> {
+            if (!"packages".equals(key)
+                && !"metadata-url".equals(key)
+                && !"providers-url".equals(key)
+                && !"providers".equals(key)) {
+                out.add(key, value);
+            }
+        });
+
+        final boolean hasSatisFormat = json.containsKey("providers")
+            && json.get("providers") instanceof JsonObject;
+
+        if (hasSatisFormat) {
+            // Satis format: copy provider table verbatim; rewrite providers-url
+            // to the group basePath so client p2 lookups land back at this
+            // group slice (which routes through tryMembersForP2).
+            out.add("packages", Json.createObjectBuilder());
+            out.add("providers-url", this.basePath + "/p2/%package%.json");
+            out.add("providers", json.getJsonObject("providers"));
+            EcsLogger.debug("com.auto1.pantera.composer")
+                .message("Sequential winner (Satis format)")
+                .eventCategory("web")
+                .eventAction("packages_fetch")
+                .eventOutcome("success")
+                .field("repository.name", this.group)
+                .field("repository.member", member)
+                .log();
+        } else {
+            // Traditional format: copy packages, inject uid where missing,
+            // rewrite metadata-url to group basePath. Composer v1 needs an
+            // absolute path, not relative.
+            final JsonObjectBuilder packagesBuilder = Json.createObjectBuilder();
+            if (json.containsKey("packages")
+                && json.get("packages") instanceof JsonObject) {
+                final JsonObject packages = json.getJsonObject("packages");
+                packages.forEach((name, versionsObj) -> {
+                    if (!(versionsObj instanceof JsonObject)) {
+                        return;
+                    }
+                    final JsonObject versions = (JsonObject) versionsObj;
+                    final JsonObjectBuilder pkgWithUids = Json.createObjectBuilder();
+                    versions.forEach((version, versionData) -> {
+                        if (!(versionData instanceof JsonObject)) {
+                            return;
+                        }
+                        final JsonObject versionObj = (JsonObject) versionData;
+                        final JsonObjectBuilder versionWithUid =
+                            Json.createObjectBuilder(versionObj);
+                        if (!versionObj.containsKey("uid")) {
+                            versionWithUid.add("uid", UUID.randomUUID().toString());
+                        }
+                        pkgWithUids.add(version, versionWithUid.build());
+                    });
+                    packagesBuilder.add(name, pkgWithUids.build());
+                });
+            }
+            out.add("metadata-url", this.basePath + "/p2/%package%.json");
+            out.add("packages", packagesBuilder.build());
+            EcsLogger.debug("com.auto1.pantera.composer")
+                .message("Sequential winner (traditional format)")
+                .eventCategory("web")
+                .eventAction("packages_fetch")
+                .eventOutcome("success")
+                .field("repository.name", this.group)
+                .field("repository.member", member)
+                .log();
+        }
+
+        final byte[] outBytes = out.build().toString().getBytes(StandardCharsets.UTF_8);
+        return ResponseBuilder.ok()
+            .header("Content-Type", "application/json")
+            .body(outBytes)
+            .build();
     }
 
 
