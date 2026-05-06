@@ -1024,7 +1024,7 @@ public final class ProxyCacheWriter {
     private static Throwable unwrap(final Throwable err) {
         Throwable cur = err;
         while (cur instanceof java.util.concurrent.CompletionException
-            && cur.getCause() != null && cur.getCause() != cur) {
+            && cur.getCause() != null && cur.getCause() != cur) { // NOPMD CompareObjectsWithEquals - intentional identity check (cycle guard for self-causing exception)
             cur = cur.getCause();
         }
         if (cur instanceof PrimaryStreamException && cur.getCause() != null) {

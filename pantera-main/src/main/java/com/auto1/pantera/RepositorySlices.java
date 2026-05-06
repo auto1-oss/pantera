@@ -1738,7 +1738,7 @@ public class RepositorySlices {
             this.clients.computeIfPresent(
                 key,
                 (ignored, existing) -> {
-                    if (existing != shared) {
+                    if (existing != shared) { // NOPMD CompareObjectsWithEquals - intentional identity check (cache eviction detection)
                         // The cached entry was replaced (evict + new acquire
                         // for the same key). Drop the lease's ref against
                         // the original SharedClient and stop if last.

@@ -86,7 +86,7 @@ public final class FaultClassifier {
     static Throwable unwrap(final Throwable throwable) {
         Throwable current = throwable;
         while (current instanceof CompletionException && current.getCause() != null
-            && current.getCause() != current) {
+            && current.getCause() != current) { // NOPMD CompareObjectsWithEquals - intentional identity check (cycle guard for self-causing exception)
             current = current.getCause();
         }
         return current;

@@ -372,7 +372,7 @@ public final class ImportService {
                 .field("error.message", mismatch.get())
                 .log();
             final Storage root = rootStorage(storage).orElse(storage);
-            if (root == storage) {
+            if (root == storage) { // NOPMD CompareObjectsWithEquals - intentional identity check (orElse returned the same instance)
                 // Same storage, simple move
                 return storage.move(staging, quarantine).thenApply(
                     ignored -> {
