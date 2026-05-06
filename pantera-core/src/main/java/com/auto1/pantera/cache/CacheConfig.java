@@ -231,7 +231,7 @@ public final class CacheConfig {
         // Look for caches section
         final YamlMapping caches = serverYaml.yamlMapping("caches");
         if (caches == null) {
-            System.out.printf(
+            System.out.printf( // NOPMD SystemPrintln - config-load is pre-logger initialization; stdout is the only diagnostic channel
                 "[CacheConfig] No 'caches' section in _server.yaml for '%s', using defaults%n",
                 cacheName
             );
@@ -270,7 +270,7 @@ public final class CacheConfig {
     ) {
         final YamlMapping profiles = caches.yamlMapping("profiles");
         if (profiles == null) {
-            System.out.printf(
+            System.out.printf( // NOPMD SystemPrintln - config-load is pre-logger initialization; stdout is the only diagnostic channel
                 "[CacheConfig] No 'caches.profiles' section for '%s', using defaults%n",
                 cacheName
             );
@@ -279,14 +279,14 @@ public final class CacheConfig {
         
         final YamlMapping profile = profiles.yamlMapping(profileName);
         if (profile == null) {
-            System.out.printf(
+            System.out.printf( // NOPMD SystemPrintln - config-load is pre-logger initialization; stdout is the only diagnostic channel
                 "[CacheConfig] Profile '%s' not found for cache '%s', using defaults%n",
                 profileName, cacheName
             );
             return new CacheConfig();
         }
         
-        System.out.printf(
+        System.out.printf( // NOPMD SystemPrintln - config-load is pre-logger initialization; stdout is the only diagnostic channel
             "[CacheConfig] Loaded cache '%s' with profile '%s'%n",
             cacheName, profileName
         );
@@ -317,7 +317,7 @@ public final class CacheConfig {
         if (valkeyYaml != null) {
             final boolean enabled = "true".equalsIgnoreCase(valkeyYaml.string("enabled"));
             if (enabled) {
-                System.out.printf(
+                System.out.printf( // NOPMD SystemPrintln - config-load is pre-logger initialization; stdout is the only diagnostic channel
                     "[CacheConfig] Enabling Valkey two-tier cache for '%s'%n",
                     cacheName
                 );
@@ -383,7 +383,7 @@ public final class CacheConfig {
                 // Try parsing as seconds
                 return Duration.ofSeconds(Long.parseLong(lower));
             } catch (Exception e2) {
-                System.err.printf(
+                System.err.printf( // NOPMD SystemPrintln - config-load is pre-logger initialization; stderr is the only diagnostic channel
                     "[CacheConfig] Failed to parse duration '%s' for cache '%s', using default: %s%n",
                     value, cacheName, defaultValue
                 );
@@ -411,7 +411,7 @@ public final class CacheConfig {
         try {
             return Integer.parseInt(value.trim());
         } catch (NumberFormatException e) {
-            System.err.printf(
+            System.err.printf( // NOPMD SystemPrintln - config-load is pre-logger initialization; stderr is the only diagnostic channel
                 "[CacheConfig] Failed to parse maxSize '%s' for cache '%s', using default: %d%n",
                 value, cacheName, defaultValue
             );

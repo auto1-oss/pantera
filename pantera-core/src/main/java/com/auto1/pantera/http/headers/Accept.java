@@ -52,7 +52,7 @@ public final class Accept {
      */
     public List<String> values() {
         final RqHeaders rqh = new RqHeaders(this.headers, Accept.NAME);
-        if (rqh.size() == 0) {
+        if (rqh.isEmpty()) {
             return Collections.emptyList();
         }
         return MimeType.parse(

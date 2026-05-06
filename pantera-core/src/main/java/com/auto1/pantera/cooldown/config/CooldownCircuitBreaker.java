@@ -135,12 +135,11 @@ public final class CooldownCircuitBreaker {
             final long openTime = this.openedAt.get();
             if (openTime > 0) {
                 final long elapsed = System.currentTimeMillis() - openTime;
-                if (elapsed >= this.recoveryTimeout.toMillis()) {
-                    // Transition to HALF_OPEN
-                    if (this.state.compareAndSet(State.OPEN, State.HALF_OPEN)) {
-                        this.halfOpenSuccesses.set(0);
-                        return true;
-                    }
+                // Transition to HALF_OPEN once recovery timeout has elapsed
+                if (elapsed >= this.recoveryTimeout.toMillis()
+                    && this.state.compareAndSet(State.OPEN, State.HALF_OPEN)) {
+                    this.halfOpenSuccesses.set(0);
+                    return true;
                 }
             }
             // Still open, auto-allow
@@ -166,12 +165,11 @@ public final class CooldownCircuitBreaker {
         
         if (current == State.HALF_OPEN) {
             final int successes = this.halfOpenSuccesses.incrementAndGet();
-            if (successes >= this.successThreshold) {
-                // Recovered! Close circuit
-                if (this.state.compareAndSet(State.HALF_OPEN, State.CLOSED)) {
-                    this.failures.set(0);
-                    this.openedAt.set(0);
-                }
+            // Recovered! Close circuit once we hit the success threshold.
+            if (successes >= this.successThreshold
+                && this.state.compareAndSet(State.HALF_OPEN, State.CLOSED)) {
+                this.failures.set(0);
+                this.openedAt.set(0);
             }
         }
     }
@@ -184,21 +182,19 @@ public final class CooldownCircuitBreaker {
         
         if (current == State.CLOSED) {
             final int count = this.failures.incrementAndGet();
-            if (count >= this.failureThreshold) {
-                // Open circuit
-                if (this.state.compareAndSet(State.CLOSED, State.OPEN)) {
-                    this.openedAt.set(System.currentTimeMillis());
-                }
+            // Open circuit once failures cross the threshold.
+            if (count >= this.failureThreshold
+                && this.state.compareAndSet(State.CLOSED, State.OPEN)) {
+                this.openedAt.set(System.currentTimeMillis());
             }
             return;
         }
-        
-        if (current == State.HALF_OPEN) {
-            // Failed during recovery test, reopen circuit
-            if (this.state.compareAndSet(State.HALF_OPEN, State.OPEN)) {
-                this.openedAt.set(System.currentTimeMillis());
-                this.failures.set(this.failureThreshold);
-            }
+
+        // Failed during recovery test (HALF_OPEN): reopen circuit.
+        if (current == State.HALF_OPEN
+            && this.state.compareAndSet(State.HALF_OPEN, State.OPEN)) {
+            this.openedAt.set(System.currentTimeMillis());
+            this.failures.set(this.failureThreshold);
         }
     }
 

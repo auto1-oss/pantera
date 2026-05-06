@@ -402,10 +402,9 @@ public final class MetadataFilterService implements CooldownMetadataService {
                     if (result.blocked) {
                         blockedVersions.add(result.version);
                         // Track earliest blockedUntil for cache TTL
-                        if (result.blockedUntil != null) {
-                            if (earliestBlockedUntil == null || result.blockedUntil.isBefore(earliestBlockedUntil)) {
-                                earliestBlockedUntil = result.blockedUntil;
-                            }
+                        if (result.blockedUntil != null
+                            && (earliestBlockedUntil == null || result.blockedUntil.isBefore(earliestBlockedUntil))) {
+                            earliestBlockedUntil = result.blockedUntil;
                         }
                     }
                 }

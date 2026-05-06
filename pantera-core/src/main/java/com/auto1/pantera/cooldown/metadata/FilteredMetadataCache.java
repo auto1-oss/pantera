@@ -554,7 +554,7 @@ public class FilteredMetadataCache {
          * @return Metadata bytes
          */
         public byte[] data() {
-            return this.data;
+            return this.data; // NOPMD MethodReturnsInternalArray - immutable cache value; mirrors the matching ArrayIsStoredDirectly suppression on the ctor; callers treat this as read-only
         }
 
         /**

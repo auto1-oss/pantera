@@ -409,7 +409,7 @@ public final class FileSystemArtifactSlice implements Slice {
                 if (channel != null) {
                     try {
                         channel.close();
-                    } catch (IOException e) {
+                    } catch (IOException e) { // NOPMD EmptyCatchBlock - close() failure during cleanup is benign; resource is being released anyway
                         // Ignore close errors
                     }
                     channel = null;

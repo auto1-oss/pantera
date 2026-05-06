@@ -204,10 +204,7 @@ public final class NegativeCache {
     }
 
     private static boolean nameMatches(final String cached, final String uploaded) {
-        if (cached.equals(uploaded)) {
-            return true;
-        }
-        return uploaded.startsWith(cached + "/");
+        return cached.equals(uploaded) || uploaded.startsWith(cached + "/");
     }
 
     /**
@@ -308,7 +305,7 @@ public final class NegativeCache {
      * {@code valkey-cli GET} renders it as the readable string {@code "1"}
      * rather than the unreadable escape {@code \x01}.
      */
-    private static final byte[] L2_SENTINEL = new byte[]{'1'};
+    private static final byte[] L2_SENTINEL = {'1'};
 
     /**
      * L2 SET with TTL.

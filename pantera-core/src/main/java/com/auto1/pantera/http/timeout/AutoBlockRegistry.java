@@ -191,7 +191,7 @@ public final class AutoBlockRegistry {
         if (total < settings.minimumNumberOfCalls()) {
             return;
         }
-        final double rate = total == 0 ? 0.0 : (double) failures / (double) total;
+        final double rate = total == 0 ? 0.0 : (double) failures / total;
         if (rate >= settings.failureRateThreshold()) {
             this.tripLocked(remoteId, state, settings, false);
             // Also record the volume + rate at trip time for ops forensics.
@@ -318,7 +318,7 @@ public final class AutoBlockRegistry {
                 this.successes[this.currentBucket] = 0;
                 this.failures[this.currentBucket] = 0;
             }
-            this.currentBucketStartMs += (long) secondsElapsed * 1000L;
+            this.currentBucketStartMs += secondsElapsed * 1000L;
         }
     }
 

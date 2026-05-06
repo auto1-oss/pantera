@@ -24,7 +24,6 @@ import com.auto1.pantera.http.trace.SpanContext;
 import org.slf4j.MDC;
 
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * ECS-compliant HTTP access logging slice.
@@ -118,7 +117,6 @@ public final class EcsLoggingSlice implements Slice {
         final Content body
     ) {
         final long startTime = System.currentTimeMillis();
-        final AtomicLong responseSize = new AtomicLong(0);
 
         // TRACE CONTEXT: Set MDC values at request start for propagation to all downstream logging
         // This enables auth, cooldown, and other services to log with request context

@@ -197,9 +197,9 @@ public final class StructuredLogger {
         public void log() {
             final LevelPolicy policy = choosePolicy();
             final Map<String, Object> payload = buildPayload();
-            try (AutoCloseable bound = this.ctx.bindToMdc()) {
+            try (AutoCloseable bound = this.ctx.bindToMdc()) { // NOPMD UnusedLocalVariable - 'bound' is the AutoCloseable handle for the try-with-resources block
                 dispatch(AccessLogger.LOG, policy.level(), payload, faultCause(this.fault));
-            } catch (final Exception ex) {
+            } catch (final Exception ex) { // NOPMD EmptyCatchBlock - bindToMdc().close() is declared to throw Exception only for API contract; impl never throws
                 // bindToMdc().close() is declared to throw Exception but our
                 // impl never does. This catch is purely for the API contract.
             }
@@ -326,9 +326,9 @@ public final class StructuredLogger {
                 payload.put("message", "Internal call succeeded: " + this.member);
                 payload.put("event.outcome", "success");
             }
-            try (AutoCloseable bound = this.ctx.bindToMdc()) {
+            try (AutoCloseable bound = this.ctx.bindToMdc()) { // NOPMD UnusedLocalVariable - 'bound' is the AutoCloseable handle for the try-with-resources block
                 dispatch(InternalLogger.LOG, policy.level(), payload, faultCause(this.fault));
-            } catch (final Exception ex) {
+            } catch (final Exception ex) { // NOPMD EmptyCatchBlock - bindToMdc().close() never throws in our impl
                 // close() never throws in our impl.
             }
         }
@@ -445,9 +445,9 @@ public final class StructuredLogger {
             } else {
                 payload.put("message", "Upstream call: " + this.address);
             }
-            try (AutoCloseable bound = this.ctx.bindToMdc()) {
+            try (AutoCloseable bound = this.ctx.bindToMdc()) { // NOPMD UnusedLocalVariable - 'bound' is the AutoCloseable handle for the try-with-resources block
                 dispatch(UpstreamLogger.LOG, policy.level(), payload, this.cause);
-            } catch (final Exception ex) {
+            } catch (final Exception ex) { // NOPMD EmptyCatchBlock - bindToMdc().close() never throws in our impl
                 // close() never throws in our impl.
             }
         }
@@ -558,9 +558,9 @@ public final class StructuredLogger {
             }
             final Logger logger = LogManager.getLogger(this.component);
             if (this.reqCtx != null) {
-                try (AutoCloseable bound = this.reqCtx.bindToMdc()) {
+                try (AutoCloseable bound = this.reqCtx.bindToMdc()) { // NOPMD UnusedLocalVariable - 'bound' is the AutoCloseable handle for the try-with-resources block
                     dispatch(logger, policy.level(), payload, this.cause);
-                } catch (final Exception ex) {
+                } catch (final Exception ex) { // NOPMD EmptyCatchBlock - bindToMdc().close() never throws in our impl
                     // close() never throws
                 }
             } else {
@@ -659,9 +659,9 @@ public final class StructuredLogger {
             } else {
                 payload.put("event.outcome", "success");
             }
-            try (AutoCloseable bound = this.ctx.bindToMdc()) {
+            try (AutoCloseable bound = this.ctx.bindToMdc()) { // NOPMD UnusedLocalVariable - 'bound' is the AutoCloseable handle for the try-with-resources block
                 dispatch(AuditLogger.LOG, LevelPolicy.AUDIT_EVENT.level(), payload, null);
-            } catch (final Exception ex) {
+            } catch (final Exception ex) { // NOPMD EmptyCatchBlock - bindToMdc().close() never throws in our impl
                 // close() never throws
             }
         }

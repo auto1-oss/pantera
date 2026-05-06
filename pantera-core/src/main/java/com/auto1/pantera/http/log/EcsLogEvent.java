@@ -135,8 +135,9 @@ public final class EcsLogEvent {
      * @return this
      */
     public EcsLogEvent userAgent(final Headers headers) {
-        for (Header h : headers.find("user-agent")) {
-            final String original = h.getValue();
+        final java.util.Iterator<Header> iter = headers.find("user-agent").iterator();
+        if (iter.hasNext()) {
+            final String original = iter.next().getValue();
             if (original != null && !original.isEmpty()) {
                 fields.put("user_agent.original", original);
 
@@ -160,7 +161,6 @@ public final class EcsLogEvent {
                     fields.put("user_agent.device.name", info.deviceName());
                 }
             }
-            break;
         }
         return this;
     }
@@ -433,7 +433,7 @@ public final class EcsLogEvent {
                     if (colon > 0) {
                         return Optional.of(decoded.substring(0, colon));
                     }
-                } catch (IllegalArgumentException e) {
+                } catch (IllegalArgumentException e) { // NOPMD EmptyCatchBlock - intentional: invalid Base64 is treated as no extractable username; falls through to Optional.empty()
                     // Invalid base64, ignore
                 }
             }

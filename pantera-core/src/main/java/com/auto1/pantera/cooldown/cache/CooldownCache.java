@@ -62,11 +62,6 @@ public final class CooldownCache {
     private final boolean twoTier;
 
     /**
-     * TTL for allowed (false) entries in L1 cache.
-     */
-    private final Duration l1AllowedTtl;
-
-    /**
      * TTL for allowed (false) entries in L2 cache (seconds).
      */
     private final long l2AllowedTtlSeconds;
@@ -146,7 +141,6 @@ public final class CooldownCache {
     ) {
         this.twoTier = (valkey != null);
         this.l2 = this.twoTier ? valkey.async() : null;
-        this.l1AllowedTtl = l1AllowedTtl;
         this.l2AllowedTtlSeconds = l2AllowedTtl.getSeconds();
         
         // L1 Boolean cache: Simple true/false for block decisions

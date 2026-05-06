@@ -715,19 +715,19 @@ public abstract class BaseCachedProxySlice implements Slice {
                 if (resp.status().code() == 404) {
                     return this.handle404(resp, key, duration)
                         .thenCompose(signal ->
-                            this.signalToResponse(signal, line, key, headers, store));
+                            this.signalToResponse(signal, line, key, store));
                 }
                 if (!resp.status().success()) {
-                    return this.handleNonSuccess(resp, key, duration)
+                    return this.handleNonSuccess(resp, duration)
                         .thenCompose(signal ->
-                            this.signalToResponse(signal, line, key, headers, store));
+                            this.signalToResponse(signal, line, key, store));
                 }
                 this.recordProxyMetric("success", duration);
                 return this.singleFlight.load(key, () -> {
                     return this.cacheResponse(resp, key, owner, store)
                         .thenApply(r -> FetchSignal.SUCCESS);
                 }).thenCompose(signal ->
-                    this.signalToResponse(signal, line, key, headers, store));
+                    this.signalToResponse(signal, line, key, store));
             })
             .handle((resp, error) -> {
                 if (error != null) {
@@ -764,7 +764,6 @@ public abstract class BaseCachedProxySlice implements Slice {
         final FetchSignal signal,
         final RequestLine line,
         final Key key,
-        final Headers headers,
         final CachedArtifactMetadataStore store
     ) {
         switch (signal) {
@@ -829,7 +828,7 @@ public abstract class BaseCachedProxySlice implements Slice {
         final CachedArtifactMetadataStore store
     ) {
         final Path tempFile;
-        final FileChannel channel;
+        final FileChannel channel; // NOPMD CloseResource - closed by Subscriber.onComplete/onError below; lifecycle owned by streaming subscriber
         try {
             tempFile = Files.createTempFile("pantera-cache-", ".tmp");
             tempFile.toFile().deleteOnExit();
@@ -1174,7 +1173,7 @@ public abstract class BaseCachedProxySlice implements Slice {
     }
 
     private CompletableFuture<FetchSignal> handleNonSuccess(
-        final Response resp, final Key key, final long duration
+        final Response resp, final long duration
     ) {
         if (resp.status().code() >= 500) {
             this.trackUpstreamFailure(
@@ -1273,7 +1272,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 if (age != null) {
                     builder.header("Age", String.valueOf(age.getSeconds()));
                 }
-                return (Response) builder.body(content).build();
+                return builder.body(content).build();
             })
             .exceptionallyCompose(err -> {
                 EcsLogger.warn("com.auto1.pantera." + this.repoType)
