@@ -71,7 +71,7 @@ public final class ArtifactHandler {
 
     static {
         final String seed = System.getenv().getOrDefault(
-            "PANTERA_DOWNLOAD_TOKEN_SECRET",
+            "PANTERA_DOWNLOAD_TOKEN_SECRET", // NOPMD HardCodedCryptoKey - env var name, not key material
             "pantera-download-" + ProcessHandle.current().pid()
                 + "-" + System.getProperty("user.name", "default")
         );

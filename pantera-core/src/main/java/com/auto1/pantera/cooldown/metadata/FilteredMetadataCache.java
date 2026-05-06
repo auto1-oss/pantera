@@ -542,7 +542,7 @@ public class FilteredMetadataCache {
             final Optional<Instant> earliestBlockedUntil,
             final Duration maxTtl
         ) {
-            this.data = data;
+            this.data = data; // NOPMD ArrayIsStoredDirectly - immutable cache value; defensive copy of filtered metadata bytes is wasteful
             this.earliestBlockedUntil = earliestBlockedUntil;
             this.maxTtl = maxTtl;
             this.createdAt = Instant.now();

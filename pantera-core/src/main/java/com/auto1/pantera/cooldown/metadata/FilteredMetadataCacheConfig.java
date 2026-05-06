@@ -243,7 +243,7 @@ public final class FilteredMetadataCacheConfig {
      */
     public static FilteredMetadataCacheConfig getInstance() {
         if (instance == null) {
-            return new FilteredMetadataCacheConfig();
+            return new FilteredMetadataCacheConfig(); // NOPMD SingletonClassReturningNewInstance - "configured-or-default" accessor; new is the safe default when init() was never called
         }
         return instance;
     }

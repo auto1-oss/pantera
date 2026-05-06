@@ -377,7 +377,7 @@ public final class GroupResolver implements Slice {
         final String artifactName,
         final NegativeCacheKey negCacheKey
     ) {
-        return switch (outcome) {
+        return switch (outcome) { // NOPMD SwitchDensity - exhaustive IndexOutcome sealed-type dispatch; per-branch logging required
             case IndexOutcome.Hit hit -> targetedLocalRead(
                 hit.repos(), line, headers, body, path, artifactName, negCacheKey
             );

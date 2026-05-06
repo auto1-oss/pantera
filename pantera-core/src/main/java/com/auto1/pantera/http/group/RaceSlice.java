@@ -261,7 +261,7 @@ public final class RaceSlice implements Slice {
         DrainedResponse(final RsStatus status, final Headers headers, final byte[] bytes) {
             this.status = status;
             this.headers = headers;
-            this.bytes = bytes;
+            this.bytes = bytes; // NOPMD ArrayIsStoredDirectly - private inner record-like holder; bytes are an already-drained immutable HTTP body
         }
     }
 }

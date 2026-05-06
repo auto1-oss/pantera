@@ -17,7 +17,12 @@ package com.auto1.pantera.http;
  */
 public final class ResponseException extends RuntimeException {
 
-    private final Response response;
+    /**
+     * The HTTP response. Marked {@code transient} because pantera never
+     * serializes exceptions across the wire; this field exists only to
+     * carry the in-process response back to the request handler.
+     */
+    private final transient Response response;
 
     /**
      * Ctor.

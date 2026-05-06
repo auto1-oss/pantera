@@ -103,7 +103,7 @@ public final class FaultTranslator {
      */
     @SuppressWarnings({"PMD.UnusedFormalParameter", "PMD.CyclomaticComplexity"})
     public static Response translate(final Fault fault, final RequestContext ctx) {
-        return switch (fault) {
+        return switch (fault) { // NOPMD SwitchDensity - exhaustive Fault sealed-type translation; all branches stay together by design
             case Fault.NotFound nf -> ResponseBuilder.notFound().build();
             case Fault.Forbidden fb -> ResponseBuilder.forbidden()
                 .textBody(fb.reason())

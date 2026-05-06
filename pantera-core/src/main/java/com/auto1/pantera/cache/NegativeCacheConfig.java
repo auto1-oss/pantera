@@ -263,7 +263,7 @@ public final class NegativeCacheConfig {
      */
     public static NegativeCacheConfig getInstance() {
         if (instance == null) {
-            return new NegativeCacheConfig();
+            return new NegativeCacheConfig(); // NOPMD SingletonClassReturningNewInstance - "configured-or-default" accessor; new is the safe default when init() was never called
         }
         return instance;
     }

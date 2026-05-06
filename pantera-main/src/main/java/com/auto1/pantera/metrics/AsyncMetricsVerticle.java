@@ -149,7 +149,7 @@ public final class AsyncMetricsVerticle extends AbstractVerticle {
     public void start(final Promise<Void> startPromise) {
         final HttpServerOptions options = new HttpServerOptions()
             .setPort(this.port)
-            .setHost("0.0.0.0")
+            .setHost("0.0.0.0") // NOPMD AvoidUsingHardCodedIP - server bind on all interfaces (wildcard, not a target IP)
             .setIdleTimeout(60)
             .setTcpKeepAlive(true)
             .setTcpNoDelay(true);
