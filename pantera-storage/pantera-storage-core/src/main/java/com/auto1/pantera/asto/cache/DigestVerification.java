@@ -41,7 +41,7 @@ public final class DigestVerification implements CacheControl {
      */
     public DigestVerification(final Supplier<MessageDigest> digest, final byte[] expected) {
         this.digest = digest;
-        this.expected = expected;
+        this.expected = expected; // NOPMD ArrayIsStoredDirectly - immutable holder; expected bytes are compared via Arrays.equals only and never mutated
     }
 
     @Override

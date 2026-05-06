@@ -124,7 +124,8 @@ public abstract class StorageWhiteboxVerification {
                             )
                         )
                     ).join();
-                } catch (final Exception exc) {
+                } catch (final Exception exc) { // NOPMD EmptyCatchBlock - test deliberately injects Flowable.error and asserts atomicity below; the thrown exception is the expected outcome
+                    // expected: the injected error must abort save without corrupting prior value
                 }
                 MatcherAssert.assertThat(
                     String.format("%s: save should be atomic", pair.getKey()),

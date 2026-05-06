@@ -97,7 +97,7 @@ public final class StreamThroughCache implements Cache {
      */
     private Content teeContent(final Key key, final Content remote) {
         final Path tempFile;
-        final FileChannel channel;
+        final FileChannel channel; // NOPMD CloseResource - lifecycle owned by Flowable pipeline below; closed on complete/error/cancel
         try {
             tempFile = Files.createTempFile("pantera-stc-", ".tmp");
             tempFile.toFile().deleteOnExit();

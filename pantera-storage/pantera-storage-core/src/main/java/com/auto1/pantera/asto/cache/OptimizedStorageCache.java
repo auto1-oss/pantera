@@ -106,7 +106,7 @@ public final class OptimizedStorageCache {
             if (storage instanceof FileStorage) {
                 return getFileSystemContent((FileStorage) storage, key);
             }
-        } catch (Exception e) {
+        } catch (Exception e) { // NOPMD EmptyCatchBlock - intentional: any reflection/unwrap failure falls through to the standard storage.value() path below
             // If unwrapping fails, fall back to standard storage.value()
         }
         
@@ -181,7 +181,7 @@ public final class OptimizedStorageCache {
         private final org.reactivestreams.Subscriber<? super ByteBuffer> subscriber;
         private final java.nio.file.Path filePath;
         private final long fileSize;
-        private volatile boolean cancelled = false;
+        private volatile boolean cancelled;
         private final AtomicBoolean started = new AtomicBoolean(false);
         private final AtomicBoolean cleanedUp = new AtomicBoolean(false);
         private volatile ByteBuffer directBuffer;

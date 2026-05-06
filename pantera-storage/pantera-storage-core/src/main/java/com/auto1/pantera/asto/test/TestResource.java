@@ -28,7 +28,7 @@ import java.util.concurrent.CompletableFuture;
  * Test resource.
  * @since 0.24
  */
-public final class TestResource {
+public final class TestResource { // NOPMD TestClassWithoutTestCases - test-support utility for loading classpath resources from src/test/resources; not a JUnit test class
 
     /**
      * Relative to test resources folder resource path.

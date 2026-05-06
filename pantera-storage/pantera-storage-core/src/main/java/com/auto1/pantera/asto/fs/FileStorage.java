@@ -73,7 +73,7 @@ public final class FileStorage implements Storage {
      * @deprecated Use {@link FileStorage#FileStorage(Path)} ctor instead.
      */
     @Deprecated
-    public FileStorage(final Path path, final Object nothing) {
+    public FileStorage(final Path path, final Object nothing) { // NOPMD UnusedFormalParameter - deprecated overload; 'nothing' kept solely to disambiguate from the primary ctor for binary compatibility
         this(path);
     }
 
@@ -509,7 +509,7 @@ public final class FileStorage implements Storage {
                 if (!files.findFirst().isPresent()) {
                     Files.deleteIfExists(tmpDir);
                 }
-            } catch (final IOException ignore) {
+            } catch (final IOException ignore) { // NOPMD EmptyCatchBlock - best-effort cleanup; any IO error is benign and recovered on next storage operation
                 // Ignore cleanup errors
             }
         }
