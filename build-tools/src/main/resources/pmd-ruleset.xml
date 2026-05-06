@@ -34,6 +34,10 @@
         <exclude name="AssignmentInOperand"/>
         <!-- Bucket A->exclude (14b): "code smell" warning is too eager. Common pattern is `dataSource != null ? new X(dataSource) : null` in optional-dependency wiring, which PMD flags but is the correct pattern. 34 violations. -->
         <exclude name="NullAssignment"/>
+        <!-- Bucket A->exclude (14b post-strip): codebase legitimately uses Field.setAccessible(true) for SubStorage/FileStorage decorator unwrapping, NegativeCacheConfig admin-resource introspection, and DirectBuffer cleanup. The rule's anti-reflection premise is reasonable but every site here is reviewed and intentional. 23 violations. -->
+        <exclude name="AvoidAccessibilityAlteration"/>
+        <!-- Bucket A->exclude (14b post-strip): codebase intentionally catches Throwable at boundaries: Vert.x event-loop handlers, prefetch worker loops, and Quartz job firing — losing thread-of-control here means losing the worker. 18 violations. -->
+        <exclude name="AvoidCatchingThrowable"/>
     </rule>
 
     <!-- ===== SECURITY: weak crypto, hardcoded creds, etc. ===== -->
@@ -53,6 +57,8 @@
         <exclude name="LooseCoupling"/>
         <!-- Bucket A->exclude (14b): cosmetic test-code style; the rule fires on every assertion without a message, but assertion code is self-documenting via the comparison. 7 violations. -->
         <exclude name="JUnitAssertionsShouldIncludeMessage"/>
+        <!-- Bucket A->exclude (14b post-strip): codebase consistently uses 'public final class XTest' which PMD flags. The rule's premise (package-private tests) is a JUnit 5 idiom but conflicts with Maven Surefire's default test discovery. 32 violations. -->
+        <exclude name="JUnit5TestShouldBePackagePrivate"/>
     </rule>
 
     <!-- ===== CODE STYLE: only the ones that hide real bugs ===== -->
@@ -148,6 +154,8 @@
         <exclude name="CouplingBetweenObjects"/>
         <!-- Bucket B (14b): false positives on intentional control-flow (MetadataMerger retry loops). Heuristic, not bug detector. 9 violations. -->
         <exclude name="ExceptionAsFlowControl"/>
+        <!-- Bucket A->exclude (14b post-strip): codebase intentionally documents unchecked exceptions in throws clauses for parser/writer interfaces (MetadataParser, MetadataRewriter, etc.). Removing them weakens the contract documentation. 13 violations. -->
+        <exclude name="AvoidUncheckedExceptionsInSignatures"/>
     </rule>
 
     <!-- ===== PERFORMANCE: real perf issues, not micro-opts ===== -->

@@ -66,8 +66,8 @@ public final class CacheIntegrityAudit {
         try {
             parsed = Args.parse(args);
         } catch (final IllegalArgumentException ex) {
-            System.err.println("error: " + ex.getMessage());
-            System.err.println();
+            System.err.println("error: " + ex.getMessage()); // NOPMD SystemPrintln - CLI tool, stdout is the UI
+            System.err.println(); // NOPMD SystemPrintln - CLI tool, stdout is the UI
             printUsage(System.err);
             System.exit(2);
             return;
@@ -79,28 +79,28 @@ public final class CacheIntegrityAudit {
         }
         final Path root = Paths.get(parsed.root).toAbsolutePath().normalize();
         if (!Files.isDirectory(root)) {
-            System.err.println("error: --root does not exist or is not a directory: " + root);
+            System.err.println("error: --root does not exist or is not a directory: " + root); // NOPMD SystemPrintln - CLI tool, stdout is the UI
             System.exit(2);
             return;
         }
         final String repoTag = parsed.repo == null ? DEFAULT_REPO : parsed.repo;
-        System.out.println("Pantera cache integrity audit");
-        System.out.println("  root:    " + root);
-        System.out.println("  repo:    " + repoTag);
-        System.out.println("  mode:    " + (parsed.fix ? "fix (evict mismatches)" : "dry-run"));
-        System.out.println();
+        System.out.println("Pantera cache integrity audit"); // NOPMD SystemPrintln - CLI tool, stdout is the UI
+        System.out.println("  root:    " + root); // NOPMD SystemPrintln - CLI tool, stdout is the UI
+        System.out.println("  repo:    " + repoTag); // NOPMD SystemPrintln - CLI tool, stdout is the UI
+        System.out.println("  mode:    " + (parsed.fix ? "fix (evict mismatches)" : "dry-run")); // NOPMD SystemPrintln - CLI tool, stdout is the UI
+        System.out.println(); // NOPMD SystemPrintln - CLI tool, stdout is the UI
         final ProxyCacheWriter.IntegrityAuditor.Report report =
             ProxyCacheWriter.IntegrityAuditor.run(new FileStorage(root), repoTag, parsed.fix);
-        System.out.println();
-        System.out.println("Scanned primaries: " + report.scanned());
-        System.out.println("Mismatches found:  " + report.mismatches().size());
+        System.out.println(); // NOPMD SystemPrintln - CLI tool, stdout is the UI
+        System.out.println("Scanned primaries: " + report.scanned()); // NOPMD SystemPrintln - CLI tool, stdout is the UI
+        System.out.println("Mismatches found:  " + report.mismatches().size()); // NOPMD SystemPrintln - CLI tool, stdout is the UI
         if (!report.mismatches().isEmpty()) {
-            System.out.println();
-            System.out.println("Offenders:");
+            System.out.println(); // NOPMD SystemPrintln - CLI tool, stdout is the UI
+            System.out.println("Offenders:"); // NOPMD SystemPrintln - CLI tool, stdout is the UI
             for (final ProxyCacheWriter.IntegrityAuditor.Mismatch m : report.mismatches()) {
-                System.out.println("  " + m.primary().string());
+                System.out.println("  " + m.primary().string()); // NOPMD SystemPrintln - CLI tool, stdout is the UI
                 for (final ProxyCacheWriter.IntegrityAuditor.AlgoMismatch am : m.algorithms()) {
-                    System.out.println(String.format(
+                    System.out.println(String.format( // NOPMD SystemPrintln - CLI tool, stdout is the UI
                         Locale.ROOT,
                         "    %-6s  cached=%s  computed=%s",
                         am.algo().name().toLowerCase(Locale.ROOT),
@@ -111,21 +111,21 @@ public final class CacheIntegrityAudit {
             }
         }
         if (report.clean()) {
-            System.out.println();
-            System.out.println("Result: CLEAN");
+            System.out.println(); // NOPMD SystemPrintln - CLI tool, stdout is the UI
+            System.out.println("Result: CLEAN"); // NOPMD SystemPrintln - CLI tool, stdout is the UI
             System.exit(0);
             return;
         }
         if (parsed.fix) {
-            System.out.println();
-            System.out.println("Result: " + report.mismatches().size()
+            System.out.println(); // NOPMD SystemPrintln - CLI tool, stdout is the UI
+            System.out.println("Result: " + report.mismatches().size() // NOPMD SystemPrintln - CLI tool, stdout is the UI
                 + " mismatched pair(s) evicted. "
                 + "Next client request will repopulate through ProxyCacheWriter.");
             System.exit(0);
             return;
         }
-        System.out.println();
-        System.out.println("Result: " + report.mismatches().size()
+        System.out.println(); // NOPMD SystemPrintln - CLI tool, stdout is the UI
+        System.out.println("Result: " + report.mismatches().size() // NOPMD SystemPrintln - CLI tool, stdout is the UI
             + " mismatched pair(s) detected. Re-run with --fix to evict.");
         System.exit(1);
     }
