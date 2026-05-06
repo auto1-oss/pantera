@@ -56,7 +56,6 @@ const adminItems = computed<NavItem[]>(() => {
   if (auth.isAdmin) {
     items.push({ label: 'Auth Providers', icon: 'pi pi-key', to: '/admin/auth-providers' })
     items.push({ label: 'Negative Cache', icon: 'pi pi-ban', to: '/admin/neg-cache' })
-    items.push({ label: 'Performance Tuning', icon: 'pi pi-bolt', to: '/admin/performance-tuning' })
     items.push({ label: 'System Settings', icon: 'pi pi-sliders-h', to: '/admin/settings' })
   }
   return items

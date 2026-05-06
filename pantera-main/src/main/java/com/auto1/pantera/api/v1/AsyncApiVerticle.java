@@ -339,7 +339,7 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                 .putHeader("Access-Control-Allow-Origin", "*")
                 .putHeader(
                     "Access-Control-Allow-Methods",
-                    "GET,POST,PUT,DELETE,HEAD,OPTIONS"
+                    "GET,POST,PUT,PATCH,DELETE,HEAD,OPTIONS"
                 )
                 .putHeader(
                     "Access-Control-Allow-Headers",
