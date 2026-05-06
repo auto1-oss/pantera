@@ -101,7 +101,7 @@ final class JettyClientSlice implements Slice {
         // UnicastProcessor supports backpressure and single-subscriber semantics.
         final UnicastProcessor<ByteBuffer> processor = UnicastProcessor.create();
         if (line.method() != RqMethod.HEAD) {
-            final AsyncRequestContent async = new AsyncRequestContent();
+            final AsyncRequestContent async = new AsyncRequestContent(); // NOPMD CloseResource - lifecycle owned by Jetty request; closed via Flowable.doFinally(async::close)
             Flowable.fromPublisher(body)
                 .doOnError(async::fail)
                 .doOnCancel(

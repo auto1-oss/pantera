@@ -53,7 +53,7 @@ public final class GpgClearsign {
      * @param content Bytes content to sign
      */
     public GpgClearsign(final byte[] content) {
-        this.content = content;
+        this.content = content; // NOPMD ArrayIsStoredDirectly - private final immutable holder; bytes consumed only via signedContent()
     }
 
     /**

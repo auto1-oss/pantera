@@ -1132,7 +1132,7 @@ public final class VertxSliceServer implements Closeable {
                 // CRITICAL: Must execute on Vert.x event loop thread for thread safety
                 // DO NOT use observeOn() - it breaks Vert.x threading model and causes corruption
                 vpb.doOnSubscribe(sub -> cancelHook.set(() -> {
-                        try { sub.cancel(); } catch (Throwable ignore) { /* idempotent */ }
+                        try { sub.cancel(); } catch (Throwable ignore) { /* idempotent */ } // NOPMD EmptyCatchBlock - cancel is idempotent; any throw is benign
                     }))
                     .subscribe(
                         buffer -> { },
@@ -1208,7 +1208,7 @@ public final class VertxSliceServer implements Closeable {
                    // Capture the Subscription so client-disconnect handlers can cancel
                    // upstream work (see serveWithStream/serveWithBody cancelHook).
                    .doOnSubscribe(sub -> cancelHook.set(() -> {
-                       try { sub.cancel(); } catch (Throwable ignore) { /* idempotent */ }
+                       try { sub.cancel(); } catch (Throwable ignore) { /* idempotent */ } // NOPMD EmptyCatchBlock - cancel is idempotent; any throw is benign
                    }))
                    .subscribe(response.toSubscriber());
             }
@@ -1232,7 +1232,7 @@ public final class VertxSliceServer implements Closeable {
                         // Capture the Subscription so client-disconnect handlers can
                         // cancel upstream work (see serveWithStream/serveWithBody cancelHook).
                         cancelHook.set(() -> {
-                            try { subscription.cancel(); } catch (Throwable ignore) { /* idempotent */ }
+                            try { subscription.cancel(); } catch (Throwable ignore) { /* idempotent */ } // NOPMD EmptyCatchBlock - cancel is idempotent; any throw is benign
                         });
                         EcsLogger.debug("com.auto1.pantera.vertx")
                             .message("Subscribed to chunked response body")

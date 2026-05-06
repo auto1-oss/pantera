@@ -54,7 +54,7 @@ public interface MultiPackages {
         public void merge(final Collection<InputStream> items, final OutputStream res) {
             try (GZIPOutputStream gop = new GZIPOutputStream(new NonClosingOutputStream(res))) {
                 final Set<Pair<String, String>> packages = new HashSet<>(items.size());
-                for (final InputStream inp : items) {
+                for (final InputStream inp : items) { // NOPMD CloseResource - input streams are caller-owned per Unique contract
                     Unique.appendPackages(gop, inp, packages);
                 }
                 gop.finish();

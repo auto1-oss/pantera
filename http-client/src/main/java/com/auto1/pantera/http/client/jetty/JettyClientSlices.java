@@ -516,7 +516,7 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
         if (protocol == HttpProtocol.H1) {
             result = new HttpClientTransportOverHTTP(connector);
         } else {
-            final HTTP2Client h2Client = new HTTP2Client(connector);
+            final HTTP2Client h2Client = new HTTP2Client(connector); // NOPMD CloseResource - lifecycle managed by parent HttpClient via wrapped HttpClientTransport
             // Disable server push: registries don't push, and push streams
             // would just consume pool slots.
             h2Client.setMaxConcurrentPushedStreams(0);
