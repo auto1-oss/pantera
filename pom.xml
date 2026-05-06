@@ -394,13 +394,14 @@ Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-pmd-plugin</artifactId>
-        <version>3.21.2</version>
+        <version>3.26.0</version>
         <configuration>
           <rulesets>
             <ruleset>pmd-ruleset.xml</ruleset>
           </rulesets>
           <printFailingErrors>true</printFailingErrors>
-          <targetJdk>17</targetJdk>
+          <failOnViolation>true</failOnViolation>
+          <verbose>true</verbose>
           <excludes>
             <exclude>**/hex/proto/generated/**</exclude>
             <exclude>**/debian/benchmarks/**</exclude>
@@ -420,6 +421,16 @@ Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
             <groupId>com.auto1.pantera</groupId>
             <artifactId>build-tools</artifactId>
             <version>${project.version}</version>
+          </dependency>
+          <dependency>
+            <groupId>net.sourceforge.pmd</groupId>
+            <artifactId>pmd-core</artifactId>
+            <version>7.6.0</version>
+          </dependency>
+          <dependency>
+            <groupId>net.sourceforge.pmd</groupId>
+            <artifactId>pmd-java</artifactId>
+            <version>7.6.0</version>
           </dependency>
         </dependencies>
       </plugin>
@@ -488,7 +499,7 @@ Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-pmd-plugin</artifactId>
-        <version>3.21.2</version>
+        <version>3.26.0</version>
         <configuration>
           <rulesets>
             <ruleset>pmd-ruleset.xml</ruleset>

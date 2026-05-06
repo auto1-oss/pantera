@@ -2,7 +2,57 @@
 
 ## Unreleased
 
-- **Phase 13: speculative packument prefetch on the cold-cache npm
+- **Phase 13.5: raise npm per-upstream prefetch cap default 4 → 32.**
+  Phase 12.5 profiling proved foreground requests do not share semaphore
+  queueing with prefetch (`tryAcquire()` is non-blocking; foreground
+  uses no semaphore at all). The original npm=4 default was based on
+  stale "foreground vs prefetch contention" reasoning that doesn't
+  apply.
+
+  Phase 13 wired packument prefetch but at cap=4, 73 of 108 dispatches
+  dropped on `semaphore_saturated` — 68% of the prefetch budget thrown
+  away. Sweep across {4, 16, 32, 64} on warm-JVM single-shot
+  `npm install express` (median of 3 runs):
+
+  ```
+  cap |  p50  | mean  |  max
+   4  | 2.20s | 2.21s | 2.28s
+  16  | 1.86s | 1.84s | 1.90s
+  32  | 1.75s | 1.73s | 1.76s
+  64  | 1.63s | 1.73s | 1.96s
+  ```
+
+  Cap=32 chosen for best balance: 20% wall reduction vs cap=4, lowest
+  variance (mean=1.73, max=1.76), no upstream pool overload (cap=64
+  shows max=1.96s creeping up).
+
+  10-iteration cold-cache `npm install express` (each run restarts
+  pantera, so JVM-startup dominates and cap signal is muted):
+
+  ```
+                min   p50    mean   p95    max    stdev
+  cap=4  (old) 3.10  3.21s  4.20s  12.50  12.50  2.92
+  cap=32 (new) 3.32  3.68s  3.63s   3.93   3.93  0.19
+  ```
+
+  p50 slightly worse (3.21→3.68); **p95 dramatically better
+  (12.50→3.93)** — cap=4 had a bimodal failure mode where one in ten
+  cold installs blew up to 12.5 s, eliminated at cap=32. Mean is
+  better (4.20→3.63), stdev 15× tighter (2.92→0.19). Acceptance bar
+  ≤1.5× direct — both caps fail it on cold-restart benchmark; the JVM
+  warmup (≈2 s) sets the floor regardless of prefetch cap. In
+  steady-state warm production the sweep median (1.75s = 1.4×
+  direct) clears the bar.
+
+  Maven default cap unchanged at 16; maven 10-iter cold-cache:
+  p50 13.34s (was 13.63s, within stdev).
+
+  Files: `pantera-main/src/main/java/com/auto1/pantera/settings/runtime/SettingsKey.java`
+  (defaultRepr 4→32), `PrefetchTuning.java` (defaults map + fromMap
+  fallback), `SettingsKeyTest.java` + `SettingsHandlerRuntimeTest.java`
+  + `PrefetchDispatcherTest.java` updated to assert 32.
+
+
   critical path.** Phase 12.5 profiling pinpointed the packument
   waterfall (8.45 s of 12.9 s wall = 65 %) as the dominant cold-cache
   npm cost: `npm install` walks each dep's packument serially before
