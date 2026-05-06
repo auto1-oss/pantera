@@ -113,26 +113,27 @@ public final class AuthFromDb implements Authentication {
         try (Connection conn = this.source.getConnection();
              PreparedStatement ps = conn.prepareStatement(AuthFromDb.SQL)) {
             ps.setString(1, name);
-            final ResultSet rs = ps.executeQuery();
-            if (rs.next()) {
-                final String hash = rs.getString("password_hash");
-                final String provider = rs.getString("auth_provider");
-                if (hash == null || hash.isEmpty()) {
-                    return Optional.empty();
-                }
-                // Only authenticate pantera-managed users (not SSO)
-                if (!AuthFromDb.ARTIPIE.equals(provider)) {
-                    return Optional.empty();
-                }
-                // Bcrypt match
-                if (hash.startsWith("$2") && BCrypt.checkpw(pass, hash)) {
-                    return Optional.of(new AuthUser(name, AuthFromDb.ARTIPIE));
-                }
-                // SHA-256 match (legacy passwords from YAML migration)
-                // Transparently upgrade to bcrypt on successful login.
-                if (hash.equals(DigestUtils.sha256Hex(pass))) {
-                    this.upgradeHashToBcrypt(name, pass);
-                    return Optional.of(new AuthUser(name, AuthFromDb.ARTIPIE));
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    final String hash = rs.getString("password_hash");
+                    final String provider = rs.getString("auth_provider");
+                    if (hash == null || hash.isEmpty()) {
+                        return Optional.empty();
+                    }
+                    // Only authenticate pantera-managed users (not SSO)
+                    if (!AuthFromDb.ARTIPIE.equals(provider)) {
+                        return Optional.empty();
+                    }
+                    // Bcrypt match
+                    if (hash.startsWith("$2") && BCrypt.checkpw(pass, hash)) {
+                        return Optional.of(new AuthUser(name, AuthFromDb.ARTIPIE));
+                    }
+                    // SHA-256 match (legacy passwords from YAML migration)
+                    // Transparently upgrade to bcrypt on successful login.
+                    if (hash.equals(DigestUtils.sha256Hex(pass))) {
+                        this.upgradeHashToBcrypt(name, pass);
+                        return Optional.of(new AuthUser(name, AuthFromDb.ARTIPIE));
+                    }
                 }
             }
             return Optional.empty();

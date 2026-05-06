@@ -45,8 +45,8 @@ public final class RoleDao implements CrudRoles {
         try (Connection conn = this.source.getConnection();
              PreparedStatement ps = conn.prepareStatement(
                  "SELECT name, permissions, enabled FROM roles ORDER BY name"
-             )) {
-            final ResultSet rs = ps.executeQuery();
+             );
+             ResultSet rs = ps.executeQuery()) {
             while (rs.next()) {
                 arr.add(roleFromRow(rs));
             }
@@ -86,12 +86,13 @@ public final class RoleDao implements CrudRoles {
             ps.setString(2, pattern);
             ps.setInt(3, limit);
             ps.setInt(4, offset);
-            final ResultSet rs = ps.executeQuery();
-            while (rs.next()) {
-                if (total == 0) {
-                    total = rs.getInt("total_count");
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    if (total == 0) {
+                        total = rs.getInt("total_count");
+                    }
+                    items.add(roleFromRow(rs));
                 }
-                items.add(roleFromRow(rs));
             }
         } catch (final Exception ex) {
             throw new IllegalStateException("Failed to list roles (paged)", ex);
@@ -156,7 +157,7 @@ public final class RoleDao implements CrudRoles {
             if (rows == 0) {
                 throw new IllegalStateException("Role not found: " + rname);
             }
-        } catch (final IllegalStateException ex) {
+        } catch (final IllegalStateException ex) { // NOPMD AvoidRethrowingException - rethrow preserves the "not-found" marker so callers can distinguish it from the generic Exception catch wrapped below
             throw ex;
         } catch (final Exception ex) {
             throw new IllegalStateException("Failed to remove role: " + rname, ex);

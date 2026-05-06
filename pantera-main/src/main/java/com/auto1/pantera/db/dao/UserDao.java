@@ -53,8 +53,8 @@ public final class UserDao implements CrudUsers {
             "GROUP BY u.id ORDER BY u.username"
         );
         try (Connection conn = this.source.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-            final ResultSet rs = ps.executeQuery();
+             PreparedStatement ps = conn.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
             while (rs.next()) {
                 arr.add(userFromRow(rs));
             }
@@ -100,12 +100,13 @@ public final class UserDao implements CrudUsers {
             ps.setString(3, pattern);
             ps.setInt(4, limit);
             ps.setInt(5, offset);
-            final ResultSet rs = ps.executeQuery();
-            while (rs.next()) {
-                if (total == 0) {
-                    total = rs.getInt("total_count");
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    if (total == 0) {
+                        total = rs.getInt("total_count");
+                    }
+                    items.add(userFromRow(rs));
                 }
-                items.add(userFromRow(rs));
             }
         } catch (final Exception ex) {
             throw new IllegalStateException("Failed to list users (paged)", ex);
@@ -240,7 +241,7 @@ public final class UserDao implements CrudUsers {
             if (rows == 0) {
                 throw new IllegalStateException("User not found: " + uname);
             }
-        } catch (final IllegalStateException ex) {
+        } catch (final IllegalStateException ex) { // NOPMD AvoidRethrowingException - rethrow preserves the "not-found" marker so callers can distinguish it from the generic Exception catch wrapped below
             throw ex;
         } catch (final Exception ex) {
             throw new IllegalStateException("Failed to alter password: " + uname, ex);
@@ -291,18 +292,19 @@ public final class UserDao implements CrudUsers {
         try (PreparedStatement ps = conn.prepareStatement(
             "SELECT id FROM users WHERE username = ?")) {
             ps.setString(1, uname);
-            final ResultSet rs = ps.executeQuery();
-            if (!rs.next()) {
-                EcsLogger.warn("com.auto1.pantera.db")
-                    .message("updateUserRoles: user not found in DB after insert")
-                    .eventCategory("iam")
-                    .eventAction("role_assignment")
-                    .eventOutcome("failure")
-                    .field("user.name", uname)
-                    .log();
-                return;
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    EcsLogger.warn("com.auto1.pantera.db")
+                        .message("updateUserRoles: user not found in DB after insert")
+                        .eventCategory("iam")
+                        .eventAction("role_assignment")
+                        .eventOutcome("failure")
+                        .field("user.name", uname)
+                        .log();
+                    return;
+                }
+                userId = rs.getInt("id");
             }
-            userId = rs.getInt("id");
         }
         // Delete existing role assignments
         try (PreparedStatement ps = conn.prepareStatement(

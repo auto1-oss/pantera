@@ -80,11 +80,12 @@ public final class SettingsDao {
                  "SELECT value FROM settings WHERE key = ?"
              )) {
             ps.setString(1, key);
-            final ResultSet rs = ps.executeQuery();
-            if (rs.next()) {
-                return Optional.of(
-                    Json.createReader(new StringReader(rs.getString("value"))).readObject()
-                );
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return Optional.of(
+                        Json.createReader(new StringReader(rs.getString("value"))).readObject()
+                    );
+                }
             }
             return Optional.empty();
         } catch (final Exception ex) {
@@ -97,8 +98,8 @@ public final class SettingsDao {
         try (Connection conn = this.source.getConnection();
              PreparedStatement ps = conn.prepareStatement(
                  "SELECT key, value FROM settings ORDER BY key"
-             )) {
-            final ResultSet rs = ps.executeQuery();
+             );
+             ResultSet rs = ps.executeQuery()) {
             while (rs.next()) {
                 result.put(
                     rs.getString("key"),
@@ -117,12 +118,13 @@ public final class SettingsDao {
         try (Connection conn = this.source.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setObject(1, java.sql.Timestamp.from(since));
-            final ResultSet rs = ps.executeQuery();
-            while (rs.next()) {
-                result.put(
-                    rs.getString("key"),
-                    Json.createReader(new StringReader(rs.getString("value"))).readObject()
-                );
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    result.put(
+                        rs.getString("key"),
+                        Json.createReader(new StringReader(rs.getString("value"))).readObject()
+                    );
+                }
             }
         } catch (final Exception ex) {
             throw new IllegalStateException("Failed to query changed settings", ex);

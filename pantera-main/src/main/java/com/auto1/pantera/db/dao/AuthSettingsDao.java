@@ -48,9 +48,10 @@ public final class AuthSettingsDao {
                  "SELECT value FROM auth_settings WHERE key = ?"
              )) {
             ps.setString(1, key);
-            final ResultSet rs = ps.executeQuery();
-            if (rs.next()) {
-                return Optional.of(rs.getString("value"));
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return Optional.of(rs.getString("value"));
+                }
             }
             return Optional.empty();
         } catch (final Exception ex) {
@@ -115,8 +116,8 @@ public final class AuthSettingsDao {
         try (Connection conn = this.source.getConnection();
              PreparedStatement ps = conn.prepareStatement(
                  "SELECT key, value FROM auth_settings ORDER BY key"
-             )) {
-            final ResultSet rs = ps.executeQuery();
+             );
+             ResultSet rs = ps.executeQuery()) {
             while (rs.next()) {
                 result.put(rs.getString("key"), rs.getString("value"));
             }
