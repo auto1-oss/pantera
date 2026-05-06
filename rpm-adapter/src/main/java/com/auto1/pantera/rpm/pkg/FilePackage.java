@@ -177,7 +177,9 @@ public final class FilePackage implements Package {
                         if (e.getValues() instanceof short[]) {
                             final short[] sre = (short[]) e.getValues();
                             result = new int[sre.length];
-                            for (int ind = 0; ind < sre.length; ind += 1) {
+                            // Widening short -> int element-by-element; cannot use
+                            // System.arraycopy or Arrays.copyOf across primitive types.
+                            for (int ind = 0; ind < sre.length; ind += 1) { // NOPMD AvoidArrayLoops - short[] -> int[] requires per-element widening
                                 result[ind] = sre[ind];
                             }
                         } else {

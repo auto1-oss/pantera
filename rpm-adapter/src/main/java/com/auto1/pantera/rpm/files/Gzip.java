@@ -52,7 +52,7 @@ public final class Gzip {
             TarArchiveInputStream tar = new TarArchiveInputStream(input)
         ) {
             TarArchiveEntry entry;
-            while ((entry = (TarArchiveEntry) tar.getNextEntry()) != null) {
+            while ((entry = tar.getNextEntry()) != null) {
                 final Path next = dest.resolve(entry.getName());
                 if (!next.normalize().startsWith(dest)) {
                     throw new IllegalStateException("Bad tar.gz entry");

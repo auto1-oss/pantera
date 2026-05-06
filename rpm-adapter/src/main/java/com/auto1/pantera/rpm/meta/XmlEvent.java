@@ -122,12 +122,12 @@ public interface XmlEvent {
         /**
          * This is a bit mask used to extract the file type code from a mode value.
          */
-        private static final int S_IFMT = 0170000;
+        private static final int S_IFMT = 0170000; // NOPMD AvoidUsingOctalValues - canonical octal representation of Unix file-mode bitmask, intentionally preserved
 
         /**
          * This is the file type constant of a directory file.
          */
-        private static final int S_IFDIR = 0040000;
+        private static final int S_IFDIR = 0040000; // NOPMD AvoidUsingOctalValues - canonical octal representation of S_IFDIR Unix file-mode constant, intentionally preserved
 
         /**
          * Predicate to filter files. The item is NOT added to the writer if

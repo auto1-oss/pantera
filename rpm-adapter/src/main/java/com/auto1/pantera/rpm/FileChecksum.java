@@ -12,7 +12,6 @@ package com.auto1.pantera.rpm;
 
 import com.auto1.pantera.rpm.pkg.Checksum;
 import java.io.IOException;
-import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
@@ -69,7 +68,7 @@ public final class FileChecksum implements Checksum {
         final ByteBuffer buf = ByteBuffer.allocate(FileChecksum.BUF_SIZE);
         try (FileChannel chan = FileChannel.open(this.file, StandardOpenOption.READ)) {
             while (chan.read(buf) > 0) {
-                ((Buffer) buf).flip();
+                buf.flip();
                 digest.update(buf);
                 buf.clear();
             }

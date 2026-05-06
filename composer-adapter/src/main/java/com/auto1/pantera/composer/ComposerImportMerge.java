@@ -65,11 +65,6 @@ public final class ComposerImportMerge {
     private final Storage storage;
 
     /**
-     * Repository base URL.
-     */
-    private final Optional<String> baseUrl;
-
-    /**
      * Successful merges counter.
      */
     private final AtomicLong mergedPackages;
@@ -86,13 +81,12 @@ public final class ComposerImportMerge {
 
     /**
      * Ctor.
-     * 
+     *
      * @param storage Storage
-     * @param baseUrl Base URL for repository
+     * @param baseUrl Base URL for repository (reserved for future absolute-URL rewrites in merged metadata)
      */
-    public ComposerImportMerge(final Storage storage, final Optional<String> baseUrl) {
+    public ComposerImportMerge(final Storage storage, final Optional<String> baseUrl) { // NOPMD UnusedFormalParameter - public API; baseUrl is reserved for upcoming absolute-URL rewriting in merged dist metadata
         this.storage = storage;
-        this.baseUrl = baseUrl;
         this.mergedPackages = new AtomicLong(0);
         this.mergedVersions = new AtomicLong(0);
         this.failedPackages = new AtomicLong(0);

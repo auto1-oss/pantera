@@ -64,7 +64,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * Composer proxy slice with cache support, cooldown service, and event emission.
@@ -85,14 +84,6 @@ final class CachedProxySlice implements Slice {
      */
     private static final List<String> PRIMARY_EXTENSIONS = List.of(
         ".zip", ".tar", ".phar"
-    );
-
-    /**
-     * Pattern to extract package name and version from path.
-     * Matches /p2/vendor/package.json
-     */
-    private static final Pattern PACKAGE_PATTERN = Pattern.compile(
-        "^/p2?/(?<name>[^/]+/[^/~^]+?)(?:~.*|\\^.*|\\.json)?$"
     );
 
     private final Slice remote;
@@ -368,9 +359,8 @@ final class CachedProxySlice implements Slice {
         final String name,
         final Headers headers
     ) {
-        final String path = line.uri().getPath();
         // Check if this is a versioned package request that needs cooldown check
-        final Optional<CooldownRequest> cooldownReq = this.parseCooldownRequest(path, headers);
+        final Optional<CooldownRequest> cooldownReq = this.parseCooldownRequest();
 
         if (cooldownReq.isPresent()) {
             EcsLogger.debug("com.auto1.pantera.composer")
@@ -488,7 +478,7 @@ final class CachedProxySlice implements Slice {
                         pckgs -> pckgs.orElse(new JsonPackages())
                     ).thenCompose(Packages::content)
                     .thenCombine(
-                        this.packageFromRemote(line, headers),
+                        this.packageFromRemote(line),
                         (lcl, rmt) -> new MergePackage.WithRemote(packageName, lcl).merge(rmt)
                     ).thenCompose(Function.identity())
                     .thenCompose(contentOpt -> {
@@ -713,11 +703,9 @@ final class CachedProxySlice implements Slice {
     /**
      * Parse cooldown request from path if applicable.
      *
-     * @param path Request path
-     * @param headers Request headers
      * @return Optional cooldown request
      */
-    private Optional<CooldownRequest> parseCooldownRequest(final String path, final Headers headers) {
+    private Optional<CooldownRequest> parseCooldownRequest() {
         // TODO: Implement version extraction from request context
         // For now, we'll need to fetch the metadata to get all versions
         // This is a simplified approach - in production you might want to optimize this
@@ -799,13 +787,11 @@ final class CachedProxySlice implements Slice {
     /**
      * Obtains info about package from remote.
      * @param line The request line (usually like this `GET /p2/vendor/package.json HTTP_1_1`)
-     * @param headers Request headers
      * @return Content from respond of remote. If there were some errors,
      *  empty will be returned.
      */
     private CompletionStage<Optional<? extends Content>> packageFromRemote(
-        final RequestLine line,
-        final Headers headers
+        final RequestLine line
     ) {
         final long startTime = System.currentTimeMillis();
         return new Remote.WithErrorHandling(
@@ -973,7 +959,6 @@ final class CachedProxySlice implements Slice {
     private CompletionStage<Response> fetchVerifyAndCache(
         final RequestLine line, final Key key, final String path
     ) {
-        final Storage storage = this.repo.storage();
         final String upstream = this.upstreamUrl + path;
         final RequestContext ctx = new RequestContext(
             org.apache.logging.log4j.ThreadContext.get("trace.id"),
