@@ -45,6 +45,7 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
+import java.util.Collections;
 import java.util.EnumMap;
 import java.util.Locale;
 import java.util.Map;
@@ -804,11 +805,16 @@ final class CachedProxySlice implements Slice {
         final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> sidecars =
             new EnumMap<>(ChecksumAlgo.class);
         sidecars.put(ChecksumAlgo.SHA256, () -> this.fetchSidecar(line, ".ziphash"));
+        // Go's only sidecar is .ziphash (SHA-256), which is in NON_BLOCKING_DEFAULT;
+        // pass an empty non-blocking set so the verification is load-bearing —
+        // a mismatch must fail-closed (502) instead of falling through the
+        // deferred path that only logs.
         return this.cacheWriter.writeAndVerify(
             key,
             key.string(),
             () -> this.fetchPrimary(line, rshdr),
             sidecars,
+            Collections.emptySet(),
             ctx
         ).thenCompose(result -> {
             if (result instanceof Result.Err<ProxyCacheWriter.VerifiedArtifact> err) {

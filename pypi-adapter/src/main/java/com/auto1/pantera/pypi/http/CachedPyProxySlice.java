@@ -35,6 +35,7 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.time.Duration;
+import java.util.Collections;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Locale;
@@ -473,11 +474,16 @@ public final class CachedPyProxySlice implements Slice {
         sidecars.put(ChecksumAlgo.MD5, () -> this.fetchSidecar(line, ".md5"));
         sidecars.put(ChecksumAlgo.SHA512, () -> this.fetchSidecar(line, ".sha512"));
 
+        // PyPI sidecars (.sha256/.md5/.sha512) are all in NON_BLOCKING_DEFAULT;
+        // pass an empty non-blocking set so the integrity check is
+        // load-bearing — a digest mismatch must fail-closed (502) instead of
+        // falling through to the deferred path that only logs.
         return this.cacheWriter.writeAndVerify(
             key,
             upstream,
             () -> this.fetchPrimary(line),
             sidecars,
+            Collections.emptySet(),
             ctx
         ).toCompletableFuture().thenCompose(result -> {
             if (result instanceof Result.Err<ProxyCacheWriter.VerifiedArtifact> err) {

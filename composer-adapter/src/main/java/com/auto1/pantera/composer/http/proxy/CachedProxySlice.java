@@ -52,6 +52,7 @@ import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.nio.charset.StandardCharsets;
 import java.time.format.DateTimeParseException;
+import java.util.Collections;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Locale;
@@ -970,11 +971,16 @@ final class CachedProxySlice implements Slice {
             new EnumMap<>(ChecksumAlgo.class);
         sidecars.put(ChecksumAlgo.SHA256, () -> this.fetchSidecar(line, ".sha256"));
 
+        // Composer's only sidecar is .sha256, which is in NON_BLOCKING_DEFAULT;
+        // pass an empty non-blocking set so the SHA-256 verification is
+        // load-bearing — a mismatch must fail-closed (502) instead of falling
+        // through the deferred path that only logs.
         return this.cacheWriter.writeAndVerify(
             key,
             upstream,
             () -> this.fetchPrimary(line),
             sidecars,
+            Collections.emptySet(),
             ctx
         ).thenCompose(result -> {
             if (result instanceof Result.Err<ProxyCacheWriter.VerifiedArtifact> err) {
