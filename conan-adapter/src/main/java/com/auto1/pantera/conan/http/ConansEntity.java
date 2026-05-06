@@ -44,7 +44,7 @@ import java.util.stream.Collectors;
  * configuration (conaninfo.txt).
  * Pantera-conan storage structure for now corresponds to standard conan_server.
  */
-public final class ConansEntity {
+public final class ConansEntity { // NOPMD MissingStaticMethodInNonInstantiatableClass - namespace container for nested REST endpoint slices; intentionally non-instantiable
 
     /**
      * Protocol type for download URIs.

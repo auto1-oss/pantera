@@ -307,7 +307,7 @@ final class CachedProxySlice implements Slice {
                     .log();
                 // Record event for .zip files (with unknown release date since we skip network)
                 if (key.string().endsWith(".zip")) {
-                    this.enqueueEvent(key, user, Optional.of(module + "/@v/" + version), Optional.empty());
+                    this.enqueueEvent(user, Optional.of(module + "/@v/" + version), Optional.empty());
                 }
                 return CompletableFuture.completedFuture(
                     ResponseBuilder.ok()
@@ -416,7 +416,7 @@ final class CachedProxySlice implements Slice {
                     .log();
                 // Record event for .zip files
                 if (key.string().endsWith(".zip") && artifactPath.isPresent()) {
-                    this.enqueueEvent(key, owner, artifactPath, releaseDate);
+                    this.enqueueEvent(owner, artifactPath, releaseDate);
                 }
                 return CompletableFuture.completedFuture(
                     ResponseBuilder.ok()
@@ -538,7 +538,6 @@ final class CachedProxySlice implements Slice {
                                 .field("user.name", owner)
                                 .log();
                             this.enqueueEvent(
-                                key,
                                 owner,
                                 artifactPath,
                                 releaseDate.or(() -> this.parseLastModified(rshdr.get()))
@@ -602,13 +601,11 @@ final class CachedProxySlice implements Slice {
      * Enqueue artifact event for metadata processing.
      * Only enqueues for actual artifacts (not list endpoints).
      *
-     * @param key Artifact key
      * @param owner Owner username
      * @param artifactPath Optional artifact path (module/@v/version)
      * @param releaseDate Optional release date
      */
     private void enqueueEvent(
-        final Key key,
         final String owner,
         final Optional<String> artifactPath,
         final Optional<Instant> releaseDate
@@ -682,7 +679,7 @@ final class CachedProxySlice implements Slice {
         // Metadata paths need TTL-based expiration to pick up new versions
         if (this.isMetadataPath(path)) {
             return this.storage
-                .map(sto -> (CacheControl) new CacheTimeControl(sto))
+                .<CacheControl>map(sto -> new CacheTimeControl(sto))
                 .orElse(CacheControl.Standard.ALWAYS);
         }
         // Artifacts use checksum-based validation
@@ -767,7 +764,7 @@ final class CachedProxySlice implements Slice {
         return raw.exists(key).thenCompose(present -> {
             if (present) {
                 if (artifactPath.isPresent()) {
-                    this.enqueueEvent(key, owner, artifactPath, releaseDate);
+                    this.enqueueEvent(owner, artifactPath, releaseDate);
                 }
                 return this.serveFromCache(raw, key);
             }
@@ -798,7 +795,6 @@ final class CachedProxySlice implements Slice {
         final Optional<Instant> releaseDate,
         final AtomicReference<Headers> rshdr
     ) {
-        final Storage raw = this.storage.orElseThrow();
         final RequestContext ctx = new RequestContext(
             org.apache.logging.log4j.ThreadContext.get("trace.id"),
             null,
@@ -854,7 +850,7 @@ final class CachedProxySlice implements Slice {
                 ((Result.Ok<ProxyCacheWriter.VerifiedArtifact>) result).value();
             if (artifactPath.isPresent()) {
                 this.enqueueEvent(
-                    key, owner, artifactPath,
+                    owner, artifactPath,
                     releaseDate.or(() -> this.parseLastModified(rshdr.get()))
                 );
             }

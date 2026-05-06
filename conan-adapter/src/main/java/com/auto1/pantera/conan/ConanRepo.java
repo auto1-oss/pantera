@@ -21,16 +21,12 @@ import io.reactivex.Completable;
 public final class ConanRepo {
 
     /**
-     * Primary storage.
-     */
-    private final Storage storage;
-
-    /**
      * Main constructor.
-     * @param storage Asto storage object
+     * @param storage Asto storage object (reserved for future incremental update implementation)
      */
-    public ConanRepo(final Storage storage) {
-        this.storage = storage;
+    public ConanRepo(final Storage storage) { // NOPMD UnusedFormalParameter - public API; storage will be wired in when batchUpdateIncrementally is implemented
+        // storage parameter retained for forward-compatible API; current
+        // batchUpdateIncrementally implementation is a stub.
     }
 
     /**
@@ -38,7 +34,7 @@ public final class ConanRepo {
      * @param prefix Repo prefix
      * @return Completable action
      */
-    public Completable batchUpdateIncrementally(final Key prefix) {
+    public Completable batchUpdateIncrementally(final Key prefix) { // NOPMD UnusedFormalParameter - public API; prefix will be wired in once implementation lands
         return null;
     }
 }

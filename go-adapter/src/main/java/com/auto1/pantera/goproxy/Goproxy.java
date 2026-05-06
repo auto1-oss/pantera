@@ -103,13 +103,12 @@ public final class Goproxy {
      * @param content Content instance to be read
      * @return ByteBuffer contains all data from the content
      */
-    @SuppressWarnings("cast")
     static Single<ByteBuffer> readCompletely(final Content content) {
         return Flowable.fromPublisher(content)
             .reduce(
                 ByteBuffer.allocate(0),
                 (left, right) ->
-                    (ByteBuffer) ByteBuffer.allocate(left.remaining() + right.remaining())
+                    ByteBuffer.allocate(left.remaining() + right.remaining())
                         .put(left).put(right).flip()
             );
     }

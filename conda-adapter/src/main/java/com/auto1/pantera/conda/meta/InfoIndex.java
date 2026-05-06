@@ -122,7 +122,7 @@ public interface InfoIndex {
                     }
                     final String name = entry.getName();
                     if (name.startsWith("info") && name.endsWith("tar.zst")) {
-                        final TarArchiveInputStream info = new TarArchiveInputStream(
+                        final TarArchiveInputStream info = new TarArchiveInputStream( // NOPMD CloseResource - wraps outer 'archive' which owns the underlying lifecycle; closing info would prematurely close the archive iteration
                             new ZstdCompressorInputStream(archive)
                         );
                         while ((entry = info.getNextEntry()) != null) {
