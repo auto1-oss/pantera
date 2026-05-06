@@ -30,6 +30,8 @@
         <!-- noise: legitimate accessor/Lombok-style pattern -->
         <exclude name="AvoidFieldNameMatchingMethodName"/>
         <exclude name="AvoidFieldNameMatchingTypeName"/>
+        <!-- Bucket C (14b): historically wholesale-suppressed (30 prior @SuppressWarnings); use code review for typo-vs-intent -->
+        <exclude name="AssignmentInOperand"/>
     </rule>
 
     <!-- ===== SECURITY: weak crypto, hardcoded creds, etc. ===== -->
@@ -45,6 +47,8 @@
         <exclude name="GuardLogStatement"/>
         <!-- legit: parameterized tests / contract tests don't always have @Test -->
         <exclude name="JUnitTestsShouldIncludeAssert"/>
+        <!-- Bucket B (14b): fires on EnumSet/ConcurrentHashMap/JobDataMap where impl type IS the contract (perf, thread-safety, framework-required). 63 violations, wholesale-suppression magnet. -->
+        <exclude name="LooseCoupling"/>
     </rule>
 
     <!-- ===== CODE STYLE: only the ones that hide real bugs ===== -->
@@ -84,6 +88,12 @@
         <exclude name="EmptyControlStatement"/>
         <!-- legit: var declared but assigned later is fine -->
         <exclude name="UnnecessaryLocalBeforeReturn"/>
+        <!-- Bucket B (14b): pure cosmetic ordering rule. Codebase intentionally intermixes per-section fields. 135 violations. -->
+        <exclude name="FieldDeclarationsShouldBeAtStartOfClass"/>
+        <!-- Bucket B (14b): inverse of `var` adoption; modern Java guidance allows `var` when type is obvious. 34 violations. -->
+        <exclude name="UseExplicitTypes"/>
+        <!-- Bucket B (14b): fires on intentional EMPTY/INSTANCE/LOG static finals using a different (uppercase) convention. 3 violations. -->
+        <exclude name="FieldNamingConventions"/>
     </rule>
 
     <!-- ===== DESIGN: real architecture issues ===== -->
@@ -120,6 +130,10 @@
         <exclude name="AvoidCatchingGenericException"/>
         <!-- judgment-call: can be a bug, but fires too widely -->
         <exclude name="UseObjectForClearerAPI"/>
+        <!-- Bucket B (14b): LOC/dependency-count metric, same family as the dropped CyclomaticComplexity. 42 violations. -->
+        <exclude name="CouplingBetweenObjects"/>
+        <!-- Bucket B (14b): false positives on intentional control-flow (MetadataMerger retry loops). Heuristic, not bug detector. 9 violations. -->
+        <exclude name="ExceptionAsFlowControl"/>
     </rule>
 
     <!-- ===== PERFORMANCE: real perf issues, not micro-opts ===== -->
@@ -141,6 +155,10 @@
         <exclude name="DoNotUseThreads"/>
         <!-- legit: volatile is used correctly throughout for visibility -->
         <exclude name="AvoidUsingVolatile"/>
+        <!-- Bucket B (14b): "Use ReentrantLock" is judgment; synchronized is correct for short critical sections. 46 violations. -->
+        <exclude name="AvoidSynchronizedStatement"/>
+        <!-- Bucket B (14b): same family as AvoidSynchronizedStatement; method-level synchronized on tiny accessor methods is fine. 6 violations. -->
+        <exclude name="AvoidSynchronizedAtMethodLevel"/>
     </rule>
 
     <!-- ===== Custom XPath rules from previous ruleset =====
