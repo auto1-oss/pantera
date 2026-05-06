@@ -295,7 +295,7 @@ public final class IndexGenerator {
                         return null;
                     })
                     .filter(packageName -> packageName != null
-                        && !packageName.equals(INDEX_HTML)
+                        && !INDEX_HTML.equals(packageName)
                         && !packageName.startsWith(".")
                         && packageName.matches("[A-Za-z0-9._-]+"))
                     .distinct()
