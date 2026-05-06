@@ -178,7 +178,7 @@ public final class ComposerGroupSlice implements Slice {
         final String path = line.uri().getPath();
 
         // For packages.json, merge responses from all members
-        if (path.endsWith("/packages.json") || path.equals("/packages.json")) {
+        if (path.endsWith("/packages.json") || "/packages.json".equals(path)) {
             return mergePackagesJson(line, headers, body);
         }
 

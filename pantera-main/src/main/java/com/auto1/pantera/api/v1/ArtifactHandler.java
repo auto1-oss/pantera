@@ -39,6 +39,7 @@ import java.util.Base64;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import javax.crypto.Mac;
@@ -377,7 +378,7 @@ public final class ArtifactHandler {
         if (raw == null) {
             return "name";
         }
-        return switch (raw.toLowerCase()) {
+        return switch (raw.toLowerCase(Locale.ROOT)) {
             case "date", "modified", "created_at" -> "date";
             case "size" -> "size";
             default -> "name";
@@ -537,7 +538,7 @@ public final class ArtifactHandler {
      * @return Kind constant
      */
     private static String deriveArtifactKind(final String name) {
-        final String lower = name.toLowerCase();
+        final String lower = name.toLowerCase(Locale.ROOT);
         if (lower.endsWith(".sha256") || lower.endsWith(".sha512")
             || lower.endsWith(".sha1") || lower.endsWith(".md5")) {
             return "CHECKSUM";
@@ -549,9 +550,9 @@ public final class ArtifactHandler {
         if (lower.endsWith(".pom") || lower.endsWith(".xml")
             || lower.endsWith(".info") || lower.endsWith(".mod")
             || lower.endsWith(".json")
-            || lower.equals("list") || lower.equals("index.yaml")
-            || lower.equals("packages.json")
-            || lower.equals("maven-metadata.xml")) {
+            || "list".equals(lower) || "index.yaml".equals(lower)
+            || "packages.json".equals(lower)
+            || "maven-metadata.xml".equals(lower)) {
             return "METADATA";
         }
         return "ARTIFACT";

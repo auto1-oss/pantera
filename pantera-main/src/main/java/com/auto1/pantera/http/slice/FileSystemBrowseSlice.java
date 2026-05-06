@@ -480,7 +480,7 @@ public final class FileSystemBrowseSlice implements Slice {
             // Unwrap decorators to find SubStorage / FileStorage
             final Storage unwrapped = unwrapDecorators(storage);
             // Check if this is SubStorage
-            if (unwrapped.getClass().getSimpleName().equals("SubStorage")) {
+            if ("SubStorage".equals(unwrapped.getClass().getSimpleName())) {
                 // Extract prefix from SubStorage
                 final Field prefixField = unwrapped.getClass().getDeclaredField("prefix");
                 prefixField.setAccessible(true);

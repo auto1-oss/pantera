@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.http.log.EcsLogger;
+import java.util.Locale;
 
 import javax.json.Json;
 import javax.json.JsonObject;
@@ -535,10 +536,10 @@ public final class ComposerImportMerge {
      * @return True if dev branch
      */
     private boolean isDevBranch(final String version) {
-        final String lower = version.toLowerCase();
+        final String lower = version.toLowerCase(Locale.ROOT);
         return lower.startsWith("dev-")
             || lower.matches(".*\\.x-dev")
-            || lower.equals("dev-master")
+            || "dev-master".equals(lower)
             || (lower.endsWith("-dev") && !lower.matches(".*\\d+\\.\\d+.*-dev"));
     }
 

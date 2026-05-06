@@ -50,6 +50,7 @@ import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.index.ArtifactIndexCache;
 import com.auto1.pantera.index.DbArtifactIndex;
+import java.util.Locale;
 import org.quartz.SchedulerException;
 
 import javax.sql.DataSource;
@@ -672,7 +673,7 @@ public final class YamlSettings implements Settings {
         if (target instanceof com.auto1.pantera.http.misc.DispatchedStorage) {
             target = ((com.auto1.pantera.http.misc.DispatchedStorage) target).unwrap();
         }
-        final String className = target.getClass().getSimpleName().toLowerCase();
+        final String className = target.getClass().getSimpleName().toLowerCase(Locale.ROOT);
         if (className.contains("s3")) {
             return "s3";
         } else if (className.contains("file")) {

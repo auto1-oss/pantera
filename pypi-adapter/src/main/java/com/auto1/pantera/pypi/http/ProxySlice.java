@@ -41,6 +41,7 @@ import com.auto1.pantera.pypi.cooldown.PypiJsonHandler;
 import com.auto1.pantera.pypi.cooldown.PypiSimpleHandler;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import java.util.Locale;
 
 import java.io.IOException;
 import java.net.URI;
@@ -1120,7 +1121,7 @@ final class ProxySlice implements Slice {
         if (!this.looksLikeHtml(body)) {
             return false;
         }
-        final String lower = body.toLowerCase();
+        final String lower = body.toLowerCase(Locale.ROOT);
         if (lower.contains("<a ") && lower.contains("href=")) {
             return false;
         }
@@ -1193,17 +1194,17 @@ final class ProxySlice implements Slice {
     private boolean isHtml(final Header header) {
         return header != null
             && header.getValue() != null
-            && header.getValue().toLowerCase().contains("html");
+            && header.getValue().toLowerCase(Locale.ROOT).contains("html");
     }
 
     private boolean isJson(final Header header) {
         return header != null
             && header.getValue() != null
-            && header.getValue().toLowerCase().contains("json");
+            && header.getValue().toLowerCase(Locale.ROOT).contains("json");
     }
 
     private boolean looksLikeHtml(final String body) {
-        final String trimmed = body.trim().toLowerCase();
+        final String trimmed = body.trim().toLowerCase(Locale.ROOT);
         return trimmed.startsWith("<!doctype") || trimmed.startsWith("<html") || trimmed.contains("<a ");
     }
 
@@ -1484,7 +1485,7 @@ final class ProxySlice implements Slice {
     }
 
     private Optional<ArtifactCoordinates> coordinatesFromFilename(final String filename) {
-        final String lower = filename.toLowerCase();
+        final String lower = filename.toLowerCase(Locale.ROOT);
         if (lower.endsWith(".whl")) {
             final int first = filename.indexOf('-');
             if (first > 0 && first < filename.length() - 1) {

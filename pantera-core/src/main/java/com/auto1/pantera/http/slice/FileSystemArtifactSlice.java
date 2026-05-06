@@ -478,7 +478,7 @@ public final class FileSystemArtifactSlice implements Slice {
     private static Path getBasePath(final Storage storage) {
         try {
             // Check if this is SubStorage
-            if (storage.getClass().getSimpleName().equals("SubStorage")) {
+            if ("SubStorage".equals(storage.getClass().getSimpleName())) {
                 // Extract prefix from SubStorage
                 final Field prefixField = storage.getClass().getDeclaredField("prefix");
                 prefixField.setAccessible(true);

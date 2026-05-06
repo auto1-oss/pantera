@@ -13,6 +13,7 @@ package com.auto1.pantera.http.trace;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.log.EcsLogger;
+import java.util.Locale;
 
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
@@ -241,7 +242,7 @@ public final class SpanContext {
             logMalformed(fieldName, raw, userAgent);
             return generateHex16();
         }
-        final String lower = raw.toLowerCase();
+        final String lower = raw.toLowerCase(Locale.ROOT);
         // All-zero ids are explicitly forbidden by W3C Trace Context §3.2.2.2
         // (trace-id) and §3.2.2.3 (parent-id), and by the B3 spec. They
         // typically indicate a buggy or uninitialised client.

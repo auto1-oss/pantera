@@ -750,7 +750,7 @@ final class JdbcCooldownService implements CooldownService {
             final Instant now = request.requestedAt();
             // Pass the user who tried to install as installed_by
             final Optional<String> installedBy = Optional.ofNullable(request.requestedBy())
-                .filter(s -> !s.isEmpty() && !s.equals("anonymous"));
+                .filter(s -> !s.isEmpty() && !"anonymous".equals(s));
             this.repository.insertBlock(
                 request.repoType(),
                 request.repoName(),

@@ -11,6 +11,7 @@
 package com.auto1.pantera.pypi.cooldown;
 
 import java.util.Comparator;
+import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -154,7 +155,7 @@ public final class Pep440VersionComparator implements Comparator<String> {
         if (label == null) {
             return null;
         }
-        final String lower = label.toLowerCase();
+        final String lower = label.toLowerCase(Locale.ROOT);
         final int rank;
         // Normalise PEP 440 pre-release labels to ordering ranks.
         if ("a".equals(lower) || "alpha".equals(lower)) {
@@ -195,7 +196,7 @@ public final class Pep440VersionComparator implements Comparator<String> {
         if (source == null) {
             return null;
         }
-        final int devIdx = source.toLowerCase().indexOf("dev");
+        final int devIdx = source.toLowerCase(Locale.ROOT).indexOf("dev");
         if (devIdx < 0) {
             return null;
         }

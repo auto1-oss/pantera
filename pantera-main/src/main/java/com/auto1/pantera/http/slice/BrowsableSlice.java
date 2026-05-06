@@ -20,6 +20,7 @@ import com.auto1.pantera.http.headers.Accept;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.log.EcsLogger;
+import java.util.Locale;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -163,7 +164,7 @@ public final class BrowsableSlice implements Slice {
         return headers.stream()
             .filter(h -> Accept.NAME.equalsIgnoreCase(h.getKey()))
             .anyMatch(h -> {
-                final String value = h.getValue().toLowerCase();
+                final String value = h.getValue().toLowerCase(Locale.ROOT);
                 
                 // If PyPI Simple API content types are present, this is an API request
                 if (value.contains("application/vnd.pypi.simple.v1+json") || 
@@ -205,7 +206,7 @@ public final class BrowsableSlice implements Slice {
             return false;
         }
         
-        final String extension = lastSegment.substring(lastDot + 1).toLowerCase();
+        final String extension = lastSegment.substring(lastDot + 1).toLowerCase(Locale.ROOT);
         return FILE_EXTENSIONS.contains(extension);
     }
 
@@ -279,7 +280,7 @@ public final class BrowsableSlice implements Slice {
             
             try {
                 // Try DispatchedStorage unwrapping
-                if (className.equals("DispatchedStorage")) {
+                if ("DispatchedStorage".equals(className)) {
                     final java.lang.reflect.Field delegate =
                         current.getClass().getDeclaredField("delegate");
                     delegate.setAccessible(true);
@@ -294,7 +295,7 @@ public final class BrowsableSlice implements Slice {
                 }
 
                 // Try DiskCacheStorage unwrapping
-                if (className.equals("DiskCacheStorage")) {
+                if ("DiskCacheStorage".equals(className)) {
                     final java.lang.reflect.Field backend =
                         current.getClass().getDeclaredField("backend");
                     backend.setAccessible(true);
@@ -309,7 +310,7 @@ public final class BrowsableSlice implements Slice {
                 }
 
                 // Try SubStorage unwrapping
-                if (className.equals("SubStorage")) {
+                if ("SubStorage".equals(className)) {
                     final java.lang.reflect.Field origin =
                         current.getClass().getDeclaredField("origin");
                     origin.setAccessible(true);

@@ -12,6 +12,7 @@ package com.auto1.pantera.cooldown.metadata;
 
 import com.amihaiemil.eoyaml.YamlMapping;
 import java.time.Duration;
+import java.util.Locale;
 
 /**
  * Configuration for FilteredMetadataCache (cooldown metadata caching).
@@ -301,7 +302,7 @@ public final class FilteredMetadataCacheConfig {
             return defaultVal;
         }
         try {
-            final String trimmed = value.trim().toLowerCase();
+            final String trimmed = value.trim().toLowerCase(Locale.ROOT);
             if (trimmed.endsWith("d")) {
                 return Duration.ofDays(Long.parseLong(trimmed.substring(0, trimmed.length() - 1)));
             } else if (trimmed.endsWith("h")) {

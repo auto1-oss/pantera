@@ -10,6 +10,8 @@
  */
 package com.auto1.pantera.http;
 
+import java.util.Locale;
+
 /**
  * Realistic ecosystem-native {@code User-Agent} strings used by Pantera when
  * issuing upstream requests.
@@ -88,7 +90,7 @@ public final class EcosystemUserAgents {
         if (repoType == null) {
             return GO;
         }
-        final String type = repoType.toLowerCase();
+        final String type = repoType.toLowerCase(Locale.ROOT);
         if (type.startsWith("maven") || type.startsWith("gradle")) {
             return MAVEN;
         }

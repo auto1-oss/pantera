@@ -11,6 +11,7 @@
 package com.auto1.pantera.http.rq;
 
 import java.net.URI;
+import java.util.Locale;
 import java.util.Objects;
 
 /**
@@ -71,7 +72,7 @@ public final class RequestLine {
      * @param version The http version.
      */
     public RequestLine(String method, String uri, String version) {
-        this(RqMethod.valueOf(method.toUpperCase()), URI.create(sanitizeUri(uri)), version);
+        this(RqMethod.valueOf(method.toUpperCase(Locale.ROOT)), URI.create(sanitizeUri(uri)), version);
     }
     
     /**

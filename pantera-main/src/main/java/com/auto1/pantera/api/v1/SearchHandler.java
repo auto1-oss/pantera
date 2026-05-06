@@ -32,6 +32,7 @@ import java.security.PermissionCollection;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 import org.eclipse.jetty.http.HttpStatus;
@@ -178,8 +179,8 @@ public final class SearchHandler {
             .toList();
         // Validate sortBy against allowlist — unknown values fall back to relevance
         final String rawSort = ctx.queryParams().get("sort");
-        final String sortBy = rawSort != null && VALID_SORT_FIELDS.contains(rawSort.toLowerCase())
-            ? rawSort.toLowerCase() : null;
+        final String sortBy = rawSort != null && VALID_SORT_FIELDS.contains(rawSort.toLowerCase(Locale.ROOT))
+            ? rawSort.toLowerCase(Locale.ROOT) : null;
         final boolean sortAsc = !"desc".equalsIgnoreCase(ctx.queryParams().get("sort_dir"));
         final PermissionCollection perms = this.policy.getPermissions(
             new AuthUser(

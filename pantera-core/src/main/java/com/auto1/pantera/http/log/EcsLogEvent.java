@@ -14,6 +14,7 @@ import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.observability.UserAgentParser;
+import java.util.Locale;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.ThreadContext;
 import org.apache.logging.log4j.message.MapMessage;
@@ -424,7 +425,7 @@ public final class EcsLogEvent {
     public static Optional<String> extractUsername(final Headers headers) {
         for (Header h : headers.find("authorization")) {
             final String value = h.getValue();
-            if (value != null && value.toLowerCase().startsWith("basic ")) {
+            if (value != null && value.toLowerCase(Locale.ROOT).startsWith("basic ")) {
                 try {
                     final String decoded = new String(
                         java.util.Base64.getDecoder().decode(value.substring(6))

@@ -224,7 +224,7 @@ public final class MetadataEnhancer {
 
             // Copy all fields except internal ones
             for (String key : versionMeta.keySet()) {
-                if (!key.startsWith("_publish") && !key.equals("_time")) {
+                if (!key.startsWith("_publish") && !"_time".equals(key)) {
                     versionCleaned.add(key, versionMeta.get(key));
                 }
             }

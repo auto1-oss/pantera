@@ -71,7 +71,7 @@ public final class YamlCooldownSettings {
         final YamlMapping repoTypes = node.yamlMapping(KEY_REPO_TYPES);
         if (repoTypes != null) {
             for (final var entry : repoTypes.keys()) {
-                final String repoType = entry.asScalar().value().toLowerCase();
+                final String repoType = entry.asScalar().value().toLowerCase(Locale.ROOT);
                 final YamlMapping repoConfig = repoTypes.yamlMapping(entry.asScalar().value());
                 if (repoConfig != null) {
                     final boolean repoEnabled = parseBool(

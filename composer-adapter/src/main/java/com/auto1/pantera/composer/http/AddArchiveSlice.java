@@ -21,6 +21,7 @@ import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.scheduling.ArtifactEvent;
+import java.util.Locale;
 
 import java.util.Optional;
 import java.util.Queue;
@@ -119,7 +120,7 @@ final class AddArchiveSlice implements Slice {
         }
 
         // Validate archive format - support .zip, .tar.gz, .tgz
-        final String lowerUri = uri.toLowerCase();
+        final String lowerUri = uri.toLowerCase(Locale.ROOT);
         final boolean isZip = lowerUri.endsWith(".zip");
         final boolean isTarGz = lowerUri.endsWith(".tar.gz") || lowerUri.endsWith(".tgz");
 

@@ -18,6 +18,7 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.rq.RequestLine;
 import java.net.URI;
+import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -67,21 +68,21 @@ final class SecurityAuditProxySlice implements Slice {
             boolean hasContentEncoding = false;
 
             for (final Header header : headers) {
-                final String name = header.getKey().toLowerCase();
+                final String name = header.getKey().toLowerCase(Locale.ROOT);
                 // Skip ALL internal/proxy headers
-                if (name.equals("host")
-                    || name.equals("authorization")
-                    || name.equals("pantera_login")
+                if ("host".equals(name)
+                    || "authorization".equals(name)
+                    || "pantera_login".equals(name)
                     || name.startsWith("x-real")      // x-real-ip, etc.
                     || name.startsWith("x-forwarded") // x-forwarded-for, x-forwarded-proto
                     || name.startsWith("x-fullpath")  // internal pantera header
                     || name.startsWith("x-original")  // x-original-path
-                    || name.equals("connection")
-                    || name.equals("transfer-encoding") // Will set our own
-                    || name.equals("content-length")) { // Will use actual body length
+                    || "connection".equals(name)
+                    || "transfer-encoding".equals(name) // Will set our own
+                    || "content-length".equals(name)) { // Will use actual body length
                     continue;
                 }
-                if (name.equals("content-encoding")) {
+                if ("content-encoding".equals(name)) {
                     hasContentEncoding = true;
                 }
                 cleanList.add(header);

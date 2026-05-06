@@ -19,6 +19,7 @@ import com.auto1.pantera.cache.CacheConfig;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import java.time.Duration;
+import java.util.Locale;
 import java.util.Optional;
 
 /**
@@ -144,7 +145,7 @@ public class GuavaFiltersCache implements FiltersCache {
     ) {
         if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
             com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
-                .recordCacheEviction("filters", "l1", cause.toString().toLowerCase());
+                .recordCacheEviction("filters", "l1", cause.toString().toLowerCase(Locale.ROOT));
         }
     }
 }

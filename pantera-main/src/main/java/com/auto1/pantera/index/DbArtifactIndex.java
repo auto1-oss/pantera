@@ -13,6 +13,7 @@ package com.auto1.pantera.index;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.misc.ConfigDefaults;
 import com.auto1.pantera.http.context.ContextualExecutorService;
+import java.util.Locale;
 
 import javax.sql.DataSource;
 import java.sql.Array;
@@ -585,7 +586,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
         if (raw == null) {
             return SortField.RELEVANCE;
         }
-        return switch (raw.toLowerCase()) {
+        return switch (raw.toLowerCase(Locale.ROOT)) {
             case "name" -> SortField.NAME;
             case "version" -> SortField.VERSION;
             case "created_at" -> SortField.DATE;
@@ -754,7 +755,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
             }
             for (final String value : filter.values()) {
                 final String bound = switch (filter.matchType()) {
-                    case ILIKE -> "%" + value.toLowerCase() + "%";
+                    case ILIKE -> "%" + value.toLowerCase(Locale.ROOT) + "%";
                     case PREFIX -> value + "%";
                     default -> value;
                 };
@@ -1536,7 +1537,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
             }
             for (final String value : filter.values()) {
                 final String bound = switch (filter.matchType()) {
-                    case ILIKE -> "%" + value.toLowerCase() + "%";
+                    case ILIKE -> "%" + value.toLowerCase(Locale.ROOT) + "%";
                     case PREFIX -> value + "%";
                     default -> value;
                 };

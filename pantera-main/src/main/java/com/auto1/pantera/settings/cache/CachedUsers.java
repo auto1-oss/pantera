@@ -28,6 +28,7 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -536,7 +537,7 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
     ) {
         if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
             com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
-                .recordCacheEviction("auth", "l1", cause.toString().toLowerCase());
+                .recordCacheEviction("auth", "l1", cause.toString().toLowerCase(Locale.ROOT));
         }
     }
 }

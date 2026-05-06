@@ -24,6 +24,7 @@ import com.auto1.pantera.http.rq.RequestLine;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import javax.json.Json;
@@ -176,7 +177,7 @@ public final class OAuthLoginSlice implements Slice {
         return headers.find("authorization").stream()
             .findFirst()
             .map(Header::getValue)
-            .filter(v -> v.toLowerCase().startsWith("bearer "))
+            .filter(v -> v.toLowerCase(Locale.ROOT).startsWith("bearer "))
             .map(v -> v.substring(7).trim())
             .filter(v -> !v.isEmpty());
     }

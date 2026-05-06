@@ -12,6 +12,7 @@ package com.auto1.pantera.cache;
 
 import com.amihaiemil.eoyaml.YamlMapping;
 import java.time.Duration;
+import java.util.Locale;
 import java.util.Optional;
 
 /**
@@ -336,7 +337,7 @@ public final class NegativeCacheConfig {
             return defaultVal;
         }
         try {
-            final String trimmed = value.trim().toLowerCase();
+            final String trimmed = value.trim().toLowerCase(Locale.ROOT);
             if (trimmed.endsWith("d")) {
                 return Duration.ofDays(Long.parseLong(trimmed.substring(0, trimmed.length() - 1)));
             } else if (trimmed.endsWith("h")) {

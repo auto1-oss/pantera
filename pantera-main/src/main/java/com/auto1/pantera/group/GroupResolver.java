@@ -834,7 +834,7 @@ public final class GroupResolver implements Slice {
     private static Headers dropFullPathHeader(final Headers headers) {
         return new Headers(
             headers.asList().stream()
-                .filter(h -> !h.getKey().equalsIgnoreCase("X-FullPath"))
+                .filter(h -> !"X-FullPath".equalsIgnoreCase(h.getKey()))
                 .toList()
         );
     }

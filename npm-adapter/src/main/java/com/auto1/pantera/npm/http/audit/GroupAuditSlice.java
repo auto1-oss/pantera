@@ -234,7 +234,7 @@ public final class GroupAuditSlice implements Slice {
                 .thenApply(bytes -> {
                     try {
                         final String json = new String(bytes, StandardCharsets.UTF_8);
-                        if (json.isBlank() || json.equals("{}")) {
+                        if (json.isBlank() || "{}".equals(json)) {
                             EcsLogger.debug("com.auto1.pantera.npm")
                                 .message("Member returned empty audit response: " + member.name)
                                 .eventCategory("web")
@@ -312,7 +312,7 @@ public final class GroupAuditSlice implements Slice {
     private static Headers dropFullPathHeader(final Headers headers) {
         return new Headers(
             headers.asList().stream()
-                .filter(h -> !h.getKey().equalsIgnoreCase("X-FullPath"))
+                .filter(h -> !"X-FullPath".equalsIgnoreCase(h.getKey()))
                 .toList()
         );
     }

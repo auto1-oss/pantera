@@ -12,6 +12,7 @@ package com.auto1.pantera.cooldown.config;
 
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 
@@ -134,7 +135,7 @@ public final class CooldownSettings {
      * @return {@code true} if cooldown is enabled for this repo type
      */
     public boolean enabledFor(final String repoType) {
-        final RepoTypeConfig override = this.repoTypeOverrides.get(repoType.toLowerCase());
+        final RepoTypeConfig override = this.repoTypeOverrides.get(repoType.toLowerCase(Locale.ROOT));
         return override != null ? override.enabled() : this.enabled;
     }
 
@@ -155,7 +156,7 @@ public final class CooldownSettings {
      * @return Minimum allowed age for this repo type
      */
     public Duration minimumAllowedAgeFor(final String repoType) {
-        final RepoTypeConfig override = this.repoTypeOverrides.get(repoType.toLowerCase());
+        final RepoTypeConfig override = this.repoTypeOverrides.get(repoType.toLowerCase(Locale.ROOT));
         return override != null ? override.minimumAllowedAge() : this.minimumAllowedAge;
     }
 

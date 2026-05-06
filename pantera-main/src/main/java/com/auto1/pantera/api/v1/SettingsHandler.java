@@ -34,6 +34,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 import javax.json.Json;
 import javax.sql.DataSource;
@@ -615,7 +616,7 @@ public final class SettingsHandler {
      * @return True if secret
      */
     private static boolean isSecret(final String key) {
-        final String lower = key.toLowerCase();
+        final String lower = key.toLowerCase(Locale.ROOT);
         return lower.contains("secret") || lower.contains("password")
             || lower.contains("token") || lower.contains("key");
     }

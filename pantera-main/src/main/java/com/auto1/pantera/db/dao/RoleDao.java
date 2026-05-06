@@ -16,6 +16,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import javax.json.Json;
@@ -76,7 +77,7 @@ public final class RoleDao implements CrudRoles {
             "ORDER BY " + col + " " + dir,
             "LIMIT ? OFFSET ?"
         );
-        final String pattern = query == null ? null : "%" + query.toLowerCase() + "%";
+        final String pattern = query == null ? null : "%" + query.toLowerCase(Locale.ROOT) + "%";
         final List<JsonObject> items = new ArrayList<>();
         int total = 0;
         try (Connection conn = this.source.getConnection();

@@ -12,6 +12,7 @@ package com.auto1.pantera.cache;
 
 import com.amihaiemil.eoyaml.YamlMapping;
 import java.time.Duration;
+import java.util.Locale;
 import java.util.Optional;
 
 /**
@@ -369,7 +370,7 @@ public final class CacheConfig {
         } catch (Exception e1) {
             // Try simple format: 24h, 30m, 5s
             try {
-                final String lower = value.toLowerCase().trim();
+                final String lower = value.toLowerCase(Locale.ROOT).trim();
                 if (lower.endsWith("h")) {
                     return Duration.ofHours(Long.parseLong(lower.substring(0, lower.length() - 1)));
                 } else if (lower.endsWith("m")) {

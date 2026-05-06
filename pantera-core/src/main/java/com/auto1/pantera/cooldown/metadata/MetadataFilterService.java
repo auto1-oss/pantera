@@ -17,6 +17,7 @@ import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.config.CooldownSettings;
 import com.auto1.pantera.cooldown.metrics.CooldownMetrics;
 import com.auto1.pantera.http.log.EcsLogger;
+import java.util.Locale;
 
 import org.slf4j.MDC;
 
@@ -341,7 +342,7 @@ public final class MetadataFilterService implements CooldownMetadataService {
                 // FALLBACK: No release dates available, use semver-based limit
                 // This is less accurate but better than nothing
                 final Comparator<String> comparator = this.versionComparators
-                    .getOrDefault(repoType.toLowerCase(), VersionComparators.semver());
+                    .getOrDefault(repoType.toLowerCase(Locale.ROOT), VersionComparators.semver());
                 sortedVersions = new ArrayList<>(allVersions);
                 sortedVersions.sort(comparator.reversed()); // Newest first by semver
                 

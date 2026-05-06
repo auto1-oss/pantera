@@ -81,7 +81,7 @@ public final class OptimizedStorageCache {
     public static CompletableFuture<Content> optimizedValue(final Storage storage, final Key key) {
         try {
             // Check if this is SubStorage wrapping FileStorage
-            if (storage.getClass().getSimpleName().equals("SubStorage")) {
+            if ("SubStorage".equals(storage.getClass().getSimpleName())) {
                 // Extract prefix from SubStorage
                 final java.lang.reflect.Field prefixField = 
                     storage.getClass().getDeclaredField("prefix");

@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.http.cache;
 
+import java.util.Locale;
 import java.util.Objects;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -141,7 +142,7 @@ public record NegativeCacheKey(
         if (path.isEmpty()) {
             return new String[]{"", ""};
         }
-        final String type = repoType == null ? "" : repoType.toLowerCase();
+        final String type = repoType == null ? "" : repoType.toLowerCase(Locale.ROOT);
         if (type.startsWith("go")) {
             final Matcher m = GO_PATH.matcher(path);
             if (m.matches()) {

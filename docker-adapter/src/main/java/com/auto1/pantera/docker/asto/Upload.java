@@ -247,7 +247,7 @@ public final class Upload {
                     .filter(
                         key -> {
                             final String value = key.string();
-                            return !value.equals("started") && !value.endsWith("/started");
+                            return !"started".equals(value) && !value.endsWith("/started");
                         }
                     )
                     .toList()

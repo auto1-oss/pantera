@@ -297,7 +297,7 @@ public final class MetadataRegenerator {
             }
             final String firstSegment = relative.split("/")[0];
             // Skip metadata files, hidden files, and system files
-            if (firstSegment.equals("maven-metadata.xml")
+            if ("maven-metadata.xml".equals(firstSegment)
                 || firstSegment.endsWith(".lastUpdated")
                 || firstSegment.endsWith(".properties")
                 || firstSegment.startsWith(".")  // Skip .DS_Store, .git, etc.

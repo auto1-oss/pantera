@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.group;
 
+import java.util.Locale;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -487,7 +488,7 @@ public final class ArtifactNameParser {
      * Normalize a PyPI project name: replace [-_.] runs with single hyphen, lowercase.
      */
     private static String normalizePypiName(final String name) {
-        return PYPI_NAME_SEPARATORS.matcher(name).replaceAll("-").toLowerCase();
+        return PYPI_NAME_SEPARATORS.matcher(name).replaceAll("-").toLowerCase(Locale.ROOT);
     }
 
     /**

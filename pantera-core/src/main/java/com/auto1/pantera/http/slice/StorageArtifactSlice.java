@@ -151,7 +151,7 @@ public final class StorageArtifactSlice implements Slice {
             
             try {
                 // Try DiskCacheStorage unwrapping
-                if (className.equals("DiskCacheStorage")) {
+                if ("DiskCacheStorage".equals(className)) {
                     final java.lang.reflect.Field backend = 
                         current.getClass().getDeclaredField("backend");
                     backend.setAccessible(true);
@@ -160,7 +160,7 @@ public final class StorageArtifactSlice implements Slice {
                 }
                 
                 // Try SubStorage unwrapping
-                if (className.equals("SubStorage")) {
+                if ("SubStorage".equals(className)) {
                     final java.lang.reflect.Field origin = 
                         current.getClass().getDeclaredField("origin");
                     origin.setAccessible(true);

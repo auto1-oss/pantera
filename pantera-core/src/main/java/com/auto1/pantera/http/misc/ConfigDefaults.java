@@ -10,6 +10,8 @@
  */
 package com.auto1.pantera.http.misc;
 
+import java.util.Locale;
+
 /**
  * Centralized configuration defaults with environment variable overrides.
  * Values are read with precedence: env var > system property > default.
@@ -32,7 +34,7 @@ public final class ConfigDefaults {
         if (env != null && !env.isEmpty()) {
             return env;
         }
-        final String prop = System.getProperty(envVar.toLowerCase().replace('_', '.'));
+        final String prop = System.getProperty(envVar.toLowerCase(Locale.ROOT).replace('_', '.'));
         if (prop != null && !prop.isEmpty()) {
             return prop;
         }
