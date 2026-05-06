@@ -127,12 +127,9 @@ final class MavenScanner implements Scanner {
             return false;
         }
         // pantera-meta JSON sidecars and Maven's own metadata XML.
-        if (name.endsWith(".pantera-meta.json")
+        return !(name.endsWith(".pantera-meta.json")
             || "maven-metadata.xml".equals(name)
-            || name.startsWith("maven-metadata.xml.")) {
-            return false;
-        }
-        return true;
+            || name.startsWith("maven-metadata.xml."));
     }
 
     /**

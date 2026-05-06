@@ -162,7 +162,7 @@ public final class S3StorageFactory implements StorageFactory {
                 )
             );
         }
-        final SdkAsyncHttpClient netty = NettyNioAsyncHttpClient.builder()
+        final SdkAsyncHttpClient netty = NettyNioAsyncHttpClient.builder() // NOPMD CloseResource - lifecycle owned by built S3 client (closed via builder.httpClient(netty))
             .maxConcurrency(maxConc)
             .maxPendingConnectionAcquires(maxPend)
             .connectionAcquisitionTimeout(acqTmo)

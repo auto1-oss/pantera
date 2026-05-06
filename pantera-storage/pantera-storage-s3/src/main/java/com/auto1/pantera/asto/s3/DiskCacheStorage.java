@@ -206,7 +206,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                 if (Files.exists(file) && Files.exists(meta)) {
                     return CacheMeta.read(meta);
                 }
-            } catch (final IOException ex) {
+            } catch (final IOException ex) { // NOPMD EmptyCatchBlock - intentional: any cache read error falls through to network fetch
                 // Fall through to fetch on any cache read error
             }
             return null;

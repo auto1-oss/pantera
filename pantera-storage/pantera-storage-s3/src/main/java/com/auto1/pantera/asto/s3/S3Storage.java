@@ -464,8 +464,8 @@ public final class S3Storage implements ManagedStorage {
                         .concatMapEager(
                             idx -> Flowable.fromPublisher(
                                 this.rangePublisher(key,
-                                    idx * (long) this.parallelChunk,
-                                    Math.min(size - 1, (idx + 1L) * (long) this.parallelChunk - 1)
+                                    (long) idx * this.parallelChunk,
+                                    Math.min(size - 1, (idx + 1L) * this.parallelChunk - 1)
                                 )
                             ),
                             this.parallelConc,

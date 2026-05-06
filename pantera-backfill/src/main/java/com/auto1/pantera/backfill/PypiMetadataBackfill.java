@@ -149,7 +149,9 @@ final class PypiMetadataBackfill {
                     }
                 });
         } catch (final UncheckedIOException ex) {
-            throw ex.getCause();
+            // Unwrap to surface the original checked IOException to callers.
+            // ex.getCause() carries the full original stack trace.
+            throw new IOException(ex.getMessage(), ex);
         }
         return stats;
     }
