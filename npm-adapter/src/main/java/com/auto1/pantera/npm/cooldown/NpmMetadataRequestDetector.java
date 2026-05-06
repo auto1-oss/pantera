@@ -33,21 +33,13 @@ public final class NpmMetadataRequestDetector implements MetadataRequestDetector
         if (path == null || path.isEmpty() || "/".equals(path)) {
             return false;
         }
-        // Tarball downloads contain /-/ in the path
-        if (path.contains("/-/")) {
-            return false;
-        }
-        // Security audit endpoints are not metadata
-        if (path.contains("/npm/v1/security/")) {
-            return false;
-        }
-        // User management endpoints
-        if (path.contains("/-/user/") || path.contains("/-/v1/login")
-            || path.contains("/-/whoami")) {
-            return false;
-        }
-        // Everything else is a package metadata request
-        return true;
+        // Tarball downloads contain /-/, security audit, and user-management
+        // endpoints are NOT package-metadata requests; everything else is.
+        return !(path.contains("/-/")
+            || path.contains("/npm/v1/security/")
+            || path.contains("/-/user/")
+            || path.contains("/-/v1/login")
+            || path.contains("/-/whoami"));
     }
 
     @Override

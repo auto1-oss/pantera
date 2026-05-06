@@ -145,10 +145,9 @@ public final class NpmMetadataFilter implements MetadataFilter<JsonNode> {
         if (distTags != null && distTags.isObject()) {
             final ObjectNode distTagsObj = (ObjectNode) distTags;
             final JsonNode tagValue = distTagsObj.get(tagName);
-            if (tagValue != null && tagValue.isTextual()) {
-                if (blockedVersions.contains(tagValue.asText())) {
-                    distTagsObj.remove(tagName);
-                }
+            if (tagValue != null && tagValue.isTextual()
+                && blockedVersions.contains(tagValue.asText())) {
+                distTagsObj.remove(tagName);
             }
         }
         return root;

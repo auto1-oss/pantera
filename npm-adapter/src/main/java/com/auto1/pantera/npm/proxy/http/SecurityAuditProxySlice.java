@@ -65,7 +65,6 @@ final class SecurityAuditProxySlice implements Slice {
             // Build clean headers for upstream - only forward safe client headers
             // Filter out ALL internal/proxy headers that upstream registries reject
             final java.util.List<Header> cleanList = new java.util.ArrayList<>();
-            boolean hasContentEncoding = false;
 
             for (final Header header : headers) {
                 final String name = header.getKey().toLowerCase(Locale.ROOT);
@@ -81,9 +80,6 @@ final class SecurityAuditProxySlice implements Slice {
                     || "transfer-encoding".equals(name) // Will set our own
                     || "content-length".equals(name)) { // Will use actual body length
                     continue;
-                }
-                if ("content-encoding".equals(name)) {
-                    hasContentEncoding = true;
                 }
                 cleanList.add(header);
             }

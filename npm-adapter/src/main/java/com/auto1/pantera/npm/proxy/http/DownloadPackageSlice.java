@@ -159,7 +159,7 @@ public final class DownloadPackageSlice implements Slice {
                 final String packageName = rawPackageName.substring(
                     0, rawPackageName.length() - LATEST_SUFFIX.length()
                 );
-                return this.serveLatestManifest(packageName, headers);
+                return this.serveLatestManifest(packageName);
             }
 
             // MEMORY OPTIMIZATION: Use different paths for abbreviated vs full requests
@@ -562,14 +562,13 @@ public final class DownloadPackageSlice implements Slice {
      * behaviour of the upstream npm registry for this endpoint.</p>
      */
     private CompletableFuture<Response> serveLatestManifest(
-        final String packageName,
-        final Headers headers
+        final String packageName
     ) {
         if (this.cooldownMetadata == null || this.repoType == null) {
             // Cooldown disabled: pass-through by fetching packument and
             // returning its current latest manifest. This keeps behaviour
             // parity with upstream registry even without filtering.
-            return this.resolveLatestFromRaw(packageName, headers, null);
+            return this.resolveLatestFromRaw(packageName);
         }
         return this.npm.getPackageMetadataOnly(packageName)
             .flatMap(metadata -> this.npm.getPackageContentStream(packageName)
@@ -646,9 +645,7 @@ public final class DownloadPackageSlice implements Slice {
      * packument and extract its {@code dist-tags.latest} manifest.
      */
     private CompletableFuture<Response> resolveLatestFromRaw(
-        final String packageName,
-        final Headers headers,
-        final Optional<String> clientETag
+        final String packageName
     ) {
         return this.npm.getPackageMetadataOnly(packageName)
             .flatMap(metadata -> this.npm.getPackageContentStream(packageName)

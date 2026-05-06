@@ -155,8 +155,8 @@ public final class MavenProxySlice extends Slice.Wrap {
         final com.auto1.pantera.cooldown.api.CooldownService cooldown,
         final Optional<Storage> storage,
         final Duration metadataTtl,
-        final Duration negativeCacheTtl,
-        final boolean negativeCacheEnabled,
+        final Duration negativeCacheTtl, // NOPMD UnusedFormalParameter - public API; reserved for upcoming negative-cache wiring
+        final boolean negativeCacheEnabled, // NOPMD UnusedFormalParameter - public API; reserved for upcoming negative-cache wiring
         final com.auto1.pantera.cooldown.metadata.CooldownMetadataService cooldownMetadata
     ) {
         this(remote(clients, remote, auth), cache, events, rname, remote.toString(), rtype,
@@ -217,7 +217,7 @@ public final class MavenProxySlice extends Slice.Wrap {
         // delegates to the cooldown service for freshness enforcement.
         final ProxyCacheConfig config = ProxyCacheConfig.withCooldown();
         // Create MetadataCache with provided TTL
-        final com.auto1.pantera.cache.ValkeyConnection valkeyConn =
+        final com.auto1.pantera.cache.ValkeyConnection valkeyConn = // NOPMD CloseResource - shared singleton owned by GlobalCacheConfig; closed at JVM shutdown by the cache config
             com.auto1.pantera.cache.GlobalCacheConfig.valkeyConnection().orElse(null);
         final MetadataCache metadataCache = new MetadataCache(
             metadataTtl,

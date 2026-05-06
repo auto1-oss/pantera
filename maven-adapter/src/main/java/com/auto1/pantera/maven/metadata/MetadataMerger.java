@@ -312,7 +312,7 @@ public final class MetadataMerger {
      *   <li>CyclomaticComplexity: endElement() has multiple branches for different XML elements</li>
      * </ul>
      */
-    private static class MetadataHandler extends DefaultHandler {
+    private static final class MetadataHandler extends DefaultHandler {
         private final Set<String> versions = new TreeSet<>(new VersionComparator());
         private final Set<Plugin> plugins = new TreeSet<>();
         private String groupId;
@@ -321,7 +321,7 @@ public final class MetadataMerger {
 
         // Current parsing state
         private String currentElement;
-        private final StringBuilder currentText = new StringBuilder();
+        private final StringBuilder currentText = new StringBuilder(); // NOPMD AvoidStringBufferField - SAX parser per-element accumulator; reset on each element by setLength(0); handler instance is short-lived (one per parse)
         private String currentPluginPrefix;
         private String currentPluginArtifactId;
         private String currentPluginName;
@@ -457,7 +457,7 @@ public final class MetadataMerger {
     /**
      * Comparator for Maven versions (semantic versioning with SNAPSHOT support).
      */
-    private static class VersionComparator implements Comparator<String> {
+    private static final class VersionComparator implements Comparator<String> {
         @Override
         public int compare(final String v1, final String v2) {
             return new Version(v1).compareTo(new Version(v2));

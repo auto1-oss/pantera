@@ -204,7 +204,7 @@ final class ChecksumProxySlice implements Slice {
                     .eventCategory("web")
                     .eventAction("checksum_computation")
                     .eventOutcome("failure")
-                    .error(err instanceof Throwable ? (Throwable) err : new RuntimeException(err))
+                    .error(err)
                     .field("file.path", artifactPath)
                     .log();
                 return ResponseBuilder.internalError().build();

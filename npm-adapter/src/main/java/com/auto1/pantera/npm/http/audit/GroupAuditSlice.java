@@ -127,13 +127,11 @@ public final class GroupAuditSlice implements Slice {
                     final Map<String, JsonValue> merged = new HashMap<>();
                     int emptyCount = 0;
                     int nonEmptyCount = 0;
-                    int idx = 0;
 
                     for (CompletableFuture<JsonObject> future : auditResults) {
                         // Safe: allOf() guarantees all futures are complete
                         // getNow() is non-blocking when future is complete
                         final JsonObject result = future.getNow(Json.createObjectBuilder().build());
-                        final String memberName = idx < this.members.size() ? this.members.get(idx).name : "unknown";
                         if (result.isEmpty()) {
                             emptyCount++;
                         } else {
@@ -141,7 +139,6 @@ public final class GroupAuditSlice implements Slice {
                             // Merge entries - later entries with same key overwrite
                             result.forEach(merged::put);
                         }
-                        idx++;
                     }
 
                     final long duration = System.currentTimeMillis() - startTime;

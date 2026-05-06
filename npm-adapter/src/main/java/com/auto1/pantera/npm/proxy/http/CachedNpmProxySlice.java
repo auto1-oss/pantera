@@ -215,7 +215,7 @@ public final class CachedNpmProxySlice implements Slice {
         return this.deduplicator.load(
             key,
             () -> this.doFetch(line, headers, body, key)
-        ).thenCompose(signal -> this.handleSignal(signal, line, headers, key));
+        ).thenCompose(signal -> this.handleSignal(signal, line, headers));
     }
 
     /**
@@ -284,8 +284,7 @@ public final class CachedNpmProxySlice implements Slice {
     private CompletableFuture<Response> handleSignal(
         final FetchSignal signal,
         final RequestLine line,
-        final Headers headers,
-        final Key key
+        final Headers headers
     ) {
         switch (signal) {
             case SUCCESS:
