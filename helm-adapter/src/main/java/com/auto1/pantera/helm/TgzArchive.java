@@ -48,7 +48,7 @@ public final class TgzArchive {
      * @param content The archive content.
      */
     public TgzArchive(final byte[] content) {
-        this.content = content;
+        this.content = content; // NOPMD ArrayIsStoredDirectly - immutable archive holder; bytes() returns a defensive copy
         this.chart = new ChartYaml(this.file("Chart.yaml"));
     }
 

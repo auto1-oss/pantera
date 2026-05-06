@@ -34,12 +34,21 @@ import org.apache.maven.artifact.versioning.ComparableVersion;
  * <a href="https://learn.microsoft.com/en-us/nuget/api/registration-base-url-resource#registration-page-object">Registration page</a>.
  * @since 1.5
  */
-public abstract class IndexJson {
+public class IndexJson {
 
     /**
      * Default null value for index.json required fields with urls values.
      */
     private static final String NULL = "null";
+
+    /**
+     * Package-private ctor; this class is a namespace base for the nested
+     * {@link Delete} and {@link Update} subclasses and is not meant to be
+     * instantiated directly.
+     */
+    IndexJson() {
+        // namespace base; not instantiated outside this file
+    }
 
     /**
      * The name of the `@id` json field.

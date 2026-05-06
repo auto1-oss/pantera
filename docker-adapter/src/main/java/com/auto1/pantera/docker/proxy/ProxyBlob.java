@@ -83,7 +83,7 @@ public final class ProxyBlob implements Blob {
                         .stream()
                         .findFirst()
                         .map(h -> Long.parseLong(h.getValue()))
-                        .map(val -> (Content) new Content.From(val, response.body()))
+                        .<Content>map(val -> new Content.From(val, response.body()))
                         .orElseGet(response::body);
                     return CompletableFuture.completedFuture(res);
                 }

@@ -76,7 +76,7 @@ public final class ProxyDocker implements Docker {
     public Repo repo(String name) {
         // Normalize name for Docker Hub
         String normalizedName = this.normalizeRepoName(name);
-        return new ProxyRepo(this.remote, normalizedName, name);
+        return new ProxyRepo(this.remote, normalizedName);
     }
     
     /**

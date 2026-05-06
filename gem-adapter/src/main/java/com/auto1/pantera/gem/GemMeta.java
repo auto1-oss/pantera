@@ -50,7 +50,7 @@ public interface GemMeta {
          * @param name Key
          * @param values Array
          */
-        void print(String name, String[] values);
+        void print(String name, String... values);
     }
 
     /**

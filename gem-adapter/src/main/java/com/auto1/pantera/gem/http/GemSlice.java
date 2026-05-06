@@ -21,6 +21,7 @@ import com.auto1.pantera.http.auth.AuthzSlice;
 import com.auto1.pantera.http.auth.CombinedAuthScheme;
 import com.auto1.pantera.http.auth.OperationControl;
 import com.auto1.pantera.http.auth.TokenAuthentication;
+import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rt.MethodRule;
 import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
@@ -219,9 +220,11 @@ public final class GemSlice extends Slice.Wrap {
                     storage.save(key, new Content.From(data)).join();
                 }
             } catch (final Exception err) {
-                System.err.println(
-                    "GemSlice: failed to init specs file " + name + ": " + err
-                );
+                EcsLogger.warn("com.auto1.pantera.gem")
+                    .message("Failed to init specs file")
+                    .field("file", name)
+                    .error(err)
+                    .log();
             }
         }
     }
