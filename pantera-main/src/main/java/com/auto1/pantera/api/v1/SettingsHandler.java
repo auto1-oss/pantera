@@ -876,7 +876,6 @@ public final class SettingsHandler {
      * @param value Decoded JSON value
      * @return true iff {@code value} is a valid setting for {@code key}
      */
-    @SuppressWarnings({"PMD.CyclomaticComplexity", "PMD.NcssCount"})
     private static boolean validateRuntime(final String key, final Object value) {
         return switch (key) {
             case "http_client.protocol" ->

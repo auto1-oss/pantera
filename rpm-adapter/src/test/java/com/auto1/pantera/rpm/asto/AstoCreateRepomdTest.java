@@ -33,7 +33,6 @@ import org.xmlunit.matchers.CompareMatcher;
  * Test for {@link AstoCreateRepomd}.
  * @since 1.9
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class AstoCreateRepomdTest {
 
     /**

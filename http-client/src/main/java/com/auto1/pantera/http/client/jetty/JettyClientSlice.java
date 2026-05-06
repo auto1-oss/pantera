@@ -306,7 +306,6 @@ final class JettyClientSlice implements Slice {
      *
      * @since 0.3
      */
-    @SuppressWarnings({"PMD.OnlyOneReturn", "PMD.CognitiveComplexity"})
     private static final class StreamingDemander implements Runnable {
 
         /**

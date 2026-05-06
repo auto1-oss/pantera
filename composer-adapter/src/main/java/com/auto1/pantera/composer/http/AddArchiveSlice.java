@@ -34,7 +34,6 @@ import java.util.regex.Pattern;
  * Accepts any .zip file and extracts metadata from composer.json inside.
  * See <a href="https://getcomposer.org/doc/05-repositories.md#artifact">Artifact repository</a>.
  */
-@SuppressWarnings({"PMD.SingularField", "PMD.UnusedPrivateField"})
 final class AddArchiveSlice implements Slice {
     /**
      * Repository type.

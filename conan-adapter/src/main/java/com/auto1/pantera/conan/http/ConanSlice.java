@@ -131,7 +131,6 @@ public final class ConanSlice extends Slice.Wrap {
      *               so the DB index picks the row up (fixes the Conan
      *               blind spot in search/tree before 2.2.0).
      */
-    @SuppressWarnings("PMD.ExcessiveMethodLength")
     public ConanSlice(
         final Storage storage,
         final Policy<?> policy,

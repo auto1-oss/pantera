@@ -61,7 +61,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * @since 2.2.0
  */
-@SuppressWarnings("PMD.TooManyMethods")
 final class ProxyCacheWriterTest {
 
     /** Pretend the client asked for this artifact on a Maven upstream. */

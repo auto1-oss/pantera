@@ -80,7 +80,6 @@ final class Completion<T> {
     /**
      * Notify downstream item completed.
      */
-    @SuppressWarnings("PMD.AssignmentInOperand")
     void itemCompleted() {
         synchronized (this.lock) {
             if (--this.counter == 0 && this.completed) {

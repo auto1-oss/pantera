@@ -87,7 +87,6 @@ public interface MergedJson {
         }
 
         @Override
-        @SuppressWarnings({"PMD.AssignmentInOperand", "PMD.CognitiveComplexity"})
         public void merge(final Map<String, JsonObject> items) throws IOException {
             if (this.parser.isPresent()) {
                 final AtomicReference<Boolean> tars;

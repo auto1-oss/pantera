@@ -111,7 +111,6 @@ public final class NpmCacheWriteBridge {
      * <p>Any throwable is logged and swallowed — never propagates to the
      * serve path.</p>
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void onAssetSaved(final String assetPath) {
         final long entryNs = System.nanoTime();
         final Consumer<CacheWriteEvent> shared =
@@ -220,7 +219,6 @@ public final class NpmCacheWriteBridge {
      * <p>Any throwable is logged and swallowed — never propagates to the
      * serve path.</p>
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void onPackumentSaved(final String packageName) {
         final long entryNs = System.nanoTime();
         final Consumer<CacheWriteEvent> shared =

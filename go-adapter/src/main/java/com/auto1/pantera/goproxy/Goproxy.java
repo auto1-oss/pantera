@@ -232,7 +232,6 @@ public final class Goproxy {
      * @return Path to ZIP archive
      * @throws IOException if an error occurred when temporary ZIP file created
      */
-    @SuppressWarnings("PMD.AvoidInstantiatingObjectsInLoops")
     private Single<Path> archive(final String prefix, final String target) throws IOException {
         final Path zip = Files.createTempFile("", ".zip");
         zip.toFile().deleteOnExit();

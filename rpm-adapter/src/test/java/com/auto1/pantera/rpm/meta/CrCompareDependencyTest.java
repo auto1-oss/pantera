@@ -22,7 +22,6 @@ import org.junit.jupiter.api.Test;
  *
  * @since 1.9.9
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 final class CrCompareDependencyTest {
 
     @Test

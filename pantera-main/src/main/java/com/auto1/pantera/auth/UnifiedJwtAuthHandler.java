@@ -127,7 +127,6 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
      * @param token JWT string
      * @return Authenticated user if valid, empty otherwise
      */
-    @SuppressWarnings("PMD.CyclomaticComplexity")
     private Optional<AuthUser> validate(final String token) {
         final DecodedJWT decoded;
         try {

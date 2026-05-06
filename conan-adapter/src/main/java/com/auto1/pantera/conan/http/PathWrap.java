@@ -16,7 +16,6 @@ import java.util.regex.Pattern;
  * Wrapper for Conan protocol request paths.
  * @since 0.1
  */
-@SuppressWarnings("PMD.AbstractClassWithoutAbstractMethod")
 public abstract class PathWrap {
     /**
      * Path pattern for specific request type.

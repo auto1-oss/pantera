@@ -314,7 +314,6 @@ public final class DockerTagsListHandler {
             });
     }
 
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private CompletableFuture<Boolean> isBlocked(
         final String image, final String tag, final String user
     ) {

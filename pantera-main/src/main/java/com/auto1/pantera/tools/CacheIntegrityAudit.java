@@ -61,7 +61,6 @@ public final class CacheIntegrityAudit {
      *
      * @param args CLI args per class javadoc.
      */
-    @SuppressWarnings("PMD.SystemPrintln")
     public static void main(final String[] args) {
         final Args parsed;
         try {
@@ -132,7 +131,6 @@ public final class CacheIntegrityAudit {
     }
 
     /** Print the usage string to {@code out}. */
-    @SuppressWarnings("PMD.SystemPrintln")
     private static void printUsage(final PrintStream out) {
         out.println("Usage: pantera-cache-integrity-audit --root <storage-dir> "
             + "[--repo <name>] [--dry-run | --fix] [--verbose]");
@@ -160,7 +158,6 @@ public final class CacheIntegrityAudit {
         @SuppressWarnings("unused")
         private boolean verbose;
 
-        @SuppressWarnings({"PMD.CognitiveComplexity", "PMD.CyclomaticComplexity"})
         static Args parse(final String[] args) {
             final Args out = new Args();
             final List<String> rest = new ArrayList<>();

@@ -48,7 +48,6 @@ import org.junit.jupiter.api.Test;
  *
  * @since 2.2.0
  */
-@SuppressWarnings({"PMD.AvoidUsingHardCodedIP", "PMD.TooManyMethods", "PMD.ExcessiveImports"})
 class PrefetchDispatcherTest {
 
     private static final String REPO = "maven-central";

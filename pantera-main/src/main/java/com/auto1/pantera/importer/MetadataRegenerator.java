@@ -56,7 +56,6 @@ import java.util.stream.Collectors;
  *
  * @since 1.0
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class MetadataRegenerator {
 
     /**

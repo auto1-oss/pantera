@@ -58,7 +58,7 @@ import org.awaitility.Awaitility;
  *
  * @since 0.1
  */
-@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "deprecation"})
+@SuppressWarnings("deprecation")
 @DisabledOnOs(OS.WINDOWS)
 @org.testcontainers.junit.jupiter.Testcontainers
 public final class NpmProxyITCase {

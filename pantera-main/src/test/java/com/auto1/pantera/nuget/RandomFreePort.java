@@ -17,7 +17,6 @@ import java.net.ServerSocket;
  * Provides random free port to use in tests.
  * @since 0.12
  */
-@SuppressWarnings("PMD.ConstructorOnlyInitializesOrCallOtherConstructors")
 public final class RandomFreePort {
     /**
      * Random free port.

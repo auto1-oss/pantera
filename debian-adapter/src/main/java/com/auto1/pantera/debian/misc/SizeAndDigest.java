@@ -26,7 +26,6 @@ import org.apache.commons.lang3.tuple.Pair;
  * Calculates size and digest of the gz packed content provided as input stream.
  * @since 0.6
  */
-@SuppressWarnings("PMD.AssignmentInOperand")
 public final class SizeAndDigest implements Function<InputStream, Pair<Long, String>> {
 
     @Override

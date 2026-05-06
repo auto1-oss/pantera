@@ -718,7 +718,6 @@ public final class CooldownRepository {
      * @return List of matching active block records.
      * @checkstyle ParameterNumberCheck (5 lines)
      */
-    @SuppressWarnings("PMD.UseObjectForClearerAPI")
     public List<DbBlockRecord> findActivePaginated(
         final Set<String> accessibleRepos,
         final String repoFilter,
@@ -911,7 +910,6 @@ public final class CooldownRepository {
      * @return List of matching history records.
      * @checkstyle ParameterNumberCheck (5 lines)
      */
-    @SuppressWarnings("PMD.UseObjectForClearerAPI")
     public List<DbHistoryRecord> findHistoryPaginated(
         final Set<String> accessibleRepos,
         final String repoFilter,

@@ -18,7 +18,6 @@ import org.reactivestreams.Subscription;
  * @param <D> Downstream type
  * @since 1.0
  */
-@SuppressWarnings("PMD.NullAssignment")
 public final class Pipeline<D> implements Subscriber<D>, Subscription {
 
     /**
@@ -57,7 +56,6 @@ public final class Pipeline<D> implements Subscriber<D>, Subscription {
      * Connect downstream.
      * @param sub Downstream subscriber
      */
-    @SuppressWarnings("PMD.ConfusingTernary")
     public void connect(final Subscriber<? super D> sub) {
         synchronized (this.lock) {
             if (this.downstream != null) {

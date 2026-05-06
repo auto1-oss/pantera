@@ -48,7 +48,6 @@ import com.auto1.pantera.index.SearchQueryParser.MatchType;
  *
  * @since 1.20.13
  */
-@SuppressWarnings({"PMD.TooManyMethods", "PMD.AvoidCatchingGenericException"})
 public final class DbArtifactIndex implements ArtifactIndex {
 
     /**
@@ -484,7 +483,6 @@ public final class DbArtifactIndex implements ArtifactIndex {
      * @param fieldFilters Additional field filters (name:, version:) from parsed query
      * @return Search result with matching documents
      */
-    @SuppressWarnings("PMD.ParameterNumber")
     public CompletableFuture<SearchResult> search(
         final String query, final int maxResults, final int offset,
         final String repoType, final String repoName, final String sortBy, final boolean sortAsc,
@@ -554,7 +552,6 @@ public final class DbArtifactIndex implements ArtifactIndex {
      * @param hasRank True when the SELECT includes a rank column (FTS queries)
      * @return SQL ORDER BY clause (without "ORDER BY" keyword)
      */
-    @SuppressWarnings("PMD.CyclomaticComplexity")
     private static String buildOrderBy(
         final SortField field, final boolean sortAsc, final boolean hasRank
     ) {
@@ -1131,7 +1128,6 @@ public final class DbArtifactIndex implements ArtifactIndex {
      * Fix 5: allowedRepos adds AND repo_name = ANY(?) filter.
      * Fix 6: SET LOCAL statement_timeout before FTS aggregations.
      */
-    @SuppressWarnings("PMD.CyclomaticComplexity")
     private static SearchResult searchFilteredPrefixFts(
         final DataSource source, final String query, final int maxResults, final int offset,
         final String repoType, final String repoName, final String sortBy, final boolean sortAsc,
@@ -1148,7 +1144,6 @@ public final class DbArtifactIndex implements ArtifactIndex {
      *
      * @param fieldFilters Additional structured field filters; may be null
      */
-    @SuppressWarnings({"PMD.CyclomaticComplexity", "PMD.ParameterNumber"})
     private static SearchResult searchFilteredPrefixFts(
         final DataSource source, final String query, final int maxResults, final int offset,
         final String repoType, final String repoName, final String sortBy, final boolean sortAsc,
@@ -1255,7 +1250,6 @@ public final class DbArtifactIndex implements ArtifactIndex {
      * Fix 5: allowedRepos adds AND repo_name = ANY(?) filter.
      * Fix 6: SET LOCAL statement_timeout before FTS aggregations.
      */
-    @SuppressWarnings("PMD.CyclomaticComplexity")
     private static SearchResult searchFilteredFts(
         final DataSource source, final String query, final int maxResults, final int offset,
         final String repoType, final String repoName, final String sortBy, final boolean sortAsc,
@@ -1272,7 +1266,6 @@ public final class DbArtifactIndex implements ArtifactIndex {
      *
      * @param fieldFilters Additional structured field filters; may be null
      */
-    @SuppressWarnings({"PMD.CyclomaticComplexity", "PMD.ParameterNumber"})
     private static SearchResult searchFilteredFts(
         final DataSource source, final String query, final int maxResults, final int offset,
         final String repoType, final String repoName, final String sortBy, final boolean sortAsc,
@@ -1373,7 +1366,6 @@ public final class DbArtifactIndex implements ArtifactIndex {
      * Fix 3: fallback COUNT when empty result + non-zero offset.
      * Fix 5: allowedRepos adds AND repo_name = ANY(?) filter.
      */
-    @SuppressWarnings("PMD.CyclomaticComplexity")
     private static SearchResult searchFilteredLike(
         final DataSource source, final String pattern, final int maxResults, final int offset,
         final String repoType, final String repoName, final String sortBy, final boolean sortAsc,
@@ -1390,7 +1382,6 @@ public final class DbArtifactIndex implements ArtifactIndex {
      *
      * @param fieldFilters Additional structured field filters; may be null
      */
-    @SuppressWarnings({"PMD.CyclomaticComplexity", "PMD.ParameterNumber"})
     private static SearchResult searchFilteredLike(
         final DataSource source, final String pattern, final int maxResults, final int offset,
         final String repoType, final String repoName, final String sortBy, final boolean sortAsc,

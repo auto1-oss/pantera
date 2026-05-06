@@ -20,7 +20,6 @@ import java.util.Optional;
  *
  * @since 1.14.0
  */
-@SuppressWarnings("PMD.TestClassWithoutTestCases")
 public final class BenchmarkStorageVerificationTest extends StorageWhiteboxVerification {
 
     @Override

@@ -57,7 +57,6 @@ import javax.sql.DataSource;
  * @since 1.21.0
  * @checkstyle ClassDataAbstractionCouplingCheck (300 lines)
  */
-@SuppressWarnings("PMD.TooManyMethods")
 public final class CooldownHandler {
 
     /**
@@ -231,7 +230,6 @@ public final class CooldownHandler {
      * @param ctx Routing context
      * @checkstyle ExecutableStatementCountCheck (60 lines)
      */
-    @SuppressWarnings("PMD.CognitiveComplexity")
     private void updateConfig(final RoutingContext ctx) {
         final JsonObject body = ctx.body().asJsonObject();
         if (body == null) {
@@ -670,7 +668,6 @@ public final class CooldownHandler {
      * @param ctx Routing context
      * @checkstyle ExecutableStatementCountCheck (60 lines)
      */
-    @SuppressWarnings("PMD.CognitiveComplexity")
     private void unblock(final RoutingContext ctx) {
         final String name = ctx.pathParam("name");
         final RepositoryName rname = new RepositoryName.Simple(name);

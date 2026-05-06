@@ -94,7 +94,6 @@ import com.auto1.pantera.http.timeout.AutoBlockRegistry;
  *
  * @since 2.2.0
  */
-@SuppressWarnings({"PMD.TooManyMethods", "PMD.GodClass"})
 public final class GroupResolver implements Slice {
 
     private final String group;
@@ -126,7 +125,6 @@ public final class GroupResolver implements Slice {
      * @param negativeCache Negative cache for 404 results
      * @param drainExecutor Per-repo drain executor from {@link com.auto1.pantera.http.resilience.RepoBulkhead}
      */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
     public GroupResolver(
         final String group,
         final List<MemberSlice> members,
@@ -179,7 +177,6 @@ public final class GroupResolver implements Slice {
      *                         {@link AutoBlockRegistry} (may be {@code null})
      * @param repoDrainExecutor Per-repo drain executor
      */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
     public GroupResolver(
         final SliceResolver resolver,
         final String group,
@@ -708,7 +705,6 @@ public final class GroupResolver implements Slice {
      *                             (mirrors the parallel path's behaviour for
      *                             local-read fallbacks).
      */
-    @SuppressWarnings("PMD.CognitiveComplexity")
     private CompletableFuture<Response> querySequentially(
         final List<MemberSlice> targeted,
         final RequestLine line,

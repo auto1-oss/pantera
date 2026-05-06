@@ -76,7 +76,6 @@ import java.util.concurrent.ConcurrentHashMap;
  * Vertx server entry point.
  * @since 1.0
  */
-@SuppressWarnings("PMD.PrematureDeclaration")
 public final class VertxMain {
 
     /**
@@ -803,7 +802,6 @@ public final class VertxMain {
      *
      * @param slices Slices registry whose accessors back the dispatcher.
      */
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.CognitiveComplexity"})
     private void installPrefetch(
         final RepositorySlices slices,
         final com.auto1.pantera.auth.JwtTokens jwtTokens

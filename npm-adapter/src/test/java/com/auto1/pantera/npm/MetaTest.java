@@ -34,7 +34,6 @@ import wtf.g4s8.hamcrest.json.JsonValueIs;
  *
  * @since 0.4.2
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class MetaTest {
 
     /**

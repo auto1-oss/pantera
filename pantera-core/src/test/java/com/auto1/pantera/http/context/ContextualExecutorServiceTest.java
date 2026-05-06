@@ -44,8 +44,6 @@ import org.junit.jupiter.api.Test;
  *   <li>lifecycle methods delegate to the underlying pool.</li>
  * </ul>
  */
-@SuppressWarnings({"PMD.TooManyMethods", "PMD.AvoidDuplicateLiterals",
-    "PMD.JUnitAssertionsShouldIncludeMessage"})
 final class ContextualExecutorServiceTest {
 
     /**

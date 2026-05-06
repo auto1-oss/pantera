@@ -405,7 +405,6 @@ public final class ArtifactHandler {
      * @param metaCache Caffeine cache for storage metadata (avoids repeat HEADs)
      * @return Future carrying the same JsonArray with metadata merged in
      */
-    @SuppressWarnings("PMD.CyclomaticComplexity")
     private static CompletableFuture<JsonArray> hydrateFilesWithDbMetadata(
         final DataSource ds, final String repoName, final JsonArray files,
         final Storage asto, final StorageMetaCache metaCache
@@ -1135,7 +1134,6 @@ public final class ArtifactHandler {
      * @param path Artifact path within the repository
      * @return JsonArray of instruction strings
      */
-    @SuppressWarnings("PMD.CyclomaticComplexity")
     private static JsonArray buildPullInstructions(final String repoType,
         final String repoName, final String path) {
         final JsonArray instructions = new JsonArray();

@@ -153,7 +153,6 @@ public final class AsyncApiVerticle extends AbstractVerticle {
      * @param jwtTokens RS256 tokens provider for token issuance
      * @param prefetchMetrics Prefetch metrics for the stats handler, nullable
      */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
     public AsyncApiVerticle(
         final PanteraCaches caches,
         final Storage configsStorage,
@@ -202,7 +201,6 @@ public final class AsyncApiVerticle extends AbstractVerticle {
      * @param dataSource Database data source, nullable
      * @param jwtTokens RS256 tokens provider for token issuance
      */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
     public AsyncApiVerticle(
         final PanteraCaches caches,
         final Storage configsStorage,

@@ -78,7 +78,6 @@ public final class CooldownWiring {
      * and {@link CooldownResponseRegistry} (403 factories for direct-artifact blocks)
      * are populated.
      */
-    @SuppressWarnings("PMD.ExcessiveMethodLength")
     public static void registerAllAdapters() {
         final CooldownAdapterRegistry adapters = CooldownAdapterRegistry.instance();
         final CooldownResponseRegistry responses = CooldownResponseRegistry.instance();

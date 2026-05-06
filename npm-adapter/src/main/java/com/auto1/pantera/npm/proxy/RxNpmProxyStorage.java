@@ -77,7 +77,6 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
      * @param phase phase name (e.g. {@code "npm_storage_save_meta"})
      * @param startNs nanoTime captured at phase entry
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordPhase(final String phase, final long startNs) {
         try {
             this.phaseRecorder.accept(phase, System.nanoTime() - startNs);
@@ -252,7 +251,6 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
      *     client delivery and background storage save
      */
     @Override
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     public Maybe<NpmAsset> saveStreamThrough(final NpmAsset asset) {
         return Maybe.just(this.streamThrough(asset));
     }
@@ -265,7 +263,6 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
      * @param asset Upstream asset
      * @return Asset with tee'd data publisher; meta save is fired immediately
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     NpmAsset streamThrough(final NpmAsset asset) {
         final Key key = new Key.From(asset.path());
         final Key metaKey = new Key.From(

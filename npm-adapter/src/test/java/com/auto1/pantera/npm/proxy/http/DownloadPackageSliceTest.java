@@ -42,7 +42,6 @@ import javax.json.Json;
  *  is passed. It is necessary to find out why it happens and add
  *  empty prefix to params of method DownloadPackageSliceTest#downloadMetaWorks.
  */
-@SuppressWarnings("PMD.AvoidUsingHardCodedIP")
 final class DownloadPackageSliceTest {
 
     private static final Vertx VERTX = Vertx.vertx();

@@ -34,7 +34,6 @@ public final class UncheckedConsumer<T, E extends Throwable> implements Consumer
     }
 
     @Override
-    @SuppressWarnings("PMD.AvoidCatchingThrowable")
     public void accept(final T val) {
         try {
             this.checked.accept(val);

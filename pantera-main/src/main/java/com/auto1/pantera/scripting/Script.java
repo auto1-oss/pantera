@@ -35,7 +35,6 @@ public interface Script {
     /**
      * Script type values, known by javax.script.ScriptEngineManager.
      */
-    @SuppressWarnings("PMD.AvoidDuplicateLiterals")
     enum ScriptType {
 
         /**
@@ -112,7 +111,6 @@ public interface Script {
      * Should be used for multiple invocations of script.
      * @since 0.30
      */
-    @SuppressWarnings("PMD.ConstructorOnlyInitializesOrCallOtherConstructors")
     class PrecompiledScript implements Script {
         /**
          * Compiled script.
@@ -184,12 +182,6 @@ public interface Script {
      * Result of script invocation.
      * @since 0.30
      */
-    @SuppressWarnings(
-        {
-            "PMD.OnlyOneConstructorShouldDoInitialization",
-            "PMD.ConstructorOnlyInitializesOrCallOtherConstructors"
-        }
-    )
     class Result {
         /**
          * Script context.

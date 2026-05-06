@@ -64,7 +64,6 @@ import org.apache.logging.log4j.ThreadContext;
  *
  * @since 2.2.0
  */
-@SuppressWarnings({"PMD.TooManyMethods", "PMD.AvoidCatchingGenericException"})
 public final class ContextualExecutorService implements ExecutorService {
 
     /**

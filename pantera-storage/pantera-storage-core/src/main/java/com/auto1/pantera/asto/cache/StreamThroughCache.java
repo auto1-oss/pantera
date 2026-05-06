@@ -95,7 +95,6 @@ public final class StreamThroughCache implements Cache {
      * @param remote Remote content to tee
      * @return Content that streams to caller and saves to storage
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private Content teeContent(final Key key, final Content remote) {
         final Path tempFile;
         final FileChannel channel;
@@ -205,7 +204,6 @@ public final class StreamThroughCache implements Cache {
      * @param key Storage key
      * @param tempFile Temp file containing the content
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void saveFromTempFile(final Key key, final Path tempFile) {
         try {
             final long size = Files.size(tempFile);
@@ -264,7 +262,6 @@ public final class StreamThroughCache implements Cache {
      * @param key Storage key
      * @param bytes Content bytes to save
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void saveToStorageFromBytes(final Key key, final byte[] bytes) {
         try {
             this.storage.save(key, new Content.From(bytes))

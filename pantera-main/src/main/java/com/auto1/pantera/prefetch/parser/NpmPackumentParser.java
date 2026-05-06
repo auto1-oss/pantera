@@ -77,7 +77,6 @@ public final class NpmPackumentParser implements PrefetchParser {
     }
 
     @Override
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     public List<Coordinate> parse(final Path bytesOnDisk) {
         try {
             final JsonNode root = JSON.readTree(bytesOnDisk.toFile());

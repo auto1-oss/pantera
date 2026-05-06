@@ -136,7 +136,6 @@ public final class CachedPyProxySlice implements Slice {
      * @deprecated Use constructor without negative cache params - negative cache now uses unified NegativeCacheConfig
      */
     @Deprecated
-    @SuppressWarnings("PMD.UnusedFormalParameter")
     public CachedPyProxySlice(
         final Slice origin,
         final Optional<Storage> storage,
@@ -157,7 +156,6 @@ public final class CachedPyProxySlice implements Slice {
      * @deprecated Use constructor without negative cache params - negative cache now uses unified NegativeCacheConfig
      */
     @Deprecated
-    @SuppressWarnings("PMD.UnusedFormalParameter")
     public CachedPyProxySlice(
         final Slice origin,
         final Optional<Storage> storage,
@@ -181,7 +179,6 @@ public final class CachedPyProxySlice implements Slice {
      * @deprecated Use constructor without negative cache params - negative cache now uses unified NegativeCacheConfig
      */
     @Deprecated
-    @SuppressWarnings("PMD.UnusedFormalParameter")
     public CachedPyProxySlice(
         final Slice origin,
         final Optional<Storage> storage,
@@ -404,7 +401,6 @@ public final class CachedPyProxySlice implements Slice {
     /**
      * Record metric safely (only if metrics are enabled).
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
             if (com.auto1.pantera.metrics.PanteraMetrics.isEnabled()) {
@@ -431,7 +427,6 @@ public final class CachedPyProxySlice implements Slice {
      * {@link Fault.StorageUnavailable} collapses to 502 and leaves the
      * cache empty for this key.
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private CompletableFuture<Response> verifyAndServePrimary(
         final RequestLine line, final Key key, final String path
     ) {
@@ -554,7 +549,6 @@ public final class CachedPyProxySlice implements Slice {
      * sidecar as absent; I/O errors collapse to empty so a transient
      * sidecar failure never blocks the primary write.
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private CompletionStage<Optional<InputStream>> fetchSidecar(
         final RequestLine primary, final String extension
     ) {
@@ -591,7 +585,6 @@ public final class CachedPyProxySlice implements Slice {
      * @return Registry or {@code null} when metrics have not been
      *         initialised (e.g. test suites that skip bootstrap).
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private static MeterRegistry meterRegistry() {
         try {
             if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {

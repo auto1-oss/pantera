@@ -61,7 +61,6 @@ import org.xmlunit.matchers.CompareMatcher;
  *  like described in showMeaningfulErrorWhenInvalidPackageSent. Implement it
  *  and then enable the test.
  */
-@SuppressWarnings("PMD.AvoidCatchingGenericException")
 final class RpmTest {
 
     /**

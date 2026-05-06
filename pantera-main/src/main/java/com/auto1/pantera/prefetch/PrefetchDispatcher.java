@@ -151,7 +151,6 @@ public final class PrefetchDispatcher {
      *                            {@link PrefetchTask}. Production
      *                            wiring uses {@code coordinator::submit}.
      */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
     public PrefetchDispatcher(
         final Supplier<PrefetchTuning> tuningSupplier,
         final Function<String, Boolean> repoPrefetchEnabled,
@@ -180,7 +179,6 @@ public final class PrefetchDispatcher {
      * @param submitSink          Submit sink.
      * @param dispatchExecutor    Executor used to run async dispatch.
      */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
     public PrefetchDispatcher(
         final Supplier<PrefetchTuning> tuningSupplier,
         final Function<String, Boolean> repoPrefetchEnabled,
@@ -230,7 +228,6 @@ public final class PrefetchDispatcher {
      * @param event Cache write event carrying repo name, url path, and
      *              the bytes-on-disk hint.
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     public void onCacheWrite(final CacheWriteEvent event) {
         try {
             // 1) Global kill-switch.
@@ -323,7 +320,6 @@ public final class PrefetchDispatcher {
      * a dispatcher-owned snapshot deleted on exit; when false the path is
      * storage-owned and left untouched.
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void dispatchAsync(
         final CacheWriteEvent event,
         final String repoType,
@@ -395,7 +391,6 @@ public final class PrefetchDispatcher {
     }
 
     /** Best-effort temp-file delete; silent on failure. */
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.EmptyCatchBlock"})
     private static void deleteQuietly(final Path tmp) {
         if (tmp == null) {
             return;

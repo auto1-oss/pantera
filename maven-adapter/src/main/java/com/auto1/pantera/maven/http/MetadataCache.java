@@ -121,7 +121,6 @@ public class MetadataCache {
      * @param valkey Valkey connection for L2 cache (null uses GlobalCacheConfig)
      * @param repoName Repository name for cache key isolation
      */
-    @SuppressWarnings({"PMD.NullAssignment", "PMD.ConstructorOnlyInitializesOrCallOtherConstructors"})
     public MetadataCache(
         final Duration ttl, 
         final int maxSize, 
@@ -138,14 +137,12 @@ public class MetadataCache {
         this.cache = this.buildCaffeineCache(ttl, maxSize, this.twoTier);
     }
 
-    @SuppressWarnings("PMD.ConstructorOnlyInitializesOrCallOtherConstructors")
     private ValkeyConnection resolveValkeyConnection(final ValkeyConnection valkey) {
         return (valkey != null) 
             ? valkey 
             : com.auto1.pantera.cache.GlobalCacheConfig.valkeyConnection().orElse(null);
     }
 
-    @SuppressWarnings("PMD.ConstructorOnlyInitializesOrCallOtherConstructors")
     private Cache<Key, CachedMetadata> buildCaffeineCache(
         final Duration ttl,
         final int maxSize,

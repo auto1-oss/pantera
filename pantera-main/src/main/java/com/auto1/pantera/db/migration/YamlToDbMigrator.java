@@ -340,7 +340,6 @@ public final class YamlToDbMigrator {
      * http_client, http_server, metrics, caches, global_prefixes,
      * storage aliases, and auth providers.
      */
-    @SuppressWarnings({"PMD.CognitiveComplexity", "PMD.NPathComplexity"})
     private void migratePanteraYml() {
         if (this.panteraYml == null || !Files.isRegularFile(this.panteraYml)) {
             LOG.info("No pantera.yml path provided or file not found, skipping settings migration");

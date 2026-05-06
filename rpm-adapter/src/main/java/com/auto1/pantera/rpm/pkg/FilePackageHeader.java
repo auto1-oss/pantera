@@ -71,7 +71,6 @@ public final class FilePackageHeader {
      * @throws InvalidPackageException In case package is invalid.
      * @throws IOException In case of I/O error.
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     public Header header() throws IOException {
         if (this.path != null) {
             try (InputStream stream = Files.newInputStream(this.path)) {
@@ -88,7 +87,6 @@ public final class FilePackageHeader {
      * @throws InvalidPackageException If the package cannot be parsed
      * @throws IOException If an I/O error occurs
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private static Header readHeader(final InputStream stream) throws IOException {
         try (ReadableByteChannel chan = Channels.newChannel(stream)) {
             final Format format;

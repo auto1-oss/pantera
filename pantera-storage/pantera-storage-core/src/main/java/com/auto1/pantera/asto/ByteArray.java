@@ -48,7 +48,6 @@ public final class ByteArray {
      *
      * @param bytes The bytes.
      */
-    @SuppressWarnings("PMD.ArrayIsStoredDirectly")
     public ByteArray(final Byte[] bytes) {
         this.bytes = bytes;
     }
@@ -71,7 +70,6 @@ public final class ByteArray {
      *
      * @return Primitive byte array
      */
-    @SuppressWarnings("PMD.MethodReturnsInternalArray")
     public Byte[] boxedBytes() {
         return this.bytes;
     }
@@ -81,7 +79,6 @@ public final class ByteArray {
      * @param primitive Primitive byte array
      * @return Boxed byte array
      */
-    @SuppressWarnings("PMD.AvoidArrayLoops")
     private static Byte[] boxed(final byte[] primitive) {
         final Byte[] res = new Byte[primitive.length];
         for (int itr = 0; itr < primitive.length; itr += 1) {

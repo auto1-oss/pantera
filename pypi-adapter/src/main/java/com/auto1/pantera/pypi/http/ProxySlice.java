@@ -457,7 +457,6 @@ final class ProxySlice implements Slice {
         });
     }
     
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private CompletableFuture<Response> serveNonArtifact(
         final RequestLine line, final Headers rqheaders, final Content body, final String user
     ) {
@@ -636,7 +635,6 @@ final class ProxySlice implements Slice {
      * Pre-rewrite index content at write time.
      * Rewrites URLs once before caching so reads serve pre-rewritten content.
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private CompletableFuture<Optional<Content>> preRewriteContent(
         final Content body, final Headers headers, final RequestLine line
     ) {
@@ -709,7 +707,6 @@ final class ProxySlice implements Slice {
      * Serves stale content immediately while refreshing in background.
      * Uses conditional request (If-Modified-Since) when possible.
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void backgroundRefreshIndex(
         final Key key, final RequestLine line,
         final RequestLine upstream, final String user, final SimpleApiFormat format

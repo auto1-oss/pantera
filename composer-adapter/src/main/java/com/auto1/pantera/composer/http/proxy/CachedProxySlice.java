@@ -77,7 +77,6 @@ import java.util.regex.Pattern;
  * in WI-07 (§9.5). The existing metadata-JSON flow (the dominant traffic
  * shape through this slice) is unchanged.
  */
-@SuppressWarnings({"PMD.UnusedPrivateField", "PMD.SingularField"})
 final class CachedProxySlice implements Slice {
 
     /**
@@ -435,7 +434,6 @@ final class CachedProxySlice implements Slice {
      * @param name Package name
      * @param headers Request headers
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void backgroundRefresh(
         final RequestLine line,
         final String name,
@@ -896,7 +894,6 @@ final class CachedProxySlice implements Slice {
     /**
      * Record metric safely (only if metrics are enabled).
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
             if (com.auto1.pantera.metrics.PanteraMetrics.isEnabled()) {
@@ -945,7 +942,6 @@ final class CachedProxySlice implements Slice {
      * {@link Fault.StorageUnavailable} collapses to 502 and leaves the
      * cache empty for this key.
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private CompletableFuture<Response> verifyAndServePrimary(
         final RequestLine line, final String path
     ) {
@@ -1064,7 +1060,6 @@ final class CachedProxySlice implements Slice {
      * treats the sidecar as absent; a transient sidecar failure never
      * blocks the primary write.
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private CompletionStage<Optional<InputStream>> fetchSidecar(
         final RequestLine primary, final String extension
     ) {
@@ -1099,7 +1094,6 @@ final class CachedProxySlice implements Slice {
      * @return Registry or {@code null} when metrics have not been
      *         initialised (e.g. test suites that skip bootstrap).
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private static MeterRegistry meterRegistry() {
         try {
             if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {

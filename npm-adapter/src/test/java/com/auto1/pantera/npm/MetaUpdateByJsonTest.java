@@ -27,7 +27,6 @@ import org.junit.jupiter.api.Test;
  * Test for {@link MetaUpdate.ByJson}.
  * @since 0.9
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 final class MetaUpdateByJsonTest {
     /**
      * Storage.

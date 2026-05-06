@@ -28,7 +28,6 @@ import java.util.concurrent.CompletableFuture;
  * Test resource.
  * @since 0.24
  */
-@SuppressWarnings("PMD.TestClassWithoutTestCases")
 public final class TestResource {
 
     /**
@@ -119,7 +118,6 @@ public final class TestResource {
      * Recourse as bytes.
      * @return Bytes
      */
-    @SuppressWarnings("PMD.AssignmentInOperand")
     public byte[] asBytes() {
         try (InputStream stream = this.asInputStream()) {
             final ByteArrayOutputStream buffer = new ByteArrayOutputStream();
@@ -139,7 +137,6 @@ public final class TestResource {
      *
      * @return Resource string
      */
-    @SuppressWarnings("PMD.StringInstantiation")
     public String asString() {
         return new String(this.asBytes());
     }

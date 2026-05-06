@@ -118,7 +118,6 @@ public final class MergedXmlPrimary implements MergedXml {
      * @return Checksums of the skipped packages
      * @throws XMLStreamException If fails
      */
-    @SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.CyclomaticComplexity", "PMD.CognitiveComplexity"})
     private static Collection<String> processPackages(final Set<String> locations,
         final XMLEventReader reader, final XMLEventWriter writer, final AtomicLong cnt)
         throws XMLStreamException {

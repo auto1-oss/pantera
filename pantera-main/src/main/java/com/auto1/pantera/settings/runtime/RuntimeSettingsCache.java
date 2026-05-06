@@ -36,7 +36,6 @@ import com.auto1.pantera.http.log.EcsLogger;
  *
  * @since 2.2.0
  */
-@SuppressWarnings("PMD.TooManyMethods")
 public final class RuntimeSettingsCache {
 
     /** Polling-fallback interval (seconds) used when LISTEN is lost. */

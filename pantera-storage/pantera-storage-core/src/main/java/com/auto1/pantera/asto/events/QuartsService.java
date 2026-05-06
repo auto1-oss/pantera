@@ -38,7 +38,6 @@ public final class QuartsService {
     /**
      * Ctor.
      */
-    @SuppressWarnings("PMD.ConstructorOnlyInitializesOrCallOtherConstructors")
     public QuartsService() {
         try {
             this.scheduler = new StdSchedulerFactory().getScheduler();

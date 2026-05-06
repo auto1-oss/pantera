@@ -41,7 +41,6 @@ import java.util.Optional;
  *
  * @since 1.21.0
  */
-@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.TooManyMethods"})
 @Testcontainers
 final class LocateHitRateTest {
 

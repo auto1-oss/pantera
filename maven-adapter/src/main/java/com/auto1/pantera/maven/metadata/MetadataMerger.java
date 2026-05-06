@@ -113,7 +113,6 @@ public final class MetadataMerger {
      *
      * @return CompletableFuture with merged metadata as Content
      */
-    @SuppressWarnings({"PMD.CognitiveComplexity", "PMD.NPathComplexity", "PMD.AvoidCatchingGenericException"})
     public CompletableFuture<Content> merge() {
         // Rate limiting: Try to acquire semaphore permit
         if (!MERGE_SEMAPHORE.tryAcquire()) {
@@ -313,12 +312,6 @@ public final class MetadataMerger {
      *   <li>CyclomaticComplexity: endElement() has multiple branches for different XML elements</li>
      * </ul>
      */
-    @SuppressWarnings({
-        "PMD.AvoidStringBufferField",
-        "PMD.NullAssignment",
-        "PMD.CognitiveComplexity",
-        "PMD.CyclomaticComplexity"
-    })
     private static class MetadataHandler extends DefaultHandler {
         private final Set<String> versions = new TreeSet<>(new VersionComparator());
         private final Set<Plugin> plugins = new TreeSet<>();

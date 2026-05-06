@@ -57,7 +57,6 @@ import java.util.zip.GZIPInputStream;
  *
  * @since 0.1
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class Rpm {
 
     /**

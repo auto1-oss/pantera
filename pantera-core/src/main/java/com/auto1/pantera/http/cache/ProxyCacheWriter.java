@@ -235,7 +235,6 @@ public final class ProxyCacheWriter {
      *         (atomic-move failed). Never throws; exceptions are captured as
      *         {@code Err}.
      */
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.CyclomaticComplexity"})
     public CompletionStage<Result<Void>> writeWithSidecars(
         final Key primaryKey,
         final String upstreamUri,
@@ -312,7 +311,6 @@ public final class ProxyCacheWriter {
      *     block the {@link VerifiedArtifact} return — they save themselves in
      *     the background if/when the upstream eventually responds.
      */
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.CyclomaticComplexity"})
     public CompletionStage<Result<VerifiedArtifact>> writeAndVerify(
         final Key primaryKey,
         final String upstreamUri,
@@ -395,7 +393,6 @@ public final class ProxyCacheWriter {
      * @param tempFile Destination.
      * @return Stage yielding hex-encoded digests for every algorithm.
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private CompletionStage<Map<ChecksumAlgo, String>> streamPrimary(
         final InputStream stream, final Path tempFile
     ) {
@@ -437,7 +434,6 @@ public final class ProxyCacheWriter {
     /**
      * Fetch every declared sidecar, verify, commit or reject.
      */
-    @SuppressWarnings({"PMD.CognitiveComplexity", "PMD.CyclomaticComplexity"})
     private CompletionStage<Result<Void>> fetchAndVerify(
         final Key primaryKey,
         final String upstreamUri,
@@ -483,7 +479,6 @@ public final class ProxyCacheWriter {
      * are fired in parallel but their futures do NOT gate the return — they
      * verify and persist themselves once the upstream eventually responds.
      */
-    @SuppressWarnings({"PMD.CognitiveComplexity", "PMD.CyclomaticComplexity"})
     private CompletionStage<Result<VerifiedArtifact>> verifyOnly(
         final Key primaryKey,
         final String upstreamUri,
@@ -557,7 +552,6 @@ public final class ProxyCacheWriter {
      * already proven by the synchronously-verified sidecars (sha1 / md5 in
      * the default config). 404 / IO error → no-op (sidecar absent upstream).
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void dispatchDeferredSidecar(
         final Key primaryKey,
         final String upstreamUri,
@@ -633,7 +627,6 @@ public final class ProxyCacheWriter {
      * skipped entirely &mdash; no {@code Files.createTempFile + write +
      * deleteQuietly} on the proxy hot path.</p>
      */
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.CognitiveComplexity"})
     CompletionStage<Result<Void>> commitVerified(final VerifiedArtifact artifact) {
         final byte[] bytes;
         try {
@@ -752,7 +745,6 @@ public final class ProxyCacheWriter {
      * after the primary lands, delete whatever has been written and return
      * Err(StorageUnavailable).
      */
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.CognitiveComplexity"})
     private CompletionStage<Result<Void>> commit(
         final Key primaryKey,
         final Path tempFile,
@@ -873,7 +865,6 @@ public final class ProxyCacheWriter {
      * @param tempFile   Filesystem path of the source bytes.
      * @param size       Size in bytes of the primary.
      */
-    @SuppressWarnings("PMD.AvoidCatchingThrowable")
     private void fireOnWrite(final Key primaryKey, final Path tempFile, final long size) {
         try {
             this.onWrite.accept(new CacheWriteEvent(
@@ -1121,7 +1112,6 @@ public final class ProxyCacheWriter {
          *                 a mismatch is found; if {@code false}, report only.
          * @return Report containing counts + every offender.
          */
-        @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.CognitiveComplexity"})
         public static Report run(
             final Storage storage, final String repoName, final boolean fix
         ) {
@@ -1161,7 +1151,6 @@ public final class ProxyCacheWriter {
          * Audit a single primary key. Returns a {@link Mismatch} when at least
          * one sidecar disagrees; {@code null} otherwise.
          */
-        @SuppressWarnings("PMD.AvoidCatchingGenericException")
         private static Mismatch auditOne(
             final Storage storage, final Key primary,
             final String repoName, final boolean fix

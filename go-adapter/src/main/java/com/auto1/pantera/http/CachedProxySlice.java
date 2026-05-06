@@ -755,7 +755,6 @@ final class CachedProxySlice implements Slice {
      * {@code X-Pantera-Fault: upstream-integrity:sha256}; storage failures
      * collapse to a 502 and leave the cache empty for this key.
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private CompletableFuture<Response> verifyAndServePrimary(
         final RequestLine line,
         final Key key,
@@ -895,7 +894,6 @@ final class CachedProxySlice implements Slice {
      * treats the sidecar as absent and a transient sidecar failure never
      * blocks the primary write.
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private CompletionStage<Optional<InputStream>> fetchSidecar(
         final RequestLine primary, final String extension
     ) {
@@ -930,7 +928,6 @@ final class CachedProxySlice implements Slice {
      * @return Registry or {@code null} when metrics have not been
      *         initialised (e.g. test suites that skip bootstrap).
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private static MeterRegistry meterRegistry() {
         try {
             if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {

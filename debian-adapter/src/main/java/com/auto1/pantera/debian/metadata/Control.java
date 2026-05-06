@@ -66,7 +66,6 @@ public interface Control {
         }
 
         @Override
-        @SuppressWarnings("PMD.AssignmentInOperand")
         public String asString() {
             Optional<String> res = Optional.empty();
             try (
@@ -125,7 +124,6 @@ public interface Control {
          * @return Control file as string
          * @throws IOException On error
          */
-        @SuppressWarnings("PMD.AssignmentInOperand")
         private static String unpackTar(final InputStream input) throws IOException {
             final TarArchiveInputStream tar = new TarArchiveInputStream(input);
             TarArchiveEntry entry;

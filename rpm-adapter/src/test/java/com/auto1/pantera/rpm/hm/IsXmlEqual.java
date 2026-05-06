@@ -33,7 +33,6 @@ public final class IsXmlEqual extends TypeSafeMatcher<Path> {
      * Ctor.
      * @param xml Xml bytes
      */
-    @SuppressWarnings("PMD.ArrayIsStoredDirectly")
     public IsXmlEqual(final byte[] xml) {
         this.xml = xml;
     }
@@ -62,7 +61,6 @@ public final class IsXmlEqual extends TypeSafeMatcher<Path> {
     }
 
     @Override
-    @SuppressWarnings("PMD.StringInstantiation")
     public void describeTo(final Description description) {
         description.appendText(new String(this.xml, StandardCharsets.US_ASCII));
     }

@@ -54,7 +54,6 @@ import org.cqfn.rio.file.File;
  *
  * @since 0.1
  */
-@SuppressWarnings("PMD.TooManyMethods")
 public final class FileStorage implements Storage {
 
     /**
@@ -74,7 +73,6 @@ public final class FileStorage implements Storage {
      * @deprecated Use {@link FileStorage#FileStorage(Path)} ctor instead.
      */
     @Deprecated
-    @SuppressWarnings("PMD.UnusedFormalParameter")
     public FileStorage(final Path path, final Object nothing) {
         this(path);
     }
@@ -338,7 +336,6 @@ public final class FileStorage implements Storage {
     }
 
     @Override
-    @SuppressWarnings("PMD.ExceptionAsFlowControl")
     public CompletableFuture<Void> delete(final Key key) {
         final long startNs = System.nanoTime();
         return this.keyPath(key).thenAcceptAsync(

@@ -246,7 +246,6 @@ public final class RqMultipart {
          * drain ignored item and return empty after that.
          * @return Single source
                  */
-        @SuppressWarnings({"PMD.ConfusingTernary", "PMD.OnlyOneReturn"})
         Single<? extends Part> filter() {
             if (this.accepted != null) {
                 return Single.just(this.accepted);

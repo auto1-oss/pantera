@@ -19,7 +19,6 @@ import java.util.function.Function;
  * Api actions.
  * @since 0.30
  */
-@SuppressWarnings({"PMD.ArrayIsStoredDirectly", "PMD.UseVarargs"})
 public abstract class ApiActions {
 
     /**

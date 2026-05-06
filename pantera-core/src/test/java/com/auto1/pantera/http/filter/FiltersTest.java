@@ -21,7 +21,6 @@ import org.llorllale.cactoos.matchers.IsTrue;
  *
  * @since 1.2
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class FiltersTest {
     /**
      * Request path.

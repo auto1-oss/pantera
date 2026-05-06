@@ -48,9 +48,7 @@ import org.junit.jupiter.api.Timeout;
  *
  * @since 1.14.0
  */
-@SuppressWarnings({"deprecation", "PMD.MethodNamingConventions",
-    "PMD.AvoidDuplicateLiterals", "PMD.AvoidCatchingGenericException",
-    "PMD.TooManyMethods", "PMD.JUnit5TestShouldBePackagePrivate"})
+@SuppressWarnings("deprecation")
 @Disabled
 public abstract class StorageWhiteboxVerification {
 
@@ -100,7 +98,6 @@ public abstract class StorageWhiteboxVerification {
         );
     }
 
-    @SuppressWarnings("PMD.EmptyCatchBlock")
     @Test
     @Timeout(1)
     public void saveAndLoad_shouldNotOverwriteWithPartial() throws Exception {

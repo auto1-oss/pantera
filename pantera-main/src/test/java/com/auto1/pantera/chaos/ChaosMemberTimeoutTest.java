@@ -54,7 +54,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * @since 2.2.0
  */
 @Tag("Chaos")
-@SuppressWarnings("PMD.TooManyMethods")
 final class ChaosMemberTimeoutTest {
 
     private static final String GROUP = "chaos-group";

@@ -78,7 +78,6 @@ public final class NpmCompositeParser implements PrefetchParser {
     }
 
     @Override
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     public List<Coordinate> parse(final Path bytesOnDisk) {
         final boolean tarball;
         try {

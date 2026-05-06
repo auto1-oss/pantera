@@ -25,7 +25,6 @@ import org.junit.jupiter.api.Test;
  * Test for {@link CliPublish}.
  * @since 0.9
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 final class CliPublishTest {
 
     @Test

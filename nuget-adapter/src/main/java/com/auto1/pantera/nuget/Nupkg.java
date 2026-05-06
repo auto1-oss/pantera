@@ -25,7 +25,6 @@ import org.apache.commons.compress.archivers.ArchiveStreamFactory;
  *
  * @since 0.1
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class Nupkg implements NuGetPackage {
 
     /**
@@ -43,7 +42,6 @@ public final class Nupkg implements NuGetPackage {
     }
 
     @Override
-    @SuppressWarnings("PMD.AssignmentInOperand")
     public Nuspec nuspec() {
         Optional<Nuspec> res = Optional.empty();
         try (

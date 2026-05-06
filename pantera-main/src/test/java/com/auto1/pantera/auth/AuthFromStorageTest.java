@@ -27,7 +27,6 @@ import org.junit.jupiter.params.provider.ValueSource;
  * Test for {@link AuthFromStorage}.
  * @since 1.29
  */
-@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.TooManyMethods"})
 class AuthFromStorageTest {
 
     /**

@@ -33,7 +33,6 @@ class ChangelogEntryTest {
     }
 
     @Test
-    @SuppressWarnings("PMD.UseUnderscoresInNumericLiterals")
     void shouldParseDate() {
         final int unixtime = 1589328000;
         MatcherAssert.assertThat(

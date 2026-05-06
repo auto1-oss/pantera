@@ -53,7 +53,6 @@ import java.util.function.Function;
  * </p>
  * @since 1.1.0
  */
-@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.TooManyMethods"})
 public final class BenchmarkStorage implements Storage {
     /**
      * Backend storage.
@@ -88,7 +87,6 @@ public final class BenchmarkStorage implements Storage {
     }
 
     @Override
-    @SuppressWarnings("PMD.CognitiveComplexity")
     public CompletableFuture<Collection<Key>> list(final Key root) {
         return CompletableFuture.supplyAsync(
             () -> {

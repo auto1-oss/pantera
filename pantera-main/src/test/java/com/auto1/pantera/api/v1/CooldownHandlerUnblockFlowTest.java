@@ -202,7 +202,6 @@ final class CooldownHandlerUnblockFlowTest {
     /**
      * Recording CooldownMetadataService that tracks invalidation calls.
      */
-    @SuppressWarnings("PMD.TooManyMethods")
     private static final class RecordingMetadataService implements CooldownMetadataService {
         private final AtomicInteger invCount = new AtomicInteger(0);
         private final AtomicInteger invAllCount = new AtomicInteger(0);

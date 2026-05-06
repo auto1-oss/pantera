@@ -36,7 +36,6 @@ public final class UncheckedFunc<T, R, E extends Exception> implements Function<
     }
 
     @Override
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     public R apply(final T val) {
         try {
             return this.checked.apply(val);

@@ -19,7 +19,6 @@ import org.junit.jupiter.api.Test;
  * Test for {@link Accept}.
  * @since 0.19
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class AcceptTest {
 
     @Test

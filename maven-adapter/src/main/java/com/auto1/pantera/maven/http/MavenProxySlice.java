@@ -39,7 +39,6 @@ import java.util.Queue;
  * Maven proxy repository slice.
  * @since 0.5
  */
-@SuppressWarnings("PMD.ExcessiveParameterList")
 public final class MavenProxySlice extends Slice.Wrap {
 
     /**
@@ -145,7 +144,6 @@ public final class MavenProxySlice extends Slice.Wrap {
      * @param cooldownMetadata Cooldown metadata filter service, or null for
      *                         unfiltered {@code maven-metadata.xml} responses
      */
-    @SuppressWarnings("PMD.UnusedFormalParameter")
     public MavenProxySlice(
         final ClientSlices clients,
         final URI remote,
@@ -202,7 +200,6 @@ public final class MavenProxySlice extends Slice.Wrap {
     /**
      * Build the routing slice with ChecksumProxySlice wrapping CachedProxySlice.
      */
-    @SuppressWarnings({"PMD.ExcessiveParameterList", "PMD.CloseResource"})
     private static Slice buildRoute(
         final Slice remote,
         final Cache cache,

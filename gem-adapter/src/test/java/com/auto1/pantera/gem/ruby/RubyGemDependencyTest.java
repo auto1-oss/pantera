@@ -27,7 +27,6 @@ import org.junit.jupiter.api.io.TempDir;
  *
  * @since 1.3
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 final class RubyGemDependencyTest {
     @Test
     void calculatesDependencies(final @TempDir Path tmp) {

@@ -293,7 +293,7 @@ public final class PypiJsonHandler {
                 out.add(it.next());
             }
             return out;
-        } catch (@SuppressWarnings("PMD.AvoidCatchingGenericException") final Exception ex) {
+        } catch ( final Exception ex) {
             return List.of();
         }
     }
@@ -322,7 +322,6 @@ public final class PypiJsonHandler {
             });
     }
 
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private CompletableFuture<Boolean> isBlocked(
         final String pkg, final String version, final String user
     ) {

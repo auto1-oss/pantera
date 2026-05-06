@@ -28,7 +28,6 @@ import org.testcontainers.containers.BindMode;
  *
  * @since 0.11
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 @DisabledOnOs(OS.WINDOWS)
 final class MavenProxyAuthIT {
 

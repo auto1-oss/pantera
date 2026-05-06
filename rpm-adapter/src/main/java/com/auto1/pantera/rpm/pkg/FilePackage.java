@@ -169,7 +169,6 @@ public final class FilePackage implements Package {
         }
 
         @Override
-        @SuppressWarnings("PMD.AvoidArrayLoops")
         public int[] asInts() {
             return this.entry
                 .map(

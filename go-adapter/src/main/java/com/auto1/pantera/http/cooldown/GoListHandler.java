@@ -314,7 +314,6 @@ public final class GoListHandler {
      * Ask the cooldown service whether {@code version} is currently
      * blocked for this repo. Swallows per-version errors to "allowed".
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private CompletableFuture<Boolean> isBlocked(
         final String module, final String version, final String user
     ) {

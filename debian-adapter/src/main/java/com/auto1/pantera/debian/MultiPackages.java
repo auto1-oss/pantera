@@ -70,7 +70,6 @@ public interface MultiPackages {
          * @param inp InputStream to read Packages index from
          * @param packages Map with the appended packages
          */
-        @SuppressWarnings("PMD.CyclomaticComplexity")
         private static void appendPackages(
             final OutputStream out, final InputStream inp, final Set<Pair<String, String>> packages
         ) {

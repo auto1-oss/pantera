@@ -22,7 +22,6 @@ import java.io.UncheckedIOException;
  *
  * @since 1.2
  */
-@SuppressWarnings("PMD.ProhibitPublicStaticMethods")
 public final class FiltersTestUtil {
     /**
      * Ctor.

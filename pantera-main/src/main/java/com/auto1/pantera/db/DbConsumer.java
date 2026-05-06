@@ -100,7 +100,6 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
      * @param bufferTimeSeconds Buffer time in seconds
      * @param bufferSize Maximum events per batch
      */
-    @SuppressWarnings("PMD.ConstructorOnlyInitializesOrCallOtherConstructors")
     public DbConsumer(final DataSource source, final int bufferTimeSeconds, final int bufferSize) {
         this.source = source;
         this.subject = PublishSubject.create();

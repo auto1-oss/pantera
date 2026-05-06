@@ -28,7 +28,6 @@ import javax.json.JsonPatchBuilder;
  * absolute URL: /@scope/package-name -&gt; http://host:port/base-path/@scope/package-name.
  * @since 0.6
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class Tarballs {
 
     /**

@@ -52,13 +52,11 @@ public class CompilerTool {
     /**
      * Diagnostic listener.
      */
-    @SuppressWarnings("PMD.AvoidFieldNameMatchingMethodName")
     private final DiagnosticListener<JavaFileObject> diagnostic;
 
     /**
      * Code blobs of compiled classes.
      */
-    @SuppressWarnings("PMD.AvoidFieldNameMatchingMethodName")
     private final List<CodeBlob> blobs;
 
     /**

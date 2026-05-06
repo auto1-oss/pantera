@@ -277,7 +277,6 @@ public final class UploadSlice implements Slice {
      * @param bytes Original metadata XML bytes
      * @return Completable future with normalised bytes
      */
-    @SuppressWarnings("PMD.CognitiveComplexity")
     private CompletableFuture<byte[]> fixMetadataBytes(final byte[] bytes) {
         return CompletableFuture.supplyAsync(() -> {
             try {
@@ -586,7 +585,6 @@ public final class UploadSlice implements Slice {
      * Record metric safely (only if metrics are enabled).
      * @param metric Metric recording action
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
             if (com.auto1.pantera.metrics.PanteraMetrics.isEnabled()) {

@@ -437,7 +437,6 @@ public final class VertxSliceServer implements Closeable {
      * A handler which proxy incoming requests to encapsulated slice.
      * @return The request handler.
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private Handler<HttpServerRequest> proxyHandler() {
         return (HttpServerRequest req) -> {
             // FAST PATH: Handle NLB/load-balancer health checks directly in Vert.x

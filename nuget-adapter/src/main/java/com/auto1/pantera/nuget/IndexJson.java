@@ -34,7 +34,6 @@ import org.apache.maven.artifact.versioning.ComparableVersion;
  * <a href="https://learn.microsoft.com/en-us/nuget/api/registration-base-url-resource#registration-page-object">Registration page</a>.
  * @since 1.5
  */
-@SuppressWarnings("PMD.AbstractClassWithoutAbstractMethod")
 public abstract class IndexJson {
 
     /**
@@ -264,7 +263,6 @@ public abstract class IndexJson {
          * @param old Existing packages metadata array
          * @return Sorted by packages version list of the packages metadata including new package
                  */
-        @SuppressWarnings("PMD.AssignmentInOperand")
         private static List<JsonObject> sortedPackages(final JsonObject newest,
             final String version, final JsonObject old) {
             List<JsonObject> list = Collections.singletonList(newest);

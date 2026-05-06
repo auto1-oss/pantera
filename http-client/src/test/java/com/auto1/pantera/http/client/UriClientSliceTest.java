@@ -25,7 +25,6 @@ import java.util.concurrent.CompletableFuture;
 /**
  * Tests for {@link UriClientSlice}.
  */
-@SuppressWarnings("PMD.UseObjectForClearerAPI")
 final class UriClientSliceTest {
 
     @ParameterizedTest

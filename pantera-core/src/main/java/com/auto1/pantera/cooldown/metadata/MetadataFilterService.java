@@ -167,7 +167,6 @@ public final class MetadataFilterService implements CooldownMetadataService {
      * @param maxVersionsToEvaluate Maximum versions to evaluate
      * @param evalExecutor Dedicated executor for parallel version evaluation (null = create default)
      */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
     public MetadataFilterService(
         final CooldownService cooldown,
         final CooldownSettings settings,

@@ -30,7 +30,6 @@ import org.junit.jupiter.api.Test;
  * Tests for {@link TgzArchive}.
  * @since 0.9
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 final class TgzArchiveTest {
     @Test
     void getProjectNameAndVersionFromPackageJson() {

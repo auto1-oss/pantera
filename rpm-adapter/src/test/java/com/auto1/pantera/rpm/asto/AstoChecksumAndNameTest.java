@@ -26,7 +26,6 @@ import org.junit.jupiter.api.Test;
  * Test for {@link AstoChecksumAndName}.
  * @since 1.10
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class AstoChecksumAndNameTest {
 
     /**

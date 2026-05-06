@@ -24,7 +24,6 @@ import org.junit.jupiter.api.Test;
  * Test for {@link PoliciesLoader}.
  * @since 1.2
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public class PoliciesLoaderTest {
 
     @Test

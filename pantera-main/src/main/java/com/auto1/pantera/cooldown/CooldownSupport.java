@@ -216,7 +216,6 @@ public final class CooldownSupport {
      * @param csettings In-memory cooldown settings to update
      * @param ds Database data source
      */
-    @SuppressWarnings("PMD.CognitiveComplexity")
     static void loadDbCooldownSettings(
         final CooldownSettings csettings,
         final javax.sql.DataSource ds

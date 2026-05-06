@@ -103,7 +103,6 @@ public final class PypiJsonMetadataFilter {
      *     cannot be parsed (never break clients on upstream weirdness),
      *     or {@link Result#AllBlocked} when every version is blocked
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     public Result filter(final byte[] body, final Set<String> blocked) {
         if (body == null || body.length == 0) {
             return new Passthrough(new byte[0]);

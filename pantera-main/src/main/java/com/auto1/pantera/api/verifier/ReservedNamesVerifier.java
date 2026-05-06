@@ -50,7 +50,6 @@ public final class ReservedNamesVerifier implements Verifier {
      * Set of reserved words.
      * @return Reserved words
      */
-    @SuppressWarnings("PMD.ProhibitPublicStaticMethods")
     public static Set<String> reservedWords() {
         return ReservedNamesVerifier.RESERVED;
     }

@@ -23,7 +23,6 @@ import org.junit.jupiter.params.provider.ValueSource;
  *
  * @since 0.9
  */
-@SuppressWarnings("PMD.TooManyMethods")
 class CliArgumentsTest {
 
     @Test

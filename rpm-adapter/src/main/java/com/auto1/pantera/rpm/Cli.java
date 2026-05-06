@@ -39,13 +39,6 @@ public final class Cli {
      *
      * @param args Arguments of command line
      */
-    @SuppressWarnings(
-        {
-            "PMD.SystemPrintln",
-            "PMD.AvoidCatchingGenericException",
-            "PMD.AvoidDuplicateLiterals"
-        }
-    )
     public static void main(final String... args) {
         final CliArguments cliargs = new CliArguments(args);
         final RepoConfig cnfg = cliargs.config();

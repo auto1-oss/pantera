@@ -36,7 +36,6 @@ import javax.sql.DataSource;
  *
  * @since 0.2
  */
-@SuppressWarnings("PMD.AvoidFieldNameMatchingMethodName")
 public final class TestSettings implements Settings {
 
     /**

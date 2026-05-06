@@ -39,7 +39,6 @@ public final class DigestVerification implements CacheControl {
      * @param digest Message digest has func
      * @param expected Expected digest bytes
      */
-    @SuppressWarnings("PMD.ArrayIsStoredDirectly")
     public DigestVerification(final Supplier<MessageDigest> digest, final byte[] expected) {
         this.digest = digest;
         this.expected = expected;

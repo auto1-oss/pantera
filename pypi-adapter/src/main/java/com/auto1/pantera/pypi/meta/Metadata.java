@@ -200,7 +200,6 @@ public interface Metadata {
          * @return PackageInfo if package info file found
          * @throws IOException On error
          */
-        @SuppressWarnings("PMD.AssignmentInOperand")
         private static PackageInfo readArchive(final ArchiveInputStream input) throws IOException {
             ArchiveEntry entry;
             Optional<PackageInfo> res = Optional.empty();

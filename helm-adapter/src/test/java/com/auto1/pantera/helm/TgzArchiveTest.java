@@ -29,7 +29,6 @@ import org.junit.jupiter.api.Assertions;
  *
  * @since 0.2
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class TgzArchiveTest {
 
     @Test

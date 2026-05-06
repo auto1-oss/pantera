@@ -19,7 +19,6 @@ import java.util.concurrent.CompletableFuture;
 /**
  * Slice which handles all exceptions and respond with 500 error in that case.
  */
-@SuppressWarnings("PMD.AvoidCatchingGenericException")
 final class SafeSlice implements Slice {
 
     /**

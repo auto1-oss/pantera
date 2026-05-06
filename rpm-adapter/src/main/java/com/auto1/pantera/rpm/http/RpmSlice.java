@@ -110,7 +110,6 @@ public final class RpmSlice extends Slice.Wrap {
      * @param events Artifact events queue
      * @return Slice route
      */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
     private static SliceRoute createSliceRoute(
         final Storage storage,
         final Policy<?> policy,

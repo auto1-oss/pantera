@@ -155,7 +155,6 @@ public final class PypiSidecar {
      * requested) and amortizes to O(1) per artifact after the first
      * hit.</p>
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private static CompletableFuture<Optional<Meta>> generateFromStorageMetadata(
         final Storage storage,
         final Key artifactKey

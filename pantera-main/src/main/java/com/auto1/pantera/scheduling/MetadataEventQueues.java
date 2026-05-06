@@ -138,7 +138,6 @@ public final class MetadataEventQueues {
      * @param config Repository config
      * @return Queue for proxy events
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     public Optional<Queue<ProxyArtifactEvent>> proxyEventQueues(final RepoConfig config) {
         Optional<Queue<ProxyArtifactEvent>> result =
             Optional.ofNullable(this.queues.get(config.name()));

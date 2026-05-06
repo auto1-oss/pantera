@@ -51,7 +51,6 @@ public interface MultiRepodata {
      * the outside.
      * @since 0.3
      */
-    @SuppressWarnings("PMD.CloseResource")
     final class Unique implements MultiRepodata {
 
         /**
@@ -127,7 +126,6 @@ public interface MultiRepodata {
          * @param condas Output for condas packages
          * @throws IOException On IO error
          */
-        @SuppressWarnings("PMD.AssignmentInOperand")
         private void processInput(final JsonParser parser, final JsonGenerator tars,
             final JsonGenerator condas) throws IOException {
             JsonToken token;

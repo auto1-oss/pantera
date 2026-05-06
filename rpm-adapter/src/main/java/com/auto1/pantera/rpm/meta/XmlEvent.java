@@ -26,7 +26,6 @@ import org.redline_rpm.payload.Directive;
  * Xml event to write to the output stream.
  * @since 1.5
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public interface XmlEvent {
 
     /**
@@ -118,7 +117,6 @@ public interface XmlEvent {
      * @see <a href="https://github.com/rpm-software-management/createrepo_c/blob/b49b8b2586c07d3e84009beba677162b86539f9d/src/parsehdr.c#L256">Create repo implementation</a>
      * @since 1.5
      */
-    @SuppressWarnings("PMD.AvoidUsingOctalValues")
     final class Files implements XmlEvent {
 
         /**

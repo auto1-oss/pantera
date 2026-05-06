@@ -78,7 +78,6 @@ public interface Helm {
      * Implementation of {@link Helm} for abstract storage.
      * @since 0.3
      */
-    @SuppressWarnings("PMD.CognitiveComplexity")
     final class Asto implements Helm {
         /**
          * Storage.

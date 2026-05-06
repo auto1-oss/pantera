@@ -42,7 +42,6 @@ import org.junit.jupiter.api.Test;
  * Test for {@link UpdateSlice}.
  * @since 0.1
  */
-@SuppressWarnings({"PMD.AssignmentInOperand", "PMD.AvoidDuplicateLiterals"})
 class UpdateSliceTest {
 
     /**

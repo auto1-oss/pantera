@@ -30,7 +30,6 @@ import java.io.IOException;
  *
  * @since 0.12
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 @EnabledOnOs({OS.LINUX, OS.MAC})
 final class PypiS3ITCase {
 

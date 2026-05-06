@@ -45,7 +45,6 @@ import java.util.zip.GZIPOutputStream;
  * A slice, which servers gem packages.
  * Ruby HTTP layer.
  */
-@SuppressWarnings({"PMD.UnusedPrivateField", "PMD.SingularField"})
 public final class GemSlice extends Slice.Wrap {
 
     /**
@@ -209,7 +208,6 @@ public final class GemSlice extends Slice.Wrap {
      *
      * @param storage Repository storage
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private static void initEmptySpecs(final Storage storage) {
         for (final String name : GemSlice.SPECS_FILES) {
             final Key key = new Key.From(name);

@@ -31,7 +31,6 @@ import org.skyscreamer.jsonassert.JSONAssert;
  * Test for {@link MergedJson.Jackson}.
  * @since 0.2
  */
-@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.UseObjectForClearerAPI"})
 class MergedJsonTest {
 
     @Test

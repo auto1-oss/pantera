@@ -75,7 +75,6 @@ import java.util.regex.Matcher;
  *
  * @since 1.20.13
  */
-@SuppressWarnings("PMD.ExcessiveImports")
 public final class CachedProxySlice extends BaseCachedProxySlice {
 
     /**
@@ -158,7 +157,6 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      * @param config Unified proxy cache configuration
      * @param metadataCache Maven metadata cache
      */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
     CachedProxySlice(
         final Slice client,
         final Cache cache,
@@ -195,7 +193,6 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      * @param cooldownMetadata Cooldown metadata filter service, or null to
      *                         disable filtering on this slice
      */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
     CachedProxySlice(
         final Slice client,
         final Cache cache,
@@ -239,7 +236,6 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      * @param cooldownInspector Cooldown inspector
      * @param storage Optional local storage
      */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
     CachedProxySlice(
         final Slice client,
         final Cache cache,
@@ -604,7 +600,6 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      * and production file-backed deployments benefit from the verify path on
      * genuine cache misses.
      */
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.CognitiveComplexity"})
     private CompletableFuture<Response> verifyAndServePrimary(
         final RequestLine line, final Key key, final String path
     ) {
@@ -647,7 +642,6 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      * to a clean 502 response (mirroring {@code FaultTranslator.UpstreamIntegrity}
      * policy) and leave the cache empty for this key.
      */
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.CognitiveComplexity"})
     private CompletableFuture<Response> fetchVerifyAndCache(
         final RequestLine line, final Key key, final String path
     ) {
@@ -775,7 +769,6 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      * as absent; I/O errors collapse to empty so a transient sidecar failure
      * never blocks the primary write.
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private CompletionStage<Optional<InputStream>> fetchSidecar(
         final RequestLine primary, final String extension
     ) {
@@ -827,7 +820,6 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      * @param key Artifact cache key
      * @param size Artifact size in bytes (0 when unavailable)
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void enqueueEventForWriter(final Key key, final long size) {
         if (this.localEvents.isEmpty()) {
             return;

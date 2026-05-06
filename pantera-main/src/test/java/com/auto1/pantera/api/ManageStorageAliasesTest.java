@@ -31,7 +31,6 @@ import org.junit.jupiter.params.provider.ValueSource;
  * Test for {@link ManageStorageAliases}.
  * @since 0.1
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class ManageStorageAliasesTest {
 
     /**

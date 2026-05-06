@@ -45,7 +45,6 @@ public final class Gzip {
      * @param dest Destination directory
      * @throws IOException If fails
      */
-    @SuppressWarnings("PMD.AssignmentInOperand")
     public void unpackTar(final Path dest) throws IOException {
         try (
             GzipCompressorInputStream input =
@@ -81,7 +80,6 @@ public final class Gzip {
      * @param dest Destination directory
      * @throws IOException If fails
      */
-    @SuppressWarnings("PMD.AssignmentInOperand")
     public void unpack(final Path dest) throws IOException {
         try (OutputStream out = Files.newOutputStream(dest);
             GZIPInputStream input = new GZIPInputStream(Files.newInputStream(this.file))) {

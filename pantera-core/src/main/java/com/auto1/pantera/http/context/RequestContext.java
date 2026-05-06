@@ -62,7 +62,6 @@ import org.apache.logging.log4j.ThreadContext;
  *                      never emitted to ECS. Must not be {@code null}.
  * @since 2.2.0
  */
-@SuppressWarnings("PMD.TooManyMethods")
 public record RequestContext(
     String traceId,
     String transactionId,

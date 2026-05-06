@@ -61,7 +61,6 @@ final class GzipSlice implements Slice {
             );
     }
 
-    @SuppressWarnings("PMD.CloseResource")
     private static CompletionStage<Content> gzip(Publisher<ByteBuffer> body) {
         CompletionStage<Content> res;
         try (PipedOutputStream resout = new PipedOutputStream();

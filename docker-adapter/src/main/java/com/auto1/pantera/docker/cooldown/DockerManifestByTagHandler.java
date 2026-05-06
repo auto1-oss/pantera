@@ -266,7 +266,6 @@ public final class DockerManifestByTagHandler {
             .findFirst();
     }
 
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private CompletableFuture<Boolean> isBlocked(
         final String image, final String version, final String user
     ) {

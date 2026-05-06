@@ -107,7 +107,6 @@ public final class StorageExecutors {
      * Shutdown all storage executor pools and await termination.
      * Should be called during application shutdown.
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     public static void shutdown() {
         READ.shutdown();
         WRITE.shutdown();

@@ -94,7 +94,6 @@ class DockerProxyTest {
         );
     }
 
-    @SuppressWarnings("PMD.UnusedPrivateMethod")
     private static Stream<String> goodConfigs() {
         return Stream.of(
             "repo:\n  type: docker-proxy\n  remotes:\n    - url: registry-1.docker.io",
@@ -124,7 +123,6 @@ class DockerProxyTest {
         );
     }
 
-    @SuppressWarnings("PMD.UnusedPrivateMethod")
     private static Stream<String> badConfigs() {
         return Stream.of(
             "",

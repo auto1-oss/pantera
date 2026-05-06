@@ -23,7 +23,6 @@ public final class ConanRepo {
     /**
      * Primary storage.
      */
-    @SuppressWarnings({"PMD.UnusedPrivateField", "PMD.SingularField"})
     private final Storage storage;
 
     /**

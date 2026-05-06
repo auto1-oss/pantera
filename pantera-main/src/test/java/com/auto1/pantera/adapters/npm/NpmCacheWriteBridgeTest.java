@@ -52,7 +52,6 @@ import org.junit.jupiter.api.io.TempDir;
  *
  * @since 2.2.0
  */
-@SuppressWarnings("PMD.AvoidUsingHardCodedIP")
 final class NpmCacheWriteBridgeTest {
 
     private static final String REPO = "npm_proxy";

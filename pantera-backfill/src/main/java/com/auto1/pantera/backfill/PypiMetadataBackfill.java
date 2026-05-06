@@ -242,7 +242,6 @@ final class PypiMetadataBackfill {
      * @return Requires-Python constraint string, or {@code ""} if absent
      *     or unreadable
      */
-    @SuppressWarnings("PMD.CyclomaticComplexity")
     static String extractRequiresPython(final Path path) {
         final String lower =
             path.getFileName().toString().toLowerCase(Locale.ROOT);
@@ -309,7 +308,6 @@ final class PypiMetadataBackfill {
      * @throws IOException On IO error
      * @checkstyle NestedIfDepthCheck (30 lines)
      */
-    @SuppressWarnings("PMD.AssignmentInOperand")
     private static Optional<String> scanArchive(
         final ArchiveInputStream<?> archive
     ) throws IOException {

@@ -82,7 +82,6 @@ public final class MavenCacheConfig {
      * @param profile YAML mapping for a specific profile
      * @return Cache config
      */
-    @SuppressWarnings("PMD.ProhibitPublicStaticMethods")
     public static MavenCacheConfig fromProfile(final YamlMapping profile) {
         if (profile == null) {
             return new MavenCacheConfig();
@@ -117,7 +116,6 @@ public final class MavenCacheConfig {
      * @param profileName Name of the cache profile to load
      * @return Cache config
      */
-    @SuppressWarnings({"PMD.ProhibitPublicStaticMethods", "PMD.SystemPrintln"})
     public static MavenCacheConfig fromServer(
         final YamlMapping serverYaml,
         final String profileName
@@ -184,7 +182,6 @@ public final class MavenCacheConfig {
      * @param repoYaml Repository YAML
      * @return Profile name, or "default" if not specified
      */
-    @SuppressWarnings("PMD.ProhibitPublicStaticMethods")
     public static String getProfileName(final YamlMapping repoYaml) {
         if (repoYaml == null) {
             return "default";
@@ -200,7 +197,6 @@ public final class MavenCacheConfig {
      * @param defaultValue Default if parsing fails
      * @return Parsed duration
      */
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.UseLocaleWithCaseConversions", "PMD.SystemPrintln"})
     private static Duration parseDuration(final String value, final Duration defaultValue) {
         if (value == null || value.isEmpty()) {
             return defaultValue;
@@ -240,7 +236,6 @@ public final class MavenCacheConfig {
      * @param defaultValue Default if parsing fails
      * @return Parsed integer
      */
-    @SuppressWarnings("PMD.SystemPrintln")
     private static int parseInt(final String value, final int defaultValue) {
         if (value == null || value.isEmpty()) {
             return defaultValue;

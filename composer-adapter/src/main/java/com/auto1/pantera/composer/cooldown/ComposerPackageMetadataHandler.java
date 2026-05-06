@@ -338,7 +338,6 @@ public final class ComposerPackageMetadataHandler {
             });
     }
 
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private CompletableFuture<Boolean> isBlocked(
         final String pkg, final String version, final String user
     ) {

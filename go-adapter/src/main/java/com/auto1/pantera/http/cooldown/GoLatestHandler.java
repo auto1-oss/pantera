@@ -383,7 +383,6 @@ public final class GoLatestHandler {
      * treating them as "not blocked" — a transient inspector failure
      * must not cascade to denying every Go resolution.
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private CompletableFuture<Boolean> isBlocked(
         final String module, final String version, final String user
     ) {

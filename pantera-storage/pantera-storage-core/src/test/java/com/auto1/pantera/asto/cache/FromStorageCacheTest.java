@@ -38,7 +38,6 @@ import org.junit.jupiter.api.Test;
  *
  * @since 0.24
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 final class FromStorageCacheTest {
 
     /**

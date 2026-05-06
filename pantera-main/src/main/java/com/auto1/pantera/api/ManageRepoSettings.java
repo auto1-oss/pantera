@@ -25,7 +25,6 @@ import javax.json.JsonStructure;
  * Manage repository settings.
  * @since 0.26
  */
-@SuppressWarnings("PMD.TooManyMethods")
 public final class ManageRepoSettings implements CrudRepoSettings {
     /**
      * Repository settings storage.

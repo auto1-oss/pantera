@@ -46,7 +46,6 @@ import java.util.LinkedList;
  * @since 0.8
  */
 @DisabledOnOs(OS.WINDOWS)
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 final class NpmUnpublishIT {
 
     /**

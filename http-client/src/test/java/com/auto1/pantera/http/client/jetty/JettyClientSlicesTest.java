@@ -173,7 +173,6 @@ final class JettyClientSlicesTest {
     }
 
     @Test
-    @SuppressWarnings("PMD.AvoidUsingHardCodedIP")
     void shouldTimeoutConnectionIfDisabled() {
         // When connectTimeout=0 (disabled), Jetty doesn't set connection timeout
         // Connection attempts will hang until OS timeout or test timeout
@@ -333,7 +332,6 @@ final class JettyClientSlicesTest {
         "self-signed.badssl.com",
         "untrusted-root.badssl.com"
     })
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     void shouldRejectBadCertificates(final String url) throws Exception {
         final JettyClientSlices client = new JettyClientSlices(
             new HttpClientSettings().setTrustAll(false)

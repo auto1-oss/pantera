@@ -37,7 +37,6 @@ import org.yaml.snakeyaml.Yaml;
  *
  * @since 0.2
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class IndexYaml {
     /**
      * The `index.yaml` string.

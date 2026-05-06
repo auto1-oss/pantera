@@ -70,7 +70,6 @@ import java.util.concurrent.ConcurrentMap;
  *
  * @since 2.2.0
  */
-@SuppressWarnings("PMD.TooManyMethods")
 public final class ArtifactIndexCache implements ArtifactIndex {
 
     /** Max entries kept on the positive tier (~12.5 MB worst case). */

@@ -288,7 +288,6 @@ public final class DownloadAssetSlice implements Slice {
      * @param headers Request headers
      * @param asset The resolved asset
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void enqueueProxyEvent(
         final String tgz,
         final Headers headers,

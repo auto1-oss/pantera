@@ -51,7 +51,6 @@ import javax.sql.DataSource;
  *
  * @since 1.21
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class CachedDbPolicy implements Policy<UserPermissions>, Cleanable<String> {
 
     /**

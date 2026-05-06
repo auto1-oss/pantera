@@ -27,7 +27,6 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  * Test for artifacts db.
  * @since 0.31
  */
-@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.TooManyMethods"})
 @Testcontainers
 class ArtifactDbTest {
 

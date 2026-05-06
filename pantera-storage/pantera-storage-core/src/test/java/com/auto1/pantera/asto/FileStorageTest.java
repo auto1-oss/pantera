@@ -41,7 +41,6 @@ import org.junit.jupiter.api.io.TempDir;
  *
  * @since 0.1
  */
-@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.TooManyMethods"})
 final class FileStorageTest {
 
     /**

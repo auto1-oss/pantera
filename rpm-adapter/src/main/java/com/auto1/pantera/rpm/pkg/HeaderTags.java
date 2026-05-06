@@ -26,7 +26,6 @@ import org.redline_rpm.header.Header;
  *
  * @since 0.6
  */
-@SuppressWarnings("PMD.TooManyMethods")
 public final class HeaderTags {
 
     /**
@@ -332,7 +331,6 @@ public final class HeaderTags {
         }
 
         @Override
-        @SuppressWarnings("PMD.AvoidDuplicateLiterals")
         public int compareTo(final Version another) {
             int res;
             if (this.val.equals(another.val)) {

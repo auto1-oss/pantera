@@ -37,7 +37,6 @@ public final class EmptyPermissions extends PermissionCollection {
     /**
      * Ctor.
      */
-    @SuppressWarnings("PMD.ConstructorOnlyInitializesOrCallOtherConstructors")
     private EmptyPermissions() {
         this.setReadOnly();
     }

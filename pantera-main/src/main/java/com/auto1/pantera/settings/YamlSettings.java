@@ -73,7 +73,6 @@ import com.auto1.pantera.asto.factory.StoragesLoader;
  *
  * @since 0.1
  */
-@SuppressWarnings("PMD.TooManyMethods")
 public final class YamlSettings implements Settings {
 
     /**
@@ -254,7 +253,6 @@ public final class YamlSettings implements Settings {
      * @param shared Pre-created DataSource to reuse, or empty to create a new one
      * @since 1.20.13
      */
-    @SuppressWarnings("PMD.ConstructorOnlyInitializesOrCallOtherConstructors")
     public YamlSettings(final YamlMapping content, final Path path,
         final QuartzService quartz, final Optional<DataSource> shared) {
         this(content, path, quartz, shared, Optional.empty());

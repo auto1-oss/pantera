@@ -69,7 +69,6 @@ public final class PyProxySlice extends Slice.Wrap {
      * @param events Artifact events queue
      * @param rname Repository name
      */
-    @SuppressWarnings("PMD.UnusedFormalParameter")
     public PyProxySlice(
         final ClientSlices clients,
         final URI remote,

@@ -17,7 +17,6 @@ import org.junit.jupiter.params.provider.EnumSource;
  * Test for {@link DockerRepositoryPermission}.
  * @since 0.18
  */
-@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.UnnecessaryAnnotationValueElement"})
 class DockerRepositoryPermissionTest {
 
     @Test

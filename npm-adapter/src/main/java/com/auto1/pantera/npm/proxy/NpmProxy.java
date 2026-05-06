@@ -245,7 +245,6 @@ public class NpmProxy {
      * @param packumentWriteHook Post-save hook on packument writes; null treated as no-op
      * @param phaseRecorder Sub-phase timer recorder; null treated as no-op
      */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
     public NpmProxy(
         final Storage storage,
         final Slice client,
@@ -330,7 +329,6 @@ public class NpmProxy {
      * @param packumentWriteHook Post-save hook on packument writes; null treated as no-op
      * @param phaseRecorder (phase, durationNs) recorder; null treated as no-op
      */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
     NpmProxy(
         final NpmProxyStorage storage,
         final NpmRemote remote,
@@ -465,7 +463,6 @@ public class NpmProxy {
      *
      * @param name Package name
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void backgroundRefresh(final String name) {
         if (this.refreshing.add(name)) {
             // Try conditional request first if we have a stored upstream ETag.
@@ -603,7 +600,6 @@ public class NpmProxy {
      * @param phase phase name (e.g. {@code "npm_storage_save"})
      * @param startNs nanoTime captured at phase entry
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordPhase(final String phase, final long startNs) {
         try {
             this.phaseRecorder.accept(phase, System.nanoTime() - startNs);
@@ -623,7 +619,6 @@ public class NpmProxy {
      *
      * @param path Asset path that was just saved
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void fireCacheWriteHook(final String path) {
         try {
             this.cacheWriteHook.accept(path);
@@ -747,7 +742,6 @@ public class NpmProxy {
      *
      * @param name Package name that was just saved
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void firePackumentWriteHook(final String name) {
         try {
             this.packumentWriteHook.accept(name);

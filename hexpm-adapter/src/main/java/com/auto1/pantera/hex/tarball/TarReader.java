@@ -24,7 +24,6 @@ import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
  *
  * @since 0.1
  */
-@SuppressWarnings("PMD.AssignmentInOperand")
 public class TarReader {
     /**
      * File metadata.config.

@@ -56,7 +56,6 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * @since 2.2.0
  */
-@SuppressWarnings({"PMD.TooManyMethods", "PMD.AvoidFieldNameMatchingMethodName"})
 public final class PrefetchMetrics {
 
     /**

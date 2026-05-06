@@ -43,7 +43,6 @@ import java.util.Optional;
  *
  * @since 1.20.13
  */
-@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.TooManyMethods", "PMD.TooManyStaticImports"})
 @Testcontainers
 class DbArtifactIndexTest {
 

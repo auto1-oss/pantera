@@ -89,7 +89,6 @@ import java.util.stream.StreamSupport;
  *
  * @since 1.20.13
  */
-@SuppressWarnings({"PMD.GodClass", "PMD.ExcessiveImports"})
 public abstract class BaseCachedProxySlice implements Slice {
 
     /**
@@ -196,7 +195,6 @@ public abstract class BaseCachedProxySlice implements Slice {
      *     (treated as no-op). Throwables propagated from the callback are
      *     caught + logged and do NOT affect the cache-write outcome.
      */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
     protected BaseCachedProxySlice(
         final Slice client,
         final Cache cache,
@@ -259,7 +257,6 @@ public abstract class BaseCachedProxySlice implements Slice {
      * early startup), the registry returns a no-op consumer, so behaviour is
      * unchanged from the pre-Task-19 default.</p>
      */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
     protected BaseCachedProxySlice(
         final Slice client,
         final Cache cache,
@@ -283,7 +280,6 @@ public abstract class BaseCachedProxySlice implements Slice {
      * callback so the prefetch dispatcher (Task 19b) is wired in for every
      * adapter that uses this overload without per-adapter ctor surgery.
      */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
     protected BaseCachedProxySlice(
         final Slice client,
         final Cache cache,
@@ -826,7 +822,6 @@ public abstract class BaseCachedProxySlice implements Slice {
      * Streams body to a temp file while computing digests incrementally,
      * then saves from temp file to cache. Never buffers the full artifact on heap.
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private CompletableFuture<FetchSignal> cacheResponse(
         final Response resp,
         final Key key,
@@ -986,7 +981,6 @@ public abstract class BaseCachedProxySlice implements Slice {
      * @param size File size in bytes
      * @return Save future
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private CompletableFuture<?> saveFromTempFile(
         final Key key, final Path tempFile, final long size
     ) {
@@ -1033,7 +1027,6 @@ public abstract class BaseCachedProxySlice implements Slice {
                 private volatile boolean cancelled;
 
                 @Override
-                @SuppressWarnings("PMD.AvoidCatchingGenericException")
                 public void request(final long n) {
                     try {
                         long remaining = n;
@@ -1345,7 +1338,6 @@ public abstract class BaseCachedProxySlice implements Slice {
      *                 method returns).
      * @param size     Size in bytes of the primary.
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void fireOnCacheWrite(final Key key, final Path tempFile, final long size) {
         try {
             this.onCacheWrite.accept(new CacheWriteEvent(
@@ -1362,7 +1354,6 @@ public abstract class BaseCachedProxySlice implements Slice {
         }
     }
 
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void enqueueEvent(
         final Key key, final Headers headers, final long size, final String owner
     ) {
@@ -1413,7 +1404,6 @@ public abstract class BaseCachedProxySlice implements Slice {
         });
     }
 
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
             if (com.auto1.pantera.metrics.PanteraMetrics.isEnabled()) {

@@ -24,7 +24,6 @@ import java.util.function.Function;
  *
  * @since 0.3
  */
-@SuppressWarnings("PMD.TooManyMethods")
 public interface Repository {
 
     /**

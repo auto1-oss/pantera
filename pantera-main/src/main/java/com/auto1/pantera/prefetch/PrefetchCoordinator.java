@@ -68,7 +68,6 @@ import java.util.function.Supplier;
  *
  * @since 2.2.0
  */
-@SuppressWarnings({"PMD.TooManyMethods", "PMD.GodClass", "PMD.ExcessiveImports"})
 public final class PrefetchCoordinator {
 
     /**
@@ -233,7 +232,6 @@ public final class PrefetchCoordinator {
      * @param cooldownTimeout Cooldown evaluation timeout.
      * @param upstreamTimeout Upstream call timeout.
      */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
     PrefetchCoordinator(
         final PrefetchMetrics metrics,
         final PrefetchCircuitBreaker breaker,

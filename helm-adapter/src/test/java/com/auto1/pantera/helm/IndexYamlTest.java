@@ -37,7 +37,6 @@ import java.util.Map;
 /**
  * Test case for {@link IndexYaml}.
  */
-@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.TooManyMethods"})
 final class IndexYamlTest {
 
     /**

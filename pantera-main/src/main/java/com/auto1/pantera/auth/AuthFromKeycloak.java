@@ -38,7 +38,6 @@ public final class AuthFromKeycloak implements Authentication {
     }
 
     @Override
-    @SuppressWarnings("PMD.AvoidCatchingThrowable")
     public Optional<AuthUser> user(final String username, final String password) {
         final AuthzClient client = AuthzClient.create(this.config);
         Optional<AuthUser> res;

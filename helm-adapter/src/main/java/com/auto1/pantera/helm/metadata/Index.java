@@ -49,7 +49,6 @@ public interface Index {
      * </pre>
      * @since 0.3
      */
-    @SuppressWarnings({"PMD.CyclomaticComplexity", "PMD.CognitiveComplexity"})
     final class WithBreaks implements Index {
         /**
          * Versions.
@@ -102,7 +101,6 @@ public interface Index {
          * @param idx Key of index file
          * @return Parsed versions of packages from index file.
          */
-        @SuppressWarnings("PMD.AssignmentInOperand")
         private CompletionStage<Map<String, Set<String>>> versionsByPckgs(final Key idx) {
             final TokenizerFlatProc target = new TokenizerFlatProc("\n");
             return this.storage.value(idx).thenAccept(

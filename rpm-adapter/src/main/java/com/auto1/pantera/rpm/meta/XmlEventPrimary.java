@@ -39,7 +39,6 @@ import org.redline_rpm.header.Header;
  *
  * @since 1.5
  */
-@SuppressWarnings({"PMD.LongVariable", "PMD.AvoidDuplicateLiterals", "PMD.TooManyMethods"})
 public final class XmlEventPrimary implements XmlEvent {
 
     /**
@@ -208,7 +207,6 @@ public final class XmlEventPrimary implements XmlEvent {
      * @param tags Tag info
      * @throws XMLStreamException On error
      */
-    @SuppressWarnings({"PMD.CyclomaticComplexity", "PMD.NPathComplexity", "PMD.CognitiveComplexity"})
     private static void addRequires(final XMLEventWriter writer, final HeaderTags tags)
         throws XMLStreamException {
         final XMLEventFactory events = XMLEventFactory.newFactory();

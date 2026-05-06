@@ -36,7 +36,6 @@ import org.apache.commons.io.IOUtils;
  *
  * @since 1.5
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class StorageValuePipelineTest {
 
     /**

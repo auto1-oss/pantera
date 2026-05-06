@@ -133,7 +133,6 @@ public final class Http3Server {
      * Starts http3 server with native QUIC support via Quiche.
      * @throws com.auto1.pantera.PanteraException On Error
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     public void start() {
         try {
             // Create PEM directory for QUIC native library (required by Quiche)
@@ -208,7 +207,6 @@ public final class Http3Server {
      * @checkstyle AnonInnerLengthCheck (500 lines)
      * @checkstyle NestedIfDepthCheck (500 lines)
      */
-    @SuppressWarnings("PMD.OnlyOneReturn")
     private final class SliceListener implements Session.Server.Listener {
 
         public Stream.Server.Listener onRequest(

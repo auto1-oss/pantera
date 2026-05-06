@@ -70,7 +70,6 @@ public final class NegativeCache {
      *
      * @param config Unified negative cache configuration
      */
-    @SuppressWarnings("PMD.NullAssignment")
     public NegativeCache(final NegativeCacheConfig config) {
         this.enabled = true;
         this.ttl = config.l2Ttl();

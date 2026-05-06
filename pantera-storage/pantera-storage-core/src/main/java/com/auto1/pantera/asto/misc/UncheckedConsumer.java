@@ -35,7 +35,6 @@ public final class UncheckedConsumer<T, E extends Exception> implements Consumer
     }
 
     @Override
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     public void accept(final T val) {
         try {
             this.checked.accept(val);

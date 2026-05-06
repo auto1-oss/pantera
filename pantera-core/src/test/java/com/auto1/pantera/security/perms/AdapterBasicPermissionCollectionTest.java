@@ -20,7 +20,6 @@ import org.junit.jupiter.api.Test;
  * Test for {@link AdapterBasicPermission}.
  * @since 1.2
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class AdapterBasicPermissionCollectionTest {
 
     @Test

@@ -66,7 +66,6 @@ import org.apache.logging.log4j.message.MapMessage;
  *
  * @since 2.2.0
  */
-@SuppressWarnings({"PMD.TooManyMethods", "PMD.GodClass"})
 public final class StructuredLogger {
 
     private static final String LOGGER_ACCESS = "http.access";

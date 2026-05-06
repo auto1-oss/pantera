@@ -270,7 +270,6 @@ public final class CooldownSettings {
      * @param newCleanupBatchLimit Maximum rows per background cleanup iteration,
      *                             must be in (0, 100000]
      */
-    @SuppressWarnings("PMD.UseObjectForClearerAPI")
     public void update(final boolean newEnabled, final Duration newMinAge,
         final Map<String, RepoTypeConfig> overrides,
         final int newHistoryRetentionDays,

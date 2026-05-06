@@ -51,7 +51,6 @@ import java.util.concurrent.atomic.AtomicInteger;
  * @since 2.2.0
  * @checkstyle ClassDataAbstractionCouplingCheck (500 lines)
  */
-@SuppressWarnings({"PMD.TooManyMethods", "PMD.ExcessiveImports"})
 public final class NegativeCacheAdminResource {
 
     /**
@@ -274,7 +273,6 @@ public final class NegativeCacheAdminResource {
      * Rate-limited: 10 per minute per admin user.
      * @param ctx Routing context
      */
-    @SuppressWarnings("PMD.CognitiveComplexity")
     private void invalidatePattern(final RoutingContext ctx) {
         final String user = extractUsername(ctx);
         if (!checkRateLimit(user)) {

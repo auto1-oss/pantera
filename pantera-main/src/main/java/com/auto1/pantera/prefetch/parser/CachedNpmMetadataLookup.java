@@ -262,7 +262,6 @@ public final class CachedNpmMetadataLookup implements NpmMetadataLookup {
     }
 
     // package-private hook for tests that want to round-trip a JSON byte[]
-    @SuppressWarnings("PMD.UnusedPrivateMethod")
     private static byte[] utf8(final String text) {
         return text.getBytes(StandardCharsets.UTF_8);
     }

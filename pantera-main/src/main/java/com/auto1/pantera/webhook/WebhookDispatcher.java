@@ -33,7 +33,6 @@ import java.util.Objects;
  *
  * @since 1.20.13
  */
-@SuppressWarnings("PMD.AvoidCatchingGenericException")
 public final class WebhookDispatcher {
 
     /**

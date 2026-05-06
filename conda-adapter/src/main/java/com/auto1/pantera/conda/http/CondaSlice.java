@@ -53,7 +53,6 @@ import java.util.regex.Pattern;
  * we cannot trim first part of the path.
  * @since 0.4
  */
-@SuppressWarnings("PMD.ExcessiveMethodLength")
 public final class CondaSlice extends Slice.Wrap {
 
     /**

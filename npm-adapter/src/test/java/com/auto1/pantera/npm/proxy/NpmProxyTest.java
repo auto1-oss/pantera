@@ -37,7 +37,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
  * @since 0.1
  */
 @ExtendWith(MockitoExtension.class)
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class NpmProxyTest {
 
     /**

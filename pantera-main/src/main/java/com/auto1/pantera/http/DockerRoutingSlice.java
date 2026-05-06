@@ -55,7 +55,6 @@ public final class DockerRoutingSlice implements Slice {
     }
 
     @Override
-    @SuppressWarnings("PMD.NestedIfDepthCheck")
     public CompletableFuture<Response> response(
         RequestLine line, Headers headers, Content body
     ) {

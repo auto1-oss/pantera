@@ -37,7 +37,6 @@ public final class EventQueue<T> {
     /**
      * Queue.
      */
-    @SuppressWarnings("PMD.AvoidFieldNameMatchingMethodName")
     private final Queue<T> queue;
 
     /**
@@ -116,7 +115,6 @@ public final class EventQueue<T> {
      * Queue, not public intentionally, the queue should be accessible only from this package.
      * @return The queue.
      */
-    @SuppressWarnings("PMD.AvoidFieldNameMatchingMethodName")
     Queue<T> queue() {
         return this.queue;
     }

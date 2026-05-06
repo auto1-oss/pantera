@@ -24,7 +24,6 @@ import org.apache.maven.artifact.versioning.ComparableVersion;
  *  </a>
  * @since 1.9.9
  */
-@SuppressWarnings({"PMD.CyclomaticComplexity", "PMD.CognitiveComplexity"})
 public final class CrCompareDependency implements Comparator<String> {
 
     @Override

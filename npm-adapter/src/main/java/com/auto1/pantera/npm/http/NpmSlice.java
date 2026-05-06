@@ -60,7 +60,6 @@ import java.util.concurrent.CompletableFuture;
  *  https://github.com/npm/registry
  *  https://docs.npmjs.com/cli/v8
  */
-@SuppressWarnings("PMD.ExcessiveMethodLength")
 public final class NpmSlice implements Slice {
 
     /**
@@ -213,7 +212,6 @@ public final class NpmSlice implements Slice {
      * @param jwtOnly Use JWT-only mode.
      * @param tokens Token service (optional).
      */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
     private NpmSlice(
         final URL base,
         final Storage storage,

@@ -31,10 +31,6 @@ import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
  * A .tgz archive file.
  * @since 0.2
  */
-@SuppressWarnings({
-    "PMD.ArrayIsStoredDirectly",
-    "PMD.AssignmentInOperand"
-})
 public final class TgzArchive {
 
     /**

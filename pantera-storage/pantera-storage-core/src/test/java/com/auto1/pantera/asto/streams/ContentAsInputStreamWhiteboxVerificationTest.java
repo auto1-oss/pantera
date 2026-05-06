@@ -23,7 +23,6 @@ import org.reactivestreams.tck.TestEnvironment;
  *
  * @since 1.12
  */
-@SuppressWarnings("PMD.TestClassWithoutTestCases")
 public final class ContentAsInputStreamWhiteboxVerificationTest
     extends SubscriberWhiteboxVerification<ByteBuffer> {
 

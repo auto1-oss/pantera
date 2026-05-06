@@ -33,7 +33,6 @@ import org.awaitility.Awaitility;
  * Test for {@link NpmProxyPackageProcessor}.
  * @since 1.5
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class NpmProxyPackageProcessorTest {
 
     /**

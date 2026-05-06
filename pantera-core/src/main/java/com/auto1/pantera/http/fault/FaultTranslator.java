@@ -101,7 +101,6 @@ public final class FaultTranslator {
      *              headers and correlated body fields without breaking the API.
      * @return The outbound response.
      */
-    @SuppressWarnings({"PMD.UnusedFormalParameter", "PMD.CyclomaticComplexity"})
     public static Response translate(final Fault fault, final RequestContext ctx) {
         return switch (fault) { // NOPMD SwitchDensity - exhaustive Fault sealed-type translation; all branches stay together by design
             case Fault.NotFound nf -> ResponseBuilder.notFound().build();

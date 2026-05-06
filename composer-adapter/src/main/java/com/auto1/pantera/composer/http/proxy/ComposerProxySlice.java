@@ -68,7 +68,6 @@ import java.util.concurrent.CompletableFuture;
  * ({@code 19bc60cb}) and {@code DockerTagsListHandler}
  * ({@code 6c5a30ef}).</p>
  */
-@SuppressWarnings("PMD.TooManyMethods")
 public class ComposerProxySlice implements Slice {
 
     /**

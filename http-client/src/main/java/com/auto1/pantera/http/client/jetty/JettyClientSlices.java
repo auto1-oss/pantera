@@ -347,7 +347,6 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
      *     client-initiated HTTP/2 streams. Ignored for {@link HttpProtocol#H1}.
      * @return HTTP client built from settings.
      */
-    @SuppressWarnings("PMD.NPathComplexity")
     private static HttpClient create(
         final HttpClientSettings settings,
         final HttpProtocol protocol,

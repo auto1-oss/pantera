@@ -40,7 +40,6 @@ public class HttpServer {
     /**
      * Listened port.
      */
-    @SuppressWarnings("PMD.AvoidFieldNameMatchingMethodName")
     private int port;
 
     /**

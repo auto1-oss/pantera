@@ -55,7 +55,6 @@ public interface Archive {
      * Archive in ZIP format.
      * @since 0.4
      */
-    @SuppressWarnings("PMD.AssignmentInOperand")
     class Zip implements Archive {
         /**
          * Composer json file name.

@@ -339,7 +339,6 @@ public final class CachedNpmProxySlice implements Slice {
     /**
      * Records metric safely, ignoring errors.
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
             if (com.auto1.pantera.metrics.PanteraMetrics.isEnabled()) {

@@ -29,7 +29,6 @@ import java.util.concurrent.CompletableFuture;
  *
  * @since 0.5
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 final class ReadWriteLayersTest {
 
     @Test

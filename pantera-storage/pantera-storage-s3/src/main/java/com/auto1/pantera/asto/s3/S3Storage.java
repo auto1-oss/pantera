@@ -67,7 +67,6 @@ import software.amazon.awssdk.services.s3.model.StorageClass;
  * @since 0.1
  * On multipart upload failure, abort() is fired in background without blocking save() completion.
  */
-@SuppressWarnings("PMD.TooManyMethods")
 public final class S3Storage implements ManagedStorage {
 
     /**

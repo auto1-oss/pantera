@@ -22,7 +22,6 @@ import java.util.Optional;
  *
  * @since 0.19
  */
-@SuppressWarnings({"PMD.UnusedPrivateField", "PMD.SingularField"})
 public class RxCopy {
 
     /**

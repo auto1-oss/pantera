@@ -35,7 +35,6 @@ import org.junit.jupiter.api.Test;
  * Test for {@link AstoRepoRemove}.
  * @since 1.9
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class AstoRepoRemoveTest {
 
     /**

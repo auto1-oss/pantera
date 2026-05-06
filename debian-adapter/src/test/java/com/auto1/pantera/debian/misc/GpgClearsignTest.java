@@ -23,7 +23,6 @@ import org.junit.jupiter.api.Test;
  * Test for {@link GpgClearsign}.
  * @since 0.4
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class GpgClearsignTest {
 
     @Test

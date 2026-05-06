@@ -125,7 +125,6 @@ public final class LocalEnabledFilter implements Authentication {
      * @return {@code true} if enabled, {@code false} if disabled,
      *     {@code null} if no row exists
      */
-    @SuppressWarnings("PMD.CloseResource")
     private Boolean loadEnabled(final String username) {
         try (Connection conn = this.source.getConnection();
             PreparedStatement ps = conn.prepareStatement(SQL)) {

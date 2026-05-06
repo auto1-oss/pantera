@@ -29,7 +29,6 @@ import java.util.concurrent.atomic.AtomicInteger;
  *
  * @since 0.17
  */
-@SuppressWarnings("PMD.OnlyOneReturn")
 public final class BasicAuthScheme implements AuthScheme {
 
     /**
