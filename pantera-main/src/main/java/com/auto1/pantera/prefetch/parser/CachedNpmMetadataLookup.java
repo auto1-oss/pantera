@@ -173,7 +173,7 @@ public final class CachedNpmMetadataLookup implements NpmMetadataLookup {
         if (Boolean.TRUE.equals(fullExists.get(IO_TIMEOUT_MS, TimeUnit.MILLISECONDS))) {
             return readBytes(storage, full);
         }
-        return null;
+        return null; // NOPMD ReturnEmptyCollectionRatherThanNull - byte[] is a payload, not a collection; null signals "no metadata cached" vs empty array which would mean "empty packument"
     }
 
     private static byte[] readBytes(final Storage storage, final Key key) throws Exception {

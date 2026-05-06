@@ -27,7 +27,7 @@ public final class LoggingContext {
      * Constructor.
      * @param meta Meta section from Pantera YAML settings (ignored)
      */
-    public LoggingContext(final YamlMapping meta) {
+    public LoggingContext(final YamlMapping meta) { // NOPMD UnusedFormalParameter - deprecated public API; meta retained for source-compat with callers wired before log4j2.xml migration
         // No-op: logging is now configured via log4j2.xml
     }
 

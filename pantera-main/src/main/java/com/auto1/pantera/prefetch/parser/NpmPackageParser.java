@@ -121,7 +121,7 @@ public final class NpmPackageParser implements PrefetchParser {
                 return tar.readAllBytes();
             }
         }
-        return null;
+        return null; // NOPMD ReturnEmptyCollectionRatherThanNull - byte[] is a payload, not a collection; null signals "manifest absent" vs empty array which would mean "empty manifest"
     }
 
     /**

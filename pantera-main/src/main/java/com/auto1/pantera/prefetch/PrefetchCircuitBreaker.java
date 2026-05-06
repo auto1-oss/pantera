@@ -97,19 +97,18 @@ public final class PrefetchCircuitBreaker {
         this.recentDrops.add(now);
         prune(now, snap);
         // Trip math: strictly greater than threshold * window.
-        if (this.recentDrops.size() > (long) snap.dropThresholdPerSec() * snap.windowSeconds()) {
-            if (this.trippedAt.compareAndSet(CLOSED, now)) {
-                EcsLogger.warn("com.auto1.pantera.prefetch.PrefetchCircuitBreaker")
-                    .message("Prefetch circuit breaker tripped — auto-disabling")
-                    .field("drops_in_window", this.recentDrops.size())
-                    .field("threshold_per_sec", snap.dropThresholdPerSec())
-                    .field("window_seconds", snap.windowSeconds())
-                    .field("disable_minutes", snap.disableMinutes())
-                    .eventCategory("process")
-                    .eventAction("prefetch_breaker_open")
-                    .eventOutcome("failure")
-                    .log();
-            }
+        if (this.recentDrops.size() > (long) snap.dropThresholdPerSec() * snap.windowSeconds()
+            && this.trippedAt.compareAndSet(CLOSED, now)) {
+            EcsLogger.warn("com.auto1.pantera.prefetch.PrefetchCircuitBreaker")
+                .message("Prefetch circuit breaker tripped — auto-disabling")
+                .field("drops_in_window", this.recentDrops.size())
+                .field("threshold_per_sec", snap.dropThresholdPerSec())
+                .field("window_seconds", snap.windowSeconds())
+                .field("disable_minutes", snap.disableMinutes())
+                .eventCategory("process")
+                .eventAction("prefetch_breaker_open")
+                .eventOutcome("failure")
+                .log();
         }
     }
 

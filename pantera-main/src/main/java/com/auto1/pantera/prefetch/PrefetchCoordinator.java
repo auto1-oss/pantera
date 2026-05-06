@@ -515,7 +515,7 @@ public final class PrefetchCoordinator {
                 if (host != null && !host.isEmpty()) {
                     return host;
                 }
-            } catch (final IllegalArgumentException ex) {
+            } catch (final IllegalArgumentException ex) { // NOPMD EmptyCatchBlock - intentional: malformed upstream URL falls through to the repo-name fallback below
                 // fall through to repo-name fallback
             }
         }

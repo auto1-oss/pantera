@@ -299,7 +299,7 @@ public final class YamlSettings implements Settings {
         // CachedLocalEnabledFilter inside the auth chain can subscribe
         // for L1 invalidation broadcasts. Both the pub/sub and the
         // auth chain are ultimately owned by this settings object.
-        final CacheInvalidationPubSub psEarly = valkey
+        final CacheInvalidationPubSub psEarly = valkey // NOPMD CloseResource - lifecycle owned by this.cachePubSub field; closed in YamlSettings.close()
             .map(CacheInvalidationPubSub::new)
             .orElse(null);
         this.cachePubSub = psEarly;
@@ -342,7 +342,7 @@ public final class YamlSettings implements Settings {
         final boolean indexEnabled = indexConfig != null
             && "true".equals(indexConfig.string("enabled"));
         if (indexEnabled && this.artifactsDb.isPresent()) {
-            final ArtifactIndexCache cached = new ArtifactIndexCache(
+            final ArtifactIndexCache cached = new ArtifactIndexCache( // NOPMD CloseResource - lifecycle owned by this.artifactIndex / this.artifactIndexCache fields
                 new DbArtifactIndex(this.artifactsDb.get())
             );
             this.artifactIndex = cached;
@@ -353,7 +353,7 @@ public final class YamlSettings implements Settings {
             );
         } else if (this.artifactsDb.isPresent()) {
             // Auto-enable DB-backed index when database is configured
-            final ArtifactIndexCache cached = new ArtifactIndexCache(
+            final ArtifactIndexCache cached = new ArtifactIndexCache( // NOPMD CloseResource - lifecycle owned by this.artifactIndex / this.artifactIndexCache fields
                 new DbArtifactIndex(this.artifactsDb.get())
             );
             this.artifactIndex = cached;
@@ -369,7 +369,7 @@ public final class YamlSettings implements Settings {
             db -> YamlSettings.initArtifactsEvents(this.meta(), quartz, db)
         );
         this.syncIndexer = eventsDs
-            .map(db -> (com.auto1.pantera.index.SyncArtifactIndexer)
+            .<com.auto1.pantera.index.SyncArtifactIndexer>map(db ->
                 new com.auto1.pantera.db.DbSyncArtifactIndexer(db, this.artifactIndexCache))
             .orElse(com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
         this.prefixesConfig = new PrefixesConfig(YamlSettings.readPrefixes(this.meta()));
@@ -501,10 +501,7 @@ public final class YamlSettings implements Settings {
     public boolean proxyProtocol() {
         final YamlMapping server = this.meta != null
             ? this.meta.yamlMapping("http_server") : null;
-        if (server == null) {
-            return false;
-        }
-        return "true".equalsIgnoreCase(server.string("proxy_protocol"));
+        return server != null && "true".equalsIgnoreCase(server.string("proxy_protocol"));
     }
 
     @Override
@@ -709,17 +706,19 @@ public final class YamlSettings implements Settings {
             try {
                 final long millis = Long.parseLong(trimmed);
                 if (millis < 0) {
-                    throw new IllegalStateException("`http_server.request_timeout` must be zero or positive");
+                    throw new IllegalStateException("`http_server.request_timeout` must be zero or positive", ex);
                 }
                 return Duration.ofMillis(millis);
             } catch (final NumberFormatException num) {
-                throw new IllegalStateException(
+                final IllegalStateException ise = new IllegalStateException(
                     String.format(
                         "Invalid `http_server.request_timeout` value '%s'. Provide ISO-8601 duration (e.g. PT30S) or milliseconds.",
                         trimmed
                     ),
                     ex
                 );
+                ise.addSuppressed(num);
+                throw ise;
             }
         }
     }

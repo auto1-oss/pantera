@@ -158,7 +158,7 @@ public final class CacheIntegrityAudit {
         @SuppressWarnings("unused")
         private boolean verbose;
 
-        static Args parse(final String[] args) {
+        static Args parse(final String... args) {
             final Args out = new Args();
             final List<String> rest = new ArrayList<>();
             for (int i = 0; i < args.length; i++) {
@@ -181,13 +181,13 @@ public final class CacheIntegrityAudit {
                         if (i + 1 >= args.length) {
                             throw new IllegalArgumentException("--root requires a value");
                         }
-                        out.root = args[++i];
+                        out.root = args[++i]; // NOPMD AvoidReassigningLoopVariables - intentional: --root takes the next arg as value, advance the for-loop index
                         break;
                     case "--repo":
                         if (i + 1 >= args.length) {
                             throw new IllegalArgumentException("--repo requires a value");
                         }
-                        out.repo = args[++i];
+                        out.repo = args[++i]; // NOPMD AvoidReassigningLoopVariables - intentional: --repo takes the next arg as value, advance the for-loop index
                         break;
                     default:
                         rest.add(arg);

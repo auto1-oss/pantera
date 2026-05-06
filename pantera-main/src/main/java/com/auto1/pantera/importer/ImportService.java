@@ -785,12 +785,8 @@ public final class ImportService {
                 final String raw = ym.get().string("metadata_merge_mode");
                 if (raw != null && !raw.isBlank()) {
                     final String mode = raw.trim().toLowerCase(Locale.ROOT);
-                    // Explicit legacy/direct/off disables shards
-                    if ("legacy".equals(mode) || "direct".equals(mode) || "off".equals(mode)) {
-                        return false;
-                    }
-                    // Explicit "shards" enables shards; any other value defaults to shards as well.
-                    return true;
+                    // Explicit legacy/direct/off disables shards; everything else defaults to shards.
+                    return !"legacy".equals(mode) && !"direct".equals(mode) && !"off".equals(mode);
                 }
             }
         } catch (final Exception ex) {

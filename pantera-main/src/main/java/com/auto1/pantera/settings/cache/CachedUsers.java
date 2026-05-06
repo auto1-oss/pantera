@@ -531,8 +531,8 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
      * @param cause Eviction cause
      */
     private void onEviction(
-        final String key,
-        final Optional<AuthUser> user,
+        final String key, // NOPMD UnusedFormalParameter - Caffeine RemovalListener<K,V> contract: receives key/value/cause; only cause is consumed
+        final Optional<AuthUser> user, // NOPMD UnusedFormalParameter - Caffeine RemovalListener<K,V> contract: receives key/value/cause; only cause is consumed
         final com.github.benmanes.caffeine.cache.RemovalCause cause
     ) {
         if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
