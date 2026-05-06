@@ -153,7 +153,7 @@ public final class SearchQueryParser {
                         && !"(".equals(next) && !")".equals(next)) {
                         fieldValues.computeIfAbsent(field, k -> new ArrayList<>())
                             .add(normalizeValue(field, next));
-                        i++;
+                        i++; // NOPMD AvoidReassigningLoopVariables - intentional: consume the peeked-ahead value token so the outer for-loop skips it
                         continue;
                     }
                 }

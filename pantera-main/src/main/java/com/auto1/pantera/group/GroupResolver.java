@@ -101,7 +101,6 @@ public final class GroupResolver implements Slice {
     private final List<RoutingRule> routingRules;
     private final Optional<ArtifactIndex> artifactIndex;
     private final String repoType;
-    private final Set<String> proxyMembers;
     private final NegativeCache negativeCache;
     private final SingleFlight<String, Void> inFlightFanouts;
     private final java.util.concurrent.Executor drainExecutor;
@@ -131,7 +130,7 @@ public final class GroupResolver implements Slice {
         final List<RoutingRule> routingRules,
         final Optional<ArtifactIndex> artifactIndex,
         final String repoType,
-        final Set<String> proxyMembers,
+        final Set<String> proxyMembers, // NOPMD UnusedFormalParameter - public API; reserved (proxyMembers list now consulted via the buildMembers wiring path)
         final NegativeCache negativeCache,
         final java.util.concurrent.Executor drainExecutor
     ) {
@@ -140,7 +139,6 @@ public final class GroupResolver implements Slice {
         this.routingRules = routingRules != null ? routingRules : Collections.emptyList();
         this.artifactIndex = artifactIndex != null ? artifactIndex : Optional.empty();
         this.repoType = repoType != null ? repoType : "";
-        this.proxyMembers = proxyMembers != null ? proxyMembers : Collections.emptySet();
         this.negativeCache = Objects.requireNonNull(negativeCache, "negativeCache");
         this.drainExecutor = Objects.requireNonNull(drainExecutor, "drainExecutor");
         this.inFlightFanouts = new SingleFlight<>(
@@ -182,8 +180,8 @@ public final class GroupResolver implements Slice {
         final String group,
         final List<String> memberNames,
         final int port,
-        final int depth,
-        final long timeoutSeconds,
+        final int depth, // NOPMD UnusedFormalParameter - public API; reserved for legacy depth-limited recursion (unused since v2.2.0 sequential-only fanout)
+        final long timeoutSeconds, // NOPMD UnusedFormalParameter - public API; reserved for legacy timeout (unused since v2.2.0 sequential-only fanout)
         final List<RoutingRule> routingRules,
         final Optional<ArtifactIndex> artifactIndex,
         final Set<String> proxyMembers,
@@ -292,7 +290,7 @@ public final class GroupResolver implements Slice {
                 .whenComplete((r, e) -> recordPhase("resolve_total", resolveStartNs));
         }
 
-        final ArtifactIndex idx = this.artifactIndex.get();
+        final ArtifactIndex idx = this.artifactIndex.get(); // NOPMD CloseResource - ArtifactIndex is a long-lived shared service; lifecycle owned by RepositorySlices
         final Optional<String> parsedName = ArtifactNameParser.parse(this.repoType, path);
         if (parsedName.isEmpty()) {
             EcsLogger.debug("com.auto1.pantera.group")
@@ -765,13 +763,13 @@ public final class GroupResolver implements Slice {
                 return;
             }
             if (status == RsStatus.NOT_FOUND) {
-                drainBody(member.name(), resp.body());
+                drainBody(resp.body());
                 tryNextSequentialMember(iter, line, headers, requestBytes,
                     isTargetedLocalRead, anyServerError, result);
                 return;
             }
             // Other 4xx or any 5xx -> record failure, cascade.
-            drainBody(member.name(), resp.body());
+            drainBody(resp.body());
             member.recordFailure();
             anyServerError.set(true);
             tryNextSequentialMember(iter, line, headers, requestBytes,
@@ -801,7 +799,7 @@ public final class GroupResolver implements Slice {
     /**
      * Drain response body on per-repo background executor from {@link com.auto1.pantera.http.resilience.RepoBulkhead}.
      */
-    private void drainBody(final String memberName, final Content body) {
+    private void drainBody(final Content body) {
         this.drainExecutor.execute(() ->
             body.subscribe(new org.reactivestreams.Subscriber<>() {
                 @Override

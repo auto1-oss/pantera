@@ -158,7 +158,7 @@ public final class Http3Server {
             // and Jetty's Server API surfaces the real client IP (not the TCP
             // peer) to handlers. Mirrors the Vert.x setUseProxyProtocol
             // behavior on the HTTP/1–2 listeners.
-            final QuicheServerConnector connector;
+            final QuicheServerConnector connector; // NOPMD CloseResource - lifecycle owned by Jetty Server (this.server.addConnector(connector) below; closed on server stop)
             if (Http3Server.PROXY_PROTOCOL_ENABLED) {
                 connector = new QuicheServerConnector(
                     this.server,

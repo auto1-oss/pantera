@@ -524,7 +524,6 @@ public final class ImportService {
     private static CompletionStage<Void> writePyPiShard(
         final Storage storage,
         final Key target,
-        final ImportRequest request,
         final long size,
         final EnumMap<DigestType, String> digests
     ) {
@@ -765,7 +764,7 @@ public final class ImportService {
                 origin.setAccessible(true);
                 return Optional.of((Storage) origin.get(storage));
             }
-        } catch (final Exception ignore) {
+        } catch (final Exception ignore) { // NOPMD EmptyCatchBlock - intentional: any reflection failure means the storage is not a SubStorage; return empty
             // ignore and treat as not a SubStorage
         }
         return Optional.empty();
@@ -790,11 +789,7 @@ public final class ImportService {
                     if ("legacy".equals(mode) || "direct".equals(mode) || "off".equals(mode)) {
                         return false;
                     }
-                    // Explicit shards enables shards
-                    if ("shards".equals(mode)) {
-                        return true;
-                    }
-                    // Unknown values: default to shards
+                    // Explicit "shards" enables shards; any other value defaults to shards as well.
                     return true;
                 }
             }
@@ -889,10 +884,10 @@ public final class ImportService {
             return writeMavenShard(storage, target, request, size, digests);
         }
         if ("helm".equals(type)) {
-            return writeHelmShard(storage, target, request, size, digests, baseUrl);
+            return writeHelmShard(storage, target, size, digests, baseUrl);
         }
         if ("pypi".equals(type) || "python".equals(type)) {
-            return writePyPiShard(storage, target, request, size, digests);
+            return writePyPiShard(storage, target, size, digests);
         }
         return CompletableFuture.completedFuture(null);
     }
@@ -1002,7 +997,6 @@ public final class ImportService {
     private static CompletionStage<Void> writeHelmShard(
         final Storage storage,
         final Key target,
-        final ImportRequest request,
         final long size,
         final EnumMap<DigestType, String> digests,
         final Optional<String> baseUrl

@@ -173,7 +173,7 @@ public final class BlockedThreadDiagnostics {
                 // Also log thread states during long GC
                 this.logAllBlockedThreads();
             }
-        } catch (final Exception ex) {
+        } catch (final Exception ex) { // NOPMD EmptyCatchBlock - diagnostics is best-effort: any thread/JMX failure must not propagate to the host
             // Ignore diagnostics errors
         }
     }
@@ -218,7 +218,7 @@ public final class BlockedThreadDiagnostics {
                     .log();
                 this.logAllBlockedThreads();
             }
-        } catch (final Exception ex) {
+        } catch (final Exception ex) { // NOPMD EmptyCatchBlock - diagnostics is best-effort: any thread/JMX failure must not propagate to the host
             // Ignore diagnostics errors
         }
     }
@@ -233,7 +233,7 @@ public final class BlockedThreadDiagnostics {
                 if (info.getThreadState() == Thread.State.BLOCKED
                     && info.getThreadName().contains("vert.x-eventloop")) {
                     
-                    final StringBuilder sb = new StringBuilder();
+                    final StringBuilder sb = new StringBuilder(512);
                     sb.append("Thread ").append(info.getThreadName())
                         .append(" BLOCKED on ").append(info.getLockName())
                         .append(" owned by ").append(info.getLockOwnerName())
@@ -253,7 +253,7 @@ public final class BlockedThreadDiagnostics {
                         .log();
                 }
             }
-        } catch (final Exception ex) {
+        } catch (final Exception ex) { // NOPMD EmptyCatchBlock - diagnostics is best-effort: any thread/JMX failure must not propagate to the host
             // Ignore diagnostics errors
         }
     }

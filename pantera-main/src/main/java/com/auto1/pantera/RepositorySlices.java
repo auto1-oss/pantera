@@ -838,7 +838,7 @@ public class RepositorySlices {
                 );
                 break;
             case "php-proxy":
-                clientLease = jettyClientSlices(cfg);
+                clientLease = jettyClientSlices(cfg); // NOPMD CloseResource - lifecycle owned by clientLease (closed in finally/exception handlers)
                 clientSlices = clientLease.client();
                 slice = trimPathSlice(
                     new PathPrefixStripSlice(
@@ -1284,7 +1284,7 @@ public class RepositorySlices {
             wrapIntoCommonSlices(slice, cfg),
             Optional.ofNullable(clientLease)
         );
-        } catch (final RuntimeException ex) {
+        } catch (final RuntimeException | Error ex) {
             if (clientLease != null) {
                 clientLease.close();
             }
@@ -1296,11 +1296,6 @@ public class RepositorySlices {
             throw new IllegalStateException(
                 String.format("Failed to construct adapter slice for '%s'", cfg.name()), ex
             );
-        } catch (final Error ex) {
-            if (clientLease != null) {
-                clientLease.close();
-            }
-            throw ex;
         }
     }
 
@@ -1380,11 +1375,9 @@ public class RepositorySlices {
         return this.repos.config(name)
             .map(c -> {
                 final String type = c.type();
-                if (type.endsWith("-proxy")) {
-                    return true;
-                }
-                return type.endsWith("-group")
-                    && c.members().stream().anyMatch(this::isProxyOrContainsProxy);
+                return type.endsWith("-proxy")
+                    || type.endsWith("-group")
+                        && c.members().stream().anyMatch(this::isProxyOrContainsProxy);
             })
             .orElse(false);
     }

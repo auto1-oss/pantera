@@ -906,23 +906,17 @@ public final class AuthHandler {
             .put("api_cooldown_permissions",
                 AuthHandler.allowedActions(perms,
                     new String[]{"read", "write"},
-                    new java.security.Permission[]{
-                        ApiCooldownPermission.READ,
-                        ApiCooldownPermission.WRITE,
-                    }))
+                    ApiCooldownPermission.READ,
+                    ApiCooldownPermission.WRITE))
             .put("api_cooldown_history_permissions",
                 AuthHandler.allowedActions(perms,
                     new String[]{"read"},
-                    new java.security.Permission[]{
-                        ApiCooldownHistoryPermission.READ,
-                    }))
+                    ApiCooldownHistoryPermission.READ))
             .put("api_search_permissions",
                 AuthHandler.allowedActions(perms,
                     new String[]{"read", "write"},
-                    new java.security.Permission[]{
-                        ApiSearchPermission.READ,
-                        ApiSearchPermission.WRITE,
-                    }))
+                    ApiSearchPermission.READ,
+                    ApiSearchPermission.WRITE))
             .put("can_delete_artifacts",
                 perms.implies(new AdapterBasicPermission("*", "delete")));
         final JsonObject result = new JsonObject()

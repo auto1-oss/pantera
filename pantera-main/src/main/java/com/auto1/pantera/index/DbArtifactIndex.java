@@ -295,7 +295,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
             try (Connection conn = this.source.getConnection();
                  PreparedStatement stmt = conn.prepareStatement("SELECT 1")) {
                 stmt.executeQuery().close();
-            } catch (final SQLException ex) {
+            } catch (final SQLException ex) { // NOPMD EmptyCatchBlock - warm-up is best-effort: any failure just means first real request pays the cost instead
                 // Non-fatal — first real request will pay the cost instead
             }
         });
@@ -609,7 +609,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
     private static String buildFilterClauses(
         final String repoType, final String repoName, final List<String> allowedRepos
     ) {
-        final StringBuilder sb = new StringBuilder();
+        final StringBuilder sb = new StringBuilder(128);
         if (repoType != null && !repoType.isBlank()) {
             sb.append(" AND repo_type IN (?, ?, ?)");
         }
@@ -1071,11 +1071,11 @@ public final class DbArtifactIndex implements ArtifactIndex {
         final Map<String, Long> counts = new java.util.LinkedHashMap<>();
         try (PreparedStatement stmt = conn.prepareStatement(sql)) {
             int pos = 1;
-            for (int i = 0; i < params.size(); i++) {
-                if (params.get(i) instanceof String) {
-                    stmt.setString(pos++, (String) params.get(i));
-                } else if (params.get(i) instanceof java.sql.Array) {
-                    stmt.setArray(pos++, (java.sql.Array) params.get(i));
+            for (final Object param : params) {
+                if (param instanceof String s) {
+                    stmt.setString(pos++, s);
+                } else if (param instanceof java.sql.Array a) {
+                    stmt.setArray(pos++, a);
                 }
             }
             if (repoType != null && !repoType.isBlank()) {

@@ -34,7 +34,7 @@ public final class Json2Yaml implements Function<String, YamlMapping> {
      * YAML writer configured once with INDENT_ARRAYS_WITH_INDICATOR;
      * thread-safe for write operations; hoisted to avoid per-call allocation.
      */
-    private static final YAMLMapper YAML = (YAMLMapper) new YAMLMapper()
+    private static final YAMLMapper YAML = new YAMLMapper()
         .configure(YAMLGenerator.Feature.INDENT_ARRAYS_WITH_INDICATOR, true);
 
     @Override
