@@ -182,8 +182,8 @@ public final class CachedPyProxySlice implements Slice {
     public CachedPyProxySlice(
         final Slice origin,
         final Optional<Storage> storage,
-        final Duration negativeCacheTtl,
-        final boolean negativeCacheEnabled,
+        final Duration negativeCacheTtl, // NOPMD UnusedFormalParameter - deprecated overload; ignored, settings come from unified NegativeCacheConfig
+        final boolean negativeCacheEnabled, // NOPMD UnusedFormalParameter - deprecated overload; ignored, settings come from unified NegativeCacheConfig
         final String repoName,
         final String upstreamUrl,
         final String repoType
@@ -460,7 +460,6 @@ public final class CachedPyProxySlice implements Slice {
     private CompletableFuture<Response> fetchVerifyAndCache(
         final RequestLine line, final Key key, final String path
     ) {
-        final Storage storage = this.rawStorage.orElseThrow();
         final String upstream = this.upstreamUrl + path;
         final RequestContext ctx = new RequestContext(
             org.apache.logging.log4j.ThreadContext.get("trace.id"),

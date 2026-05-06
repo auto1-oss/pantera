@@ -124,7 +124,7 @@ final class WheelSlice implements Slice {
                         if (this.events.isPresent()) {
                             move = move.thenCompose(
                                 ignored ->
-                                    this.putArtifactToQueue(name, info, filename, iterable)
+                                    this.putArtifactToQueue(name, info, iterable)
                             );
                         }
                         // Create sidecar metadata for PEP 503/691 compliance
@@ -232,12 +232,11 @@ final class WheelSlice implements Slice {
      * Put uploaded artifact info into events queue.
      * @param key Artifact key in the storage
      * @param info Artifact info
-     * @param filename Artifact filename
      * @param headers Request headers
      * @return Completion action
      */
     private CompletionStage<Void> putArtifactToQueue(
-        final Key key, final PackageInfo info, final String filename,
+        final Key key, final PackageInfo info,
         Headers headers
     ) {
         return this.storage.metadata(key).thenApply(meta -> meta.read(Meta.OP_SIZE).get())

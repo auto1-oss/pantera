@@ -39,7 +39,7 @@ public final class PypiMetadataRewriter implements MetadataRewriter<PypiSimpleIn
     @Override
     public byte[] rewrite(final PypiSimpleIndex metadata) throws MetadataRewriteException {
         try {
-            final StringBuilder html = new StringBuilder();
+            final StringBuilder html = new StringBuilder(512);
             html.append("<!DOCTYPE html><html><body>\n");
             for (final PypiSimpleIndex.Link link : metadata.links()) {
                 html.append("<a href=\"");

@@ -66,21 +66,15 @@ public final class IndexGenerator {
     private final Key packageKey;
 
     /**
-     * Base URL prefix for links.
-     */
-    private final String prefix;
-
-    /**
      * Ctor.
-     * 
+     *
      * @param storage Storage
      * @param packageKey Package key
-     * @param prefix URL prefix
+     * @param prefix URL prefix (reserved for absolute-URL emission in future index variants)
      */
-    public IndexGenerator(final Storage storage, final Key packageKey, final String prefix) {
+    public IndexGenerator(final Storage storage, final Key packageKey, final String prefix) { // NOPMD UnusedFormalParameter - public API; prefix is reserved for absolute-URL emission and kept for source-compatibility
         this.storage = storage;
         this.packageKey = packageKey;
-        this.prefix = prefix;
     }
 
     /**
@@ -93,8 +87,6 @@ public final class IndexGenerator {
         private final String filename;
         /** Relative URL for the HTML anchor target. */
         private final String relativeHref;
-        /** Absolute URL (with prefix) for the JSON {@code url} field. */
-        private final String absoluteUrl;
         /** Hex SHA-256 of the file content. */
         private final String sha256;
         /** Sidecar metadata (may be empty for legacy uploads). */
@@ -103,13 +95,11 @@ public final class IndexGenerator {
         Entry(
             final String filename,
             final String relativeHref,
-            final String absoluteUrl,
             final String sha256,
             final Optional<PypiSidecar.Meta> meta
         ) {
             this.filename = filename;
             this.relativeHref = relativeHref;
-            this.absoluteUrl = absoluteUrl;
             this.sha256 = sha256;
             this.meta = meta;
         }
@@ -198,7 +188,6 @@ public final class IndexGenerator {
                 optMeta -> new Entry(
                     new KeyLastPart(key).get(),
                     relativeHref,
-                    String.format("%s/%s", this.prefix, key.string()),
                     hex,
                     optMeta
                 )

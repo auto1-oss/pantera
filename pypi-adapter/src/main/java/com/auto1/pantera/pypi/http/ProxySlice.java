@@ -18,7 +18,6 @@ import com.auto1.pantera.asto.cache.Cache;
 import com.auto1.pantera.asto.cache.CacheControl;
 import com.auto1.pantera.asto.cache.FromStorageCache;
 import com.auto1.pantera.asto.cache.Remote;
-import com.auto1.pantera.asto.blocking.BlockingStorage;
 import com.auto1.pantera.asto.ext.KeyLastPart;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
@@ -130,11 +129,6 @@ final class ProxySlice implements Slice {
      * Proxy artifacts events.
      */
     private final Optional<Queue<ProxyArtifactEvent>> events;
-
-    /**
-     * Repository storage (blocking).
-     */
-    private final BlockingStorage storage;
 
     /**
      * Repository storage (async) for cache-first lookup.
@@ -271,7 +265,6 @@ final class ProxySlice implements Slice {
             .maximumSize(10_000)
             .expireAfterWrite(Duration.ofHours(1))
             .build();
-        this.storage = new BlockingStorage(backend);
         this.asyncStorage = backend;
         this.indexCacheControl = new CacheTimeControl(backend, metadataTtl);
         this.refreshing = ConcurrentHashMap.newKeySet();
@@ -334,7 +327,7 @@ final class ProxySlice implements Slice {
         // This ensures offline mode works - serve cached content even when upstream is down
         if (coords.isPresent()) {
             final ArtifactCoordinates info = coords.get();
-            return this.checkCacheFirst(line, rqheaders, info, user);
+            return this.checkCacheFirst(line, info, user);
         }
 
         // Non-artifacts (index pages, metadata): serve directly from cache/upstream
@@ -353,7 +346,6 @@ final class ProxySlice implements Slice {
      */
     private CompletableFuture<Response> checkCacheFirst(
         final RequestLine line,
-        final Headers rqheaders,
         final ArtifactCoordinates info,
         final String user
     ) {
@@ -387,10 +379,10 @@ final class ProxySlice implements Slice {
                         }
                     });
                     // Serve cached content
-                    return this.serveArtifactContent(line, key, cached.get(), Headers.EMPTY);
+                    return this.serveArtifactContent(line, cached.get(), Headers.EMPTY);
                 }
                 // Cache MISS - now we need network, evaluate cooldown first
-                return this.evaluateCooldownAndFetch(line, rqheaders, info, user);
+                return this.evaluateCooldownAndFetch(line, info, user);
             }).toCompletableFuture();
     }
 
@@ -406,7 +398,6 @@ final class ProxySlice implements Slice {
      */
     private CompletableFuture<Response> evaluateCooldownAndFetch(
         final RequestLine line,
-        final Headers rqheaders,
         final ArtifactCoordinates info,
         final String user
     ) {
@@ -453,7 +444,7 @@ final class ProxySlice implements Slice {
                 .field("package.version", info.version())
                 .log();
             // Cooldown passed - now serve the artifact (no further cooldown checks)
-            return this.serveArtifact(line, rqheaders, info, user);
+            return this.serveArtifact(line, user);
         });
     }
     
@@ -471,7 +462,7 @@ final class ProxySlice implements Slice {
                 return this.indexCacheControl.validate(key, Remote.EMPTY).thenCompose(fresh -> {
                     if (!fresh) {
                         // Stale content - serve immediately + background refresh
-                        this.backgroundRefreshIndex(key, line, upstream, user, format);
+                        this.backgroundRefreshIndex(key, line, upstream, format);
                         return this.asyncStorage.value(key).thenCompose(cached ->
                             this.afterHit(line, rqheaders, key, cached, Headers.EMPTY, false)
                         );
@@ -549,9 +540,7 @@ final class ProxySlice implements Slice {
                                 }
                                 return ProxySlice.this.preRewriteContent(
                                     response.body(), response.headers(), line
-                                ).thenApply(
-                                    opt -> (Optional<? extends Content>) opt
-                                );
+                                ).<Optional<? extends Content>>thenApply(opt -> opt);
                             }
                             return CompletableFuture.completedFuture(
                                 Optional.empty()
@@ -709,7 +698,7 @@ final class ProxySlice implements Slice {
      */
     private void backgroundRefreshIndex(
         final Key key, final RequestLine line,
-        final RequestLine upstream, final String user, final SimpleApiFormat format
+        final RequestLine upstream, final SimpleApiFormat format
     ) {
         final String keyStr = key.string();
         if (!this.refreshing.add(keyStr)) {
@@ -831,7 +820,7 @@ final class ProxySlice implements Slice {
     }
 
     private CompletableFuture<Response> serveArtifact(
-        final RequestLine line, final Headers rqheaders, final ArtifactCoordinates info, final String user
+        final RequestLine line, final String user
     ) {
         final AtomicReference<Headers> remote = new AtomicReference<>(Headers.EMPTY);
         final AtomicBoolean remoteSuccess = new AtomicBoolean(false);
@@ -934,13 +923,13 @@ final class ProxySlice implements Slice {
                     });
                 }
                 // Serve artifact content (cooldown already evaluated and passed)
-                return this.serveArtifactContent(line, key, content.get(), remote.get());
+                return this.serveArtifactContent(line, content.get(), remote.get());
             }
         ).thenCompose(Function.identity()).toCompletableFuture();
     }
     
     private CompletableFuture<Response> serveArtifactContent(
-        final RequestLine line, final Key key, final Content content, final Headers remote
+        final RequestLine line, final Content content, final Headers remote
     ) {
         // Stream content directly without buffering into byte[].
         // StreamThroughCache or FromStorageCache provides Content with size info.
@@ -1146,7 +1135,7 @@ final class ProxySlice implements Slice {
         // Extract base path from request URI, removing the package-specific trailing path.
         // Example: /test_prefix/api/pypi/pypi_group/workday/ -> /test_prefix/api/pypi/pypi_group
         // This ensures download links preserve the correct path prefix for proxy routing.
-        final String base = this.extractBasePath(line);
+        final String base = this.extractBasePath();
         EcsLogger.debug("com.auto1.pantera.pypi")
             .message("Rewriting index body")
             .eventCategory("web")
@@ -1178,11 +1167,10 @@ final class ProxySlice implements Slice {
      * According to PEP 503:
      * - Index pages: /{repo}/simple/{package}/
      * - Download links: /{repo}/packages/{hash}/{filename}
-     * 
-     * @param line Request line (already stripped of prefix by routing layer)
+     *
      * @return Base path (repository name, e.g., "/pypi_group")
      */
-    private String extractBasePath(final RequestLine line) {
+    private String extractBasePath() {
         // ALWAYS use repository name as base.
         // The routing layer handles path prefix mapping, we just need the repo name.
         return String.format("/%s", this.rname);
@@ -1410,7 +1398,6 @@ final class ProxySlice implements Slice {
             final boolean known = existing.isPresent();
             if (remoteSuccess) {
                 final Optional<Instant> header = this.releaseInstant(remote);
-                this.registerRelease(info, header);
                 return this.inspector.releaseDate(info.artifact(), info.version())
                     .thenApply(updated -> new ReleaseContext(
                         updated.or(() -> header),
@@ -1418,18 +1405,11 @@ final class ProxySlice implements Slice {
                     ));
             }
             if (!known) {
-                this.registerRelease(info, Optional.empty());
                 return this.inspector.releaseDate(info.artifact(), info.version())
                     .thenApply(updated -> new ReleaseContext(updated, false));
             }
             return CompletableFuture.completedFuture(new ReleaseContext(existing, true));
         });
-    }
-
-    private void registerRelease(final ArtifactCoordinates coords, final Optional<Instant> release) {
-        // Publish dates are now persisted by PublishDateRegistry (DB + sources).
-        // The per-adapter inspector cache layer has been removed; this method is a no-op.
-        // Parameters retained for callers; remove as a follow-up cleanup.
     }
 
     private Optional<Instant> releaseInstant(final Headers headers) {
@@ -1500,11 +1480,9 @@ final class ProxySlice implements Slice {
             return Optional.of(new ArtifactCoordinates(name, wheel.group("version")));
         }
         final Matcher archive = ARCHIVE_PATTERN.matcher(filename);
-        if (archive.matches()) {
-            if (filename.matches(ProxySlice.FORMATS)) {
-                final String name = new NormalizedProjectName.Simple(archive.group("name")).value();
-                return Optional.of(new ArtifactCoordinates(name, archive.group("version")));
-            }
+        if (archive.matches() && filename.matches(ProxySlice.FORMATS)) {
+            final String name = new NormalizedProjectName.Simple(archive.group("name")).value();
+            return Optional.of(new ArtifactCoordinates(name, archive.group("version")));
         }
         return Optional.empty();
     }

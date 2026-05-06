@@ -256,7 +256,7 @@ public final class Pep440VersionComparator implements Comparator<String> {
             return compareDevKey(this.dev, other.dev);
         }
 
-        private static int compareReleases(final int[] lhs, final int[] rhs) {
+        private static int compareReleases(final int[] lhs, final int... rhs) {
             final int len = Math.max(lhs.length, rhs.length);
             for (int idx = 0; idx < len; idx++) {
                 final int left = idx < lhs.length ? lhs[idx] : 0;
