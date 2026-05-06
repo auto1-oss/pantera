@@ -25,7 +25,7 @@ final class Completion<T> {
      * @since 1.0
      */
     static final Completion<?> FAKE = new Completion<>(
-        new Subscriber<Object>() {
+        new Subscriber<>() {
             @Override
             public void onSubscribe(final Subscription sub) {
                 // do nothing

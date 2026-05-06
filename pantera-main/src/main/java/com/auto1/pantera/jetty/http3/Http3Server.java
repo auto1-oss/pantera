@@ -242,6 +242,7 @@ public final class Http3Server {
                 final List<ByteBuffer> buffers = new ArrayList<>();
                 final AtomicLong totalBytes = new AtomicLong(0L);
                 return new Stream.Server.Listener() {
+                    @Override
                     public void onDataAvailable(final Stream.Server stream) {
                         // Accumulator overflow guard.
                         // Note: readData() API changed in Jetty 12.1.4

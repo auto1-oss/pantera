@@ -215,7 +215,7 @@ final class SliceIndex implements Slice {
     private static CompletableFuture<byte[]> drainBody(final Content content) {
         final CompletableFuture<byte[]> future = new CompletableFuture<>();
         content.subscribe(
-            new org.reactivestreams.Subscriber<java.nio.ByteBuffer>() {
+            new org.reactivestreams.Subscriber<>() {
                 private final java.io.ByteArrayOutputStream out =
                     new java.io.ByteArrayOutputStream();
                 @Override

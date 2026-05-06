@@ -91,6 +91,7 @@ final class JettyClientSlice implements Slice {
         this.acquireTimeoutMillis = acquireTimeoutMillis;
     }
 
+    @Override
     public CompletableFuture<Response> response(
         RequestLine line, Headers headers, com.auto1.pantera.asto.Content body
     ) {

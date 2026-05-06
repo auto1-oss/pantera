@@ -123,7 +123,7 @@ public final class CacheInvalidationPubSub implements AutoCloseable {
      *     for this namespace arrives
      */
     public void subscribe(final String namespace, final Consumer<String> handler) {
-        this.caches.put(namespace, new Cleanable<String>() {
+        this.caches.put(namespace, new Cleanable<>() {
             @Override
             public void invalidate(final String key) {
                 handler.accept(key);

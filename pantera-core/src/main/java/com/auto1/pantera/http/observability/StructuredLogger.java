@@ -702,7 +702,7 @@ public final class StructuredLogger {
             }
             filtered.put(e.getKey(), e.getValue());
         }
-        final MapMessage msg = new MapMessage(filtered);
+        final MapMessage<?, Object> msg = new MapMessage<>(filtered);
         if (level == Level.ERROR) {
             if (cause != null) {
                 logger.error(msg, cause);

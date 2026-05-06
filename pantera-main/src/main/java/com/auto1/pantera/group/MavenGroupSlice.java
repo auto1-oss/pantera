@@ -680,7 +680,7 @@ public final class MavenGroupSlice implements Slice {
         final ByteArrayOutputStream baos = new ByteArrayOutputStream();
         final CompletableFuture<byte[]> result = new CompletableFuture<>();
         
-        content.subscribe(new org.reactivestreams.Subscriber<ByteBuffer>() {
+        content.subscribe(new org.reactivestreams.Subscriber<>() {
             private org.reactivestreams.Subscription subscription;
             
             @Override

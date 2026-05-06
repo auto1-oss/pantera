@@ -323,8 +323,7 @@ public final class EcsLogEvent {
         // The ECS top-level "message" string is produced from this entry by EcsLayout.
         payload.put("message", effectiveMessage);
 
-        @SuppressWarnings({"rawtypes", "unchecked"})
-        final MapMessage mapMessage = new MapMessage(payload);
+        final MapMessage<?, Object> mapMessage = new MapMessage<>(payload);
 
         if (statusCode != null && statusCode >= 500) {
             LOGGER.error(mapMessage);
