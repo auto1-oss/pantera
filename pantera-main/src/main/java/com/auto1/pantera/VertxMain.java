@@ -1439,7 +1439,7 @@ public final class VertxMain {
                 .field("destination.port", serverPort)
                 .log();
         }
-        final VertxSliceServer server = new VertxSliceServer(
+        final VertxSliceServer server = new VertxSliceServer( // NOPMD CloseResource - lifecycle owned by this.servers list (closed on shutdown)
             vertx,
             new BaseSlice(mctx, slice),
             opts,

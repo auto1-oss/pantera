@@ -217,7 +217,7 @@ public final class DockerProxyCooldownSlice implements Slice {
                     }
                     
                     // First time seeing this artifact - WAIT for extraction then evaluate
-                    return this.determineReleaseSync(request, response.headers(), bytes, artifact, version, digest, user)
+                    return this.determineReleaseSync(request, response.headers(), bytes, artifact, version, digest)
                         .thenCompose(release -> {
                             this.inspector.register(
                                 artifact, version, release,
@@ -272,8 +272,7 @@ public final class DockerProxyCooldownSlice implements Slice {
         final byte[] manifestBytes,
         final String artifact,
         final String version,
-        final Optional<String> digest,
-        final String user
+        final Optional<String> digest
     ) {
         final Optional<Manifest> manifest = this.manifestFrom(headers, manifestBytes);
         if (manifest.isEmpty() || manifest.get().isManifestList()) {

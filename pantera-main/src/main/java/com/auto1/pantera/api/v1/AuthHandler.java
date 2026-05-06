@@ -707,14 +707,14 @@ public final class AuthHandler {
      */
     private javax.json.JsonObject findProvider(final String name) {
         if (this.providerDao == null) {
-            return null;
+            return null; // NOPMD ReturnEmptyCollectionRatherThanNull - JsonObject is a single record, not a collection; null signals "no provider configured"
         }
         for (final javax.json.JsonObject prov : this.providerDao.list()) {
             if (name.equals(prov.getString("type", ""))) {
                 return prov;
             }
         }
-        return null;
+        return null; // NOPMD ReturnEmptyCollectionRatherThanNull - JsonObject is a single record, not a collection; null signals "not found"
     }
 
     /**
@@ -865,7 +865,7 @@ public final class AuthHandler {
         final PermissionCollection perms = this.policy.getPermissions(authUser);
         final JsonObject permissions = new JsonObject()
             .put("api_repository_permissions",
-                AuthHandler.allowedActions(perms, "repo",
+                AuthHandler.allowedActions(perms,
                     new String[]{"read", "create", "update", "delete", "move"},
                     new ApiRepositoryPermission[]{
                         new ApiRepositoryPermission(ApiRepositoryPermission.RepositoryAction.READ),
@@ -875,7 +875,7 @@ public final class AuthHandler {
                         new ApiRepositoryPermission(ApiRepositoryPermission.RepositoryAction.MOVE),
                     }))
             .put("api_user_permissions",
-                AuthHandler.allowedActions(perms, "user",
+                AuthHandler.allowedActions(perms,
                     new String[]{"read", "create", "update", "delete", "enable", "change_password"},
                     new ApiUserPermission[]{
                         new ApiUserPermission(ApiUserPermission.UserAction.READ),
@@ -886,7 +886,7 @@ public final class AuthHandler {
                         new ApiUserPermission(ApiUserPermission.UserAction.CHANGE_PASSWORD),
                     }))
             .put("api_role_permissions",
-                AuthHandler.allowedActions(perms, "role",
+                AuthHandler.allowedActions(perms,
                     new String[]{"read", "create", "update", "delete", "enable"},
                     new ApiRolePermission[]{
                         new ApiRolePermission(ApiRolePermission.RoleAction.READ),
@@ -896,7 +896,7 @@ public final class AuthHandler {
                         new ApiRolePermission(ApiRolePermission.RoleAction.ENABLE),
                     }))
             .put("api_alias_permissions",
-                AuthHandler.allowedActions(perms, "alias",
+                AuthHandler.allowedActions(perms,
                     new String[]{"read", "create", "delete"},
                     new ApiAliasPermission[]{
                         new ApiAliasPermission(ApiAliasPermission.AliasAction.READ),
@@ -904,20 +904,20 @@ public final class AuthHandler {
                         new ApiAliasPermission(ApiAliasPermission.AliasAction.DELETE),
                     }))
             .put("api_cooldown_permissions",
-                AuthHandler.allowedActions(perms, "cooldown",
+                AuthHandler.allowedActions(perms,
                     new String[]{"read", "write"},
                     new java.security.Permission[]{
                         ApiCooldownPermission.READ,
                         ApiCooldownPermission.WRITE,
                     }))
             .put("api_cooldown_history_permissions",
-                AuthHandler.allowedActions(perms, "cooldown_history",
+                AuthHandler.allowedActions(perms,
                     new String[]{"read"},
                     new java.security.Permission[]{
                         ApiCooldownHistoryPermission.READ,
                     }))
             .put("api_search_permissions",
-                AuthHandler.allowedActions(perms, "search",
+                AuthHandler.allowedActions(perms,
                     new String[]{"read", "write"},
                     new java.security.Permission[]{
                         ApiSearchPermission.READ,
@@ -1067,14 +1067,13 @@ public final class AuthHandler {
      * Build a JsonArray of allowed action names by checking each permission.
      * Returns empty array if user has no permissions of this type.
      * @param perms User permission collection
-     * @param type Permission type label (for logging, unused)
      * @param names Action name strings
      * @param checks Permission objects to check
      * @return JsonArray of allowed action names
      */
     private static JsonArray allowedActions(final PermissionCollection perms,
-        final String type, final String[] names,
-        final java.security.Permission[] checks) {
+        final String[] names,
+        final java.security.Permission... checks) {
         final JsonArray result = new JsonArray();
         for (int idx = 0; idx < names.length; idx++) {
             if (perms.implies(checks[idx])) {

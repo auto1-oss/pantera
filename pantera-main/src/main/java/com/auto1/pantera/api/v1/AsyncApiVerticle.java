@@ -87,11 +87,6 @@ public final class AsyncApiVerticle extends AbstractVerticle {
     private final Optional<KeyStore> keystore;
 
     /**
-     * JWT authentication provider.
-     */
-    private final JWTAuth jwt;
-
-    /**
      * Artifact metadata events queue.
      */
     private final Optional<MetadataEventQueues> events;
@@ -159,7 +154,7 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         final int port,
         final PanteraSecurity security,
         final Optional<KeyStore> keystore,
-        final JWTAuth jwt,
+        final JWTAuth jwt, // NOPMD UnusedFormalParameter - public API; JWTAuth is reserved for upcoming route-protection wiring
         final Optional<MetadataEventQueues> events,
         final CooldownService cooldown,
         final Settings settings,
@@ -173,7 +168,6 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         this.port = port;
         this.security = security;
         this.keystore = keystore;
-        this.jwt = jwt;
         this.events = events;
         this.cooldown = cooldown;
         this.cooldownMetadata = CooldownSupport.createMetadataService(cooldown, settings);
@@ -207,7 +201,7 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         final int port,
         final PanteraSecurity security,
         final Optional<KeyStore> keystore,
-        final JWTAuth jwt,
+        final JWTAuth jwt, // NOPMD UnusedFormalParameter - public API; JWTAuth is reserved for upcoming route-protection wiring
         final Optional<MetadataEventQueues> events,
         final CooldownService cooldown,
         final Settings settings,

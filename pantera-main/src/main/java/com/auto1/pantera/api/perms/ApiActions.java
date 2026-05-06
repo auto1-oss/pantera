@@ -30,7 +30,7 @@ public abstract class ApiActions {
      * Ctor.
      * @param values Action values list
      */
-    protected ApiActions(final Action[] values) {
+    protected ApiActions(final Action... values) {
         this.values = Arrays.asList(values);
     }
 

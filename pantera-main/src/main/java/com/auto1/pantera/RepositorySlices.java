@@ -235,26 +235,11 @@ public class RepositorySlices {
      *
      * <p>Defaults to {@link HttpTuning#defaults()} for tests and legacy boot
      * paths that don't provide a runtime cache.</p>
-     */
-    private final Supplier<HttpTuning> httpTuningSupplier;
-
-    /**
-     * When {@code true}, {@link SharedJettyClients} routes
-     * {@link SharedClient} construction through the legacy 1-arg
-     * {@link JettyClientSlices#JettyClientSlices(HttpClientSettings)} ctor,
-     * which preserves the pre-Task-9 contract of using
-     * {@code settings.maxConnectionsPerDestination()} from YAML for the
-     * connection-pool cap. Set by the 3-/4-arg legacy {@code RepositorySlices}
-     * constructors so callers that did not opt into the runtime tuning
-     * supplier keep their YAML-driven pool sizing
-     * (typically 20-50) instead of silently dropping to
-     * {@link HttpTuning#defaults()}'s {@code h2MaxPoolSize == 1}.
      *
-     * <p>Cleared (false) for the 5-arg ctor used by {@code VertxMain},
-     * which threads {@link HttpTuning} through the 4-arg
-     * {@link JettyClientSlices} ctor as designed in Phase 2 / Task 9.</p>
+     * <p>Used only inside the constructor to wire {@code SharedJettyClients};
+     * not stored as a field because the supplier is captured by the inner
+     * cache and never re-read from this instance.</p>
      */
-    private final boolean useLegacyHttpClientCtor;
 
     /**
      * @param settings Pantera settings
@@ -358,8 +343,6 @@ public class RepositorySlices {
         final boolean useLegacyHttpClientCtor
     ) {
         this.circuitBreakerSettings = circuitBreakerSettings;
-        this.httpTuningSupplier = httpTuningSupplier;
-        this.useLegacyHttpClientCtor = useLegacyHttpClientCtor;
         this.settings = settings;
         this.repos = repos;
         this.tokens = tokens;
@@ -750,7 +733,7 @@ public class RepositorySlices {
     private SliceValue sliceFromConfig(final RepoConfig cfg, final int port, final int depth) {
         Slice slice;
         SharedJettyClients.Lease clientLease = null;
-        JettyClientSlices clientSlices = null;
+        JettyClientSlices clientSlices = null; // NOPMD CloseResource - lifecycle owned by clientLease (closed in finally); this is just an alias to lease.client()
         try {
             switch (cfg.type()) {
             case "file":
@@ -1011,7 +994,7 @@ public class RepositorySlices {
                 break;
             case "npm-group":
                 warnIfLegacyMembersStrategy(cfg);
-                final List<String> npmFlatMembers = flattenMembers(cfg.name(), cfg.members());
+                final List<String> npmFlatMembers = flattenMembers(cfg.name());
                 final Slice npmGroupSlice = new GroupResolver(
                     this::slice, cfg.name(), npmFlatMembers, port, depth,
                     cfg.groupMemberTimeout().orElse(120L),
@@ -1079,7 +1062,7 @@ public class RepositorySlices {
             case "file-group":
             case "php-group":
                 warnIfLegacyMembersStrategy(cfg);
-                final List<String> composerFlatMembers = flattenMembers(cfg.name(), cfg.members());
+                final List<String> composerFlatMembers = flattenMembers(cfg.name());
                 final GroupResolver composerDelegate = new GroupResolver(
                     this::slice, cfg.name(), composerFlatMembers, port, depth,
                     cfg.groupMemberTimeout().orElse(120L),
@@ -1118,7 +1101,7 @@ public class RepositorySlices {
                 // slice — previously gradle-group fell into the generic
                 // GroupResolver case which can't merge metadata.
                 warnIfLegacyMembersStrategy(cfg);
-                final List<String> mavenFlatMembers = flattenMembers(cfg.name(), cfg.members());
+                final List<String> mavenFlatMembers = flattenMembers(cfg.name());
                 final GroupResolver mavenDelegate = new GroupResolver(
                     this::slice, cfg.name(), mavenFlatMembers, port, depth,
                     cfg.groupMemberTimeout().orElse(120L),
@@ -1157,7 +1140,7 @@ public class RepositorySlices {
             case "pypi-group":
             case "docker-group":
                 warnIfLegacyMembersStrategy(cfg);
-                final List<String> genericFlatMembers = flattenMembers(cfg.name(), cfg.members());
+                final List<String> genericFlatMembers = flattenMembers(cfg.name());
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
                         new GroupResolver(
@@ -1301,12 +1284,14 @@ public class RepositorySlices {
             wrapIntoCommonSlices(slice, cfg),
             Optional.ofNullable(clientLease)
         );
-        } catch (final Exception ex) {
+        } catch (final RuntimeException ex) {
             if (clientLease != null) {
                 clientLease.close();
             }
-            if (ex instanceof RuntimeException) {
-                throw (RuntimeException) ex;
+            throw ex;
+        } catch (final Exception ex) {
+            if (clientLease != null) {
+                clientLease.close();
             }
             throw new IllegalStateException(
                 String.format("Failed to construct adapter slice for '%s'", cfg.name()), ex
@@ -1398,10 +1383,8 @@ public class RepositorySlices {
                 if (type.endsWith("-proxy")) {
                     return true;
                 }
-                if (type.endsWith("-group")) {
-                    return c.members().stream().anyMatch(this::isProxyOrContainsProxy);
-                }
-                return false;
+                return type.endsWith("-group")
+                    && c.members().stream().anyMatch(this::isProxyOrContainsProxy);
             })
             .orElse(false);
     }
@@ -1455,10 +1438,9 @@ public class RepositorySlices {
      * Returns the flat list of leaf repo names for direct querying.
      *
      * @param groupName Group repository name (for cycle-detection logging)
-     * @param directMembers Direct member names declared in this group's config
      * @return Flat, deduplicated list of leaf repo names (no nested groups)
      */
-    private List<String> flattenMembers(final String groupName, final List<String> directMembers) {
+    private List<String> flattenMembers(final String groupName) {
         final com.auto1.pantera.group.GroupMemberFlattener flattener =
             new com.auto1.pantera.group.GroupMemberFlattener(
                 name -> this.repos.config(name)

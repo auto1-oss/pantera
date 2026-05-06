@@ -114,12 +114,6 @@ public final class ComposerGroupSlice implements Slice {
             "php-group");
     }
 
-    /** Cooldown metadata service applied to merged packages.json. */
-    private final com.auto1.pantera.cooldown.metadata.CooldownMetadataService cooldownMetadata;
-
-    /** Repo type for cooldown lookups (php-group / file-group). */
-    private final String repoType;
-
     /**
      * Ctor with cooldown metadata filtering on the merged response.
      *
@@ -147,8 +141,8 @@ public final class ComposerGroupSlice implements Slice {
         final List<String> members,
         final int port,
         final String globalPrefix,
-        final com.auto1.pantera.cooldown.metadata.CooldownMetadataService cooldownMetadata,
-        final String repoType
+        final com.auto1.pantera.cooldown.metadata.CooldownMetadataService cooldownMetadata, // NOPMD UnusedFormalParameter - public API; reserved for upcoming cooldown filtering on merged packages.json
+        final String repoType // NOPMD UnusedFormalParameter - public API; reserved for upcoming cooldown lookups
     ) {
         this.delegate = delegate;
         this.resolver = resolver;
@@ -160,8 +154,6 @@ public final class ComposerGroupSlice implements Slice {
         } else {
             this.basePath = "/" + group;
         }
-        this.cooldownMetadata = cooldownMetadata;
-        this.repoType = repoType;
     }
 
     @Override
