@@ -631,7 +631,7 @@ final class JdbcCooldownService implements CooldownService {
                 return Optional.empty();
             })
             .thenCompose(release -> {
-                    return this.shouldBlockNewArtifact(request, inspector, release);
+                    return this.shouldBlockNewArtifact(request, release);
             });
     }
 
@@ -639,13 +639,11 @@ final class JdbcCooldownService implements CooldownService {
      * Check if new artifact should be blocked given a known release date.
      * Returns boolean and creates database record if blocking.
      * @param request Cooldown request
-     * @param inspector Inspector for dependencies
      * @param release Release date (may be empty)
      * @return CompletableFuture with boolean (true=blocked, false=allowed)
      */
     private CompletableFuture<Boolean> shouldBlockNewArtifact(
         final CooldownRequest request,
-        final CooldownInspector inspector,
         final Optional<Instant> release
     ) {
         final Instant now = request.requestedAt();

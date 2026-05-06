@@ -315,7 +315,7 @@ public final class DashboardHandler {
                             .put("size", rs.getLong("total_size")));
                     }
                 }
-            } catch (final Exception ex) {
+            } catch (final Exception ex) { // NOPMD EmptyCatchBlock - dashboard is best-effort: DB unavailable or materialized views missing falls through to zeroed counters
                 // DB unavailable or MVs not yet created — return zeros
             }
         }

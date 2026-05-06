@@ -384,8 +384,7 @@ public final class CooldownHandler {
                 final RepositoryName rname = new RepositoryName.Simple(name);
                 try {
                     final JsonStructure config = this.crs.value(rname);
-                    if (config == null
-                        || !(config instanceof javax.json.JsonObject)) {
+                    if (!(config instanceof javax.json.JsonObject)) {
                         continue;
                     }
                     final javax.json.JsonObject jobj =
@@ -425,7 +424,7 @@ public final class CooldownHandler {
                         entry.put("active_blocks", count);
                     }
                     result.add(entry);
-                } catch (final Exception ex) {
+                } catch (final Exception ex) { // NOPMD EmptyCatchBlock - intentional: any per-repo read error skips the repo from the overview
                     // skip repos that cannot be read
                 }
             }

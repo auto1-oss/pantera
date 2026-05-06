@@ -336,7 +336,7 @@ public final class OktaOidcClient {
             request, HttpResponse.BodyHandlers.ofString()
         );
         if (resp.statusCode() / 100 != 2) {
-            return null;
+            return null; // NOPMD ReturnEmptyCollectionRatherThanNull - JsonObject is a single record, not a collection; null signals MFA verify call failure
         }
         return json(resp.body());
     }
@@ -628,7 +628,7 @@ public final class OktaOidcClient {
                     .field("user.name", username)
                     .field("http.response.status_code", resp.statusCode())
                     .log();
-                return null;
+                return null; // NOPMD ReturnEmptyCollectionRatherThanNull - JsonObject is a single record, not a collection; null signals userinfo fetch failure
             }
             final JsonObject userinfo = json(resp.body());
             EcsLogger.info("com.auto1.pantera.auth")
@@ -639,7 +639,7 @@ public final class OktaOidcClient {
                 .field("user.name", username)
                 .log();
             return userinfo;
-        } catch (final IOException | InterruptedException err) {
+        } catch (final InterruptedException err) {
             EcsLogger.error("com.auto1.pantera.auth")
                 .message("Failed to fetch Okta userinfo")
                 .eventCategory("authentication")
@@ -648,10 +648,18 @@ public final class OktaOidcClient {
                 .field("user.name", username)
                 .error(err)
                 .log();
-            if (err instanceof InterruptedException) {
-                Thread.currentThread().interrupt();
-            }
-            return null;
+            Thread.currentThread().interrupt();
+            return null; // NOPMD ReturnEmptyCollectionRatherThanNull - JsonObject is a single record, not a collection; null signals fetch failure on interrupt
+        } catch (final IOException err) {
+            EcsLogger.error("com.auto1.pantera.auth")
+                .message("Failed to fetch Okta userinfo")
+                .eventCategory("authentication")
+                .eventAction("userinfo")
+                .eventOutcome("failure")
+                .field("user.name", username)
+                .error(err)
+                .log();
+            return null; // NOPMD ReturnEmptyCollectionRatherThanNull - JsonObject is a single record, not a collection; null signals fetch I/O failure
         }
     }
 

@@ -76,11 +76,6 @@ public final class RepositoryHandler {
     private final Optional<MetadataEventQueues> events;
 
     /**
-     * Cooldown service.
-     */
-    private final CooldownService cooldown;
-
-    /**
      * Vert.x event bus.
      */
     private final EventBus eventBus;
@@ -99,13 +94,13 @@ public final class RepositoryHandler {
     public RepositoryHandler(final FiltersCache filtersCache,
         final CrudRepoSettings crs, final RepoData repoData,
         final Policy<?> policy, final Optional<MetadataEventQueues> events,
-        final CooldownService cooldown, final EventBus eventBus) {
+        final CooldownService cooldown, // NOPMD UnusedFormalParameter - public API; reserved for upcoming cooldown integration in repo CRUD endpoints
+        final EventBus eventBus) {
         this.filtersCache = filtersCache;
         this.crs = crs;
         this.repoData = repoData;
         this.policy = policy;
         this.events = events;
-        this.cooldown = cooldown;
         this.eventBus = eventBus;
     }
 

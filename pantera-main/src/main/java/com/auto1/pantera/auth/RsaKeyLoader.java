@@ -49,7 +49,7 @@ public final class RsaKeyLoader {
         try {
             this.privKey = loadPrivateKey(privPath);
             this.pubKey = loadPublicKey(pubPath);
-        } catch (final IllegalStateException ex) {
+        } catch (final IllegalStateException ex) { // NOPMD AvoidRethrowingException - rethrow preserves the diagnostic IllegalStateException raised by loadPrivateKey/loadPublicKey so callers can distinguish from the generic Exception wrap below
             throw ex;
         } catch (final Exception ex) {
             throw new IllegalStateException("Failed to load RSA key pair: " + ex.getMessage(), ex);

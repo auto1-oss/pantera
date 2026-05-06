@@ -338,13 +338,13 @@ public final class StorageAliasHandler {
         final String raw = ctx.body().asString();
         if (raw == null || raw.isBlank()) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "JSON body is required");
-            return null;
+            return null; // NOPMD ReturnEmptyCollectionRatherThanNull - JsonObject is a single record, not a collection; null signals "response already sent" to caller
         }
         try {
             return Json.createReader(new StringReader(raw)).readObject();
         } catch (final Exception ex) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid JSON body");
-            return null;
+            return null; // NOPMD ReturnEmptyCollectionRatherThanNull - JsonObject is a single record, not a collection; null signals "response already sent" to caller
         }
     }
 

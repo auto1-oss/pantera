@@ -94,7 +94,7 @@ public final class CooldownSupport {
         // early -- the registry is a ConcurrentHashMap, and adapters are stateless.
         CooldownWiring.registerAllAdapters();
         return settings.artifactsDatabase()
-            .map(ds -> {
+            .<CooldownService>map(ds -> {
                 // Load DB-persisted cooldown config and apply over YAML defaults.
                 // This ensures overrides saved via the UI survive container restarts.
                 loadDbCooldownSettings(settings.cooldown(), ds);
@@ -111,7 +111,7 @@ public final class CooldownSupport {
                 );
                 // Initialize metrics from database (async) - loads actual active block counts
                 service.initializeMetrics();
-                return (CooldownService) service;
+                return service;
             })
             .orElseGet(() -> {
                 EcsLogger.warn("com.auto1.pantera.cooldown")

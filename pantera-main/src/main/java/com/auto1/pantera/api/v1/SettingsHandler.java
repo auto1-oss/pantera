@@ -71,11 +71,6 @@ public final class SettingsHandler {
     private final Settings settings;
 
     /**
-     * Repository settings manager.
-     */
-    private final ManageRepoSettings manageRepo;
-
-    /**
      * Settings DAO for database persistence (nullable).
      */
     private final SettingsDao settingsDao;
@@ -108,12 +103,12 @@ public final class SettingsHandler {
      * @checkstyle ParameterNumberCheck (6 lines)
      */
     public SettingsHandler(final int port, final Settings settings,
-        final ManageRepoSettings manageRepo, final DataSource dataSource,
+        final ManageRepoSettings manageRepo, // NOPMD UnusedFormalParameter - public API; reserved for upcoming repo-settings management endpoints
+        final DataSource dataSource,
         final Policy<?> policy,
         final com.auto1.pantera.asto.misc.Cleanable<String> authCache) {
         this.port = port;
         this.settings = settings;
-        this.manageRepo = manageRepo;
         this.settingsDao = dataSource != null ? new SettingsDao(dataSource) : null;
         this.authProviderDao = dataSource != null ? new AuthProviderDao(dataSource) : null;
         this.policy = policy;

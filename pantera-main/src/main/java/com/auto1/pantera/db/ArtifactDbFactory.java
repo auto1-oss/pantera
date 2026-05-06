@@ -283,7 +283,7 @@ public final class ArtifactDbFactory {
         if (registry == null) {
             return;
         }
-        if (dataSource instanceof HikariDataSource hds) {
+        if (dataSource instanceof HikariDataSource hds) { // NOPMD CloseResource - DataSource is caller-owned; we only attach metrics, not manage lifecycle
             hds.setMetricsTrackerFactory(
                 new com.zaxxer.hikari.metrics.micrometer.MicrometerMetricsTrackerFactory(registry)
             );

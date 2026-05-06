@@ -91,9 +91,9 @@ public final class PypiHandler {
         final String pkg = ctx.pathParam("package");
         final String version = ctx.pathParam("version");
         final String reason = extractReason(ctx);
-        CompletableFuture.supplyAsync(() -> {
+        CompletableFuture.<Void>supplyAsync(() -> {
             this.applyYank(repo, pkg, version, reason);
-            return (Void) null;
+            return null;
         }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
             if (err != null) {
                 EcsLogger.error("com.auto1.pantera.api.v1")
@@ -130,9 +130,9 @@ public final class PypiHandler {
         final String repo = ctx.pathParam("repo");
         final String pkg = ctx.pathParam("package");
         final String version = ctx.pathParam("version");
-        CompletableFuture.supplyAsync(() -> {
+        CompletableFuture.<Void>supplyAsync(() -> {
             this.applyUnyank(repo, pkg, version);
-            return (Void) null;
+            return null;
         }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
             if (err != null) {
                 EcsLogger.error("com.auto1.pantera.api.v1")

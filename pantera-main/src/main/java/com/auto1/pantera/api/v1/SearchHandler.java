@@ -237,10 +237,9 @@ public final class SearchHandler {
             // If index is not DbArtifactIndex, fall back to client-side filtering.
             final JsonArray items = new JsonArray();
             for (final var doc : result.documents()) {
-                if (!(this.index instanceof DbArtifactIndex)) {
-                    if (!perms.implies(new AdapterBasicPermission(doc.repoName(), "read"))) {
-                        continue;
-                    }
+                if (!(this.index instanceof DbArtifactIndex)
+                    && !perms.implies(new AdapterBasicPermission(doc.repoName(), "read"))) {
+                    continue;
                 }
                 final JsonObject obj = new JsonObject()
                     .put("repo_type", doc.repoType())
@@ -297,7 +296,7 @@ public final class SearchHandler {
     private static List<String> resolveAllowedRepos(final PermissionCollection perms) {
         // FreePermissions implies everything — no restriction
         if (perms instanceof FreePermissions) {
-            return null;
+            return null; // NOPMD ReturnEmptyCollectionRatherThanNull - null signals "unrestricted"; empty list would mean "deny everything"
         }
         final List<String> repos = new ArrayList<>();
         final Enumeration<Permission> elements = perms.elements();
@@ -307,7 +306,7 @@ public final class SearchHandler {
                 final String name = perm.getName();
                 if ("*".equals(name)) {
                     // Wildcard — unrestricted access
-                    return null;
+                    return null; // NOPMD ReturnEmptyCollectionRatherThanNull - null signals "unrestricted"; empty list would mean "deny everything"
                 }
                 // Include repos the user can read
                 if (perm.implies(new AdapterBasicPermission(name, "read"))) {

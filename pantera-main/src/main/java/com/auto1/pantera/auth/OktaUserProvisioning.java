@@ -49,7 +49,7 @@ public final class OktaUserProvisioning {
             final boolean hasYaml = this.asto.exists(yaml);
             final boolean hasYml = this.asto.exists(yml);
             final Key target;
-            YamlMapping existing = null;
+            final YamlMapping existing;
             if (hasYaml) {
                 target = yaml;
                 existing = readYaml(this.asto.value(yaml));

@@ -145,7 +145,9 @@ public final class JwtPasswordAuthFactory implements AuthFactory {
      */
     private static String pemEncodePublicKey(final RSAPublicKey publicKey) {
         final String base64 = Base64.getEncoder().encodeToString(publicKey.getEncoded());
-        final StringBuilder sb = new StringBuilder("-----BEGIN PUBLIC KEY-----\n");
+        // Pre-size: header + base64 body + line breaks + footer.
+        final StringBuilder sb = new StringBuilder(base64.length() + 128);
+        sb.append("-----BEGIN PUBLIC KEY-----\n");
         for (int i = 0; i < base64.length(); i += 64) {
             sb.append(base64, i, Math.min(i + 64, base64.length())).append('\n');
         }
