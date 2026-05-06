@@ -241,9 +241,9 @@ public final class FilteredMetadataCacheConfig {
      * Get the global instance.
      * @return Global config (defaults if not initialized)
      */
-    public static FilteredMetadataCacheConfig getInstance() {
+    public static FilteredMetadataCacheConfig getInstance() { // NOPMD SingletonClassReturningNewInstance - "configured-or-default" accessor; new is the safe default when init() was never called
         if (instance == null) {
-            return new FilteredMetadataCacheConfig(); // NOPMD SingletonClassReturningNewInstance - "configured-or-default" accessor; new is the safe default when init() was never called
+            return new FilteredMetadataCacheConfig();
         }
         return instance;
     }

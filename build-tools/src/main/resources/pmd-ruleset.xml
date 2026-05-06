@@ -32,6 +32,8 @@
         <exclude name="AvoidFieldNameMatchingTypeName"/>
         <!-- Bucket C (14b): historically wholesale-suppressed (30 prior @SuppressWarnings); use code review for typo-vs-intent -->
         <exclude name="AssignmentInOperand"/>
+        <!-- Bucket A->exclude (14b): "code smell" warning is too eager. Common pattern is `dataSource != null ? new X(dataSource) : null` in optional-dependency wiring, which PMD flags but is the correct pattern. 34 violations. -->
+        <exclude name="NullAssignment"/>
     </rule>
 
     <!-- ===== SECURITY: weak crypto, hardcoded creds, etc. ===== -->
@@ -49,6 +51,8 @@
         <exclude name="JUnitTestsShouldIncludeAssert"/>
         <!-- Bucket B (14b): fires on EnumSet/ConcurrentHashMap/JobDataMap where impl type IS the contract (perf, thread-safety, framework-required). 63 violations, wholesale-suppression magnet. -->
         <exclude name="LooseCoupling"/>
+        <!-- Bucket A->exclude (14b): cosmetic test-code style; the rule fires on every assertion without a message, but assertion code is self-documenting via the comparison. 7 violations. -->
+        <exclude name="JUnitAssertionsShouldIncludeMessage"/>
     </rule>
 
     <!-- ===== CODE STYLE: only the ones that hide real bugs ===== -->
@@ -94,6 +98,16 @@
         <exclude name="UseExplicitTypes"/>
         <!-- Bucket B (14b): fires on intentional EMPTY/INSTANCE/LOG static finals using a different (uppercase) convention. 3 violations. -->
         <exclude name="FieldNamingConventions"/>
+        <!-- Bucket A->exclude (14b): cosmetic; PMD frequently misjudges callable-conversion compatibility (Optional.map/etc.). 32 violations. -->
+        <exclude name="LambdaCanBeMethodReference"/>
+        <!-- Bucket A->exclude (14b): cosmetic readability nit; not a bug indicator. 30 violations. -->
+        <exclude name="UselessQualifiedThis"/>
+        <!-- Bucket A->exclude (14b): cosmetic readability suggestion; underscores in numeric literals do not catch bugs. 20 violations. -->
+        <exclude name="UseUnderscoresInNumericLiterals"/>
+        <!-- Bucket A->exclude (14b): cosmetic; pre-Allman code-style rule. 5 violations. -->
+        <exclude name="ControlStatementBraces"/>
+        <!-- Bucket A->exclude (14b): cosmetic; `Long.valueOf(x)` vs `x` is harmless and sometimes more explicit. 5 violations. -->
+        <exclude name="UnnecessaryBoxing"/>
     </rule>
 
     <!-- ===== DESIGN: real architecture issues ===== -->
@@ -145,6 +159,12 @@
         <exclude name="ConsecutiveLiteralAppends"/>
         <exclude name="InefficientEmptyStringCheck"/>
         <exclude name="StringInstantiation"/>
+        <!-- Bucket A->exclude (14b): cosmetic micro-opt; `sb.append(a).append(b);` vs separate statements is JIT-equivalent. 27 violations. -->
+        <exclude name="ConsecutiveAppendsShouldReuse"/>
+        <!-- Bucket A->exclude (14b): cosmetic-only; modern JIT handles `sb.append("a")` identically to `sb.append('a')`. 13 violations. -->
+        <exclude name="AppendCharacterWithChar"/>
+        <!-- Bucket A->exclude (14b): cosmetic micro-perf; modern JIT handles indexOf("c") identically to indexOf('c'). 3 violations. -->
+        <exclude name="UseIndexOfChar"/>
     </rule>
 
     <!-- ===== MULTITHREADING: real concurrency bugs ===== -->

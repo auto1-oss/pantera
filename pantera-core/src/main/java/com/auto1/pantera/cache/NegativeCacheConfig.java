@@ -261,9 +261,9 @@ public final class NegativeCacheConfig {
      * Get the global instance.
      * @return Global config (defaults if not initialized)
      */
-    public static NegativeCacheConfig getInstance() {
+    public static NegativeCacheConfig getInstance() { // NOPMD SingletonClassReturningNewInstance - "configured-or-default" accessor; new is the safe default when init() was never called
         if (instance == null) {
-            return new NegativeCacheConfig(); // NOPMD SingletonClassReturningNewInstance - "configured-or-default" accessor; new is the safe default when init() was never called
+            return new NegativeCacheConfig();
         }
         return instance;
     }
