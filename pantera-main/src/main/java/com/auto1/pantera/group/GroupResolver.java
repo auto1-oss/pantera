@@ -31,6 +31,8 @@ import com.auto1.pantera.http.slice.EcsLoggingSlice;
 import com.auto1.pantera.http.slice.KeyFromPath;
 import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.index.IndexOutcome;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -96,6 +98,20 @@ import com.auto1.pantera.http.timeout.AutoBlockRegistry;
  */
 public final class GroupResolver implements Slice {
 
+    /**
+     * Per-coordinate sibling-member pin TTL. Long enough to cover the gap
+     * between a Maven client's {@code .pom} fetch and the immediately-following
+     * {@code .pom.sha1} / {@code .jar} fetch (typically &lt;1 s); short enough
+     * that a member going offline isn't sticky.
+     */
+    private static final Duration MEMBER_PIN_TTL = Duration.ofSeconds(60);
+
+    /**
+     * Member-pin cache size. One entry per artifact name seen in the last
+     * {@link #MEMBER_PIN_TTL}. ~50 bytes per entry → ~2.5 MB worst case.
+     */
+    private static final long MEMBER_PIN_MAX = 50_000L;
+
     private final String group;
     private final List<MemberSlice> members;
     private final List<RoutingRule> routingRules;
@@ -104,6 +120,16 @@ public final class GroupResolver implements Slice {
     private final NegativeCache negativeCache;
     private final SingleFlight<String, Void> inFlightFanouts;
     private final java.util.concurrent.Executor drainExecutor;
+    /**
+     * Per-coordinate sibling-member pin. When a request for artifact {@code X}
+     * is served successfully by member {@code M}, subsequent requests for any
+     * {@code X.*} sibling within {@link #MEMBER_PIN_TTL} are routed to {@code
+     * M} directly, bypassing the index lookup and the fanout. This keeps
+     * {@code .pom} and {@code .pom.sha1} fetches on the same upstream — the
+     * race that produced the "Checksum validation failed" warnings when the
+     * index was momentarily inconsistent with member-side cache state.
+     */
+    private final Cache<String, String> memberPin;
 
     /**
      * Full constructor.
@@ -146,6 +172,10 @@ public final class GroupResolver implements Slice {
             10_000,
             ContextualExecutor.contextualize(ForkJoinPool.commonPool())
         );
+        this.memberPin = Caffeine.newBuilder()
+            .maximumSize(MEMBER_PIN_MAX)
+            .expireAfterWrite(MEMBER_PIN_TTL)
+            .build();
     }
 
     /**
@@ -329,6 +359,32 @@ public final class GroupResolver implements Slice {
             return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
         }
 
+        // ---- STEP 1.5: Sibling-member pin ----
+        // If this same artifactName was served successfully within the last
+        // MEMBER_PIN_TTL, route directly to that member. This eliminates the
+        // window where a .pom resolves to member A (via fanout) and the
+        // immediately-following .pom.sha1 — fetched before the index has
+        // caught up — resolves to a different member, producing a body /
+        // sidecar pair from two different upstreams. On TOCTOU drift the
+        // pinned-member 404 falls through to proxy fanout via
+        // {@link #targetedLocalRead}'s standard path.
+        final String pinnedRepo = this.memberPin.getIfPresent(artifactName);
+        if (pinnedRepo != null
+            && this.members.stream().anyMatch(m -> m.name().equals(pinnedRepo))) {
+            EcsLogger.debug("com.auto1.pantera.group")
+                .message("Sibling-pin hit: routing " + artifactName
+                    + " to " + pinnedRepo)
+                .eventCategory("web")
+                .eventAction("group_sibling_pin_hit")
+                .field("url.path", path)
+                .field("repository.name", pinnedRepo)
+                .log();
+            return targetedLocalRead(
+                List.of(pinnedRepo), line, headers, body, path,
+                artifactName, negCacheKey
+            ).whenComplete((r, e) -> recordPhase("resolve_total", resolveStartNs));
+        }
+
         // ---- STEP 2: Query index ----
         // Phase 7.5 profiler: time the index lookup itself, separate from
         // the downstream targeted/fanout work. Recorded both on success
@@ -473,7 +529,7 @@ public final class GroupResolver implements Slice {
         // index-hit reads are authoritative on hosted state — a tripped
         // breaker against the hosted member would otherwise mask the
         // index-vs-storage drift behind a fanout.
-        return querySequentially(targeted, line, headers, body, true)
+        return querySequentially(targeted, line, headers, body, true, artifactName)
             .thenCompose(resp -> {
                 if (resp.status().success()
                     || resp.status() == RsStatus.NOT_MODIFIED
@@ -570,7 +626,7 @@ public final class GroupResolver implements Slice {
                 .eventAction("group_index_miss")
                 .field("url.path", line.uri().getPath())
                 .log();
-            return executeProxyFanout(fanoutMembers, line, headers, body, negCacheKey)
+            return executeProxyFanout(fanoutMembers, line, headers, body, artifactName, negCacheKey)
                 .whenComplete((resp, err) -> leaderGate.complete(null));
         }
         EcsLogger.debug("com.auto1.pantera.group")
@@ -590,6 +646,7 @@ public final class GroupResolver implements Slice {
         final RequestLine line,
         final Headers headers,
         final Content body,
+        final String artifactName,
         final NegativeCacheKey negCacheKey
     ) {
         // Sequential-only fanout (v2.2.0). The previous parallel branch and
@@ -598,7 +655,7 @@ public final class GroupResolver implements Slice {
         // querySequentially walks members in declared order and FaultTranslator
         // is invoked here on a 5xx terminal to preserve the X-Pantera-Fault
         // header behaviour of the legacy parallel path.
-        return querySequentially(fanoutMembers, line, headers, body, false)
+        return querySequentially(fanoutMembers, line, headers, body, false, artifactName)
             .thenApply(resp -> {
                 if (resp.status().serverError()) {
                     // Sequential walk reached terminal 5xx: any member 5xx in
@@ -682,7 +739,7 @@ public final class GroupResolver implements Slice {
         final Content body,
         final boolean isTargetedLocalRead
     ) {
-        return querySequentially(targeted, line, headers, body, isTargetedLocalRead);
+        return querySequentially(targeted, line, headers, body, isTargetedLocalRead, null);
     }
 
     /**
@@ -708,7 +765,8 @@ public final class GroupResolver implements Slice {
         final RequestLine line,
         final Headers headers,
         final Content body,
-        final boolean isTargetedLocalRead
+        final boolean isTargetedLocalRead,
+        final String pinArtifactName
     ) {
         return body.asBytesFuture().thenCompose(requestBytes -> {
             final CompletableFuture<Response> result = new CompletableFuture<>();
@@ -716,7 +774,7 @@ public final class GroupResolver implements Slice {
                 new java.util.concurrent.atomic.AtomicBoolean(false);
             tryNextSequentialMember(
                 targeted.iterator(), line, headers, requestBytes,
-                isTargetedLocalRead, anyServerError, result
+                isTargetedLocalRead, anyServerError, result, pinArtifactName
             );
             return result;
         });
@@ -729,7 +787,8 @@ public final class GroupResolver implements Slice {
         final byte[] requestBytes,
         final boolean isTargetedLocalRead,
         final java.util.concurrent.atomic.AtomicBoolean anyServerError,
-        final CompletableFuture<Response> result
+        final CompletableFuture<Response> result,
+        final String pinArtifactName
     ) {
         if (!iter.hasNext()) {
             if (anyServerError.get()) {
@@ -742,7 +801,7 @@ public final class GroupResolver implements Slice {
         final MemberSlice member = iter.next();
         if (!isTargetedLocalRead && member.isCircuitOpen()) {
             tryNextSequentialMember(iter, line, headers, requestBytes,
-                isTargetedLocalRead, anyServerError, result);
+                isTargetedLocalRead, anyServerError, result, pinArtifactName);
             return;
         }
         queryMemberDirect(member, line, headers, requestBytes).whenComplete((resp, err) -> {
@@ -752,20 +811,28 @@ public final class GroupResolver implements Slice {
                     anyServerError.set(true);
                 }
                 tryNextSequentialMember(iter, line, headers, requestBytes,
-                    isTargetedLocalRead, anyServerError, result);
+                    isTargetedLocalRead, anyServerError, result, pinArtifactName);
                 return;
             }
             final RsStatus status = resp.status();
             if (status == RsStatus.OK || status == RsStatus.PARTIAL_CONTENT
                 || status == RsStatus.NOT_MODIFIED || status == RsStatus.FORBIDDEN) {
                 member.recordSuccess();
+                // Record the winning member for sibling pinning. NOT_MODIFIED
+                // and FORBIDDEN also count — they confirm authoritative
+                // ownership by this member. The cache TTL keeps the pin
+                // bounded so a member going offline doesn't strand
+                // subsequent requests.
+                if (pinArtifactName != null) {
+                    this.memberPin.put(pinArtifactName, member.name());
+                }
                 result.complete(resp);
                 return;
             }
             if (status == RsStatus.NOT_FOUND) {
                 drainBody(resp.body());
                 tryNextSequentialMember(iter, line, headers, requestBytes,
-                    isTargetedLocalRead, anyServerError, result);
+                    isTargetedLocalRead, anyServerError, result, pinArtifactName);
                 return;
             }
             // Other 4xx or any 5xx -> record failure, cascade.
@@ -773,7 +840,7 @@ public final class GroupResolver implements Slice {
             member.recordFailure();
             anyServerError.set(true);
             tryNextSequentialMember(iter, line, headers, requestBytes,
-                isTargetedLocalRead, anyServerError, result);
+                isTargetedLocalRead, anyServerError, result, pinArtifactName);
         });
     }
 

@@ -157,7 +157,11 @@ public final class GoProxySlice extends Slice.Wrap {
             new SliceRoute(
                 new RtRulePath(
                     MethodRule.HEAD,
-                    new HeadProxySlice(remote)
+                    // Track 5 Phase 2B: cache-first HEAD — serve 200 +
+                    // Content-Length from local storage metadata when the
+                    // requested Go module file is already cached. Falls
+                    // through to upstream HEAD on cache miss only.
+                    new HeadProxySlice(remote, storage)
                 ),
                 new RtRulePath(
                     MethodRule.GET,

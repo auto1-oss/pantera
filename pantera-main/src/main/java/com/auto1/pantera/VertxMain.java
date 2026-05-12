@@ -400,6 +400,36 @@ public final class VertxMain {
                     )
                 );
             com.auto1.pantera.publishdate.PublishDateRegistries.installDefault(publishDates);
+            // Track 5 Phase 3B: register the per-repo-type publish-date
+            // extractor. Every adapter's cache-write event path resolves
+            // publish_date via this registry, so the SPI is the single
+            // source of truth for "how do I read the upstream's publish
+            // timestamp out of this response?".  Maven scrapes the
+            // RFC 1123 Last-Modified header; npm pulls time.{version}
+            // from the packument JSON, but the proxy-cache event path
+            // only sees response headers — for ecosystems whose publish
+            // date lives in the body, the extractor returns empty here
+            // and the dedicated metadata-parsing path (NpmPackumentCache
+            // etc.) writes the row directly.
+            com.auto1.pantera.publishdate.PublishDateExtractors.instance().register(
+                "maven",
+                (headers, name, version) -> {
+                    try {
+                        return java.util.stream.StreamSupport.stream(
+                                headers.spliterator(), false
+                            )
+                            .filter(h -> "Last-Modified".equalsIgnoreCase(h.getKey()))
+                            .findFirst()
+                            .map(com.auto1.pantera.http.headers.Header::getValue)
+                            .map(val -> java.time.Instant.from(
+                                java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME
+                                    .parse(val)
+                            ));
+                    } catch (final java.time.format.DateTimeParseException ex) {
+                        return java.util.Optional.empty();
+                    }
+                }
+            );
         });
         // Wire RepositorySlices with the runtime HTTP tuning supplier so
         // every new SharedClient picks up the latest http_client.* values.

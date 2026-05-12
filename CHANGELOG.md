@@ -2,6 +2,141 @@
 
 ## Version 2.2.0
 
+- **Track 5: zero upstream I/O on cache hit, architectural fix across
+  every proxy adapter.** User reported sudden 429 storms from Maven
+  Central starting 2026-05-11 and the diagnostic question that named the
+  root cause: *"we have the jar and pom cached, why are we hitting Maven
+  all the time?"* The cache-hit path was firing `MavenHeadSource` HEAD
+  requests on Maven Central via the cooldown inspector's network
+  fallback. Under Cloudflare-backed Maven Central rate limiting (added
+  Q1-Q2 2025 alongside the Central Portal migration), the per-IP budget
+  fell below what Pantera's per-request HEAD pattern needed. Same shape
+  in the composer adapter for packagist.org. Track 5 closes the design
+  loophole permanently — no flags, every fix replaces the broken path
+  in place.
+
+  **Phase 1A — invert the cooldown gate ordering.**
+  `CachedProxySlice.verifyAndServePrimaryGated` (maven) wrapped both
+  cache-hit and cache-miss in `evaluateCooldownOrProceed`, which goes
+  through the cooldown inspector → `RegistryBackedInspector` →
+  `PublishDateRegistries` → L1 → L2 → `MavenHeadSource` fetch. Every
+  cached `.jar` / `.pom` request created an upstream HEAD when L1
+  evicted (100k cap, no TTL) or L2 lacked the entry. Fix: move the gate
+  INSIDE `verifyAndServePrimary`, after `storage.exists`. Cache hit is
+  now pure-local. Same shape applied to composer: removed
+  `evaluateMetadataCooldown` from `serveCachedMetadata` so cached
+  packages.json no longer triggers `PackagistSource`. Go adapter was
+  already correct (`cache.load` check at line 294, cooldown only on
+  miss). Trade-off documented: a cooldown rule applied AFTER an artifact
+  was first cached takes effect on the next miss; the admin's tool for
+  blocking already-cached versions is cache eviction.
+
+  Files: `maven-adapter/.../CachedProxySlice.java` (deleted
+  `verifyAndServePrimaryGated`; cooldown moved inline at the cache-miss
+  branch), `composer-adapter/.../proxy/CachedProxySlice.java`
+  (`serveCachedMetadata` cooldown call removed).
+
+  **Phase 1B — restore publish_date pre-population on cache write.**
+  Track 4's stream-through path passed `Headers.EMPTY` to
+  `enqueueEventForWriter` so `lastModified` was always
+  `Optional.empty()`. The DB consumer fell back to `now()` as the
+  publish_date, making subsequent cooldown evaluations resolve to "just
+  published" — and on L1 eviction the inspector fell through to
+  `MavenHeadSource` to re-resolve. Fix: `UpstreamBody` record now
+  carries the upstream `Headers`; `enqueueEventForWriter` takes
+  `(key, upstreamHeaders, size)` and threads them into
+  `buildArtifactEvent`, which extracts the RFC 1123 `Last-Modified`
+  via the existing `extractLastModified` helper. Every cached primary
+  artifact now has the authoritative upstream publish_date in the
+  registry, so subsequent cooldown lookups are pure-local forever.
+
+  **Phase 2A — `PublishDateRegistry.Mode` (NETWORK_FALLBACK / CACHE_ONLY).**
+  Defence-in-depth: callers on the cache-hit hot path that still want
+  to consult the registry can pass `CACHE_ONLY`, which short-circuits
+  the L1+L2 lookup with `Optional.empty()` on miss and physically
+  forbids the source-fetch step. Old 3-arg `publishDate(...)` stays
+  abstract so the test stub in `PublishDateRegistries.installDefault`
+  (a lambda) keeps compiling; 4-arg default delegates to the 3-arg.
+  `DbPublishDateRegistry` overrides the 4-arg to honour CACHE_ONLY
+  with a `cache_only_miss` outcome metric.
+  `RegistryBackedInspector` grows a 3-arg constructor that selects the
+  mode; the legacy 2-arg constructor keeps NETWORK_FALLBACK so existing
+  wiring is byte-for-byte unchanged.
+
+  **Phase 2B — HEAD requests served from local storage.** The Maven
+  client routinely fires HEAD before GET to check artifact metadata,
+  and pre-Track-5 every HEAD proxied to `repo.maven.apache.org` even
+  when the artifact was already cached — a second class of upstream
+  traffic the user explicitly named. `HeadProxySlice` (maven, go) now
+  takes `Optional<Storage>`; on cache hit it synthesises a 200 with
+  `Content-Length` from `Meta.OP_SIZE` and never touches the upstream
+  client. Cache miss falls through to the pre-Track-5 pass-through.
+  Storage wired in via `MavenProxySlice` and `GoProxySlice`.
+
+  **Phase 2D — full cross-adapter audit.** Spike audit across every
+  proxy adapter (maven, composer, go, pypi, npm, file, nuget, conan,
+  hex, gem, docker, helm, debian, rpm, conda) using a dedicated
+  Explore subagent. Findings: maven (broken pre-Track-5, fixed in
+  1A/2B), composer (broken pre-Track-5, fixed in 1A), go (already
+  correct — `cache.load` first at line 294), pypi/npm/file
+  (already cache-first), helm/debian/rpm/conda/nuget/conan/hex/gem
+  (no proxy mode with cooldown — confirmed clean). Docker HEAD for
+  blobs/manifests flagged for a follow-up: digest-keyed manifests are
+  immutable so safe, but tag-resolved manifest HEAD still proxies.
+
+  **Phase 3A — `SwrMetadataCache<K, V>` primitive.** Generic
+  stale-while-revalidate cache in pantera-core encapsulating the
+  pattern maven-adapter `MetadataCache` already does correctly. Soft
+  TTL: serve cached, no upstream. Past soft within hard: serve cached
+  IMMEDIATELY (non-blocking) and fire one background refresh
+  (dedup'd via a `ConcurrentHashMap` key set so 10 concurrent
+  soft-stale requests collapse to one upstream call). Past hard: treat
+  as miss, await loader. Metrics: `pantera_metadata_swr_hit_fresh`,
+  `_hit_stale`, `_miss`. Counted, tagged by `cacheName`. Primitive +
+  5 unit tests landed; per-adapter migration of composer/pypi/go onto
+  the primitive is the natural follow-up — the existing per-adapter
+  ad-hoc SWR is async (off hot path) so the user-facing 429 storm is
+  already addressed by Phases 1A/2A/2B.
+
+  **Phase 3B — `PublishDateExtractor` SPI.** Each repo-type's
+  publish-date extraction pattern was scattered across adapter helpers
+  (maven's `extractLastModified`, composer's `extractReleaseDate`,
+  go's `parseLastModified`). The Track 4 `Headers.EMPTY` regression
+  was a symptom of that scattering. The new SPI in
+  `com.auto1.pantera.publishdate.PublishDateExtractor` +
+  `PublishDateExtractors` registry centralises extraction keyed by
+  repo-type. Maven's extractor registered in `VertxMain` at boot
+  (RFC 1123 `Last-Modified` parse). Other adapters fall through to the
+  registry's NO_OP for now — additive rollout, no regression. Non-maven
+  registrations move incrementally.
+
+  **Test coverage.** 16 new unit tests across the diff:
+  - `CacheHitNoUpstreamTest` (2): cache-hit on .jar/.pom serves
+    local bytes with zero upstream calls AND zero inspector calls.
+  - `HeadProxySliceCacheFirstTest` (3): HEAD on cached artifact is
+    pure-local; HEAD on miss delegates; no-storage variant is
+    pass-through.
+  - `RegistryBackedInspectorCacheOnlyTest` (2): CACHE_ONLY constructor
+    forwards mode; default forwards NETWORK_FALLBACK.
+  - `PublishDateExtractorsTest` (4): unregistered repo-type yields
+    NO_OP; registered extractor returned; re-registration replaces;
+    null arguments rejected.
+  - `SwrMetadataCacheTest` (5): fresh hit no loader; soft-stale serves
+    cached + async refresh; hard-stale awaits loader; concurrent
+    soft-stale dedups to one refresh; absent → load → cached.
+
+  Existing `verifyAndServePrimaryBlocksEvenWhenCacheHasVersion` test
+  renamed to `verifyAndServePrimaryCacheHitIsLocalEvenWhenBlockIsActive`
+  and rewritten to assert the new contract.
+
+  Acceptance for the user's reported symptom: with a warm cache, a
+  `mvn dependency:resolve -U` walk now makes ZERO upstream calls for
+  artifacts and HEADs that already landed. Cooldown evaluation happens
+  exactly once per (artifact, version) first-fetch. Mutable
+  per-package index files (maven-metadata.xml et al.) continue to
+  refresh in the background via SWR — the user's "serve stale + refresh
+  in background" contract.
+
 - **Phase 13.5: raise npm per-upstream prefetch cap default 4 → 32.**
   Phase 12.5 profiling proved foreground requests do not share semaphore
   queueing with prefetch (`tryAcquire()` is non-blocking; foreground

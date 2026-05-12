@@ -95,6 +95,13 @@ public final class DbPublishDateRegistry implements PublishDateRegistry {
     public CompletableFuture<Optional<Instant>> publishDate(
         final String repoType, final String name, final String version
     ) {
+        return this.publishDate(repoType, name, version, Mode.NETWORK_FALLBACK);
+    }
+
+    @Override
+    public CompletableFuture<Optional<Instant>> publishDate(
+        final String repoType, final String name, final String version, final Mode mode
+    ) {
         final long startNanos = System.nanoTime();
         final CacheKey key = new CacheKey(repoType, name, version);
         final Instant l1hit = this.l1.getIfPresent(key);
@@ -115,6 +122,14 @@ public final class DbPublishDateRegistry implements PublishDateRegistry {
                     this.l1.put(key, dbHit.get());
                     recordOutcome(repoType, "l2_hit", startNanos);
                     return CompletableFuture.completedFuture(dbHit);
+                }
+                // Track 5 Phase 2A: CACHE_ONLY callers explicitly forbid the
+                // upstream-source step. Return empty without firing any
+                // network I/O. Used by cache-hit hot paths so the registry
+                // can never become a back-door for upstream HEAD calls.
+                if (mode == Mode.CACHE_ONLY) {
+                    recordOutcome(repoType, "cache_only_miss", startNanos);
+                    return CompletableFuture.completedFuture(Optional.<Instant>empty());
                 }
                 final PublishDateSource src = this.sourcesByRepoType.get(repoType);
                 if (src == null) {

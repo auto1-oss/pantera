@@ -26,12 +26,37 @@ import java.util.concurrent.CompletableFuture;
  * </ol>
  *
  * <p>Implementations are thread-safe and meant to be a long-lived singleton.
+ *
+ * <p>Track 5 Phase 2A introduced {@link Mode}: callers on a cache-hit hot
+ * path that nevertheless want to consult the registry can pass
+ * {@link Mode#CACHE_ONLY} to physically prevent the step-3 source fetch.
+ * This is defence-in-depth — Phase 1A removes the cooldown-on-hit call sites
+ * that were exercising step 3, but {@code CACHE_ONLY} makes upstream HEAD
+ * impossible from those call sites going forward.
  */
 public interface PublishDateRegistry {
 
     /**
-     * Resolve publish date for {@code (repoType, name, version)}.
-     * Never throws — transient errors return {@code Optional.empty()}.
+     * Lookup mode controlling whether to fall back to the upstream source
+     * when L1 and L2 both miss. Defaults to {@link #NETWORK_FALLBACK}.
+     */
+    enum Mode {
+        /** L1 → L2 → upstream source. Pre-Track-5 behaviour. */
+        NETWORK_FALLBACK,
+        /**
+         * L1 → L2 → {@code Optional.empty()}. Step 3 (upstream source HTTP
+         * fetch) is skipped entirely. Used by cache-hit paths to guarantee
+         * zero upstream I/O while still consulting the local registry.
+         */
+        CACHE_ONLY
+    }
+
+    /**
+     * Resolve publish date for {@code (repoType, name, version)} with default
+     * {@link Mode#NETWORK_FALLBACK}. Existing pre-Track-5 contract; remains
+     * the abstract method so simple lambda implementations (test stubs,
+     * placeholder default in {@link PublishDateRegistries}) still satisfy
+     * the interface without surgery.
      *
      * @param repoType Repository type ("maven", "npm", "pypi", "go", "composer", "gem")
      * @param name Artifact name (per Pantera's repo-type-specific naming convention)
@@ -41,4 +66,21 @@ public interface PublishDateRegistry {
     CompletableFuture<Optional<Instant>> publishDate(
         String repoType, String name, String version
     );
+
+    /**
+     * Resolve publish date for {@code (repoType, name, version)} with an
+     * explicit lookup mode. {@code CACHE_ONLY} forbids the upstream-source
+     * fallback so a cache-hit hot path can never trigger network I/O via the
+     * registry.
+     *
+     * <p>Default implementation just delegates to the 3-arg method
+     * (NETWORK_FALLBACK semantics). Registries that genuinely fetch upstream
+     * (like {@code DbPublishDateRegistry}) override to short-circuit on
+     * {@code CACHE_ONLY} after the L2 lookup.
+     */
+    default CompletableFuture<Optional<Instant>> publishDate(
+        final String repoType, final String name, final String version, final Mode mode
+    ) {
+        return this.publishDate(repoType, name, version);
+    }
 }

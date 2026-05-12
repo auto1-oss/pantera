@@ -228,7 +228,11 @@ public final class MavenProxySlice extends Slice.Wrap {
         return new SliceRoute(
             new RtRulePath(
                 MethodRule.HEAD,
-                new HeadProxySlice(remote)
+                // Track 5 Phase 2B: pass the raw storage so HEAD on a
+                // cached artifact returns 200 + Content-Length from local
+                // metadata without ever touching upstream. Cache-miss still
+                // proxies to upstream HEAD.
+                new HeadProxySlice(remote, storage)
             ),
             new RtRulePath(
                 MethodRule.GET,

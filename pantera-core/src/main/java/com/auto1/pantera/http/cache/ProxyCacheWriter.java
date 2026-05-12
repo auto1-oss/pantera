@@ -21,6 +21,9 @@ import com.auto1.pantera.http.log.EcsLogger;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tags;
+import io.reactivex.Flowable;
+import io.reactivex.schedulers.Schedulers;
+import org.reactivestreams.Publisher;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -46,6 +49,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -386,6 +391,371 @@ public final class ProxyCacheWriter {
     }
 
     /**
+     * Stream-through cache write (Track 4): tee the upstream body into the
+     * client response Publisher AND the local temp file in a single pass.
+     *
+     * <p>Unlike {@link #writeAndVerify}, this method does NOT block the
+     * client on draining the upstream body before returning. The returned
+     * {@link StreamedArtifact#body()} is a {@link Content} the caller passes
+     * directly to {@code ResponseBuilder.body(...)}; once the response is
+     * committed, Jetty subscribes and bytes flow upstream &rarr; tee &rarr;
+     * client as they arrive. Each chunk is simultaneously written to a
+     * temp file and fed into every {@link MessageDigest}. When the stream
+     * completes, the writer awaits the already-in-flight blocking sidecar
+     * fetches (Phase 7.5 parallel-prefetch trick), compares hex, and either
+     * commits the primary + sidecars (sidecar-first per Track 3) or drops
+     * the temp file with an integrity-failure log + metric.
+     *
+     * <p><b>Always-verify invariant for the CACHE is preserved.</b> A
+     * primary lands on disk only after the upstream {@code .sha1} agrees
+     * with the bytes we just emitted. A mismatch means the client received
+     * unverified bytes (which Maven re-checks against its own digest of
+     * what it downloaded — same semantics as Nexus/JFrog stream-through),
+     * but the cache stays empty for that key so the next request re-fetches
+     * cleanly. The trade-off the user accepted in Track 4 design: faster
+     * time-to-first-byte vs. ability to refuse the response on mismatch.
+     *
+     * <p>The {@link StreamedArtifact#verificationOutcome()} future is
+     * fire-and-forget for the proxy hot path — the caller does NOT block on
+     * it. It exists for tests and integration code that wants to observe
+     * the final commit result.
+     *
+     * @param primaryKey      Cache key of the primary artifact.
+     * @param upstreamUri     Informational URI recorded on integrity failures.
+     * @param upstreamSize    Optional Content-Length from the upstream
+     *                        response; forwarded to the response body so
+     *                        Jetty emits an exact-size response when known.
+     * @param upstreamBody    Upstream response body publisher. Subscribed
+     *                        exactly once by the tee; must not have been
+     *                        consumed by the caller.
+     * @param fetchSidecars   Per-algorithm sidecar fetchers (typically just
+     *                        {@code SHA1} in the Maven adapter).
+     * @param nonBlockingAlgos Algorithms whose sidecar fetch must NOT block
+     *                        the post-stream verify-and-commit (default
+     *                        when null: {@link #NON_BLOCKING_DEFAULT}). These
+     *                        sidecars are fired asynchronously and persisted
+     *                        in the background if upstream returns 200.
+     * @param ctx             Request context (trace id), may be null.
+     * @return Stage that completes synchronously with a {@link StreamedArtifact}
+     *         except in the narrow case where temp file creation itself fails;
+     *         in that case the caller receives Err(StorageUnavailable) and the
+     *         upstream body is left unsubscribed for the caller to drain.
+     */
+    public CompletionStage<Result<StreamedArtifact>> streamThroughAndCommit(
+        final Key primaryKey,
+        final String upstreamUri,
+        final Optional<Long> upstreamSize,
+        final Publisher<ByteBuffer> upstreamBody,
+        final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> fetchSidecars,
+        final Set<ChecksumAlgo> nonBlockingAlgos,
+        final RequestContext ctx
+    ) {
+        Objects.requireNonNull(primaryKey, "primaryKey");
+        Objects.requireNonNull(upstreamBody, "upstreamBody");
+        final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> fetchers =
+            fetchSidecars == null ? Collections.emptyMap() : fetchSidecars;
+        final Set<ChecksumAlgo> nonBlocking = nonBlockingAlgos == null
+            ? NON_BLOCKING_DEFAULT : nonBlockingAlgos;
+        final Path tempFile;
+        try {
+            tempFile = Files.createTempFile("pantera-proxy-", ".tmp");
+        } catch (final IOException ex) {
+            return CompletableFuture.completedFuture(
+                Result.err(new Fault.StorageUnavailable(ex, primaryKey.string()))
+            );
+        }
+        final FileChannel channel; // NOPMD CloseResource - closed asynchronously inside doOnComplete/doOnError/doOnCancel terminal callbacks; try-with-resources would close it before any tee chunk could be written
+        try {
+            channel = FileChannel.open(
+                tempFile,
+                StandardOpenOption.WRITE,
+                StandardOpenOption.TRUNCATE_EXISTING
+            );
+        } catch (final IOException ex) {
+            deleteQuietly(tempFile);
+            return CompletableFuture.completedFuture(
+                Result.err(new Fault.StorageUnavailable(ex, primaryKey.string()))
+            );
+        }
+        // Phase 7.5 parallel-prefetch trick (same as writeAndVerify): fire
+        // every blocking sidecar fetch BEFORE we start consuming the primary
+        // body. By the time the tee onComplete fires, the .sha1 future is
+        // typically already resolved — the verify step adds zero RTT on the
+        // critical path.
+        final Map<ChecksumAlgo, CompletableFuture<SidecarFetch>> blockingFutures =
+            new EnumMap<>(ChecksumAlgo.class);
+        for (final Map.Entry<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> entry
+                : fetchers.entrySet()) {
+            if (nonBlocking.contains(entry.getKey())) {
+                continue;
+            }
+            blockingFutures.put(
+                entry.getKey(),
+                entry.getValue().get()
+                    .toCompletableFuture()
+                    .thenApply(opt -> new SidecarFetch(
+                        entry.getKey(), opt.map(ProxyCacheWriter::readSmall)
+                    ))
+                    .exceptionally(err -> new SidecarFetch(
+                        entry.getKey(), Optional.empty()
+                    ))
+            );
+        }
+        final Map<ChecksumAlgo, MessageDigest> digests = createDigests();
+        final AtomicLong size = new AtomicLong();
+        // Idempotent terminal guard: doOnComplete / doOnError / doOnCancel
+        // can race in pathological subscriber implementations. Only the
+        // first terminal event runs cleanup / verify-and-commit; the others
+        // become no-ops.
+        final AtomicBoolean terminated = new AtomicBoolean();
+        final CompletableFuture<Result<Void>> verifyDone = new CompletableFuture<>();
+        final Flowable<ByteBuffer> teed = Flowable.fromPublisher(upstreamBody)
+            // Move the file-write + digest work off the upstream HTTP I/O
+            // thread so a slow disk does not back-pressure the upstream
+            // connection. Schedulers.io grows on demand and is RxJava's
+            // standard pool for blocking I/O.
+            .observeOn(Schedulers.io())
+            .doOnNext(buf -> {
+                final ByteBuffer dup = buf.duplicate();
+                final byte[] arr = new byte[dup.remaining()];
+                dup.get(arr);
+                for (final MessageDigest md : digests.values()) {
+                    md.update(arr);
+                }
+                final ByteBuffer write = ByteBuffer.wrap(arr);
+                while (write.hasRemaining()) {
+                    channel.write(write);
+                }
+                size.addAndGet(arr.length);
+            })
+            .doOnComplete(() -> {
+                if (!terminated.compareAndSet(false, true)) {
+                    return;
+                }
+                closeQuietly(channel);
+                final Map<ChecksumAlgo, String> computedHex = finalizeDigests(digests);
+                this.streamCompleteVerifyAndCommit(
+                    primaryKey, upstreamUri, tempFile, computedHex,
+                    fetchers, nonBlocking, blockingFutures, ctx,
+                    size.get(), verifyDone
+                );
+            })
+            .doOnError(err -> {
+                if (!terminated.compareAndSet(false, true)) {
+                    return;
+                }
+                closeQuietly(channel);
+                deleteQuietly(tempFile);
+                EcsLogger.warn("com.auto1.pantera.cache")
+                    .message("Stream-through upstream error; cache not populated")
+                    .eventCategory("web")
+                    .eventAction("cache_write")
+                    .eventOutcome("failure")
+                    .field("repository.name", this.repoName)
+                    .field("url.path", primaryKey.string())
+                    .field("trace.id", traceId(ctx))
+                    .error(err)
+                    .log();
+                verifyDone.complete(Result.err(new Fault.StorageUnavailable(
+                    unwrap(err), primaryKey.string()
+                )));
+            })
+            .doOnCancel(() -> {
+                if (!terminated.compareAndSet(false, true)) {
+                    return;
+                }
+                closeQuietly(channel);
+                deleteQuietly(tempFile);
+                EcsLogger.debug("com.auto1.pantera.cache")
+                    .message("Stream-through cancelled by client; cache not populated")
+                    .eventCategory("web")
+                    .eventAction("cache_write")
+                    .eventOutcome("failure")
+                    .field("repository.name", this.repoName)
+                    .field("url.path", primaryKey.string())
+                    .field("trace.id", traceId(ctx))
+                    .log();
+                verifyDone.complete(Result.err(new Fault.StorageUnavailable(
+                    new IOException("client disconnected mid-stream"),
+                    primaryKey.string()
+                )));
+            });
+        final Content body = new Content.From(upstreamSize, teed);
+        return CompletableFuture.completedFuture(
+            Result.ok(new StreamedArtifact(body, verifyDone))
+        );
+    }
+
+    /**
+     * Post-stream verification + commit dispatched from the tee's
+     * {@code doOnComplete}. Awaits the in-flight blocking sidecar futures,
+     * compares each claim to the locally-computed digest, and either commits
+     * (sidecar-first per Track 3) or drops the temp file with an integrity
+     * log. All outcomes complete {@code outcome}; no exceptions are leaked.
+     */
+    private void streamCompleteVerifyAndCommit(
+        final Key primaryKey,
+        final String upstreamUri,
+        final Path tempFile,
+        final Map<ChecksumAlgo, String> computed,
+        final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> fetchers,
+        final Set<ChecksumAlgo> nonBlocking,
+        final Map<ChecksumAlgo, CompletableFuture<SidecarFetch>> blockingFutures,
+        final RequestContext ctx,
+        final long size,
+        final CompletableFuture<Result<Void>> outcome
+    ) {
+        for (final ChecksumAlgo algo : fetchers.keySet()) {
+            if (nonBlocking.contains(algo)) {
+                this.dispatchDeferredSidecar(
+                    primaryKey, upstreamUri, algo, fetchers.get(algo), computed, ctx
+                );
+            }
+        }
+        @SuppressWarnings("unchecked")
+        final CompletableFuture<SidecarFetch>[] futures =
+            blockingFutures.values().toArray(new CompletableFuture[0]);
+        CompletableFuture.allOf(futures).whenComplete((ignored, awaitErr) -> {
+            if (awaitErr != null) {
+                deleteQuietly(tempFile);
+                outcome.complete(Result.err(new Fault.StorageUnavailable(
+                    unwrap(awaitErr), primaryKey.string()
+                )));
+                return;
+            }
+            final Map<ChecksumAlgo, byte[]> sidecars = new EnumMap<>(ChecksumAlgo.class);
+            for (final CompletableFuture<SidecarFetch> f : futures) {
+                final SidecarFetch fetch = f.join();
+                fetch.bytes().ifPresent(b -> sidecars.put(fetch.algo(), b));
+            }
+            for (final Map.Entry<ChecksumAlgo, byte[]> entry : sidecars.entrySet()) {
+                final ChecksumAlgo algo = entry.getKey();
+                final String claim = normaliseSidecar(entry.getValue());
+                final String have = computed.get(algo);
+                if (!claim.equals(have)) {
+                    deleteQuietly(tempFile);
+                    this.logStreamIntegrityFailure(
+                        primaryKey, upstreamUri, algo, claim, have, ctx
+                    );
+                    outcome.complete(Result.err(new Fault.UpstreamIntegrity(
+                        upstreamUri == null ? primaryKey.string() : upstreamUri,
+                        algo, claim, have
+                    )));
+                    return;
+                }
+            }
+            this.commitStreamed(primaryKey, tempFile, size, sidecars, ctx, outcome);
+        });
+    }
+
+    /**
+     * Commit a stream-through artifact: sidecars first, primary last (Track 3
+     * atomic commit order). The bytes are read from the temp file into memory
+     * exactly once and re-used for both the primary save and the {@code onWrite}
+     * callback (Track 4 +sibling-prefetch). Temp file is deleted on success
+     * and on any failure.
+     */
+    private void commitStreamed(
+        final Key primaryKey,
+        final Path tempFile,
+        final long size,
+        final Map<ChecksumAlgo, byte[]> sidecars,
+        final RequestContext ctx,
+        final CompletableFuture<Result<Void>> outcome
+    ) {
+        final byte[] bytes;
+        try {
+            bytes = Files.readAllBytes(tempFile);
+        } catch (final IOException ex) {
+            deleteQuietly(tempFile);
+            outcome.complete(Result.err(new Fault.StorageUnavailable(
+                ex, primaryKey.string()
+            )));
+            return;
+        }
+        final boolean hasCallback = this.onWrite != NO_OP_ON_WRITE
+            && !CacheWriteCallbackRegistry.instance().isNoOp(this.onWrite);
+        this.saveSidecars(primaryKey, sidecars)
+            .thenCompose(ignored ->
+                this.cache.save(primaryKey, new Content.From(bytes))
+            )
+            .whenComplete((ignored, err) -> {
+                if (err == null) {
+                    if (hasCallback) {
+                        this.fireOnWrite(primaryKey, tempFile, size);
+                    }
+                    deleteQuietly(tempFile);
+                    this.logSuccess(primaryKey, sidecars.keySet(), ctx);
+                    outcome.complete(Result.ok(null));
+                } else {
+                    deleteQuietly(tempFile);
+                    this.rollbackAfterPartialFailure(
+                        primaryKey, sidecars.keySet(), err, ctx
+                    );
+                    outcome.complete(Result.err(new Fault.StorageUnavailable(
+                        unwrap(err), primaryKey.string()
+                    )));
+                }
+            });
+    }
+
+    /**
+     * Emit an integrity-failure log + metric for a stream-through mismatch.
+     * The message explicitly notes the client already received the unverified
+     * bytes — operators reading the log should know the cache stayed empty
+     * but the in-flight response was already committed.
+     */
+    private void logStreamIntegrityFailure(
+        final Key primaryKey,
+        final String upstreamUri,
+        final ChecksumAlgo algo,
+        final String sidecarClaim,
+        final String computed,
+        final RequestContext ctx
+    ) {
+        final String tag = algo.name().toLowerCase(Locale.ROOT);
+        EcsLogger.error("com.auto1.pantera.cache")
+            .message(
+                "Stream-through integrity mismatch — bytes were served to client"
+                + " but NOT committed to cache (algo=" + tag
+                + ", sidecar_claim=" + sidecarClaim
+                + ", computed=" + computed + ")"
+            )
+            .eventCategory("web")
+            .eventAction("cache_write")
+            .eventOutcome("integrity_failure")
+            .field("repository.name", this.repoName)
+            .field("url.path", primaryKey.string())
+            .field("url.full", upstreamUri == null ? primaryKey.string() : upstreamUri)
+            .field("trace.id", traceId(ctx))
+            .log();
+        this.incrementIntegrityFailure(tag);
+    }
+
+    /** Finalize every {@link MessageDigest} into a stable hex map. */
+    private static Map<ChecksumAlgo, String> finalizeDigests(
+        final Map<ChecksumAlgo, MessageDigest> digests
+    ) {
+        final Map<ChecksumAlgo, String> out = new EnumMap<>(ChecksumAlgo.class);
+        for (final Map.Entry<ChecksumAlgo, MessageDigest> entry : digests.entrySet()) {
+            out.put(entry.getKey(), HEX.formatHex(entry.getValue().digest()));
+        }
+        return out;
+    }
+
+    /** Close a file channel without surfacing IO errors (best effort). */
+    private static void closeQuietly(final FileChannel channel) {
+        try {
+            channel.close();
+        } catch (final IOException ex) {
+            EcsLogger.debug("com.auto1.pantera.cache")
+                .message("Failed to close stream-through temp channel")
+                .error(ex)
+                .log();
+        }
+    }
+
+    /**
      * Stream the upstream body into {@code tempFile} while computing all four
      * digests in a single pass.
      *
@@ -647,8 +1017,17 @@ public final class ProxyCacheWriter {
         final Path callbackFile = hasCallback
             ? materialiseCallbackTempFile(bytes, artifact.primaryKey())
             : null;
-        return this.cache.save(artifact.primaryKey(), new Content.From(bytes))
-            .thenCompose(ignored -> this.saveSidecars(artifact.primaryKey(), artifact.sidecars()))
+        // Track 3 atomic commit: sidecars FIRST, primary LAST. By writing
+        // sidecars before the primary, any reader that observes the primary
+        // on disk is guaranteed to find every matching sidecar — the
+        // previously-possible "primary present without .sha1" window is
+        // eliminated. If the primary write fails or the JVM crashes
+        // between the two phases, only orphaned sidecars remain; the next
+        // request finds no primary, re-fetches from upstream, and a fresh
+        // ProxyCacheWriter run overwrites the orphans with consistent
+        // values. Orphans are therefore harmless and self-healing.
+        return this.saveSidecars(artifact.primaryKey(), artifact.sidecars())
+            .thenCompose(ignored -> this.cache.save(artifact.primaryKey(), new Content.From(bytes)))
             .handle((ignored, err) -> {
                 if (err == null) {
                     if (hasCallback) {
@@ -1030,6 +1409,30 @@ public final class ProxyCacheWriter {
 
     /** Tuple type for collecting per-algo sidecar fetches. */
     private record SidecarFetch(ChecksumAlgo algo, Optional<byte[]> bytes) {
+    }
+
+    /**
+     * Track 4 stream-through return value: a teed body to hand to
+     * {@code ResponseBuilder.body(...)} plus a fire-and-forget future that
+     * completes when the post-stream verify + commit decision lands.
+     *
+     * <p>The proxy hot path does NOT block on {@code verificationOutcome} —
+     * the response is committed to Jetty as soon as the upstream Publisher
+     * emits its first byte. {@code verificationOutcome} is exposed so tests
+     * and integration callers can observe whether the cache was populated
+     * (commit success), left empty by upstream integrity disagreement, or
+     * left empty by a mid-stream error.
+     *
+     * @param body                  Teed response body, ready for
+     *                              {@code ResponseBuilder.body(...)}.
+     * @param verificationOutcome   Completes with the final commit/verify
+     *                              outcome; never throws, captures errors
+     *                              as {@link Result.Err}.
+     */
+    public record StreamedArtifact(
+        Content body,
+        CompletionStage<Result<Void>> verificationOutcome
+    ) {
     }
 
     /** A verified-but-not-yet-committed artifact that can be served immediately. */

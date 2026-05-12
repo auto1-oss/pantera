@@ -74,12 +74,14 @@ public final class DbSyncArtifactIndexer implements SyncArtifactIndexer {
         return CompletableFuture.runAsync(
             () -> upsert(event), HandlerExecutor.get()
         ).thenRun(() -> {
-            // Drop both positive and negative L1 entries for this artifact
-            // name so the next read sees the fresh DB row, not a stale
-            // (possibly negative) cache entry. No-op when no cache is wired.
+            // Surgical: append this repo to the positive entry (creating it
+            // if absent) and drop any negative entry for the name. Avoids the
+            // DB round-trip that the old blunt invalidate(name) caused on the
+            // next read, and cluster-propagates the delta via pub/sub so peer
+            // nodes apply the same change without each rehitting the DB.
             this.cache.ifPresent(c -> {
                 if (event.artifactName() != null) {
-                    c.invalidate(event.artifactName());
+                    c.recordUpload(event.artifactName(), normalize(event.repoName()));
                 }
             });
         }).exceptionally(err -> {

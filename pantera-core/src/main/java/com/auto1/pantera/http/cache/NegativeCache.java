@@ -132,7 +132,17 @@ public final class NegativeCache {
     }
 
     /**
-     * Cache a composite key as not found (404) in L1 + L2.
+     * Cache a composite key as not found in L1 + L2.
+     *
+     * <p><b>Caller contract:</b> only invoke this when absence has been
+     * <em>positively confirmed</em> — either by an explicit upstream
+     * {@code 404 Not Found} response, or by structural knowledge that the
+     * artifact cannot exist in this scope (e.g. a group with no proxy
+     * members, a cooldown-blocked artifact). <b>Never</b> call this on
+     * other client errors (401/403/410/429) or on server errors (5xx,
+     * timeouts, exceptions): those are transient or non-absence signals
+     * and would poison the cache for the negative TTL window
+     * (default 24h).</p>
      *
      * @param key Composite key to cache
      */

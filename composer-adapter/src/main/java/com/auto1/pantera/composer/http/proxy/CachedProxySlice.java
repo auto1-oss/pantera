@@ -299,7 +299,7 @@ final class CachedProxySlice implements Slice {
                         if (!fresh) {
                             this.backgroundRefresh(line, name, headers);
                         }
-                        return this.serveCachedMetadata(name, headers, bytes);
+                        return this.serveCachedMetadata(bytes);
                     });
                 });
             }
@@ -309,41 +309,31 @@ final class CachedProxySlice implements Slice {
     }
 
     /**
-     * Serve cached metadata bytes: evaluate cooldown, rewrite URLs if needed, build response.
-     * Fixes triple buffering by using byte[] directly instead of wrapping/unwrapping Content.
+     * Serve cached metadata bytes: rewrite URLs if needed, build response.
+     *
+     * <p>Track 5 Phase 1A: cooldown re-evaluation removed from the cache-hit
+     * path. Pre-Track 5, this method called {@link #evaluateMetadataCooldown}
+     * which goes through {@code RegistryBackedInspector} and can fall
+     * through to {@code PackagistSource} (network) when L1+L2 miss. That
+     * made every cached metadata read dependent on packagist.org being
+     * reachable AND inside its rate-limit budget. Cooldown still gates the
+     * cache-miss / write-time refresh path inside
+     * {@link #fetchThroughCache} — once metadata has been written, requests
+     * for it serve from cache with zero upstream I/O.
      *
      * @param name Package name
-     * @param headers Request headers
+     * @param headers Request headers (unused on cache-hit; kept for symmetry)
      * @param bytes Cached metadata bytes
      * @return Response future
      */
-    private CompletableFuture<Response> serveCachedMetadata(
-        final String name,
-        final Headers headers,
-        final byte[] bytes
-    ) {
-        return this.evaluateMetadataCooldown(name, headers, bytes)
-            .thenApply(result -> {
-                if (result.blocked()) {
-                    EcsLogger.info("com.auto1.pantera.composer")
-                        .message("Cooldown blocked cached metadata request")
-                        .eventCategory("web")
-                        .eventAction("cooldown_check")
-                        .eventOutcome("failure")
-                        .field("event.reason", "cooldown_active")
-                        .field("package.name", name)
-                        .log();
-                    return CooldownResponseRegistry.instance()
-                        .getOrThrow(this.rtype)
-                        .forbidden(result.block().orElseThrow());
-                }
-                // Rewrite URLs (no-op for pre-rewritten content due to original_url check)
-                final byte[] rewritten = this.rewriteMetadata(bytes);
-                return ResponseBuilder.ok()
-                    .header("Content-Type", "application/json")
-                    .body(new Content.From(rewritten))
-                    .build();
-            });
+    private CompletableFuture<Response> serveCachedMetadata(final byte[] bytes) {
+        final byte[] rewritten = this.rewriteMetadata(bytes);
+        return CompletableFuture.completedFuture(
+            ResponseBuilder.ok()
+                .header("Content-Type", "application/json")
+                .body(new Content.From(rewritten))
+                .build()
+        );
     }
 
     /**

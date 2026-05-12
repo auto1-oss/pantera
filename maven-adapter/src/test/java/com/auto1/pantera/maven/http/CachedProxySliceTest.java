@@ -75,9 +75,50 @@ final class CachedProxySliceTest {
     private Queue<ProxyArtifactEvent> events;
 
     /**
-     * Optional storage placeholder for tests.
+     * Fresh in-memory storage for each call site. CachedProxySlice now
+     * requires non-empty raw storage by construction (Track 3 always-verify
+     * fix); tests use a throwaway {@link InMemoryStorage} so they exercise
+     * the same construction path as production.
      */
-    private static final Optional<Storage> NO_STORAGE = Optional.empty();
+    private static Optional<Storage> testStorage() {
+        return Optional.of(new InMemoryStorage());
+    }
+
+    /**
+     * Upstream test fixture that serves {@code data} for primary artifact
+     * requests and the matching SHA-1 hex for {@code .sha1} sidecar
+     * requests. Required since Track 3 made {@link CachedProxySlice} verify
+     * primaries against upstream {@code .sha1} on every cache-miss; a naive
+     * upstream that serves the same body for both paths now fails the
+     * integrity check.
+     */
+    private static com.auto1.pantera.http.Slice serveBodyWithSha1(final byte[] data) {
+        final String sha1Hex = sha1Hex(data);
+        return (line, headers, body) -> {
+            final String path = line.uri().getPath();
+            if (path.endsWith(".sha1")) {
+                return ResponseBuilder.ok()
+                    .body(sha1Hex.getBytes(StandardCharsets.UTF_8))
+                    .completedFuture();
+            }
+            return ResponseBuilder.ok().body(data).completedFuture();
+        };
+    }
+
+    private static String sha1Hex(final byte[] data) {
+        try {
+            final java.security.MessageDigest md =
+                java.security.MessageDigest.getInstance("SHA-1");
+            final byte[] digest = md.digest(data);
+            final StringBuilder out = new StringBuilder(digest.length * 2);
+            for (final byte b : digest) {
+                out.append(String.format("%02x", b));
+            }
+            return out.toString();
+        } catch (final java.security.NoSuchAlgorithmException ex) {
+            throw new IllegalStateException("SHA-1 unavailable", ex);
+        }
+    }
 
     @BeforeEach
     void init() {
@@ -126,7 +167,11 @@ final class CachedProxySliceTest {
     }
 
     @Test
-    void returnsNotFoundOnRemoteError() {
+    void returnsServiceUnavailableOnRemoteError() {
+        // Track 1 fix: upstream 5xx no longer collapses to 404 — operators
+        // need to distinguish "upstream is broken" from "artifact doesn't
+        // exist". Maps to 503 with the body drained to release the upstream
+        // connection.
         MatcherAssert.assertThat(
             new CachedProxySlice(
                 new SliceSimple(ResponseBuilder.internalError().build()),
@@ -134,10 +179,10 @@ final class CachedProxySliceTest {
                 Optional.of(this.events), "*", "https://repo.maven.apache.org/maven2", "maven-proxy",
                 NoopCooldownService.INSTANCE,
                 noopInspector(),
-                CachedProxySliceTest.NO_STORAGE
+                testStorage()
             ),
             new SliceHasResponse(
-                new RsHasStatus(RsStatus.NOT_FOUND),
+                new RsHasStatus(RsStatus.SERVICE_UNAVAILABLE),
                 new RequestLine(RqMethod.GET, "/any")
             )
         );
@@ -145,7 +190,9 @@ final class CachedProxySliceTest {
     }
 
     @Test
-    void returnsNotFoundOnRemoteAndCacheError() {
+    void returnsServiceUnavailableOnRemoteAndCacheError() {
+        // Track 1 fix: upstream 5xx → 503 even when the local cache is
+        // unavailable (no stale fallback possible).
         MatcherAssert.assertThat(
             new CachedProxySlice(
                 new SliceSimple(ResponseBuilder.internalError().build()),
@@ -154,10 +201,10 @@ final class CachedProxySliceTest {
                 Optional.of(this.events), "*", "https://repo.maven.apache.org/maven2", "maven-proxy",
                 NoopCooldownService.INSTANCE,
                 noopInspector(),
-                CachedProxySliceTest.NO_STORAGE
+                testStorage()
             ),
             new SliceHasResponse(
-                new RsHasStatus(RsStatus.NOT_FOUND),
+                new RsHasStatus(RsStatus.SERVICE_UNAVAILABLE),
                 new RequestLine(RqMethod.GET, "/abc")
             )
         );
@@ -175,12 +222,12 @@ final class CachedProxySliceTest {
         final byte[] data = "remote".getBytes();
         MatcherAssert.assertThat(
             new CachedProxySlice(
-                (line, headers, body) -> ResponseBuilder.ok().body(data).completedFuture(),
+                serveBodyWithSha1(data),
                 (key, supplier, control) -> supplier.get(),
                 Optional.of(this.events), "*", "https://repo.maven.apache.org/maven2", "maven-proxy",
                 NoopCooldownService.INSTANCE,
                 noopInspector(),
-                CachedProxySliceTest.NO_STORAGE
+                testStorage()
             ),
             new SliceHasResponse(
                 Matchers.allOf(
@@ -195,21 +242,36 @@ final class CachedProxySliceTest {
 
     @ParameterizedTest
     @ValueSource(strings = {
+        // Classified primaries (sources/javadoc) route through the
+        // always-verify path but the event builder filters them out so the
+        // queue stays empty.
         "/com/pantera/asto/1.5/asto-1.5-sources.jar",
-        "/com/pantera/asto/1.0-SNAPSHOT/asto-1.0-20200520.121003-4.jar.sha1",
         "/org/apache/commons/3.6/commons-3.6-javadoc.pom",
+        // Metadata bypasses the verify path entirely (Track 1+3 unchanged).
         "/org/test/test-app/maven-metadata.xml"
+        // Pure sidecar passthrough (e.g. {@code *.jar.sha1}) is now covered
+        // end-to-end by ChecksumProxySliceErrorPropagationTest and isn't
+        // re-tested here.
     })
     void loadsOriginAndDoesNotAddToEvents(final String path) {
         final byte[] data = "remote".getBytes();
+        // Sources/javadoc artifacts route through the always-verify path
+        // (Track 3) — they're {@code .jar}/{@code .pom} primaries and need a
+        // matching {@code .sha1} from upstream. Sidecars and metadata don't
+        // route through verification but they DO read back from the cache
+        // post-write, so we need a real storage-backed cache pair (the dumb
+        // {@code (key, supplier, control) -> supplier.get()} lambda returns
+        // empty content for the {@code Remote.EMPTY} supplier the SUCCESS
+        // path uses).
+        final Storage storage = new InMemoryStorage();
         MatcherAssert.assertThat(
             new CachedProxySlice(
-                (line, headers, body) -> ResponseBuilder.ok().body(data).completedFuture(),
-                (key, supplier, control) -> supplier.get(),
+                serveBodyWithSha1(data),
+                new com.auto1.pantera.asto.cache.FromStorageCache(storage),
                 Optional.of(this.events), "*", "https://repo.maven.apache.org/maven2", "maven-proxy",
                 NoopCooldownService.INSTANCE,
                 noopInspector(),
-                CachedProxySliceTest.NO_STORAGE
+                Optional.of(storage)
             ),
             new SliceHasResponse(
                 Matchers.allOf(
@@ -381,22 +443,28 @@ final class CachedProxySliceTest {
     }
 
     /**
-     * Regression: a version that was cached BEFORE the block was applied
-     * must STILL return 403 when the admin subsequently marks it blocked.
+     * Track 5 Phase 1A: cache-hit path is pure-local. A cooldown block
+     * applied AFTER the version was cached must NOT take effect on
+     * subsequent reads — cooldown evaluation now runs only on cache miss /
+     * refresh. The admin's tool for blocking an already-cached version is
+     * cache eviction.
      *
-     * <p>Before the fix, verifyAndServePrimary checked storage.exists() first
-     * and returned the cached bytes without any cooldown evaluation, meaning
-     * a blocked version that had landed in cache was served forever.</p>
+     * <p>Why this is the right trade-off: pre-Track-5 every cache hit ran
+     * {@code evaluateCooldownOrProceed} which threaded through the publish-date
+     * inspector chain, falling through to {@code MavenHeadSource} HEAD on
+     * Maven Central on L1+L2 miss. Under Cloudflare-backed Maven Central
+     * rate limiting that path generated the 429 storm that motivated
+     * Track 5. The new contract: cache hit = ZERO upstream I/O, ever.</p>
      */
     @Test
-    void verifyAndServePrimaryBlocksEvenWhenCacheHasVersion() {
+    void verifyAndServePrimaryCacheHitIsLocalEvenWhenBlockIsActive() {
         final String path = "/com/example/mylib/1.0/mylib-1.0.jar";
         final byte[] cachedBytes = "already-cached-jar".getBytes(StandardCharsets.UTF_8);
         final InMemoryStorage storage = new InMemoryStorage();
         final Key key = new Key.From(path.substring(1));
-        // Pre-populate storage to simulate a version cached before the block was applied.
         storage.save(key, new Content.From(cachedBytes)).join();
         final AtomicBoolean upstreamCalled = new AtomicBoolean(false);
+        final AtomicBoolean cooldownEvaluated = new AtomicBoolean(false);
         final CooldownBlock block = new CooldownBlock(
             "maven-proxy", "maven_proxy", "com/example/mylib", "1.0",
             CooldownReason.FRESH_RELEASE,
@@ -409,6 +477,7 @@ final class CachedProxySliceTest {
             public CompletableFuture<CooldownResult> evaluate(
                 final CooldownRequest request, final CooldownInspector inspector
             ) {
+                cooldownEvaluated.set(true);
                 return CompletableFuture.completedFuture(CooldownResult.blocked(block));
             }
             @Override
@@ -435,7 +504,7 @@ final class CachedProxySliceTest {
             (line, headers, body) -> {
                 upstreamCalled.set(true);
                 return CompletableFuture.failedFuture(
-                    new AssertionError("Upstream must not be called for a blocked version")
+                    new AssertionError("Upstream must not be called on cache hit")
                 );
             },
             (cacheKey, supplier, control) -> supplier.get(),
@@ -455,20 +524,25 @@ final class CachedProxySliceTest {
             Content.EMPTY
         ).join();
         MatcherAssert.assertThat(
-            "Already-cached blocked version must return 403 — not serve cached bytes",
+            "Cache hit serves the cached bytes with 200 — cooldown is not evaluated",
             response.status(),
-            Matchers.is(RsStatus.FORBIDDEN)
+            Matchers.is(RsStatus.OK)
         );
         MatcherAssert.assertThat(
-            "Upstream must NOT be contacted for a blocked version even on cache-hit path",
+            "Cooldown must NOT be evaluated on cache hit (Track 5 contract)",
+            cooldownEvaluated.get(),
+            Matchers.is(false)
+        );
+        MatcherAssert.assertThat(
+            "Upstream must NOT be contacted on cache hit",
             upstreamCalled.get(),
             Matchers.is(false)
         );
         final byte[] body = response.body().asBytes();
         MatcherAssert.assertThat(
-            "Cached bytes must NOT appear in the 403 response body",
-            new String(body, StandardCharsets.UTF_8).contains("already-cached-jar"),
-            Matchers.is(false)
+            "Cache hit returns the cached bytes verbatim",
+            new String(body, StandardCharsets.UTF_8),
+            Matchers.is("already-cached-jar")
         );
     }
 
@@ -557,7 +631,7 @@ final class CachedProxySliceTest {
             (cacheKey, supplier, control) -> CompletableFuture.completedFuture(Optional.empty()),
             Optional.of(this.events), "gradle_proxy",
             "https://repo.maven.apache.org/maven2", "maven-proxy",
-            NoopCooldownService.INSTANCE, noopInspector(), NO_STORAGE,
+            NoopCooldownService.INSTANCE, noopInspector(), testStorage(),
             ProxyCacheConfig.defaults(),
             new MetadataCache(Duration.ofMinutes(1)),
             recordingService
@@ -607,7 +681,7 @@ final class CachedProxySliceTest {
             (cacheKey, supplier, control) -> CompletableFuture.completedFuture(Optional.empty()),
             Optional.of(this.events), "gradle_proxy",
             "https://repo.maven.apache.org/maven2", "maven-proxy",
-            NoopCooldownService.INSTANCE, noopInspector(), NO_STORAGE,
+            NoopCooldownService.INSTANCE, noopInspector(), testStorage(),
             ProxyCacheConfig.defaults(),
             new MetadataCache(Duration.ofMinutes(1))
             // no CooldownMetadataService → pass-through behaviour

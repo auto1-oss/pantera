@@ -24,6 +24,7 @@ import com.auto1.pantera.asto.factory.Config;
 import com.auto1.pantera.asto.factory.StoragesLoader;
 import com.auto1.pantera.auth.AuthFromDb;
 import com.auto1.pantera.auth.AuthFromEnv;
+import com.auto1.pantera.cache.ArtifactIndexCacheConfig;
 import com.auto1.pantera.cache.CacheInvalidationPubSub;
 import com.auto1.pantera.cache.GlobalCacheConfig;
 import com.auto1.pantera.cache.NegativeCacheConfig;
@@ -289,6 +290,15 @@ public final class YamlSettings implements Settings {
         NegativeCacheConfig.initialize(this.meta().yamlMapping("caches"));
         // Initialize cooldown metadata cache config
         FilteredMetadataCacheConfig.initialize(this.meta().yamlMapping("caches"));
+        // Parse ArtifactIndexCache tier configs eagerly so the index wiring
+        // below can pick them up. These are read directly per-instance rather
+        // than via a global singleton (the cache owns its own config).
+        final ArtifactIndexCacheConfig indexPositiveCfg = ArtifactIndexCacheConfig.fromYaml(
+            this.meta().yamlMapping("caches"), ArtifactIndexCacheConfig.POSITIVE_SUBKEY
+        );
+        final ArtifactIndexCacheConfig indexNegativeCfg = ArtifactIndexCacheConfig.fromYaml(
+            this.meta().yamlMapping("caches"), ArtifactIndexCacheConfig.NEGATIVE_SUBKEY
+        );
         // Initialize database early so AuthFromDb can be used in auth chain
         if (shared.isPresent()) {
             this.artifactsDb = shared;
@@ -343,7 +353,13 @@ public final class YamlSettings implements Settings {
             && "true".equals(indexConfig.string("enabled"));
         if (indexEnabled && this.artifactsDb.isPresent()) {
             final ArtifactIndexCache cached = new ArtifactIndexCache( // NOPMD CloseResource - lifecycle owned by this.artifactIndex / this.artifactIndexCache fields
-                new DbArtifactIndex(this.artifactsDb.get())
+                new DbArtifactIndex(this.artifactsDb.get()),
+                indexPositiveCfg,
+                indexNegativeCfg,
+                (indexPositiveCfg.isValkeyEnabled() || indexNegativeCfg.isValkeyEnabled())
+                    ? valkey.map(ValkeyConnection::async)
+                    : Optional.empty(),
+                Optional.ofNullable(psEarly)
             );
             this.artifactIndex = cached;
             this.artifactIndexCache = Optional.of(cached);
@@ -354,7 +370,13 @@ public final class YamlSettings implements Settings {
         } else if (this.artifactsDb.isPresent()) {
             // Auto-enable DB-backed index when database is configured
             final ArtifactIndexCache cached = new ArtifactIndexCache( // NOPMD CloseResource - lifecycle owned by this.artifactIndex / this.artifactIndexCache fields
-                new DbArtifactIndex(this.artifactsDb.get())
+                new DbArtifactIndex(this.artifactsDb.get()),
+                indexPositiveCfg,
+                indexNegativeCfg,
+                (indexPositiveCfg.isValkeyEnabled() || indexNegativeCfg.isValkeyEnabled())
+                    ? valkey.map(ValkeyConnection::async)
+                    : Optional.empty(),
+                Optional.ofNullable(psEarly)
             );
             this.artifactIndex = cached;
             this.artifactIndexCache = Optional.of(cached);

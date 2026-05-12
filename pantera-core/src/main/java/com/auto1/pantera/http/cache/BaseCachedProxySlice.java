@@ -718,9 +718,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                             this.signalToResponse(signal, line, key, store));
                 }
                 if (!resp.status().success()) {
-                    return this.handleNonSuccess(resp, duration)
-                        .thenCompose(signal ->
-                            this.signalToResponse(signal, line, key, store));
+                    return this.handleNonSuccess(resp, duration, key);
                 }
                 this.recordProxyMetric("success", duration);
                 return this.singleFlight.load(key, () -> {
@@ -1100,7 +1098,8 @@ public abstract class BaseCachedProxySlice implements Slice {
             .thenCompose(resp -> {
                 final long duration = System.currentTimeMillis() - startTime;
                 if (!resp.status().success()) {
-                    if (resp.status().code() == 404) {
+                    final int code = resp.status().code();
+                    if (code == 404) {
                         if (this.negativeCache != null
                             && !this.isChecksumSidecar(key.string())) {
                             final NegativeCacheKey nk = this.negKey(line.uri().getPath());
@@ -1109,16 +1108,24 @@ public abstract class BaseCachedProxySlice implements Slice {
                             );
                         }
                         this.recordProxyMetric("not_found", duration);
-                    } else if (resp.status().code() >= 500) {
+                        return resp.body().asBytesFuture()
+                            .thenApply(bytes -> ResponseBuilder.notFound().build());
+                    }
+                    if (code >= 500) {
                         this.trackUpstreamFailure(
-                            new RuntimeException("HTTP " + resp.status().code())
+                            new RuntimeException("HTTP " + code)
                         );
                         this.recordProxyMetric("error", duration);
-                    } else {
-                        this.recordProxyMetric("client_error", duration);
+                        return resp.body().asBytesFuture()
+                            .thenApply(bytes -> ResponseBuilder.unavailable()
+                                .textBody("Upstream temporarily unavailable")
+                                .build());
                     }
-                    return resp.body().asBytesFuture()
-                        .thenApply(bytes -> ResponseBuilder.notFound().build());
+                    // 4xx (non-404): propagate verbatim — preserves 429
+                    // status + Retry-After, 403 auth signal, 410 Gone, etc.
+                    // Crucially does not write NegativeCache for these.
+                    this.recordProxyMetric("client_error", duration);
+                    return CompletableFuture.completedFuture(resp);
                 }
                 this.recordProxyMetric("success", duration);
                 this.enqueueEvent(key, resp.headers(), -1, owner);
@@ -1172,21 +1179,46 @@ public abstract class BaseCachedProxySlice implements Slice {
         return NegativeCacheKey.fromPath(this.repoName, this.repoType, path);
     }
 
-    private CompletableFuture<FetchSignal> handleNonSuccess(
-        final Response resp, final long duration
+    /**
+     * Handle a non-success upstream response (4xx other than 404, or 5xx).
+     * 404 has its own dedicated path via {@link #handle404}.
+     *
+     * <p>Behavior:
+     * <ul>
+     *   <li><b>5xx</b>: record upstream failure, drain upstream body to release the
+     *       connection, then try stale-if-revalidate or return 503. Upstream body
+     *       is not propagated (operators want a clean Pantera message, not the
+     *       upstream's error page).</li>
+     *   <li><b>4xx (non-404)</b>: propagate the upstream response verbatim —
+     *       status, headers (including {@code Retry-After} on 429), and body.
+     *       This covers 401, 403, 410, 429, etc. Crucially, the response is
+     *       <em>not</em> written to {@link NegativeCache}: only true 404 belongs
+     *       there. A transient 429 from upstream must not poison the cache for
+     *       the 24h negative-cache TTL.</li>
+     * </ul>
+     */
+    private CompletableFuture<Response> handleNonSuccess(
+        final Response resp, final long duration, final Key key
     ) {
-        if (resp.status().code() >= 500) {
+        final int code = resp.status().code();
+        if (code >= 500) {
             this.trackUpstreamFailure(
-                new RuntimeException("HTTP " + resp.status().code())
+                new RuntimeException("HTTP " + code)
             );
             this.recordProxyMetric("error", duration);
-        } else {
-            this.recordProxyMetric("client_error", duration);
+            return resp.body().asBytesFuture().thenCompose(ignored ->
+                this.tryServeStale(
+                    key,
+                    () -> CompletableFuture.completedFuture(
+                        ResponseBuilder.unavailable()
+                            .textBody("Upstream temporarily unavailable")
+                            .build()
+                    )
+                )
+            );
         }
-        return resp.body().asBytesFuture()
-            .thenApply(bytes -> resp.status().code() < 500
-                ? FetchSignal.NOT_FOUND
-                : FetchSignal.ERROR);
+        this.recordProxyMetric("client_error", duration);
+        return CompletableFuture.completedFuture(resp);
     }
 
     /**
