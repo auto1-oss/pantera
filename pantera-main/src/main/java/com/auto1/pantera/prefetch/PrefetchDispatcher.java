@@ -250,6 +250,17 @@ public final class PrefetchDispatcher {
             if (parser == null) {
                 return;
             }
+            // 4.5) Parser applicability gate. Track 5 follow-up: each
+            // parser exposes a path predicate so the dispatcher skips
+            // files it can't possibly parse — e.g. .jar / .war / .aar /
+            // .module writes for the Maven POM parser. Pre-filter avoids
+            // burning a temp-file snapshot + executor slot + WARN log
+            // per non-POM cache write, which under a cold mvn walk
+            // accounted for 80+ "Unexpected character 'P' in prolog"
+            // entries per build.
+            if (!parser.appliesTo(event.urlPath())) {
+                return;
+            }
             // 5) Decide who owns the bytes-on-disk path:
             //    - callerOwnsSnapshot=true: the writer's temp file is deleted
             //      as soon as this callback returns; we must snapshot it now.

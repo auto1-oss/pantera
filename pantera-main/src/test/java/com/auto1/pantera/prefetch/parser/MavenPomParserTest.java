@@ -41,6 +41,38 @@ class MavenPomParserTest {
     }
 
     @Test
+    void appliesToFiltersOutNonPomPaths() {
+        final MavenPomParser parser = new MavenPomParser();
+        // Track 5 follow-up: pre-fix the dispatcher invoked the POM parser
+        // on every cached primary including .jar / .war / .module — each
+        // attempt produced a "Unexpected character 'P' in prolog" WARN
+        // (ZIP magic byte) and burned CPU. The appliesTo gate skips
+        // non-POMs before the dispatcher even snapshots the bytes.
+        MatcherAssert.assertThat(
+            "POM path matches", parser.appliesTo("com/example/foo/1.0/foo-1.0.pom"),
+            Matchers.is(true)
+        );
+        MatcherAssert.assertThat(
+            "JAR path is filtered", parser.appliesTo("com/example/foo/1.0/foo-1.0.jar"),
+            Matchers.is(false)
+        );
+        MatcherAssert.assertThat(
+            "WAR path is filtered", parser.appliesTo("com/example/foo/1.0/foo-1.0.war"),
+            Matchers.is(false)
+        );
+        MatcherAssert.assertThat(
+            "module (Gradle) path is filtered",
+            parser.appliesTo("com/example/foo/1.0/foo-1.0.module"),
+            Matchers.is(false)
+        );
+        MatcherAssert.assertThat(
+            "null path treated as not-applicable",
+            parser.appliesTo(null),
+            Matchers.is(false)
+        );
+    }
+
+    @Test
     void returnsEmptyOnMalformedPom() {
         final Path missing = Paths.get("/this/path/does/not/exist.pom");
         final List<Coordinate> deps = new MavenPomParser().parse(missing);

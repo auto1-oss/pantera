@@ -34,4 +34,27 @@ public interface PrefetchParser {
      * @return Direct dependency coordinates; empty if file is missing or malformed.
      */
     List<Coordinate> parse(Path bytesOnDisk);
+
+    /**
+     * Filter: should this parser even attempt the cached artifact at
+     * {@code urlPath}? Pre-Track-5 the dispatcher routed every cached
+     * primary to the registered parser regardless of extension — for the
+     * Maven adapter that meant {@link MavenPomParser} was invoked on
+     * every cached {@code .jar} (binary ZIP starting with {@code PK}),
+     * producing one WARN per jar and burning CPU on a guaranteed-failed
+     * XML parse. {@code .jar} writes in a {@code mvn dependency:resolve}
+     * cold walk easily account for hundreds of these log lines and a
+     * meaningful slice of the wall clock.
+     *
+     * <p>Default returns {@code true} for backward-compatibility with
+     * parsers that don't care about path filtering (npm tarball parser,
+     * etc.). Maven and Gradle override to gate on {@code .pom}.
+     *
+     * @param urlPath URL path of the cached artifact (e.g.
+     *                {@code com/example/foo/1.0/foo-1.0.jar}).
+     * @return {@code true} iff this parser can usefully process the file.
+     */
+    default boolean appliesTo(final String urlPath) {
+        return true;
+    }
 }

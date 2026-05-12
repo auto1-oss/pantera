@@ -464,6 +464,53 @@ class PrefetchDispatcherTest {
             submitter.submitCount(), Matchers.equalTo(5));
     }
 
+    /**
+     * Track 5 follow-up: PrefetchParser.appliesTo gates the dispatcher
+     * BEFORE the snapshot+executor hop. Pre-fix the Maven POM parser was
+     * invoked on every cached primary including .jar (binary ZIP),
+     * spamming WARNs and burning CPU on a guaranteed-failed XML parse.
+     */
+    @Test
+    void onCacheWrite_skipsParser_whenAppliesToReturnsFalse() throws Exception {
+        final RecordingSubmitter submitter = new RecordingSubmitter();
+        final RecordingParser parser = new RecordingParser(
+            List.of(Coordinate.maven("com.example", "y", "1.0"))
+        ) {
+            @Override
+            public boolean appliesTo(final String urlPath) {
+                return urlPath.endsWith(".pom");
+            }
+        };
+        final PrefetchDispatcher dispatcher = new PrefetchDispatcher(
+            PrefetchTuning::defaults,
+            repo -> Boolean.TRUE,
+            repo -> UPSTREAM,
+            Map.of(REPO_TYPE, parser),
+            repo -> REPO_TYPE,
+            submitter,
+            this.executor
+        );
+        // .jar write: appliesTo returns false → parser MUST NOT be invoked.
+        dispatcher.onCacheWrite(new CacheWriteEvent(
+            REPO, "com/example/foo/1.0/foo-1.0.jar",
+            this.eventFile, 100L, Instant.now()
+        ));
+        // .pom write: appliesTo returns true → parser runs.
+        dispatcher.onCacheWrite(new CacheWriteEvent(
+            REPO, "com/example/foo/1.0/foo-1.0.pom",
+            this.eventFile, 100L, Instant.now()
+        ));
+        drain(this.executor);
+        MatcherAssert.assertThat(
+            "parser invoked exactly once — only for the .pom",
+            parser.parseCount(), Matchers.equalTo(1)
+        );
+        MatcherAssert.assertThat(
+            "submitter receives one task — for the .pom only",
+            submitter.submitCount(), Matchers.equalTo(1)
+        );
+    }
+
     // ============================================================
     //  Helpers
     // ============================================================

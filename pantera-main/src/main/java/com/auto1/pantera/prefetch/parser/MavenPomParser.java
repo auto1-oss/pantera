@@ -43,6 +43,21 @@ public final class MavenPomParser implements PrefetchParser {
      */
     private static final XMLInputFactory INPUT_FACTORY = createInputFactory();
 
+    /**
+     * Only POMs are parseable as Maven XML. Pre-Track-5 the dispatcher
+     * routed every cached primary here — including {@code .jar},
+     * {@code .war}, {@code .aar}, {@code .module} etc. — and each one
+     * burned a temp-file snapshot copy + an XML parse attempt that
+     * failed at byte 1 with "Unexpected character 'P'" (the ZIP magic
+     * {@code PK}). One cold {@code mvn dependency:resolve -U} produced
+     * 80+ identical WARNs and the matching CPU/disk waste. Filtering
+     * here turns the dispatcher into a no-op for non-POM Maven writes.
+     */
+    @Override
+    public boolean appliesTo(final String urlPath) {
+        return urlPath != null && urlPath.endsWith(".pom");
+    }
+
     @Override
     public List<Coordinate> parse(final Path bytesOnDisk) {
         final List<Coordinate> result = new ArrayList<>();

@@ -137,6 +137,36 @@
   refresh in the background via SWR — the user's "serve stale + refresh
   in background" contract.
 
+- **Track 5 perf fix: PrefetchDispatcher applicability gate (MavenPomParser
+  no longer parses JARs).** Diagnosed via cold-cache `mvn dependency:resolve -U`
+  log review: the only WARN type the proxy emitted during the failing run
+  was `Maven POM parse failed: Unexpected character 'P' (code 80) in prolog`,
+  fired 80+ times per build. Root cause: `PrefetchDispatcher` routed every
+  successful Maven cache write to `MavenPomParser` regardless of file
+  extension. JAR files (binary ZIPs starting with `PK` = `0x50 0x4B`) are
+  not parseable as XML — every `.jar` write triggered a temp-file snapshot
+  copy + an XML parse attempt that failed at byte 1 + a WARN log emission +
+  an executor slot consumed for nothing.
+
+  Fix: added `PrefetchParser.appliesTo(String urlPath)` default-method to
+  the SPI. `MavenPomParser` overrides to `path.endsWith(".pom")`. The
+  dispatcher gates on `appliesTo` BEFORE the snapshot copy and executor
+  hand-off, so non-applicable writes (`.jar`, `.war`, `.aar`, `.module`,
+  etc. for Maven; future per-ecosystem variants for other parsers) are
+  a no-op on the cache-write callback path. Other parsers
+  (`NpmPackageParser`, `NpmCompositeParser`, `NpmPackumentParser`) inherit
+  the default-true behaviour and are unchanged.
+
+  Test coverage: `MavenPomParserTest.appliesToFiltersOutNonPomPaths`
+  pins the filter contract; `PrefetchDispatcherTest.onCacheWrite_skipsParser_whenAppliesToReturnsFalse`
+  pins the integration — a `.jar` write does not invoke the parser, the
+  subsequent `.pom` write does.
+
+  Impact on the user-reported cold `mvn dependency:resolve -U` walk: 80+
+  fewer WARNs per build, 80+ fewer temp-file `Files.copy` operations, 80+
+  fewer XML parser instances created and immediately discarded, 80+ fewer
+  executor jobs queued behind useful prefetch work.
+
 - **Track 5 follow-ups: per-repo-type extractors + Phase 3C contract pin.**
 
   **PublishDateExtractor registrations for every proxy ecosystem.**
