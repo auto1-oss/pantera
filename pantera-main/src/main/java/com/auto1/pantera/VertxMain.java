@@ -400,19 +400,19 @@ public final class VertxMain {
                     )
                 );
             com.auto1.pantera.publishdate.PublishDateRegistries.installDefault(publishDates);
-            // Track 5 Phase 3B: register the per-repo-type publish-date
-            // extractor. Every adapter's cache-write event path resolves
-            // publish_date via this registry, so the SPI is the single
-            // source of truth for "how do I read the upstream's publish
-            // timestamp out of this response?".  Maven scrapes the
-            // RFC 1123 Last-Modified header; npm pulls time.{version}
-            // from the packument JSON, but the proxy-cache event path
-            // only sees response headers — for ecosystems whose publish
-            // date lives in the body, the extractor returns empty here
-            // and the dedicated metadata-parsing path (NpmPackumentCache
-            // etc.) writes the row directly.
-            com.auto1.pantera.publishdate.PublishDateExtractors.instance().register(
-                "maven",
+            // Track 5 Phase 3B: register a header-based publish-date
+            // extractor for every proxy repo-type. All major upstream
+            // registries (Maven Central, npm registry, pypi
+            // files.pythonhosted.org, proxy.golang.org, packagist dist URLs,
+            // rubygems.org) emit an RFC 1123 Last-Modified header on
+            // artifact GETs, so a single parser handles them all. Adapters
+            // for ecosystems whose publish date lives in the response
+            // BODY rather than headers (docker manifests, nuget catalog,
+            // hex registry) need their own body-aware extractor; for now
+            // they fall through to the registry's NO_OP which simply
+            // skips the populate step (the DB consumer's
+            // System.currentTimeMillis() fallback applies).
+            final com.auto1.pantera.publishdate.PublishDateExtractor lastModified =
                 (headers, name, version) -> {
                     try {
                         return java.util.stream.StreamSupport.stream(
@@ -428,8 +428,15 @@ public final class VertxMain {
                     } catch (final java.time.format.DateTimeParseException ex) {
                         return java.util.Optional.empty();
                     }
-                }
-            );
+                };
+            final com.auto1.pantera.publishdate.PublishDateExtractors registry =
+                com.auto1.pantera.publishdate.PublishDateExtractors.instance();
+            registry.register("maven", lastModified);
+            registry.register("npm", lastModified);
+            registry.register("pypi", lastModified);
+            registry.register("go", lastModified);
+            registry.register("composer", lastModified);
+            registry.register("gem", lastModified);
         });
         // Wire RepositorySlices with the runtime HTTP tuning supplier so
         // every new SharedClient picks up the latest http_client.* values.

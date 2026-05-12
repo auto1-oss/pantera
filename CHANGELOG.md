@@ -137,6 +137,66 @@
   refresh in the background via SWR — the user's "serve stale + refresh
   in background" contract.
 
+- **Track 5 follow-ups: per-repo-type extractors + Phase 3C contract pin.**
+
+  **PublishDateExtractor registrations for every proxy ecosystem.**
+  `VertxMain.start` now registers the RFC 1123 `Last-Modified` extractor
+  for all six header-emitting ecosystems we proxy (maven, npm, pypi, go,
+  composer, gem) — every upstream we care about sets `Last-Modified` on
+  artifact GETs, so one lambda handles them all. Ecosystems whose
+  publish date lives in the response body (docker manifests, nuget
+  catalog, hex registry) fall through to the registry's NO_OP and
+  preserve the pre-Track-5 `System.currentTimeMillis()` DB-consumer
+  fallback — adding body-aware extractors for those is a separate
+  change scoped to whichever adapter needs strict cooldown semantics.
+
+  **Phase 3A "migration of composer/pypi/go onto SwrMetadataCache":
+  DELIBERATELY NOT DONE.** On close inspection of those adapters,
+  the audit finding that motivated the migration was wrong. Their
+  cache-hit paths use `CacheTimeControl.validate` which queries
+  `storage.metadata` (Postgres-backed, cross-process) — that is a
+  LOCAL DB query, not an upstream HTTP call. Replacing it with the
+  in-process Caffeine-timestamp shape of `SwrMetadataCache` would
+  trade cross-process consistency (any node sees freshness writes from
+  any other node) for in-process speed (each node tracks its own
+  freshness window). In a multi-instance Pantera deployment that is a
+  net regression: two nodes serving the same package would drift their
+  staleness independently. The existing adapter patterns are correct.
+  `SwrMetadataCache` stays as the canonical primitive for FUTURE
+  adapters that do not have a storage-backed metadata layer.
+
+  **Phase 3C "deletion of MavenHeadSource et al.": DELIBERATELY
+  NOT DONE.** The PublishDateSource implementations remain
+  load-bearing on the cache-miss branch (NETWORK_FALLBACK mode). The
+  cooldown gate runs BEFORE the upstream fetch on cache miss; without
+  a network-fallback source, the registry returns
+  `Optional.empty()` for any artifact we have never seen before, the
+  cooldown evaluator fails open, and a freshly-published version
+  inside its cooldown window slips past the gate the first time it is
+  requested. The Phase 1A invariant the user reported — "no upstream
+  on cache HIT" — does not require deletion of the cache-miss
+  fallback; one upstream HEAD per genuinely-new
+  `(artifact, version)` pair is amortised over the entire lifetime of
+  the artifact in cache and is the minimum cost of preserving the
+  "block fresh versions even for the first asker" property.
+
+  Admins who want strictly zero upstream HEAD traffic — at the cost
+  of losing first-asker cooldown — can already opt out per-repo by
+  setting `cooldown.enabled: false` in the repo YAML. No new toggles
+  needed.
+
+  Phase 3C contract is pinned in
+  `pantera-main/.../publishdate/DbPublishDateRegistryTest.java` with
+  two new tests:
+  - `cacheOnlyModeNeverInvokesSource` — L1+L2 miss + CACHE_ONLY
+    returns empty without firing the source.
+  - `cacheOnlyAfterNetworkFallbackHitsL1OrL2` — first call uses
+    NETWORK_FALLBACK and populates L2; subsequent CACHE_ONLY reads
+    (even across a registry-instance restart simulating a JVM
+    bounce) hit L2 with zero source calls.
+
+  Test count: 1194 unit tests passing (up from 1192). PMD clean.
+
 - **Phase 13.5: raise npm per-upstream prefetch cap default 4 → 32.**
   Phase 12.5 profiling proved foreground requests do not share semaphore
   queueing with prefetch (`tryAcquire()` is non-blocking; foreground

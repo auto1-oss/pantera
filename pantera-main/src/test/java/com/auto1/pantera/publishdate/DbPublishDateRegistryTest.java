@@ -164,6 +164,83 @@ final class DbPublishDateRegistryTest {
             "second lookup must hit negativeL1, not call source again");
     }
 
+    @Test
+    void cacheOnlyModeNeverInvokesSource() throws Exception {
+        // Track 5 Phase 3C contract: when the caller passes CACHE_ONLY,
+        // the registry MUST return Optional.empty() on L1+L2 miss without
+        // firing the PublishDateSource. This is what makes the SPI safe
+        // for cache-hit hot paths — even if someone later re-introduces a
+        // cooldown gate on a cache hit, the inspector chain physically
+        // cannot reach upstream.
+        final AtomicInteger sourceCalls = new AtomicInteger();
+        final PublishDateSource fakeMaven = stubSource("maven", "fake",
+            (n, v) -> {
+                sourceCalls.incrementAndGet();
+                return CompletableFuture.completedFuture(
+                    Optional.of(Instant.parse("2020-01-01T00:00:00Z"))
+                );
+            });
+        final DbPublishDateRegistry reg = new DbPublishDateRegistry(
+            this.ds, Map.of("maven", fakeMaven)
+        );
+        final Optional<Instant> result = reg.publishDate(
+            "maven", "x.y", "1.0", PublishDateRegistry.Mode.CACHE_ONLY
+        ).get();
+        assertEquals(Optional.empty(), result,
+            "CACHE_ONLY on L1+L2 miss returns empty");
+        assertEquals(0, sourceCalls.get(),
+            "CACHE_ONLY must NOT fire the PublishDateSource");
+    }
+
+    @Test
+    void cacheOnlyAfterNetworkFallbackHitsL1OrL2() throws Exception {
+        // Cache-miss path uses NETWORK_FALLBACK, populates L1+L2; the
+        // subsequent CACHE_ONLY read on the cache-hit path then finds the
+        // value locally without any source call. This is the steady-state
+        // pattern Phase 3C documents — first asker pays one upstream HEAD
+        // via NETWORK_FALLBACK, every subsequent asker is pure-local.
+        final AtomicInteger sourceCalls = new AtomicInteger();
+        final Instant published = Instant.parse("2024-09-15T12:34:56Z");
+        final PublishDateSource fakeMaven = stubSource("maven", "fake",
+            (n, v) -> {
+                sourceCalls.incrementAndGet();
+                return CompletableFuture.completedFuture(Optional.of(published));
+            });
+        final DbPublishDateRegistry reg = new DbPublishDateRegistry(
+            this.ds, Map.of("maven", fakeMaven)
+        );
+        // First call: NETWORK_FALLBACK → source fires.
+        reg.publishDate(
+            "maven", "x.y", "1.0", PublishDateRegistry.Mode.NETWORK_FALLBACK
+        ).get();
+        assertEquals(1, sourceCalls.get());
+        // Subsequent CACHE_ONLY: L1 hit, no source call.
+        final Optional<Instant> cacheOnly = reg.publishDate(
+            "maven", "x.y", "1.0", PublishDateRegistry.Mode.CACHE_ONLY
+        ).get();
+        assertEquals(Optional.of(published), cacheOnly);
+        assertEquals(1, sourceCalls.get(),
+            "CACHE_ONLY served from L1 — source count unchanged");
+        // Fresh registry instance simulates a restart: L1 empty, L2 has it,
+        // CACHE_ONLY still pure-local (no source call).
+        final AtomicInteger postRestartCalls = new AtomicInteger();
+        final PublishDateSource shouldNotFire = stubSource("maven", "fake2",
+            (n, v) -> {
+                postRestartCalls.incrementAndGet();
+                return CompletableFuture.completedFuture(Optional.empty());
+            });
+        final DbPublishDateRegistry fresh = new DbPublishDateRegistry(
+            this.ds, Map.of("maven", shouldNotFire)
+        );
+        final Optional<Instant> afterRestart = fresh.publishDate(
+            "maven", "x.y", "1.0", PublishDateRegistry.Mode.CACHE_ONLY
+        ).get();
+        assertEquals(Optional.of(published), afterRestart,
+            "CACHE_ONLY reads from L2 (Postgres) when L1 is cold");
+        assertEquals(0, postRestartCalls.get(),
+            "L2 hit must not fall through to source even on cold L1");
+    }
+
     private static PublishDateSource stubSource(
         final String repoType, final String id,
         final BiFunction<String, String, CompletableFuture<Optional<Instant>>> fn
