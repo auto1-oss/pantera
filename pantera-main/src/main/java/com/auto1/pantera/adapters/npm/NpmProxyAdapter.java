@@ -80,11 +80,12 @@ public final class NpmProxyAdapter implements Slice {
                     );
                     
                     // Create NpmProxy for this remote with 12h metadata TTL.
-                    // Wire a CacheWriteEvent bridge so speculative pre-fetch
-                    // (PrefetchDispatcher.onCacheWrite) fires for npm tarballs
-                    // — symmetric with how BaseCachedProxySlice fires for
-                    // maven/pypi/etc. Without this, the v2.2.0 npm-prefetch
-                    // parser is wired but never invoked.
+                    // The cache-write and packument hooks are passed as null:
+                    // their only previous consumer was the speculative prefetch
+                    // subsystem, deleted wholesale in M2 (analysis/plan/v1/PLAN.md).
+                    // The hook surface on NpmProxy is retained so a future
+                    // observed-coordinate prewarming feature (Phase 4c, 2.3.0)
+                    // can wire in without redesigning the adapter.
                     final Storage npmStorage = asto.orElseThrow(
                         () -> new IllegalStateException(
                             "npm-proxy requires storage to be set"
@@ -92,11 +93,7 @@ public final class NpmProxyAdapter implements Slice {
                     );
                     // Phase 11.5: wire fine-grained sub-phase profiler so
                     // /metrics/vertx exposes pantera_proxy_phase_seconds for
-                    // npm_storage_* sub-phases tagged by repo name. This
-                    // decomposes the asset_total observed in Phase 10.5 into
-                    // cache_check / upstream_fetch_open / save_meta /
-                    // save_data / reload (read_data_open + read_meta) so we
-                    // can tell if save→reload is the actual bottleneck.
+                    // npm_storage_* sub-phases tagged by repo name.
                     final String repoName = cfg.name();
                     final java.util.function.BiConsumer<String, Long> phaseRecorder =
                         (phase, durationNs) -> {
@@ -105,14 +102,12 @@ public final class NpmProxyAdapter implements Slice {
                                     .recordProxyPhaseDuration(repoName, phase, durationNs);
                             }
                         };
-                    final NpmCacheWriteBridge bridge =
-                        new NpmCacheWriteBridge(npmStorage, cfg.name());
                     final NpmProxy npmProxy = new NpmProxy(
                         npmStorage,
                         remoteSlice,
                         NpmProxy.DEFAULT_METADATA_TTL,
-                        bridge.hook(),
-                        bridge.packumentHook(),
+                        null,
+                        null,
                         phaseRecorder
                     );
                     

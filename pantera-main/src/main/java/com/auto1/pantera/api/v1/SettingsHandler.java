@@ -880,24 +880,6 @@ public final class SettingsHandler {
                 isIntInRange(value, 1, 8);
             case "http_client.http2_multiplexing_limit" ->
                 isIntInRange(value, 1, 1000);
-            case "prefetch.enabled" -> value instanceof Boolean;
-            case "prefetch.concurrency.global" ->
-                isIntInRange(value, 1, 512);
-            case "prefetch.concurrency.per_upstream",
-                 "prefetch.concurrency.per_upstream.maven",
-                 "prefetch.concurrency.per_upstream.gradle",
-                 "prefetch.concurrency.per_upstream.npm" ->
-                isIntInRange(value, 1, 128);
-            case "prefetch.queue.capacity" ->
-                isIntInRange(value, 128, 16_384);
-            case "prefetch.worker_threads" ->
-                isIntInRange(value, 1, 32);
-            case "prefetch.circuit_breaker.drop_threshold_per_sec" ->
-                isIntInRange(value, 1, 10_000);
-            case "prefetch.circuit_breaker.window_seconds" ->
-                isIntInRange(value, 1, 600);
-            case "prefetch.circuit_breaker.disable_minutes" ->
-                isIntInRange(value, 1, 1440);
             default -> false;
         };
     }

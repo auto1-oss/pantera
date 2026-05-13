@@ -89,7 +89,6 @@ final class RuntimeSettingsCacheTest {
         this.cache = new RuntimeSettingsCache(this.dao, ds);
         this.cache.start();
         assertThat(this.cache.httpTuning(), equalTo(HttpTuning.defaults()));
-        assertThat(this.cache.prefetchTuning(), equalTo(PrefetchTuning.defaults()));
     }
 
     @Test

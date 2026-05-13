@@ -88,8 +88,8 @@ function searchProxyTypes(event: { query: string }) {
 const grafanaUrl = ref('')
 const registryUrl = ref('')
 
-// Runtime tunables (HTTP/2 client + Pre-fetch). Loaded into the same view
-// so admins have one place for everything that lives in the settings DB.
+// Runtime tunables (HTTP/2 client). Loaded into the same view so admins
+// have one place for everything that lives in the settings DB.
 const runtime = useRuntimeSettings()
 
 const PROTOCOL_OPTIONS = [
@@ -103,17 +103,6 @@ const RUNTIME_INT_RANGES: Record<RuntimeSettingKey, IntRange | null> = {
   'http_client.protocol': null,
   'http_client.http2_max_pool_size': { min: 1, max: 8 },
   'http_client.http2_multiplexing_limit': { min: 1, max: 1000 },
-  'prefetch.enabled': null,
-  'prefetch.concurrency.global': { min: 1, max: 512 },
-  'prefetch.concurrency.per_upstream': { min: 1, max: 128 },
-  'prefetch.concurrency.per_upstream.maven': { min: 1, max: 128 },
-  'prefetch.concurrency.per_upstream.gradle': { min: 1, max: 128 },
-  'prefetch.concurrency.per_upstream.npm': { min: 1, max: 128 },
-  'prefetch.queue.capacity': { min: 128, max: 16_384 },
-  'prefetch.worker_threads': { min: 1, max: 32 },
-  'prefetch.circuit_breaker.drop_threshold_per_sec': { min: 1, max: 10_000 },
-  'prefetch.circuit_breaker.window_seconds': { min: 1, max: 600 },
-  'prefetch.circuit_breaker.disable_minutes': { min: 1, max: 1440 },
 }
 
 const HTTP_RUNTIME_KEYS: RuntimeSettingKey[] = [
@@ -122,38 +111,10 @@ const HTTP_RUNTIME_KEYS: RuntimeSettingKey[] = [
   'http_client.http2_multiplexing_limit',
 ]
 
-const PREFETCH_KEYS: RuntimeSettingKey[] = [
-  'prefetch.enabled',
-  'prefetch.concurrency.global',
-  'prefetch.concurrency.per_upstream',
-  'prefetch.concurrency.per_upstream.maven',
-  'prefetch.concurrency.per_upstream.gradle',
-  'prefetch.concurrency.per_upstream.npm',
-  'prefetch.queue.capacity',
-  'prefetch.worker_threads',
-  'prefetch.circuit_breaker.drop_threshold_per_sec',
-  'prefetch.circuit_breaker.window_seconds',
-  'prefetch.circuit_breaker.disable_minutes',
-]
-
 const RUNTIME_LABELS: Record<RuntimeSettingKey, string> = {
   'http_client.protocol': 'Protocol',
   'http_client.http2_max_pool_size': 'HTTP/2 max pool size',
   'http_client.http2_multiplexing_limit': 'HTTP/2 multiplexing limit',
-  'prefetch.enabled': 'Pre-fetch enabled',
-  'prefetch.concurrency.global': 'Global concurrency',
-  'prefetch.concurrency.per_upstream': 'Per-upstream concurrency (default)',
-  'prefetch.concurrency.per_upstream.maven': 'Per-upstream concurrency: maven',
-  'prefetch.concurrency.per_upstream.gradle': 'Per-upstream concurrency: gradle',
-  'prefetch.concurrency.per_upstream.npm': 'Per-upstream concurrency: npm',
-  'prefetch.queue.capacity': 'Queue capacity',
-  'prefetch.worker_threads': 'Worker threads',
-  'prefetch.circuit_breaker.drop_threshold_per_sec':
-    'Drop-rate breaker: trip threshold (drops/sec)',
-  'prefetch.circuit_breaker.window_seconds':
-    'Drop-rate breaker: window (seconds)',
-  'prefetch.circuit_breaker.disable_minutes':
-    'Drop-rate breaker: open duration (minutes)',
 }
 
 const RUNTIME_HELP: Partial<Record<RuntimeSettingKey, string>> = {
@@ -166,31 +127,6 @@ const RUNTIME_HELP: Partial<Record<RuntimeSettingKey, string>> = {
     + 'unless you have a specific need to fan out.',
   'http_client.http2_multiplexing_limit':
     'Max concurrent streams per HTTP/2 connection.',
-  'prefetch.enabled':
-    'Master toggle for the background pre-fetch dispatcher.',
-  'prefetch.concurrency.global':
-    'Maximum number of in-flight pre-fetch tasks across all upstreams.',
-  'prefetch.concurrency.per_upstream':
-    'Maximum number of in-flight pre-fetch tasks against any single upstream. '
-    + 'Used as the fallback for ecosystems without an explicit override.',
-  'prefetch.concurrency.per_upstream.maven':
-    'Per-upstream cap for maven pre-fetches.',
-  'prefetch.concurrency.per_upstream.gradle':
-    'Per-upstream cap for gradle pre-fetches.',
-  'prefetch.concurrency.per_upstream.npm':
-    'Per-upstream cap for npm pre-fetches. Default is intentionally low (4) '
-    + 'so npm install\'s parallel tarball wave wins the upstream pool race.',
-  'prefetch.queue.capacity':
-    'Bounded queue size for the dispatcher; new tasks dropped when full.',
-  'prefetch.worker_threads':
-    'Worker thread-pool size for the dispatcher.',
-  'prefetch.circuit_breaker.drop_threshold_per_sec':
-    'When the global drop rate exceeds this threshold, the breaker opens '
-    + 'and pauses new pre-fetch scheduling.',
-  'prefetch.circuit_breaker.window_seconds':
-    'Sliding window over which the drop rate is measured.',
-  'prefetch.circuit_breaker.disable_minutes':
-    'How long the breaker stays open once tripped before re-evaluating.',
 }
 
 onMounted(async () => {
@@ -590,8 +526,7 @@ async function saveExternalLinks() {
           Rate-over-sliding-window breaker for proxy upstream calls. Opens when
           the failure rate inside the window exceeds the threshold AND the window
           has seen at least the minimum number of calls — the volume gate
-          protects against cold-start false positives. Distinct from the
-          pre-fetch drop-rate breaker below (Pre-fetch card).
+          protects against cold-start false positives.
         </template>
         <template #content>
           <div class="space-y-4">
@@ -929,87 +864,6 @@ async function saveExternalLinks() {
               :loading="saving === 'http_server'"
               @click="saveHttpServer"
             />
-          </div>
-        </template>
-      </Card>
-
-      <!-- Pre-fetch (live runtime knobs incl. drop-rate breaker) -->
-      <Card class="shadow-sm">
-        <template #title>Pre-fetch</template>
-        <template #subtitle>
-          Background warm-up of related artifacts after a proxy cache write.
-          Concurrency caps, queue depth, worker threads, and the drop-rate
-          breaker that opens when the dispatcher saturates. Per-repo opt-out
-          remains on the repository edit page.
-        </template>
-        <template #content>
-          <div v-if="runtime.loading.value" class="text-sm text-gray-500">Loading…</div>
-          <div
-            v-else-if="runtime.loadError.value"
-            class="text-sm text-red-700 dark:text-red-300"
-          >
-            Failed to load runtime tunables: {{ runtime.loadError.value }}
-          </div>
-          <div v-else class="space-y-5">
-            <div
-              v-for="key in PREFETCH_KEYS"
-              :key="key"
-              class="flex flex-col gap-1"
-              :data-testid="`runtime-row-${key}`"
-            >
-              <label
-                :for="`field-${key}`"
-                class="text-sm font-medium text-gray-700 dark:text-gray-200"
-              >
-                {{ RUNTIME_LABELS[key] }}
-              </label>
-              <InputSwitch
-                v-if="key === 'prefetch.enabled'"
-                :id="`field-${key}`"
-                v-model="runtime.edited[key] as boolean"
-                :data-testid="`runtime-input-${key}`"
-              />
-              <InputNumber
-                v-else
-                :id="`field-${key}`"
-                v-model="runtime.edited[key] as number"
-                :min="RUNTIME_INT_RANGES[key]?.min"
-                :max="RUNTIME_INT_RANGES[key]?.max"
-                show-buttons
-                class="w-48"
-                :input-props="{ 'data-testid': `runtime-input-${key}` }"
-              />
-              <div v-if="RUNTIME_HELP[key]" class="text-xs text-gray-500">
-                {{ RUNTIME_HELP[key] }}
-                <template v-if="RUNTIME_INT_RANGES[key]">
-                  Allowed range:
-                  {{ RUNTIME_INT_RANGES[key]?.min }}–{{ RUNTIME_INT_RANGES[key]?.max }}.
-                </template>
-                Default: {{ runtime.rows[key]?.default }}.
-              </div>
-              <div class="flex gap-2 mt-1">
-                <Button
-                  label="Save"
-                  icon="pi pi-save"
-                  size="small"
-                  :loading="runtime.saving[key]"
-                  :disabled="!runtime.isDirty(key) || runtime.saving[key]"
-                  :data-testid="`runtime-save-${key}`"
-                  @click="runtime.saveOne(key)"
-                />
-                <Button
-                  v-if="runtime.isOverridden(key)"
-                  label="Reset to default"
-                  icon="pi pi-undo"
-                  size="small"
-                  severity="secondary"
-                  text
-                  :loading="runtime.saving[key]"
-                  :data-testid="`runtime-reset-${key}`"
-                  @click="runtime.resetOne(key)"
-                />
-              </div>
-            </div>
           </div>
         </template>
       </Card>

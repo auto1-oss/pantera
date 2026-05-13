@@ -265,38 +265,6 @@ public final class RepoConfig {
     }
 
     /**
-     * Whether prefetch is enabled for this repository. Reads
-     * {@code settings.prefetch} (boolean) from the per-repo YAML/JSONB
-     * config. When the field is absent the default is {@code false} for
-     * every repo type — operators must explicitly opt in by setting
-     * {@code settings.prefetch: true} in the per-repo config.
-     *
-     * <p>Why the default flipped from "proxy types default to true" to
-     * "explicit opt-in everywhere": the speculative prefetch subsystem
-     * fires N upstream GETs per cached primary (one per direct dep in a
-     * POM / packument), recursively. With per-host concurrency 16
-     * (Maven) / 32 (npm) and no requests-per-second cap, a cold cache
-     * walk amplifies outbound RPS several times above the foreground
-     * client's request rate — enough to trip Maven Central's per-IP
-     * rate limiter (RCA in {@code analysis/03-findings.md} finding #1).
-     * Operators who want prefetch must enable it knowingly per repo.</p>
-     *
-     * @return {@code true} if prefetch should be considered for this
-     *     repo, {@code false} otherwise.
-     * @since 2.2.0
-     */
-    public boolean prefetchEnabled() {
-        final Optional<YamlMapping> cfg = this.settings();
-        if (cfg.isPresent()) {
-            final String explicit = cfg.get().string("prefetch");
-            if (explicit != null && !explicit.isBlank()) {
-                return Boolean.parseBoolean(explicit);
-            }
-        }
-        return false;
-    }
-
-    /**
      * Group routing rules for directing requests to specific members
      * based on path prefix or pattern matching.
      *

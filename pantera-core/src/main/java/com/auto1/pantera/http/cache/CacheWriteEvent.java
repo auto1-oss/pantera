@@ -35,11 +35,9 @@ import java.time.Instant;
  *   <li>{@code callerOwnsSnapshot = true} (default, {@link ProxyCacheWriter}
  *       path) — the writer owns a temp file and will delete it as soon as
  *       this callback returns. A consumer that wants to use the bytes
- *       asynchronously MUST snapshot them before going async (e.g. the
- *       {@link com.auto1.pantera.prefetch.PrefetchDispatcher} copies the
- *       file to a dispatcher-owned temp file).</li>
- *   <li>{@code callerOwnsSnapshot = false} ({@code NpmCacheWriteBridge}
- *       zero-copy passthrough path) — {@code bytesOnDisk} is the actual
+ *       asynchronously MUST snapshot them before going async.</li>
+ *   <li>{@code callerOwnsSnapshot = false} (zero-copy passthrough path) —
+ *       {@code bytesOnDisk} is the actual
  *       on-disk path managed by {@link com.auto1.pantera.asto.Storage}
  *       (typically {@code FileStorage}). The storage owns lifetime and
  *       may evict the file at any time. Consumers MUST treat the path

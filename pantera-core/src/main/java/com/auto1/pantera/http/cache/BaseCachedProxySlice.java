@@ -272,13 +272,9 @@ public abstract class BaseCachedProxySlice implements Slice {
     /**
      * Constructor with cooldown; no explicit post-write callback. Delegates
      * to the 11-arg ctor with the {@link CacheWriteCallbackRegistry} shared
-     * callback so the prefetch dispatcher (Task 19b) is wired in for every
-     * adapter that uses this overload — Maven CachedProxySlice — without
-     * threading a {@code Consumer} through 4 levels of adapter ctors.
-     *
-     * <p>When the registry has no shared callback (tests, DB-less boot,
-     * early startup), the registry returns a no-op consumer, so behaviour is
-     * unchanged from the pre-Task-19 default.</p>
+     * callback so a future cache-write consumer can be installed once at
+     * boot rather than threaded through each adapter ctor. With no consumer
+     * installed the registry returns a no-op.
      */
     protected BaseCachedProxySlice(
         final Slice client,
@@ -300,8 +296,8 @@ public abstract class BaseCachedProxySlice implements Slice {
     /**
      * Convenience constructor without cooldown or explicit post-write
      * callback. Delegates with the {@link CacheWriteCallbackRegistry} shared
-     * callback so the prefetch dispatcher (Task 19b) is wired in for every
-     * adapter that uses this overload without per-adapter ctor surgery.
+     * callback so a future cache-write consumer can be installed once at
+     * boot without per-adapter ctor surgery.
      */
     protected BaseCachedProxySlice(
         final Slice client,

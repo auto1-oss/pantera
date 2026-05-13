@@ -49,8 +49,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@link ProxyCacheWriterHookTest} but exercises the actual production
  * cache-write path used by every proxy adapter (Phase 4 / Task 19a).
  *
- * <p>Phase 4's {@code PrefetchDispatcher} is the first real consumer; this
- * suite pins:
+ * <p>This suite pins:
  * <ul>
  *   <li>callback fires exactly once after a successful cache write
  *       (post-storage-save, pre-temp-file-delete);</li>

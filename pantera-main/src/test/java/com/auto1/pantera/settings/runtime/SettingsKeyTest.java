@@ -20,7 +20,6 @@ import com.auto1.pantera.settings.runtime.HttpTuning.Protocol;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Tests for v2.2.0 typed settings snapshot records and the {@link SettingsKey}
@@ -35,33 +34,6 @@ final class SettingsKeyTest {
         assertEquals(4, t.h2MaxPoolSize(), "default h2 pool size must be 4");
         assertEquals(100, t.h2MultiplexingLimit(),
             "default h2 multiplexing limit must be 100");
-    }
-
-    @Test
-    void prefetchTuningHasSpecDefaults() {
-        final PrefetchTuning p = PrefetchTuning.defaults();
-        assertTrue(p.enabled(), "prefetch must default to enabled");
-        assertEquals(64, p.globalConcurrency(), "default global concurrency must be 64");
-        assertEquals(16, p.perUpstreamConcurrency(),
-            "default per-upstream concurrency must be 16");
-        assertEquals(2048, p.queueCapacity(), "default queue capacity must be 2048");
-        assertEquals(8, p.workerThreads(), "default worker threads must be 8");
-        // Per-ecosystem overrides: maven/gradle stay at 16; npm raised to 32
-        // (Phase 13.5 sweep) since prefetch uses tryAcquire (non-blocking)
-        // and foreground requests do not share the semaphore — a larger cap
-        // warms more packuments without contending with the foreground pool.
-        assertEquals(16, p.perUpstreamFor("maven"),
-            "maven default per-upstream cap must be 16");
-        assertEquals(16, p.perUpstreamFor("gradle"),
-            "gradle default per-upstream cap must be 16");
-        assertEquals(32, p.perUpstreamFor("npm"),
-            "npm default per-upstream cap must be 32");
-        assertEquals(16, p.perUpstreamFor("MAVEN"),
-            "ecosystem lookup must be case-insensitive");
-        assertEquals(16, p.perUpstreamFor("pypi"),
-            "unknown ecosystem must fall back to global perUpstreamConcurrency");
-        assertEquals(16, p.perUpstreamFor(null),
-            "null ecosystem must fall back to global perUpstreamConcurrency");
     }
 
     @Test

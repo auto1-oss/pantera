@@ -44,9 +44,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Tests for the {@link ProxyCacheWriter} {@code onCacheWrite} extension
- * point added in Phase 3 / Task 11. Phase 4's {@code PrefetchDispatcher}
- * will be the first real consumer; this test pins the contract so that
- * callback exceptions do not affect the cache-write path.
+ * point. The hook is retained as a NO_OP surface for a future cache-write
+ * consumer; this test pins the contract so that callback exceptions do
+ * not affect the cache-write path.
  *
  * @since 2.2.0
  */

@@ -595,9 +595,10 @@ public class RepositorySlices {
     }
 
     /**
-     * Shared {@link NegativeCache} bean. Returned for use by the prefetch
-     * coordinator so its negative-cache short-circuit shares the same
-     * 404 cache the proxies populate. Never null after construction.
+     * Shared {@link NegativeCache} bean. The 404 cache is populated by every
+     * proxy adapter; this accessor remains so a future observed-coordinate
+     * prewarming subsystem (Phase 4c, 2.3.0) can share the same cache without
+     * a redesign. Never null after construction.
      *
      * @return shared NegativeCache instance.
      * @since 2.2.0
@@ -607,122 +608,13 @@ public class RepositorySlices {
     }
 
     /**
-     * Look up a repo's type ({@code "maven-proxy"}, {@code "npm-proxy"}, etc.)
-     * by repo name. Returns {@code null} when the repo is not configured
-     * (e.g., recently deleted) so the dispatcher's null-guard short-circuits.
-     *
-     * @param name Repo name to resolve.
-     * @return Repo type or {@code null} when unknown.
-     * @since 2.2.0
-     */
-    public String repoTypeOf(final String name) {
-        if (name == null) {
-            return null;
-        }
-        return this.repos.config(name).map(RepoConfig::type).orElse(null);
-    }
-
-    /**
-     * Look up the upstream URL for a repo. Returns the first
-     * {@link com.auto1.pantera.http.client.RemoteConfig#uri()} for proxy
-     * repos; an empty string for non-proxy or unknown repos.
-     *
-     * <p>Used by the dispatcher to stamp every {@link com.auto1.pantera.prefetch.PrefetchTask#upstreamUrl()}
-     * so the coordinator can route the GET via the right per-host
-     * semaphore bucket.</p>
-     *
-     * @param name Repo name to resolve.
-     * @return Upstream URL string, or empty when unknown / not a proxy.
-     * @since 2.2.0
-     */
-    public String upstreamUrlOf(final String name) {
-        if (name == null) {
-            return "";
-        }
-        final Optional<RepoConfig> cfg = this.repos.config(name);
-        if (cfg.isEmpty()) {
-            return "";
-        }
-        final List<com.auto1.pantera.http.client.RemoteConfig> remotes = cfg.get().remotes();
-        if (remotes == null || remotes.isEmpty()) {
-            return "";
-        }
-        final java.net.URI uri = remotes.get(0).uri();
-        return uri == null ? "" : uri.toString();
-    }
-
-    /**
-     * Per-repo prefetch enable flag. Reads the
-     * {@link com.auto1.pantera.settings.repo.RepoConfig#prefetchEnabled()}
-     * accessor — which honours an explicit {@code settings.prefetch}
-     * boolean and falls back to {@code true} for {@code *-proxy} types
-     * and {@code false} for everything else. The global kill-switch
-     * ({@code prefetch.enabled} from
-     * {@link com.auto1.pantera.settings.runtime.RuntimeSettingsCache})
-     * remains the master off-switch.
-     *
-     * @param name Repo name to resolve.
-     * @return {@code Boolean.TRUE} when the repo opts in to prefetch,
-     *     {@code Boolean.FALSE} otherwise (including unknown repos).
-     * @since 2.2.0
-     */
-    public Boolean prefetchEnabledFor(final String name) {
-        if (name == null) {
-            return Boolean.FALSE;
-        }
-        return this.repos.config(name)
-            .map(RepoConfig::prefetchEnabled)
-            .orElse(Boolean.FALSE);
-    }
-
-    /**
-     * Cooldown service used by the proxy adapters. Exposed for the prefetch
-     * coordinator's {@code CooldownGate} adapter so prefetch decisions
-     * honour the same admin-configured cooldown windows the foreground
-     * requests are gated by.
+     * Cooldown service used by the proxy adapters.
      *
      * @return shared CooldownService.
      * @since 2.2.0
      */
     public CooldownService cooldownService() {
         return this.cooldown;
-    }
-
-    /**
-     * Snapshot of every {@code npm-proxy} repository's storage in
-     * configuration order, paired with its repo name. Used by the prefetch
-     * subsystem's {@link com.auto1.pantera.prefetch.parser.CachedNpmMetadataLookup}
-     * to resolve npm version ranges against locally-cached packuments
-     * without ever issuing an upstream metadata fetch.
-     *
-     * <p>The result is computed afresh on every call so live repo additions
-     * or removals (config reloads) are picked up by callers that wrap the
-     * accessor in a {@code Supplier}. Repos with no storage configured are
-     * skipped silently.</p>
-     *
-     * @return Ordered list of (repoName, storage) pairs for npm-proxy
-     *     repositories; empty when no npm-proxy is configured.
-     * @since 2.2.0
-     */
-    public java.util.List<
-        com.auto1.pantera.prefetch.parser.CachedNpmMetadataLookup.NamedStorage
-    > npmProxyStorages() {
-        final java.util.List<
-            com.auto1.pantera.prefetch.parser.CachedNpmMetadataLookup.NamedStorage
-        > out = new java.util.ArrayList<>();
-        for (final RepoConfig cfg : this.repos.configs()) {
-            if (!"npm-proxy".equals(cfg.type())) {
-                continue;
-            }
-            cfg.storageOpt().ifPresent(
-                store -> out.add(
-                    new com.auto1.pantera.prefetch.parser.CachedNpmMetadataLookup.NamedStorage(
-                        cfg.name(), store
-                    )
-                )
-            );
-        }
-        return out;
     }
 
     private Optional<Queue<ArtifactEvent>> artifactEvents() {

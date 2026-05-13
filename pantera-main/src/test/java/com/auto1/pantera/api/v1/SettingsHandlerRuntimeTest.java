@@ -248,61 +248,7 @@ final class SettingsHandlerRuntimeTest {
                     body.getJsonObject("http_client.http2_max_pool_size");
                 MatcherAssert.assertThat(poolEntry.getString("value"),
                     Matchers.is("4"));
-                // Per-ecosystem perUpstream overrides (v2.2.0 perf-pack).
-                // Maven / gradle inherit the global default (16); npm is
-                // raised to 32 (Phase 13.5 sweep) since prefetch uses
-                // tryAcquire (non-blocking) and foreground requests do not
-                // share the semaphore, so a larger cap warms more
-                // packuments without contending with the foreground pool.
-                MatcherAssert.assertThat(
-                    body.getJsonObject("prefetch.concurrency.per_upstream.maven")
-                        .getString("value"),
-                    Matchers.is("16"));
-                MatcherAssert.assertThat(
-                    body.getJsonObject("prefetch.concurrency.per_upstream.gradle")
-                        .getString("value"),
-                    Matchers.is("16"));
-                MatcherAssert.assertThat(
-                    body.getJsonObject("prefetch.concurrency.per_upstream.npm")
-                        .getString("value"),
-                    Matchers.is("32"));
             }
-        );
-    }
-
-    @Test
-    void patchPerEcosystemNpmKeyAcceptsValidValue(
-        final Vertx vertx, final VertxTestContext ctx) throws Exception {
-        adminGranted = true;
-        this.request(vertx, ctx, HttpMethod.PATCH,
-            "/api/v1/settings/runtime/prefetch.concurrency.per_upstream.npm",
-            new JsonObject().put("value", 8),
-            res -> Assertions.assertEquals(200, res.statusCode(),
-                "Expected 200, got body: " + res.bodyAsString())
-        );
-    }
-
-    @Test
-    void patchPerEcosystemNpmKeyRejectsZero(
-        final Vertx vertx, final VertxTestContext ctx) throws Exception {
-        adminGranted = true;
-        this.request(vertx, ctx, HttpMethod.PATCH,
-            "/api/v1/settings/runtime/prefetch.concurrency.per_upstream.npm",
-            new JsonObject().put("value", 0),
-            res -> Assertions.assertEquals(400, res.statusCode(),
-                "Expected 400, got body: " + res.bodyAsString())
-        );
-    }
-
-    @Test
-    void patchPerEcosystemNpmKeyRejectsAboveRange(
-        final Vertx vertx, final VertxTestContext ctx) throws Exception {
-        adminGranted = true;
-        this.request(vertx, ctx, HttpMethod.PATCH,
-            "/api/v1/settings/runtime/prefetch.concurrency.per_upstream.npm",
-            new JsonObject().put("value", 999),
-            res -> Assertions.assertEquals(400, res.statusCode(),
-                "Expected 400, got body: " + res.bodyAsString())
         );
     }
 
@@ -407,7 +353,7 @@ final class SettingsHandlerRuntimeTest {
         final Vertx vertx, final VertxTestContext ctx) throws Exception {
         adminGranted = true;
         this.request(vertx, ctx, HttpMethod.PATCH,
-            "/api/v1/settings/runtime/prefetch.concurrency.global",
+            "/api/v1/settings/runtime/http_client.http2_max_pool_size",
             new JsonObject().put("value", 99_999),
             res -> {
                 Assertions.assertEquals(400, res.statusCode(),

@@ -57,15 +57,11 @@ public final class RuntimeSettingsCache {
 
     private record Snapshot(
         HttpTuning http,
-        PrefetchTuning prefetch,
-        CircuitBreakerTuning cb,
         Map<String, JsonObject> raw
     ) {
         static Snapshot defaults() {
             return new Snapshot(
                 HttpTuning.defaults(),
-                PrefetchTuning.defaults(),
-                CircuitBreakerTuning.defaults(),
                 Map.of()
             );
         }
@@ -107,14 +103,6 @@ public final class RuntimeSettingsCache {
 
     public HttpTuning httpTuning() {
         return this.snapshot.http();
-    }
-
-    public PrefetchTuning prefetchTuning() {
-        return this.snapshot.prefetch();
-    }
-
-    public CircuitBreakerTuning circuitBreakerTuning() {
-        return this.snapshot.cb();
     }
 
     public Map<String, JsonObject> raw() {
@@ -168,8 +156,6 @@ public final class RuntimeSettingsCache {
         final Map<String, JsonObject> rows = this.dao.listAll();
         this.snapshot = new Snapshot(
             HttpTuning.fromMap(rows),
-            PrefetchTuning.fromMap(rows),
-            CircuitBreakerTuning.fromMap(rows),
             Map.copyOf(rows)
         );
         this.lastReadAt = now;

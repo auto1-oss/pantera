@@ -159,68 +159,6 @@ public final class RepoConfigTest {
         Assertions.assertEquals(Optional.empty(), readFull().cooldownDuration());
     }
 
-    @Test
-    public void prefetchDefaultsFalseWhenAbsentForProxy() throws Exception {
-        // repo-cooldown-config.yml uses pypi-proxy with no settings.prefetch.
-        // Default flipped 2026-05-13 (analysis/03-findings.md #1): opt-in
-        // everywhere. The old "proxy default to true" was the regression
-        // vehicle for the Maven Central 429 storms.
-        Assertions.assertFalse(
-            readFromResource("repo-cooldown-config.yml").prefetchEnabled(),
-            "any repo without settings.prefetch must default to disabled"
-        );
-    }
-
-    @Test
-    public void prefetchDefaultsFalseForNonProxyTypes() throws Exception {
-        // repo-min-config.yml uses 'maven' (hosted).
-        Assertions.assertFalse(
-            readMin().prefetchEnabled(),
-            "hosted (non-proxy) repo without settings.prefetch should default to disabled"
-        );
-    }
-
-    @Test
-    public void prefetchRespectsExplicitFalse() {
-        final RepoConfig cfg = RepoConfig.from(
-            Yaml.createYamlMappingBuilder().add(
-                "repo", Yaml.createYamlMappingBuilder()
-                    .add("type", "maven-proxy")
-                    .add("url", "http://upstream.example.com")
-                    .add(
-                        "settings",
-                        Yaml.createYamlMappingBuilder().add("prefetch", "false").build()
-                    ).build()
-            ).build(),
-            new StorageByAlias(Yaml.createYamlMappingBuilder().build()),
-            new Key.From("explicit-false.yml"), cache, false
-        );
-        Assertions.assertFalse(
-            cfg.prefetchEnabled(),
-            "settings.prefetch=false stays disabled"
-        );
-    }
-
-    @Test
-    public void prefetchRespectsExplicitTrue() {
-        final RepoConfig cfg = RepoConfig.from(
-            Yaml.createYamlMappingBuilder().add(
-                "repo", Yaml.createYamlMappingBuilder()
-                    .add("type", "maven")
-                    .add(
-                        "settings",
-                        Yaml.createYamlMappingBuilder().add("prefetch", "true").build()
-                    ).build()
-            ).build(),
-            new StorageByAlias(Yaml.createYamlMappingBuilder().build()),
-            new Key.From("explicit-true.yml"), cache, false
-        );
-        Assertions.assertTrue(
-            cfg.prefetchEnabled(),
-            "settings.prefetch=true must override the non-proxy default"
-        );
-    }
-
     private RepoConfig readFull() throws Exception {
         return readFromResource("repo-full-config.yml");
     }

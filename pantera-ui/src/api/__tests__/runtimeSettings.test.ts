@@ -50,9 +50,9 @@ describe('runtimeSettings API wrappers', () => {
             default: '"h2"',
             source: 'default',
           },
-          'prefetch.enabled': {
-            value: 'false',
-            default: 'true',
+          'http_client.http2_multiplexing_limit': {
+            value: '200',
+            default: '100',
             source: 'db',
           },
           'http_client.http2_max_pool_size': {
@@ -68,16 +68,15 @@ describe('runtimeSettings API wrappers', () => {
       // Sorted alphabetically by key
       expect(result.map(r => r.key)).toEqual([
         'http_client.http2_max_pool_size',
+        'http_client.http2_multiplexing_limit',
         'http_client.protocol',
-        'prefetch.enabled',
       ])
       // Decoded
       expect(result[0].value).toBe(4)
       expect(result[0].default).toBe(1)
       expect(result[0].source).toBe('db')
-      expect(result[1].value).toBe('h2')
-      expect(result[2].value).toBe(false)
-      expect(result[2].default).toBe(true)
+      expect(result[1].value).toBe(200)
+      expect(result[2].value).toBe('h2')
     })
   })
 
@@ -105,44 +104,28 @@ describe('runtimeSettings API wrappers', () => {
     it('rounds-trips integer keys', async () => {
       patch.mockResolvedValueOnce({
         data: {
-          key: 'prefetch.concurrency.global',
-          value: '128',
+          key: 'http_client.http2_max_pool_size',
+          value: '4',
           source: 'db',
         },
       })
       const updated = await patchRuntimeSetting(
-        'prefetch.concurrency.global', 128,
+        'http_client.http2_max_pool_size', 4,
       )
       expect(patch).toHaveBeenCalledWith(
-        '/settings/runtime/prefetch.concurrency.global',
-        { value: 128 },
+        '/settings/runtime/http_client.http2_max_pool_size',
+        { value: 4 },
       )
-      expect(updated.value).toBe(128)
-    })
-
-    it('rounds-trips boolean keys', async () => {
-      patch.mockResolvedValueOnce({
-        data: {
-          key: 'prefetch.enabled',
-          value: 'false',
-          source: 'db',
-        },
-      })
-      const updated = await patchRuntimeSetting('prefetch.enabled', false)
-      expect(patch).toHaveBeenCalledWith(
-        '/settings/runtime/prefetch.enabled',
-        { value: false },
-      )
-      expect(updated.value).toBe(false)
+      expect(updated.value).toBe(4)
     })
   })
 
   describe('resetRuntimeSetting', () => {
     it('DELETEs /settings/runtime/:key', async () => {
       del.mockResolvedValueOnce({ data: undefined })
-      await resetRuntimeSetting('prefetch.queue.capacity')
+      await resetRuntimeSetting('http_client.http2_multiplexing_limit')
       expect(del).toHaveBeenCalledWith(
-        '/settings/runtime/prefetch.queue.capacity',
+        '/settings/runtime/http_client.http2_multiplexing_limit',
       )
     })
   })
@@ -150,33 +133,11 @@ describe('runtimeSettings API wrappers', () => {
   describe('SPEC_DEFAULTS', () => {
     it('catalogues all server-side keys', () => {
       const keys = Object.keys(SPEC_DEFAULTS)
-      // 11 original + 3 per-ecosystem perUpstream overrides (v2.2.0 perf-pack)
-      expect(keys.length).toBe(14)
+      expect(keys.length).toBe(3)
       // Must include every documented key from SettingsKey.java
       expect(keys).toContain('http_client.protocol')
       expect(keys).toContain('http_client.http2_max_pool_size')
       expect(keys).toContain('http_client.http2_multiplexing_limit')
-      expect(keys).toContain('prefetch.enabled')
-      expect(keys).toContain('prefetch.concurrency.global')
-      expect(keys).toContain('prefetch.concurrency.per_upstream')
-      expect(keys).toContain('prefetch.concurrency.per_upstream.maven')
-      expect(keys).toContain('prefetch.concurrency.per_upstream.gradle')
-      expect(keys).toContain('prefetch.concurrency.per_upstream.npm')
-      expect(keys).toContain('prefetch.queue.capacity')
-      expect(keys).toContain('prefetch.worker_threads')
-      expect(keys).toContain('prefetch.circuit_breaker.drop_threshold_per_sec')
-      expect(keys).toContain('prefetch.circuit_breaker.window_seconds')
-      expect(keys).toContain('prefetch.circuit_breaker.disable_minutes')
-    })
-
-    it('npm per-upstream default is 4 (lower than the global 16)', () => {
-      // The lower default is the v2.2.0 perf-pack fix for the cold-cache
-      // npm regression — npm install's bursty parallel tarball wave wins
-      // the upstream pool race when prefetch is reserved a smaller slice.
-      expect(SPEC_DEFAULTS['prefetch.concurrency.per_upstream.npm']).toBe(4)
-      expect(SPEC_DEFAULTS['prefetch.concurrency.per_upstream.maven']).toBe(16)
-      expect(SPEC_DEFAULTS['prefetch.concurrency.per_upstream.gradle']).toBe(16)
-      expect(SPEC_DEFAULTS['prefetch.concurrency.per_upstream']).toBe(16)
     })
   })
 })

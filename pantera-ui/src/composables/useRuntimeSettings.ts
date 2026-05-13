@@ -13,8 +13,8 @@ import { useNotificationStore } from '@/stores/notifications'
  * Stateful wrapper around the runtime-tunables API. Loads the catalog
  * once, exposes a reactive edit buffer with dirty tracking, and PATCHes /
  * DELETEs through the same channel. Used by SettingsView so the runtime
- * knobs (HTTP/2 client, prefetch) can sit beside the rest of the system
- * settings without duplicating state machinery.
+ * knobs (HTTP/2 client) can sit beside the rest of the system settings
+ * without duplicating state machinery.
  */
 export function useRuntimeSettings() {
   const notify = useNotificationStore()

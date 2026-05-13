@@ -192,8 +192,8 @@ public final class ProxyCacheWriter {
 
     /**
      * Ctor with metrics; no explicit post-write callback. Falls back to the
-     * shared callback installed in {@link CacheWriteCallbackRegistry} so the
-     * prefetch dispatcher (Task 19b) wires in here too without surgery on
+     * shared callback installed in {@link CacheWriteCallbackRegistry} so a
+     * future cache-write consumer wires in here too without surgery on
      * each adapter that constructs its own writer (Maven CachedProxySlice,
      * Go CachedProxySlice, Pypi CachedPyProxySlice, Composer CachedProxySlice).
      *
