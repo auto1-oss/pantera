@@ -465,15 +465,17 @@ Location: `pantera-core/src/main/java/com/auto1/pantera/http/cache/BaseCachedPro
 
 Abstract base class implementing the shared proxy caching pipeline via template method pattern. All proxy adapters extend this class.
 
-**7-step pipeline:**
+**9-step pipeline:**
 
 1. **Negative cache check** -- Fast-fail on known 404s (L1 Caffeine lookup, sub-microsecond).
-2. **Pre-process hook** -- Adapter-specific short-circuit (e.g., Maven metadata cache).
+2. **Pre-process hook** -- Adapter-specific short-circuit (e.g., Maven metadata cache; Maven primary artifacts route to `verifyAndServePrimary` in `maven-adapter/CachedProxySlice`).
 3. **Cacheability check** -- `isCacheable(path)` determines if the path should be cached.
 4. **Cache-first lookup** -- Check local storage cache for a fresh hit (offline-safe).
-5. **Cooldown evaluation** -- Block downloads of quarantined artifacts.
-6. **Deduplicated upstream fetch** -- Only one in-flight request per artifact key.
-7. **Cache storage with digest computation** -- Stream body to a temp file, compute digests (SHA-256, MD5), generate sidecar checksum files, enqueue artifact event, save to cache.
+5. **Cooldown evaluation on cache miss** -- Block downloads of quarantined artifacts. (Cache hits are pure-local since Track 5 Phase 1A, 2026-05-12.)
+6. **Single-flight gate around the upstream fetch + cache write** -- N concurrent callers for the same uncached path collapse to exactly 1 upstream call. The leader fires `client.response(...)` and writes the cache; followers park on a `CompletableFuture` gate. On gate completion, followers re-enter `cacheFirstFlow` and hit the now-warm cache (or, on leader failure, retry from a cold cache — same upstream cost as no-dedup, no per-caller amplification). Implemented since Finding #2 (2026-05-13, `analysis/03-findings.md`).
+7. **On 200**: stream body to a temp file, compute digests (SHA-256, MD5, ...), generate sidecar checksum files, enqueue artifact event, save to cache, fire `onCacheWrite` callback (currently used by `PrefetchDispatcher` when `RepoConfig.prefetchEnabled` is true; off-by-default since Finding #1).
+8. **On 404**: update negative cache.
+9. **Record metrics** -- per-repo phase histograms, outcome counters.
 
 Adapters override hooks: `isCacheable()`, `buildCooldownRequest()`, `digestAlgorithms()`, `buildArtifactEvent()`, `postProcess()`, `generateSidecars()`.
 

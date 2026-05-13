@@ -73,14 +73,27 @@ import java.util.stream.StreamSupport;
  * <p>Implements the shared proxy flow via template method pattern:
  * <ol>
  *   <li>Check negative cache - fast-fail on known 404s</li>
- *   <li>Check local cache (offline-safe) - serve if fresh hit</li>
- *   <li>Evaluate cooldown - block if in cooldown period</li>
- *   <li>Deduplicate concurrent requests for same path</li>
- *   <li>Fetch from upstream</li>
- *   <li>On 200: cache content, compute digests, generate sidecars, enqueue event</li>
+ *   <li>Pre-process hook - adapter-specific short-circuit (e.g. Maven
+ *       primary artifacts route through {@code verifyAndServePrimary}
+ *       in {@code maven-adapter/CachedProxySlice})</li>
+ *   <li>Cacheability check - {@code isCacheable(path)}</li>
+ *   <li>Cache-first lookup - serve from local cache if present (no
+ *       upstream)</li>
+ *   <li>Evaluate cooldown on cache miss - block if in cooldown period</li>
+ *   <li>Single-flight gate around the upstream fetch + cache write -
+ *       N concurrent callers collapse to exactly 1 upstream call; the
+ *       leader runs {@code fetchAndCacheLeader}, followers park on the
+ *       gate and re-enter {@code cacheFirstFlow} on completion</li>
+ *   <li>On 200: cache content, compute digests, generate sidecars,
+ *       enqueue event</li>
  *   <li>On 404: update negative cache</li>
  *   <li>Record metrics</li>
  * </ol>
+ *
+ * <p>The single-flight placement at step 6 is the post-Finding-#2
+ * (2026-05-13) shape — pre-fix the SingleFlight wrapped only the
+ * cache-write step, so concurrent callers each fired their own upstream
+ * call. See {@code analysis/03-findings.md} finding #2 for evidence.</p>
  *
  * <p>Adapters override only the hooks they need:
  * {@link #isCacheable(String)}, {@link #buildCooldownRequest(String, Headers)},
@@ -152,13 +165,23 @@ public abstract class BaseCachedProxySlice implements Slice {
     private final CooldownInspector cooldownInspector;
 
     /**
-     * Per-key request coalescer. Concurrent callers for the same cache key share
-     * one cache-write loader invocation, each receiving the same
-     * {@link FetchSignal} terminal state. Wired in via WI-post-05;
-     * SIGNAL-strategy semantics are provided by
-     * {@link SingleFlight#load(Object, Supplier)}.
+     * Per-key leader/follower gate. Concurrent callers for the same cache
+     * key collapse: the first caller becomes the leader and runs the
+     * upstream fetch + cache write; subsequent callers park on a {@link
+     * java.util.concurrent.CompletableFuture}{@code <Void>} gate. When the
+     * leader completes (normally or exceptionally), the gate fires and the
+     * followers re-enter {@link #cacheFirstFlow} — which hits the now-warm
+     * cache and returns without firing upstream again. Mirrors the pattern
+     * used by {@code GroupResolver.proxyOnlyFanout} and
+     * {@code MavenGroupSlice.mergeMetadata}.
+     *
+     * <p>Pre-Finding-#2 (2026-05-13) this field was typed
+     * {@code SingleFlight<Key, FetchSignal>} and only collapsed the
+     * cache-write step — so concurrent callers each fired their own
+     * upstream call. The type change to {@code <Key, Void>} matches the
+     * gate semantics of the new placement.</p>
      */
-    private final SingleFlight<Key, FetchSignal> singleFlight;
+    private final SingleFlight<Key, Void> singleFlight;
 
     /**
      * Raw storage for direct saves (bypasses FromStorageCache lazy tee-content).
@@ -700,8 +723,55 @@ public abstract class BaseCachedProxySlice implements Slice {
     /**
      * Fetch from upstream and cache the result, with request deduplication.
      * Uses NIO temp file streaming to avoid buffering full artifacts on heap.
+     *
+     * <p><b>Single-flight placement (Finding #2, analysis/03-findings.md).</b>
+     * The leader does the upstream fetch + cache write inside the
+     * {@link SingleFlight#load} loader. Concurrent followers park on the
+     * leader's gate; when the leader completes they re-enter
+     * {@link #cacheFirstFlow}, which now hits the freshly-warm cache
+     * without re-firing upstream. On leader 404, the negative cache is
+     * populated inside {@link #handle404} so followers short-circuit on
+     * re-entry. On leader 5xx / exception, the gate completes anyway and
+     * followers retry from a cold cache — same upstream cost as if dedup
+     * had never been involved, but no per-caller request amplification
+     * during the leader's in-flight window.</p>
+     *
+     * <p>Mirrors the leader/follower pattern already used by
+     * {@code GroupResolver.proxyOnlyFanout} and
+     * {@code MavenGroupSlice.mergeMetadata}.</p>
      */
     private CompletableFuture<Response> fetchAndCache(
+        final RequestLine line,
+        final Key key,
+        final Headers headers,
+        final CachedArtifactMetadataStore store
+    ) {
+        final boolean[] isLeader = {false};
+        final CompletableFuture<Void> leaderGate = new CompletableFuture<>();
+        final CompletableFuture<Void> gate = this.singleFlight.load(key, () -> {
+            isLeader[0] = true;
+            return leaderGate;
+        });
+        if (isLeader[0]) {
+            return this.fetchAndCacheLeader(line, key, headers, store)
+                .whenComplete((r, e) -> leaderGate.complete(null));
+        }
+        // Follower: wait for leader, then re-enter cacheFirstFlow which
+        // hits the now-warm cache (or, on leader failure, retries from a
+        // cold cache — identical outcome to no-dedup at the cost of a
+        // small parking delay).
+        return gate.exceptionally(err -> null).thenCompose(
+            ignored -> this.cacheFirstFlow(line, headers, key, line.uri().getPath())
+        );
+    }
+
+    /**
+     * The leader's body of {@link #fetchAndCache}: fires the upstream
+     * call, handles all status branches, caches success. Identical
+     * behaviour to the pre-2026-05 placement except for the move into a
+     * helper so the gate management above stays readable.
+     */
+    private CompletableFuture<Response> fetchAndCacheLeader(
         final RequestLine line,
         final Key key,
         final Headers headers,
@@ -721,11 +791,10 @@ public abstract class BaseCachedProxySlice implements Slice {
                     return this.handleNonSuccess(resp, duration, key);
                 }
                 this.recordProxyMetric("success", duration);
-                return this.singleFlight.load(key, () -> {
-                    return this.cacheResponse(resp, key, owner, store)
-                        .thenApply(r -> FetchSignal.SUCCESS);
-                }).thenCompose(signal ->
-                    this.signalToResponse(signal, line, key, store));
+                return this.cacheResponse(resp, key, owner, store)
+                    .thenApply(r -> FetchSignal.SUCCESS)
+                    .thenCompose(signal ->
+                        this.signalToResponse(signal, line, key, store));
             })
             .handle((resp, error) -> {
                 if (error != null) {
