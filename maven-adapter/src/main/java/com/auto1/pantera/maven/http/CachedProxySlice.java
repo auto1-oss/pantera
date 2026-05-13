@@ -631,7 +631,22 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                             ResponseBuilder.ok().body(opt.get()).build()
                         );
                     }
-                    return this.fetchVerifyAndCache(line, key, path);
+                    // M4 (analysis/plan/v1/PLAN.md): concurrent clients for the
+                    // same uncached primary must collapse to one upstream call.
+                    // Pre-M4 each request fired its own fetchVerifyAndCache,
+                    // multiplying outbound by N for a burst of N — the
+                    // dominant cold-walk amplifier after M2's prefetch deletion.
+                    // The follower path re-runs verifyAndServePrimary which
+                    // hits the warm cache the leader wrote — but only AFTER
+                    // the leader's verificationOutcome fires (cache commit
+                    // complete), not when the leader's response future
+                    // resolves (which happens before the body is drained
+                    // through the stream-through tee).
+                    return this.coalesceUpstream(
+                        key,
+                        leaderGate -> this.fetchVerifyAndCache(line, key, path, leaderGate),
+                        () -> this.verifyAndServePrimary(line, headers, key, path)
+                    );
                 }).toCompletableFuture()
             );
         }).exceptionally(err -> {
@@ -671,7 +686,8 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      * re-fetches cleanly from upstream.
      */
     private CompletableFuture<Response> fetchVerifyAndCache(
-        final RequestLine line, final Key key, final String path
+        final RequestLine line, final Key key, final String path,
+        final CompletableFuture<Void> singleFlightGate
     ) {
         this.rawStorage.orElseThrow(); // guard: storage must be configured
         final String upstreamUri = this.upstreamUrl() + path;
@@ -713,6 +729,15 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 @SuppressWarnings("unchecked")
                 final ProxyCacheWriter.StreamedArtifact artifact =
                     ((Result.Ok<ProxyCacheWriter.StreamedArtifact>) result).value();
+                // M4: release followers waiting on the single-flight gate only
+                // AFTER the verify-and-commit step lands the bytes in storage.
+                // The Response we return now carries the streaming body — it
+                // resolves before the cache is committed, so completing the
+                // gate on this future would let followers re-enter
+                // verifyAndServePrimary against a still-empty cache and refire
+                // upstream.
+                artifact.verificationOutcome()
+                    .whenComplete((r2, e2) -> singleFlightGate.complete(null));
                 // Track 5 Phase 1B: pass the upstream response headers (carrying
                 // Last-Modified) through to buildArtifactEvent so the DB
                 // consumer records the true upstream publish date for this

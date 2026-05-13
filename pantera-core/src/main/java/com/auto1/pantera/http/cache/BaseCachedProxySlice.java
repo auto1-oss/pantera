@@ -762,6 +762,77 @@ public abstract class BaseCachedProxySlice implements Slice {
     }
 
     /**
+     * Single-flight gate for subclasses that own a custom upstream
+     * fetch path (e.g. Maven's {@code fetchVerifyAndCache} which streams
+     * the body through {@code ProxyCacheWriter} rather than reusing
+     * {@link #fetchAndCache}). Concurrent callers for the same {@code key}
+     * collapse: the first caller becomes the leader and runs
+     * {@code leaderFetch}; followers park on the leader's gate and
+     * then run {@code followerLookup} which is expected to hit the
+     * now-warm cache.
+     *
+     * <p>The leader receives a {@link CompletableFuture} which it MUST
+     * complete when the cache is fully committed (not when the response
+     * future resolves — for stream-through caches the response carries
+     * a not-yet-drained body, so followers waiting on the response
+     * future would re-fire upstream against a still-empty cache). For
+     * adapters that commit synchronously inside their leader fetch, the
+     * caller can complete the gate via {@code .whenComplete} on the
+     * response future; for adapters with a streaming commit (Maven's
+     * {@code streamThroughAndCommit}) the leader hooks the gate to the
+     * artifact's {@code verificationOutcome}.</p>
+     *
+     * <p>On leader failure (exception or non-2xx) the gate still
+     * completes; followers run {@code followerLookup} against a cold
+     * cache — same as the no-dedup path, at the cost of a small parking
+     * delay.</p>
+     *
+     * @param key Cache key used as the per-flight identifier.
+     * @param leaderFetch Function invoked exactly once per flight. The
+     *     argument is the leader-gate future the implementation must
+     *     complete when the cache write is fully durable. Returns the
+     *     {@link Response} the leader observed.
+     * @param followerLookup Supplier invoked for every follower after
+     *     the leader completes its gate. Typically re-enters the cache
+     *     lookup flow so the warm cache serves the response without
+     *     firing upstream again.
+     * @return Response — the leader's response for the leader, the
+     *     follower-lookup's response for followers.
+     * @since 2.2.0 (M4: extends Finding #2 coalescing into adapter-
+     *     specific upstream fetch paths).
+     */
+    protected final CompletableFuture<Response> coalesceUpstream(
+        final Key key,
+        final java.util.function.Function<
+            CompletableFuture<Void>, CompletableFuture<Response>> leaderFetch,
+        final java.util.function.Supplier<CompletableFuture<Response>> followerLookup
+    ) {
+        final boolean[] isLeader = {false};
+        final CompletableFuture<Void> leaderGate = new CompletableFuture<>();
+        final CompletableFuture<Void> gate = this.singleFlight.load(key, () -> {
+            isLeader[0] = true;
+            return leaderGate;
+        });
+        if (isLeader[0]) {
+            // The leader's response future typically resolves BEFORE the
+            // cache write commits (stream-through pattern: body is still
+            // being teed to the temp file). The leader signals cache-
+            // durability via {@code leaderGate} (typically wired to
+            // {@code StreamedArtifact.verificationOutcome}). Only on
+            // exceptional completion do we release followers eagerly so
+            // they retry against a cold cache rather than parking on a
+            // gate the leader will never close.
+            return leaderFetch.apply(leaderGate)
+                .whenComplete((r, e) -> {
+                    if (e != null && !leaderGate.isDone()) {
+                        leaderGate.complete(null);
+                    }
+                });
+        }
+        return gate.exceptionally(err -> null).thenCompose(ignored -> followerLookup.get());
+    }
+
+    /**
      * The leader's body of {@link #fetchAndCache}: fires the upstream
      * call, handles all status branches, caches success. Identical
      * behaviour to the pre-2026-05 placement except for the move into a
