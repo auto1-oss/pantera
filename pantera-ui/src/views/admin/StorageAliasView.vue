@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, computed, watch } from 'vue'
+import { onMounted, ref, computed } from 'vue'
 import { listStorages, putStorage, deleteStorage } from '@/api/settings'
 import { useNotificationStore } from '@/stores/notifications'
 import { useConfirmDelete } from '@/composables/useConfirmDelete'

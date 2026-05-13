@@ -95,10 +95,9 @@ public final class StreamThroughCache implements Cache {
      * @param remote Remote content to tee
      * @return Content that streams to caller and saves to storage
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private Content teeContent(final Key key, final Content remote) {
         final Path tempFile;
-        final FileChannel channel;
+        final FileChannel channel; // NOPMD CloseResource - lifecycle owned by Flowable pipeline below; closed on complete/error/cancel
         try {
             tempFile = Files.createTempFile("pantera-stc-", ".tmp");
             tempFile.toFile().deleteOnExit();
@@ -125,7 +124,12 @@ public final class StreamThroughCache implements Cache {
                 }
             })
             .doOnComplete(() -> {
-                channel.force(true);
+                // Intentionally NO fsync (channel.force). The cache is a
+                // regenerable mirror of upstream — if a crash leaves the
+                // temp file unflushed we'll refetch on the next miss.
+                // fsync per primary added 5-10s wall on macOS APFS to a
+                // 500-artifact cold mvn walk (Phase 7 acceptance bench
+                // debug, 2026-05).
                 channel.close();
                 if (saveFired.compareAndSet(false, true)) {
                     saveFromTempFile(key, tempFile);
@@ -140,6 +144,19 @@ public final class StreamThroughCache implements Cache {
                     .eventAction("stream_through")
                     .eventOutcome("failure")
                     .error(err)
+                    .log();
+            })
+            // Client cancelled mid-stream (e.g., closed connection) — mirror doOnError cleanup
+            // so the temp file/channel don't leak when subscription is cancelled.
+            .doOnCancel(() -> {
+                closeQuietly(channel);
+                deleteTempFileQuietly(tempFile);
+                EcsLogger.debug("com.auto1.pantera.asto.cache")
+                    .message(String.format("Stream-through: subscription cancelled for key '%s', cleaning up temp file", key.string()))
+                    .eventCategory("database")
+                    .eventAction("stream_through")
+                    .eventOutcome("unknown")
+                    .field("event.reason", "cancel")
                     .log();
             });
         return new Content.From(remote.size(), teed);
@@ -187,7 +204,6 @@ public final class StreamThroughCache implements Cache {
      * @param key Storage key
      * @param tempFile Temp file containing the content
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void saveFromTempFile(final Key key, final Path tempFile) {
         try {
             final long size = Files.size(tempFile);
@@ -246,7 +262,6 @@ public final class StreamThroughCache implements Cache {
      * @param key Storage key
      * @param bytes Content bytes to save
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void saveToStorageFromBytes(final Key key, final byte[] bytes) {
         try {
             this.storage.save(key, new Content.From(bytes))

@@ -12,6 +12,10 @@ package  com.auto1.pantera.conan.http;
 
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.conan.ItemTokenizer;
+import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.scheduling.RepositoryEvents;
+import java.util.Optional;
+import java.util.Queue;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.auth.AuthUser;
@@ -92,7 +96,10 @@ public final class ConanSlice extends Slice.Wrap {
     }
 
     /**
-     * Ctor.
+     * Legacy ctor retained for call sites that cannot provide an events
+     * queue. Uploads via this ctor are written to storage but NOT indexed
+     * in the artifacts DB, so they will not appear in tree / search.
+     *
      * @param storage Storage object.
      * @param policy Access policy.
      * @param auth Authentication parameters.
@@ -100,7 +107,6 @@ public final class ConanSlice extends Slice.Wrap {
      * @param tokenizer Tokens provider for repository items.
      * @param name Repository name.
      */
-    @SuppressWarnings("PMD.ExcessiveMethodLength")
     public ConanSlice(
         final Storage storage,
         final Policy<?> policy,
@@ -108,6 +114,31 @@ public final class ConanSlice extends Slice.Wrap {
         final Tokens tokens,
         final ItemTokenizer tokenizer,
         final String name
+    ) {
+        this(storage, policy, auth, tokens, tokenizer, name, Optional.empty());
+    }
+
+    /**
+     * Ctor.
+     * @param storage Storage object.
+     * @param policy Access policy.
+     * @param auth Authentication parameters.
+     * @param tokens User auth token generator.
+     * @param tokenizer Tokens provider for repository items.
+     * @param name Repository name.
+     * @param events Optional artifact events queue — when present,
+     *               successful uploads emit an {@link ArtifactEvent}
+     *               so the DB index picks the row up (fixes the Conan
+     *               blind spot in search/tree before 2.2.0).
+     */
+    public ConanSlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication auth,
+        final Tokens tokens,
+        final ItemTokenizer tokenizer,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events
     ) {
         super(
             new SliceRoute(
@@ -328,7 +359,10 @@ public final class ConanSlice extends Slice.Wrap {
                 ),
                 new RtRulePath(
                     MethodRule.PUT,
-                    new ConanUpload.PutFile(storage, tokenizer)
+                    new ConanUpload.PutFile(
+                        storage, tokenizer,
+                        events.map(queue -> new RepositoryEvents("conan", name, queue))
+                    )
                 )
             )
         );

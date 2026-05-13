@@ -48,9 +48,7 @@ import org.junit.jupiter.api.Timeout;
  *
  * @since 1.14.0
  */
-@SuppressWarnings({"deprecation", "PMD.MethodNamingConventions",
-    "PMD.AvoidDuplicateLiterals", "PMD.AvoidCatchingGenericException",
-    "PMD.TooManyMethods", "PMD.JUnit5TestShouldBePackagePrivate"})
+@SuppressWarnings("deprecation")
 @Disabled
 public abstract class StorageWhiteboxVerification {
 
@@ -100,7 +98,6 @@ public abstract class StorageWhiteboxVerification {
         );
     }
 
-    @SuppressWarnings("PMD.EmptyCatchBlock")
     @Test
     @Timeout(1)
     public void saveAndLoad_shouldNotOverwriteWithPartial() throws Exception {
@@ -127,7 +124,8 @@ public abstract class StorageWhiteboxVerification {
                             )
                         )
                     ).join();
-                } catch (final Exception exc) {
+                } catch (final Exception exc) { // NOPMD EmptyCatchBlock - test deliberately injects Flowable.error and asserts atomicity below; the thrown exception is the expected outcome
+                    // expected: the injected error must abort save without corrupting prior value
                 }
                 MatcherAssert.assertThat(
                     String.format("%s: save should be atomic", pair.getKey()),

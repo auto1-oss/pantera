@@ -98,9 +98,10 @@ public final class StorageAliasDao {
                  "SELECT name FROM repositories WHERE config->'repo'->>'storage' = ?"
              )) {
             ps.setString(1, aliasName);
-            final ResultSet rs = ps.executeQuery();
-            while (rs.next()) {
-                result.add(rs.getString("name"));
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    result.add(rs.getString("name"));
+                }
             }
         } catch (final Exception ex) {
             throw new IllegalStateException("Failed to find repos using: " + aliasName, ex);
@@ -118,13 +119,14 @@ public final class StorageAliasDao {
             if (repoName != null) {
                 ps.setString(1, repoName);
             }
-            final ResultSet rs = ps.executeQuery();
-            while (rs.next()) {
-                result.add(Json.createObjectBuilder()
-                    .add("name", rs.getString("name"))
-                    .add("config", Json.createReader(
-                        new StringReader(rs.getString("config"))).readObject())
-                    .build());
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    result.add(Json.createObjectBuilder()
+                        .add("name", rs.getString("name"))
+                        .add("config", Json.createReader(
+                            new StringReader(rs.getString("config"))).readObject())
+                        .build());
+                }
             }
         } catch (final Exception ex) {
             throw new IllegalStateException("Failed to list aliases", ex);

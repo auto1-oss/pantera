@@ -29,7 +29,6 @@ import org.testcontainers.containers.BindMode;
  * @since 0.26
  */
 @DisabledOnOs(OS.WINDOWS)
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public class HexpmITCase {
     /**
      * Artifact in tar format.

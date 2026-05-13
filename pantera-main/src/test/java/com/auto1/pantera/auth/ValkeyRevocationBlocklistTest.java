@@ -29,7 +29,6 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  * @since 2.1.0
  */
 @Testcontainers
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 final class ValkeyRevocationBlocklistTest {
 
     /**

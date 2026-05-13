@@ -14,10 +14,10 @@ All `PANTERA_*` variables can also be set as Java system properties using the lo
 |----------|---------|-------------|
 | `PANTERA_DB_POOL_MAX` | `50` | Maximum database connection pool size |
 | `PANTERA_DB_POOL_MIN` | `10` | Minimum idle connections |
-| `PANTERA_DB_CONNECTION_TIMEOUT_MS` | `5000` | Connection acquisition timeout (ms) |
+| `PANTERA_DB_CONNECTION_TIMEOUT_MS` | `3000` | Connection acquisition timeout (ms). v2.2.0 fail-fast default (was `5000`). See [Database](database.md#canary-ramp-guide) for the canary ramp. |
 | `PANTERA_DB_IDLE_TIMEOUT_MS` | `600000` | Idle connection timeout (ms) -- 10 minutes |
 | `PANTERA_DB_MAX_LIFETIME_MS` | `1800000` | Maximum connection lifetime (ms) -- 30 minutes |
-| `PANTERA_DB_LEAK_DETECTION_MS` | `300000` | Connection leak detection threshold (ms) -- 5 minutes |
+| `PANTERA_DB_LEAK_DETECTION_MS` | `5000` | Connection leak detection threshold (ms). v2.2.0 fail-fast default (was `300000`). A WARN past this threshold is a real held-connection bug -- see [Database](database.md#what-a-hikari-leak-warn-means). |
 | `PANTERA_DB_BUFFER_SECONDS` | `2` | Event batch buffer time (seconds) |
 | `PANTERA_DB_BATCH_SIZE` | `200` | Maximum events per database batch |
 
@@ -176,9 +176,56 @@ These variables are consumed by the AWS SDK inside the container:
 
 ---
 
+## Authentication Cache (auth-enabled)
+
+Two-tier cache (L1 Caffeine + L2 Valkey) in front of `LocalEnabledFilter`. See [Cache Configuration](cache-configuration.md#auth-enabled-cachedlocalenabledfilter).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PANTERA_AUTH_ENABLED_L1_MAX_SIZE` | `10000` | L1 (Caffeine) max entries. |
+| `PANTERA_AUTH_ENABLED_L1_TTL_SECONDS` | `300` | L1 TTL in seconds. |
+| `PANTERA_AUTH_ENABLED_L2_ENABLED` | `true` | Enable the Valkey L2 tier. Set `false` to run L1-only. |
+| `PANTERA_AUTH_ENABLED_L2_TTL_SECONDS` | `3600` | L2 TTL in seconds. |
+| `PANTERA_AUTH_ENABLED_L2_TIMEOUT_MS` | `100` | L2 read timeout in milliseconds. |
+
+---
+
+## Group Metadata Stale Cache
+
+Two-tier last-known-good fallback for group repositories. `l2.ttlSeconds = 0` is intentional -- Valkey LRU owns eviction. See [Cache Configuration](cache-configuration.md#group-metadata-stale-groupmetadatacache-stale-fallback).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PANTERA_GROUP_METADATA_STALE_L1_MAX_SIZE` | `100000` | L1 max entries. |
+| `PANTERA_GROUP_METADATA_STALE_L1_TTL_SECONDS` | `2592000` | L1 TTL in seconds (30 days). |
+| `PANTERA_GROUP_METADATA_STALE_L2_ENABLED` | `true` | Enable the Valkey L2 tier. |
+| `PANTERA_GROUP_METADATA_STALE_L2_TTL_SECONDS` | `0` | L2 TTL in seconds. `0` means no TTL; Valkey LRU evicts. |
+| `PANTERA_GROUP_METADATA_STALE_L2_TIMEOUT_MS` | `100` | L2 read timeout in milliseconds. |
+
+---
+
+## HTTP/3
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PANTERA_HTTP3_PROXY_PROTOCOL` | `false` | When `true`, the HTTP/3 listener prepends Jetty's `ProxyConnectionFactory` so the real client IP is recovered from the PROXY-protocol prelude. Required when the listener sits behind an NLB or other L4 proxy. See [Deployment behind an NLB](deployment-nlb.md). |
+| `PANTERA_HTTP3_MAX_STREAM_BUFFER_BYTES` | `16777216` (16 MiB) | Per-stream body buffer cap. Requests exceeding this are rejected. Guards against memory exhaustion on large unbounded uploads over HTTP/3. |
+
+---
+
+## Scheduler
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PANTERA_JOB_DATA_REGISTRY_MAX` | `10000` | Sanity cap on entries in `JobDataRegistry`. Exceeding this threshold emits an ECS error log naming a key prefix so operators can locate the leaking scheduler site. Entries are never silently dropped. |
+
+---
+
 ## Related Pages
 
 - [Configuration](configuration.md) -- Main pantera.yml configuration
 - [Configuration Reference](../configuration-reference.md#7-environment-variables-reference) -- Environment variables in the configuration reference
 - [Performance Tuning](performance-tuning.md) -- How to size thread pools and connection pools
 - [Installation](installation.md) -- Setting environment variables in Docker
+- [Cache Configuration](cache-configuration.md) -- Full cache tier reference
+- [Database](database.md) -- Hikari fail-fast and canary ramp

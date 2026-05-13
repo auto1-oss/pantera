@@ -25,7 +25,6 @@ import javax.json.JsonValue;
  *
  * @since 0.1
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 final class Meta {
     /**
      * Latest tag name.

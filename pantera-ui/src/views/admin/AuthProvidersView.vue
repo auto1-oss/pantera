@@ -21,7 +21,6 @@ import { listRoles } from '@/api/roles'
 import { useNotificationStore } from '@/stores/notifications'
 import { useConfirmDelete } from '@/composables/useConfirmDelete'
 import {
-  PROVIDER_SCHEMAS,
   CREATABLE_SCHEMAS,
   PROTECTED_TYPES,
   schemaFor,

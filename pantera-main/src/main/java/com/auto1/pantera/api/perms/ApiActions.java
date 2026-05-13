@@ -19,7 +19,6 @@ import java.util.function.Function;
  * Api actions.
  * @since 0.30
  */
-@SuppressWarnings({"PMD.ArrayIsStoredDirectly", "PMD.UseVarargs"})
 public abstract class ApiActions {
 
     /**
@@ -31,7 +30,7 @@ public abstract class ApiActions {
      * Ctor.
      * @param values Action values list
      */
-    protected ApiActions(final Action[] values) {
+    protected ApiActions(final Action... values) {
         this.values = Arrays.asList(values);
     }
 

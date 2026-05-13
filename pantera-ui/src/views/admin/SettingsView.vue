@@ -4,7 +4,12 @@ import {
   getSettings, updatePrefixes, updateSettingsSection,
   getCooldownConfig, updateCooldownConfig,
 } from '@/api/settings'
-import { getAuthSettings, updateAuthSettings } from '@/api/auth'
+import {
+  getAuthSettings, updateAuthSettings,
+  getCircuitBreakerSettings, updateCircuitBreakerSettings,
+} from '@/api/auth'
+import type { RuntimeSettingKey } from '@/api/runtimeSettings'
+import { useRuntimeSettings } from '@/composables/useRuntimeSettings'
 import { useConfigStore } from '@/stores/config'
 import { useNotificationStore } from '@/stores/notifications'
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -14,6 +19,7 @@ import InputText from 'primevue/inputtext'
 import InputNumber from 'primevue/inputnumber'
 import InputSwitch from 'primevue/inputswitch'
 import AutoComplete from 'primevue/autocomplete'
+import Select from 'primevue/select'
 import Tag from 'primevue/tag'
 import type { Settings, CooldownConfig } from '@/types'
 
@@ -44,10 +50,19 @@ const authRefreshTtl = ref(604800)
 const authApiMaxTtl = ref(7776000)
 const authAllowPermanent = ref(true)
 
+// Circuit breaker (rate-over-sliding-window, 2.2.0)
+const cbFailureRatePercent = ref(50)     // stored as 0.0-1.0 on server, shown as % here
+const cbMinCalls = ref(20)
+const cbWindowSeconds = ref(30)
+const cbInitialBlockSeconds = ref(20)
+const cbMaxBlockSeconds = ref(300)
+
 // Cooldown config
 const cooldownConfig = ref<CooldownConfig | null>(null)
 const cooldownEnabled = ref(false)
 const cooldownAge = ref('7d')
+const cooldownHistoryRetentionDays = ref(90)
+const cooldownCleanupBatchLimit = ref(10000)
 const newRepoType = ref('')
 
 // Proxy repo types for autocomplete
@@ -55,7 +70,7 @@ const allProxyTypes = [
   'maven-proxy', 'docker-proxy', 'npm-proxy', 'pypi-proxy',
   'helm-proxy', 'go-proxy', 'nuget-proxy', 'debian-proxy',
   'rpm-proxy', 'conda-proxy', 'gem-proxy', 'conan-proxy',
-  'hex-proxy', 'php-proxy', 'file-proxy',
+  'hexpm-proxy', 'php-proxy', 'file-proxy',
 ]
 const proxyTypeSuggestions = ref<string[]>([])
 function searchProxyTypes(event: { query: string }) {
@@ -72,6 +87,47 @@ function searchProxyTypes(event: { query: string }) {
 // External links
 const grafanaUrl = ref('')
 const registryUrl = ref('')
+
+// Runtime tunables (HTTP/2 client). Loaded into the same view so admins
+// have one place for everything that lives in the settings DB.
+const runtime = useRuntimeSettings()
+
+const PROTOCOL_OPTIONS = [
+  { label: 'HTTP/2', value: 'h2' },
+  { label: 'HTTP/1.1', value: 'h1' },
+  { label: 'Auto', value: 'auto' },
+]
+
+interface IntRange { min: number; max: number }
+const RUNTIME_INT_RANGES: Record<RuntimeSettingKey, IntRange | null> = {
+  'http_client.protocol': null,
+  'http_client.http2_max_pool_size': { min: 1, max: 8 },
+  'http_client.http2_multiplexing_limit': { min: 1, max: 1000 },
+}
+
+const HTTP_RUNTIME_KEYS: RuntimeSettingKey[] = [
+  'http_client.protocol',
+  'http_client.http2_max_pool_size',
+  'http_client.http2_multiplexing_limit',
+]
+
+const RUNTIME_LABELS: Record<RuntimeSettingKey, string> = {
+  'http_client.protocol': 'Protocol',
+  'http_client.http2_max_pool_size': 'HTTP/2 max pool size',
+  'http_client.http2_multiplexing_limit': 'HTTP/2 multiplexing limit',
+}
+
+const RUNTIME_HELP: Partial<Record<RuntimeSettingKey, string>> = {
+  'http_client.protocol':
+    'Default upstream HTTP protocol. h2 multiplexes many requests over one '
+    + 'connection. h1 forces classic HTTP/1.1. auto negotiates per upstream.',
+  'http_client.http2_max_pool_size':
+    'Max concurrent HTTP/2 connections per destination. Most upstreams '
+    + 'multiplex thousands of streams over one connection — leave at 1 '
+    + 'unless you have a specific need to fan out.',
+  'http_client.http2_multiplexing_limit':
+    'Max concurrent streams per HTTP/2 connection.',
+}
 
 onMounted(async () => {
   try {
@@ -103,6 +159,8 @@ onMounted(async () => {
       cooldownConfig.value = cd
       cooldownEnabled.value = cd.enabled
       cooldownAge.value = cd.minimum_allowed_age
+      cooldownHistoryRetentionDays.value = cd.history_retention_days ?? 90
+      cooldownCleanupBatchLimit.value = cd.cleanup_batch_limit ?? 10000
     }
     getAuthSettings().then(s => {
       authAccessTtl.value = parseInt(s.access_token_ttl_seconds ?? '3600')
@@ -110,6 +168,16 @@ onMounted(async () => {
       authApiMaxTtl.value = parseInt(s.api_token_max_ttl_seconds ?? '7776000')
       authAllowPermanent.value = s.api_token_allow_permanent === 'true'
     }).catch(() => {})
+    getCircuitBreakerSettings().then(s => {
+      cbFailureRatePercent.value = Math.round(
+        parseFloat(s.circuit_breaker_failure_rate_threshold ?? '0.5') * 100,
+      )
+      cbMinCalls.value = parseInt(s.circuit_breaker_minimum_number_of_calls ?? '20')
+      cbWindowSeconds.value = parseInt(s.circuit_breaker_sliding_window_seconds ?? '30')
+      cbInitialBlockSeconds.value = parseInt(s.circuit_breaker_initial_block_seconds ?? '20')
+      cbMaxBlockSeconds.value = parseInt(s.circuit_breaker_max_block_seconds ?? '300')
+    }).catch(() => {})
+    runtime.load().catch(() => {})
   } catch {
     notify.error('Failed to load settings')
   } finally {
@@ -186,6 +254,49 @@ async function saveAuthSettings() {
   }
 }
 
+/**
+ * Save rate-over-sliding-window circuit breaker settings. Server-side
+ * invariants (rate in (0,1], minCalls>=1, initial<=max) are also
+ * validated client-side below to give immediate feedback — the server
+ * does the same checks again and rejects with 400 if anything slips
+ * through, so nothing gets persisted in an invalid state.
+ */
+async function saveCircuitBreakerSettings() {
+  const ratePct = cbFailureRatePercent.value
+  if (ratePct <= 0 || ratePct > 100) {
+    notify.error('Failure rate must be between 1 and 100%')
+    return
+  }
+  if (cbMinCalls.value < 1) {
+    notify.error('Minimum number of calls must be at least 1')
+    return
+  }
+  if (cbWindowSeconds.value < 1) {
+    notify.error('Sliding window must be at least 1 second')
+    return
+  }
+  if (cbInitialBlockSeconds.value < 1
+      || cbMaxBlockSeconds.value < cbInitialBlockSeconds.value) {
+    notify.error('Initial block must be >= 1s and <= max block duration')
+    return
+  }
+  saving.value = 'circuit-breaker'
+  try {
+    await updateCircuitBreakerSettings({
+      circuit_breaker_failure_rate_threshold: (ratePct / 100).toFixed(3),
+      circuit_breaker_minimum_number_of_calls: String(cbMinCalls.value),
+      circuit_breaker_sliding_window_seconds: String(cbWindowSeconds.value),
+      circuit_breaker_initial_block_seconds: String(cbInitialBlockSeconds.value),
+      circuit_breaker_max_block_seconds: String(cbMaxBlockSeconds.value),
+    })
+    notify.success('Circuit breaker settings saved')
+  } catch {
+    notify.error('Failed to save circuit breaker settings')
+  } finally {
+    saving.value = null
+  }
+}
+
 function saveHttpClient() {
   saveSection('http_client', {
     proxy_timeout: httpProxyTimeout.value,
@@ -210,6 +321,8 @@ async function saveCooldown() {
     const payload: CooldownConfig = {
       enabled: cooldownEnabled.value,
       minimum_allowed_age: cooldownAge.value,
+      history_retention_days: cooldownHistoryRetentionDays.value,
+      cleanup_batch_limit: cooldownCleanupBatchLimit.value,
       repo_types: {},
     }
     if (cooldownConfig.value?.repo_types) {
@@ -406,6 +519,72 @@ async function saveExternalLinks() {
         </template>
       </Card>
 
+      <!-- Upstream Failure Circuit Breaker (rate-over-sliding-window) -->
+      <Card class="shadow-sm">
+        <template #title>Upstream Failure Circuit Breaker</template>
+        <template #subtitle>
+          Rate-over-sliding-window breaker for proxy upstream calls. Opens when
+          the failure rate inside the window exceeds the threshold AND the window
+          has seen at least the minimum number of calls — the volume gate
+          protects against cold-start false positives.
+        </template>
+        <template #content>
+          <div class="space-y-4">
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Failure Rate Threshold (%)</label>
+                <InputNumber v-model="cbFailureRatePercent" :min="1" :max="100" suffix="%" class="w-full" />
+                <span class="text-xs text-gray-400">
+                  Default: 50%. Breaker opens when failure rate ≥ this value across the window.
+                </span>
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Minimum Number of Calls</label>
+                <InputNumber v-model="cbMinCalls" :min="1" :max="10000" class="w-full" />
+                <span class="text-xs text-gray-400">
+                  Default: 20. No trip until the window has seen this many outcomes (rate + volume gate).
+                </span>
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Sliding Window (seconds)</label>
+                <InputNumber v-model="cbWindowSeconds" :min="1" :max="600" suffix=" s" class="w-full" />
+                <span class="text-xs text-gray-400">
+                  Default: 30s. Rolling window over which failure rate is computed.
+                </span>
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Initial Block Duration (seconds)</label>
+                <InputNumber v-model="cbInitialBlockSeconds" :min="1" :max="3600" suffix=" s" class="w-full" />
+                <span class="text-xs text-gray-400">
+                  Default: 20s. First block after the breaker opens; Fibonacci-scaled on repeat trips.
+                </span>
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Max Block Duration (seconds)</label>
+                <InputNumber v-model="cbMaxBlockSeconds" :min="1" :max="86400" suffix=" s" class="w-full" />
+                <span class="text-xs text-gray-400">
+                  Default: 300s (5 min). Upper bound on the Fibonacci back-off.
+                </span>
+              </div>
+            </div>
+            <div class="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded p-2">
+              <i class="pi pi-info-circle mr-1" />
+              Settings take effect on the next recorded outcome across every proxy
+              upstream — no restart needed. A very low rate threshold combined with
+              a low minimum-calls value makes the breaker trip-happy under cold-start
+              bursts; the defaults are tuned to avoid that.
+            </div>
+            <Button
+              label="Save Circuit Breaker Settings"
+              icon="pi pi-save"
+              size="small"
+              :loading="saving === 'circuit-breaker'"
+              @click="saveCircuitBreakerSettings"
+            />
+          </div>
+        </template>
+      </Card>
+
       <!-- Cooldown Configuration -->
       <Card class="shadow-sm">
         <template #title>Cooldown Configuration</template>
@@ -433,6 +612,42 @@ async function saveExternalLinks() {
                 placeholder="7d"
               />
               <span class="text-xs text-gray-400">e.g. 7d, 24h, 30m</span>
+            </div>
+
+            <!-- History retention -->
+            <div class="flex flex-col gap-2">
+              <label for="cooldown-retention" class="text-sm text-gray-500">
+                History retention (days)
+              </label>
+              <InputNumber
+                id="cooldown-retention"
+                v-model="cooldownHistoryRetentionDays"
+                :min="1"
+                :max="3650"
+                show-buttons
+                class="w-40"
+              />
+              <small class="text-gray-500">
+                Days to retain archived cooldown blocks before auto-purge.
+              </small>
+            </div>
+
+            <!-- Cleanup batch limit -->
+            <div class="flex flex-col gap-2">
+              <label for="cooldown-batch" class="text-sm text-gray-500">
+                Cleanup batch limit
+              </label>
+              <InputNumber
+                id="cooldown-batch"
+                v-model="cooldownCleanupBatchLimit"
+                :min="1"
+                :max="100000"
+                show-buttons
+                class="w-40"
+              />
+              <small class="text-gray-500">
+                Max rows archived per cleanup tick.
+              </small>
             </div>
 
             <!-- Per-repo-type overrides -->
@@ -543,6 +758,90 @@ async function saveExternalLinks() {
               :loading="saving === 'http_client'"
               @click="saveHttpClient"
             />
+          </div>
+        </template>
+      </Card>
+
+      <!-- HTTP/2 Upstream Tuning (live runtime knobs) -->
+      <Card class="shadow-sm">
+        <template #title>HTTP/2 Upstream Tuning</template>
+        <template #subtitle>
+          Live runtime knobs for the upstream HTTP client — protocol selection
+          and HTTP/2 pool/multiplexing limits. Changes apply within a few
+          hundred milliseconds; no restart required.
+        </template>
+        <template #content>
+          <div v-if="runtime.loading.value" class="text-sm text-gray-500">Loading…</div>
+          <div
+            v-else-if="runtime.loadError.value"
+            class="text-sm text-red-700 dark:text-red-300"
+          >
+            Failed to load runtime tunables: {{ runtime.loadError.value }}
+          </div>
+          <div v-else class="space-y-5">
+            <div
+              v-for="key in HTTP_RUNTIME_KEYS"
+              :key="key"
+              class="flex flex-col gap-1"
+              :data-testid="`runtime-row-${key}`"
+            >
+              <label
+                :for="`field-${key}`"
+                class="text-sm font-medium text-gray-700 dark:text-gray-200"
+              >
+                {{ RUNTIME_LABELS[key] }}
+              </label>
+              <Select
+                v-if="key === 'http_client.protocol'"
+                :id="`field-${key}`"
+                v-model="runtime.edited[key]"
+                :options="PROTOCOL_OPTIONS"
+                optionLabel="label"
+                optionValue="value"
+                class="w-full max-w-xs"
+                :data-testid="`runtime-input-${key}`"
+              />
+              <InputNumber
+                v-else
+                :id="`field-${key}`"
+                v-model="runtime.edited[key] as number"
+                :min="RUNTIME_INT_RANGES[key]?.min"
+                :max="RUNTIME_INT_RANGES[key]?.max"
+                show-buttons
+                class="w-48"
+                :input-props="{ 'data-testid': `runtime-input-${key}` }"
+              />
+              <div v-if="RUNTIME_HELP[key]" class="text-xs text-gray-500">
+                {{ RUNTIME_HELP[key] }}
+                <template v-if="RUNTIME_INT_RANGES[key]">
+                  Allowed range:
+                  {{ RUNTIME_INT_RANGES[key]?.min }}–{{ RUNTIME_INT_RANGES[key]?.max }}.
+                </template>
+                Default: {{ runtime.rows[key]?.default }}.
+              </div>
+              <div class="flex gap-2 mt-1">
+                <Button
+                  label="Save"
+                  icon="pi pi-save"
+                  size="small"
+                  :loading="runtime.saving[key]"
+                  :disabled="!runtime.isDirty(key) || runtime.saving[key]"
+                  :data-testid="`runtime-save-${key}`"
+                  @click="runtime.saveOne(key)"
+                />
+                <Button
+                  v-if="runtime.isOverridden(key)"
+                  label="Reset to default"
+                  icon="pi pi-undo"
+                  size="small"
+                  severity="secondary"
+                  text
+                  :loading="runtime.saving[key]"
+                  :data-testid="`runtime-reset-${key}`"
+                  @click="runtime.resetOne(key)"
+                />
+              </div>
+            </div>
           </div>
         </template>
       </Card>

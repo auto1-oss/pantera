@@ -37,7 +37,6 @@ import org.junit.jupiter.api.Test;
  * Test for {@link AstoRepoAdd}.
  * @since 1.10
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class AstoRepoAddTest {
 
     /**

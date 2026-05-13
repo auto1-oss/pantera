@@ -86,7 +86,6 @@ public class NextSafeAvailablePort {
      * @param port The port to check for availability
      * @return If the ports is available
      */
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.OnlyOneReturn"})
     private static boolean available(final int port) {
         try (ServerSocket sersock = new ServerSocket(port);
             DatagramSocket dgrmsock = new DatagramSocket(port)

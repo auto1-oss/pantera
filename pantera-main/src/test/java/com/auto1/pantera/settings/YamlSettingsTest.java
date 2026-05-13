@@ -35,7 +35,6 @@ import org.junit.jupiter.params.provider.ValueSource;
  *
  * @since 0.1
  */
-@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.TooManyMethods"})
 class YamlSettingsTest {
 
     /**
@@ -368,7 +367,6 @@ class YamlSettingsTest {
         );
     }
 
-    @SuppressWarnings("PMD.UnusedPrivateMethod")
     private static Stream<String> badYamls() {
         return Stream.of(
             "meta:\n  storage:\n",

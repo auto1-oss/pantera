@@ -79,7 +79,8 @@ public final class MavenSlice extends Slice.Wrap {
         final String name,
         final Optional<Queue<ArtifactEvent>> events
     ) {
-        this(storage, policy, users, null, name, events);
+        this(storage, policy, users, null, name, events,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
     }
 
     /**
@@ -99,20 +100,40 @@ public final class MavenSlice extends Slice.Wrap {
         final String name,
         final Optional<Queue<ArtifactEvent>> events
     ) {
+        this(storage, policy, basicAuth, tokenAuth, name, events,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+    }
+
+    /**
+     * Ctor with synchronous index writer for read-after-write consistency.
+     * @param storage The storage.
+     * @param policy Access policy.
+     * @param basicAuth Basic authentication.
+     * @param tokenAuth Token authentication.
+     * @param name Repository name
+     * @param events Artifact events
+     * @param syncIndex Synchronous artifact-index writer
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public MavenSlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
+    ) {
         super(
-            MavenSlice.createSliceRoute(storage, policy, basicAuth, tokenAuth, name, events)
+            MavenSlice.createSliceRoute(
+                storage, policy, basicAuth, tokenAuth, name, events, syncIndex
+            )
         );
     }
 
     /**
      * Creates slice route with appropriate authentication.
-     * @param storage The storage
-     * @param policy Access policy
-     * @param basicAuth Basic authentication
-     * @param tokenAuth Token authentication
-     * @param name Repository name
-     * @param events Artifact events
-     * @return Slice route
+     * @checkstyle ParameterNumberCheck (5 lines)
      */
     private static SliceRoute createSliceRoute(
         final Storage storage,
@@ -120,7 +141,8 @@ public final class MavenSlice extends Slice.Wrap {
         final Authentication basicAuth,
         final TokenAuthentication tokenAuth,
         final String name,
-        final Optional<Queue<ArtifactEvent>> events
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
     ) {
         return new SliceRoute(
             new RtRulePath(
@@ -142,7 +164,7 @@ public final class MavenSlice extends Slice.Wrap {
                     new RtRule.ByPath(".*SNAPSHOT.*")
                 ),
                 MavenSlice.createAuthSlice(
-                    new UploadSlice(storage, events, name),
+                    new UploadSlice(storage, events, name, syncIndex),
                     basicAuth,
                     tokenAuth,
                     new OperationControl(
@@ -153,7 +175,7 @@ public final class MavenSlice extends Slice.Wrap {
             new RtRulePath(
                 MethodRule.PUT,
                 MavenSlice.createAuthSlice(
-                    new UploadSlice(storage, events, name),
+                    new UploadSlice(storage, events, name, syncIndex),
                     basicAuth,
                     tokenAuth,
                     new OperationControl(

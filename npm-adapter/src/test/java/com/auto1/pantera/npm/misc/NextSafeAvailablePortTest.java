@@ -22,7 +22,6 @@ import org.junit.jupiter.params.provider.ValueSource;
  * Test cases for {@link NextSafeAvailablePort}.
  * @since 0.9
  */
-@SuppressWarnings("PMD.ProhibitPlainJunitAssertionsRule")
 final class NextSafeAvailablePortTest {
 
     @ParameterizedTest

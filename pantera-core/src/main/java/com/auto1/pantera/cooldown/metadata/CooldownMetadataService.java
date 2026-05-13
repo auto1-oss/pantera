@@ -10,7 +10,7 @@
  */
 package com.auto1.pantera.cooldown.metadata;
 
-import com.auto1.pantera.cooldown.CooldownInspector;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -77,6 +77,13 @@ public interface CooldownMetadataService {
      * @param repoName Repository name
      */
     void invalidateAll(String repoType, String repoName);
+
+    /**
+     * Clear all cached metadata across all repositories.
+     * Called on global policy changes (e.g. cooldown duration change)
+     * that may affect all cached entries.
+     */
+    void clearAll();
 
     /**
      * Get cache statistics.

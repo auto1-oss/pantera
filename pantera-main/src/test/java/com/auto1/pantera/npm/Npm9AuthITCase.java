@@ -29,7 +29,6 @@ import org.testcontainers.containers.Container;
  * Integration tests for Npm repository with npm client version 9 and token auth.
  * @since 0.12
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 @EnabledOnOs({OS.LINUX, OS.MAC})
 final class Npm9AuthITCase {
     /**

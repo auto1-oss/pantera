@@ -39,7 +39,7 @@ public final class LoggingAuth implements Authentication {
         final Optional<AuthUser> res = this.origin.user(username, password);
         if (res.isEmpty()) {
             EcsLogger.warn("com.auto1.pantera.auth")
-                .message("Failed to authenticate user")
+                .message("Failed to authenticate user via " + this.origin)
                 .eventCategory("authentication")
                 .eventAction("login")
                 .eventOutcome("failure")
@@ -47,8 +47,15 @@ public final class LoggingAuth implements Authentication {
                 .field("event.provider", this.origin.toString())
                 .log();
         } else {
-            EcsLogger.info("com.auto1.pantera.auth")
-                .message("Successfully authenticated user")
+            // RCA-4 (v2.2.0): demoted from INFO to DEBUG. With twoTier auth
+            // (CachedUsers wrapping LocalEnabledFilter) this wrapper sits on
+            // BOTH tiers, firing twice per successful request. A cold mvn
+            // dependency:resolve produced 1062 INFO entries (534 requests ×
+            // 2 tiers) at ~750 bytes JSON each — ~800 KB of pure log
+            // amplification per build with no diagnostic value. Failures
+            // remain at WARN above.
+            EcsLogger.debug("com.auto1.pantera.auth")
+                .message("Successfully authenticated user via " + this.origin)
                 .eventCategory("authentication")
                 .eventAction("login")
                 .eventOutcome("success")

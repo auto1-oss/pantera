@@ -127,13 +127,11 @@ public final class GroupAuditSlice implements Slice {
                     final Map<String, JsonValue> merged = new HashMap<>();
                     int emptyCount = 0;
                     int nonEmptyCount = 0;
-                    int idx = 0;
 
                     for (CompletableFuture<JsonObject> future : auditResults) {
                         // Safe: allOf() guarantees all futures are complete
                         // getNow() is non-blocking when future is complete
                         final JsonObject result = future.getNow(Json.createObjectBuilder().build());
-                        final String memberName = idx < this.members.size() ? this.members.get(idx).name : "unknown";
                         if (result.isEmpty()) {
                             emptyCount++;
                         } else {
@@ -141,7 +139,6 @@ public final class GroupAuditSlice implements Slice {
                             // Merge entries - later entries with same key overwrite
                             result.forEach(merged::put);
                         }
-                        idx++;
                     }
 
                     final long duration = System.currentTimeMillis() - startTime;
@@ -234,7 +231,7 @@ public final class GroupAuditSlice implements Slice {
                 .thenApply(bytes -> {
                     try {
                         final String json = new String(bytes, StandardCharsets.UTF_8);
-                        if (json.isBlank() || json.equals("{}")) {
+                        if (json.isBlank() || "{}".equals(json)) {
                             EcsLogger.debug("com.auto1.pantera.npm")
                                 .message("Member returned empty audit response: " + member.name)
                                 .eventCategory("web")
@@ -312,7 +309,7 @@ public final class GroupAuditSlice implements Slice {
     private static Headers dropFullPathHeader(final Headers headers) {
         return new Headers(
             headers.asList().stream()
-                .filter(h -> !h.getKey().equalsIgnoreCase("X-FullPath"))
+                .filter(h -> !"X-FullPath".equalsIgnoreCase(h.getKey()))
                 .toList()
         );
     }

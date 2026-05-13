@@ -26,7 +26,6 @@ import org.junit.jupiter.api.Test;
  *
  * @since 0.22
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 final class CachedUsersTest {
 
     /**

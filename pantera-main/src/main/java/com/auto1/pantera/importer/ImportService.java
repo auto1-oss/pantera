@@ -372,7 +372,7 @@ public final class ImportService {
                 .field("error.message", mismatch.get())
                 .log();
             final Storage root = rootStorage(storage).orElse(storage);
-            if (root == storage) {
+            if (root == storage) { // NOPMD CompareObjectsWithEquals - intentional identity check (orElse returned the same instance)
                 // Same storage, simple move
                 return storage.move(staging, quarantine).thenApply(
                     ignored -> {
@@ -524,7 +524,6 @@ public final class ImportService {
     private static CompletionStage<Void> writePyPiShard(
         final Storage storage,
         final Key target,
-        final ImportRequest request,
         final long size,
         final EnumMap<DigestType, String> digests
     ) {
@@ -765,7 +764,7 @@ public final class ImportService {
                 origin.setAccessible(true);
                 return Optional.of((Storage) origin.get(storage));
             }
-        } catch (final Exception ignore) {
+        } catch (final Exception ignore) { // NOPMD EmptyCatchBlock - intentional: any reflection failure means the storage is not a SubStorage; return empty
             // ignore and treat as not a SubStorage
         }
         return Optional.empty();
@@ -786,16 +785,8 @@ public final class ImportService {
                 final String raw = ym.get().string("metadata_merge_mode");
                 if (raw != null && !raw.isBlank()) {
                     final String mode = raw.trim().toLowerCase(Locale.ROOT);
-                    // Explicit legacy/direct/off disables shards
-                    if ("legacy".equals(mode) || "direct".equals(mode) || "off".equals(mode)) {
-                        return false;
-                    }
-                    // Explicit shards enables shards
-                    if ("shards".equals(mode)) {
-                        return true;
-                    }
-                    // Unknown values: default to shards
-                    return true;
+                    // Explicit legacy/direct/off disables shards; everything else defaults to shards.
+                    return !"legacy".equals(mode) && !"direct".equals(mode) && !"off".equals(mode);
                 }
             }
         } catch (final Exception ex) {
@@ -889,10 +880,10 @@ public final class ImportService {
             return writeMavenShard(storage, target, request, size, digests);
         }
         if ("helm".equals(type)) {
-            return writeHelmShard(storage, target, request, size, digests, baseUrl);
+            return writeHelmShard(storage, target, size, digests, baseUrl);
         }
         if ("pypi".equals(type) || "python".equals(type)) {
-            return writePyPiShard(storage, target, request, size, digests);
+            return writePyPiShard(storage, target, size, digests);
         }
         return CompletableFuture.completedFuture(null);
     }
@@ -1002,7 +993,6 @@ public final class ImportService {
     private static CompletionStage<Void> writeHelmShard(
         final Storage storage,
         final Key target,
-        final ImportRequest request,
         final long size,
         final EnumMap<DigestType, String> digests,
         final Optional<String> baseUrl

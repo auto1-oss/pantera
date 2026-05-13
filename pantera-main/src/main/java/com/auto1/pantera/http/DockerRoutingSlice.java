@@ -55,7 +55,6 @@ public final class DockerRoutingSlice implements Slice {
     }
 
     @Override
-    @SuppressWarnings("PMD.NestedIfDepthCheck")
     public CompletableFuture<Response> response(
         RequestLine line, Headers headers, Content body
     ) {
@@ -63,7 +62,7 @@ public final class DockerRoutingSlice implements Slice {
         final Matcher matcher = PTN_PATH.matcher(path);
         if (matcher.matches()) {
             final String group = matcher.group(1);
-            if (group.isEmpty() || group.equals("/")) {
+            if (group.isEmpty() || "/".equals(group)) {
                 return new BasicAuthzSlice(
                     (l, h, b) -> ResponseBuilder.ok()
                         .header("Docker-Distribution-API-Version", "registry/2.0")

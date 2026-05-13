@@ -69,7 +69,6 @@ public final class QuartzSchema {
      * @param stmt JDBC statement
      * @throws SQLException On SQL error
      */
-    @SuppressWarnings("PMD.ExcessiveMethodLength")
     private static void createTables(final Statement stmt) throws SQLException {
         stmt.executeUpdate(
             String.join(
@@ -256,7 +255,6 @@ public final class QuartzSchema {
      * @param stmt JDBC statement
      * @throws SQLException On SQL error
      */
-    @SuppressWarnings("PMD.ExcessiveMethodLength")
     private static void createIndexes(final Statement stmt) throws SQLException {
         // Indexes on QRTZ_JOB_DETAILS
         stmt.executeUpdate(

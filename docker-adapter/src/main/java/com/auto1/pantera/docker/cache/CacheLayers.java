@@ -181,7 +181,6 @@ public final class CacheLayers implements Layers {
     /**
      * Record metric safely (only if metrics are enabled).
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
             if (com.auto1.pantera.metrics.PanteraMetrics.isEnabled()) {

@@ -135,7 +135,7 @@ public final class DockerRepositoryPermission extends Permission  {
      * Get key for collection.
      * @return Repo name and resource joined with :
      */
-    @SuppressWarnings("PMD.UnusedPrivateMethod") // just a pmd bug
+     // just a pmd bug
     private String key() {
         return String.join(":", this.getName(), this.resource);
     }
@@ -213,7 +213,6 @@ public final class DockerRepositoryPermission extends Permission  {
         }
 
         @Override
-        @SuppressWarnings({"PMD.CyclomaticComplexity", "PMD.CognitiveComplexity"})
         public boolean implies(final Permission obj) {
             boolean res = false;
             if (obj instanceof DockerRepositoryPermission perm) {

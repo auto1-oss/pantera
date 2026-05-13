@@ -27,7 +27,6 @@ import org.redline_rpm.header.Header;
  * Test for {@link HeaderTags}.
  * @since 1.10
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class HeaderTagsTest {
 
     @Test

@@ -185,7 +185,6 @@ public interface PermissionConfig extends Config {
         }
 
         @Override
-        @SuppressWarnings("PMD.ConfusingTernary")
         public PermissionConfig config(final String index) {
             final int ind = Integer.parseInt(index);
             final PermissionConfig res;

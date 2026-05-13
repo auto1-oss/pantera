@@ -52,7 +52,6 @@ import org.junit.jupiter.api.Test;
  *
  * @since 0.5
  */
-@SuppressWarnings({"PMD.TooManyMethods", "PMD.AvoidCatchingGenericException"})
 class AstoRepositoryTest {
 
     /**

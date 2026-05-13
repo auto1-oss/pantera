@@ -169,7 +169,6 @@ class VersionTest {
         );
     }
 
-    @SuppressWarnings("PMD.UnusedPrivateMethod")
     private static Stream<Object[]> pairs() {
         return orderedSequences().flatMap(
             ordered -> IntStream.range(0, ordered.length).mapToObj(
@@ -180,12 +179,10 @@ class VersionTest {
         ).flatMap(Function.identity());
     }
 
-    @SuppressWarnings("PMD.UnusedPrivateMethod")
     private static Stream<String> versions() {
         return orderedSequences().map(Stream::of).flatMap(pairs -> pairs);
     }
 
-    @SuppressWarnings("PMD.AvoidUsingHardCodedIP")
     private static Stream<String[]> orderedSequences() {
         return Stream.of(
             new String[] {"0.1", "0.2", "0.11", "1.0", "2.0", "2.1", "18.0"},

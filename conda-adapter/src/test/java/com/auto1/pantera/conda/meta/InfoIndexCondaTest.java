@@ -20,7 +20,6 @@ import org.skyscreamer.jsonassert.JSONAssert;
  * Test for {@link InfoIndex.Conda}.
  * @since 0.2
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class InfoIndexCondaTest {
 
     @Test

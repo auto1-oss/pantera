@@ -12,6 +12,7 @@ package com.auto1.pantera.api.v1;
 
 import com.auto1.pantera.api.AuthTokenRest;
 import com.auto1.pantera.api.perms.ApiAliasPermission;
+import com.auto1.pantera.api.perms.ApiCooldownHistoryPermission;
 import com.auto1.pantera.api.perms.ApiCooldownPermission;
 import com.auto1.pantera.api.perms.ApiRepositoryPermission;
 import com.auto1.pantera.api.perms.ApiRolePermission;
@@ -25,8 +26,8 @@ import com.auto1.pantera.db.dao.UserTokenDao;
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.http.auth.Tokens;
+import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.http.trace.MdcPropagation;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.users.CrudUsers;
 import io.vertx.core.json.JsonArray;
@@ -48,6 +49,7 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import javax.json.Json;
 import javax.json.JsonString;
 import java.util.stream.Collectors;
@@ -138,8 +140,8 @@ public final class AuthHandler {
         final String name = body.getString("name");
         final String pass = body.getString("pass");
         final String mfa = body.getString("mfa_code");
-        ctx.vertx().<Optional<AuthUser>>executeBlocking(
-            MdcPropagation.withMdc(() -> {
+        CompletableFuture.supplyAsync(
+            (java.util.function.Supplier<Optional<AuthUser>>) () -> {
                 // Also set user.name in MDC so logs from inside the
                 // auth chain (AuthFromDb, Keycloak, etc.) can reference
                 // who is attempting to log in.
@@ -152,31 +154,28 @@ public final class AuthHandler {
                 } finally {
                     OktaAuthContext.clear();
                 }
-            }),
-            false
-        ).onComplete(ar -> {
-            if (ar.succeeded()) {
-                final Optional<AuthUser> user = ar.result();
-                if (user.isPresent()) {
-                    final Tokens.TokenPair pair = this.tokens.generatePair(user.get());
-                    ctx.response()
-                        .setStatusCode(200)
-                        .putHeader("Content-Type", "application/json")
-                        .end(new JsonObject()
-                            .put("token", pair.accessToken())
-                            .put("refresh_token", pair.refreshToken())
-                            .put("expires_in", pair.expiresIn())
-                            .encode());
-                } else {
-                    // Generic message — never disclose whether the user
-                    // exists, the password is wrong, or MFA failed. Detail
-                    // is in the server logs from the auth chain.
-                    ApiResponse.sendError(ctx, 401, "UNAUTHORIZED",
-                        "Sign-in failed. Check your credentials and try again.");
-                }
-            } else {
+            },
+            HandlerExecutor.get()
+        ).whenComplete((user, err) -> {
+            if (err != null) {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
                     "Sign-in is temporarily unavailable. Please try again.");
+            } else if (user.isPresent()) {
+                final Tokens.TokenPair pair = this.tokens.generatePair(user.get());
+                ctx.response()
+                    .setStatusCode(200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(new JsonObject()
+                        .put("token", pair.accessToken())
+                        .put("refresh_token", pair.refreshToken())
+                        .put("expires_in", pair.expiresIn())
+                        .encode());
+            } else {
+                // Generic message — never disclose whether the user
+                // exists, the password is wrong, or MFA failed. Detail
+                // is in the server logs from the auth chain.
+                ApiResponse.sendError(ctx, 401, "UNAUTHORIZED",
+                    "Sign-in failed. Check your credentials and try again.");
             }
         });
     }
@@ -230,51 +229,58 @@ public final class AuthHandler {
             ApiResponse.sendError(ctx, 404, "NOT_FOUND", "No auth providers configured");
             return;
         }
-        ctx.vertx().<JsonObject>executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                final javax.json.JsonObject provider = findProvider(name);
-                if (provider == null) {
-                    return null;
-                }
-                final javax.json.JsonObject config = provider.getJsonObject("config");
-                final String type = provider.getString("type", "");
-                final String state = Long.toHexString(
-                    Double.doubleToLongBits(Math.random())
-                ) + Long.toHexString(System.nanoTime());
-                final String authorizeUrl;
-                final String clientId;
-                final String scope;
-                if ("okta".equals(type)) {
-                    final String issuer = config.getString("issuer", "");
-                    clientId = config.getString("client-id", "");
-                    scope = config.getString("scope", "openid profile");
-                    final String base = issuer.endsWith("/")
-                        ? issuer.substring(0, issuer.length() - 1) : issuer;
-                    final String oidcBase = base.contains("/oauth2") ? base : base + "/oauth2";
-                    authorizeUrl = oidcBase + "/v1/authorize";
-                } else if ("keycloak".equals(type)) {
-                    final String url = config.getString("url", "");
-                    final String realm = config.getString("realm", "");
-                    clientId = config.getString("client-id", "");
-                    scope = "openid profile";
-                    final String base = url.endsWith("/")
-                        ? url.substring(0, url.length() - 1) : url;
-                    authorizeUrl = base + "/realms/" + realm
-                        + "/protocol/openid-connect/auth";
-                } else {
-                    return new JsonObject().put("error", "Unsupported provider type: " + type);
-                }
-                final String url = authorizeUrl
-                    + "?client_id=" + enc(clientId)
-                    + "&response_type=code"
-                    + "&scope=" + enc(scope)
-                    + "&redirect_uri=" + enc(callbackUrl)
-                    + "&state=" + enc(state);
-                return new JsonObject().put("url", url).put("state", state);
-            }),
-            false
-        ).onSuccess(result -> {
-            if (result == null) {
+        CompletableFuture.supplyAsync((java.util.function.Supplier<JsonObject>) () -> {
+            final javax.json.JsonObject provider = findProvider(name);
+            if (provider == null) {
+                return null;
+            }
+            final javax.json.JsonObject config = provider.getJsonObject("config");
+            final String type = provider.getString("type", "");
+            final String state = Long.toHexString(
+                Double.doubleToLongBits(Math.random())
+            ) + Long.toHexString(System.nanoTime());
+            final String authorizeUrl;
+            final String clientId;
+            final String scope;
+            if ("okta".equals(type)) {
+                final String issuer = config.getString("issuer", "");
+                clientId = config.getString("client-id", "");
+                scope = config.getString("scope", "openid profile");
+                final String base = issuer.endsWith("/")
+                    ? issuer.substring(0, issuer.length() - 1) : issuer;
+                final String oidcBase = base.contains("/oauth2") ? base : base + "/oauth2";
+                authorizeUrl = oidcBase + "/v1/authorize";
+            } else if ("keycloak".equals(type)) {
+                final String url = config.getString("url", "");
+                final String realm = config.getString("realm", "");
+                clientId = config.getString("client-id", "");
+                scope = "openid profile";
+                final String base = url.endsWith("/")
+                    ? url.substring(0, url.length() - 1) : url;
+                authorizeUrl = base + "/realms/" + realm
+                    + "/protocol/openid-connect/auth";
+            } else {
+                return new JsonObject().put("error", "Unsupported provider type: " + type);
+            }
+            final String url = authorizeUrl
+                + "?client_id=" + enc(clientId)
+                + "&response_type=code"
+                + "&scope=" + enc(scope)
+                + "&redirect_uri=" + enc(callbackUrl)
+                + "&state=" + enc(state);
+            return new JsonObject().put("url", url).put("state", state);
+        }, HandlerExecutor.get()).whenComplete((result, err) -> {
+            if (err != null) {
+                EcsLogger.error("com.auto1.pantera.api.v1")
+                    .message("SSO redirect failed: "
+                        + (err.getMessage() != null ? err.getMessage() : err.getClass().getSimpleName()))
+                    .eventCategory("authentication")
+                    .eventAction("sso_redirect")
+                    .error(err)
+                    .log();
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
+                    "Sign-in is temporarily unavailable. Please try again.");
+            } else if (result == null) {
                 ApiResponse.sendError(ctx, 404, "NOT_FOUND",
                     "Sign-in provider is not configured.");
             } else if (result.containsKey("error")) {
@@ -290,16 +296,6 @@ public final class AuthHandler {
                     .putHeader("Content-Type", "application/json")
                     .end(result.encode());
             }
-        }).onFailure(err -> {
-            EcsLogger.error("com.auto1.pantera.api.v1")
-                .message("SSO redirect failed: "
-                    + (err.getMessage() != null ? err.getMessage() : err.getClass().getSimpleName()))
-                .eventCategory("authentication")
-                .eventAction("sso_redirect")
-                .error(err)
-                .log();
-            ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
-                "Sign-in is temporarily unavailable. Please try again.");
         });
     }
 
@@ -326,8 +322,8 @@ public final class AuthHandler {
                 "Field 'callback_url' is required");
             return;
         }
-        ctx.vertx().<Tokens.TokenPair>executeBlocking(
-            MdcPropagation.withMdc(() -> {
+        CompletableFuture.supplyAsync(
+            (java.util.function.Supplier<Tokens.TokenPair>) () -> {
                 final javax.json.JsonObject prov = findProvider(provider);
                 if (prov == null) {
                     throw new IllegalStateException(
@@ -481,13 +477,13 @@ public final class AuthHandler {
                     final boolean intersects = groups.stream().anyMatch(allowedGroups::contains);
                     if (!intersects) {
                         EcsLogger.warn("com.auto1.pantera.api.v1")
-                            .message("SSO login rejected: user not in any allowed group")
+                            .message("SSO login rejected: user not in any allowed group"
+                                + " (user_groups=" + String.join(",", groups)
+                                + ", allowed_groups=" + String.join(",", allowedGroups) + ")")
                             .eventCategory("authentication")
                             .eventAction("sso_callback")
                             .eventOutcome("failure")
                             .field("user.name", username)
-                            .field("user.groups", String.join(",", groups))
-                            .field("allowed_groups", String.join(",", allowedGroups))
                             .log();
                         throw new IllegalStateException(
                             "Access denied: user is not in any allowed group for this provider"
@@ -665,37 +661,41 @@ public final class AuthHandler {
                 // Generate Pantera JWT pair
                 final AuthUser authUser = new AuthUser(username, provider);
                 return AuthHandler.this.tokens.generatePair(authUser);
-            }),
-            false
-        ).onSuccess(pair -> ctx.response().setStatusCode(200)
-            .putHeader("Content-Type", "application/json")
-            .end(new JsonObject()
-                .put("token", pair.accessToken())
-                .put("refresh_token", pair.refreshToken())
-                .put("expires_in", pair.expiresIn())
-                .encode())
-        ).onFailure(err -> {
-            // Detailed reason logged server-side for ops/forensics. The
-            // client always gets a single generic message: revealing
-            // "user is disabled" / "not in allowed group" / "token
-            // exchange failed" lets attackers enumerate accounts and
-            // probe IdP configuration. The only exception is a missing
-            // provider (admin misconfig, not security-sensitive).
-            final String detail = err.getMessage() != null
-                ? err.getMessage() : "SSO callback failed";
-            EcsLogger.error("com.auto1.pantera.api.v1")
-                .message("SSO callback failed: " + detail)
-                .eventCategory("authentication")
-                .eventAction("sso_callback")
-                .eventOutcome("failure")
-                .error(err)
-                .log();
-            if (detail.contains("Provider '") && detail.contains("not found")) {
-                ApiResponse.sendError(ctx, 404, "NOT_FOUND",
-                    "Sign-in provider is not configured.");
+            },
+            HandlerExecutor.get()
+        ).whenComplete((pair, err) -> {
+            if (err == null) {
+                ctx.response().setStatusCode(200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(new JsonObject()
+                        .put("token", pair.accessToken())
+                        .put("refresh_token", pair.refreshToken())
+                        .put("expires_in", pair.expiresIn())
+                        .encode());
             } else {
-                ApiResponse.sendError(ctx, 401, "UNAUTHORIZED",
-                    "Sign-in failed. Please try again or contact your administrator.");
+                // Detailed reason logged server-side for ops/forensics. The
+                // client always gets a single generic message: revealing
+                // "user is disabled" / "not in allowed group" / "token
+                // exchange failed" lets attackers enumerate accounts and
+                // probe IdP configuration. The only exception is a missing
+                // provider (admin misconfig, not security-sensitive).
+                final Throwable cause = err.getCause() != null ? err.getCause() : err;
+                final String detail = cause.getMessage() != null
+                    ? cause.getMessage() : "SSO callback failed";
+                EcsLogger.error("com.auto1.pantera.api.v1")
+                    .message("SSO callback failed: " + detail)
+                    .eventCategory("authentication")
+                    .eventAction("sso_callback")
+                    .eventOutcome("failure")
+                    .error(cause)
+                    .log();
+                if (detail.contains("Provider '") && detail.contains("not found")) {
+                    ApiResponse.sendError(ctx, 404, "NOT_FOUND",
+                        "Sign-in provider is not configured.");
+                } else {
+                    ApiResponse.sendError(ctx, 401, "UNAUTHORIZED",
+                        "Sign-in failed. Please try again or contact your administrator.");
+                }
             }
         });
     }
@@ -707,14 +707,14 @@ public final class AuthHandler {
      */
     private javax.json.JsonObject findProvider(final String name) {
         if (this.providerDao == null) {
-            return null;
+            return null; // NOPMD ReturnEmptyCollectionRatherThanNull - JsonObject is a single record, not a collection; null signals "no provider configured"
         }
         for (final javax.json.JsonObject prov : this.providerDao.list()) {
             if (name.equals(prov.getString("type", ""))) {
                 return prov;
             }
         }
-        return null;
+        return null; // NOPMD ReturnEmptyCollectionRatherThanNull - JsonObject is a single record, not a collection; null signals "not found"
     }
 
     /**
@@ -865,7 +865,7 @@ public final class AuthHandler {
         final PermissionCollection perms = this.policy.getPermissions(authUser);
         final JsonObject permissions = new JsonObject()
             .put("api_repository_permissions",
-                AuthHandler.allowedActions(perms, "repo",
+                AuthHandler.allowedActions(perms,
                     new String[]{"read", "create", "update", "delete", "move"},
                     new ApiRepositoryPermission[]{
                         new ApiRepositoryPermission(ApiRepositoryPermission.RepositoryAction.READ),
@@ -875,7 +875,7 @@ public final class AuthHandler {
                         new ApiRepositoryPermission(ApiRepositoryPermission.RepositoryAction.MOVE),
                     }))
             .put("api_user_permissions",
-                AuthHandler.allowedActions(perms, "user",
+                AuthHandler.allowedActions(perms,
                     new String[]{"read", "create", "update", "delete", "enable", "change_password"},
                     new ApiUserPermission[]{
                         new ApiUserPermission(ApiUserPermission.UserAction.READ),
@@ -886,7 +886,7 @@ public final class AuthHandler {
                         new ApiUserPermission(ApiUserPermission.UserAction.CHANGE_PASSWORD),
                     }))
             .put("api_role_permissions",
-                AuthHandler.allowedActions(perms, "role",
+                AuthHandler.allowedActions(perms,
                     new String[]{"read", "create", "update", "delete", "enable"},
                     new ApiRolePermission[]{
                         new ApiRolePermission(ApiRolePermission.RoleAction.READ),
@@ -896,7 +896,7 @@ public final class AuthHandler {
                         new ApiRolePermission(ApiRolePermission.RoleAction.ENABLE),
                     }))
             .put("api_alias_permissions",
-                AuthHandler.allowedActions(perms, "alias",
+                AuthHandler.allowedActions(perms,
                     new String[]{"read", "create", "delete"},
                     new ApiAliasPermission[]{
                         new ApiAliasPermission(ApiAliasPermission.AliasAction.READ),
@@ -904,19 +904,19 @@ public final class AuthHandler {
                         new ApiAliasPermission(ApiAliasPermission.AliasAction.DELETE),
                     }))
             .put("api_cooldown_permissions",
-                AuthHandler.allowedActions(perms, "cooldown",
+                AuthHandler.allowedActions(perms,
                     new String[]{"read", "write"},
-                    new java.security.Permission[]{
-                        ApiCooldownPermission.READ,
-                        ApiCooldownPermission.WRITE,
-                    }))
+                    ApiCooldownPermission.READ,
+                    ApiCooldownPermission.WRITE))
+            .put("api_cooldown_history_permissions",
+                AuthHandler.allowedActions(perms,
+                    new String[]{"read"},
+                    ApiCooldownHistoryPermission.READ))
             .put("api_search_permissions",
-                AuthHandler.allowedActions(perms, "search",
+                AuthHandler.allowedActions(perms,
                     new String[]{"read", "write"},
-                    new java.security.Permission[]{
-                        ApiSearchPermission.READ,
-                        ApiSearchPermission.WRITE,
-                    }))
+                    ApiSearchPermission.READ,
+                    ApiSearchPermission.WRITE))
             .put("can_delete_artifacts",
                 perms.implies(new AdapterBasicPermission("*", "delete")));
         final JsonObject result = new JsonObject()
@@ -955,12 +955,12 @@ public final class AuthHandler {
                 // earlier (or the row was deleted out from under the JWT).
                 EcsLogger.warn("com.auto1.pantera.api.v1")
                     .message("/me: authenticated user has no DB row — "
-                        + "permissions will be empty")
+                        + "permissions will be empty"
+                        + " (context=" + (context != null ? context : "local") + ")")
                     .eventCategory("authentication")
                     .eventAction("me_user_lookup")
                     .eventOutcome("failure")
                     .field("user.name", sub)
-                    .field("user.context", context != null ? context : "local")
                     .log();
             }
         }
@@ -997,32 +997,31 @@ public final class AuthHandler {
             return;
         }
         final String sub = ctx.user().principal().getString(AuthTokenRest.SUB);
-        ctx.vertx().<JsonArray>executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                final JsonArray arr = new JsonArray();
-                for (final UserTokenDao.TokenInfo info : this.tokenDao.listByUser(sub)) {
-                    final JsonObject obj = new JsonObject()
-                        .put("id", info.id().toString())
-                        .put("label", info.label())
-                        .put("created_at", info.createdAt().toString());
-                    if (info.expiresAt() != null) {
-                        obj.put("expires_at", info.expiresAt().toString());
-                        obj.put("expired", Instant.now().isAfter(info.expiresAt()));
-                    } else {
-                        obj.put("permanent", true);
-                    }
-                    arr.add(obj);
+        CompletableFuture.supplyAsync((java.util.function.Supplier<JsonArray>) () -> {
+            final JsonArray arr = new JsonArray();
+            for (final UserTokenDao.TokenInfo info : this.tokenDao.listByUser(sub)) {
+                final JsonObject obj = new JsonObject()
+                    .put("id", info.id().toString())
+                    .put("label", info.label())
+                    .put("created_at", info.createdAt().toString());
+                if (info.expiresAt() != null) {
+                    obj.put("expires_at", info.expiresAt().toString());
+                    obj.put("expired", Instant.now().isAfter(info.expiresAt()));
+                } else {
+                    obj.put("permanent", true);
                 }
-                return arr;
-            }),
-            false
-        ).onSuccess(
-            arr -> ctx.response().setStatusCode(200)
-                .putHeader("Content-Type", "application/json")
-                .end(new JsonObject().put("tokens", arr).encode())
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+                arr.add(obj);
+            }
+            return arr;
+        }, HandlerExecutor.get()).whenComplete((arr, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
+                ctx.response().setStatusCode(200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(new JsonObject().put("tokens", arr).encode());
+            }
+        });
     }
 
     /**
@@ -1044,32 +1043,31 @@ public final class AuthHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid token ID");
             return;
         }
-        ctx.vertx().<Boolean>executeBlocking(
-            MdcPropagation.withMdc(() -> this.tokenDao.revoke(id, sub)),
-            false
-        ).onSuccess(revoked -> {
-            if (revoked) {
+        CompletableFuture.supplyAsync(
+            () -> this.tokenDao.revoke(id, sub),
+            HandlerExecutor.get()
+        ).whenComplete((revoked, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else if (revoked) {
                 ctx.response().setStatusCode(204).end();
             } else {
                 ApiResponse.sendError(ctx, 404, "NOT_FOUND", "Token not found");
             }
-        }).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+        });
     }
 
     /**
      * Build a JsonArray of allowed action names by checking each permission.
      * Returns empty array if user has no permissions of this type.
      * @param perms User permission collection
-     * @param type Permission type label (for logging, unused)
      * @param names Action name strings
      * @param checks Permission objects to check
      * @return JsonArray of allowed action names
      */
     private static JsonArray allowedActions(final PermissionCollection perms,
-        final String type, final String[] names,
-        final java.security.Permission[] checks) {
+        final String[] names,
+        final java.security.Permission... checks) {
         final JsonArray result = new JsonArray();
         for (int idx = 0; idx < names.length; idx++) {
             if (perms.implies(checks[idx])) {

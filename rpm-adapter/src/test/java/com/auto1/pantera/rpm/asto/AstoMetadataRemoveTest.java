@@ -36,7 +36,6 @@ import org.junit.jupiter.api.Test;
  * Test for {@link AstoMetadataRemove}.
  * @since 1.9
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class AstoMetadataRemoveTest {
 
     /**

@@ -32,7 +32,6 @@ import org.junit.jupiter.api.Test;
  *
  * @since 0.10
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 final class SliceDeleteTest {
 
     /**

@@ -16,8 +16,10 @@ import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.Remaining;
+import com.auto1.pantera.http.cache.NegativeCacheRegistry;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.index.SyncArtifactIndexer;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.KeyFromPath;
 import com.auto1.pantera.http.slice.ContentWithSize;
@@ -74,7 +76,17 @@ final class GoUploadSlice implements Slice {
     private final String repo;
 
     /**
-     * New Go upload slice.
+     * Synchronous artifact-index writer. Runs inline with upload so the
+     * group resolver's index lookup sees the new artifact immediately on
+     * the very next request — no stale-index window. Defaults to
+     * {@link SyncArtifactIndexer#NOOP} when no DataSource is wired (e.g.
+     * tests, file-only deployments). The async event queue continues to
+     * fire for audit / metrics regardless.
+     */
+    private final SyncArtifactIndexer syncIndex;
+
+    /**
+     * New Go upload slice (legacy ctor — no synchronous index writer).
      *
      * @param storage Repository storage
      * @param repo Repository name
@@ -85,9 +97,27 @@ final class GoUploadSlice implements Slice {
         final String repo,
         final Optional<Queue<ArtifactEvent>> events
     ) {
+        this(storage, repo, events, SyncArtifactIndexer.NOOP);
+    }
+
+    /**
+     * New Go upload slice with synchronous index writer.
+     *
+     * @param storage Repository storage
+     * @param repo Repository name
+     * @param events Metadata events queue
+     * @param syncIndex Synchronous artifact-index writer
+     */
+    GoUploadSlice(
+        final Storage storage,
+        final String repo,
+        final Optional<Queue<ArtifactEvent>> events,
+        final SyncArtifactIndexer syncIndex
+    ) {
         this.storage = storage;
         this.repo = repo;
         this.events = events;
+        this.syncIndex = syncIndex;
     }
 
     @Override
@@ -122,7 +152,7 @@ final class GoUploadSlice implements Slice {
             key,
             new ContentWithSize(body, headers)
         );
-        final CompletableFuture<Void> extra;
+        CompletableFuture<Void> extra;
         if (matcher.matches()) {
             final String module = matcher.group("module");
             final String version = matcher.group("version");
@@ -136,6 +166,34 @@ final class GoUploadSlice implements Slice {
             } else {
                 extra = stored;
             }
+            // Invalidate any negative-cache 404s recorded for this module
+            // (or its parent paths, e.g. Go's parent-path probing) BEFORE
+            // we tell the client the upload succeeded. Otherwise an earlier
+            // probe-against-group that cached a 404 keeps shadowing the
+            // newly-published artifact and `go get` returns 404.
+            extra = extra.whenComplete((ignored, error) -> {
+                if (error != null) {
+                    return;
+                }
+                try {
+                    final int n = NegativeCacheRegistry.instance().sharedCache()
+                        .invalidateByArtifactName(module);
+                    if (n > 0) {
+                        EcsLogger.info("com.auto1.pantera.go")
+                            .message("Negative-cache invalidated after upload "
+                                + "(module=" + module + ", invalidated=" + n + ")")
+                            .eventCategory("database")
+                            .eventAction("neg_cache_invalidate_on_upload")
+                            .field("package.name", module)
+                            .log();
+                    }
+                } catch (final RuntimeException ex) {
+                    EcsLogger.warn("com.auto1.pantera.go")
+                        .message("Negative-cache invalidation after upload failed")
+                        .error(ex)
+                        .log();
+                }
+            });
         } else {
             extra = stored;
         }
@@ -143,13 +201,20 @@ final class GoUploadSlice implements Slice {
     }
 
     /**
-     * Record artifact upload event after the binary is stored.
+     * Record artifact upload after the binary is stored.
+     *
+     * <p>Writes the artifact-index row synchronously (so the next group
+     * resolver lookup sees the new artifact immediately) AND publishes an
+     * async {@link ArtifactEvent} to the queue (so audit logging, metrics
+     * and any other async consumers still fire). The two writers target the
+     * same DB row via idempotent UPSERT so they cannot diverge.
      *
      * @param headers Request headers
      * @param module Module path
      * @param version Module version (without leading `v`)
      * @param key Storage key for uploaded artifact
-     * @return Completion stage
+     * @return Completion stage that completes when the synchronous index
+     *         write has landed
      */
     private CompletableFuture<Void> recordEvent(
         final Headers headers,
@@ -157,25 +222,20 @@ final class GoUploadSlice implements Slice {
         final String version,
         final Key key
     ) {
-        if (this.events.isEmpty()) {
-            return CompletableFuture.completedFuture(null);
-        }
         return this.storage.metadata(key)
             .thenApply(meta -> meta.read(Meta.OP_SIZE).orElseThrow())
-            .thenAccept(
-                size -> this.events.ifPresent(
-                    queue -> queue.add(
-                        new ArtifactEvent(
-                            REPO_TYPE,
-                            this.repo,
-                            owner(headers),
-                            module,
-                            version,
-                            size
-                        )
+            .thenCompose(size -> {
+                final ArtifactEvent event = new ArtifactEvent(
+                    REPO_TYPE, this.repo, owner(headers),
+                    module, version, size
+                );
+                this.events.ifPresent(
+                    queue -> queue.add( // ok: unbounded ConcurrentLinkedDeque
+                        event
                     )
-                )
-            );
+                );
+                return this.syncIndex.recordSync(event);
+            });
     }
 
     /**

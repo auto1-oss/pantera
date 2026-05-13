@@ -42,7 +42,6 @@ public interface MergePackage {
      * Merging local data with data from remote.
      * @since 0.4
      */
-    @SuppressWarnings("PMD.AvoidDuplicateLiterals")
     class WithRemote implements MergePackage {
         /**
          * Package name.

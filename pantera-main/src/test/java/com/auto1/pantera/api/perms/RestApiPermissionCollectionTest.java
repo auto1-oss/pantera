@@ -22,7 +22,6 @@ import org.junit.jupiter.params.provider.EnumSource;
  * Test for {@link com.auto1.pantera.api.perms.RestApiPermission.RestApiPermissionCollection}.
  * @since 0.30
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public class RestApiPermissionCollectionTest {
 
     @ParameterizedTest

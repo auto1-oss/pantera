@@ -12,6 +12,7 @@ package com.auto1.pantera.composer.http.proxy;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.LogSanitizer;
 import com.auto1.pantera.asto.cache.Cache;
@@ -21,76 +22,100 @@ import com.auto1.pantera.asto.cache.Remote;
 import com.auto1.pantera.composer.JsonPackages;
 import com.auto1.pantera.composer.Packages;
 import com.auto1.pantera.composer.Repository;
-import com.auto1.pantera.cooldown.CooldownInspector;
-import com.auto1.pantera.cooldown.CooldownRequest;
-import com.auto1.pantera.cooldown.CooldownResponses;
-import com.auto1.pantera.cooldown.CooldownResult;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
+import com.auto1.pantera.cooldown.api.CooldownRequest;
+import com.auto1.pantera.cooldown.response.CooldownResponseRegistry;
+import com.auto1.pantera.cooldown.api.CooldownResult;
+import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.cache.ProxyCacheWriter;
+import com.auto1.pantera.http.context.RequestContext;
+import com.auto1.pantera.http.fault.Fault;
+import com.auto1.pantera.http.fault.Fault.ChecksumAlgo;
+import com.auto1.pantera.http.fault.Result;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.publishdate.PublishDateRegistries;
+import com.auto1.pantera.publishdate.RegistryBackedInspector;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
+import io.micrometer.core.instrument.MeterRegistry;
 
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.nio.charset.StandardCharsets;
 import java.time.format.DateTimeParseException;
+import java.util.Collections;
+import java.util.EnumMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * Composer proxy slice with cache support, cooldown service, and event emission.
+ *
+ * <p>Primary artifact writes (the {@code *.zip} / {@code *.tar} / {@code *.phar}
+ * dist archives) flow through {@link ProxyCacheWriter} so the packagist.org
+ * {@code dist.shasum} SHA-256 sidecar is verified against the downloaded
+ * bytes before anything lands in the cache — giving the Composer adapter
+ * the same primary+sidecar integrity guarantee the Maven adapter received
+ * in WI-07 (§9.5). The existing metadata-JSON flow (the dominant traffic
+ * shape through this slice) is unchanged.
  */
-@SuppressWarnings({"PMD.UnusedPrivateField", "PMD.SingularField"})
 final class CachedProxySlice implements Slice {
 
     /**
-     * Pattern to extract package name and version from path.
-     * Matches /p2/vendor/package.json
+     * Primary artifact extensions that participate in the coupled
+     * primary+sidecar write path via {@link ProxyCacheWriter}.
      */
-    private static final Pattern PACKAGE_PATTERN = Pattern.compile(
-        "^/p2?/(?<name>[^/]+/[^/~^]+?)(?:~.*|\\^.*|\\.json)?$"
+    private static final List<String> PRIMARY_EXTENSIONS = List.of(
+        ".zip", ".tar", ".phar"
     );
 
     private final Slice remote;
     private final Cache cache;
     private final Repository repo;
-    
+
     /**
      * Proxy artifact events queue.
      */
     private final Optional<Queue<ProxyArtifactEvent>> events;
-    
+
     /**
      * Repository name.
      */
     private final String rname;
-    
+
     /**
      * Repository type.
      */
     private final String rtype;
-    
+
     /**
      * Cooldown service.
      */
     private final CooldownService cooldown;
-    
+
     /**
      * Cooldown inspector.
      */
     private final CooldownInspector inspector;
-    
+
     /**
      * Base URL for metadata rewriting.
      */
@@ -112,14 +137,23 @@ final class CachedProxySlice implements Slice {
     private final ConcurrentHashMap<String, String> lastModifiedStore;
 
     /**
+     * Single-source-of-truth cache writer introduced by WI-07 (§9.5 of the
+     * v2.2 target architecture). Fetches the primary dist archive + the
+     * Composer {@code .sha256} sidecar in one coupled batch, verifies the
+     * declared claim against the bytes we just downloaded, and atomically
+     * commits the pair. Non-null whenever {@code repo.storage()} is set.
+     */
+    private final ProxyCacheWriter cacheWriter;
+
+    /**
      * @param remote Remote slice
      * @param repo Repository
      * @param cache Cache
      */
     CachedProxySlice(Slice remote, Repository repo, Cache cache) {
         this(remote, repo, cache, Optional.empty(), "composer", "php",
-            com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE,
-            new NoopComposerCooldownInspector(),
+            com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE,
+            new RegistryBackedInspector("composer", PublishDateRegistries.instance()),
             "http://localhost:8080",
             "unknown"
         );
@@ -190,6 +224,10 @@ final class CachedProxySlice implements Slice {
         this.upstreamUrl = upstreamUrl;
         this.refreshing = ConcurrentHashMap.newKeySet();
         this.lastModifiedStore = new ConcurrentHashMap<>();
+        final Storage storage = repo.storage();
+        this.cacheWriter = storage == null
+            ? null
+            : new ProxyCacheWriter(storage, rname, meterRegistry());
     }
 
     @Override
@@ -204,6 +242,14 @@ final class CachedProxySlice implements Slice {
                 .eventAction("proxy_request")
                 .field("url.path", path)
                 .log();
+
+            // WI-07 §9.5 — integrity-verified atomic primary+sidecar write on
+            // cache-miss. Runs only when the request path resolves to a
+            // primary dist archive (.zip / .tar / .phar). Metadata JSON
+            // paths fall through to the existing flow unchanged.
+            if (this.cacheWriter != null && isPrimaryArtifact(path)) {
+                return this.verifyAndServePrimary(line, path);
+            }
 
             // Keep ~dev suffix in cache key to avoid collision between stable and dev metadata
             final String name = path
@@ -253,7 +299,7 @@ final class CachedProxySlice implements Slice {
                         if (!fresh) {
                             this.backgroundRefresh(line, name, headers);
                         }
-                        return this.serveCachedMetadata(name, headers, bytes);
+                        return this.serveCachedMetadata(bytes);
                     });
                 });
             }
@@ -263,39 +309,31 @@ final class CachedProxySlice implements Slice {
     }
 
     /**
-     * Serve cached metadata bytes: evaluate cooldown, rewrite URLs if needed, build response.
-     * Fixes triple buffering by using byte[] directly instead of wrapping/unwrapping Content.
+     * Serve cached metadata bytes: rewrite URLs if needed, build response.
+     *
+     * <p>Track 5 Phase 1A: cooldown re-evaluation removed from the cache-hit
+     * path. Pre-Track 5, this method called {@link #evaluateMetadataCooldown}
+     * which goes through {@code RegistryBackedInspector} and can fall
+     * through to {@code PackagistSource} (network) when L1+L2 miss. That
+     * made every cached metadata read dependent on packagist.org being
+     * reachable AND inside its rate-limit budget. Cooldown still gates the
+     * cache-miss / write-time refresh path inside
+     * {@link #fetchThroughCache} — once metadata has been written, requests
+     * for it serve from cache with zero upstream I/O.
      *
      * @param name Package name
-     * @param headers Request headers
+     * @param headers Request headers (unused on cache-hit; kept for symmetry)
      * @param bytes Cached metadata bytes
      * @return Response future
      */
-    private CompletableFuture<Response> serveCachedMetadata(
-        final String name,
-        final Headers headers,
-        final byte[] bytes
-    ) {
-        return this.evaluateMetadataCooldown(name, headers, bytes)
-            .thenApply(result -> {
-                if (result.blocked()) {
-                    EcsLogger.info("com.auto1.pantera.composer")
-                        .message("Cooldown blocked cached metadata request")
-                        .eventCategory("web")
-                        .eventAction("cooldown_check")
-                        .eventOutcome("failure")
-                        .field("event.reason", "cooldown_active")
-                        .field("package.name", name)
-                        .log();
-                    return CooldownResponses.forbidden(result.block().orElseThrow());
-                }
-                // Rewrite URLs (no-op for pre-rewritten content due to original_url check)
-                final byte[] rewritten = this.rewriteMetadata(bytes);
-                return ResponseBuilder.ok()
-                    .header("Content-Type", "application/json")
-                    .body(new Content.From(rewritten))
-                    .build();
-            });
+    private CompletableFuture<Response> serveCachedMetadata(final byte[] bytes) {
+        final byte[] rewritten = this.rewriteMetadata(bytes);
+        return CompletableFuture.completedFuture(
+            ResponseBuilder.ok()
+                .header("Content-Type", "application/json")
+                .body(new Content.From(rewritten))
+                .build()
+        );
     }
 
     /**
@@ -312,9 +350,8 @@ final class CachedProxySlice implements Slice {
         final String name,
         final Headers headers
     ) {
-        final String path = line.uri().getPath();
         // Check if this is a versioned package request that needs cooldown check
-        final Optional<CooldownRequest> cooldownReq = this.parseCooldownRequest(path, headers);
+        final Optional<CooldownRequest> cooldownReq = this.parseCooldownRequest();
 
         if (cooldownReq.isPresent()) {
             EcsLogger.debug("com.auto1.pantera.composer")
@@ -329,7 +366,7 @@ final class CachedProxySlice implements Slice {
 
         return this.fetchThroughCache(line, name, headers);
     }
-    
+
     /**
      * Handle response after cooldown evaluation.
      *
@@ -355,7 +392,9 @@ final class CachedProxySlice implements Slice {
                 .field("package.name", name)
                 .log();
             return CompletableFuture.completedFuture(
-                CooldownResponses.forbidden(result.block().orElseThrow())
+                CooldownResponseRegistry.instance()
+                    .getOrThrow(this.rtype)
+                    .forbidden(result.block().orElseThrow())
             );
         }
         EcsLogger.debug("com.auto1.pantera.composer")
@@ -376,7 +415,6 @@ final class CachedProxySlice implements Slice {
      * @param name Package name
      * @param headers Request headers
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void backgroundRefresh(
         final RequestLine line,
         final String name,
@@ -431,7 +469,7 @@ final class CachedProxySlice implements Slice {
                         pckgs -> pckgs.orElse(new JsonPackages())
                     ).thenCompose(Packages::content)
                     .thenCombine(
-                        this.packageFromRemote(line, headers),
+                        this.packageFromRemote(line),
                         (lcl, rmt) -> new MergePackage.WithRemote(packageName, lcl).merge(rmt)
                     ).thenCompose(Function.identity())
                     .thenCompose(contentOpt -> {
@@ -480,7 +518,9 @@ final class CachedProxySlice implements Slice {
                                 .field("package.name", name)
                                 .log();
                             return CompletableFuture.completedFuture(
-                                CooldownResponses.forbidden(result.block().orElseThrow())
+                                CooldownResponseRegistry.instance()
+                                    .getOrThrow(this.rtype)
+                                    .forbidden(result.block().orElseThrow())
                             );
                         }
                         // Save rewritten metadata for ProxyDownloadSlice (original_url lookup)
@@ -517,13 +557,13 @@ final class CachedProxySlice implements Slice {
     ) {
         try {
             final javax.json.JsonObject json = javax.json.Json.createReader(new java.io.StringReader(new String(bytes))).readObject();
-            
+
             // Handle both Satis format (packages is array) and traditional format (packages is object)
             final javax.json.JsonValue packagesValue = json.get("packages");
             if (packagesValue == null) {
                 return CompletableFuture.completedFuture(CooldownResult.allowed());
             }
-            
+
             // If packages is an array (Satis format), skip cooldown check
             // Satis format has empty packages array and uses provider-includes instead
             if (packagesValue.getValueType() == javax.json.JsonValue.ValueType.ARRAY) {
@@ -534,12 +574,12 @@ final class CachedProxySlice implements Slice {
                     .log();
                 return CompletableFuture.completedFuture(CooldownResult.allowed());
             }
-            
+
             // Traditional format: packages is an object
             if (packagesValue.getValueType() != javax.json.JsonValue.ValueType.OBJECT) {
                 return CompletableFuture.completedFuture(CooldownResult.allowed());
             }
-            
+
             final javax.json.JsonObject packages = packagesValue.asJsonObject();
             final javax.json.JsonValue pkgVal = packages.get(name);
             if (pkgVal == null) {
@@ -550,7 +590,7 @@ final class CachedProxySlice implements Slice {
                 return CompletableFuture.completedFuture(CooldownResult.allowed());
             }
             final String owner = new Login(headers).getValue();
-            final com.auto1.pantera.cooldown.CooldownRequest req = new com.auto1.pantera.cooldown.CooldownRequest(
+            final com.auto1.pantera.cooldown.api.CooldownRequest req = new com.auto1.pantera.cooldown.api.CooldownRequest(
                 this.rtype,
                 this.rname,
                 name,
@@ -626,7 +666,7 @@ final class CachedProxySlice implements Slice {
             return java.util.Optional.ofNullable(bestVer);
         }
     }
-    
+
     /**
      * Rewrite metadata content to proxy downloads through Pantera.
      * Returns byte[] directly to avoid unnecessary Content wrapping/unwrapping.
@@ -654,18 +694,16 @@ final class CachedProxySlice implements Slice {
     /**
      * Parse cooldown request from path if applicable.
      *
-     * @param path Request path
-     * @param headers Request headers
      * @return Optional cooldown request
      */
-    private Optional<CooldownRequest> parseCooldownRequest(final String path, final Headers headers) {
+    private Optional<CooldownRequest> parseCooldownRequest() {
         // TODO: Implement version extraction from request context
         // For now, we'll need to fetch the metadata to get all versions
         // This is a simplified approach - in production you might want to optimize this
         // by caching version lists or parsing the request differently
         return Optional.empty();
     }
-    
+
     /**
      * Emit event for downloaded package.
      *
@@ -713,7 +751,7 @@ final class CachedProxySlice implements Slice {
             .field("user.name", owner)
             .log();
     }
-    
+
     /**
      * Extract release date from response headers.
      *
@@ -740,13 +778,11 @@ final class CachedProxySlice implements Slice {
     /**
      * Obtains info about package from remote.
      * @param line The request line (usually like this `GET /p2/vendor/package.json HTTP_1_1`)
-     * @param headers Request headers
      * @return Content from respond of remote. If there were some errors,
      *  empty will be returned.
      */
     private CompletionStage<Optional<? extends Content>> packageFromRemote(
-        final RequestLine line,
-        final Headers headers
+        final RequestLine line
     ) {
         final long startTime = System.currentTimeMillis();
         return new Remote.WithErrorHandling(
@@ -835,7 +871,6 @@ final class CachedProxySlice implements Slice {
     /**
      * Record metric safely (only if metrics are enabled).
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
             if (com.auto1.pantera.metrics.PanteraMetrics.isEnabled()) {
@@ -846,6 +881,235 @@ final class CachedProxySlice implements Slice {
                 .message("Failed to record metric")
                 .error(ex)
                 .log();
+        }
+    }
+
+    // ===== WI-07 §9.5: ProxyCacheWriter integration =====
+
+    /**
+     * Check if path represents a Composer primary artifact (zip / tar /
+     * phar dist archive) that should be routed through
+     * {@link ProxyCacheWriter}.
+     *
+     * @param path Request path.
+     * @return {@code true} if the path ends with a primary-artifact extension.
+     */
+    private static boolean isPrimaryArtifact(final String path) {
+        if (path.endsWith("/")) {
+            return false;
+        }
+        final String lower = path.toLowerCase(Locale.ROOT);
+        for (final String ext : PRIMARY_EXTENSIONS) {
+            if (lower.endsWith(ext)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Primary-artifact flow: if the cache already has the primary, serve
+     * from the cache; otherwise fetch the primary + the
+     * {@code dist.shasum} SHA-256 sidecar upstream in one coupled batch,
+     * verify via {@link ProxyCacheWriter}, atomically commit, and serve
+     * the freshly-cached bytes.
+     *
+     * <p>On {@link Fault.UpstreamIntegrity} collapses to 502 with the
+     * {@code X-Pantera-Fault: upstream-integrity:sha256} header; on
+     * {@link Fault.StorageUnavailable} collapses to 502 and leaves the
+     * cache empty for this key.
+     */
+    private CompletableFuture<Response> verifyAndServePrimary(
+        final RequestLine line, final String path
+    ) {
+        final Storage storage = this.repo.storage();
+        final Key key = new Key.From(path.startsWith("/") ? path.substring(1) : path);
+        return storage.exists(key).thenCompose(present -> {
+            if (present) {
+                return this.serveFromCache(storage, key);
+            }
+            return this.fetchVerifyAndCache(line, key, path);
+        }).exceptionally(err -> {
+            EcsLogger.warn("com.auto1.pantera.composer")
+                .message("Composer primary-artifact verify-and-serve failed; returning 502")
+                .eventCategory("web")
+                .eventAction("cache_write")
+                .eventOutcome("failure")
+                .field("repository.name", this.rname)
+                .field("url.path", path)
+                .error(err)
+                .log();
+            return ResponseBuilder.badGateway().build();
+        }).toCompletableFuture();
+    }
+
+    /**
+     * Fetch the primary + the declared sidecar upstream, verify via
+     * {@link ProxyCacheWriter}, then stream the primary from the cache.
+     */
+    private CompletionStage<Response> fetchVerifyAndCache(
+        final RequestLine line, final Key key, final String path
+    ) {
+        final String upstream = this.upstreamUrl + path;
+        final RequestContext ctx = new RequestContext(
+            org.apache.logging.log4j.ThreadContext.get("trace.id"),
+            null,
+            this.rname,
+            path
+        );
+        final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> sidecars =
+            new EnumMap<>(ChecksumAlgo.class);
+        sidecars.put(ChecksumAlgo.SHA256, () -> this.fetchSidecar(line, ".sha256"));
+
+        // Composer's only sidecar is .sha256, which is in NON_BLOCKING_DEFAULT;
+        // pass an empty non-blocking set so the SHA-256 verification is
+        // load-bearing — a mismatch must fail-closed (502) instead of falling
+        // through the deferred path that only logs.
+        return this.cacheWriter.writeAndVerify(
+            key,
+            upstream,
+            () -> this.fetchPrimary(line),
+            sidecars,
+            Collections.emptySet(),
+            ctx
+        ).thenCompose(result -> {
+            if (result instanceof Result.Err<ProxyCacheWriter.VerifiedArtifact> err) {
+                if (err.fault() instanceof Fault.UpstreamIntegrity ui) {
+                    return CompletableFuture.<Response>completedFuture(
+                        ResponseBuilder.badGateway()
+                            .header(
+                                "X-Pantera-Fault",
+                                "upstream-integrity:"
+                                    + ui.algo().name().toLowerCase(Locale.ROOT)
+                            )
+                            .textBody("Upstream integrity verification failed")
+                            .build()
+                    );
+                }
+                // Upstream-404 must propagate as 404, not 503: RaceSlice's
+                // contract is "404 → try the next remote, non-404 → that
+                // remote wins." For Composer proxies, 404 means the package
+                // archive doesn't exist at that repository — 410 Gone and
+                // other 4xx carry the same "not here" semantics. Surface them
+                // all as 404 so RaceSlice falls back to the next remote.
+                if (err.fault() instanceof Fault.StorageUnavailable storageErr
+                    && storageErr.cause() instanceof UpstreamHttpException upstreamErr
+                    && upstreamErr.status() >= 400 && upstreamErr.status() < 500) {
+                    return CompletableFuture.completedFuture(
+                        ResponseBuilder.notFound().build()
+                    );
+                }
+                // StorageUnavailable / anything else → 502; transient failure.
+                return CompletableFuture.<Response>completedFuture(
+                    ResponseBuilder.badGateway()
+                        .textBody("Upstream temporarily unavailable")
+                        .build()
+                );
+            }
+            final ProxyCacheWriter.VerifiedArtifact artifact =
+                ((Result.Ok<ProxyCacheWriter.VerifiedArtifact>) result).value();
+            artifact.commitAsync();
+            return CompletableFuture.completedFuture(
+                ResponseBuilder.ok().body(artifact.contentFromTempFile()).build()
+            );
+        });
+    }
+
+    /**
+     * Read the primary from upstream as an {@link InputStream}. On any
+     * non-success status, throws so the writer's outer exception handler
+     * treats it as a transient failure (no cache mutation).
+     */
+    private CompletionStage<InputStream> fetchPrimary(final RequestLine line) {
+        return this.remote.response(line, Headers.EMPTY, Content.EMPTY)
+            .thenApply(resp -> {
+                if (!resp.status().success()) {
+                    resp.body().asBytesFuture();
+                    throw new UpstreamHttpException(resp.status().code());
+                }
+                try {
+                    return resp.body().asInputStream();
+                } catch (final IOException ex) {
+                    throw new IllegalStateException("Upstream body not readable", ex);
+                }
+            });
+    }
+
+    /**
+     * Fetch a sidecar for the primary at {@code line}. Returns
+     * {@link Optional#empty()} for 4xx/5xx and I/O errors so the writer
+     * treats the sidecar as absent; a transient sidecar failure never
+     * blocks the primary write.
+     */
+    private CompletionStage<Optional<InputStream>> fetchSidecar(
+        final RequestLine primary, final String extension
+    ) {
+        final String sidecarPath = primary.uri().getPath() + extension;
+        final RequestLine sidecarLine = new RequestLine(RqMethod.GET, sidecarPath);
+        return this.remote.response(sidecarLine, Headers.EMPTY, Content.EMPTY)
+            .thenCompose(resp -> {
+                if (!resp.status().success()) {
+                    return resp.body().asBytesFuture()
+                        .thenApply(ignored -> Optional.<InputStream>empty());
+                }
+                return resp.body().asBytesFuture()
+                    .thenApply(bytes -> Optional.<InputStream>of(
+                        new ByteArrayInputStream(bytes)
+                    ));
+            })
+            .exceptionally(ignored -> Optional.<InputStream>empty());
+    }
+
+    /**
+     * Serve the primary from storage after a successful atomic write.
+     */
+    private CompletionStage<Response> serveFromCache(final Storage storage, final Key key) {
+        return storage.value(key).thenApply(content ->
+            ResponseBuilder.ok().body(content).build()
+        );
+    }
+
+    /**
+     * Resolve the shared micrometer registry when metrics are enabled.
+     *
+     * @return Registry or {@code null} when metrics have not been
+     *         initialised (e.g. test suites that skip bootstrap).
+     */
+    private static MeterRegistry meterRegistry() {
+        try {
+            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                return com.auto1.pantera.metrics.MicrometerMetrics.getInstance().getRegistry();
+            }
+        } catch (final Exception ex) {
+            EcsLogger.debug("com.auto1.pantera.composer")
+                .message("MicrometerMetrics registry unavailable; writer will run without metrics")
+                .error(ex)
+                .log();
+        }
+        return null;
+    }
+
+    /**
+     * Carries the upstream HTTP status so {@link #fetchVerifyAndCache} can
+     * distinguish "this upstream truly doesn't have it" (404 → propagate as
+     * 404 to RaceSlice, so other remotes can serve) from "transient failure"
+     * (5xx, timeouts → surface as 503). Without this, every non-2xx upstream
+     * response was mapped to 503 by the cache writer, and RaceSlice treats
+     * 503 as a "winning" response (only 404 triggers race-continue), so a
+     * single 404 from a Composer remote beat a 200 from another for package
+     * archives.
+     */
+    private static final class UpstreamHttpException extends IllegalStateException {
+        private static final long serialVersionUID = 1L;
+        private final int status;
+
+        UpstreamHttpException(final int status) {
+            super("Upstream returned HTTP " + status);
+            this.status = status;
+        }
+
+        int status() {
+            return this.status;
         }
     }
 }

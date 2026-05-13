@@ -235,7 +235,6 @@ public final class AdapterBasicPermission extends Permission {
         }
 
         @Override
-        @SuppressWarnings("PMD.CognitiveComplexity")
         public boolean implies(final Permission permission) {
             boolean res = false;
             if (permission instanceof AdapterBasicPermission) {

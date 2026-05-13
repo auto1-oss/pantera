@@ -34,7 +34,6 @@ import org.postgresql.ds.PGSimpleDataSource;
  * database.
  * @since 0.31
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class MetadataMavenITCase {
 
     /**

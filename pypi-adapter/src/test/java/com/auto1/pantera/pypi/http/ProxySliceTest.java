@@ -19,7 +19,7 @@ import com.auto1.pantera.asto.cache.Cache;
 import com.auto1.pantera.asto.cache.FromStorageCache;
 import com.auto1.pantera.asto.ext.KeyLastPart;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
-import com.auto1.pantera.cooldown.NoopCooldownService;
+import com.auto1.pantera.cooldown.impl.NoopCooldownService;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
@@ -552,7 +552,15 @@ class ProxySliceTest {
             "my-pypi-proxy",
             "pypi-proxy",
             NoopCooldownService.INSTANCE,
-            new PyProxyCooldownInspector()
+            new com.auto1.pantera.publishdate.RegistryBackedInspector(
+                "pypi", com.auto1.pantera.publishdate.PublishDateRegistries.instance()
+            ),
+            // jsonApiUpstream — tests only exercise simple-API and artifact paths;
+            // a stub that always 404s suffices since none of these tests touch
+            // /pypi/{pkg}/{ver}/json
+            (line, headers, body) -> java.util.concurrent.CompletableFuture.completedFuture(
+                com.auto1.pantera.http.ResponseBuilder.notFound().build()
+            )
         );
     }
 

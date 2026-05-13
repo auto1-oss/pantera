@@ -76,7 +76,7 @@ public final class ProxyDocker implements Docker {
     public Repo repo(String name) {
         // Normalize name for Docker Hub
         String normalizedName = this.normalizeRepoName(name);
-        return new ProxyRepo(this.remote, normalizedName, name);
+        return new ProxyRepo(this.remote, normalizedName);
     }
     
     /**
@@ -103,9 +103,9 @@ public final class ProxyDocker implements Docker {
         }
         String host = this.remoteUri.getHost();
         return host != null && (
-            host.equals("registry-1.docker.io") ||
-            host.equals("docker.io") ||
-            host.equals("hub.docker.com")
+            "registry-1.docker.io".equals(host) ||
+            "docker.io".equals(host) ||
+            "hub.docker.com".equals(host)
         );
     }
 

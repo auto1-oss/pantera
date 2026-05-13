@@ -67,7 +67,6 @@ import software.amazon.awssdk.services.s3.model.StorageClass;
  * @since 0.1
  * On multipart upload failure, abort() is fired in background without blocking save() completion.
  */
-@SuppressWarnings("PMD.TooManyMethods")
 public final class S3Storage implements ManagedStorage {
 
     /**
@@ -465,8 +464,8 @@ public final class S3Storage implements ManagedStorage {
                         .concatMapEager(
                             idx -> Flowable.fromPublisher(
                                 this.rangePublisher(key,
-                                    idx * (long) this.parallelChunk,
-                                    Math.min(size - 1, (idx + 1L) * (long) this.parallelChunk - 1)
+                                    (long) idx * this.parallelChunk,
+                                    Math.min(size - 1, (idx + 1L) * this.parallelChunk - 1)
                                 )
                             ),
                             this.parallelConc,

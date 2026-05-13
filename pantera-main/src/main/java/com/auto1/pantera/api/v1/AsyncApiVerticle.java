@@ -17,7 +17,8 @@ import com.auto1.pantera.api.ssl.KeyStore;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.blocking.BlockingStorage;
 import com.auto1.pantera.auth.JwtTokens;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownService;
+import com.auto1.pantera.cooldown.cache.CooldownCache;
 import com.auto1.pantera.cooldown.CooldownSupport;
 import com.auto1.pantera.cooldown.metadata.CooldownMetadataService;
 import com.auto1.pantera.db.dao.AuthProviderDao;
@@ -39,7 +40,6 @@ import com.auto1.pantera.settings.repo.CrudRepoSettings;
 import com.auto1.pantera.settings.users.CrudRoles;
 import com.auto1.pantera.settings.users.CrudUsers;
 import io.vertx.core.AbstractVerticle;
-import io.vertx.core.WorkerExecutor;
 import io.vertx.core.http.HttpServer;
 import io.vertx.core.http.HttpServerOptions;
 import io.vertx.core.json.JsonObject;
@@ -84,11 +84,6 @@ public final class AsyncApiVerticle extends AbstractVerticle {
      * SSL KeyStore.
      */
     private final Optional<KeyStore> keystore;
-
-    /**
-     * JWT authentication provider.
-     */
-    private final JWTAuth jwt;
 
     /**
      * Artifact metadata events queue.
@@ -141,14 +136,13 @@ public final class AsyncApiVerticle extends AbstractVerticle {
      * @param dataSource Database data source, nullable
      * @param jwtTokens RS256 tokens provider for token issuance
      */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
     public AsyncApiVerticle(
         final PanteraCaches caches,
         final Storage configsStorage,
         final int port,
         final PanteraSecurity security,
         final Optional<KeyStore> keystore,
-        final JWTAuth jwt,
+        final JWTAuth jwt, // NOPMD UnusedFormalParameter - public API; JWTAuth is reserved for upcoming route-protection wiring
         final Optional<MetadataEventQueues> events,
         final CooldownService cooldown,
         final Settings settings,
@@ -161,7 +155,6 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         this.port = port;
         this.security = security;
         this.keystore = keystore;
-        this.jwt = jwt;
         this.events = events;
         this.cooldown = cooldown;
         this.cooldownMetadata = CooldownSupport.createMetadataService(cooldown, settings);
@@ -206,14 +199,6 @@ public final class AsyncApiVerticle extends AbstractVerticle {
     @Override
     public void start() {
         final Router router = Router.router(this.vertx);
-        // Create named worker pool for blocking DAO calls
-        final WorkerExecutor apiWorkers =
-            this.vertx.createSharedWorkerExecutor("api-workers");
-        // Store in routing context for handlers to use
-        router.route("/api/v1/*").handler(ctx -> {
-            ctx.put("apiWorkers", apiWorkers);
-            ctx.next();
-        });
         // Body handler for all API routes (1MB limit)
         router.route("/api/v1/*").handler(BodyHandler.create().setBodyLimit(1_048_576));
         // Trace context + client.ip MDC setup for all API requests.
@@ -284,7 +269,7 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                 .putHeader("Access-Control-Allow-Origin", "*")
                 .putHeader(
                     "Access-Control-Allow-Methods",
-                    "GET,POST,PUT,DELETE,HEAD,OPTIONS"
+                    "GET,POST,PUT,PATCH,DELETE,HEAD,OPTIONS"
                 )
                 .putHeader(
                     "Access-Control-Allow-Headers",
@@ -431,8 +416,10 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             final com.auto1.pantera.db.dao.UserTokenDao utDao =
                 this.dataSource != null
                     ? new com.auto1.pantera.db.dao.UserTokenDao(this.dataSource) : null;
-            new UserHandler(users, this.caches, this.security, blocklist, utDao)
-                .register(router);
+            new UserHandler(
+                users, this.caches, this.security, blocklist, utDao,
+                this.settings.cachedLocalEnabledFilter().orElse(null)
+            ).register(router);
         }
         if (roles != null) {
             new RoleHandler(
@@ -457,10 +444,12 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         new DashboardHandler(crs, this.dataSource).register(router);
         new ArtifactHandler(
             crs, new RepoData(this.configsStorage, this.caches.storagesCache()),
-            this.security.policy()
+            this.security.policy(), this.dataSource, this.artifactIndex
         ).register(router);
         new CooldownHandler(
-            this.cooldown, this.cooldownMetadata, crs, this.settings.cooldown(), this.dataSource,
+            this.cooldown, this.cooldownMetadata,
+            CooldownSupport.extractCache(this.cooldown),
+            crs, this.settings.cooldown(), this.dataSource,
             this.security.policy()
         ).register(router);
         new SearchHandler(this.artifactIndex, this.security.policy()).register(router);
@@ -475,6 +464,9 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                 this.security.policy()
             ).register(router);
         }
+        new com.auto1.pantera.api.v1.admin.NegativeCacheAdminResource(
+            this.security.policy()
+        ).register(router);
         // Start server
         final HttpServer server;
         final String schema;

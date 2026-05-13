@@ -23,7 +23,6 @@ import org.skyscreamer.jsonassert.JSONAssert;
  * Test for {@link SearchResults}.
  * @since 1.2
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class SearchResultsTest {
 
     @Test

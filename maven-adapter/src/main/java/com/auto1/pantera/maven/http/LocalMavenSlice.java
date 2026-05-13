@@ -169,7 +169,6 @@ final class LocalMavenSlice implements Slice {
      * Record metric safely (only if metrics are enabled).
      * @param metric Metric recording action
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
             if (com.auto1.pantera.metrics.PanteraMetrics.isEnabled()) {

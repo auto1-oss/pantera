@@ -14,9 +14,11 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.cache.Cache;
-import com.auto1.pantera.cooldown.CooldownInspector;
-import com.auto1.pantera.cooldown.CooldownRequest;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
+import com.auto1.pantera.cooldown.api.CooldownRequest;
+import com.auto1.pantera.cooldown.api.CooldownService;
+import com.auto1.pantera.cooldown.metadata.AllVersionsBlockedException;
+import com.auto1.pantera.cooldown.metadata.CooldownMetadataService;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
@@ -24,21 +26,43 @@ import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.cache.BaseCachedProxySlice;
 import com.auto1.pantera.http.cache.DigestComputer;
 import com.auto1.pantera.http.cache.ProxyCacheConfig;
+import com.auto1.pantera.http.cache.ProxyCacheWriter;
 import com.auto1.pantera.http.cache.SidecarFile;
+import com.auto1.pantera.http.context.RequestContext;
+import com.auto1.pantera.http.fault.Fault;
+import com.auto1.pantera.http.fault.Fault.ChecksumAlgo;
+import com.auto1.pantera.http.fault.Result;
 import com.auto1.pantera.http.headers.Login;
+import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.maven.cooldown.MavenMetadataFilter;
+import com.auto1.pantera.maven.cooldown.MavenMetadataParser;
+import com.auto1.pantera.maven.cooldown.MavenMetadataRequestDetector;
+import com.auto1.pantera.maven.cooldown.MavenMetadataRewriter;
+import com.auto1.pantera.publishdate.PublishDateRegistries;
+import com.auto1.pantera.publishdate.RegistryBackedInspector;
+import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
+
+import org.reactivestreams.Publisher;
 
 /**
  * Maven proxy slice with caching, extending unified BaseCachedProxySlice.
@@ -54,8 +78,16 @@ import java.util.regex.Matcher;
  *
  * @since 1.20.13
  */
-@SuppressWarnings("PMD.ExcessiveImports")
 public final class CachedProxySlice extends BaseCachedProxySlice {
+
+    /**
+     * Primary artifact extensions that participate in the coupled
+     * primary+sidecar write path. The checksum sidecar paths themselves are
+     * still served by {@link ChecksumProxySlice} / standard cache flow.
+     */
+    private static final List<String> PRIMARY_EXTENSIONS = List.of(
+        ".pom", ".jar", ".war", ".aar", ".ear", ".zip", ".module"
+    );
 
     /**
      * Maven-specific metadata cache for maven-metadata.xml files.
@@ -63,7 +95,59 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
     private final MetadataCache metadataCache;
 
     /**
-     * Constructor with full configuration.
+     * Remote client slice, held here so {@link #preProcess} can fetch the
+     * primary + sidecars as a coupled batch via {@link ProxyCacheWriter}.
+     * A duplicate reference of {@code super.client()} is kept so we don't
+     * invoke a protected getter from an anonymous fetch supplier.
+     */
+    private final Slice remote;
+
+    /**
+     * Optional raw storage used by {@link ProxyCacheWriter} to land the
+     * primary + sidecars atomically. Empty when the upstream runs without a
+     * file-backed cache; in that case we fall back to the standard flow.
+     */
+    private final Optional<Storage> rawStorage;
+
+    /**
+     * Single-source-of-truth cache writer introduced by WI-07 (§9.5 of the
+     * v2.2 target architecture). Fetches the primary + every sidecar in one
+     * coupled batch, verifies the upstream {@code .sha1}/{@code .sha256}
+     * claim against the bytes we just downloaded, and atomically commits the
+     * pair. Instantiated lazily when {@link #rawStorage} is present.
+     */
+    private final ProxyCacheWriter cacheWriter;
+
+    /**
+     * Local copy of the events queue so that {@link #enqueueEventForWriter}
+     * can offer events without going through the private field in
+     * {@link BaseCachedProxySlice}. Mirrors the pattern used by the Go
+     * adapter for its WI-07 post-write enqueue call.
+     */
+    private final Optional<Queue<ProxyArtifactEvent>> localEvents;
+
+    /**
+     * Cooldown metadata filter service. When present, {@link #handleMetadata}
+     * runs the upstream {@code maven-metadata.xml} bytes through the parser /
+     * filter / rewriter chain before returning, so fresh versions inside the
+     * admin-configured cooldown window are stripped from {@code <versions>}
+     * and {@code <latest>} / {@code <release>} are rewritten downward. When
+     * null (legacy constructors, tests), responses pass through unfiltered —
+     * same behaviour as before the metadata filter was wired.
+     */
+    private final CooldownMetadataService cooldownMetadata;
+
+    /**
+     * Inspector used by the metadata filter to resolve per-version release
+     * dates. Holding one instance avoids re-wrapping the remote slice on
+     * every request.
+     */
+    private final CooldownInspector metadataInspector;
+
+    /**
+     * Constructor with full configuration (no metadata filtering).
+     * Delegates to the overload below with {@code cooldownMetadata=null}; used
+     * by legacy callers and tests that do not need filter behaviour.
      * @param client Upstream remote slice
      * @param cache Asto cache for artifact storage
      * @param events Event queue for proxy artifact events
@@ -76,7 +160,6 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      * @param config Unified proxy cache configuration
      * @param metadataCache Maven metadata cache
      */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
     CachedProxySlice(
         final Slice client,
         final Cache cache,
@@ -90,11 +173,69 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         final ProxyCacheConfig config,
         final MetadataCache metadataCache
     ) {
+        this(
+            client, cache, events, repoName, upstreamUrl, repoType,
+            cooldownService, cooldownInspector, storage, config, metadataCache,
+            null
+        );
+    }
+
+    /**
+     * Constructor with metadata filter enabled.
+     * @param client Upstream remote slice
+     * @param cache Asto cache for artifact storage
+     * @param events Event queue for proxy artifact events
+     * @param repoName Repository name
+     * @param upstreamUrl Upstream base URL
+     * @param repoType Repository type
+     * @param cooldownService Cooldown service
+     * @param cooldownInspector Cooldown inspector
+     * @param storage Optional local storage
+     * @param config Unified proxy cache configuration
+     * @param metadataCache Maven metadata cache
+     * @param cooldownMetadata Cooldown metadata filter service, or null to
+     *                         disable filtering on this slice
+     */
+    CachedProxySlice(
+        final Slice client,
+        final Cache cache,
+        final Optional<Queue<ProxyArtifactEvent>> events,
+        final String repoName,
+        final String upstreamUrl,
+        final String repoType,
+        final CooldownService cooldownService,
+        final CooldownInspector cooldownInspector,
+        final Optional<Storage> storage,
+        final ProxyCacheConfig config,
+        final MetadataCache metadataCache,
+        final CooldownMetadataService cooldownMetadata
+    ) {
         super(
             client, cache, repoName, repoType, upstreamUrl,
             storage, events, config, cooldownService, cooldownInspector
         );
         this.metadataCache = metadataCache;
+        this.remote = client;
+        this.rawStorage = storage;
+        this.localEvents = events;
+        // Always-verify (Track 3): a Maven proxy without raw storage cannot
+        // run the upstream-sha1 verification path, which means primary bytes
+        // would land in the cache unverified. Refuse to construct rather
+        // than silently fall back — the YAML wiring should guarantee
+        // storage is present, and a misconfiguration must fail loudly at
+        // startup, not corrupt cache state at the first request.
+        this.cacheWriter = new ProxyCacheWriter(
+            storage.orElseThrow(() -> new IllegalArgumentException(
+                "Maven CachedProxySlice requires raw storage for upstream-sha1 "
+                + "verification; repository '" + repoName + "' was constructed "
+                + "with Optional.empty() — check the proxy YAML configuration."
+            )),
+            repoName
+        );
+        this.cooldownMetadata = cooldownMetadata;
+        this.metadataInspector = cooldownMetadata == null
+            ? null
+            : new RegistryBackedInspector("maven", PublishDateRegistries.instance());
     }
 
     /**
@@ -109,7 +250,6 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      * @param cooldownInspector Cooldown inspector
      * @param storage Optional local storage
      */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
     CachedProxySlice(
         final Slice client,
         final Cache cache,
@@ -141,6 +281,21 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         // maven-metadata.xml uses dedicated MetadataCache with stale-while-revalidate
         if (path.contains("maven-metadata.xml") && this.metadataCache != null) {
             return Optional.of(this.handleMetadata(line, key));
+        }
+        // WI-07 §9.5 — integrity-verified atomic primary+sidecar write on
+        // cache-miss. cacheWriter is non-null by construction (constructor
+        // throws on empty storage as of Track 3), so primaries always
+        // route through the verification path. Cache-hit and sidecar paths
+        // fall through to the standard BaseCachedProxySlice flow unchanged.
+        // Track 5 Phase 1A: cooldown evaluation moved INSIDE
+        // verifyAndServePrimary so it only runs on cache-miss. A cache hit
+        // serves from local storage with zero upstream I/O — no HEAD to
+        // MavenHeadSource, no inspector network fallback. The trade-off:
+        // a cooldown rule applied AFTER an artifact was first cached only
+        // takes effect on the next miss; the admin's tool for blocking an
+        // already-cached version is cache eviction.
+        if (!isChecksumSidecar(path) && isPrimaryArtifact(path)) {
+            return Optional.of(this.verifyAndServePrimary(line, headers, key, path));
         }
         return Optional.empty();
     }
@@ -191,7 +346,18 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         if (!matcher.matches()) {
             return Optional.empty();
         }
-        final Optional<Long> lastModified = extractLastModified(responseHeaders);
+        // Track 5 Phase 3B: consult the PublishDateExtractors SPI first, so
+        // the per-repo-type registration in VertxMain is the single source
+        // of truth. Fall back to the in-class extractLastModified helper
+        // when no extractor is registered (NO_OP returns empty) — keeps
+        // pre-Track-5 behaviour for boot paths that haven't wired the
+        // registry yet.
+        final Optional<Long> lastModified = com.auto1.pantera.publishdate
+            .PublishDateExtractors.instance()
+            .forRepoType(this.repoType())
+            .extract(responseHeaders, matcher.group("pkg"), "")
+            .map(java.time.Instant::toEpochMilli)
+            .or(() -> extractLastModified(responseHeaders));
         return Optional.of(
             new ProxyArtifactEvent(
                 new Key.From(matcher.group("pkg")),
@@ -226,6 +392,22 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
 
     /**
      * Handle maven-metadata.xml requests using dedicated MetadataCache.
+     *
+     * <p>When {@link #cooldownMetadata} is non-null, the cached upstream XML
+     * is run through the parser / filter / rewriter chain before the
+     * response is built — fresh versions inside the configured cooldown
+     * window are stripped from {@code <versions>} and {@code <latest>} /
+     * {@code <release>} are rewritten to the newest non-blocked version.
+     * The metadata cache itself stores UNFILTERED upstream bytes so the
+     * filter decision re-evaluates per request (cooldown state changes as
+     * versions age out of the window — caching filtered output would
+     * produce stale decisions).</p>
+     *
+     * <p>If every version is blocked, returns 403 with a short explanation.
+     * On any filter error (parse failure, unexpected upstream format) the
+     * unfiltered bytes are served instead — availability over strictness,
+     * matching the npm adapter's fail-open behaviour.</p>
+     *
      * @param line Request line
      * @param key Cache key
      * @return Response future
@@ -233,7 +415,7 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
     private CompletableFuture<Response> handleMetadata(
         final RequestLine line, final Key key
     ) {
-        return this.metadataCache.load(
+        final CompletableFuture<Optional<Content>> loaded = this.metadataCache.load(
             key,
             () -> this.client().response(line, Headers.EMPTY, Content.EMPTY)
                 .thenApply(resp -> {
@@ -242,13 +424,104 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                     }
                     return Optional.<Content>empty();
                 })
-        ).thenApply(opt -> opt
-            .map(content -> ResponseBuilder.ok()
-                .header("Content-Type", "text/xml")
-                .body(content)
-                .build()
-            )
-            .orElse(ResponseBuilder.notFound().build())
+        );
+        return loaded.thenCompose(opt -> {
+            if (opt.isEmpty()) {
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.notFound().build()
+                );
+            }
+            if (this.cooldownMetadata == null) {
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.ok()
+                        .header("Content-Type", "text/xml")
+                        .body(opt.get())
+                        .build()
+                );
+            }
+            return this.applyMetadataCooldown(line, opt.get());
+        });
+    }
+
+    /**
+     * Run upstream {@code maven-metadata.xml} bytes through the cooldown
+     * metadata filter. Extracts the package coordinate (groupId/artifactId)
+     * from the URL path, drains the reactive body, invokes the filter
+     * service, and wraps the filtered bytes in a 200 response. Falls through
+     * to the unfiltered bytes on any non-{@link AllVersionsBlockedException}
+     * failure so upstream quirks do not turn metadata requests into 5xx.
+     */
+    private CompletableFuture<Response> applyMetadataCooldown(
+        final RequestLine line, final Content content
+    ) {
+        final Optional<String> pkgOpt = new MavenMetadataRequestDetector()
+            .extractPackageName(line.uri().getPath());
+        if (pkgOpt.isEmpty()) {
+            return CompletableFuture.completedFuture(
+                ResponseBuilder.ok()
+                    .header("Content-Type", "text/xml")
+                    .body(content)
+                    .build()
+            );
+        }
+        // extractPackageName returns SLASHED format (com/google/guava/guava)
+        // — the MavenHeadSource that resolves release dates splits on the last
+        // DOT to derive groupId/artifactId, so a slashed name silently produces
+        // an empty inspector lookup and the filter fails open ("0 blocked"
+        // even when the version is well past its publish-date window). Convert
+        // to dotted before handing it to the metadata service. Mirrors the
+        // same conversion applied in MavenGroupSlice.applyCooldownFilter.
+        final String packageName = pkgOpt.get().replace('/', '.');
+        return content.asBytesFuture().thenCompose(
+            bytes -> this.cooldownMetadata.filterMetadata(
+                this.repoType(),
+                this.repoName(),
+                packageName,
+                bytes,
+                new MavenMetadataParser(),
+                new MavenMetadataFilter(),
+                new MavenMetadataRewriter(),
+                Optional.ofNullable(this.metadataInspector)
+            ).handle((filtered, ex) -> {
+                if (ex == null) {
+                    return ResponseBuilder.ok()
+                        .header("Content-Type", "text/xml")
+                        .body(filtered)
+                        .build();
+                }
+                Throwable cause = ex;
+                while (cause != null) {
+                    if (cause instanceof AllVersionsBlockedException) {
+                        EcsLogger.info("com.auto1.pantera.maven")
+                            .message("All versions blocked by cooldown")
+                            .eventCategory("database")
+                            .eventAction("all_versions_blocked")
+                            .field("repository.name", this.repoName())
+                            .field("package.name", packageName)
+                            .log();
+                        return ResponseBuilder.forbidden()
+                            .textBody(
+                                "All versions of '" + packageName
+                                    + "' are under cooldown; no non-blocked "
+                                    + "version is currently available."
+                            )
+                            .build();
+                    }
+                    cause = cause.getCause();
+                }
+                EcsLogger.warn("com.auto1.pantera.maven")
+                    .message("Cooldown metadata filter failed — serving unfiltered")
+                    .eventCategory("database")
+                    .eventAction("filter_error")
+                    .field("repository.name", this.repoName())
+                    .field("package.name", packageName)
+                    .error(ex)
+                    .log();
+                return ResponseBuilder.ok()
+                    .header("Content-Type", "text/xml")
+                    .body(bytes)
+                    .build();
+            })
         );
     }
 
@@ -291,6 +564,443 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 sidecarPath,
                 digest.getBytes(StandardCharsets.UTF_8)
             ));
+        }
+    }
+
+    // ===== WI-07 §9.5: ProxyCacheWriter integration =====
+
+    /**
+     * Check if a path represents a Maven primary artifact that benefits from
+     * coupled primary+sidecar writing. Metadata files, directories and
+     * checksum sidecars are explicitly excluded by callers.
+     *
+     * @param path Request path.
+     * @return {@code true} if we should route this request through
+     *         {@link ProxyCacheWriter}.
+     */
+    private static boolean isPrimaryArtifact(final String path) {
+        if (path.endsWith("/") || path.contains("maven-metadata.xml")) {
+            return false;
+        }
+        final String lower = path.toLowerCase(Locale.ROOT);
+        for (final String ext : PRIMARY_EXTENSIONS) {
+            if (lower.endsWith(ext)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Primary-artifact flow: if the cache already has the primary, serve it
+     * with **zero upstream I/O** (no cooldown HEAD, no inspector network
+     * fallback). Otherwise gate via cooldown — only on the about-to-go-upstream
+     * branch — and fetch + verify + commit on allow.
+     *
+     * <p>Track 5 Phase 1A inversion: pre-Track 5 the cooldown gate wrapped
+     * BOTH branches via the old {@code verifyAndServePrimaryGated}, which
+     * forced a Maven Central HEAD on every cached request through the
+     * {@link com.auto1.pantera.publishdate.RegistryBackedInspector} chain
+     * (the inspector falls through to {@code MavenHeadSource} on L1+L2
+     * miss). That made cached artifact serving dependent on Maven Central
+     * being reachable AND inside its rate-limit budget. Now: cache-hit is
+     * pure-local; cache-miss runs the gate exactly where the upstream call
+     * is unavoidable anyway.
+     *
+     * <p>We consult BOTH the {@link Storage} and the {@link Cache} abstraction
+     * so tests that plug a lambda-Cache without a real storage keep working,
+     * and production file-backed deployments benefit from the verify path on
+     * genuine cache misses.
+     */
+    private CompletableFuture<Response> verifyAndServePrimary(
+        final RequestLine line, final Headers headers, final Key key, final String path
+    ) {
+        final Storage storage = this.rawStorage.orElseThrow();
+        return storage.exists(key).thenCompose(presentInStorage -> {
+            if (presentInStorage) {
+                return this.serveFromCache(storage, key);
+            }
+            return this.evaluateCooldownOrProceed(headers, path, () ->
+                this.cache().load(
+                    key,
+                    com.auto1.pantera.asto.cache.Remote.EMPTY,
+                    com.auto1.pantera.asto.cache.CacheControl.Standard.ALWAYS
+                ).thenCompose(opt -> {
+                    if (opt.isPresent()) {
+                        return CompletableFuture.completedFuture(
+                            ResponseBuilder.ok().body(opt.get()).build()
+                        );
+                    }
+                    // M4 (analysis/plan/v1/PLAN.md): concurrent clients for the
+                    // same uncached primary must collapse to one upstream call.
+                    // Pre-M4 each request fired its own fetchVerifyAndCache,
+                    // multiplying outbound by N for a burst of N — the
+                    // dominant cold-walk amplifier after M2's prefetch deletion.
+                    // The follower path re-runs verifyAndServePrimary which
+                    // hits the warm cache the leader wrote — but only AFTER
+                    // the leader's verificationOutcome fires (cache commit
+                    // complete), not when the leader's response future
+                    // resolves (which happens before the body is drained
+                    // through the stream-through tee).
+                    return this.coalesceUpstream(
+                        key,
+                        leaderGate -> this.fetchVerifyAndCache(line, key, path, leaderGate),
+                        () -> this.verifyAndServePrimary(line, headers, key, path)
+                    );
+                }).toCompletableFuture()
+            );
+        }).exceptionally(err -> {
+            EcsLogger.warn("com.auto1.pantera.cache")
+                .message("Primary-artifact verify-and-serve failed; falling back to not-found")
+                .eventCategory("web")
+                .eventAction("cache_write")
+                .eventOutcome("failure")
+                .field("repository.name", this.repoName())
+                .field("url.path", path)
+                .error(err)
+                .log();
+            return ResponseBuilder.notFound().build();
+        });
+    }
+
+    /**
+     * Track 4 stream-through cache write: tee the upstream body to the
+     * client AND to a verifying temp file in a single pass. The client
+     * receives the first byte as soon as upstream emits it; verification
+     * against the upstream {@code .sha1} runs on stream completion and
+     * decides whether the temp file gets committed to the cache (Track 3's
+     * sidecar-first atomic order) or dropped with an integrity_failure
+     * metric.
+     *
+     * <p>Compared to the pre-Track-4 {@code writeAndVerify} flow, the
+     * client no longer waits for the entire body to drain into a temp
+     * file + the {@code .sha1} round-trip before its first byte arrives.
+     * On a cold {@code mvn dependency:resolve} this halves the wall clock
+     * for primaries large enough that disk-write dominated serve latency.
+     *
+     * <p>Trade-off: a {@code .sha1} mismatch means the client received
+     * unverified bytes (Maven's own client-side checksum policy is the
+     * final gate — same semantics as Nexus/JFrog stream-through). The
+     * <i>cache</i> still upholds Track 3's always-verify invariant: a
+     * mismatched primary is never persisted, and the next request
+     * re-fetches cleanly from upstream.
+     */
+    private CompletableFuture<Response> fetchVerifyAndCache(
+        final RequestLine line, final Key key, final String path,
+        final CompletableFuture<Void> singleFlightGate
+    ) {
+        this.rawStorage.orElseThrow(); // guard: storage must be configured
+        final String upstreamUri = this.upstreamUrl() + path;
+        final RequestContext ctx = new RequestContext(
+            org.apache.logging.log4j.ThreadContext.get("trace.id"),
+            null,
+            this.repoName(),
+            path
+        );
+        // Phase 7 perf (2026-05): only .sha1 is eagerly fetched alongside the
+        // primary. mvn does NOT request .md5/.sha256/.sha512 for resolution —
+        // eagerly fetching those 3 extra sidecars per primary inflated upstream
+        // amplification to ~3.6×, contended with primary downloads, and
+        // serialised the foreground walk through the upstream H2 pool.
+        // If a client explicitly requests .md5/.sha256/.sha512, the request
+        // falls through the standard cache-miss path and is proxied on demand
+        // (same behaviour as Maven Central).
+        final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> sidecars =
+            new EnumMap<>(ChecksumAlgo.class);
+        sidecars.put(ChecksumAlgo.SHA1, () -> this.fetchSidecar(line, ".sha1"));
+        return this.fetchPrimaryBody(line).toCompletableFuture().thenCompose(body ->
+            this.cacheWriter.streamThroughAndCommit(
+                key, upstreamUri, body.size(), body.publisher(),
+                sidecars, null, ctx
+            ).toCompletableFuture().thenApply(result -> {
+                if (result instanceof Result.Err<ProxyCacheWriter.StreamedArtifact> err) {
+                    // streamThroughAndCommit returns Err only for the narrow
+                    // case where temp file / channel creation fails BEFORE
+                    // the upstream body is subscribed. Upstream errors and
+                    // integrity mismatches reach the client via the response
+                    // body's onError / log-and-don't-commit paths, not via
+                    // this Err branch. Surface as 502 (storage_unavailable
+                    // semantics) so RaceSlice can fall through to the next
+                    // remote.
+                    return ResponseBuilder.badGateway()
+                        .textBody("Upstream temporarily unavailable")
+                        .build();
+                }
+                @SuppressWarnings("unchecked")
+                final ProxyCacheWriter.StreamedArtifact artifact =
+                    ((Result.Ok<ProxyCacheWriter.StreamedArtifact>) result).value();
+                // M4: release followers waiting on the single-flight gate only
+                // AFTER the verify-and-commit step lands the bytes in storage.
+                // The Response we return now carries the streaming body — it
+                // resolves before the cache is committed, so completing the
+                // gate on this future would let followers re-enter
+                // verifyAndServePrimary against a still-empty cache and refire
+                // upstream.
+                artifact.verificationOutcome()
+                    .whenComplete((r2, e2) -> singleFlightGate.complete(null));
+                // Track 5 Phase 1B: pass the upstream response headers (carrying
+                // Last-Modified) through to buildArtifactEvent so the DB
+                // consumer records the true upstream publish date for this
+                // (artifact, version). Pre-Track 5 we passed Headers.EMPTY,
+                // which fell back to System.currentTimeMillis() — making
+                // every cooldown evaluation on a freshly-cached version
+                // resolve to "just published" and triggering an upstream
+                // HEAD via MavenHeadSource on the very next request.
+                this.enqueueEventForWriter(
+                    key, body.headers(), artifact.body().size().orElse(0L)
+                );
+                return ResponseBuilder.ok().body(artifact.body()).build();
+            })
+        ).exceptionally(err -> {
+            final Throwable cause = unwrap(err);
+            if (cause instanceof UpstreamHttpException upstreamErr) {
+                return mapUpstreamStatus(upstreamErr);
+            }
+            // Connection / timeout / SSL → transient infrastructure.
+            return ResponseBuilder.badGateway()
+                .textBody("Upstream temporarily unavailable")
+                .build();
+        });
+    }
+
+    /**
+     * W6 status-code fidelity (analysis/plan/v1/PLAN.md, RCA-1 + RCA-7):
+     * map upstream non-2xx to the correct outbound response so the group
+     * resolver can act on it, the index cache does not get poisoned, and
+     * clients receive authoritative auth / rate-limit signals.
+     *
+     * <ul>
+     *   <li><b>404, 410</b> → propagate as 404 ({@code notFound}) so
+     *       RaceSlice can try the next remote (e.g. {@code .module} on
+     *       maven-central 404 → try plugins.gradle.org).</li>
+     *   <li><b>429</b> → propagate as 429 with the upstream's
+     *       Retry-After preserved. M3's gate is now closed for this
+     *       host so subsequent calls fail-fast; client backs off.</li>
+     *   <li><b>503 with Retry-After</b> → propagate as 503 + Retry-After
+     *       (transient cooldown).</li>
+     *   <li><b>401, 403</b> → propagate verbatim (auth is authoritative,
+     *       not a fallthrough signal).</li>
+     *   <li><b>5xx (no Retry-After)</b> → 502 badGateway; group fanout
+     *       will try the next member. Index cache MUST NOT write a
+     *       negative-cache entry for these.</li>
+     * </ul>
+     */
+    private static Response mapUpstreamStatus(final UpstreamHttpException err) {
+        final int status = err.status();
+        if (status == 404 || status == 410) {
+            return ResponseBuilder.notFound().build();
+        }
+        if (status == 429) {
+            final ResponseBuilder rb = ResponseBuilder
+                .from(com.auto1.pantera.http.RsStatus.TOO_MANY_REQUESTS);
+            err.retryAfter().ifPresent(ra -> rb.header("Retry-After", ra));
+            return rb.textBody("Upstream rate-limited").build();
+        }
+        // 503 WITH Retry-After: upstream cooldown — propagate verbatim.
+        // 503 WITHOUT Retry-After: pure transient — fall through to
+        // badGateway so the group resolver retries another member
+        // without poisoning the cache.
+        if (status == 503 && err.retryAfter().isPresent()) {
+            return ResponseBuilder
+                .from(com.auto1.pantera.http.RsStatus.SERVICE_UNAVAILABLE)
+                .header("Retry-After", err.retryAfter().get())
+                .textBody("Upstream temporarily unavailable")
+                .build();
+        }
+        if (status == 401 || status == 403) {
+            return ResponseBuilder
+                .from(com.auto1.pantera.http.RsStatus.byCode(status))
+                .textBody("Upstream auth required")
+                .build();
+        }
+        // 5xx and any other unclassified non-2xx — transient,
+        // surface as bad-gateway so group fanout retries another member.
+        return ResponseBuilder.badGateway()
+            .textBody("Upstream temporarily unavailable")
+            .build();
+    }
+
+    /**
+     * Fetch the primary from upstream and return its body Publisher together
+     * with the Content-Length (when present) AND the response headers
+     * (carrying {@code Last-Modified} for Track 5 Phase 1B publish-date
+     * pre-population). The body has NOT been subscribed — the caller
+     * (stream-through tee) is responsible for exactly-one subscription. On
+     * any non-success status, throws {@link UpstreamHttpException} after
+     * draining the response body to release the connection.
+     */
+    private CompletionStage<UpstreamBody> fetchPrimaryBody(final RequestLine line) {
+        return this.remote.response(line, Headers.EMPTY, Content.EMPTY)
+            .thenApply(resp -> {
+                if (!resp.status().success()) {
+                    resp.body().asBytesFuture();
+                    // Preserve Retry-After so the W6 status-fidelity handler
+                    // can propagate it verbatim on 429 / 503.
+                    final java.util.List<String> retryAfter =
+                        resp.headers().values("Retry-After");
+                    throw new UpstreamHttpException(
+                        resp.status().code(),
+                        retryAfter.isEmpty() ? null : retryAfter.get(0)
+                    );
+                }
+                return new UpstreamBody(
+                    resp.body().size(), resp.body(), resp.headers()
+                );
+            });
+    }
+
+    /**
+     * Upstream response body bundle: optional Content-Length + the unsubscribed
+     * body Publisher + response headers. Lives in the adapter (not the writer)
+     * so the writer stays decoupled from the slice's HTTP client. Track 5
+     * Phase 1B added {@code headers} so the publish-date can be propagated
+     * into the artifact event without a second upstream round-trip.
+     */
+    private record UpstreamBody(
+        Optional<Long> size, Publisher<ByteBuffer> publisher, Headers headers
+    ) {
+    }
+
+    /**
+     * Unwrap CompletionException chains to surface the underlying cause for
+     * status-mapping checks. Mirrors {@code ProxyCacheWriter.unwrap}.
+     */
+    private static Throwable unwrap(final Throwable err) {
+        Throwable cur = err;
+        int depth = 0;
+        while (cur instanceof java.util.concurrent.CompletionException
+            && cur.getCause() != null && depth < 8) {
+            cur = cur.getCause();
+            depth++;
+        }
+        return cur;
+    }
+
+    /**
+     * Carries the upstream HTTP status (and Retry-After when present) so
+     * {@link #fetchVerifyAndCache} can map each non-2xx category to the
+     * right outbound response per W6 status-fidelity:
+     *
+     * <ul>
+     *   <li>404 / 410 → propagate as 404 to RaceSlice (genuine "doesn't
+     *       have it" — next member may have it).</li>
+     *   <li>429 → propagate verbatim with Retry-After (M3's gate honours
+     *       this; mvn / npm clients back off).</li>
+     *   <li>401 / 403 → propagate verbatim (authoritative auth signal).</li>
+     *   <li>503 with Retry-After → propagate verbatim (upstream cooldown).</li>
+     *   <li>5xx → badGateway (transient — group fanout retries another
+     *       member; cache is not poisoned).</li>
+     * </ul>
+     */
+    private static final class UpstreamHttpException extends IllegalStateException {
+        private static final long serialVersionUID = 1L;
+        private final int status;
+        private final String retryAfter;
+
+        UpstreamHttpException(final int status, final String retryAfter) {
+            super("Upstream returned HTTP " + status);
+            this.status = status;
+            this.retryAfter = retryAfter;
+        }
+
+        int status() {
+            return this.status;
+        }
+
+        Optional<String> retryAfter() {
+            return Optional.ofNullable(this.retryAfter);
+        }
+    }
+
+    /**
+     * Fetch a sidecar for the primary at {@code line}. Returns
+     * {@link Optional#empty()} for 4xx/5xx so the writer treats the sidecar
+     * as absent; I/O errors collapse to empty so a transient sidecar failure
+     * never blocks the primary write.
+     */
+    private CompletionStage<Optional<InputStream>> fetchSidecar(
+        final RequestLine primary, final String extension
+    ) {
+        final String sidecarPath = primary.uri().getPath() + extension;
+        final RequestLine sidecarLine = new RequestLine(
+            primary.method().value(), sidecarPath
+        );
+        return this.remote.response(sidecarLine, Headers.EMPTY, Content.EMPTY)
+            .thenCompose(resp -> {
+                if (!resp.status().success()) {
+                    return resp.body().asBytesFuture()
+                        .thenApply(ignored -> Optional.<InputStream>empty());
+                }
+                return resp.body().asBytesFuture()
+                    .thenApply(bytes -> Optional.<InputStream>of(
+                        new java.io.ByteArrayInputStream(bytes)
+                    ));
+            })
+            .exceptionally(ignored -> Optional.<InputStream>empty());
+    }
+
+    /**
+     * Serve the primary from storage after a successful atomic write.
+     */
+    private CompletableFuture<Response> serveFromCache(final Storage storage, final Key key) {
+        return storage.value(key).thenApply(content ->
+            ResponseBuilder.ok().body(content).build()
+        );
+    }
+
+    /**
+     * Enqueue a proxy-artifact event after a successful {@link ProxyCacheWriter}
+     * write. Mirrors {@code BaseCachedProxySlice.enqueueEvent} for the new
+     * verify-then-write path so Maven/Gradle proxies generate DB-index events
+     * the same way the legacy {@code fetchAndCache} path does.
+     *
+     * <p>Track 5 Phase 1B fix: the upstream response headers are now threaded
+     * through {@link UpstreamBody} so {@code buildArtifactEvent} can extract
+     * the authoritative {@code Last-Modified} timestamp. Pre-Track 5 this
+     * call passed {@code Headers.EMPTY}, so the DB consumer fell back to
+     * {@code System.currentTimeMillis()} as the publish date — and the next
+     * cooldown evaluation for that same {@code (artifact, version)} found a
+     * timestamp of "right now" in the registry, decided the version was
+     * still inside the cooldown window, and (worse) on a cache eviction
+     * fell through to {@code MavenHeadSource} to re-resolve. Net: every
+     * stream-through cache write quietly created an upstream HEAD debt
+     * paid the next time the publish-date L1 evicted that key.</p>
+     *
+     * <p>Any exception in the enqueue path is swallowed so the serve path
+     * (the {@code return serveFromCache(...)} that follows this call) is
+     * never affected by a queue failure.</p>
+     *
+     * @param key            Artifact cache key.
+     * @param upstreamHeaders Upstream response headers carrying
+     *                        {@code Last-Modified}; may be {@link Headers#EMPTY}
+     *                        when upstream omits the header.
+     * @param size           Artifact size in bytes (0 when unavailable).
+     */
+    private void enqueueEventForWriter(
+        final Key key, final Headers upstreamHeaders, final long size
+    ) {
+        if (this.localEvents.isEmpty()) {
+            return;
+        }
+        try {
+            final Optional<ProxyArtifactEvent> event = this.buildArtifactEvent(
+                key, upstreamHeaders, size, ArtifactEvent.DEF_OWNER
+            );
+            event.ifPresent(e -> {
+                if (!this.localEvents.get().offer(e)) {
+                    com.auto1.pantera.metrics.EventsQueueMetrics
+                        .recordDropped(this.repoName());
+                }
+            });
+        } catch (final Exception ex) {
+            EcsLogger.warn("com.auto1.pantera.cache")
+                .message("Failed to enqueue proxy event; serve path unaffected")
+                .eventCategory("process")
+                .eventAction("queue_enqueue")
+                .eventOutcome("failure")
+                .field("repository.name", this.repoName())
+                .error(ex)
+                .log();
         }
     }
 }

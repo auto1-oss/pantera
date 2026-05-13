@@ -32,7 +32,6 @@ import org.testcontainers.containers.BindMode;
  * Integration tests for Maven repository.
  * @since 0.11
  */
-@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.UseObjectForClearerAPI"})
 @DisabledOnOs(OS.WINDOWS)
 public final class MavenITCase {
 
@@ -112,7 +111,6 @@ public final class MavenITCase {
      * @param path Resource path
      * @return List of subresources
      */
-    @SuppressWarnings("PMD.AssignmentInOperand")
     static List<String> getResourceFiles(final String path) throws IOException {
         final List<String> filenames = new ArrayList<>(0);
         try (InputStream in = getResourceAsStream(path);

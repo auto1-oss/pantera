@@ -1,35 +1,128 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, ref, watch } from 'vue'
-import { getCooldownOverview, getCooldownBlocked } from '@/api/settings'
+import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import { getCooldownOverview, getCooldownBlocked, getCooldownHistory } from '@/api/settings'
 import { unblockArtifact, unblockAll } from '@/api/repos'
 import { useNotificationStore } from '@/stores/notifications'
 import { useAuthStore } from '@/stores/auth'
+import { REPO_TYPE_FILTERS } from '@/utils/repoTypes'
+import { useConfirmDelete } from '@/composables/useConfirmDelete'
 import RepoTypeBadge from '@/components/common/RepoTypeBadge.vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
 import Button from 'primevue/button'
 import Card from 'primevue/card'
+import Dialog from 'primevue/dialog'
 import Tag from 'primevue/tag'
 import InputText from 'primevue/inputtext'
+import Select from 'primevue/select'
+import SelectButton from 'primevue/selectbutton'
 import Paginator from 'primevue/paginator'
-import type { CooldownRepo, BlockedArtifact } from '@/types'
+import type { CooldownRepo, BlockedArtifact, HistoryArtifact } from '@/types'
+
+type Mode = 'active' | 'history'
 
 const notify = useNotificationStore()
 const auth = useAuthStore()
 const canWrite = auth.hasAction('api_cooldown_permissions', 'write')
+// The history feed is gated by its own narrower permission
+// (api_cooldown_history_permissions.read). A user can have api_cooldown.read
+// to see the live blocked list without necessarily being allowed to browse
+// the long-term archive. Per-repo AdapterBasicPermission continues to filter
+// rows server-side on top of this API-level gate.
+const canReadHistory = computed(() =>
+  auth.hasAction('api_cooldown_history_permissions', 'read'),
+)
 
 const repos = ref<CooldownRepo[]>([])
-const blocked = ref<BlockedArtifact[]>([])
+const blocked = ref<Array<BlockedArtifact | HistoryArtifact>>([])
+const mode = ref<Mode>('active')
 const blockedPage = ref(0)
 const blockedSize = ref(50)
 const blockedTotal = ref(0)
 const loading = ref(false)
 const search = ref('')
+const repoFilter = ref<string | null>(null)
+const typeFilter = ref<string | null>(null)
 const sortField = ref<string | null>(null)
 const sortOrder = ref<number>(-1) // -1=desc (default: newest first)
 let searchTimeout: ReturnType<typeof setTimeout> | null = null
 let blockedAbortCtrl: AbortController | null = null
+
+// Client-side pagination for the cooldown-enabled repositories tile grid.
+// 10 tiles = 2 rows × 5 cols on xl, which matches the compact card layout.
+const repoPage = ref(0)
+const repoPageSize = 10
+
+// Strip "-proxy" / "-group" / "-hosted" suffix to get the base tech type.
+// Mirrors parseType() in utils/repoTypes.ts so `typeFilter="docker"` matches
+// both `docker-proxy` and `docker-group`.
+function typeBase(fullType: string): string {
+  const t = (fullType ?? '').toLowerCase()
+  if (t.endsWith('-proxy')) return t.slice(0, -'-proxy'.length)
+  if (t.endsWith('-group')) return t.slice(0, -'-group'.length)
+  if (t.endsWith('-hosted')) return t.slice(0, -'-hosted'.length)
+  return t
+}
+
+// Apply the same search / repo / type filter triple that drives the blocked
+// artifacts table, so the tile grid stays in sync with the unified filter bar.
+const filteredRepos = computed(() => {
+  const q = search.value?.trim().toLowerCase() ?? ''
+  return repos.value.filter(r => {
+    if (q && !r.name.toLowerCase().includes(q)) return false
+    if (repoFilter.value && r.name !== repoFilter.value) return false
+    if (typeFilter.value && typeBase(r.type) !== typeFilter.value) return false
+    return true
+  })
+})
+
+const pagedRepos = computed(() =>
+  filteredRepos.value.slice(
+    repoPage.value * repoPageSize,
+    (repoPage.value + 1) * repoPageSize,
+  ),
+)
+
+// PrimeVue Paginator emits the "first row index", not the page index, so we
+// wrap repoPage in a computed that translates both directions.
+const repoPaginatorFirst = computed({
+  get: () => repoPage.value * repoPageSize,
+  set: (first: number) => {
+    repoPage.value = Math.floor(first / repoPageSize)
+  },
+})
+
+// Any change to the unified filters collapses the grid back to page 0 so the
+// user never lands on an empty page of a shrunken result set.
+watch([search, repoFilter, typeFilter], () => {
+  repoPage.value = 0
+})
+
+// Confirmation dialog for the per-repo "unblock all" eraser icon. Reuses the
+// same useConfirmDelete composable / Dialog pattern used elsewhere in admin
+// views (RepoManagementView, StorageAliasView) so behaviour stays consistent.
+const {
+  visible: unblockAllVisible,
+  targetName: unblockAllTarget,
+  confirm: confirmUnblockAllDialog,
+  accept: acceptUnblockAll,
+  reject: rejectUnblockAll,
+} = useConfirmDelete()
+
+// Repo dropdown options: derived from the overview endpoint (which is
+// already permission-scoped server-side), with an "All repos" sentinel.
+const repoOptions = computed(() => [
+  { label: 'All repos', value: null as string | null },
+  ...repos.value.map(r => ({ label: r.name, value: r.name as string | null })),
+])
+
+// Repo-type dropdown options: reuse the shared filter list with an
+// "All types" sentinel prepended.
+const typeOptions = computed(() => [
+  { label: 'All types', value: null as string | null },
+  ...REPO_TYPE_FILTERS.filter(o => o.value !== null),
+])
 
 // Debounced server-side search: reset to page 0 and reload
 watch(search, () => {
@@ -38,6 +131,22 @@ watch(search, () => {
     blockedPage.value = 0
     loadBlocked()
   }, 400)
+})
+
+// Repo + repo-type filters: reset to page 0 and reload immediately.
+watch([repoFilter, typeFilter], () => {
+  blockedPage.value = 0
+  loadBlocked()
+})
+
+// Mode toggle: reset pagination and reload from the appropriate endpoint.
+watch(mode, () => {
+  blockedPage.value = 0
+  blocked.value = []
+  blockedTotal.value = 0
+  sortField.value = null
+  sortOrder.value = -1
+  loadBlocked()
 })
 
 onBeforeUnmount(() => {
@@ -66,11 +175,19 @@ async function loadBlocked() {
     if (search.value.trim()) {
       params.search = search.value.trim()
     }
+    if (repoFilter.value) {
+      params.repo = repoFilter.value
+    }
+    if (typeFilter.value) {
+      params.repo_type = typeFilter.value
+    }
     if (sortField.value) {
       params.sort_by = sortField.value
       params.sort_dir = sortOrder.value >= 0 ? 'asc' : 'desc'
     }
-    const resp = await getCooldownBlocked(params as any, ctrl.signal)
+    const resp = mode.value === 'active'
+      ? await getCooldownBlocked(params as any, ctrl.signal)
+      : await getCooldownHistory(params as any, ctrl.signal)
     if (ctrl.signal.aborted) return
     blocked.value = resp.items
     blockedTotal.value = resp.total
@@ -80,6 +197,20 @@ async function loadBlocked() {
   } finally {
     if (!ctrl.signal.aborted) loading.value = false
   }
+}
+
+// Compact SHA digests for display in the Version column. Docker cooldown
+// blocks may record a digest like `sha256:<64 hex>` when the client pushed
+// by digest instead of a human-readable tag. We keep the algorithm prefix
+// and show the first 12 hex chars + ellipsis to stay readable in the
+// table while the `title` attribute tooltips the full value.
+function formatVersion(v: string | null | undefined): string {
+  if (!v) return ''
+  const sha = /^sha256:([0-9a-f]{64})$/i.exec(v)
+  if (sha) return `sha256:${sha[1].slice(0, 12)}\u2026`
+  const genericSha = /^(sha\d+):([0-9a-f]{32,})$/i.exec(v)
+  if (genericSha) return `${genericSha[1]}:${genericSha[2].slice(0, 12)}\u2026`
+  return v
 }
 
 function formatRemaining(blockedUntil: string): string {
@@ -122,6 +253,15 @@ async function handleUnblockAll(repoName: string) {
   }
 }
 
+// Prompt the user before issuing the destructive "unblock all" action on a
+// repo tile. Resolves via the shared confirm-delete dialog.
+async function confirmUnblockAll(repo: CooldownRepo) {
+  const confirmed = await confirmUnblockAllDialog(repo.name)
+  if (confirmed) {
+    await handleUnblockAll(repo.name)
+  }
+}
+
 onMounted(() => {
   loadOverview()
   loadBlocked()
@@ -131,57 +271,157 @@ onMounted(() => {
 <template>
   <AppLayout>
     <div class="space-y-6">
-      <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Cooldown</h1>
+      <div class="flex items-center justify-between">
+        <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Cooldown</h1>
+      </div>
 
-      <Card class="shadow-sm">
-        <template #title>Cooldown-Enabled Repositories</template>
-        <template #content>
-          <div v-if="repos.length === 0" class="text-gray-400 text-sm">
-            No cooldown-enabled repositories
-          </div>
-          <div v-else class="divide-y divide-gray-100 dark:divide-gray-700">
-            <div v-for="r in repos" :key="r.name" class="flex items-center justify-between py-2">
-              <div class="flex items-center gap-2">
-                <span class="font-medium">{{ r.name }}</span>
-                <RepoTypeBadge :type="r.type" />
-                <Tag
-                  v-if="r.active_blocks != null && r.active_blocks > 0"
-                  :value="`${r.active_blocks} blocked`"
-                  severity="danger"
-                />
-              </div>
-              <div class="flex items-center gap-3">
-                <span class="text-sm text-gray-400 font-mono">{{ r.cooldown }}</span>
-                <Button
-                  v-if="canWrite"
-                  label="Unblock All"
-                  size="small"
-                  severity="warn"
-                  text
-                  @click="handleUnblockAll(r.name)"
-                />
-              </div>
-            </div>
-          </div>
-        </template>
-      </Card>
-
-      <Card class="shadow-sm">
-        <template #title>
-          <div class="flex items-center justify-between">
-            <span>Blocked Artifacts</span>
-            <span class="text-sm font-normal text-gray-400">{{ blockedTotal }} total</span>
-          </div>
-        </template>
-        <template #content>
-          <div class="relative mb-3">
+      <!--
+        Global filter bar: single source of truth for search, repo, type
+        and active/history mode. Drives both the tile grid (client-side
+        filter via filteredRepos) and the blocked-artifacts DataTable
+        (server-side via loadBlocked params).
+      -->
+      <div class="flex flex-wrap items-end gap-3">
+        <div class="flex flex-col gap-1 flex-1 min-w-[16rem]">
+          <label class="text-sm text-gray-500" for="cooldown-filter-search">Search</label>
+          <span class="relative">
             <i class="pi pi-search absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
             <InputText
+              id="cooldown-filter-search"
               v-model="search"
               placeholder="Search by package, version or repo..."
               class="w-full !pl-10"
             />
+          </span>
+        </div>
+        <div class="flex flex-col gap-1">
+          <label class="text-sm text-gray-500" for="cooldown-filter-repo">Repository</label>
+          <Select
+            id="cooldown-filter-repo"
+            v-model="repoFilter"
+            :options="repoOptions"
+            option-label="label"
+            option-value="value"
+            placeholder="All repos"
+            class="w-48"
+          />
+        </div>
+        <div class="flex flex-col gap-1">
+          <label class="text-sm text-gray-500" for="cooldown-filter-type">Type</label>
+          <Select
+            id="cooldown-filter-type"
+            v-model="typeFilter"
+            :options="typeOptions"
+            option-label="label"
+            option-value="value"
+            placeholder="All types"
+            class="w-40"
+          />
+        </div>
+        <SelectButton
+          v-if="canReadHistory"
+          v-model="mode"
+          :options="[
+            { label: 'Active', value: 'active' },
+            { label: 'History', value: 'history' },
+          ]"
+          option-label="label"
+          option-value="value"
+          :allow-empty="false"
+          aria-label="Toggle active vs. history view"
+        />
+      </div>
+
+      <Card class="shadow-sm">
+        <template #title>
+          <div class="flex items-center gap-2">
+            <span>Cooldown-Enabled Repositories</span>
+            <span class="text-sm font-normal text-gray-500">
+              ({{ filteredRepos.length }} of {{ repos.length }})
+            </span>
           </div>
+        </template>
+        <template #content>
+          <div
+            v-if="repos.length === 0"
+            class="text-center text-gray-400 py-4"
+          >
+            No cooldown-enabled repositories
+          </div>
+          <div
+            v-else-if="filteredRepos.length === 0"
+            class="text-sm text-gray-500 py-2"
+          >
+            No repositories match current filters.
+          </div>
+          <div
+            v-else
+            class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3"
+          >
+            <div
+              v-for="repo in pagedRepos"
+              :key="repo.name"
+              class="border border-surface-200 dark:border-surface-700 rounded-lg p-3 flex flex-col gap-2 bg-surface-card"
+              data-testid="cooldown-repo-tile"
+            >
+              <div class="flex items-center gap-2 min-w-0">
+                <span
+                  class="font-semibold truncate text-color"
+                  :title="repo.name"
+                >
+                  {{ repo.name }}
+                </span>
+              </div>
+              <div class="flex items-center gap-2 min-w-0">
+                <RepoTypeBadge :type="repo.type" />
+              </div>
+              <div class="flex items-center justify-between mt-1">
+                <span class="text-xs text-gray-500">
+                  {{ repo.cooldown }} &middot; {{ repo.active_blocks ?? 0 }} active
+                </span>
+                <Button
+                  v-if="(repo.active_blocks ?? 0) > 0 && canWrite"
+                  v-tooltip="'Unblock all'"
+                  icon="pi pi-eraser"
+                  severity="danger"
+                  text
+                  rounded
+                  size="small"
+                  :aria-label="`Unblock all ${repo.active_blocks} blocks in ${repo.name}`"
+                  @click="confirmUnblockAll(repo)"
+                />
+              </div>
+            </div>
+          </div>
+          <Paginator
+            v-if="filteredRepos.length > repoPageSize"
+            v-model:first="repoPaginatorFirst"
+            :rows="repoPageSize"
+            :total-records="filteredRepos.length"
+            class="mt-3"
+          />
+        </template>
+      </Card>
+
+      <Dialog v-model:visible="unblockAllVisible" header="Confirm Unblock All" modal class="w-96">
+        <p>
+          Unblock all active artifacts in
+          <strong>{{ unblockAllTarget }}</strong>? This cannot be undone.
+        </p>
+        <template #footer>
+          <Button label="Cancel" severity="secondary" text @click="rejectUnblockAll" />
+          <Button label="Unblock all" severity="danger" @click="acceptUnblockAll" />
+        </template>
+      </Dialog>
+
+      <Card class="shadow-sm">
+        <template #title>
+          <div class="flex items-center justify-between">
+            <span>{{ mode === 'active' ? 'Blocked Artifacts' : 'Cooldown history' }}</span>
+            <span class="text-sm font-normal text-gray-400">{{ blockedTotal }} total</span>
+          </div>
+        </template>
+        <template #content>
           <DataTable
             :value="blocked"
             :loading="loading"
@@ -191,9 +431,21 @@ onMounted(() => {
             :sortOrder="sortOrder"
             @sort="onSort"
           >
-            <Column field="package_name" header="Package" sortable />
-            <Column field="version" header="Version" sortable />
-            <Column field="repo" header="Repository" sortable />
+            <Column field="package_name" header="Package" sortable>
+              <template #body="{ data }">
+                <span class="break-all whitespace-normal">{{ data.package_name }}</span>
+              </template>
+            </Column>
+            <Column field="version" header="Version" sortable>
+              <template #body="{ data }">
+                <span :title="data.version">{{ formatVersion(data.version) }}</span>
+              </template>
+            </Column>
+            <Column field="repo" header="Repository" sortable>
+              <template #body="{ data }">
+                <span class="break-all whitespace-normal">{{ data.repo }}</span>
+              </template>
+            </Column>
             <Column field="repo_type" header="Type" sortable>
               <template #body="{ data }">
                 <RepoTypeBadge :type="data.repo_type" />
@@ -204,12 +456,32 @@ onMounted(() => {
                 <Tag :value="data.reason" severity="info" />
               </template>
             </Column>
-            <Column field="remaining_hours" header="Remaining" sortable>
+            <Column field="release_date" header="Release Date" sortable>
+              <template #body="{ data }">
+                <span v-if="data.release_date">{{ new Date(data.release_date).toLocaleDateString() }}</span>
+                <span v-else class="text-gray-400">&mdash;</span>
+              </template>
+            </Column>
+            <Column
+              v-if="mode === 'active'"
+              field="blocked_date"
+              header="Blocked at"
+              sortable
+            />
+            <Column
+              v-if="mode === 'active'"
+              field="remaining_hours"
+              header="Remaining"
+              sortable
+            >
               <template #body="{ data }">
                 <span>{{ formatRemaining(data.blocked_until) }}</span>
               </template>
             </Column>
-            <Column v-if="canWrite" header="" class="w-16">
+            <Column
+              v-if="mode === 'active' && canWrite"
+              header="Actions"
+            >
               <template #body="{ data }">
                 <Button
                   icon="pi pi-unlock"
@@ -221,8 +493,32 @@ onMounted(() => {
                 />
               </template>
             </Column>
+            <Column
+              v-if="mode === 'history'"
+              field="archived_at"
+              header="Unblocked date"
+              sortable
+            />
+            <Column
+              v-if="mode === 'history'"
+              field="archived_by"
+              header="Unblocked by"
+              sortable
+            />
+            <Column
+              v-if="mode === 'history'"
+              field="archive_reason"
+              header="Unblocked reason"
+              sortable
+            >
+              <template #body="{ data }">
+                <Tag :value="data.archive_reason" severity="secondary" />
+              </template>
+            </Column>
             <template #empty>
-              <div class="text-center text-gray-400 py-4">No blocked artifacts</div>
+              <div class="text-center text-gray-400 py-4">
+                {{ mode === 'active' ? 'No blocked artifacts' : 'No archived artifacts' }}
+              </div>
             </template>
           </DataTable>
           <Paginator

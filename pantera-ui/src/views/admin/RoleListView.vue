@@ -157,6 +157,7 @@ const allActionsMap: Record<string, string[]> = {
   api_storage_alias_permissions: ['read', 'create', 'delete'],
   api_search_permissions: ['read', 'write'],
   api_cooldown_permissions: ['read', 'write'],
+  api_cooldown_history_permissions: ['read'],
   adapter_basic_permissions: ['read', 'write', 'delete'],
   docker_repository_permissions: ['pull', 'push', 'overwrite'],
   docker_registry_permissions: ['base', 'catalog'],

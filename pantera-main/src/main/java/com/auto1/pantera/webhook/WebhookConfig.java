@@ -35,8 +35,8 @@ public record WebhookConfig(
      */
     public WebhookConfig {
         Objects.requireNonNull(url, "url");
-        events = events != null ? List.copyOf(events) : List.of();
-        repos = repos != null ? List.copyOf(repos) : List.of();
+        events = events != null ? List.copyOf(events) : List.of(); // NOPMD UnusedAssignment - record compact-ctor: this assigns to the record component, not a stack-local
+        repos = repos != null ? List.copyOf(repos) : List.of(); // NOPMD UnusedAssignment - record compact-ctor: this assigns to the record component, not a stack-local
     }
 
     /**

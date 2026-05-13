@@ -4,10 +4,8 @@ import { search as searchApi } from '@/api/search'
 import { repoTypeIcon, repoTypeColorClass, repoTypeBaseLabel } from '@/utils/repoTypes'
 import RepoTypeBadge from '@/components/common/RepoTypeBadge.vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
-import InputText from 'primevue/inputtext'
 import Button from 'primevue/button'
 import Popover from 'primevue/popover'
-import Tag from 'primevue/tag'
 import Paginator from 'primevue/paginator'
 import type { SearchResult } from '@/types'
 
@@ -158,6 +156,37 @@ function formatSize(bytes: number): string {
   if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MB`
   if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${bytes} B`
+}
+
+function formatUploadedAt(iso?: string | null): string {
+  if (!iso) return ''
+  const ts = Date.parse(iso)
+  if (Number.isNaN(ts)) return ''
+  const diffMs = Date.now() - ts
+  const sec = Math.round(diffMs / 1000)
+  if (sec < 60) return `${sec}s ago`
+  const min = Math.round(sec / 60)
+  if (min < 60) return `${min}m ago`
+  const hr = Math.round(min / 60)
+  if (hr < 48) return `${hr}h ago`
+  const day = Math.round(hr / 24)
+  if (day < 30) return `${day}d ago`
+  const mon = Math.round(day / 30)
+  if (mon < 18) return `${mon}mo ago`
+  return `${Math.round(mon / 12)}y ago`
+}
+
+function formatUploadedAtAbsolute(iso?: string | null): string {
+  if (!iso) return ''
+  const ts = Date.parse(iso)
+  if (Number.isNaN(ts)) return ''
+  return new Date(ts).toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 }
 
 function normalizePath(path: string): string {
@@ -400,6 +429,14 @@ const SORT_OPTIONS = [
                 <span class="text-[10px] font-medium px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-500">{{ item.repo_name }}</span>
                 <span v-if="item.version" class="text-[10px] font-medium px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500">v{{ item.version }}</span>
                 <span class="text-xs text-gray-500">{{ formatSize(item.size) }}</span>
+                <span
+                  v-if="item.created_at"
+                  class="text-xs text-gray-500 inline-flex items-center gap-1"
+                  :title="formatUploadedAtAbsolute(item.created_at)"
+                >
+                  <i class="pi pi-clock text-[10px]" />
+                  {{ formatUploadedAt(item.created_at) }}
+                </span>
               </div>
             </div>
 

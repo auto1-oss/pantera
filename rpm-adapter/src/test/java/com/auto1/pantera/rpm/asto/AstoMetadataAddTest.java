@@ -38,7 +38,6 @@ import org.junit.jupiter.api.Test;
  * Test for {@link AstoMetadataAdd}.
  * @since 1.10
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class AstoMetadataAddTest {
 
     /**

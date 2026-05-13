@@ -30,7 +30,6 @@ import org.testcontainers.containers.BindMode;
  *  it's necessary to create a kubernetes cluster in Docker.
  * @since 0.13
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 @EnabledOnOs({OS.LINUX, OS.MAC})
 final class HelmITCase {
 

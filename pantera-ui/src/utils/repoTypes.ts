@@ -46,7 +46,7 @@ const TECH_MAP: Record<string, TechInfo> = {
   conda:    { label: 'Conda',    icon: 'pi pi-box',    color: '#44A833', bgClass: 'bg-[#44A833]/10', textClass: 'text-[#44A833]' },
   gem:      { label: 'RubyGems', icon: 'pi pi-box',    color: '#CC6699', bgClass: 'bg-[#CC6699]/10', textClass: 'text-[#CC6699]' },
   conan:    { label: 'Conan',    icon: 'pi pi-box',    color: '#6699CB', bgClass: 'bg-[#6699CB]/10', textClass: 'text-[#6699CB]' },
-  hex:      { label: 'Hex',      icon: 'pi pi-box',    color: '#6E4A7E', bgClass: 'bg-[#6E4A7E]/10', textClass: 'text-[#6E4A7E]' },
+  hexpm:    { label: 'Hex',      icon: 'pi pi-box',    color: '#6E4A7E', bgClass: 'bg-[#6E4A7E]/10', textClass: 'text-[#6E4A7E]' },
   php:      { label: 'PHP',      icon: 'pi pi-box',    color: '#777BB4', bgClass: 'bg-[#777BB4]/10', textClass: 'text-[#777BB4]' },
   file:     { label: 'File',     icon: 'pi pi-folder', color: '#8B8B8B', bgClass: 'bg-gray-500/10',  textClass: 'text-gray-400' },
   binary:   { label: 'Binary',   icon: 'pi pi-file',   color: '#6B7280', bgClass: 'bg-gray-500/10',  textClass: 'text-gray-400' },
@@ -127,10 +127,6 @@ export function repoTypeSeverity(raw: string): string {
   return 'secondary'
 }
 
-function capitalize(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1)
-}
-
 /** Filter dropdown options. */
 export const REPO_TYPE_FILTERS = [
   { label: 'All Types', value: null },
@@ -140,13 +136,14 @@ export const REPO_TYPE_FILTERS = [
   { label: 'PyPI',     value: 'pypi' },
   { label: 'Helm',     value: 'helm' },
   { label: 'Go',       value: 'go' },
+  { label: 'Gradle',   value: 'gradle' },
   { label: 'NuGet',    value: 'nuget' },
   { label: 'Debian',   value: 'debian' },
   { label: 'RPM',      value: 'rpm' },
   { label: 'Conda',    value: 'conda' },
   { label: 'RubyGems', value: 'gem' },
   { label: 'Conan',    value: 'conan' },
-  { label: 'Hex',      value: 'hex' },
+  { label: 'Hex',      value: 'hexpm' },
   { label: 'PHP',      value: 'php' },
   { label: 'File',     value: 'file' },
   { label: 'Binary',   value: 'binary' },
@@ -166,7 +163,12 @@ export const REPO_TYPE_CREATE_OPTIONS = [
   { label: 'PyPI (Local)',     value: 'pypi' },
   { label: 'PyPI (Proxy)',     value: 'pypi-proxy' },
   { label: 'PyPI (Group)',     value: 'pypi-group' },
-  { label: 'Go (Proxy)',       value: 'go-proxy' },
+  { label: 'Go (Local)',        value: 'go' },
+  { label: 'Go (Proxy)',        value: 'go-proxy' },
+  { label: 'Go (Group)',        value: 'go-group' },
+  { label: 'Gradle (Local)',    value: 'gradle' },
+  { label: 'Gradle (Proxy)',    value: 'gradle-proxy' },
+  { label: 'Gradle (Group)',    value: 'gradle-group' },
   { label: 'Helm (Local)',     value: 'helm' },
   { label: 'NuGet (Local)',    value: 'nuget' },
   { label: 'Debian (Local)',   value: 'deb' },
@@ -174,9 +176,10 @@ export const REPO_TYPE_CREATE_OPTIONS = [
   { label: 'Conda (Local)',    value: 'conda' },
   { label: 'RubyGems (Local)', value: 'gem' },
   { label: 'Conan (Local)',    value: 'conan' },
-  { label: 'Hex (Local)',      value: 'hex' },
+  { label: 'Hex (Local)',      value: 'hexpm' },
   { label: 'PHP (Local)',      value: 'php' },
   { label: 'PHP (Proxy)',      value: 'php-proxy' },
+  { label: 'PHP (Group)',      value: 'php-group' },
   { label: 'File (Local)',     value: 'file' },
   { label: 'File (Proxy)',     value: 'file-proxy' },
   { label: 'File (Group)',     value: 'file-group' },

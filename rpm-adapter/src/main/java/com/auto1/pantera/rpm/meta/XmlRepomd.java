@@ -27,7 +27,6 @@ import javax.xml.stream.XMLStreamWriter;
  * </p>
  * @since 0.6
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class XmlRepomd implements Closeable {
 
     /**

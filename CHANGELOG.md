@@ -1,5 +1,61 @@
 # Changelog
 
+## Version 2.2.0
+
+### ⚠️ Breaking changes
+
+- **Sequential-only group resolution.** Members are tried in declared order; the first 2xx response wins, and remaining members are consulted only on 404. The `members_strategy: parallel|sequential` YAML key is parsed and ignored with a one-time WARN. Order `members:` lists with the most-likely-to-have-the-artifact entry first (typically hosted before proxy).
+  ([@aydasraf](https://github.com/aydasraf))
+- **No metadata union-merge across group members.** `maven-metadata.xml` and `packages.json` group lookups now return the first member's 200 response verbatim. Configs that need union semantics should split into multiple group repos.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Speculative prefetch removed.** The dependency-prefetch subsystem and its admin surface are gone. The prefetch admin UI panel, the `GET /api/v1/repositories/{name}/prefetch/stats` REST endpoint, and every `prefetch.*` runtime setting are removed; a database migration drops any persisted prefetch settings rows.
+  ([@aydasraf](https://github.com/aydasraf))
+
+### 🌟 New features
+
+- **DB-backed publish-date registry** replaces per-adapter cooldown inspectors. Built-in upstream sources cover Maven Central, npm, PyPI, Go modules, Packagist, and RubyGems.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Outbound-traffic observability.** Per-upstream-host request counts, error counts, and the outbound/inbound amplification ratio are exported as Prometheus metrics. Recording rules and Grafana-compatible alert definitions ship under `pantera-main/docker-compose/prometheus/rules/`.
+  ([@aydasraf](https://github.com/aydasraf))
+- **CI perf-gate workflow** validates every PR touching proxy / cache code against three invariants: zero upstream 429s, no sustained rate-limit gate closures, amplification ratio at or below 1.5.
+  ([@aydasraf](https://github.com/aydasraf))
+
+### ⚡ Performance
+
+- **HTTP/2 over TLS for upstream proxy traffic**, ALPN-negotiated with HTTP/1.1 fallback. Pool size and stream-multiplexing limits are runtime-tunable.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Per-host outbound rate limit and 429 back-off.** A token-bucket governor caps the rate at which Pantera issues upstream requests. Defaults are conservative (Maven Central 20 req/s, npm public registry 30 req/s) and configurable per host. On an upstream 429 or 503-with-`Retry-After`, Pantera holds back outbound traffic for that host until the deadline passes and propagates the same `Retry-After` to the calling client.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Single-flight coalescing on cache-miss.** Concurrent client requests for the same uncached artifact share one upstream fetch instead of firing independent calls.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Stream-through cache writes.** The client receives the first byte as upstream emits it; integrity verification runs on stream completion before the cache commits.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Maven proxy fetches only `.sha1` alongside the primary** on cache-miss. `.md5`, `.sha256`, and `.sha512` are proxied on demand only.
+  ([@aydasraf](https://github.com/aydasraf))
+- **First-fetch cooldown HEAD against Maven Central is opt-in.** Publish-date is populated from the primary GET's `Last-Modified` header; set `PANTERA_PUBLISH_DATE_HEAD_FALLBACK_ENABLED=true` to restore the pre-2.2.0 behaviour.
+  ([@aydasraf](https://github.com/aydasraf))
+
+### 🔧 Bug fixes
+
+- **Upstream non-2xx responses propagate with correct status.** 429 (with `Retry-After`), 401, 403, and 503-with-`Retry-After` are no longer collapsed to 404. Transient 5xx no longer pollutes the artifact index cache, so a brief upstream outage does not produce long-lived false negatives.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Group resolver falls through only on genuine 404s.** Transient member errors (5xx, timeouts) retry the next member instead of stopping the walk.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Cooldown unblock invalidates the metadata cache** so re-enabled `(artifact, version)` pairs are immediately visible to clients.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Vert.x temporary cache directories are swept at startup.** Pantera now cleans up stale per-PID `tmp-<uuid>` directories older than one hour before booting, preventing slow accumulation on long-lived hosts.
+  ([@aydasraf](https://github.com/aydasraf))
+
+### 🔒 Security
+
+- **RS256 JWT migration completed.** Every token-validation path requires RS256; HS256 fallback paths removed.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Authentication-policy settings are server-enforced**, not just UI-displayed. `api_token_max_ttl_seconds` and `api_token_allow_permanent` round-trip through the admin settings API and are honoured at token-mint time.
+  ([@aydasraf](https://github.com/aydasraf))
+
+---
+
+
 ## Version 2.1.4 (Hotfix)
 
 ### 🔧 Bug fixes

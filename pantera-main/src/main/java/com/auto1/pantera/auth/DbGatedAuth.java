@@ -88,10 +88,7 @@ public final class DbGatedAuth implements Authentication {
 
     @Override
     public boolean canHandle(final String username) {
-        if (!this.cache.isEnabled(this.type)) {
-            return false;
-        }
-        return this.inner.canHandle(username);
+        return this.cache.isEnabled(this.type) && this.inner.canHandle(username);
     }
 
     @Override
@@ -101,10 +98,7 @@ public final class DbGatedAuth implements Authentication {
 
     @Override
     public boolean isAuthoritative(final String username) {
-        if (!this.cache.isEnabled(this.type)) {
-            return false;
-        }
-        return this.inner.isAuthoritative(username);
+        return this.cache.isEnabled(this.type) && this.inner.isAuthoritative(username);
     }
 
     @Override

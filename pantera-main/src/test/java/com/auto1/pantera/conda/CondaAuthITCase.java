@@ -29,7 +29,6 @@ import org.junit.jupiter.api.extension.RegisterExtension;
  * @since 0.23
  */
 @EnabledOnOs({OS.LINUX, OS.MAC})
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class CondaAuthITCase {
 
     /**

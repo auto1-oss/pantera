@@ -23,7 +23,6 @@ import org.llorllale.cactoos.matchers.Satisfies;
  * Test for {@link RepoConfig.FromYaml}.
  * @since 0.10
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class RepoConfigFromYamlTest {
 
     @Test

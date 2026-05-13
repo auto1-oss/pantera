@@ -13,6 +13,8 @@ package com.auto1.pantera.http.log;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.observability.UserAgentParser;
+import java.util.Locale;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.ThreadContext;
 import org.apache.logging.log4j.message.MapMessage;
@@ -133,30 +135,32 @@ public final class EcsLogEvent {
      * @return this
      */
     public EcsLogEvent userAgent(final Headers headers) {
-        for (Header h : headers.find("user-agent")) {
-            final String original = h.getValue();
+        final java.util.Iterator<Header> iter = headers.find("user-agent").iterator();
+        if (iter.hasNext()) {
+            final String original = iter.next().getValue();
             if (original != null && !original.isEmpty()) {
                 fields.put("user_agent.original", original);
 
-                // Parse user agent (basic parsing - can be enhanced with ua-parser library)
-                final UserAgentInfo info = parseUserAgent(original);
-                if (info.name != null) {
-                    fields.put("user_agent.name", info.name);
+                // Delegates to UserAgentParser (WI-post-03b re-lifted the parser
+                // into pantera-core.observability so StructuredLogger.access
+                // can reuse the same shape without coupling back to this class).
+                final UserAgentParser.UserAgentInfo info = UserAgentParser.parse(original);
+                if (info.name() != null) {
+                    fields.put("user_agent.name", info.name());
                 }
-                if (info.version != null) {
-                    fields.put("user_agent.version", info.version);
+                if (info.version() != null) {
+                    fields.put("user_agent.version", info.version());
                 }
-                if (info.osName != null) {
-                    fields.put("user_agent.os.name", info.osName);
-                    if (info.osVersion != null) {
-                        fields.put("user_agent.os.version", info.osVersion);
+                if (info.osName() != null) {
+                    fields.put("user_agent.os.name", info.osName());
+                    if (info.osVersion() != null) {
+                        fields.put("user_agent.os.version", info.osVersion());
                     }
                 }
-                if (info.deviceName != null) {
-                    fields.put("user_agent.device.name", info.deviceName);
+                if (info.deviceName() != null) {
+                    fields.put("user_agent.device.name", info.deviceName());
                 }
             }
-            break;
         }
         return this;
     }
@@ -271,11 +275,17 @@ public final class EcsLogEvent {
      * field in the Elasticsearch document. When ThreadContext does not have that
      * key, the field value is kept so it still reaches the JSON output.
      *
-     * <p>Strategy to reduce log volume:
+     * <p>Strategy to reduce log volume (v2.1.4 WI-00):
      * <ul>
-     *   <li>ERROR (>= 500): Always log at ERROR level</li>
-     *   <li>WARN (>= 400 or slow >5s): Log at WARN level</li>
-     *   <li>SUCCESS (< 400): Log at DEBUG level (production: disabled)</li>
+     *   <li>ERROR ({@code >= 500}): ERROR level</li>
+     *   <li>404 / 401 / 403 (client-driven): INFO — these are normal client probes
+     *       (Maven HEAD probes, unauthenticated health-checks, per-client auth
+     *       retries) and were responsible for ~95% of the access-log WARN noise
+     *       in production (forensic §1.7 F2.1–F2.2).</li>
+     *   <li>Other 4xx ({@code 400-499} except 401/403/404): WARN</li>
+     *   <li>Slow request ({@code durationMs > 5000}): WARN</li>
+     *   <li>{@code failureOutcome == true}: WARN</li>
+     *   <li>default: DEBUG (production: disabled)</li>
      * </ul>
      */
     public void log() {
@@ -313,11 +323,16 @@ public final class EcsLogEvent {
         // The ECS top-level "message" string is produced from this entry by EcsLayout.
         payload.put("message", effectiveMessage);
 
-        @SuppressWarnings({"rawtypes", "unchecked"})
-        final MapMessage mapMessage = new MapMessage(payload);
+        final MapMessage<?, Object> mapMessage = new MapMessage<>(payload);
 
         if (statusCode != null && statusCode >= 500) {
             LOGGER.error(mapMessage);
+        } else if (statusCode != null
+            && (statusCode == 404 || statusCode == 401 || statusCode == 403)) {
+            // Client-driven 4xx are normal probes (Maven HEAD, unauthenticated
+            // health checks, auth retries). Emit at INFO to collapse the 95%
+            // log-WARN flood observed in production (§1.7 F2.1–F2.2).
+            LOGGER.info(mapMessage);
         } else if (statusCode != null && statusCode >= 400) {
             LOGGER.warn(mapMessage);
         } else if (durationMs > SLOW_REQUEST_THRESHOLD_MS) {
@@ -409,7 +424,7 @@ public final class EcsLogEvent {
     public static Optional<String> extractUsername(final Headers headers) {
         for (Header h : headers.find("authorization")) {
             final String value = h.getValue();
-            if (value != null && value.toLowerCase().startsWith("basic ")) {
+            if (value != null && value.toLowerCase(Locale.ROOT).startsWith("basic ")) {
                 try {
                     final String decoded = new String(
                         java.util.Base64.getDecoder().decode(value.substring(6))
@@ -418,7 +433,7 @@ public final class EcsLogEvent {
                     if (colon > 0) {
                         return Optional.of(decoded.substring(0, colon));
                     }
-                } catch (IllegalArgumentException e) {
+                } catch (IllegalArgumentException e) { // NOPMD EmptyCatchBlock - intentional: invalid Base64 is treated as no extractable username; falls through to Optional.empty()
                     // Invalid base64, ignore
                 }
             }
@@ -426,99 +441,4 @@ public final class EcsLogEvent {
         return Optional.empty();
     }
 
-    /**
-     * Parse user agent string into ECS components.
-     */
-    private static UserAgentInfo parseUserAgent(final String ua) {
-        final UserAgentInfo info = new UserAgentInfo();
-
-        if (ua == null || ua.isEmpty()) {
-            return info;
-        }
-
-        if (ua.startsWith("Maven/")) {
-            info.name = "Maven";
-            extractVersion(ua, "Maven/", info);
-        } else if (ua.startsWith("npm/")) {
-            info.name = "npm";
-            extractVersion(ua, "npm/", info);
-        } else if (ua.startsWith("pip/")) {
-            info.name = "pip";
-            extractVersion(ua, "pip/", info);
-        } else if (ua.contains("Docker-Client/")) {
-            info.name = "Docker";
-            extractVersion(ua, "Docker-Client/", info);
-        } else if (ua.startsWith("Go-http-client/")) {
-            info.name = "Go";
-            extractVersion(ua, "Go-http-client/", info);
-        } else if (ua.startsWith("Gradle/")) {
-            info.name = "Gradle";
-            extractVersion(ua, "Gradle/", info);
-        } else if (ua.contains("Composer/")) {
-            info.name = "Composer";
-            extractVersion(ua, "Composer/", info);
-        } else if (ua.startsWith("NuGet")) {
-            info.name = "NuGet";
-            if (ua.contains("/")) {
-                extractVersion(ua, "NuGet Command Line/", info);
-            }
-        } else if (ua.contains("curl/")) {
-            info.name = "curl";
-            extractVersion(ua, "curl/", info);
-        } else if (ua.contains("wget/")) {
-            info.name = "wget";
-            extractVersion(ua, "wget/", info);
-        }
-
-        if (ua.contains("Linux")) {
-            info.osName = "Linux";
-        } else if (ua.contains("Windows")) {
-            info.osName = "Windows";
-        } else if (ua.contains("Mac OS X") || ua.contains("Darwin")) {
-            info.osName = "macOS";
-        } else if (ua.contains("FreeBSD")) {
-            info.osName = "FreeBSD";
-        }
-
-        if (ua.contains("Java/")) {
-            final int start = ua.indexOf("Java/") + 5;
-            final int end = findVersionEnd(ua, start);
-            if (end > start) {
-                info.osVersion = ua.substring(start, end);
-            }
-        }
-
-        return info;
-    }
-
-    private static void extractVersion(final String ua, final String prefix, final UserAgentInfo info) {
-        final int start = ua.indexOf(prefix);
-        if (start >= 0) {
-            final int versionStart = start + prefix.length();
-            final int versionEnd = findVersionEnd(ua, versionStart);
-            if (versionEnd > versionStart) {
-                info.version = ua.substring(versionStart, versionEnd);
-            }
-        }
-    }
-
-    private static int findVersionEnd(final String ua, final int start) {
-        int end = start;
-        while (end < ua.length()) {
-            final char c = ua.charAt(end);
-            if (c == ' ' || c == ';' || c == '(' || c == ')') {
-                break;
-            }
-            end++;
-        }
-        return end;
-    }
-
-    private static final class UserAgentInfo {
-        String name;
-        String version;
-        String osName;
-        String osVersion;
-        String deviceName;
-    }
 }

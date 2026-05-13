@@ -8,7 +8,6 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 import InputText from 'primevue/inputtext'
 import Select from 'primevue/select'
 import Paginator from 'primevue/paginator'
-import Tag from 'primevue/tag'
 import type { RepoListItem } from '@/types'
 
 const router = useRouter()

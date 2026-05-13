@@ -26,7 +26,6 @@ import org.junit.jupiter.api.Test;
  *
  * @since 0.28.0
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public class MetricsContextTest {
 
     @Test

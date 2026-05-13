@@ -1,0 +1,112 @@
+name: Perf Gate (M3-M4 invariants)
+
+# CI-side enforcement of the M3 + M4 outbound-traffic invariants:
+#   - zero upstream 429s
+#   - zero sustained rate-limit gate-closed events
+#   - amplification ratio ≤ 1.5
+#
+# These mirror the production Grafana alerts shipped in
+# pantera-main/docker-compose/prometheus/rules/amplification.yml.
+#
+# The job boots Pantera with the existing scaling-benchmark docker-compose
+# (WireMock-fronted upstream + Pantera SUT), exercises the cache-miss path
+# from a k6 ramp scenario, then scrapes /metrics/vertx and asserts the
+# invariants via scripts/perf-gate-check.sh.
+
+on:
+  pull_request:
+    branches: [master, 2.2.0]
+    paths:
+      - 'pantera-core/**'
+      - 'pantera-main/**'
+      - 'maven-adapter/**'
+      - 'http-client/**'
+      - 'performance/**'
+      - 'scripts/perf-gate-check.sh'
+      - '.github/workflows/perf-gate.yml'
+
+jobs:
+  perf-gate:
+    runs-on: ubuntu-latest
+    # 30 min upper bound: 10 min build + 10 min stack-up + 5 min ramp + 5 min slack.
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: maven
+
+      - name: Build Pantera image
+        working-directory: performance
+        run: |
+          # Reuses the existing scaling-benchmark Make target which packages
+          # pantera-main and builds the local image — same artifact path
+          # production smoke tests use.
+          make build
+
+      - name: Generate WireMock fixture bodies
+        working-directory: performance
+        run: make setup
+
+      - name: Start Pantera + WireMock stack
+        working-directory: performance
+        run: |
+          docker compose -f docker-compose-scaling.yml up -d pantera wiremock
+          # Wait for Pantera to expose its metrics endpoint.
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:8087/metrics/vertx > /dev/null 2>&1; then
+              echo "Pantera metrics endpoint is up"
+              break
+            fi
+            sleep 2
+          done
+          # Confirm again or fail loudly.
+          curl -fsS http://localhost:8087/metrics/vertx > /dev/null \
+            || (docker compose -f docker-compose-scaling.yml logs --tail=200 pantera; exit 1)
+
+      - name: Ramp traffic through cold-cache path
+        working-directory: performance
+        env:
+          K6_DURATION: 60s
+          K6_VUS: 20
+        run: |
+          # The k6 scenario hits the proxy group's cold-cache path so the
+          # outbound counters increment. Use a short ramp (60 s, 20 VUs) —
+          # we are not measuring throughput here, only verifying the
+          # observability invariants. The full scaling matrix runs nightly.
+          docker compose -f docker-compose-scaling.yml run --rm \
+            -e K6_DURATION=${K6_DURATION} -e K6_VUS=${K6_VUS} \
+            k6 run /scenarios/scenario.js || true
+
+      - name: Run perf-gate check
+        run: |
+          chmod +x scripts/perf-gate-check.sh
+          scripts/perf-gate-check.sh http://localhost:8087/metrics/vertx
+
+      - name: Collect logs on failure
+        if: failure()
+        working-directory: performance
+        run: |
+          docker compose -f docker-compose-scaling.yml logs --tail=300 pantera > /tmp/pantera.log || true
+          docker compose -f docker-compose-scaling.yml logs --tail=300 wiremock > /tmp/wiremock.log || true
+
+      - name: Upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-gate-diagnostics
+          path: |
+            /tmp/pantera.log
+            /tmp/wiremock.log
+          retention-days: 14
+
+      - name: Tear down
+        if: always()
+        working-directory: performance
+        run: docker compose -f docker-compose-scaling.yml down -v

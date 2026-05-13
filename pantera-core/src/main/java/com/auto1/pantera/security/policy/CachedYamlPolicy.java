@@ -105,7 +105,6 @@ import java.time.Duration;
  * }</pre>
  * @since 1.2
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class CachedYamlPolicy implements Policy<UserPermissions>, Cleanable<String> {
 
     /**
@@ -360,10 +359,6 @@ public final class CachedYamlPolicy implements Policy<UserPermissions>, Cleanabl
      * User from storage.
      * @since 1.2
      */
-    @SuppressWarnings({
-        "PMD.AvoidFieldNameMatchingMethodName",
-        "PMD.ConstructorOnlyInitializesOrCallOtherConstructors"
-    })
     public static final class AstoUser implements User {
 
         /**

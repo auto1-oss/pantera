@@ -11,7 +11,8 @@
 package com.auto1.pantera.cooldown;
 
 import com.amihaiemil.eoyaml.YamlMapping;
-import com.auto1.pantera.cooldown.CooldownSettings.RepoTypeConfig;
+import com.auto1.pantera.cooldown.config.CooldownSettings;
+import com.auto1.pantera.cooldown.config.CooldownSettings.RepoTypeConfig;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Locale;
@@ -70,7 +71,7 @@ public final class YamlCooldownSettings {
         final YamlMapping repoTypes = node.yamlMapping(KEY_REPO_TYPES);
         if (repoTypes != null) {
             for (final var entry : repoTypes.keys()) {
-                final String repoType = entry.asScalar().value().toLowerCase();
+                final String repoType = entry.asScalar().value().toLowerCase(Locale.ROOT);
                 final YamlMapping repoConfig = repoTypes.yamlMapping(entry.asScalar().value());
                 if (repoConfig != null) {
                     final boolean repoEnabled = parseBool(

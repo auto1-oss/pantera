@@ -75,7 +75,7 @@ public final class DownloadPackageSlice implements Slice {
         
         // Additional guard: If package name is empty, return 404
         // This prevents "Empty parts are not allowed" error
-        if (pkg == null || pkg.isEmpty() || pkg.equals("/") || pkg.trim().isEmpty()) {
+        if (pkg == null || pkg.isEmpty() || "/".equals(pkg) || pkg.trim().isEmpty()) {
             // Consume request body to prevent Vert.x request leak, then return 404
             return body.asBytesFuture().thenApply(ignored ->
                 ResponseBuilder.notFound().build()

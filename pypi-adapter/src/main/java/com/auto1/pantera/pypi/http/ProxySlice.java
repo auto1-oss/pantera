@@ -18,11 +18,11 @@ import com.auto1.pantera.asto.cache.Cache;
 import com.auto1.pantera.asto.cache.CacheControl;
 import com.auto1.pantera.asto.cache.FromStorageCache;
 import com.auto1.pantera.asto.cache.Remote;
-import com.auto1.pantera.asto.blocking.BlockingStorage;
 import com.auto1.pantera.asto.ext.KeyLastPart;
-import com.auto1.pantera.cooldown.CooldownRequest;
-import com.auto1.pantera.cooldown.CooldownResponses;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
+import com.auto1.pantera.cooldown.api.CooldownRequest;
+import com.auto1.pantera.cooldown.response.CooldownResponseRegistry;
+import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.ResponseBuilder;
@@ -36,8 +36,11 @@ import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.KeyFromPath;
 import com.auto1.pantera.pypi.NormalizedProjectName;
+import com.auto1.pantera.pypi.cooldown.PypiJsonHandler;
+import com.auto1.pantera.pypi.cooldown.PypiSimpleHandler;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import java.util.Locale;
 
 import java.io.IOException;
 import java.net.URI;
@@ -128,11 +131,6 @@ final class ProxySlice implements Slice {
     private final Optional<Queue<ProxyArtifactEvent>> events;
 
     /**
-     * Repository storage (blocking).
-     */
-    private final BlockingStorage storage;
-
-    /**
      * Repository storage (async) for cache-first lookup.
      */
     private final Storage asyncStorage;
@@ -155,7 +153,7 @@ final class ProxySlice implements Slice {
     /**
      * Cooldown inspector.
      */
-    private final PyProxyCooldownInspector inspector;
+    private final CooldownInspector inspector;
 
     /**
      * Mirror map repository path -> upstream URI.
@@ -184,6 +182,26 @@ final class ProxySlice implements Slice {
     private final com.github.benmanes.caffeine.cache.Cache<String, String> lastModifiedCache;
 
     /**
+     * {@code /simple/<pkg>/} cooldown handler. Filters blocked versions
+     * out of PEP 503 HTML (or PEP 691 JSON) Simple Index responses.
+     *
+     * <p>Before this wiring the registered {@code PypiMetadataFilter}
+     * bundle was dead infrastructure — the proxy's {@link #serveNonArtifact}
+     * path never invoked {@code MetadataFilterService.filterMetadata}
+     * (exactly the same failure mode Go had before commit
+     * {@code 1eb53ceb}). This handler is where that trio now runs.</p>
+     */
+    private final PypiSimpleHandler simpleHandler;
+
+    /**
+     * {@code /pypi/<pkg>/json} cooldown handler. Closes the unbounded
+     * resolution gap on the JSON API surface — tools like poetry and
+     * pip-tools resolve {@code pip install foo} via this endpoint, and
+     * without filtering a blocked version would leak to the client.
+     */
+    private final PypiJsonHandler jsonHandler;
+
+    /**
      * Ctor with default 12h metadata TTL.
      * @param clients HTTP clients
      * @param auth Authenticator
@@ -202,9 +220,10 @@ final class ProxySlice implements Slice {
         final String rname,
         final String rtype,
         final CooldownService cooldown,
-        final PyProxyCooldownInspector inspector) {
+        final CooldownInspector inspector,
+        final Slice jsonApiUpstream) {
         this(clients, auth, origin, backend, cache, events, rname, rtype,
-            cooldown, inspector, CacheTimeControl.DEFAULT_TTL);
+            cooldown, inspector, jsonApiUpstream, CacheTimeControl.DEFAULT_TTL);
     }
 
     /**
@@ -219,6 +238,9 @@ final class ProxySlice implements Slice {
      * @param rtype Repository type
      * @param cooldown Cooldown service
      * @param inspector Cooldown inspector
+     * @param jsonApiUpstream Direct upstream slice for /pypi/{pkg}/{ver}/json
+     *  (used by PypiJsonHandler to filter blocked versions out of PyPI's JSON
+     *  metadata response — typically pypi.org regardless of the Simple-API mirror)
      * @param metadataTtl TTL for index page cache
      */
     ProxySlice(final ClientSlices clients, final Authenticator auth,
@@ -227,7 +249,8 @@ final class ProxySlice implements Slice {
         final String rname,
         final String rtype,
         final CooldownService cooldown,
-        final PyProxyCooldownInspector inspector,
+        final CooldownInspector inspector,
+        final Slice jsonApiUpstream,
         final Duration metadataTtl) {
         this.origin = origin;
         this.clients = clients;
@@ -242,7 +265,6 @@ final class ProxySlice implements Slice {
             .maximumSize(10_000)
             .expireAfterWrite(Duration.ofHours(1))
             .build();
-        this.storage = new BlockingStorage(backend);
         this.asyncStorage = backend;
         this.indexCacheControl = new CacheTimeControl(backend, metadataTtl);
         this.refreshing = ConcurrentHashMap.newKeySet();
@@ -250,6 +272,22 @@ final class ProxySlice implements Slice {
             .maximumSize(10_000)
             .expireAfterWrite(Duration.ofHours(24))
             .build();
+        // Cooldown handlers. The Simple handler consumes the proxy's
+        // own post-processing flow (URL rewriting happens inside
+        // serveNonArtifact before filtering) so /simple/ links point
+        // at the proxy path, not upstream CDNs. The JSON handler goes
+        // directly to the separate PyPI JSON API slice the inspector
+        // already owns — it has no URL-rewriting dependency for the
+        // filter to be useful.
+        final Slice simpleUpstream = (simpleLine, simpleHeaders, simpleBody) ->
+            this.serveNonArtifact(simpleLine, simpleHeaders, simpleBody,
+                new Login(simpleHeaders).getValue());
+        this.simpleHandler = new PypiSimpleHandler(
+            simpleUpstream, cooldown, inspector, rtype, rname
+        );
+        this.jsonHandler = new PypiJsonHandler(
+            jsonApiUpstream, cooldown, inspector, rtype, rname
+        );
     }
 
     @Override
@@ -259,11 +297,37 @@ final class ProxySlice implements Slice {
         final Optional<ArtifactCoordinates> coords = this.extract(line);
         final String user = new Login(rqheaders).getValue();
 
+        // Cooldown metadata handlers run ahead of the artifact /
+        // non-artifact split so blocked versions never leak into pip's
+        // resolver view. Matches the Go adapter dispatch pattern
+        // established in commit 1eb53ceb.
+        final String path = line.uri().getPath();
+        if (this.jsonHandler != null && this.jsonHandler.matches(path)) {
+            EcsLogger.debug("com.auto1.pantera.pypi")
+                .message("Dispatching /pypi/<pkg>/json to cooldown JSON handler")
+                .eventCategory("web")
+                .eventAction("proxy_request")
+                .field("url.path", path)
+                .field("repository.name", this.rname)
+                .log();
+            return this.jsonHandler.handle(line, user);
+        }
+        if (coords.isEmpty() && this.simpleHandler.matches(path)) {
+            EcsLogger.debug("com.auto1.pantera.pypi")
+                .message("Dispatching /simple/<pkg>/ to cooldown Simple handler")
+                .eventCategory("web")
+                .eventAction("proxy_request")
+                .field("url.path", path)
+                .field("repository.name", this.rname)
+                .log();
+            return this.simpleHandler.handle(line, user);
+        }
+
         // For artifacts: CRITICAL FIX - Check cache FIRST before any network calls
         // This ensures offline mode works - serve cached content even when upstream is down
         if (coords.isPresent()) {
             final ArtifactCoordinates info = coords.get();
-            return this.checkCacheFirst(line, rqheaders, info, user);
+            return this.checkCacheFirst(line, info, user);
         }
 
         // Non-artifacts (index pages, metadata): serve directly from cache/upstream
@@ -282,7 +346,6 @@ final class ProxySlice implements Slice {
      */
     private CompletableFuture<Response> checkCacheFirst(
         final RequestLine line,
-        final Headers rqheaders,
         final ArtifactCoordinates info,
         final String user
     ) {
@@ -302,20 +365,24 @@ final class ProxySlice implements Slice {
                         .field("package.name", info.artifact())
                         .field("package.version", info.version())
                         .log();
-                    // Enqueue event for cache hit
-                    this.events.ifPresent(queue ->
-                        queue.add(new ProxyArtifactEvent(
+                    // Enqueue event for cache hit — bounded ProxyArtifactEvent queue.
+                    // offer() + drop counter so a full queue cannot cascade to 503.
+                    this.events.ifPresent(queue -> {
+                        if (!queue.offer(new ProxyArtifactEvent(
                             key,
                             this.rname,
                             user,
                             Optional.empty()
-                        ))
-                    );
+                        ))) {
+                            com.auto1.pantera.metrics.EventsQueueMetrics
+                                .recordDropped(this.rname);
+                        }
+                    });
                     // Serve cached content
-                    return this.serveArtifactContent(line, key, cached.get(), Headers.EMPTY);
+                    return this.serveArtifactContent(line, cached.get(), Headers.EMPTY);
                 }
                 // Cache MISS - now we need network, evaluate cooldown first
-                return this.evaluateCooldownAndFetch(line, rqheaders, info, user);
+                return this.evaluateCooldownAndFetch(line, info, user);
             }).toCompletableFuture();
     }
 
@@ -331,7 +398,6 @@ final class ProxySlice implements Slice {
      */
     private CompletableFuture<Response> evaluateCooldownAndFetch(
         final RequestLine line,
-        final Headers rqheaders,
         final ArtifactCoordinates info,
         final String user
     ) {
@@ -364,7 +430,9 @@ final class ProxySlice implements Slice {
                     .field("package.version", info.version())
                     .log();
                 return CompletableFuture.completedFuture(
-                    CooldownResponses.forbidden(evaluation.block().orElseThrow())
+                    CooldownResponseRegistry.instance()
+                        .getOrThrow(this.rtype)
+                        .forbidden(evaluation.block().orElseThrow())
                 );
             }
             EcsLogger.debug("com.auto1.pantera.pypi")
@@ -376,11 +444,10 @@ final class ProxySlice implements Slice {
                 .field("package.version", info.version())
                 .log();
             // Cooldown passed - now serve the artifact (no further cooldown checks)
-            return this.serveArtifact(line, rqheaders, info, user);
+            return this.serveArtifact(line, user);
         });
     }
     
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private CompletableFuture<Response> serveNonArtifact(
         final RequestLine line, final Headers rqheaders, final Content body, final String user
     ) {
@@ -395,7 +462,7 @@ final class ProxySlice implements Slice {
                 return this.indexCacheControl.validate(key, Remote.EMPTY).thenCompose(fresh -> {
                     if (!fresh) {
                         // Stale content - serve immediately + background refresh
-                        this.backgroundRefreshIndex(key, line, upstream, user, format);
+                        this.backgroundRefreshIndex(key, line, upstream, format);
                         return this.asyncStorage.value(key).thenCompose(cached ->
                             this.afterHit(line, rqheaders, key, cached, Headers.EMPTY, false)
                         );
@@ -451,12 +518,16 @@ final class ProxySlice implements Slice {
                                             ProxySlice.this.releaseInstant(
                                                 response.headers()
                                             );
-                                        ProxySlice.this.events.ifPresent(queue ->
-                                            queue.add(new ProxyArtifactEvent(
+                                        // Bounded ProxyArtifactEvent queue — offer() + drop counter.
+                                        ProxySlice.this.events.ifPresent(queue -> {
+                                            if (!queue.offer(new ProxyArtifactEvent(
                                                 key, ProxySlice.this.rname, user,
                                                 releaseDate.map(Instant::toEpochMilli)
-                                            ))
-                                        );
+                                            ))) {
+                                                com.auto1.pantera.metrics.EventsQueueMetrics
+                                                    .recordDropped(ProxySlice.this.rname);
+                                            }
+                                        });
                                     });
                                 }
                                 final String path = line.uri().getPath();
@@ -469,9 +540,7 @@ final class ProxySlice implements Slice {
                                 }
                                 return ProxySlice.this.preRewriteContent(
                                     response.body(), response.headers(), line
-                                ).thenApply(
-                                    opt -> (Optional<? extends Content>) opt
-                                );
+                                ).<Optional<? extends Content>>thenApply(opt -> opt);
                             }
                             return CompletableFuture.completedFuture(
                                 Optional.empty()
@@ -555,7 +624,6 @@ final class ProxySlice implements Slice {
      * Pre-rewrite index content at write time.
      * Rewrites URLs once before caching so reads serve pre-rewritten content.
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private CompletableFuture<Optional<Content>> preRewriteContent(
         final Content body, final Headers headers, final RequestLine line
     ) {
@@ -628,10 +696,9 @@ final class ProxySlice implements Slice {
      * Serves stale content immediately while refreshing in background.
      * Uses conditional request (If-Modified-Since) when possible.
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void backgroundRefreshIndex(
         final Key key, final RequestLine line,
-        final RequestLine upstream, final String user, final SimpleApiFormat format
+        final RequestLine upstream, final SimpleApiFormat format
     ) {
         final String keyStr = key.string();
         if (!this.refreshing.add(keyStr)) {
@@ -753,7 +820,7 @@ final class ProxySlice implements Slice {
     }
 
     private CompletableFuture<Response> serveArtifact(
-        final RequestLine line, final Headers rqheaders, final ArtifactCoordinates info, final String user
+        final RequestLine line, final String user
     ) {
         final AtomicReference<Headers> remote = new AtomicReference<>(Headers.EMPTY);
         final AtomicBoolean remoteSuccess = new AtomicBoolean(false);
@@ -815,15 +882,19 @@ final class ProxySlice implements Slice {
                         remote.set(response.headers());
                         if (response.status().success()) {
                             remoteSuccess.set(true);
-                            // Enqueue artifact event immediately on successful remote fetch
-                            ProxySlice.this.events.ifPresent(queue ->
-                                queue.add(new ProxyArtifactEvent(
+                            // Enqueue artifact event immediately on successful remote fetch.
+                            // Bounded ProxyArtifactEvent queue — offer() + drop counter.
+                            ProxySlice.this.events.ifPresent(queue -> {
+                                if (!queue.offer(new ProxyArtifactEvent(
                                     key,
                                     ProxySlice.this.rname,
                                     user,
                                     ProxySlice.this.releaseInstant(response.headers()).map(Instant::toEpochMilli)
-                                ))
-                            );
+                                ))) {
+                                    com.auto1.pantera.metrics.EventsQueueMetrics
+                                        .recordDropped(ProxySlice.this.rname);
+                                }
+                            });
                             return Optional.of(response.body());
                         }
                         return Optional.empty();
@@ -836,25 +907,29 @@ final class ProxySlice implements Slice {
                 if (throwable != null || content.isEmpty()) {
                     return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
                 }
-                // Enqueue event on cache hit (remote fetch already enqueued above)
+                // Enqueue event on cache hit (remote fetch already enqueued above).
+                // Bounded ProxyArtifactEvent queue — offer() + drop counter.
                 if (!remoteSuccess.get()) {
-                    ProxySlice.this.events.ifPresent(queue ->
-                        queue.add(new ProxyArtifactEvent(
+                    ProxySlice.this.events.ifPresent(queue -> {
+                        if (!queue.offer(new ProxyArtifactEvent(
                             key,
                             ProxySlice.this.rname,
                             user,
                             Optional.empty()  // No release date on cache hit
-                        ))
-                    );
+                        ))) {
+                            com.auto1.pantera.metrics.EventsQueueMetrics
+                                .recordDropped(ProxySlice.this.rname);
+                        }
+                    });
                 }
                 // Serve artifact content (cooldown already evaluated and passed)
-                return this.serveArtifactContent(line, key, content.get(), remote.get());
+                return this.serveArtifactContent(line, content.get(), remote.get());
             }
         ).thenCompose(Function.identity()).toCompletableFuture();
     }
     
     private CompletableFuture<Response> serveArtifactContent(
-        final RequestLine line, final Key key, final Content content, final Headers remote
+        final RequestLine line, final Content content, final Headers remote
     ) {
         // Stream content directly without buffering into byte[].
         // StreamThroughCache or FromStorageCache provides Content with size info.
@@ -1032,7 +1107,7 @@ final class ProxySlice implements Slice {
         if (!this.looksLikeHtml(body)) {
             return false;
         }
-        final String lower = body.toLowerCase();
+        final String lower = body.toLowerCase(Locale.ROOT);
         if (lower.contains("<a ") && lower.contains("href=")) {
             return false;
         }
@@ -1060,7 +1135,7 @@ final class ProxySlice implements Slice {
         // Extract base path from request URI, removing the package-specific trailing path.
         // Example: /test_prefix/api/pypi/pypi_group/workday/ -> /test_prefix/api/pypi/pypi_group
         // This ensures download links preserve the correct path prefix for proxy routing.
-        final String base = this.extractBasePath(line);
+        final String base = this.extractBasePath();
         EcsLogger.debug("com.auto1.pantera.pypi")
             .message("Rewriting index body")
             .eventCategory("web")
@@ -1092,11 +1167,10 @@ final class ProxySlice implements Slice {
      * According to PEP 503:
      * - Index pages: /{repo}/simple/{package}/
      * - Download links: /{repo}/packages/{hash}/{filename}
-     * 
-     * @param line Request line (already stripped of prefix by routing layer)
+     *
      * @return Base path (repository name, e.g., "/pypi_group")
      */
-    private String extractBasePath(final RequestLine line) {
+    private String extractBasePath() {
         // ALWAYS use repository name as base.
         // The routing layer handles path prefix mapping, we just need the repo name.
         return String.format("/%s", this.rname);
@@ -1105,17 +1179,17 @@ final class ProxySlice implements Slice {
     private boolean isHtml(final Header header) {
         return header != null
             && header.getValue() != null
-            && header.getValue().toLowerCase().contains("html");
+            && header.getValue().toLowerCase(Locale.ROOT).contains("html");
     }
 
     private boolean isJson(final Header header) {
         return header != null
             && header.getValue() != null
-            && header.getValue().toLowerCase().contains("json");
+            && header.getValue().toLowerCase(Locale.ROOT).contains("json");
     }
 
     private boolean looksLikeHtml(final String body) {
-        final String trimmed = body.trim().toLowerCase();
+        final String trimmed = body.trim().toLowerCase(Locale.ROOT);
         return trimmed.startsWith("<!doctype") || trimmed.startsWith("<html") || trimmed.contains("<a ");
     }
 
@@ -1324,7 +1398,6 @@ final class ProxySlice implements Slice {
             final boolean known = existing.isPresent();
             if (remoteSuccess) {
                 final Optional<Instant> header = this.releaseInstant(remote);
-                this.registerRelease(info, header);
                 return this.inspector.releaseDate(info.artifact(), info.version())
                     .thenApply(updated -> new ReleaseContext(
                         updated.or(() -> header),
@@ -1332,24 +1405,11 @@ final class ProxySlice implements Slice {
                     ));
             }
             if (!known) {
-                this.registerRelease(info, Optional.empty());
                 return this.inspector.releaseDate(info.artifact(), info.version())
                     .thenApply(updated -> new ReleaseContext(updated, false));
             }
             return CompletableFuture.completedFuture(new ReleaseContext(existing, true));
         });
-    }
-
-    private void registerRelease(final ArtifactCoordinates coords, final Optional<Instant> release) {
-        if (release.isPresent()) {
-            this.inspector.register(
-                coords.artifact(),
-                coords.version(),
-                release.get()
-            );
-        } else if (!this.inspector.known(coords.artifact(), coords.version())) {
-            this.inspector.register(coords.artifact(), coords.version(), Instant.EPOCH);
-        }
     }
 
     private Optional<Instant> releaseInstant(final Headers headers) {
@@ -1402,7 +1462,7 @@ final class ProxySlice implements Slice {
     }
 
     private Optional<ArtifactCoordinates> coordinatesFromFilename(final String filename) {
-        final String lower = filename.toLowerCase();
+        final String lower = filename.toLowerCase(Locale.ROOT);
         if (lower.endsWith(".whl")) {
             final int first = filename.indexOf('-');
             if (first > 0 && first < filename.length() - 1) {
@@ -1420,11 +1480,9 @@ final class ProxySlice implements Slice {
             return Optional.of(new ArtifactCoordinates(name, wheel.group("version")));
         }
         final Matcher archive = ARCHIVE_PATTERN.matcher(filename);
-        if (archive.matches()) {
-            if (filename.matches(ProxySlice.FORMATS)) {
-                final String name = new NormalizedProjectName.Simple(archive.group("name")).value();
-                return Optional.of(new ArtifactCoordinates(name, archive.group("version")));
-            }
+        if (archive.matches() && filename.matches(ProxySlice.FORMATS)) {
+            final String name = new NormalizedProjectName.Simple(archive.group("name")).value();
+            return Optional.of(new ArtifactCoordinates(name, archive.group("version")));
         }
         return Optional.empty();
     }

@@ -42,7 +42,6 @@ import javax.json.Json;
  *  is passed. It is necessary to find out why it happens and add
  *  empty prefix to params of method DownloadPackageSliceTest#downloadMetaWorks.
  */
-@SuppressWarnings("PMD.AvoidUsingHardCodedIP")
 final class DownloadPackageSliceTest {
 
     private static final Vertx VERTX = Vertx.vertx();
@@ -82,6 +81,63 @@ final class DownloadPackageSliceTest {
             )
         ) {
             this.pereformRequestAndChecks(pathprefix, server);
+        }
+    }
+
+    /**
+     * {@code GET /<pkg>/latest} must return the version manifest pointed at
+     * by {@code dist-tags.latest} — not the packument and not a 404. This
+     * closes the v1.21.0+ metadata cooldown gap on the dist-tag shortcut
+     * endpoint that older yarn/npm versions hit directly.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"/ctx"})
+    void servesLatestShortcutWithoutCooldown(final String pathprefix) {
+        final Storage storage = new InMemoryStorage();
+        this.saveFilesToStorage(storage);
+        final PackagePath path = new PackagePath(pathprefix.replaceFirst("/", ""));
+        try (
+            VertxSliceServer server = new VertxSliceServer(
+                DownloadPackageSliceTest.VERTX,
+                new DownloadPackageSlice(
+                    new NpmProxy(
+                        storage,
+                        new SliceSimple(ResponseBuilder.notFound().build())
+                    ),
+                    path
+                ),
+                this.port
+            )
+        ) {
+            server.start();
+            final String url = String.format(
+                "http://127.0.0.1:%d%s/@hello/simple-npm-project/latest",
+                this.port, pathprefix
+            );
+            final WebClient client = WebClient.create(DownloadPackageSliceTest.VERTX);
+            final HttpResponse<Buffer> resp = client.getAbs(url).rxSend().blockingGet();
+            MatcherAssert.assertThat(
+                "Status code should be 200 OK",
+                resp.statusCode(),
+                new IsEqual<>(RsStatus.OK.code())
+            );
+            final JsonObject manifest = resp.body().toJsonObject();
+            MatcherAssert.assertThat(
+                "Response body should be the version manifest, not the packument",
+                manifest.getString("version"),
+                new IsEqual<>("1.0.1")
+            );
+            MatcherAssert.assertThat(
+                "Manifest should carry the package name",
+                manifest.getString("name"),
+                new IsEqual<>("@hello/simple-npm-project")
+            );
+            // Must NOT be the packument — packument has a 'versions' object.
+            MatcherAssert.assertThat(
+                "Manifest body must not contain a 'versions' map",
+                manifest.containsKey("versions"),
+                new IsEqual<>(false)
+            );
         }
     }
 

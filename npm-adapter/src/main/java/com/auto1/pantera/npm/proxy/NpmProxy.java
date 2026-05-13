@@ -15,18 +15,22 @@ import com.auto1.pantera.asto.rx.RxStorageWrapper;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.client.ClientSlices;
 import com.auto1.pantera.http.client.UriClientSlice;
-import com.auto1.pantera.http.trace.MdcPropagation;
+import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.npm.proxy.model.NpmAsset;
 import com.auto1.pantera.npm.proxy.model.NpmPackage;
 import com.auto1.pantera.http.log.EcsLogger;
 import io.reactivex.Maybe;
+import io.reactivex.Scheduler;
 import io.reactivex.schedulers.Schedulers;
 import java.io.IOException;
 import java.net.URI;
 import java.time.Duration;
 import java.time.OffsetDateTime;
-import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ForkJoinPool;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
 /**
  * NPM Proxy.
@@ -61,6 +65,64 @@ public class NpmProxy {
      * Prevents duplicate refresh operations for the same package.
      */
     private final ConcurrentHashMap.KeySetView<String, Boolean> refreshing;
+
+    /**
+     * Contextualised RxJava scheduler for background refresh.
+     * Propagates ThreadContext (ECS fields) and APM span automatically,
+     * replacing the per-call MDC capture/restore pattern.
+     */
+    private final Scheduler backgroundScheduler;
+
+    /**
+     * Optional cache-write hook fired after a successful asset save (cache miss
+     * → upstream fetch → persist to storage). Receives the asset path so the
+     * consumer can materialise the freshly-saved bytes (typically into a temp
+     * file) and fire a {@link com.auto1.pantera.http.cache.CacheWriteEvent}.
+     *
+     * <p>Default is a no-op so existing constructors and tests stay unchanged.
+     * Production wiring (see {@code NpmProxyAdapter}) installs a consumer that
+     * bridges to {@link com.auto1.pantera.http.cache.CacheWriteCallbackRegistry}
+     * for prefetch dispatch — mirrors the path
+     * {@code BaseCachedProxySlice} / {@code ProxyCacheWriter} use for the other
+     * proxy adapters.
+     *
+     * <p>Hook is invoked synchronously after {@code storage.save} completes,
+     * before the asset is reloaded for the response. Throws are swallowed by
+     * the consumer per the {@code CacheWriteEvent} contract — never on the
+     * serve path.</p>
+     */
+    private final Consumer<String> cacheWriteHook;
+
+    /**
+     * Optional packument-write hook fired after a successful packument save
+     * (cache miss → upstream fetch → persist {@code <name>/meta.json}).
+     * Receives the package name so the consumer can fire a
+     * {@link com.auto1.pantera.http.cache.CacheWriteEvent} keyed at the
+     * packument file (Phase 13 speculative packument prefetch).
+     *
+     * <p>The packument waterfall is the dominant cold-cache npm bottleneck
+     * (Phase 12.5: 8.45s of 12.9s wall = 65%). This hook lets the
+     * prefetch dispatcher parse the packument JSON, identify direct-dep
+     * package names, and dispatch packument GETs for those deps so that
+     * by the time {@code npm install} walks the tree the metadata is
+     * already warm.</p>
+     *
+     * <p>Default is a no-op so existing constructors and tests stay
+     * unchanged.</p>
+     */
+    private final Consumer<String> packumentWriteHook;
+
+    /**
+     * Phase 11.5 — fine-grained sub-phase recorder for the cold-cache asset
+     * path (cache_check / upstream_fetch_and_save / save / reload). Receives
+     * (phase name, durationNs). Default = no-op so existing constructors and
+     * tests stay unchanged. Production wiring (see {@code NpmProxyAdapter})
+     * installs a consumer that bridges to
+     * {@link com.auto1.pantera.metrics.MicrometerMetrics#recordProxyPhaseDuration}.
+     *
+     * <p>Phase 11.5 instrumentation only — no behaviour change.
+     */
+    private final BiConsumer<String, Long> phaseRecorder;
 
     /**
      * Ctor.
@@ -104,12 +166,110 @@ public class NpmProxy {
     }
 
     /**
+     * Ctor with cache-write hook.
+     *
+     * <p>Used by production wiring to fire {@code CacheWriteEvent} after each
+     * successful asset save so the speculative-prefetch dispatcher can warm
+     * the cache for direct dependencies. The hook receives the asset path
+     * (e.g. {@code @scope/pkg/-/pkg-1.2.3.tgz}) immediately after
+     * {@code storage.save(asset)} completes and is responsible for
+     * materialising the bytes + invoking the registry callback.</p>
+     *
+     * @param storage Adapter storage
+     * @param client Client slice
+     * @param metadataTtl Metadata TTL duration
+     * @param cacheWriteHook Post-save hook invoked with the asset path on
+     *                       cache-miss writes; null treated as no-op
+     */
+    public NpmProxy(
+        final Storage storage,
+        final Slice client,
+        final Duration metadataTtl,
+        final Consumer<String> cacheWriteHook
+    ) {
+        this(
+            new RxNpmProxyStorage(new RxStorageWrapper(storage)),
+            new HttpNpmRemote(client),
+            metadataTtl,
+            cacheWriteHook,
+            null,
+            null
+        );
+    }
+
+    /**
+     * Production ctor with phase recorder (Phase 11.5).
+     *
+     * <p>Wires fine-grained sub-phase timers for the cold-cache asset path
+     * (cache_check / upstream_fetch_and_save / save / reload) into the
+     * supplied {@code BiConsumer<phase, durationNs>}. Used by
+     * {@code NpmProxyAdapter} to bridge into
+     * {@link com.auto1.pantera.metrics.MicrometerMetrics#recordProxyPhaseDuration}
+     * tagged by repository name.
+     *
+     * @param storage Adapter storage
+     * @param client Client slice
+     * @param metadataTtl Metadata TTL duration
+     * @param cacheWriteHook Post-save hook on cache-miss writes; null treated as no-op
+     * @param phaseRecorder Sub-phase timer recorder; null treated as no-op
+     */
+    public NpmProxy(
+        final Storage storage,
+        final Slice client,
+        final Duration metadataTtl,
+        final Consumer<String> cacheWriteHook,
+        final BiConsumer<String, Long> phaseRecorder
+    ) {
+        this(
+            new RxNpmProxyStorage(new RxStorageWrapper(storage), phaseRecorder),
+            new HttpNpmRemote(client),
+            metadataTtl,
+            cacheWriteHook,
+            null,
+            phaseRecorder
+        );
+    }
+
+    /**
+     * Production ctor with packument write hook (Phase 13).
+     *
+     * <p>Adds a packument-write hook fired after a successful packument
+     * save so the prefetch dispatcher can parse the packument JSON and
+     * issue speculative packument GETs for direct deps. See
+     * {@link #packumentWriteHook} for rationale.</p>
+     *
+     * @param storage Adapter storage
+     * @param client Client slice
+     * @param metadataTtl Metadata TTL duration
+     * @param cacheWriteHook Post-save hook on cache-miss tarball writes; null treated as no-op
+     * @param packumentWriteHook Post-save hook on packument writes; null treated as no-op
+     * @param phaseRecorder Sub-phase timer recorder; null treated as no-op
+     */
+    public NpmProxy(
+        final Storage storage,
+        final Slice client,
+        final Duration metadataTtl,
+        final Consumer<String> cacheWriteHook,
+        final Consumer<String> packumentWriteHook,
+        final BiConsumer<String, Long> phaseRecorder
+    ) {
+        this(
+            new RxNpmProxyStorage(new RxStorageWrapper(storage), phaseRecorder),
+            new HttpNpmRemote(client),
+            metadataTtl,
+            cacheWriteHook,
+            packumentWriteHook,
+            phaseRecorder
+        );
+    }
+
+    /**
      * Default-scoped ctor (for tests).
      * @param storage NPM storage
      * @param remote Remote repository client
      */
     NpmProxy(final NpmProxyStorage storage, final NpmRemote remote) {
-        this(storage, remote, DEFAULT_METADATA_TTL);
+        this(storage, remote, DEFAULT_METADATA_TTL, null, null, null);
     }
 
     /**
@@ -119,10 +279,76 @@ public class NpmProxy {
      * @param metadataTtl Metadata TTL duration
      */
     NpmProxy(final NpmProxyStorage storage, final NpmRemote remote, final Duration metadataTtl) {
+        this(storage, remote, metadataTtl, null, null, null);
+    }
+
+    /**
+     * Default-scoped ctor with TTL and cache-write hook (for tests + wiring).
+     * @param storage NPM storage
+     * @param remote Remote repository client
+     * @param metadataTtl Metadata TTL duration
+     * @param cacheWriteHook Post-save hook on cache-miss writes; null treated as no-op
+     */
+    NpmProxy(
+        final NpmProxyStorage storage,
+        final NpmRemote remote,
+        final Duration metadataTtl,
+        final Consumer<String> cacheWriteHook
+    ) {
+        this(storage, remote, metadataTtl, cacheWriteHook, null, null);
+    }
+
+    /**
+     * Default-scoped ctor with TTL, cache-write hook, and phase recorder.
+     * Phase 11.5 fine-grained sub-phase profiling. Packument hook left null.
+     *
+     * @param storage NPM storage
+     * @param remote Remote repository client
+     * @param metadataTtl Metadata TTL duration
+     * @param cacheWriteHook Post-save hook on cache-miss writes; null treated as no-op
+     * @param phaseRecorder (phase, durationNs) recorder; null treated as no-op
+     */
+    NpmProxy(
+        final NpmProxyStorage storage,
+        final NpmRemote remote,
+        final Duration metadataTtl,
+        final Consumer<String> cacheWriteHook,
+        final BiConsumer<String, Long> phaseRecorder
+    ) {
+        this(storage, remote, metadataTtl, cacheWriteHook, null, phaseRecorder);
+    }
+
+    /**
+     * Default-scoped ctor with TTL, cache-write hook, packument-write hook,
+     * and phase recorder. Phase 13 — speculative packument prefetch.
+     *
+     * @param storage NPM storage
+     * @param remote Remote repository client
+     * @param metadataTtl Metadata TTL duration
+     * @param cacheWriteHook Post-save hook on cache-miss tarball writes; null treated as no-op
+     * @param packumentWriteHook Post-save hook on packument writes; null treated as no-op
+     * @param phaseRecorder (phase, durationNs) recorder; null treated as no-op
+     */
+    NpmProxy(
+        final NpmProxyStorage storage,
+        final NpmRemote remote,
+        final Duration metadataTtl,
+        final Consumer<String> cacheWriteHook,
+        final Consumer<String> packumentWriteHook,
+        final BiConsumer<String, Long> phaseRecorder
+    ) {
         this.storage = storage;
         this.remote = remote;
         this.metadataTtl = metadataTtl;
         this.refreshing = ConcurrentHashMap.newKeySet();
+        // Wrap ForkJoinPool.commonPool with ContextualExecutor so background
+        // refresh callbacks inherit the caller's ThreadContext (trace.id etc.)
+        // and APM span. This replaces the per-call MDC capture/restore.
+        final Executor ctxExec = ContextualExecutor.contextualize(ForkJoinPool.commonPool());
+        this.backgroundScheduler = Schedulers.from(ctxExec);
+        this.cacheWriteHook = cacheWriteHook == null ? path -> { } : cacheWriteHook;
+        this.packumentWriteHook = packumentWriteHook == null ? name -> { } : packumentWriteHook;
+        this.phaseRecorder = phaseRecorder == null ? (phase, ns) -> { } : phaseRecorder;
     }
 
     /**
@@ -231,35 +457,29 @@ public class NpmProxy {
      * Serves stale content immediately while refreshing in background.
      * Uses a ConcurrentHashMap.KeySetView to deduplicate in-flight refreshes.
      *
-     * <p>Captures the caller's MDC snapshot at wrap time and restores it
-     * inside the RxJava subscribe callbacks; without this the
-     * {@code Schedulers.io()} pool thread would emit logs without
-     * {@code trace.id} / {@code client.ip}, which is ~3.3k entries/day per
-     * production observation.</p>
+     * <p>Uses a {@link ContextualExecutor}-wrapped scheduler so that
+     * background callbacks inherit the caller's ThreadContext (trace.id,
+     * client.ip) and APM span automatically — no per-call MDC capture needed.
      *
      * @param name Package name
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void backgroundRefresh(final String name) {
         if (this.refreshing.add(name)) {
-            // Capture caller MDC so subscribe callbacks on Schedulers.io()
-            // still carry trace.id / client.ip when they log.
-            final Map<String, String> mdc = MdcPropagation.capture();
-            // Try conditional request first if we have a stored upstream ETag
+            // Try conditional request first if we have a stored upstream ETag.
+            // The backgroundScheduler propagates ThreadContext automatically.
             this.conditionalRefresh(name)
-                .subscribeOn(Schedulers.io())
+                .subscribeOn(this.backgroundScheduler)
                 .doFinally(() -> this.refreshing.remove(name))
                 .subscribe(
-                    saved -> MdcPropagation.runWith(mdc, () ->
+                    saved ->
                         EcsLogger.debug("com.auto1.pantera.npm.proxy")
                             .message("Background refresh completed")
                             .eventCategory("database")
                             .eventAction("stale_while_revalidate")
                             .eventOutcome("success")
                             .field("package.name", name)
-                            .log()
-                    ),
-                    err -> MdcPropagation.runWith(mdc, () ->
+                            .log(),
+                    err ->
                         EcsLogger.warn("com.auto1.pantera.npm.proxy")
                             .message("Background refresh failed")
                             .eventCategory("database")
@@ -267,8 +487,7 @@ public class NpmProxy {
                             .eventOutcome("failure")
                             .field("package.name", name)
                             .error(err)
-                            .log()
-                    ),
+                            .log(),
                     () -> this.refreshing.remove(name)
                 );
         }
@@ -312,18 +531,127 @@ public class NpmProxy {
 
     /**
      * Retrieve asset.
+     *
+     * <p>On cache miss the asset is fetched from the upstream remote, persisted
+     * to storage, and reloaded for the response. Immediately after the save
+     * completes (and before the reload) the configured
+     * {@link #cacheWriteHook} is fired with the asset path so production
+     * wiring can dispatch a {@link com.auto1.pantera.http.cache.CacheWriteEvent}
+     * for speculative pre-fetch — symmetric with how
+     * {@code BaseCachedProxySlice} fires its own callback after a successful
+     * proxy cache write. The hook NEVER blocks the serve path: any throwable
+     * is swallowed by the consumer per the registry contract.</p>
+     *
      * @param path Asset path
      * @return Asset data (cached or downloaded from remote repository)
      */
     public Maybe<NpmAsset> getAsset(final String path) {
-        return this.storage.getAsset(path).switchIfEmpty(
-            Maybe.defer(
-                () -> this.remote.loadAsset(path, null).flatMap(
-                    asset -> this.storage.save(asset)
-                        .andThen(Maybe.defer(() -> this.storage.getAsset(path)))
-                )
-            )
-        );
+        // Phase 11.5: time each sub-phase of the cold-cache asset path so the
+        // 54ms/req asset_total observed in Phase 10.5 can be decomposed.
+        // Timers use Maybe.defer / Single.defer so duration reflects actual
+        // subscription time (per-request), not assembly time.
+        final long checkStartNs = System.nanoTime();
+        return this.storage.getAsset(path)
+            .doOnEvent((asset, err) -> recordPhase(
+                "npm_storage_cache_check", checkStartNs
+            ))
+            .switchIfEmpty(
+                Maybe.defer(() -> {
+                    // Phase 12: cache-miss path now uses stream-through so the
+                    // client receives bytes AS the upstream delivers them and
+                    // the same byte stream is persisted to storage on
+                    // completion. Eliminates the legacy save → reload
+                    // round-trip (~23 ms/req in Phase 11.5 profiling).
+                    final long fetchStartNs = System.nanoTime();
+                    return this.remote.loadAsset(path, null)
+                        .doOnEvent((asset, err) -> recordPhase(
+                            "npm_upstream_fetch_open", fetchStartNs
+                        ))
+                        .flatMap(asset -> {
+                            final long saveStartNs = System.nanoTime();
+                            // Wrap the upstream data publisher so the
+                            // cache-write hook fires on the SAME completion
+                            // signal that commits the stream-through save —
+                            // i.e. the client has consumed the full body
+                            // (and the buffered copy has been handed to
+                            // storage.save). If the client disconnects
+                            // mid-stream the hook does NOT fire, mirroring
+                            // the legacy save-then-hook semantics where the
+                            // hook only fires after a successful save.
+                            final NpmAsset hooked = new NpmAsset(
+                                asset.path(),
+                                io.reactivex.Flowable.fromPublisher(asset.dataPublisher())
+                                    .doOnComplete(() -> this.fireCacheWriteHook(path)),
+                                asset.meta()
+                            );
+                            return this.storage.saveStreamThrough(hooked)
+                                .doOnEvent((a, err) -> recordPhase(
+                                    "npm_storage_save", saveStartNs
+                                ));
+                        });
+                })
+            );
+    }
+
+    /**
+     * Phase 11.5 — emit sub-phase duration via the configured recorder.
+     * No-op when recorder is the default (null in ctor).
+     *
+     * @param phase phase name (e.g. {@code "npm_storage_save"})
+     * @param startNs nanoTime captured at phase entry
+     */
+    private void recordPhase(final String phase, final long startNs) {
+        try {
+            this.phaseRecorder.accept(phase, System.nanoTime() - startNs);
+        } catch (final Exception thrown) {
+            // Recorder must never break the serve path.
+            EcsLogger.debug("com.auto1.pantera.npm.proxy")
+                .message("npm phaseRecorder threw; serve path unaffected")
+                .field("phase", phase)
+                .error(thrown)
+                .log();
+        }
+    }
+
+    /**
+     * Fire the cache-write hook with the freshly-saved asset path. Throws are
+     * swallowed: a broken consumer must never break the serve path.
+     *
+     * @param path Asset path that was just saved
+     */
+    private void fireCacheWriteHook(final String path) {
+        try {
+            this.cacheWriteHook.accept(path);
+        } catch (final Exception thrown) {
+            EcsLogger.warn("com.auto1.pantera.npm.proxy")
+                .message("npm cacheWriteHook threw; serve path unaffected")
+                .eventCategory("process")
+                .eventAction("cache_write_hook")
+                .eventOutcome("failure")
+                .field("url.path", path)
+                .error(thrown)
+                .log();
+        }
+    }
+
+    /**
+     * CompletionStage-based boundary adapter for {@link #getAsset(String)}.
+     * Converts the internal RxJava {@code Maybe<NpmAsset>} to
+     * {@code CompletableFuture<Optional<NpmAsset>>} so callers on hot paths
+     * (e.g. {@code DownloadAssetSlice}) can stay in the CompletionStage world
+     * without importing RxJava types.
+     *
+     * @param path Asset path
+     * @return Future containing the asset, or empty if not found
+     */
+    public java.util.concurrent.CompletableFuture<java.util.Optional<NpmAsset>> getAssetAsync(
+        final String path
+    ) {
+        return this.getAsset(path)
+            .map(java.util.Optional::of)
+            .toSingle(java.util.Optional.empty())
+            .to(hu.akarnokd.rxjava2.interop.SingleInterop.get())
+            .toCompletableFuture();
     }
 
     /**
@@ -354,7 +682,9 @@ public class NpmProxy {
             res = Maybe.empty();
         } else {
             res = pckg.flatMap(
-                pkg -> this.storage.save(pkg).andThen(Maybe.just(pkg))
+                pkg -> this.storage.save(pkg)
+                    .doOnComplete(() -> this.firePackumentWriteHook(pkg.name()))
+                    .andThen(Maybe.just(pkg))
             );
         }
         return res;
@@ -377,7 +707,9 @@ public class NpmProxy {
             return Maybe.empty();
         }
         return pckg.flatMap(
-            pkg -> this.storage.save(pkg).andThen(Maybe.just(Boolean.TRUE))
+            pkg -> this.storage.save(pkg)
+                .doOnComplete(() -> this.firePackumentWriteHook(pkg.name()))
+                .andThen(Maybe.just(Boolean.TRUE))
         );
     }
 
@@ -398,7 +730,30 @@ public class NpmProxy {
             return Maybe.empty();
         }
         return pckg.flatMap(
-            pkg -> this.storage.save(pkg).andThen(Maybe.just(pkg.meta()))
+            pkg -> this.storage.save(pkg)
+                .doOnComplete(() -> this.firePackumentWriteHook(pkg.name()))
+                .andThen(Maybe.just(pkg.meta()))
         );
+    }
+
+    /**
+     * Fire the packument-write hook with the freshly-saved package name.
+     * Throws are swallowed: a broken consumer must never break the serve path.
+     *
+     * @param name Package name that was just saved
+     */
+    private void firePackumentWriteHook(final String name) {
+        try {
+            this.packumentWriteHook.accept(name);
+        } catch (final Exception thrown) {
+            EcsLogger.warn("com.auto1.pantera.npm.proxy")
+                .message("npm packumentWriteHook threw; serve path unaffected")
+                .eventCategory("process")
+                .eventAction("packument_write_hook")
+                .eventOutcome("failure")
+                .field("package.name", name)
+                .error(thrown)
+                .log();
+        }
     }
 }

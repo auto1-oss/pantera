@@ -61,13 +61,12 @@ final class GzipSlice implements Slice {
             );
     }
 
-    @SuppressWarnings("PMD.CloseResource")
     private static CompletionStage<Content> gzip(Publisher<ByteBuffer> body) {
         CompletionStage<Content> res;
         try (PipedOutputStream resout = new PipedOutputStream();
             PipedInputStream oinput = new PipedInputStream();
              PipedOutputStream tmpout = new PipedOutputStream(oinput)) {
-            final PipedInputStream src = new PipedInputStream(resout);
+            final PipedInputStream src = new PipedInputStream(resout); // NOPMD CloseResource - ownership transferred to ReactiveInputStream consumer below; closing here would break the async pipe
             CompletableFuture.allOf(
                 new ReactiveOutputStream(tmpout)
                     .write(body, WriteGreed.SYSTEM)

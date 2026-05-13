@@ -36,7 +36,6 @@ import org.apache.commons.lang3.tuple.Pair;
  *
  * @since 0.1
  */
-@SuppressWarnings("PMD.TooManyMethods")
 public final class ManageUsers implements CrudUsers {
 
     /**

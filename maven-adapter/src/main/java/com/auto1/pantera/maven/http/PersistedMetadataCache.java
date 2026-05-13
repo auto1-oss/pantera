@@ -78,7 +78,6 @@ public final class PersistedMetadataCache extends MetadataCache {
      * @param maxSize Maximum cache size
      * @param snapshotInterval How often to snapshot
      */
-    @SuppressWarnings({"PMD.ConstructorOnlyInitializesOrCallOtherConstructors", "PMD.NullAssignment"})
     public PersistedMetadataCache(
         final Path snapshotPath,
         final Duration ttl,

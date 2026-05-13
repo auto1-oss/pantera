@@ -42,7 +42,7 @@ public final class ComposerProxy implements Slice {
      * @param cfg Repository configuration
      */
     public ComposerProxy(ClientSlices client, RepoConfig cfg) {
-        this(client, cfg, Optional.empty(), com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE);
+        this(client, cfg, Optional.empty(), com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE);
     }
 
     /**
@@ -56,23 +56,19 @@ public final class ComposerProxy implements Slice {
         ClientSlices client,
         RepoConfig cfg,
         Optional<Queue<com.auto1.pantera.scheduling.ProxyArtifactEvent>> events,
-        com.auto1.pantera.cooldown.CooldownService cooldown
+        com.auto1.pantera.cooldown.api.CooldownService cooldown
     ) {
         final Optional<Storage> asto = cfg.storageOpt();
         final String baseUrl = cfg.url().toString();
         
-        // Support multiple remotes with GroupSlice (like maven-proxy)
+        // Support multiple remotes with GroupResolver (like maven-proxy)
         // Each remote gets its own ComposerProxySlice, evaluated in priority order
         this.slice = new RaceSlice(
             cfg.remotes().stream().map(
                 remote -> {
-                    final com.auto1.pantera.http.client.auth.Authenticator auth = 
+                    final com.auto1.pantera.http.client.auth.Authenticator auth =
                         GenericAuthenticator.create(client, remote.username(), remote.pwd());
-                    final Slice remoteSlice = new com.auto1.pantera.http.client.auth.AuthClientSlice(
-                        new com.auto1.pantera.http.client.UriClientSlice(client, remote.uri()),
-                        auth
-                    );
-                    
+
                     return asto.map(
                         cache -> new ComposerProxySlice(
                             client,
@@ -84,7 +80,10 @@ public final class ComposerProxy implements Slice {
                             cfg.name(),
                             cfg.type(),
                             cooldown,
-                            new com.auto1.pantera.composer.http.proxy.ComposerCooldownInspector(remoteSlice),
+                            new com.auto1.pantera.publishdate.RegistryBackedInspector(
+                                "composer",
+                                com.auto1.pantera.publishdate.PublishDateRegistries.instance()
+                            ),
                             baseUrl,
                             remote.uri().toString()
                         )
@@ -99,7 +98,10 @@ public final class ComposerProxy implements Slice {
                             cfg.name(),
                             cfg.type(),
                             cooldown,
-                            new com.auto1.pantera.composer.http.proxy.ComposerCooldownInspector(remoteSlice),
+                            new com.auto1.pantera.publishdate.RegistryBackedInspector(
+                                "composer",
+                                com.auto1.pantera.publishdate.PublishDateRegistries.instance()
+                            ),
                             baseUrl,
                             remote.uri().toString()
                         )

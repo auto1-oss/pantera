@@ -21,6 +21,7 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.index.SyncArtifactIndexer;
 import com.auto1.pantera.npm.PackageNameFromUrl;
 import com.auto1.pantera.npm.Publish;
 import com.auto1.pantera.scheduling.ArtifactEvent;
@@ -62,7 +63,12 @@ public final class UploadSlice implements Slice {
     private final String rname;
 
     /**
-     * Ctor.
+     * Synchronous artifact-index writer for read-after-write consistency.
+     */
+    private final SyncArtifactIndexer syncIndex;
+
+    /**
+     * Legacy ctor (no synchronous index writer).
      *
      * @param npm Npm publish front
      * @param storage Abstract storage
@@ -71,10 +77,26 @@ public final class UploadSlice implements Slice {
      */
     public UploadSlice(final Publish npm, final Storage storage,
         final Optional<Queue<ArtifactEvent>> events, final String rname) {
+        this(npm, storage, events, rname, SyncArtifactIndexer.NOOP);
+    }
+
+    /**
+     * Ctor with synchronous index writer.
+     *
+     * @param npm Npm publish front
+     * @param storage Abstract storage
+     * @param events Artifact events queue
+     * @param rname Repository name
+     * @param syncIndex Synchronous artifact-index writer
+     */
+    public UploadSlice(final Publish npm, final Storage storage,
+        final Optional<Queue<ArtifactEvent>> events, final String rname,
+        final SyncArtifactIndexer syncIndex) {
         this.npm = npm;
         this.storage = storage;
         this.events = events;
         this.rname = rname;
+        this.syncIndex = syncIndex;
     }
 
     @Override
@@ -93,15 +115,15 @@ public final class UploadSlice implements Slice {
             .thenCompose(
                 ignored -> this.events.map(
                     queue -> this.npm.publishWithInfo(new Key.From(pkg), uploaded)
-                        .thenAccept(
-                            info -> this.events.get().add(
-                                new ArtifactEvent(
-                                    UploadSlice.REPO_TYPE, this.rname,
-                                    new Login(headers).getValue(),
-                                    info.packageName(), info.packageVersion(), info.tarSize()
-                                )
-                            )
-                        )
+                        .thenCompose(info -> {
+                            final ArtifactEvent event = new ArtifactEvent(
+                                UploadSlice.REPO_TYPE, this.rname,
+                                new Login(headers).getValue(),
+                                info.packageName(), info.packageVersion(), info.tarSize()
+                            );
+                            queue.add(event);
+                            return this.syncIndex.recordSync(event);
+                        })
                 ).orElseGet(() -> this.npm.publish(new Key.From(pkg), uploaded))
             )
             .thenCompose(ignored -> this.storage.delete(uploaded))

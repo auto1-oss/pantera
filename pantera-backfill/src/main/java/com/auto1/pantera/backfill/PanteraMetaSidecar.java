@@ -99,8 +99,7 @@ final class PanteraMetaSidecar {
                 return Optional.empty();
             }
             final JsonArray headers = json.getJsonArray("headers");
-            for (int idx = 0; idx < headers.size(); idx++) {
-                final JsonValue entry = headers.get(idx);
+            for (final JsonValue entry : headers) {
                 if (entry.getValueType() != JsonValue.ValueType.OBJECT) {
                     continue;
                 }

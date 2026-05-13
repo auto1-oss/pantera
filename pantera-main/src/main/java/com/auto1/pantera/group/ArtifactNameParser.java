@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.group;
 
+import java.util.Locale;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -17,7 +18,7 @@ import java.util.regex.Pattern;
 /**
  * Extracts the artifact name from a raw URL path based on the repository type.
  * Each adapter stores artifacts with a specific {@code name} format in the DB.
- * This parser reverses the URL path back to that format so GroupSlice can do
+ * This parser reverses the URL path back to that format so GroupResolver can do
  * an indexed lookup via {@code WHERE name = ?} instead of expensive fan-out.
  *
  * @since 1.21.0
@@ -487,7 +488,7 @@ public final class ArtifactNameParser {
      * Normalize a PyPI project name: replace [-_.] runs with single hyphen, lowercase.
      */
     private static String normalizePypiName(final String name) {
-        return PYPI_NAME_SEPARATORS.matcher(name).replaceAll("-").toLowerCase();
+        return PYPI_NAME_SEPARATORS.matcher(name).replaceAll("-").toLowerCase(Locale.ROOT);
     }
 
     /**

@@ -24,7 +24,6 @@ import wtf.g4s8.hamcrest.json.StringIsJson;
  * Test case for {@link BlobListFormat}.
  * @since 1.0
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 final class BlobListFormatTest {
 
     @Test

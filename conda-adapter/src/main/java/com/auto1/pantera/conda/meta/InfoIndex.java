@@ -63,7 +63,6 @@ public interface InfoIndex {
         }
 
         @Override
-        @SuppressWarnings("PMD.AssignmentInOperand")
         public JsonObject json() throws IOException {
             Optional<JsonObject> res = Optional.empty();
             try (
@@ -93,7 +92,6 @@ public interface InfoIndex {
      * Implementation of {@link InfoIndex} to read metadata from `.conda` package.
      * @since 0.2
      */
-    @SuppressWarnings("PMD.CognitiveComplexity")
     final class Conda implements InfoIndex {
 
         /**
@@ -110,7 +108,6 @@ public interface InfoIndex {
         }
 
         @Override
-        @SuppressWarnings({"PMD.CyclomaticComplexity", "PMD.AssignmentInOperand", "PMD.CloseResource"})
         public JsonObject json() throws IOException {
             Optional<JsonObject> res = Optional.empty();
             try (
@@ -125,7 +122,7 @@ public interface InfoIndex {
                     }
                     final String name = entry.getName();
                     if (name.startsWith("info") && name.endsWith("tar.zst")) {
-                        final TarArchiveInputStream info = new TarArchiveInputStream(
+                        final TarArchiveInputStream info = new TarArchiveInputStream( // NOPMD CloseResource - wraps outer 'archive' which owns the underlying lifecycle; closing info would prematurely close the archive iteration
                             new ZstdCompressorInputStream(archive)
                         );
                         while ((entry = info.getNextEntry()) != null) {

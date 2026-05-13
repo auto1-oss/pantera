@@ -79,7 +79,6 @@ public final class QuartzService {
      * Ctor for RAM-based (non-clustered) scheduler.
      * Uses the default Quartz configuration with in-memory RAMJobStore.
      */
-    @SuppressWarnings("PMD.ConstructorOnlyInitializesOrCallOtherConstructors")
     public QuartzService() {
         try {
             this.scheduler = new StdSchedulerFactory().getScheduler();
@@ -100,7 +99,6 @@ public final class QuartzService {
      *
      * @param dataSource PostgreSQL data source (typically HikariCP)
      */
-    @SuppressWarnings("PMD.ConstructorOnlyInitializesOrCallOtherConstructors")
     public QuartzService(final DataSource dataSource) {
         try {
             // 1. Create QRTZ_* tables if they don't exist

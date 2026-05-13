@@ -84,7 +84,6 @@ public final class ScriptScheduler {
      * @param settings Pantera settings
      * @param repos Repositories registry
      */
-    @SuppressWarnings("PMD.AvoidDuplicateLiterals")
     public void loadCrontab(final Settings settings, final Repositories repos) {
         final CronDefinition crondef =
             CronDefinitionBuilder.instanceDefinitionFor(CronType.QUARTZ);

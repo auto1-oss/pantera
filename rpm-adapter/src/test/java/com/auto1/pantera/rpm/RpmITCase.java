@@ -38,7 +38,6 @@ import org.junit.jupiter.api.io.TempDir;
  * Integration test for {@link Rpm}.
  * @since 0.6
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 @EnabledIfSystemProperty(named = "it.longtests.enabled", matches = "true")
 @ExtendWith(TimingExtension.class)
 final class RpmITCase {

@@ -37,7 +37,6 @@ public final class UncheckedIOSupplier<T> implements Supplier<T> {
     }
 
     @Override
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     public T get() {
         try {
             return this.checked.get();

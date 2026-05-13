@@ -33,7 +33,6 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  *
  * @since 1.20.13
  */
-@SuppressWarnings("PMD.TooManyMethods")
 @Testcontainers
 class DbNodeRegistryTest {
 

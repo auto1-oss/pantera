@@ -26,7 +26,6 @@ import org.testcontainers.containers.BindMode;
  * IT case for RPM repository.
  * @since 0.12
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 @DisabledOnOs(OS.WINDOWS)
 public final class RpmITCase {
 

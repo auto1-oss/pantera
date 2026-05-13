@@ -5,12 +5,16 @@
 package com.auto1.pantera.adapters.docker;
 
 import com.auto1.pantera.asto.Content;
-import com.auto1.pantera.cooldown.CooldownRequest;
-import com.auto1.pantera.cooldown.CooldownResponses;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownRequest;
+import com.auto1.pantera.cooldown.response.CooldownResponseRegistry;
+import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.docker.Digest;
 import com.auto1.pantera.docker.Docker;
 import com.auto1.pantera.docker.cache.DockerProxyCooldownInspector;
+import com.auto1.pantera.docker.cooldown.DockerManifestByTagHandler;
+import com.auto1.pantera.docker.cooldown.DockerManifestByTagMetadataRequestDetector;
+import com.auto1.pantera.docker.cooldown.DockerMetadataRequestDetector;
+import com.auto1.pantera.docker.cooldown.DockerTagsListHandler;
 import com.auto1.pantera.docker.http.DigestHeader;
 import com.auto1.pantera.docker.http.PathPatterns;
 import com.auto1.pantera.docker.http.manifest.ManifestRequest;
@@ -56,6 +60,32 @@ public final class DockerProxyCooldownSlice implements Slice {
 
     private final Docker docker;
 
+    /**
+     * Handler for {@code /v2/<name>/tags/list} — filters cooldown-blocked
+     * tags out of the JSON response. Prior to this wiring the Docker
+     * bundle registered in {@code CooldownWiring} was dead code.
+     */
+    private final DockerTagsListHandler tagsHandler;
+
+    /**
+     * Detector for {@code /v2/<name>/tags/list} paths.
+     */
+    private final DockerMetadataRequestDetector tagsDetector;
+
+    /**
+     * Handler for {@code /v2/<name>/manifests/<tag>} — returns 404
+     * MANIFEST_UNKNOWN when the tag itself OR the digest it resolves
+     * to is in cooldown. See class-level javadoc on the handler for
+     * why both must be checked.
+     */
+    private final DockerManifestByTagHandler manifestTagHandler;
+
+    /**
+     * Detector for {@code /v2/<name>/manifests/<tag>} paths. Returns
+     * true only for tag references, not digest references.
+     */
+    private final DockerManifestByTagMetadataRequestDetector manifestTagDetector;
+
     public DockerProxyCooldownSlice(
         final Slice origin,
         final String repoName,
@@ -70,6 +100,14 @@ public final class DockerProxyCooldownSlice implements Slice {
         this.cooldown = cooldown;
         this.inspector = inspector;
         this.docker = docker;
+        this.tagsHandler = new DockerTagsListHandler(
+            origin, cooldown, inspector, repoType, repoName
+        );
+        this.tagsDetector = new DockerMetadataRequestDetector();
+        this.manifestTagHandler = new DockerManifestByTagHandler(
+            origin, cooldown, inspector, repoType, repoName
+        );
+        this.manifestTagDetector = new DockerManifestByTagMetadataRequestDetector();
     }
 
     @Override
@@ -78,6 +116,29 @@ public final class DockerProxyCooldownSlice implements Slice {
         final Headers headers,
         final Content body
     ) {
+        final String path = line.uri().getPath();
+        // GET /v2/<name>/tags/list — route through the tags-list filter
+        // handler. This is where the Docker cooldown bundle registered
+        // in CooldownWiring is actually consumed; without this dispatch
+        // the bundle is dead infrastructure and blocked tags leak via
+        // `docker pull --all-tags` and `skopeo list-tags`.
+        if (line.method() == RqMethod.GET && this.tagsDetector.isMetadataRequest(path)) {
+            // Consume request body to match the invariant elsewhere that
+            // nothing leaks a Vert.x stream.
+            return body.asBytesFuture().thenCompose(ignored ->
+                this.tagsHandler.handle(line, new Login(headers).getValue())
+            );
+        }
+        // GET /v2/<name>/manifests/<tag> — route through the manifest-tag
+        // filter. Returns 404 MANIFEST_UNKNOWN when the tag or the digest
+        // it resolves to is blocked by cooldown. Digest references fall
+        // through to the existing flow below, which handles digest-addressed
+        // manifests (release-date bookkeeping + cooldown evaluation).
+        if (line.method() == RqMethod.GET && this.manifestTagDetector.isMetadataRequest(path)) {
+            return this.manifestTagHandler.handle(
+                line, headers, body, new Login(headers).getValue()
+            );
+        }
         if (!this.shouldInspect(line)) {
             return this.origin.response(line, headers, body);
         }
@@ -131,7 +192,9 @@ public final class DockerProxyCooldownSlice implements Slice {
                         );
                         return this.cooldown.evaluate(cooldownRequest, this.inspector)
                             .thenApply(result -> result.blocked()
-                                ? CooldownResponses.forbidden(result.block().orElseThrow())
+                                ? CooldownResponseRegistry.instance()
+                                    .getOrThrow(this.repoType)
+                                    .forbidden(result.block().orElseThrow())
                                 : rebuilt
                             );
                     }
@@ -146,13 +209,15 @@ public final class DockerProxyCooldownSlice implements Slice {
                         );
                         return this.cooldown.evaluate(cooldownRequest, this.inspector)
                             .thenApply(result -> result.blocked()
-                                ? CooldownResponses.forbidden(result.block().orElseThrow())
+                                ? CooldownResponseRegistry.instance()
+                                    .getOrThrow(this.repoType)
+                                    .forbidden(result.block().orElseThrow())
                                 : rebuilt
                             );
                     }
                     
                     // First time seeing this artifact - WAIT for extraction then evaluate
-                    return this.determineReleaseSync(request, response.headers(), bytes, artifact, version, digest, user)
+                    return this.determineReleaseSync(request, response.headers(), bytes, artifact, version, digest)
                         .thenCompose(release -> {
                             this.inspector.register(
                                 artifact, version, release,
@@ -164,7 +229,9 @@ public final class DockerProxyCooldownSlice implements Slice {
                             );
                             return this.cooldown.evaluate(cooldownRequest, this.inspector)
                                 .thenApply(result -> result.blocked()
-                                    ? CooldownResponses.forbidden(result.block().orElseThrow())
+                                    ? CooldownResponseRegistry.instance()
+                                        .getOrThrow(this.repoType)
+                                        .forbidden(result.block().orElseThrow())
                                     : rebuilt
                                 );
                         });
@@ -205,8 +272,7 @@ public final class DockerProxyCooldownSlice implements Slice {
         final byte[] manifestBytes,
         final String artifact,
         final String version,
-        final Optional<String> digest,
-        final String user
+        final Optional<String> digest
     ) {
         final Optional<Manifest> manifest = this.manifestFrom(headers, manifestBytes);
         if (manifest.isEmpty() || manifest.get().isManifestList()) {

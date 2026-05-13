@@ -62,8 +62,11 @@ final class SubmitGemSlice implements Slice {
      */
     private final String name;
 
+    /** Synchronous artifact-index writer for read-after-write consistency. */
+    private final com.auto1.pantera.index.SyncArtifactIndexer syncIndex;
+
     /**
-     * Ctor.
+     * Legacy ctor (no synchronous index writer).
      *
      * @param storage The storage.
      * @param events Artifact events
@@ -71,10 +74,25 @@ final class SubmitGemSlice implements Slice {
      */
     SubmitGemSlice(final Storage storage, final Optional<Queue<ArtifactEvent>> events,
         final String name) {
+        this(storage, events, name, com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+    }
+
+    /**
+     * Ctor with synchronous index writer.
+     *
+     * @param storage The storage.
+     * @param events Artifact events
+     * @param name Repository name
+     * @param syncIndex Synchronous artifact-index writer
+     */
+    SubmitGemSlice(final Storage storage, final Optional<Queue<ArtifactEvent>> events,
+        final String name,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex) {
         this.storage = storage;
         this.gem = new Gem(storage);
         this.events = events;
         this.name = name;
+        this.syncIndex = syncIndex;
     }
 
     @Override
@@ -88,26 +106,22 @@ final class SubmitGemSlice implements Slice {
             ).thenCompose(
                 none -> {
                     final CompletionStage<Pair<String, String>> update = this.gem.update(key);
-                    if (this.events.isPresent()) {
-                        return update.thenCompose(
-                            pair -> new RqHeaders(headers, "content-length").stream().findFirst()
-                                .map(Long::parseLong).map(CompletableFuture::completedFuture)
-                                .orElseGet(
-                                    () -> this.storage.metadata(key)
-                                        .thenApply(mets -> mets.read(Meta.OP_SIZE).get())
-                                ).thenAccept(
-                                    size -> this.events.get().add(
-                                        new ArtifactEvent(
-                                            SubmitGemSlice.REPO_TYPE, this.name,
-                                            new Login(headers).getValue(),
-                                            pair.getKey(), pair.getValue(), size
-                                        )
-                                    )
-                                )
-                        );
-                    } else {
-                        return update.thenAccept(pair -> { });
-                    }
+                    return update.thenCompose(
+                        pair -> new RqHeaders(headers, "content-length").stream().findFirst()
+                            .map(Long::parseLong).map(CompletableFuture::completedFuture)
+                            .orElseGet(
+                                () -> this.storage.metadata(key)
+                                    .thenApply(mets -> mets.read(Meta.OP_SIZE).get())
+                            ).thenCompose(size -> {
+                                final ArtifactEvent event = new ArtifactEvent(
+                                    SubmitGemSlice.REPO_TYPE, this.name,
+                                    new Login(headers).getValue(),
+                                    pair.getKey(), pair.getValue(), size
+                                );
+                                this.events.ifPresent(queue -> queue.add(event));
+                                return this.syncIndex.recordSync(event);
+                            })
+                    );
                 }
             )
             .thenCompose(none -> this.storage.delete(key))

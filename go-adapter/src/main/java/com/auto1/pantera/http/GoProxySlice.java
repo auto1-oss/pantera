@@ -12,6 +12,7 @@ package com.auto1.pantera.http;
 
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.cache.Cache;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.http.client.ClientSlices;
 import com.auto1.pantera.http.client.UriClientSlice;
 import com.auto1.pantera.http.client.auth.AuthClientSlice;
@@ -22,6 +23,8 @@ import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
 import com.auto1.pantera.http.slice.SliceSimple;
+import com.auto1.pantera.publishdate.PublishDateRegistries;
+import com.auto1.pantera.publishdate.RegistryBackedInspector;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 
 import java.net.URI;
@@ -51,7 +54,7 @@ public final class GoProxySlice extends Slice.Wrap {
     ) {
         this(
             clients, remote, auth, cache, Optional.empty(), Optional.empty(), "*",
-            "go-proxy", com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE
+            "go-proxy", com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE
         );
     }
 
@@ -69,7 +72,7 @@ public final class GoProxySlice extends Slice.Wrap {
     ) {
         this(
             client, uri, authenticator, Cache.NOP, Optional.empty(), Optional.empty(), "*",
-            "go-proxy", com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE
+            "go-proxy", com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE
         );
     }
 
@@ -93,7 +96,7 @@ public final class GoProxySlice extends Slice.Wrap {
         final Optional<Queue<ProxyArtifactEvent>> events,
         final String rname,
         final String rtype,
-        final com.auto1.pantera.cooldown.CooldownService cooldown
+        final com.auto1.pantera.cooldown.api.CooldownService cooldown
     ) {
         this(clients, remote, auth, cache, events, Optional.empty(), rname, rtype, cooldown);
     }
@@ -120,7 +123,7 @@ public final class GoProxySlice extends Slice.Wrap {
         final Optional<Storage> storage,
         final String rname,
         final String rtype,
-        final com.auto1.pantera.cooldown.CooldownService cooldown
+        final com.auto1.pantera.cooldown.api.CooldownService cooldown
     ) {
         this(remote(clients, remote, auth), cache, events, storage, rname, rtype, cooldown);
     }
@@ -132,9 +135,12 @@ public final class GoProxySlice extends Slice.Wrap {
         final Optional<Storage> storage,
         final String rname,
         final String rtype,
-        final com.auto1.pantera.cooldown.CooldownService cooldown
+        final com.auto1.pantera.cooldown.api.CooldownService cooldown
     ) {
-        this(remote, cache, events, storage, rname, rtype, cooldown, new GoCooldownInspector(remote));
+        this(
+            remote, cache, events, storage, rname, rtype, cooldown,
+            new RegistryBackedInspector("go", PublishDateRegistries.instance())
+        );
     }
 
     GoProxySlice(
@@ -144,14 +150,18 @@ public final class GoProxySlice extends Slice.Wrap {
         final Optional<Storage> storage,
         final String rname,
         final String rtype,
-        final com.auto1.pantera.cooldown.CooldownService cooldown,
-        final GoCooldownInspector inspector
+        final com.auto1.pantera.cooldown.api.CooldownService cooldown,
+        final CooldownInspector inspector
     ) {
         super(
             new SliceRoute(
                 new RtRulePath(
                     MethodRule.HEAD,
-                    new HeadProxySlice(remote)
+                    // Track 5 Phase 2B: cache-first HEAD — serve 200 +
+                    // Content-Length from local storage metadata when the
+                    // requested Go module file is already cached. Falls
+                    // through to upstream HEAD on cache miss only.
+                    new HeadProxySlice(remote, storage)
                 ),
                 new RtRulePath(
                     MethodRule.GET,

@@ -29,7 +29,6 @@ public final class KeyStoreFactory {
      * @param yaml Settings of key store
      * @return KeyStore
      */
-    @SuppressWarnings("PMD.ProhibitPublicStaticMethods")
     public static KeyStore newInstance(final YamlMapping yaml) {
         final List<KeyStore> keystores = List.of(
             new JksKeyStore(yaml), new PemKeyStore(yaml), new PfxKeyStore(yaml)

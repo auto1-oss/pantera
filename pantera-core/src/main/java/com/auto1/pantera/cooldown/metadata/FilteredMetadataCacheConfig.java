@@ -12,6 +12,7 @@ package com.auto1.pantera.cooldown.metadata;
 
 import com.amihaiemil.eoyaml.YamlMapping;
 import java.time.Duration;
+import java.util.Locale;
 
 /**
  * Configuration for FilteredMetadataCache (cooldown metadata caching).
@@ -41,14 +42,21 @@ import java.time.Duration;
 public final class FilteredMetadataCacheConfig {
 
     /**
-     * Default TTL for cache entries (24 hours).
+     * Default TTL for cache entries (10 minutes).
+     *
+     * <p>Reduced from 24 h to 10 m as defense-in-depth: with eager envelope
+     * invalidation wired into every block state-change point the TTL should
+     * almost never be the last line of defence, but keeping it short (10 m)
+     * limits the blast radius of any missed invalidation (network partition,
+     * Valkey hiccup) to 10 minutes instead of a full day.</p>
      */
-    public static final Duration DEFAULT_TTL = Duration.ofHours(24);
+    public static final Duration DEFAULT_TTL = Duration.ofMinutes(10);
 
     /**
-     * Default maximum L1 cache size (5,000 packages).
+     * Default maximum L1 cache size (50,000 packages — H4).
+     * Configurable via {@code PANTERA_COOLDOWN_METADATA_L1_SIZE} env var.
      */
-    public static final int DEFAULT_MAX_SIZE = 5_000;
+    public static final int DEFAULT_MAX_SIZE = 50_000;
 
     /**
      * Default L1 TTL when L2 is enabled (5 minutes).
@@ -56,9 +64,13 @@ public final class FilteredMetadataCacheConfig {
     public static final Duration DEFAULT_L1_TTL = Duration.ofMinutes(5);
 
     /**
-     * Default L2 TTL (24 hours).
+     * Default L2 TTL (10 minutes).
+     *
+     * <p>Reduced from 24 h to 10 m as defense-in-depth alongside eager envelope
+     * invalidation. Even if the primary invalidation path fails (e.g. Valkey
+     * network partition), the stale envelope will expire within 10 minutes.</p>
      */
-    public static final Duration DEFAULT_L2_TTL = Duration.ofHours(24);
+    public static final Duration DEFAULT_L2_TTL = Duration.ofMinutes(10);
 
     /**
      * Default L1 max size when L2 enabled (500 - reduced for large metadata).
@@ -230,7 +242,7 @@ public final class FilteredMetadataCacheConfig {
      * Get the global instance.
      * @return Global config (defaults if not initialized)
      */
-    public static FilteredMetadataCacheConfig getInstance() {
+    public static FilteredMetadataCacheConfig getInstance() { // NOPMD SingletonClassReturningNewInstance - "configured-or-default" accessor; new is the safe default when init() was never called
         if (instance == null) {
             return new FilteredMetadataCacheConfig();
         }
@@ -290,7 +302,7 @@ public final class FilteredMetadataCacheConfig {
             return defaultVal;
         }
         try {
-            final String trimmed = value.trim().toLowerCase();
+            final String trimmed = value.trim().toLowerCase(Locale.ROOT);
             if (trimmed.endsWith("d")) {
                 return Duration.ofDays(Long.parseLong(trimmed.substring(0, trimmed.length() - 1)));
             } else if (trimmed.endsWith("h")) {

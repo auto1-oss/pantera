@@ -18,7 +18,6 @@ import java.time.format.DateTimeFormatter;
  * NPM Package.
  * @since 0.1
  */
-@SuppressWarnings("PMD.AvoidFieldNameMatchingMethodName")
 public final class NpmPackage {
     /**
      * Package name.
@@ -105,7 +104,6 @@ public final class NpmPackage {
      * NPM Package metadata.
      * @since 0.2
      */
-    @SuppressWarnings("PMD.AvoidDuplicateLiterals")
     public static class Metadata {
         /**
          * Last modified date.

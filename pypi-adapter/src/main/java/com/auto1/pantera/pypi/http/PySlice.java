@@ -57,7 +57,8 @@ public final class PySlice extends Slice.Wrap {
         final String name,
         final Optional<Queue<ArtifactEvent>> queue
     ) {
-        this(storage, policy, auth, null, name, queue);
+        this(storage, policy, auth, null, name, queue,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
     }
 
     /**
@@ -76,6 +77,23 @@ public final class PySlice extends Slice.Wrap {
         final TokenAuthentication tokenAuth,
         final String name,
         final Optional<Queue<ArtifactEvent>> queue
+    ) {
+        this(storage, policy, basicAuth, tokenAuth, name, queue,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+    }
+
+    /**
+     * Ctor with synchronous artifact-index writer.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public PySlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> queue,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
     ) {
         super(
             new SliceRoute(
@@ -104,7 +122,7 @@ public final class PySlice extends Slice.Wrap {
                         )
                     ),
                     PySlice.createAuthSlice(
-                        new WheelSlice(storage, queue, name),
+                        new WheelSlice(storage, queue, name, syncIndex),
                         basicAuth,
                         tokenAuth,
                         new OperationControl(

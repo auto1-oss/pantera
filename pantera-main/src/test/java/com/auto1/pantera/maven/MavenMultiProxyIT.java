@@ -27,7 +27,6 @@ import org.junit.jupiter.params.provider.ValueSource;
  *
  * @since 0.12
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 @DisabledOnOs(OS.WINDOWS)
 final class MavenMultiProxyIT {
 

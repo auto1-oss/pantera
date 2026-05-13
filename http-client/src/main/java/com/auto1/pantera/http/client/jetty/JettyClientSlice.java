@@ -21,6 +21,8 @@ import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.trace.TraceHeaders;
+import com.auto1.pantera.metrics.MicrometerMetrics;
+import org.apache.logging.log4j.ThreadContext;
 import io.reactivex.Flowable;
 import io.reactivex.processors.UnicastProcessor;
 import org.apache.hc.core5.net.URIBuilder;
@@ -28,6 +30,7 @@ import org.eclipse.jetty.client.AsyncRequestContent;
 import org.eclipse.jetty.client.HttpClient;
 import org.eclipse.jetty.client.Request;
 import org.eclipse.jetty.http.HttpFields;
+import org.eclipse.jetty.http.HttpVersion;
 import org.eclipse.jetty.io.Content;
 import org.eclipse.jetty.util.Callback;
 import java.net.URI;
@@ -89,16 +92,31 @@ final class JettyClientSlice implements Slice {
         this.acquireTimeoutMillis = acquireTimeoutMillis;
     }
 
+    @Override
     public CompletableFuture<Response> response(
         RequestLine line, Headers headers, com.auto1.pantera.asto.Content body
     ) {
         final Request request = this.buildRequest(headers, line);
         final CompletableFuture<Response> res = new CompletableFuture<>();
+        // M1 (Finding #8): outbound observability. Snapshot caller_tag and
+        // repo_name from the calling thread's MDC BEFORE we hand off to
+        // Jetty's async machinery — once the request.send callback fires we
+        // may be on a Jetty-internal thread that does not carry our
+        // ThreadContext. The recorded values are then closed-over by the
+        // callback below. See analysis/03-findings.md finding #8 + the M1
+        // entry in analysis/plan/v1/PLAN.md.
+        final String callerTag = nullToDefault(
+            ThreadContext.get("caller.tag"), "foreground"
+        );
+        final String repoName = nullToDefault(
+            ThreadContext.get("repository.name"), "unknown"
+        );
+        final long requestStartNanos = System.nanoTime();
         // Streaming: emit chunks as they arrive instead of buffering everything.
         // UnicastProcessor supports backpressure and single-subscriber semantics.
         final UnicastProcessor<ByteBuffer> processor = UnicastProcessor.create();
         if (line.method() != RqMethod.HEAD) {
-            final AsyncRequestContent async = new AsyncRequestContent();
+            final AsyncRequestContent async = new AsyncRequestContent(); // NOPMD CloseResource - lifecycle owned by Jetty request; closed via Flowable.doFinally(async::close)
             Flowable.fromPublisher(body)
                 .doOnError(async::fail)
                 .doOnCancel(
@@ -117,6 +135,11 @@ final class JettyClientSlice implements Slice {
                 );
             request.body(async);
         }
+        // Record ALPN-negotiated protocol exactly once per upstream response.
+        // onResponseBegin fires when the response status line is received,
+        // BEFORE any body chunks or completion callbacks — this gives a
+        // single, race-free counter tick for every response that arrives.
+        request.onResponseBegin(JettyClientSlice::recordHttp2Negotiation);
         request.onResponseContentSource(
                 (response, source) -> {
                     // Complete the response future NOW with headers + streaming body.
@@ -180,21 +203,91 @@ final class JettyClientSlice implements Slice {
                         // Complete the processor in case it was created but never used
                         // (edge case: content source callback fired but no chunks)
                         processor.onComplete();
+                        // M1 outbound metric: response received, bucket by status.
+                        recordOutboundMetric(
+                            callerTag, repoName, requestStartNanos,
+                            result.getResponse().getStatus(), null
+                        );
                     } else {
-                        EcsLogger.error("com.auto1.pantera.http.client")
-                            .message("HTTP request failed")
-                            .eventCategory("web")
-                            .eventAction("http_request_send")
-                            .eventOutcome("failure")
-                            .error(result.getFailure())
-                            .log();
+                        final Throwable failure = result.getFailure();
+                        // Idle-close is a normal connection-lifecycle event
+                        // (Jetty HTTP client 30s idle timeout firing on an
+                        // otherwise-healthy upstream). Downgrade to DEBUG so
+                        // it stops counting as a request failure in the logs
+                        // (v2.1.4 WI-00, forensic §1.7 F4.4).
+                        if (isIdleTimeout(failure)) {
+                            EcsLogger.debug("com.auto1.pantera.http.client")
+                                .message("HTTP client connection closed by idle timeout")
+                                .eventCategory("web")
+                                .eventAction("http_idle_close")
+                                .error(failure)
+                                .log();
+                        } else {
+                            EcsLogger.error("com.auto1.pantera.http.client")
+                                .message("HTTP request failed")
+                                .eventCategory("web")
+                                .eventAction("http_request_send")
+                                .eventOutcome("failure")
+                                .error(failure)
+                                .log();
+                        }
                         // Complete processor with error so subscribers don't hang
-                        processor.onError(result.getFailure());
-                        res.completeExceptionally(result.getFailure());
+                        processor.onError(failure);
+                        res.completeExceptionally(failure);
+                        // M1 outbound metric: request failed, bucket by exception.
+                        recordOutboundMetric(
+                            callerTag, repoName, requestStartNanos, -1, failure
+                        );
                     }
                 }
         );
         return res;
+    }
+
+    /**
+     * M1 (Finding #8) — emit {@code pantera_upstream_requests_total} +
+     * {@code pantera_proxy_429_total} for this outbound call.
+     *
+     * <p>Single funnel through the metric API so every outbound request
+     * is counted exactly once, with caller_tag attribution and outcome
+     * bucketing. Idempotent if MicrometerMetrics is uninitialised (e.g.
+     * tests bootstrap without the registry).</p>
+     *
+     * @param callerTag         caller_tag snapshot taken before
+     *     {@code request.send()} (the Jetty callback may run on a
+     *     thread that does not carry our ThreadContext).
+     * @param repoName          repo_name snapshot, same rationale.
+     * @param requestStartNanos start time captured before send.
+     * @param statusCode        upstream HTTP status, or {@code -1} on
+     *     failure.
+     * @param failure           upstream failure, or {@code null} on success.
+     */
+    private void recordOutboundMetric(
+        final String callerTag,
+        final String repoName,
+        final long requestStartNanos,
+        final int statusCode,
+        final Throwable failure
+    ) {
+        if (!MicrometerMetrics.isInitialized()) {
+            return;
+        }
+        final long durationMillis =
+            (System.nanoTime() - requestStartNanos) / 1_000_000L;
+        final String outcome = (failure == null)
+            ? MicrometerMetrics.outcomeBucket(statusCode)
+            : MicrometerMetrics.outcomeFromFailure(failure);
+        MicrometerMetrics.getInstance().recordOutboundRequest(
+            this.host, callerTag, outcome, durationMillis
+        );
+        if (statusCode == 429) {
+            MicrometerMetrics.getInstance().recordUpstream429(this.host, repoName);
+        }
+    }
+
+    /** Return {@code value} if non-null, otherwise {@code fallback}. */
+    private static String nullToDefault(final String value, final String fallback) {
+        return value == null ? fallback : value;
     }
 
     /**
@@ -283,7 +376,6 @@ final class JettyClientSlice implements Slice {
      *
      * @since 0.3
      */
-    @SuppressWarnings({"PMD.OnlyOneReturn", "PMD.CognitiveComplexity"})
     private static final class StreamingDemander implements Runnable {
 
         /**
@@ -427,5 +519,71 @@ final class JettyClientSlice implements Slice {
         copy.put(slice);
         copy.flip();
         return copy;
+    }
+
+    /**
+     * Increment {@code pantera_http2_negotiated_total{upstream_host,version}}
+     * for an upstream response, using ALPN canonical names for the version
+     * label ({@code "h2"} for HTTP/2, {@code "http/1.1"} for HTTP/1.1).
+     *
+     * <p>Jetty's {@link HttpVersion} enum stringifies as {@code "HTTP/2.0"}
+     * and {@code "HTTP/1.1"}, but the v2.2.0 perf-pack metric spec and
+     * standard Prometheus dashboards use the ALPN identifiers, so we map
+     * here.
+     *
+     * <p>No-op when {@link MicrometerMetrics} is not initialized (e.g. in
+     * unit tests that don't bring up the full metrics stack).
+     *
+     * @param response the Jetty client response (non-null on success path)
+     */
+    private static void recordHttp2Negotiation(
+        final org.eclipse.jetty.client.Response response
+    ) {
+        if (!MicrometerMetrics.isInitialized()) {
+            return;
+        }
+        final HttpVersion version = response.getVersion();
+        final String label;
+        if (version == HttpVersion.HTTP_2) {
+            label = "h2";
+        } else if (version == HttpVersion.HTTP_1_1) {
+            label = "http/1.1";
+        } else {
+            // HTTP/1.0, HTTP/3, or unknown — pass through Jetty's canonical
+            // string so we still see distribution rather than dropping it.
+            label = version == null ? "unknown" : version.asString();
+        }
+        final String host = response.getRequest().getURI().getHost();
+        MicrometerMetrics.getInstance().recordHttp2Negotiation(
+            host == null ? "unknown" : host, label
+        );
+    }
+
+    /**
+     * Return {@code true} iff the failure is Jetty's "Idle timeout expired:
+     * N/N ms" (a {@link TimeoutException} emitted when a connection goes
+     * idle and the 30s Jetty-client idle timeout fires). This is a normal
+     * connection-lifecycle signal, not a request failure, and callers log
+     * it at DEBUG rather than ERROR.
+     *
+     * @param failure The throwable from {@code result.getFailure()}
+     * @return {@code true} if this is an idle-timeout close
+     */
+    private static boolean isIdleTimeout(final Throwable failure) {
+        if (failure == null) {
+            return false;
+        }
+        Throwable cursor = failure;
+        // Walk the cause chain — Jetty may wrap the TimeoutException
+        for (int hops = 0; cursor != null && hops < 5; hops = hops + 1) {
+            if (cursor instanceof TimeoutException) {
+                final String msg = cursor.getMessage();
+                if (msg != null && msg.contains("Idle timeout expired")) {
+                    return true;
+                }
+            }
+            cursor = cursor.getCause();
+        }
+        return false;
     }
 }

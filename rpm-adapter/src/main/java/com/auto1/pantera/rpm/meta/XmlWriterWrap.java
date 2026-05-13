@@ -18,7 +18,6 @@ import javax.xml.stream.XMLStreamWriter;
  * Envelop for XmlFile Class.
  * @since 0.7
  */
-@SuppressWarnings("PMD.TooManyMethods")
 public class XmlWriterWrap implements XMLStreamWriter {
     /**
      * XML stream.
@@ -48,7 +47,6 @@ public class XmlWriterWrap implements XMLStreamWriter {
         this.xml.writeAttribute(localname, value);
     }
 
-    @SuppressWarnings("PMD.UseObjectForClearerAPI")
     @Override
     public void writeAttribute(
         final String prefix,

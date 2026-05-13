@@ -31,7 +31,6 @@ import org.junit.jupiter.params.provider.CsvSource;
  * Integration tests for Npm repository.
  * @since 0.12
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 @EnabledOnOs({OS.LINUX, OS.MAC})
 final class NpmITCase {
     /**

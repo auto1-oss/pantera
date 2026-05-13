@@ -21,6 +21,7 @@ import com.auto1.pantera.http.auth.AuthzSlice;
 import com.auto1.pantera.http.auth.CombinedAuthScheme;
 import com.auto1.pantera.http.auth.OperationControl;
 import com.auto1.pantera.http.auth.TokenAuthentication;
+import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rt.MethodRule;
 import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
@@ -45,7 +46,6 @@ import java.util.zip.GZIPOutputStream;
  * A slice, which servers gem packages.
  * Ruby HTTP layer.
  */
-@SuppressWarnings({"PMD.UnusedPrivateField", "PMD.SingularField"})
 public final class GemSlice extends Slice.Wrap {
 
     /**
@@ -86,7 +86,8 @@ public final class GemSlice extends Slice.Wrap {
      * @param name Repository name
      */
     public GemSlice(Storage storage, Policy<?> policy, Authentication auth, String name) {
-        this(storage, policy, auth, null, name, Optional.empty());
+        this(storage, policy, auth, null, name, Optional.empty(),
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
     }
 
     /**
@@ -105,7 +106,8 @@ public final class GemSlice extends Slice.Wrap {
         final String name,
         final Optional<Queue<ArtifactEvent>> events
     ) {
-        this(storage, policy, auth, null, name, events);
+        this(storage, policy, auth, null, name, events,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
     }
 
     /**
@@ -126,6 +128,23 @@ public final class GemSlice extends Slice.Wrap {
         final String name,
         final Optional<Queue<ArtifactEvent>> events
     ) {
+        this(storage, policy, basicAuth, tokenAuth, name, events,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+    }
+
+    /**
+     * Ctor with synchronous artifact-index writer.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public GemSlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
+    ) {
         super(
             new SliceRoute(
                 new RtRulePath(
@@ -134,7 +153,7 @@ public final class GemSlice extends Slice.Wrap {
                         new RtRule.ByPath("/api/v1/gems")
                     ),
                     GemSlice.createAuthSlice(
-                        new SubmitGemSlice(storage, events, name),
+                        new SubmitGemSlice(storage, events, name, syncIndex),
                         basicAuth,
                         tokenAuth,
                         new OperationControl(
@@ -190,7 +209,6 @@ public final class GemSlice extends Slice.Wrap {
      *
      * @param storage Repository storage
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private static void initEmptySpecs(final Storage storage) {
         for (final String name : GemSlice.SPECS_FILES) {
             final Key key = new Key.From(name);
@@ -202,9 +220,11 @@ public final class GemSlice extends Slice.Wrap {
                     storage.save(key, new Content.From(data)).join();
                 }
             } catch (final Exception err) {
-                System.err.println(
-                    "GemSlice: failed to init specs file " + name + ": " + err
-                );
+                EcsLogger.warn("com.auto1.pantera.gem")
+                    .message("Failed to init specs file")
+                    .field("file", name)
+                    .error(err)
+                    .log();
             }
         }
     }

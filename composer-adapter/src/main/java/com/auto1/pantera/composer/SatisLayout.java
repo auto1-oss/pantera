@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -197,11 +198,11 @@ public final class SatisLayout {
         // Tagged releases (ALL go to main file): 1.0.0, 1.0.0-RC1, 1.0.0-beta, 1.0.0-alpha, etc.
         final boolean isDevBranch = version
             .map(v -> {
-                final String lower = v.toLowerCase();
+                final String lower = v.toLowerCase(Locale.ROOT);
                 // Match dev branches: dev-*, *.x-dev, *-dev (but NOT version-RC, version-beta, version-alpha)
                 return lower.startsWith("dev-")           // dev-master, dev-feature
                     || lower.matches(".*\\.x-dev")        // 7.3.x-dev, 2.1.x-dev
-                    || lower.equals("dev-master")         // explicit dev-master
+                    || "dev-master".equals(lower)         // explicit dev-master
                     || (lower.endsWith("-dev") && !lower.matches(".*\\d+\\.\\d+.*-dev")); // branch-dev but not version-dev
             })
             .orElse(false);

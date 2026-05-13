@@ -52,7 +52,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * @since 2.1.3
  */
-@SuppressWarnings("PMD.TooManyMethods")
 final class BaseCachedProxySliceStaleTest {
 
     private static final String ARTIFACT_PATH =

@@ -27,10 +27,10 @@ SOFTWARE.
   <parent>
     <groupId>com.auto1.pantera</groupId>
     <artifactId>pantera</artifactId>
-    <version>2.1.4</version>
+    <version>2.2.0</version>
   </parent>
   <artifactId>http-client</artifactId>
-  <version>2.1.4</version>
+  <version>2.2.0</version>
   <name>Pantera HTTP client</name>
   <url>https://github.com/auto1-oss/pantera/tree/master/http-client</url>
   <properties>
@@ -40,7 +40,7 @@ SOFTWARE.
     <dependency>
       <groupId>com.auto1.pantera</groupId>
       <artifactId>pantera-core</artifactId>
-      <version>2.1.4</version>
+      <version>2.2.0</version>
     </dependency>
     <!-- Micrometer for Jetty metrics -->
     <dependency>
@@ -58,6 +58,22 @@ SOFTWARE.
     <dependency>
       <groupId>org.eclipse.jetty</groupId>
       <artifactId>jetty-http</artifactId>
+      <version>${jetty.version}</version>
+    </dependency>
+    <!--
+      HTTP/2 client dependencies. Used by JettyClientSlices to build a
+      HttpClientTransportDynamic with ALPN-negotiated h2/h1.1 fallback
+      when the runtime HttpTuning protocol is H2 or AUTO. See task 8 of
+      docs/superpowers/plans/2026-05-04-pantera-http2-prefetch.md.
+    -->
+    <dependency>
+      <groupId>org.eclipse.jetty.http2</groupId>
+      <artifactId>jetty-http2-client</artifactId>
+      <version>${jetty.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.eclipse.jetty.http2</groupId>
+      <artifactId>jetty-http2-client-transport</artifactId>
       <version>${jetty.version}</version>
     </dependency>
     <dependency>
@@ -101,7 +117,7 @@ SOFTWARE.
     <dependency>
       <groupId>com.auto1.pantera</groupId>
       <artifactId>vertx-server</artifactId>
-      <version>2.1.4</version>
+      <version>2.2.0</version>
       <scope>test</scope>
     </dependency>
   </dependencies>

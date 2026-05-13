@@ -295,10 +295,8 @@ public final class HttpNpmRemote implements NpmRemote {
         if (cause instanceof java.util.concurrent.CompletionException && cause.getCause() != null) {
             cause = cause.getCause();
         }
-        if (cause instanceof PanteraHttpException) {
-            return ((PanteraHttpException) cause).status().code() == 304;
-        }
-        return false;
+        return cause instanceof PanteraHttpException
+            && ((PanteraHttpException) cause).status().code() == 304;
     }
 
     private static boolean isNotFoundError(final Throwable throwable) {

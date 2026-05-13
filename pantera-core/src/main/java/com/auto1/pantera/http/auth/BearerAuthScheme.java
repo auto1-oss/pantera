@@ -24,7 +24,6 @@ import java.util.concurrent.CompletionStage;
  *
  * @since 0.17
  */
-@SuppressWarnings("PMD.OnlyOneReturn")
 public final class BearerAuthScheme implements AuthScheme {
 
     /**

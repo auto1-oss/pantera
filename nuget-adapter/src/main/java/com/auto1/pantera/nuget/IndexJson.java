@@ -34,13 +34,21 @@ import org.apache.maven.artifact.versioning.ComparableVersion;
  * <a href="https://learn.microsoft.com/en-us/nuget/api/registration-base-url-resource#registration-page-object">Registration page</a>.
  * @since 1.5
  */
-@SuppressWarnings("PMD.AbstractClassWithoutAbstractMethod")
-public abstract class IndexJson {
+public class IndexJson {
 
     /**
      * Default null value for index.json required fields with urls values.
      */
     private static final String NULL = "null";
+
+    /**
+     * Package-private ctor; this class is a namespace base for the nested
+     * {@link Delete} and {@link Update} subclasses and is not meant to be
+     * instantiated directly.
+     */
+    IndexJson() {
+        // namespace base; not instantiated outside this file
+    }
 
     /**
      * The name of the `@id` json field.
@@ -264,7 +272,6 @@ public abstract class IndexJson {
          * @param old Existing packages metadata array
          * @return Sorted by packages version list of the packages metadata including new package
                  */
-        @SuppressWarnings("PMD.AssignmentInOperand")
         private static List<JsonObject> sortedPackages(final JsonObject newest,
             final String version, final JsonObject old) {
             List<JsonObject> list = Collections.singletonList(newest);

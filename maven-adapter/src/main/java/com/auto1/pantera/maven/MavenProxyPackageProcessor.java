@@ -74,7 +74,6 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
     private Storage asto;
 
     @Override
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.EmptyControlStatement"})
     public void execute(final JobExecutionContext context) {
         this.resolveFromRegistry(context);
         if (this.asto == null || this.packages == null || this.events == null) {
@@ -87,7 +86,6 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
     /**
      * Process packages in parallel batches for better performance.
      */
-    @SuppressWarnings({"PMD.AssignmentInOperand", "PMD.AvoidCatchingGenericException"})
     private void processPackagesBatch() {
         // Set trace context for background job
         final String traceId = TraceContext.generateTraceId();
@@ -164,7 +162,6 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
      * @param event Package event to process
      * @return CompletableFuture that completes when processing is done
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private CompletableFuture<Void> processPackageAsync(final ProxyArtifactEvent event) {
         return this.asto.list(event.artifactKey())
             .thenCompose(keys -> {
@@ -288,7 +285,6 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
      * Set registry key for events queue (JDBC mode).
      * @param key Registry key
      */
-    @SuppressWarnings("PMD.MethodNamingConventions")
     public void setEvents_key(final String key) {
         this.events = JobDataRegistry.lookup(key);
     }
@@ -297,7 +293,6 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
      * Set registry key for packages queue (JDBC mode).
      * @param key Registry key
      */
-    @SuppressWarnings("PMD.MethodNamingConventions")
     public void setPackages_key(final String key) {
         this.packages = JobDataRegistry.lookup(key);
     }
@@ -306,7 +301,6 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
      * Set registry key for storage (JDBC mode).
      * @param key Registry key
      */
-    @SuppressWarnings("PMD.MethodNamingConventions")
     public void setStorage_key(final String key) {
         this.asto = JobDataRegistry.lookup(key);
     }

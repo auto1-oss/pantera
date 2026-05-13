@@ -26,7 +26,6 @@ import org.junit.jupiter.params.provider.CsvSource;
  *
  * @since 0.11
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 @DisabledOnOs(OS.WINDOWS)
 final class MavenProxyIT {
 

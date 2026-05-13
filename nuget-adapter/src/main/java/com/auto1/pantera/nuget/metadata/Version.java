@@ -23,7 +23,6 @@ import java.util.regex.Pattern;
  *
  * @since 0.1
  */
-@SuppressWarnings("PMD.TooManyMethods")
 public final class Version implements Comparable<Version>, NuspecField {
 
     /**

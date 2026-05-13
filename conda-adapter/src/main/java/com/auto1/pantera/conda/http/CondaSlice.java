@@ -53,7 +53,6 @@ import java.util.regex.Pattern;
  * we cannot trim first part of the path.
  * @since 0.4
  */
-@SuppressWarnings("PMD.ExcessiveMethodLength")
 public final class CondaSlice extends Slice.Wrap {
 
     /**
@@ -74,6 +73,18 @@ public final class CondaSlice extends Slice.Wrap {
     public CondaSlice(final Storage storage, final Policy<?> policy, final Authentication users,
         final Tokens tokens, final String url, final String repo,
         final Optional<Queue<ArtifactEvent>> events) {
+        this(storage, policy, users, tokens, url, repo, events,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+    }
+
+    /**
+     * Ctor with synchronous artifact-index writer.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public CondaSlice(final Storage storage, final Policy<?> policy, final Authentication users,
+        final Tokens tokens, final String url, final String repo,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex) {
         super(
             new SliceRoute(
                 new RtRulePath(
@@ -166,7 +177,7 @@ public final class CondaSlice extends Slice.Wrap {
                         new RtRule.ByPath("/?[a-z0-9-._]*/[a-z0-9-._]*/[a-z0-9-._]*(\\.tar\\.bz2|\\.conda)$"),
                         MethodRule.POST
                     ),
-                    new UpdateSlice(storage, events, repo)
+                    new UpdateSlice(storage, events, repo, syncIndex)
                 ),
                 new RtRulePath(MethodRule.HEAD, new SliceSimple(ResponseBuilder.ok().build())),
                 new RtRulePath(

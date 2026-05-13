@@ -10,108 +10,67 @@
  */
 package com.auto1.pantera.http.cache;
 
-import com.auto1.pantera.asto.Key;
-
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-
 /**
- * Global registry of all proxy NegativeCache instances.
- * Enables cross-adapter cache invalidation when artifacts are published.
+ * Global accessor for the single shared {@link NegativeCache} bean.
+ *
+ * <p>Set once at startup from {@code RepositorySlices}; adapters obtain it via
+ * {@link #sharedCache()}. Falls back to a default instance if the shared cache
+ * has not been initialized (used by tests and early startup).
  *
  * @since 1.20.13
  */
 public final class NegativeCacheRegistry {
 
-    /**
-     * Singleton instance.
-     */
     private static final NegativeCacheRegistry INSTANCE = new NegativeCacheRegistry();
 
-    /**
-     * Registered caches: key = "repoType:repoName".
-     */
-    private final ConcurrentMap<String, NegativeCache> caches;
+    private static final NegativeCache FALLBACK = createFallback();
 
-    /**
-     * Private ctor.
-     */
+    private volatile NegativeCache shared;
+
     private NegativeCacheRegistry() {
-        this.caches = new ConcurrentHashMap<>();
     }
 
-    /**
-     * Get singleton instance.
-     * @return Registry instance
-     */
     public static NegativeCacheRegistry instance() {
         return INSTANCE;
     }
 
     /**
-     * Register a negative cache instance.
-     * @param repoType Repository type
-     * @param repoName Repository name
-     * @param cache Negative cache instance
+     * Set the single shared NegativeCache bean. Called once at startup.
+     * @param cache Shared NegativeCache instance
      */
-    public void register(
-        final String repoType, final String repoName, final NegativeCache cache
-    ) {
-        this.caches.put(key(repoType, repoName), cache);
+    public void setSharedCache(final NegativeCache cache) {
+        this.shared = cache;
     }
 
     /**
-     * Unregister a negative cache instance.
-     * @param repoType Repository type
-     * @param repoName Repository name
+     * Check whether a shared cache has been explicitly set.
+     * @return true if the shared cache is initialized
      */
-    public void unregister(final String repoType, final String repoName) {
-        this.caches.remove(key(repoType, repoName));
+    public boolean isSharedCacheSet() {
+        return this.shared != null;
     }
 
     /**
-     * Invalidate a specific artifact path across ALL registered negative caches.
-     * Called when an artifact is published to ensure stale 404 entries are cleared.
-     *
-     * @param artifactPath Artifact path to invalidate
+     * Get the shared NegativeCache bean. Returns a default fallback if the
+     * shared bean has not been initialized yet (tests, early startup).
+     * @return Shared NegativeCache
      */
-    public void invalidateGlobally(final String artifactPath) {
-        final Key artKey = new Key.From(artifactPath);
-        this.caches.values().forEach(cache -> cache.invalidate(artKey));
-    }
-
-    /**
-     * Invalidate a specific artifact path in a specific repository's negative cache.
-     *
-     * @param repoType Repository type
-     * @param repoName Repository name
-     * @param artifactPath Artifact path to invalidate
-     */
-    public void invalidate(
-        final String repoType, final String repoName, final String artifactPath
-    ) {
-        final NegativeCache cache = this.caches.get(key(repoType, repoName));
-        if (cache != null) {
-            cache.invalidate(new Key.From(artifactPath));
+    public NegativeCache sharedCache() {
+        final NegativeCache s = this.shared;
+        if (s != null) {
+            return s;
         }
+        return FALLBACK;
     }
 
     /**
-     * Get the number of registered caches.
-     * @return Count of registered caches
-     */
-    public int size() {
-        return this.caches.size();
-    }
-
-    /**
-     * Clear all registrations (for testing).
+     * Clear the shared reference (for testing).
      */
     public void clear() {
-        this.caches.clear();
+        this.shared = null;
     }
 
-    private static String key(final String repoType, final String repoName) {
-        return repoType + ":" + repoName;
+    private static NegativeCache createFallback() {
+        return new NegativeCache(new com.auto1.pantera.cache.NegativeCacheConfig());
     }
 }

@@ -14,6 +14,9 @@ import com.auto1.pantera.api.RepositoryEvents;
 import com.auto1.pantera.api.v1.AsyncApiVerticle;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.auth.JwtTokens;
+import com.auto1.pantera.cooldown.CooldownCleanupFallback;
+import com.auto1.pantera.cooldown.CooldownRepository;
+import com.auto1.pantera.cooldown.PgCronStatus;
 import com.auto1.pantera.http.BaseSlice;
 import com.auto1.pantera.http.MainSlice;
 import com.auto1.pantera.http.Slice;
@@ -61,6 +64,7 @@ import org.apache.commons.lang3.tuple.Pair;
 import com.auto1.pantera.diagnostics.BlockedThreadDiagnostics;
 
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -73,7 +77,6 @@ import java.util.concurrent.ConcurrentHashMap;
  * Vertx server entry point.
  * @since 1.0
  */
-@SuppressWarnings("PMD.PrematureDeclaration")
 public final class VertxMain {
 
     /**
@@ -113,9 +116,26 @@ public final class VertxMain {
     private com.auto1.pantera.settings.ConfigWatchService configWatch;
 
     /**
+     * Vertx-periodic cooldown cleanup fallback. Only started when pg_cron
+     * is absent or its cleanup job is not scheduled. Nullable.
+     */
+    private CooldownCleanupFallback cooldownCleanupFallback;
+
+    /**
      * Vert.x instance - must be closed on shutdown to release event loops and worker threads.
      */
     private Vertx vertx;
+
+    /**
+     * Runtime settings cache (LISTEN/NOTIFY-driven snapshot of pantera_settings).
+     * Null when no DataSource is configured (DB-less boot, tests).
+     */
+    private com.auto1.pantera.settings.runtime.RuntimeSettingsCache settingsCache;
+    // M2 (analysis/plan/v1/PLAN.md): the prefetch subsystem fields
+    // (prefetchCoordinator, prefetchDispatcher, prefetchMetrics) are
+    // removed alongside the package. Hook surfaces (onCacheWrite,
+    // ProxyCacheWriter.onWrite) remain in place as NO_OP for future
+    // observed-coordinate prewarming.
 
     /**
      * Ctor.
@@ -146,6 +166,13 @@ public final class VertxMain {
             com.auto1.pantera.http.log.EcsMdc.SPAN_ID,
             com.auto1.pantera.http.trace.SpanContext.generateHex16()
         );
+        // RCA-5 (v2.2.0): Vert.x writes a per-process cache dir
+        // (vertx.cacheDirBase) on every boot and never cleans up siblings
+        // from prior boots. Production was carrying 11k+ orphan tmp-<uuid>
+        // directories (4 GB) which slowed FileStorage I/O and bloated the
+        // /var/pantera/cache mount. Sweep any tmp-* dir older than 1 hour
+        // before Vert.x boots so the only live one will be ours.
+        cleanupStaleVertxTmpDirs();
         // Pre-parse YAML to detect DB configuration for Quartz JDBC clustering
         final com.amihaiemil.eoyaml.YamlMapping yamlContent =
             com.amihaiemil.eoyaml.Yaml.createYamlInput(this.config.toFile()).readYamlMapping();
@@ -175,6 +202,28 @@ public final class VertxMain {
             new YamlToDbMigrator(
                 ds, securityDir, reposDir, this.config.toAbsolutePath()
             ).migrate();
+            // Runtime-tunable settings: seed defaults on first boot, then start
+            // the LISTEN/NOTIFY-backed cache so PATCHes via the Settings API
+            // propagate to all consumers without a server restart. Construction
+            // happens here (before any verticle deploys or slice warmup) so
+            // future subscribers can reliably resolve the singleton via the
+            // boot wiring.
+            final com.auto1.pantera.db.dao.SettingsDao settingsDao =
+                new com.auto1.pantera.db.dao.SettingsDao(ds);
+            new com.auto1.pantera.settings.runtime.SettingsBootstrap(settingsDao)
+                .seedIfMissing();
+            // NOTE: PgListenNotify holds one Hikari connection indefinitely (the LISTEN
+            // connection has to stay open). With pool leak detection enabled
+            // (PANTERA_DB_LEAK_DETECTION_MS=5000 by default), Hikari logs a WARN every
+            // 5s for this connection. The warning is benign — the listener is doing
+            // exactly what it's designed to do — but it's noisy in dev logs.
+            // TODO(perf-pack): give PgListenNotify a dedicated DriverManager.getConnection
+            // (bypass the pool entirely) to silence the warning. Tracked separately.
+            this.settingsCache =
+                new com.auto1.pantera.settings.runtime.RuntimeSettingsCache(
+                    settingsDao, ds
+                );
+            this.settingsCache.start();
             quartz = new QuartzService(ds);
             EcsLogger.info("com.auto1.pantera")
                 .message("Quartz JDBC clustering enabled with shared DataSource")
@@ -245,9 +294,238 @@ public final class VertxMain {
         final com.auto1.pantera.auth.JwtTokens jwtTokens = new com.auto1.pantera.auth.JwtTokens(
             rsaKeys.privateKey(), rsaKeys.publicKey(), userTokenDao, null, null, enabledCheck
         );
-        final RepositorySlices slices = new RepositorySlices(
-            settings, repos, jwtTokens
+        // Install the circuit-breaker settings loader BEFORE constructing
+        // RepositorySlices so the default-constructor activeSupplier()
+        // picks up the DB-backed loader rather than pure hardcoded
+        // defaults. When no DataSource is present (tests, DB-less boot)
+        // RepositorySlices falls back to AutoBlockSettings::defaults
+        // automatically via activeSupplier().
+        sharedDs.ifPresent(ds ->
+            com.auto1.pantera.circuit.CircuitBreakerSettingsLoader.install(
+                new com.auto1.pantera.db.dao.AuthSettingsDao(ds)
+            )
         );
+        // Install singleton PublishDateRegistry. Each adapter slice now resolves
+        // canonical publish dates via RegistryBackedInspector(repoType, registry)
+        // instead of HEAD-probing upstream — eliminates the per-cooldown-eval
+        // round-trip and gives us a single L1+L2 cache shared across adapters.
+        sharedDs.ifPresent(ds -> {
+            // Publish-date WebClient: pool sizing comes from the same
+            // {@code http_client} block in pantera.yml that the proxy clients
+            // use, so operators have a single tuning knob. Default Vert.x
+            // maxPoolSize of 5 is far too small under `go get` fanout — a
+            // hundreds-of-deps resolution times out at the connection layer
+            // ("timeout getting a connection") long before any HTTP body
+            // arrives. We also negotiate HTTP/2 via ALPN so a few
+            // connections can multiplex many concurrent streams.
+            //
+            // Concurrency is scaled to a quarter of the proxy-traffic budget
+            // because publish-date lookups all hit the SAME upstream host
+            // (e.g. proxy.golang.org). Slamming a single registry with the
+            // full proxy quota triggers per-IP rate-limits / 429s and blocks.
+            // 25% keeps us well below the typical anonymous-bot thresholds.
+            final com.auto1.pantera.http.client.HttpClientSettings httpClientSettings =
+                this.settings.httpClientSettings();
+            final double publishDateConcurrencyFactor = 0.25;
+            final int maxPool = Math.max(32, (int) Math.round(
+                httpClientSettings.maxConnectionsPerDestination()
+                    * publishDateConcurrencyFactor));
+            final int idleSec = Math.max(30,
+                (int) (httpClientSettings.idleTimeout() / 1_000L));
+            final int connectMs = Math.max(1_000,
+                (int) httpClientSettings.connectTimeout());
+            final io.vertx.ext.web.client.WebClient publishDateClient =
+                io.vertx.ext.web.client.WebClient.create(
+                    this.vertx.getDelegate(),
+                    new io.vertx.ext.web.client.WebClientOptions()
+                        // Default UA only matters if a source forgets to set
+                        // a per-request one — every PublishDateSource above
+                        // overrides this with a native ecosystem UA so
+                        // upstream registries see e.g. "Go-http-client/1.1"
+                        // or "npm/10.5..." rather than a Pantera-branded
+                        // identity that gets per-UA-rate-limited at scale.
+                        .setUserAgent(com.auto1.pantera.http.EcosystemUserAgents.GO)
+                        .setConnectTimeout(connectMs)
+                        .setIdleTimeout(idleSec)
+                        .setKeepAlive(true)
+                        .setMaxPoolSize(maxPool)
+                        .setHttp2MaxPoolSize(Math.max(4, maxPool / 8))
+                        .setHttp2MultiplexingLimit(100)
+                        .setProtocolVersion(io.vertx.core.http.HttpVersion.HTTP_2)
+                        .setUseAlpn(true)
+                );
+            // M5 / W5b (analysis/plan/v1/PLAN.md): MavenHeadSource fires
+            // a HEAD against Maven Central whenever the publish-date L1+L2
+            // cache misses for an (artifact, version) pair. With Track 5
+            // Phase 1B in place, every successful cache write enqueues a
+            // publish_date row sourced from the response Last-Modified —
+            // so steady-state the head-fallback never fires. The remaining
+            // window is the very first fetch of a brand-new (artifact,
+            // version) pair: a HEAD per first-asker. At cold-walk scale
+            // (~50 new versions in a single resolve) that is 50 extra
+            // HEADs to the same upstream we are about to hit anyway, and
+            // each is subject to the same per-IP throttling as the GET.
+            // Default behaviour in 2.2.0 is therefore "skip the HEAD";
+            // operators who explicitly need first-fetch cooldown
+            // enforcement can re-enable via the env var. The trade-off:
+            // the first asker of a freshly-published blocked version
+            // downloads the bytes before the cooldown evaluator catches
+            // it on the next request (publish_date now cached).
+            final boolean headFallbackEnabled = com.auto1.pantera.http.misc.ConfigDefaults
+                .getBoolean("PANTERA_PUBLISH_DATE_HEAD_FALLBACK_ENABLED", false);
+            final java.util.Map<String, com.auto1.pantera.publishdate.PublishDateSource>
+                publishSources = new java.util.HashMap<>();
+            if (headFallbackEnabled) {
+                final com.auto1.pantera.publishdate.sources.MavenHeadSource mavenHead =
+                    new com.auto1.pantera.publishdate.sources.MavenHeadSource(publishDateClient);
+                final com.auto1.pantera.publishdate.sources.JFrogStorageApiSource jfrogFallback =
+                    new com.auto1.pantera.publishdate.sources.JFrogStorageApiSource(
+                        publishDateClient,
+                        "https://groovy.jfrog.io/artifactory",
+                        "plugins-release"
+                    );
+                final com.auto1.pantera.publishdate.PublishDateSource mavenSource =
+                    new com.auto1.pantera.publishdate.sources.ChainedPublishDateSource(
+                        mavenHead, jfrogFallback
+                    );
+                publishSources.put("maven", mavenSource);
+                publishSources.put("gradle", mavenSource);
+            }
+            publishSources.put(
+                "npm",
+                new com.auto1.pantera.publishdate.sources.NpmRegistrySource(publishDateClient)
+            );
+            publishSources.put(
+                "pypi",
+                new com.auto1.pantera.publishdate.sources.PyPiSource(publishDateClient)
+            );
+            publishSources.put(
+                "go",
+                new com.auto1.pantera.publishdate.sources.GoProxySource(publishDateClient)
+            );
+            publishSources.put(
+                "composer",
+                new com.auto1.pantera.publishdate.sources.PackagistSource(publishDateClient)
+            );
+            publishSources.put(
+                "gem",
+                new com.auto1.pantera.publishdate.sources.RubyGemsSource(publishDateClient)
+            );
+            EcsLogger.info("com.auto1.pantera.publishdate")
+                .message("Publish-date sources configured")
+                .field("sources.head_fallback_enabled", headFallbackEnabled)
+                .field("sources.registered", String.join(",", publishSources.keySet()))
+                .eventCategory("configuration")
+                .eventAction("publish_date_init")
+                .eventOutcome("success")
+                .log();
+            final com.auto1.pantera.publishdate.DbPublishDateRegistry publishDates =
+                new com.auto1.pantera.publishdate.DbPublishDateRegistry(
+                    ds, publishSources
+                );
+            com.auto1.pantera.publishdate.PublishDateRegistries.installDefault(publishDates);
+            // Track 5 Phase 3B: register a header-based publish-date
+            // extractor for every proxy repo-type. All major upstream
+            // registries (Maven Central, npm registry, pypi
+            // files.pythonhosted.org, proxy.golang.org, packagist dist URLs,
+            // rubygems.org) emit an RFC 1123 Last-Modified header on
+            // artifact GETs, so a single parser handles them all. Adapters
+            // for ecosystems whose publish date lives in the response
+            // BODY rather than headers (docker manifests, nuget catalog,
+            // hex registry) need their own body-aware extractor; for now
+            // they fall through to the registry's NO_OP which simply
+            // skips the populate step (the DB consumer's
+            // System.currentTimeMillis() fallback applies).
+            final com.auto1.pantera.publishdate.PublishDateExtractor lastModified =
+                (headers, name, version) -> {
+                    try {
+                        return java.util.stream.StreamSupport.stream(
+                                headers.spliterator(), false
+                            )
+                            .filter(h -> "Last-Modified".equalsIgnoreCase(h.getKey()))
+                            .findFirst()
+                            .map(com.auto1.pantera.http.headers.Header::getValue)
+                            .map(val -> java.time.Instant.from(
+                                java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME
+                                    .parse(val)
+                            ));
+                    } catch (final java.time.format.DateTimeParseException ex) {
+                        return java.util.Optional.empty();
+                    }
+                };
+            final com.auto1.pantera.publishdate.PublishDateExtractors registry =
+                com.auto1.pantera.publishdate.PublishDateExtractors.instance();
+            registry.register("maven", lastModified);
+            registry.register("npm", lastModified);
+            registry.register("pypi", lastModified);
+            registry.register("go", lastModified);
+            registry.register("composer", lastModified);
+            registry.register("gem", lastModified);
+        });
+        // Wire RepositorySlices with the runtime HTTP tuning supplier so
+        // every new SharedClient picks up the latest http_client.* values.
+        // When no DB-backed cache is configured (legacy YAML-only boot),
+        // fall back to HttpTuning.defaults() so behaviour matches v2.1.
+        final java.util.function.Supplier<
+            com.auto1.pantera.settings.runtime.HttpTuning
+        > httpTuningSupplier = this.settingsCache != null
+            ? this.settingsCache::httpTuning
+            : com.auto1.pantera.settings.runtime.HttpTuning::defaults;
+        final RepositorySlices slices = new RepositorySlices(
+            settings, repos, jwtTokens,
+            com.auto1.pantera.circuit.CircuitBreakerSettingsLoader.activeSupplier(),
+            httpTuningSupplier
+        );
+        // Hot-reload: any http_client.* settings change drops every cached
+        // upstream Jetty client so the next acquire rebuilds with the new
+        // protocol / pool size / multiplexing limit. Active leases keep
+        // their existing client until release; this is the v2.2 mechanism
+        // that RuntimeSettingsCache was designed to enable.
+        if (this.settingsCache != null) {
+            this.settingsCache.addListener("http_client.", changedKey -> {
+                EcsLogger.info("com.auto1.pantera")
+                    .message("http_client.* setting changed; invalidating upstream client pool")
+                    .eventCategory("configuration")
+                    .eventAction("http_client_settings_change")
+                    .field("settings.key", changedKey)
+                    .log();
+                slices.invalidateUpstreamClients();
+            });
+        }
+        // M2 (analysis/plan/v1/PLAN.md): the prefetch subsystem boot wiring
+        // is removed. The PrefetchMetrics / PrefetchCircuitBreaker /
+        // PrefetchCoordinator / PrefetchDispatcher classes are deleted from
+        // pantera-main/.../prefetch/. CacheWriteCallbackRegistry's shared
+        // callback (its only consumer was the dispatcher) is left empty;
+        // BaseCachedProxySlice.onCacheWrite and ProxyCacheWriter.onWrite
+        // still fire as NO_OPs so a future observed-coordinate prewarming
+        // (Phase 4c, 2.3.0) can install a callback without redesigning the
+        // hook surface.
+        // Cooldown cleanup fallback: if pg_cron is not running the
+        // cleanup job, start the Vertx-periodic fallback so expired
+        // blocks still get archived and history still gets purged.
+        // Requires a DataSource (no DB => no cooldown => no cleanup).
+        // RepositorySlices construction above has already called
+        // CooldownSupport.create(settings), which runs
+        // loadDbCooldownSettings — so settings.cooldown() now reflects
+        // the DB-persisted retention/batch values the fallback reads.
+        if (sharedDs.isPresent()) {
+            final javax.sql.DataSource ds = sharedDs.get();
+            final PgCronStatus pgCron = new PgCronStatus(ds);
+            if (!pgCron.cleanupJobScheduled()) {
+                this.cooldownCleanupFallback = new CooldownCleanupFallback(
+                    new CooldownRepository(ds), settings.cooldown()
+                );
+                this.cooldownCleanupFallback.start(this.vertx.getDelegate());
+            } else {
+                EcsLogger.info("com.auto1.pantera.cooldown.cleanup")
+                    .message("pg_cron cleanup job is scheduled; skipping Vertx fallback")
+                    .eventCategory("configuration")
+                    .eventAction("cooldown_fallback_skip")
+                    .eventOutcome("success")
+                    .log();
+            }
+        }
         if (settings.metrics().http()) {
             try {
                 slices.enableJettyMetrics(BackendRegistries.getDefaultNow());
@@ -407,7 +685,9 @@ public final class VertxMain {
         final DeploymentOptions deployOpts = new DeploymentOptions()
             .setInstances(apiInstances);
         this.vertx.deployVerticle(
-            () -> new AsyncApiVerticle(settings, apiPort, null, sharedDs.orElse(null), jwtTokens),
+            () -> new AsyncApiVerticle(
+                settings, apiPort, null, sharedDs.orElse(null), jwtTokens
+            ),
             deployOpts,
             result -> {
                 if (result.succeeded()) {
@@ -441,7 +721,7 @@ public final class VertxMain {
                 Thread.sleep(2000); // wait for server to fully bind
                 final java.net.http.HttpClient hc = java.net.http.HttpClient.newBuilder()
                     .connectTimeout(java.time.Duration.ofSeconds(3)).build();
-                // Hit each group repo once to JIT-compile GroupSlice + index lookup
+                // Hit each group repo once to JIT-compile GroupResolver + index lookup
                 for (final com.auto1.pantera.settings.repo.RepoConfig cfg : repos.configs()) {
                     if (cfg.type().endsWith("-group")) {
                         try {
@@ -613,6 +893,34 @@ public final class VertxMain {
                     .log();
             }
         }
+        // 3a. Clear any cache-write callback the registry is still holding.
+        //     The prefetch subsystem that owned this slot was deleted in M2;
+        //     keeping the clear() so a future callback (Phase 4c, 2.3.0
+        //     observed-coordinate prewarming) can install one without us
+        //     leaking it across restarts.
+        com.auto1.pantera.http.cache.CacheWriteCallbackRegistry.instance().clear();
+        // 3b. Stop RuntimeSettingsCache (releases LISTEN connection + poller).
+        //     Must run before settings.close() / DataSource shutdown so the
+        //     listener thread can return its connection to the pool cleanly.
+        if (this.settingsCache != null) {
+            try {
+                this.settingsCache.stop();
+                EcsLogger.info("com.auto1.pantera.settings.runtime")
+                    .message("RuntimeSettingsCache stopped")
+                    .eventCategory("web")
+                    .eventAction("settings_cache_stop")
+                    .eventOutcome("success")
+                    .log();
+            } catch (final Exception e) {
+                EcsLogger.error("com.auto1.pantera.settings.runtime")
+                    .message("Failed to stop RuntimeSettingsCache")
+                    .eventCategory("web")
+                    .eventAction("settings_cache_stop")
+                    .eventOutcome("failure")
+                    .error(e)
+                    .log();
+            }
+        }
         // 4. Stop ConfigWatchService
         if (this.configWatch != null) {
             try {
@@ -682,6 +990,27 @@ public final class VertxMain {
                 .eventOutcome("failure")
                 .error(e)
                 .log();
+        }
+        // 7b. Cancel cooldown cleanup fallback timers (must run before
+        //     Vert.x close so the timer ids can still be cancelled).
+        if (this.cooldownCleanupFallback != null) {
+            try {
+                this.cooldownCleanupFallback.stop(this.vertx.getDelegate());
+                EcsLogger.info("com.auto1.pantera.cooldown.cleanup")
+                    .message("Cooldown cleanup fallback stopped")
+                    .eventCategory("web")
+                    .eventAction("cooldown_fallback_stop")
+                    .eventOutcome("success")
+                    .log();
+            } catch (final Exception e) {
+                EcsLogger.error("com.auto1.pantera.cooldown.cleanup")
+                    .message("Failed to stop cooldown cleanup fallback")
+                    .eventCategory("web")
+                    .eventAction("cooldown_fallback_stop")
+                    .eventOutcome("failure")
+                    .error(e)
+                    .log();
+            }
         }
         // 8. Close Vert.x instance (LAST - closes event loops and worker threads)
         if (this.vertx != null) {
@@ -921,7 +1250,7 @@ public final class VertxMain {
                 .field("destination.port", serverPort)
                 .log();
         }
-        final VertxSliceServer server = new VertxSliceServer(
+        final VertxSliceServer server = new VertxSliceServer( // NOPMD CloseResource - lifecycle owned by this.servers list (closed on shutdown)
             vertx,
             new BaseSlice(mctx, slice),
             opts,
@@ -1041,12 +1370,12 @@ public final class VertxMain {
             // Initialize MicrometerMetrics with the registry
             com.auto1.pantera.metrics.MicrometerMetrics.initialize(registry);
 
-            // Initialize GroupSliceMetrics so the drain-drop counter
+            // Initialize GroupResolverMetrics so the drain-drop counter
             // (pantera.group.drain.dropped) registers with Prometheus. Without
-            // this call, GroupSliceMetrics.instance() returns null and the
+            // this call, GroupResolverMetrics.instance() returns null and the
             // counter is never emitted — operators fly blind on drain pool
             // saturation even though the code-level counter increments.
-            com.auto1.pantera.metrics.GroupSliceMetrics.initialize(registry);
+            com.auto1.pantera.metrics.GroupResolverMetrics.initialize(registry);
 
             // Initialize storage metrics recorder
             com.auto1.pantera.metrics.StorageMetricsRecorder.initialize();
@@ -1080,6 +1409,84 @@ public final class VertxMain {
             .log();
 
         return res;
+    }
+
+    /**
+     * Sweep orphan Vert.x cache-dir-base entries left by prior boots.
+     *
+     * <p>Vert.x creates a {@code tmp-<uuid>} working directory under
+     * {@code vertx.cacheDirBase} (defaults to {@code java.io.tmpdir}) on
+     * every {@code Vertx.vertx()} call, but does not clean up siblings from
+     * earlier processes — a fresh dir is created every boot and the old
+     * ones accumulate forever. Production was observed with 11 353
+     * orphans (4.1 GB). We remove any {@code tmp-*} entry older than 1
+     * hour at startup; the current PID's directory will be created later
+     * and is safely beyond that age window.
+     */
+    private static void cleanupStaleVertxTmpDirs() {
+        final String base = System.getProperty("vertx.cacheDirBase",
+            System.getProperty("java.io.tmpdir"));
+        if (base == null || base.isBlank()) {
+            return;
+        }
+        final Path baseDir = Path.of(base);
+        if (!Files.isDirectory(baseDir)) {
+            return;
+        }
+        final long cutoffMillis =
+            System.currentTimeMillis() - java.util.concurrent.TimeUnit.HOURS.toMillis(1);
+        final long[] counters = {0L, 0L}; // [removed, bytesFreed]
+        try (java.util.stream.Stream<Path> stream = Files.list(baseDir)) {
+            stream.filter(p -> p.getFileName().toString().startsWith("tmp-"))
+                .filter(Files::isDirectory)
+                .forEach(dir -> {
+                    try {
+                        final java.nio.file.attribute.FileTime mtime = Files.getLastModifiedTime(dir);
+                        if (mtime.toMillis() > cutoffMillis) {
+                            return;
+                        }
+                        final long[] subtree = {0L};
+                        try (java.util.stream.Stream<Path> walk = Files.walk(dir)) {
+                            walk.sorted(java.util.Comparator.reverseOrder())
+                                .forEach(p -> {
+                                    try {
+                                        if (Files.isRegularFile(p)) {
+                                            subtree[0] += Files.size(p);
+                                        }
+                                        Files.deleteIfExists(p);
+                                    } catch (final IOException ignored) {
+                                        // best-effort
+                                    }
+                                });
+                        }
+                        counters[0]++;
+                        counters[1] += subtree[0];
+                    } catch (final IOException ignored) {
+                        // skip this directory; continue
+                    }
+                });
+        } catch (final IOException ex) {
+            EcsLogger.warn("com.auto1.pantera")
+                .message("Vert.x tmpdir cleanup scan failed: " + ex.getMessage())
+                .eventCategory("process")
+                .eventAction("vertx_tmpdir_cleanup")
+                .eventOutcome("failure")
+                .field("file.directory", base)
+                .log();
+            return;
+        }
+        if (counters[0] > 0L) {
+            EcsLogger.info("com.auto1.pantera")
+                .message("Vert.x tmpdir cleanup: removed " + counters[0]
+                    + " orphan dir(s), freed " + counters[1] + " bytes")
+                .eventCategory("process")
+                .eventAction("vertx_tmpdir_cleanup")
+                .eventOutcome("success")
+                .field("file.directory", base)
+                .field("file.removed_count", counters[0])
+                .field("file.bytes_freed", counters[1])
+                .log();
+        }
     }
 
 }

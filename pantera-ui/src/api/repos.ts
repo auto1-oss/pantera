@@ -1,6 +1,6 @@
 import { getApiClient } from './client'
 import type {
-  PaginatedResponse, CursorResponse, Repository, RepoMember, RepoListItem,
+  PaginatedResponse, CursorResponse, RepoMember, RepoListItem,
   TreeEntry, ArtifactDetail, PullInstructions, StorageAlias,
 } from '@/types'
 
@@ -43,7 +43,11 @@ export async function getMembers(name: string): Promise<RepoMember[]> {
 }
 
 export async function getTree(name: string, params: {
-  path?: string; limit?: number; marker?: string
+  path?: string
+  limit?: number
+  marker?: string
+  sort?: 'name' | 'date' | 'size'
+  sort_dir?: 'asc' | 'desc'
 } = {}, signal?: AbortSignal): Promise<CursorResponse<TreeEntry>> {
   const { data } = await getApiClient().get(`/repositories/${name}/tree`, { params, signal })
   return data

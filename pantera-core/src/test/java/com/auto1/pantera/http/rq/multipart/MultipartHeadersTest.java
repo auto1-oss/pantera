@@ -25,7 +25,6 @@ import org.junit.jupiter.api.Test;
 final class MultipartHeadersTest {
 
     @Test
-    @SuppressWarnings("PMD.OneDeclarationPerLine")
     void buildHeadersFromChunks() throws Exception {
         final MultipartHeaders headers = new MultipartHeaders(10);
         final String source = String.join(

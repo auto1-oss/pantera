@@ -57,7 +57,6 @@ class IniFileTest {
     }
 
     @Test
-    @SuppressWarnings("PMD.ProhibitFilesCreateFileInTests")
     void testEmptyIni(@TempDir final Path tmp) throws IOException {
         final Path tmpfile = tmp.resolve("test.ini");
         Files.createFile(tmpfile);
@@ -68,7 +67,6 @@ class IniFileTest {
     }
 
     @Test
-    @SuppressWarnings("PMD.ProhibitFilesCreateFileInTests")
     void testEmptyIniReloading(@TempDir final Path tmp) throws IOException {
         final Path tmpfile = tmp.resolve("test.ini");
         Files.createFile(tmpfile);

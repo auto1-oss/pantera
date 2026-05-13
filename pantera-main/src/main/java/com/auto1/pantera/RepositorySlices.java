@@ -35,7 +35,7 @@ import com.auto1.pantera.docker.asto.AstoDocker;
 import com.auto1.pantera.docker.asto.RegistryRoot;
 import com.auto1.pantera.docker.http.DockerSlice;
 import com.auto1.pantera.docker.http.TrimmedDocker;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.CooldownSupport;
 import com.auto1.pantera.files.FilesSlice;
 import com.auto1.pantera.gem.http.GemSlice;
@@ -49,7 +49,7 @@ import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.TimeoutSlice;
-import com.auto1.pantera.group.GroupSlice;
+import com.auto1.pantera.group.GroupResolver;
 import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.http.auth.BasicAuthScheme;
@@ -80,6 +80,7 @@ import com.auto1.pantera.scheduling.MetadataEventQueues;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.Settings;
 import com.auto1.pantera.settings.repo.RepoConfig;
+import com.auto1.pantera.settings.runtime.HttpTuning;
 import com.auto1.pantera.security.perms.Action;
 import com.auto1.pantera.security.perms.AdapterBasicPermission;
 import com.auto1.pantera.settings.repo.Repositories;
@@ -109,6 +110,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import java.util.function.ToIntFunction;
 import java.util.stream.Collectors;
 import java.util.regex.Pattern;
@@ -174,13 +176,19 @@ public class RepositorySlices {
     private final SharedJettyClients sharedClients;
 
     /**
-     * Negative cache configuration for group fanout 404s.
-     * <p>Loaded once from {@code meta.caches.group-negative} in pantera.yml; falls
-     * back to a 5 min TTL / 10K entry in-memory default when absent.  Each
-     * {@code *-group} repo receives a dedicated {@link NegativeCache} built from
-     * this config so key-prefixing isolates entries per group.
+     * Negative cache configuration loaded from YAML.
+     * <p>Read from {@code meta.caches.repo-negative} first; falls back to the
+     * legacy {@code meta.caches.group-negative} key with a deprecation WARN.
+     * When neither key is present, uses historical defaults (5 min / 10K).
      */
-    private final NegativeCacheConfig groupNegativeCacheConfig;
+    private final NegativeCacheConfig negativeCacheConfig;
+
+    /**
+     * Single shared NegativeCache instance for the entire JVM.
+     * All group, proxy, and hosted scopes share this bean. Keyed by
+     * {@link com.auto1.pantera.http.cache.NegativeCacheKey}.
+     */
+    private final NegativeCache sharedNegativeCache;
 
     /**
      * Shared circuit-breaker registries keyed by physical repo name.
@@ -193,6 +201,47 @@ public class RepositorySlices {
         new ConcurrentHashMap<>();
 
     /**
+     * Per-repo bulkheads keyed by repository name.
+     * Each group repository gets exactly one {@link com.auto1.pantera.http.resilience.RepoBulkhead}
+     * at first access. Saturation in one repo cannot starve another (WI-09).
+     */
+    private final ConcurrentMap<String, com.auto1.pantera.http.resilience.RepoBulkhead> repoBulkheads =
+        new ConcurrentHashMap<>();
+
+    /**
+     * Supplier of circuit-breaker settings. Every new {@link AutoBlockRegistry}
+     * constructed in {@link #getOrCreateMemberRegistry} receives this supplier
+     * so admin-time settings updates (via the system-settings UI) flow into
+     * existing registries on the next recorded outcome. Defaults to
+     * {@link com.auto1.pantera.http.timeout.AutoBlockSettings#defaults()}
+     * when the DB-backed loader is not wired at construction time (tests,
+     * legacy boot sequences).
+     */
+    private final java.util.function.Supplier<
+        com.auto1.pantera.http.timeout.AutoBlockSettings
+    > circuitBreakerSettings;
+
+    /**
+     * Supplier of upstream HTTP-client tuning sourced from the v2.2
+     * {@code RuntimeSettingsCache}. Each call to
+     * {@link SharedJettyClients#acquire(HttpClientSettings)} reads the current
+     * snapshot to construct the underlying {@link JettyClientSlices} with the
+     * negotiated protocol, h2 pool size, and h2 multiplexing limit.
+     *
+     * <p>When {@code http_client.*} settings change, the boot wiring in
+     * {@code VertxMain} subscribes a listener that calls
+     * {@link #invalidateUpstreamClients()} so subsequent acquires miss the
+     * cache and rebuild with the new tuning.</p>
+     *
+     * <p>Defaults to {@link HttpTuning#defaults()} for tests and legacy boot
+     * paths that don't provide a runtime cache.</p>
+     *
+     * <p>Used only inside the constructor to wire {@code SharedJettyClients};
+     * not stored as a field because the supplier is captured by the inner
+     * cache and never re-read from this instance.</p>
+     */
+
+    /**
      * @param settings Pantera settings
      * @param repos Repositories
      * @param tokens Tokens: authentication and generation
@@ -202,6 +251,98 @@ public class RepositorySlices {
         final Repositories repos,
         final Tokens tokens
     ) {
+        this(
+            settings, repos, tokens,
+            com.auto1.pantera.circuit.CircuitBreakerSettingsLoader.activeSupplier()
+        );
+    }
+
+    /**
+     * @param settings Pantera settings
+     * @param repos Repositories
+     * @param tokens Tokens: authentication and generation
+     * @param circuitBreakerSettings Supplier returning the current circuit-
+     *                               breaker settings; used by
+     *                               {@link AutoBlockRegistry} on every
+     *                               record to pick up admin-time updates
+     */
+    public RepositorySlices(
+        final Settings settings,
+        final Repositories repos,
+        final Tokens tokens,
+        final java.util.function.Supplier<
+            com.auto1.pantera.http.timeout.AutoBlockSettings
+        > circuitBreakerSettings
+    ) {
+        // Legacy 4-arg ctor: route SharedClient construction through the
+        // legacy 1-arg JettyClientSlices(HttpClientSettings) ctor so the
+        // YAML-driven settings.maxConnectionsPerDestination() (typically
+        // 20-50) is preserved. Without this flag the supplier fallback
+        // would silently apply HttpTuning.defaults().h2MaxPoolSize() == 1.
+        this(settings, repos, tokens, circuitBreakerSettings, HttpTuning::defaults, true);
+    }
+
+    /**
+     * @param settings Pantera settings
+     * @param repos Repositories
+     * @param tokens Tokens: authentication and generation
+     * @param circuitBreakerSettings Supplier returning the current circuit-
+     *                               breaker settings; used by
+     *                               {@link AutoBlockRegistry} on every
+     *                               record to pick up admin-time updates
+     * @param httpTuningSupplier Supplier returning the current HTTP-client
+     *                           tuning snapshot from the runtime settings
+     *                           cache. Read on every
+     *                           {@link SharedJettyClients#acquire(HttpClientSettings)}
+     *                           so cache misses rebuild with the latest values.
+     */
+    public RepositorySlices(
+        final Settings settings,
+        final Repositories repos,
+        final Tokens tokens,
+        final java.util.function.Supplier<
+            com.auto1.pantera.http.timeout.AutoBlockSettings
+        > circuitBreakerSettings,
+        final Supplier<HttpTuning> httpTuningSupplier
+    ) {
+        // 5-arg ctor (current production path used by VertxMain): the caller
+        // supplied a real HttpTuning supplier, so we want SharedClient
+        // construction to use the 4-arg JettyClientSlices ctor and pull
+        // h2MaxPoolSize/h2MultiplexingLimit/protocol from the supplier on
+        // every cache miss. useLegacyHttpClientCtor=false.
+        this(settings, repos, tokens, circuitBreakerSettings, httpTuningSupplier, false);
+    }
+
+    /**
+     * Internal canonical constructor — all public ctors funnel here. The
+     * {@code useLegacyHttpClientCtor} flag selects between the legacy 1-arg
+     * {@link JettyClientSlices} ctor (preserves YAML
+     * {@code maxConnectionsPerDestination}) and the 4-arg ctor (uses
+     * {@link HttpTuning} from the supplier). Kept package-private so tests
+     * can force either path explicitly.
+     *
+     * @param settings Pantera settings
+     * @param repos Repositories
+     * @param tokens Tokens: authentication and generation
+     * @param circuitBreakerSettings Supplier returning the current circuit-
+     *                               breaker settings
+     * @param httpTuningSupplier Supplier returning the current HTTP-client
+     *                           tuning snapshot
+     * @param useLegacyHttpClientCtor When true, route through the legacy
+     *                                {@code JettyClientSlices(HttpClientSettings)}
+     *                                ctor; otherwise use the 4-arg ctor.
+     */
+    RepositorySlices(
+        final Settings settings,
+        final Repositories repos,
+        final Tokens tokens,
+        final java.util.function.Supplier<
+            com.auto1.pantera.http.timeout.AutoBlockSettings
+        > circuitBreakerSettings,
+        final Supplier<HttpTuning> httpTuningSupplier,
+        final boolean useLegacyHttpClientCtor
+    ) {
+        this.circuitBreakerSettings = circuitBreakerSettings;
         this.settings = settings;
         this.repos = repos;
         this.tokens = tokens;
@@ -215,13 +356,13 @@ public class RepositorySlices {
                 );
             }
         }
-        this.sharedClients = new SharedJettyClients();
-        // Load group-negative cache config once at construction time.  When the
-        // sub-key is absent from pantera.yml, fromYaml returns the default
-        // single-tier config (24h TTL / 50K entries) which we override below to
-        // preserve the pre-YAML group-slice defaults (5m / 10K) unless the
-        // operator explicitly opts in.
-        this.groupNegativeCacheConfig = loadGroupNegativeCacheConfig(settings);
+        this.sharedClients = new SharedJettyClients(httpTuningSupplier, useLegacyHttpClientCtor);
+        // Load negative cache config once at construction time.
+        // Reads repo-negative first; falls back to group-negative with deprecation WARN.
+        this.negativeCacheConfig = loadNegativeCacheConfig(settings);
+        this.sharedNegativeCache = new NegativeCache(this.negativeCacheConfig);
+        com.auto1.pantera.http.cache.NegativeCacheRegistry.instance()
+            .setSharedCache(this.sharedNegativeCache);
         this.slices = CacheBuilder.newBuilder()
             .maximumSize(500)
             .expireAfterAccess(30, java.util.concurrent.TimeUnit.MINUTES)
@@ -299,8 +440,11 @@ public class RepositorySlices {
                 .log();
             return resolved.get().slice();
         }
-        // Not found is NOT cached to allow dynamic repo addition without restart
-        EcsLogger.warn("com.auto1.pantera.settings")
+        // Not found is NOT cached to allow dynamic repo addition without restart.
+        // Logged at INFO (v2.1.4 WI-00): this is a client-config error, not a
+        // Pantera failure — clients misconfigured with stale repo names produce
+        // a steady stream that was previously drowning WARN output (§1.7 F2.2).
+        EcsLogger.info("com.auto1.pantera.settings")
             .message("Repository not found in configuration")
             .eventCategory("web")
             .eventAction("slice_resolve")
@@ -349,6 +493,54 @@ public class RepositorySlices {
     }
 
     /**
+     * Drop every cached upstream Jetty client so subsequent
+     * {@link SharedJettyClients#acquire(HttpClientSettings)} calls miss
+     * the cache and rebuild with the latest {@link HttpTuning} snapshot.
+     *
+     * <p>Active leases keep using their existing client until released —
+     * the eviction marks each {@code SharedClient} so the per-lease
+     * {@code release()} path stops the client when its last lease closes.
+     * Subsequent acquires after this method returns will see new clients
+     * built with the current tuning.</p>
+     *
+     * <p>Called from the boot wiring's {@code RuntimeSettingsCache}
+     * listener on every {@code http_client.*} change.</p>
+     *
+     * <p><b>Slow-drain semantics (intentional).</b> The slice
+     * {@link com.google.common.cache.LoadingCache} held in this class
+     * caches per-repo lease references; warm slices keep using their
+     * already-acquired clients until the slice cache itself evicts (the
+     * 30-minute idle-eviction TTL applied via
+     * {@code .expireAfterAccess(30, MINUTES)} in the slice-cache builder)
+     * or a settings change triggers a slice rebuild. We deliberately do
+     * not force-evict warm slices here: doing so would interrupt in-flight
+     * upstream requests on those leases. The trade-off is that a
+     * {@code http_client.*} setting flip can take up to 30 minutes to
+     * propagate to a long-warm slice. See CONCERN-task9-slice-cache-lag in
+     * the v2.2.0 perf-pack audit doc.</p>
+     */
+    public void invalidateUpstreamClients() {
+        this.sharedClients.invalidateAll();
+    }
+
+    /**
+     * Maps the runtime-settings {@link HttpTuning.Protocol} enum onto the
+     * http-client module's {@link JettyClientSlices.HttpProtocol}. The two
+     * mirror each other deliberately — http-client cannot depend on the
+     * pantera-main settings.runtime package without creating a cycle.
+     *
+     * @param protocol Protocol selector from the runtime tuning snapshot.
+     * @return Equivalent http-client primitive.
+     */
+    static JettyClientSlices.HttpProtocol mapProtocol(final HttpTuning.Protocol protocol) {
+        return switch (protocol) {
+            case H1 -> JettyClientSlices.HttpProtocol.H1;
+            case H2 -> JettyClientSlices.HttpProtocol.H2;
+            case AUTO -> JettyClientSlices.HttpProtocol.AUTO;
+        };
+    }
+
+    /**
      * Pre-build slices for every configured repository so their shared Jetty
      * clients finish starting before request traffic begins. Without this,
      * the first request for an uninitialized repo blocks its event-loop thread
@@ -386,11 +578,10 @@ public class RepositorySlices {
         }
         this.sharedClients.awaitAllStarted(timeout);
         EcsLogger.info("com.auto1.pantera.settings")
-            .message("Repository slices warmed up")
+            .message("Repository slices warmed up (count=" + warmed + ")")
             .eventCategory("configuration")
             .eventAction("slice_warmup")
             .eventOutcome("success")
-            .field("repository.count", warmed)
             .log();
     }
 
@@ -403,6 +594,29 @@ public class RepositorySlices {
         return this.repos;
     }
 
+    /**
+     * Shared {@link NegativeCache} bean. The 404 cache is populated by every
+     * proxy adapter; this accessor remains so a future observed-coordinate
+     * prewarming subsystem (Phase 4c, 2.3.0) can share the same cache without
+     * a redesign. Never null after construction.
+     *
+     * @return shared NegativeCache instance.
+     * @since 2.2.0
+     */
+    public NegativeCache negativeCache() {
+        return this.sharedNegativeCache;
+    }
+
+    /**
+     * Cooldown service used by the proxy adapters.
+     *
+     * @return shared CooldownService.
+     * @since 2.2.0
+     */
+    public CooldownService cooldownService() {
+        return this.cooldown;
+    }
+
     private Optional<Queue<ArtifactEvent>> artifactEvents() {
         return this.settings.artifactMetadata()
             .map(MetadataEventQueues::eventQueue);
@@ -411,7 +625,7 @@ public class RepositorySlices {
     private SliceValue sliceFromConfig(final RepoConfig cfg, final int port, final int depth) {
         Slice slice;
         SharedJettyClients.Lease clientLease = null;
-        JettyClientSlices clientSlices = null;
+        JettyClientSlices clientSlices = null; // NOPMD CloseResource - lifecycle owned by clientLease (closed in finally); this is just an alias to lease.client()
         try {
             switch (cfg.type()) {
             case "file":
@@ -440,7 +654,8 @@ public class RepositorySlices {
             case "npm":
                 slice = browsableTrimPathSlice(
                     new NpmSlice(
-                        cfg.url(), cfg.storage(), securityPolicy(), authentication(), tokens.auth(), tokens, cfg.name(), artifactEvents(), true
+                        cfg.url(), cfg.storage(), securityPolicy(), authentication(), tokens.auth(), tokens, cfg.name(), artifactEvents(), true,
+                        this.settings.syncArtifactIndexer()
                     ),
                     cfg.storage()
                 );
@@ -453,7 +668,8 @@ public class RepositorySlices {
                         authentication(),
                         tokens.auth(),
                         cfg.name(),
-                        artifactEvents()
+                        artifactEvents(),
+                        this.settings.syncArtifactIndexer()
                     ),
                     cfg.storage()
                 );
@@ -461,7 +677,8 @@ public class RepositorySlices {
             case "helm":
                 slice = browsableTrimPathSlice(
                     new HelmSlice(
-                        cfg.storage(), cfg.url().toString(), securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents()
+                        cfg.storage(), cfg.url().toString(), securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents(),
+                        this.settings.syncArtifactIndexer()
                     ),
                     cfg.storage()
                 );
@@ -469,7 +686,9 @@ public class RepositorySlices {
             case "rpm":
                 slice = browsableTrimPathSlice(
                     new RpmSlice(cfg.storage(), securityPolicy(), authentication(),
-                        tokens.auth(), new com.auto1.pantera.rpm.RepoConfig.FromYaml(cfg.settings(), cfg.name()), Optional.empty()),
+                        tokens.auth(), new com.auto1.pantera.rpm.RepoConfig.FromYaml(cfg.settings(), cfg.name()),
+                        artifactEvents(),
+                        this.settings.syncArtifactIndexer()),
                     cfg.storage()
                 );
                 break;
@@ -502,7 +721,8 @@ public class RepositorySlices {
                             authentication(),
                             tokens.auth(),
                             cfg.name(),
-                            artifactEvents()
+                            artifactEvents(),
+                            this.settings.syncArtifactIndexer()
                         ),
                         "direct-dists"
                     ),
@@ -510,7 +730,7 @@ public class RepositorySlices {
                 );
                 break;
             case "php-proxy":
-                clientLease = jettyClientSlices(cfg);
+                clientLease = jettyClientSlices(cfg); // NOPMD CloseResource - lifecycle owned by clientLease (closed in finally/exception handlers)
                 clientSlices = clientLease.client();
                 slice = trimPathSlice(
                     new PathPrefixStripSlice(
@@ -531,7 +751,8 @@ public class RepositorySlices {
                 slice = browsableTrimPathSlice(
                     new NuGet(
                         cfg.url(), new com.auto1.pantera.nuget.AstoRepository(cfg.storage()),
-                        securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents()
+                        securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents(),
+                        this.settings.syncArtifactIndexer()
                     ),
                     cfg.storage()
                 );
@@ -540,7 +761,8 @@ public class RepositorySlices {
             case "maven":
                 slice = browsableTrimPathSlice(
                     new MavenSlice(cfg.storage(), securityPolicy(),
-                        authentication(), tokens.auth(), cfg.name(), artifactEvents()),
+                        authentication(), tokens.auth(), cfg.name(), artifactEvents(),
+                        this.settings.syncArtifactIndexer()),
                     cfg.storage()
                 );
                 break;
@@ -554,7 +776,8 @@ public class RepositorySlices {
                             clientSlices,
                             cfg,
                             settings.artifactMetadata().flatMap(queues -> queues.proxyEventQueues(cfg)),
-                            this.cooldown
+                            this.cooldown,
+                            this.cooldownMetadata
                         ),
                         settings.httpClientSettings().proxyTimeout()
                     ),
@@ -577,7 +800,8 @@ public class RepositorySlices {
                         authentication(),
                         tokens.auth(),
                         cfg.name(),
-                        artifactEvents()
+                        artifactEvents(),
+                        this.settings.syncArtifactIndexer()
                     ),
                     cfg.storage()
                 );
@@ -661,16 +885,18 @@ public class RepositorySlices {
                 );
                 break;
             case "npm-group":
-                final List<String> npmFlatMembers = flattenMembers(cfg.name(), cfg.members());
-                final Slice npmGroupSlice = new GroupSlice(
+                warnIfLegacyMembersStrategy(cfg);
+                final List<String> npmFlatMembers = flattenMembers(cfg.name());
+                final Slice npmGroupSlice = new GroupResolver(
                     this::slice, cfg.name(), npmFlatMembers, port, depth,
                     cfg.groupMemberTimeout().orElse(120L),
                     java.util.Collections.emptyList(),
                     Optional.of(this.settings.artifactIndex()),
                     proxyMembers(npmFlatMembers),
                     "npm-group",
-                    newGroupNegativeCache(cfg.name()),
-                    this::getOrCreateMemberRegistry
+                    this.sharedNegativeCache,
+                    this::getOrCreateMemberRegistry,
+                    getOrCreateBulkhead(cfg.name()).drainExecutor()
                 );
                 // Create audit slice that aggregates results from ALL members
                 // This is critical for vulnerability scanning - local repos return {},
@@ -727,16 +953,18 @@ public class RepositorySlices {
                 break;
             case "file-group":
             case "php-group":
-                final List<String> composerFlatMembers = flattenMembers(cfg.name(), cfg.members());
-                final GroupSlice composerDelegate = new GroupSlice(
+                warnIfLegacyMembersStrategy(cfg);
+                final List<String> composerFlatMembers = flattenMembers(cfg.name());
+                final GroupResolver composerDelegate = new GroupResolver(
                     this::slice, cfg.name(), composerFlatMembers, port, depth,
                     cfg.groupMemberTimeout().orElse(120L),
                     java.util.Collections.emptyList(),
                     Optional.of(this.settings.artifactIndex()),
                     proxyMembers(composerFlatMembers),
                     cfg.type(),
-                    newGroupNegativeCache(cfg.name()),
-                    this::getOrCreateMemberRegistry
+                    this.sharedNegativeCache,
+                    this::getOrCreateMemberRegistry,
+                    getOrCreateBulkhead(cfg.name()).drainExecutor()
                 );
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
@@ -744,7 +972,9 @@ public class RepositorySlices {
                             composerDelegate,
                             this::slice, cfg.name(), cfg.members(), port,
                             this.settings.prefixes().prefixes().stream()
-                                .findFirst().orElse("")
+                                .findFirst().orElse(""),
+                            this.cooldownMetadata,
+                            cfg.type()
                         ),
                         authentication(),
                         tokens.auth(),
@@ -756,17 +986,24 @@ public class RepositorySlices {
                 );
                 break;
             case "maven-group":
-                // Maven groups need special metadata merging
-                final List<String> mavenFlatMembers = flattenMembers(cfg.name(), cfg.members());
-                final GroupSlice mavenDelegate = new GroupSlice(
+            case "gradle-group":
+                // Maven AND Gradle groups need maven-metadata.xml merge +
+                // cooldown filter on the merged result. Gradle uses the same
+                // metadata format as Maven, so it routes through the same
+                // slice — previously gradle-group fell into the generic
+                // GroupResolver case which can't merge metadata.
+                warnIfLegacyMembersStrategy(cfg);
+                final List<String> mavenFlatMembers = flattenMembers(cfg.name());
+                final GroupResolver mavenDelegate = new GroupResolver(
                     this::slice, cfg.name(), mavenFlatMembers, port, depth,
                     cfg.groupMemberTimeout().orElse(120L),
                     java.util.Collections.emptyList(),
                     Optional.of(this.settings.artifactIndex()),
                     proxyMembers(mavenFlatMembers),
-                    "maven-group",
-                    newGroupNegativeCache(cfg.name()),
-                    this::getOrCreateMemberRegistry
+                    cfg.type(),
+                    this.sharedNegativeCache,
+                    this::getOrCreateMemberRegistry,
+                    getOrCreateBulkhead(cfg.name()).drainExecutor()
                 );
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
@@ -776,7 +1013,10 @@ public class RepositorySlices {
                             cfg.members(),
                             this::slice,
                             port,
-                            depth
+                            depth,
+                            new com.auto1.pantera.group.GroupMetadataCache(cfg.name()),
+                            this.cooldownMetadata,
+                            cfg.type()
                         ),
                         authentication(),
                         tokens.auth(),
@@ -789,21 +1029,22 @@ public class RepositorySlices {
                 break;
             case "gem-group":
             case "go-group":
-            case "gradle-group":
             case "pypi-group":
             case "docker-group":
-                final List<String> genericFlatMembers = flattenMembers(cfg.name(), cfg.members());
+                warnIfLegacyMembersStrategy(cfg);
+                final List<String> genericFlatMembers = flattenMembers(cfg.name());
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
-                        new GroupSlice(
+                        new GroupResolver(
                             this::slice, cfg.name(), genericFlatMembers, port, depth,
                             cfg.groupMemberTimeout().orElse(120L),
                             java.util.Collections.emptyList(),
                             Optional.of(this.settings.artifactIndex()),
                             proxyMembers(genericFlatMembers),
                             cfg.type(),
-                            newGroupNegativeCache(cfg.name()),
-                            this::getOrCreateMemberRegistry
+                            this.sharedNegativeCache,
+                            this::getOrCreateMemberRegistry,
+                            getOrCreateBulkhead(cfg.name()).drainExecutor()
                         ),
                         authentication(),
                         tokens.auth(),
@@ -848,12 +1089,14 @@ public class RepositorySlices {
                 );
                 if (cfg.port().isPresent()) {
                     slice = new DockerSlice(docker, securityPolicy(),
-                        new CombinedAuthScheme(authentication(), tokens.auth()), artifactEvents());
+                        new CombinedAuthScheme(authentication(), tokens.auth()), artifactEvents(),
+                        this.settings.syncArtifactIndexer());
                 } else {
                     slice = new DockerRoutingSlice.Reverted(
                         new DockerSlice(new TrimmedDocker(docker, cfg.name()),
                             securityPolicy(), new CombinedAuthScheme(authentication(), tokens.auth()),
-                            artifactEvents())
+                            artifactEvents(),
+                            this.settings.syncArtifactIndexer())
                     );
                 }
                 break;
@@ -878,14 +1121,16 @@ public class RepositorySlices {
                     new DebianSlice(
                         cfg.storage(), securityPolicy(), authentication(),
                         new com.auto1.pantera.debian.Config.FromYaml(cfg.name(), cfg.settings(), settings.configStorage()),
-                        artifactEvents()
+                        artifactEvents(),
+                        this.settings.syncArtifactIndexer()
                     )
                 );
                 break;
             case "conda":
                 slice = new CondaSlice(
                     cfg.storage(), securityPolicy(), authentication(), tokens,
-                    cfg.url().toString(), cfg.name(), artifactEvents()
+                    cfg.url().toString(), cfg.name(), artifactEvents(),
+                    this.settings.syncArtifactIndexer()
                 );
                 break;
             case "conan":
@@ -900,13 +1145,14 @@ public class RepositorySlices {
                     new ItemTokenizer(
                         Vertx.vertx(), jwtTokens.publicKey(), jwtTokens.privateKey()
                     ),
-                    cfg.name()
+                    cfg.name(), artifactEvents()
                 );
                 break;
             case "hexpm":
                 slice = trimPathSlice(
                     new HexSlice(cfg.storage(), securityPolicy(), authentication(),
-                        artifactEvents(), cfg.name())
+                        artifactEvents(), cfg.name(),
+                        this.settings.syncArtifactIndexer())
                 );
                 break;
             case "pypi":
@@ -914,7 +1160,8 @@ public class RepositorySlices {
                     new PathPrefixStripSlice(
                         new com.auto1.pantera.pypi.http.PySlice(
                             cfg.storage(), securityPolicy(), authentication(),
-                            cfg.name(), artifactEvents()
+                            null, cfg.name(), artifactEvents(),
+                            this.settings.syncArtifactIndexer()
                         ),
                         "simple"
                     )
@@ -929,21 +1176,18 @@ public class RepositorySlices {
             wrapIntoCommonSlices(slice, cfg),
             Optional.ofNullable(clientLease)
         );
-        } catch (final Exception ex) {
-            if (clientLease != null) {
-                clientLease.close();
-            }
-            if (ex instanceof RuntimeException) {
-                throw (RuntimeException) ex;
-            }
-            throw new IllegalStateException(
-                String.format("Failed to construct adapter slice for '%s'", cfg.name()), ex
-            );
-        } catch (final Error ex) {
+        } catch (final RuntimeException | Error ex) {
             if (clientLease != null) {
                 clientLease.close();
             }
             throw ex;
+        } catch (final Exception ex) {
+            if (clientLease != null) {
+                clientLease.close();
+            }
+            throw new IllegalStateException(
+                String.format("Failed to construct adapter slice for '%s'", cfg.name()), ex
+            );
         }
     }
 
@@ -1023,63 +1267,54 @@ public class RepositorySlices {
         return this.repos.config(name)
             .map(c -> {
                 final String type = c.type();
-                if (type.endsWith("-proxy")) {
-                    return true;
-                }
-                if (type.endsWith("-group")) {
-                    return c.members().stream().anyMatch(this::isProxyOrContainsProxy);
-                }
-                return false;
+                return type.endsWith("-proxy")
+                    || type.endsWith("-group")
+                        && c.members().stream().anyMatch(this::isProxyOrContainsProxy);
             })
             .orElse(false);
     }
 
 
     /**
-     * Load negative cache config for group fanout 404s.
+     * Load negative cache config from YAML.
      *
-     * <p>Reads {@code meta.caches.group-negative} via {@link NegativeCacheConfig#fromYaml}.
-     * When the sub-key is absent the helper returns the package defaults (24h /
-     * 50K); we substitute the historical GroupSlice values (5 min / 10K /
-     * L1-only) so upgrades without YAML changes preserve prior behaviour.
+     * <p>Reads {@code meta.caches.repo-negative} first (the v2.2 canonical key).
+     * If absent, falls back to the legacy {@code meta.caches.group-negative} key
+     * and emits a deprecation WARN.  When neither key is present, returns the
+     * historical defaults (5 min / 10K / in-memory only) to preserve backwards
+     * compatibility.
      *
      * @param settings Pantera settings
-     * @return Group-specific negative cache config
+     * @return Unified negative cache config
      */
-    private static NegativeCacheConfig loadGroupNegativeCacheConfig(final Settings settings) {
+    private static NegativeCacheConfig loadNegativeCacheConfig(final Settings settings) {
         final com.amihaiemil.eoyaml.YamlMapping caches = settings != null && settings.meta() != null
             ? settings.meta().yamlMapping("caches")
             : null;
-        final boolean hasGroupNegative = caches != null
-            && caches.yamlMapping("group-negative") != null;
-        if (!hasGroupNegative) {
-            // Preserve pre-YAML defaults: 5 min TTL, 10K entries, in-memory only
-            return new NegativeCacheConfig(
-                java.time.Duration.ofMinutes(5),
-                10_000,
-                false,
-                NegativeCacheConfig.DEFAULT_L1_MAX_SIZE,
-                NegativeCacheConfig.DEFAULT_L1_TTL,
-                NegativeCacheConfig.DEFAULT_L2_MAX_SIZE,
-                NegativeCacheConfig.DEFAULT_L2_TTL
-            );
+        // Try the new canonical key first
+        if (caches != null && caches.yamlMapping("repo-negative") != null) {
+            return NegativeCacheConfig.fromYaml(caches, "repo-negative");
         }
-        return NegativeCacheConfig.fromYaml(caches, "group-negative");
-    }
-
-    /**
-     * Construct a per-group {@link NegativeCache} backed by the shared config.
-     * The group name is used as the cache-key prefix so entries for different
-     * groups cannot collide in either L1 or L2.
-     *
-     * @param groupName Group repository name
-     * @return Negative cache scoped to this group
-     */
-    private NegativeCache newGroupNegativeCache(final String groupName) {
-        return new NegativeCache(
-            "group-negative",
-            groupName,
-            this.groupNegativeCacheConfig
+        // Fall back to legacy key with deprecation WARN
+        if (caches != null && caches.yamlMapping("group-negative") != null) {
+            EcsLogger.warn("com.auto1.pantera.settings")
+                .message("YAML key 'meta.caches.group-negative' is deprecated; "
+                    + "rename to 'meta.caches.repo-negative' — legacy key will be "
+                    + "removed in a future release")
+                .eventCategory("configuration")
+                .eventAction("yaml_deprecation")
+                .log();
+            return NegativeCacheConfig.fromYaml(caches, "group-negative");
+        }
+        // Neither key present — preserve pre-YAML defaults
+        return new NegativeCacheConfig(
+            java.time.Duration.ofMinutes(5),
+            10_000,
+            false,
+            NegativeCacheConfig.DEFAULT_L1_MAX_SIZE,
+            NegativeCacheConfig.DEFAULT_L1_TTL,
+            NegativeCacheConfig.DEFAULT_L2_MAX_SIZE,
+            NegativeCacheConfig.DEFAULT_L2_TTL
         );
     }
 
@@ -1088,10 +1323,9 @@ public class RepositorySlices {
      * Returns the flat list of leaf repo names for direct querying.
      *
      * @param groupName Group repository name (for cycle-detection logging)
-     * @param directMembers Direct member names declared in this group's config
      * @return Flat, deduplicated list of leaf repo names (no nested groups)
      */
-    private List<String> flattenMembers(final String groupName, final List<String> directMembers) {
+    private List<String> flattenMembers(final String groupName) {
         final com.auto1.pantera.group.GroupMemberFlattener flattener =
             new com.auto1.pantera.group.GroupMemberFlattener(
                 name -> this.repos.config(name)
@@ -1102,6 +1336,47 @@ public class RepositorySlices {
                     .orElse(List.of())
             );
         return flattener.flatten(groupName);
+    }
+
+    /**
+     * Names of group repos that have already had their legacy
+     * {@code members_strategy} YAML key WARN'd about, so the WARN fires at
+     * most once per (process-lifetime, group). Sequential is the only
+     * fanout mode in v2.2.0 — the YAML key is preserved for forward-compat
+     * config tolerance only.
+     */
+    private static final java.util.Set<String> WARNED_LEGACY_STRATEGY_REPOS =
+        java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
+     * Tolerate the legacy {@code members_strategy} YAML key (removed in
+     * v2.2.0). If present and non-blank, log a one-time WARN per group at
+     * boot identifying the deprecated key; the key is otherwise ignored —
+     * group fanout is sequential everywhere now (Nexus / JFrog style).
+     *
+     * @param cfg Group repository config
+     */
+    private static void warnIfLegacyMembersStrategy(final RepoConfig cfg) {
+        final String raw = cfg.settings()
+            .map(yaml -> yaml.string("members_strategy"))
+            .orElse(null);
+        if (raw == null || raw.isBlank()) {
+            return;
+        }
+        if (WARNED_LEGACY_STRATEGY_REPOS.add(cfg.name())) {
+            EcsLogger.warn("com.auto1.pantera")
+                .message("Group '" + cfg.name()
+                    + "' YAML still declares members_strategy='" + raw.trim()
+                    + "'. The members_strategy key is removed in v2.2.0; "
+                    + "all group fanout is now sequential (members tried in "
+                    + "declared order, first 2xx wins). The key is ignored. "
+                    + "See docs/admin-guide/group-member-ordering.md.")
+                .eventCategory("configuration")
+                .eventAction("group_legacy_members_strategy")
+                .field("repository.name", cfg.name())
+                .field("members_strategy.declared", raw.trim())
+                .log();
+        }
     }
 
     /**
@@ -1123,7 +1398,34 @@ public class RepositorySlices {
                     .eventCategory("configuration")
                     .eventAction("circuit_breaker_init")
                     .log();
-                return new AutoBlockRegistry(AutoBlockSettings.defaults());
+                return new AutoBlockRegistry(this.circuitBreakerSettings);
+            }
+        );
+    }
+
+    /**
+     * Get or create a per-repo {@link com.auto1.pantera.http.resilience.RepoBulkhead}
+     * for the given group repository name (WI-09).
+     *
+     * @param repoName Group repository name
+     * @return Per-repo bulkhead (created on first access with default limits)
+     */
+    private com.auto1.pantera.http.resilience.RepoBulkhead getOrCreateBulkhead(final String repoName) {
+        return this.repoBulkheads.computeIfAbsent(
+            repoName,
+            n -> {
+                final com.auto1.pantera.http.resilience.BulkheadLimits limits =
+                    com.auto1.pantera.http.resilience.BulkheadLimits.defaults();
+                EcsLogger.info("com.auto1.pantera")
+                    .message("Per-repo bulkhead created for: " + n
+                        + " (maxConcurrent=" + limits.maxConcurrent()
+                        + ", maxQueueDepth=" + limits.maxQueueDepth() + ")")
+                    .eventCategory("configuration")
+                    .eventAction("bulkhead_init")
+                    .log();
+                return new com.auto1.pantera.http.resilience.RepoBulkhead(
+                    n, limits, java.util.concurrent.ForkJoinPool.commonPool()
+                );
             }
         );
     }
@@ -1142,11 +1444,46 @@ public class RepositorySlices {
 
     /**
      * Stores and shares Jetty clients per unique HTTP client configuration.
+     *
+     * <p>Package-private (rather than {@code private}) so unit tests in the
+     * same package — see {@code SharedJettyClientsInvalidateTest} — can
+     * exercise {@link #invalidateAll} directly without going through the
+     * heavyweight slice construction path.</p>
      */
-    private static final class SharedJettyClients {
+    static final class SharedJettyClients {
 
         private final ConcurrentMap<HttpClientSettingsKey, SharedClient> clients = new ConcurrentHashMap<>();
         private final AtomicReference<MeterRegistry> metrics = new AtomicReference<>();
+        private final Supplier<HttpTuning> httpTuningSupplier;
+        /**
+         * When true, build {@link SharedClient}s via the legacy
+         * {@link JettyClientSlices#JettyClientSlices(HttpClientSettings)} ctor
+         * so the YAML {@code maxConnectionsPerDestination} is preserved
+         * (pre-Task-9 behaviour). Set by the legacy 3-/4-arg
+         * {@link RepositorySlices} constructors.
+         */
+        private final boolean useLegacyHttpClientCtor;
+
+        SharedJettyClients(final Supplier<HttpTuning> httpTuningSupplier) {
+            this(httpTuningSupplier, false);
+        }
+
+        SharedJettyClients(
+            final Supplier<HttpTuning> httpTuningSupplier,
+            final boolean useLegacyHttpClientCtor
+        ) {
+            this.httpTuningSupplier = httpTuningSupplier;
+            this.useLegacyHttpClientCtor = useLegacyHttpClientCtor;
+        }
+
+        /**
+         * Test hook: number of currently cached shared clients (one per
+         * unique {@link HttpClientSettingsKey}). Drops to zero immediately
+         * after {@link #invalidateAll} returns.
+         */
+        int cachedClientCount() {
+            return this.clients.size();
+        }
 
         Lease acquire(final HttpClientSettings settings) {
             final HttpClientSettingsKey key = HttpClientSettingsKey.from(settings);
@@ -1154,7 +1491,10 @@ public class RepositorySlices {
                 key,
                 (ignored, existing) -> {
                     if (existing == null) {
-                        final SharedClient created = new SharedClient(key);
+                        final HttpTuning tuning = this.httpTuningSupplier.get();
+                        final SharedClient created = new SharedClient(
+                            key, tuning, this.useLegacyHttpClientCtor
+                        );
                         created.retain();
                         return created;
                     }
@@ -1167,6 +1507,48 @@ public class RepositorySlices {
                 holder.registerMetrics(registry);
             }
             return new Lease(this, key, holder);
+        }
+
+        /**
+         * Drop every cached client so the next {@link #acquire} miss
+         * rebuilds with the latest {@link HttpTuning}. Active leases
+         * keep their reference; the per-lease {@code release()} path
+         * stops the client once refs hit zero.
+         */
+        void invalidateAll() {
+            // Snapshot keys to avoid concurrent-modification surprises while
+            // we mutate the map.
+            final java.util.List<HttpClientSettingsKey> keys =
+                new java.util.ArrayList<>(this.clients.keySet());
+            int evictedNoRefs = 0;
+            int evictedHeld = 0;
+            for (final HttpClientSettingsKey key : keys) {
+                final SharedClient[] removedRef = new SharedClient[1];
+                this.clients.computeIfPresent(key, (k, existing) -> {
+                    existing.markEvicted();
+                    removedRef[0] = existing;
+                    return null;
+                });
+                final SharedClient removed = removedRef[0];
+                if (removed != null && removed.referenceCount() == 0) {
+                    // Race-safe: stop() is idempotent (guarded by
+                    // JettyClientSlices.stopped). If a release() ran
+                    // between markEvicted and this check it may have
+                    // stopped already; that's fine.
+                    removed.stop();
+                    evictedNoRefs += 1;
+                } else if (removed != null) {
+                    evictedHeld += 1;
+                }
+            }
+            EcsLogger.info("com.auto1.pantera")
+                .message("Upstream Jetty client pool invalidated")
+                .eventCategory("configuration")
+                .eventAction("http_client_invalidate")
+                .eventOutcome("success")
+                .field("clients.evicted_no_refs", evictedNoRefs)
+                .field("clients.evicted_with_active_leases", evictedHeld)
+                .log();
         }
 
         void enableMetrics(final MeterRegistry registry) {
@@ -1210,10 +1592,27 @@ public class RepositorySlices {
         }
 
         private void release(final HttpClientSettingsKey key, final SharedClient shared) {
+            // Evicted clients have already been removed from the cache map;
+            // their lifecycle is no longer tied to the map entry. Release
+            // the lease's ref and stop when the last lease drops it.
+            if (shared.isEvicted()) {
+                final int remaining = shared.release();
+                if (remaining == 0) {
+                    shared.stop();
+                }
+                return;
+            }
             this.clients.computeIfPresent(
                 key,
                 (ignored, existing) -> {
-                    if (existing != shared) {
+                    if (existing != shared) { // NOPMD CompareObjectsWithEquals - intentional identity check (cache eviction detection)
+                        // The cached entry was replaced (evict + new acquire
+                        // for the same key). Drop the lease's ref against
+                        // the original SharedClient and stop if last.
+                        final int remaining = shared.release();
+                        if (remaining == 0) {
+                            shared.stop();
+                        }
                         return existing;
                     }
                     final int remaining = existing.release();
@@ -1260,10 +1659,41 @@ public class RepositorySlices {
             private final CompletableFuture<Void> startFuture;
             private final AtomicInteger references = new AtomicInteger(0);
             private final AtomicBoolean metricsRegistered = new AtomicBoolean(false);
+            /**
+             * True once this client has been removed from the cache map by
+             * {@link SharedJettyClients#invalidateAll()}. The ref-counted
+             * lifecycle still applies — active leases keep using the client
+             * until released — but the {@link SharedJettyClients#release}
+             * path skips the map lookup and stops directly at refs==0.
+             */
+            private final AtomicBoolean evicted = new AtomicBoolean(false);
 
-            SharedClient(final HttpClientSettingsKey key) {
+            SharedClient(final HttpClientSettingsKey key, final HttpTuning tuning) {
+                this(key, tuning, false);
+            }
+
+            SharedClient(
+                final HttpClientSettingsKey key,
+                final HttpTuning tuning,
+                final boolean useLegacyHttpClientCtor
+            ) {
                 this.key = key;
-                this.client = new JettyClientSlices(key.toSettings());
+                if (useLegacyHttpClientCtor) {
+                    // Legacy path (3-/4-arg RepositorySlices ctors): use the
+                    // 1-arg JettyClientSlices ctor so the connection-pool cap
+                    // continues to come from settings.maxConnectionsPerDestination()
+                    // (the YAML override) rather than the supplier-provided
+                    // HttpTuning.h2MaxPoolSize() (which falls back to 1 when
+                    // no runtime cache is wired).
+                    this.client = new JettyClientSlices(key.toSettings());
+                } else {
+                    this.client = new JettyClientSlices(
+                        key.toSettings(),
+                        mapProtocol(tuning.protocol()),
+                        tuning.h2MaxPoolSize(),
+                        tuning.h2MultiplexingLimit()
+                    );
+                }
                 // Start the Jetty client on the dedicated resolve executor to avoid
                 // blocking the Vert.x event loop. The start() call can take 100ms+
                 // due to SSL context initialization and socket setup.
@@ -1286,6 +1716,18 @@ public class RepositorySlices {
                         .log();
                 }
                 return remaining;
+            }
+
+            int referenceCount() {
+                return this.references.get();
+            }
+
+            void markEvicted() {
+                this.evicted.set(true);
+            }
+
+            boolean isEvicted() {
+                return this.evicted.get();
             }
 
             JettyClientSlices client() {

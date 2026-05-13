@@ -136,7 +136,7 @@ public final class TempFileCleanupJob implements Job {
         final AtomicInteger deleted = new AtomicInteger(0);
         final AtomicInteger failed = new AtomicInteger(0);
         try {
-            Files.walkFileTree(dir, new SimpleFileVisitor<Path>() {
+            Files.walkFileTree(dir, new SimpleFileVisitor<>() {
                 @Override
                 public FileVisitResult visitFile(
                     final Path file, final BasicFileAttributes attrs

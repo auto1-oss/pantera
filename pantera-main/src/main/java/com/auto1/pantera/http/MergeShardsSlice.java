@@ -187,13 +187,14 @@ public final class MergeShardsSlice implements Slice {
     /**
      * Convert bytes to lowercase hex string.
      */
+    private static final char[] HEX_DIGITS = "0123456789abcdef".toCharArray();
+
     private static String hexLower(final byte[] bytes) {
-        final char[] HEX = "0123456789abcdef".toCharArray();
         final char[] out = new char[bytes.length * 2];
-        for (int i = 0, j = 0; i < bytes.length; i++) {
-            int v = bytes[i] & 0xFF;
-            out[j++] = HEX[v >>> 4];
-            out[j++] = HEX[v & 0x0F];
+        for (int i = 0; i < bytes.length; i++) {
+            final int v = bytes[i] & 0xFF;
+            out[i * 2] = HEX_DIGITS[v >>> 4];
+            out[i * 2 + 1] = HEX_DIGITS[v & 0x0F];
         }
         return new String(out);
     }
@@ -273,7 +274,7 @@ public final class MergeShardsSlice implements Slice {
                     .add("helmChartsUpdated", 0)
                 ).toCompletableFuture();
         } else if ("helm".equals(type)) {
-            merged = mergeHelmShards(storage, baseUrl, repoName)
+            merged = mergeHelmShards(storage, repoName)
                 .thenApply(sum -> Json.createObjectBuilder()
                     .add("type", type)
                     .add("helmChartsUpdated", sum.charts)
@@ -364,7 +365,6 @@ public final class MergeShardsSlice implements Slice {
                     continue;
                 }
                 final String filenameJson = segs[segs.length - 1];
-                final String versionFromPath = segs[segs.length - 2];
                 final String artifactId = segs[segs.length - 3];
                 // Skip if not a .json file
                 if (!filenameJson.endsWith(".json")) {
@@ -443,8 +443,6 @@ public final class MergeShardsSlice implements Slice {
                             artifactId = base;
                         }
                         final Key mdKey = new Key.From(base, "maven-metadata.xml");
-                        // Ensure parent directory path, not file path
-                        final Key parentDir = new Key.From(base);
                         chain = chain.thenCompose(nothing -> storage.exclusively(mdKey, st -> {
                             // Build maven-metadata.xml content inline (avoid nested path issues)
                             final Directives d = new Directives()
@@ -499,7 +497,7 @@ public final class MergeShardsSlice implements Slice {
     /**
      * Merge Helm shards into a unified index.yaml at repository root.
      */
-    private CompletionStage<HelmSummary> mergeHelmShards(final Storage storage, final Optional<String> baseUrl, final String repoName) {
+    private CompletionStage<HelmSummary> mergeHelmShards(final Storage storage, final String repoName) {
         final Key prefix = new Key.From(".meta", "helm", "shards");
         return storage.list(prefix).thenCompose(keys -> {
             final Map<String, List<Key>> byChart = new HashMap<>();

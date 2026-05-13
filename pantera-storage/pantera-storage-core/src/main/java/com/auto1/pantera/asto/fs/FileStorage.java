@@ -39,6 +39,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -53,7 +54,6 @@ import org.cqfn.rio.file.File;
  *
  * @since 0.1
  */
-@SuppressWarnings("PMD.TooManyMethods")
 public final class FileStorage implements Storage {
 
     /**
@@ -73,8 +73,7 @@ public final class FileStorage implements Storage {
      * @deprecated Use {@link FileStorage#FileStorage(Path)} ctor instead.
      */
     @Deprecated
-    @SuppressWarnings("PMD.UnusedFormalParameter")
-    public FileStorage(final Path path, final Object nothing) {
+    public FileStorage(final Path path, final Object nothing) { // NOPMD UnusedFormalParameter - deprecated overload; 'nothing' kept solely to disambiguate from the primary ctor for binary compatibility
         this(path);
     }
 
@@ -337,7 +336,6 @@ public final class FileStorage implements Storage {
     }
 
     @Override
-    @SuppressWarnings("PMD.ExceptionAsFlowControl")
     public CompletableFuture<Void> delete(final Key key) {
         final long startNs = System.nanoTime();
         return this.keyPath(key).thenAcceptAsync(
@@ -449,6 +447,25 @@ public final class FileStorage implements Storage {
     }
 
     /**
+     * Returns the on-disk path of the artifact under {@code key}.
+     *
+     * <p>The returned path is the storage-managed location — callers MUST
+     * treat it as read-only and MUST NOT delete it. The path is computed
+     * via the same mapping used by {@link #save(Key, Content)} and friends
+     * (i.e. {@code dir.resolve(key.string())}); race-handling is the
+     * caller's responsibility (file may be evicted between lookup and
+     * read).</p>
+     *
+     * @param key Artifact key
+     * @return Storage-owned path for this key
+     * @since 2.2.0
+     */
+    @Override
+    public Optional<Path> pathFor(final Key key) {
+        return Optional.of(this.dir.resolve(key.string()));
+    }
+
+    /**
      * Removes empty key parts (directories).
      * Also cleans up the .tmp directory if it's empty.
      * @param target Directory path
@@ -492,7 +509,7 @@ public final class FileStorage implements Storage {
                 if (!files.findFirst().isPresent()) {
                     Files.deleteIfExists(tmpDir);
                 }
-            } catch (final IOException ignore) {
+            } catch (final IOException ignore) { // NOPMD EmptyCatchBlock - best-effort cleanup; any IO error is benign and recovered on next storage operation
                 // Ignore cleanup errors
             }
         }

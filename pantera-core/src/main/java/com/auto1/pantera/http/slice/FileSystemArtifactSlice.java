@@ -409,7 +409,7 @@ public final class FileSystemArtifactSlice implements Slice {
                 if (channel != null) {
                     try {
                         channel.close();
-                    } catch (IOException e) {
+                    } catch (IOException e) { // NOPMD EmptyCatchBlock - close() failure during cleanup is benign; resource is being released anyway
                         // Ignore close errors
                     }
                     channel = null;
@@ -478,7 +478,7 @@ public final class FileSystemArtifactSlice implements Slice {
     private static Path getBasePath(final Storage storage) {
         try {
             // Check if this is SubStorage
-            if (storage.getClass().getSimpleName().equals("SubStorage")) {
+            if ("SubStorage".equals(storage.getClass().getSimpleName())) {
                 // Extract prefix from SubStorage
                 final Field prefixField = storage.getClass().getDeclaredField("prefix");
                 prefixField.setAccessible(true);

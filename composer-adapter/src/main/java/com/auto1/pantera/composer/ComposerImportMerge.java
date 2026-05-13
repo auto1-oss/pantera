@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.http.log.EcsLogger;
+import java.util.Locale;
 
 import javax.json.Json;
 import javax.json.JsonObject;
@@ -64,11 +65,6 @@ public final class ComposerImportMerge {
     private final Storage storage;
 
     /**
-     * Repository base URL.
-     */
-    private final Optional<String> baseUrl;
-
-    /**
      * Successful merges counter.
      */
     private final AtomicLong mergedPackages;
@@ -85,13 +81,12 @@ public final class ComposerImportMerge {
 
     /**
      * Ctor.
-     * 
+     *
      * @param storage Storage
-     * @param baseUrl Base URL for repository
+     * @param baseUrl Base URL for repository (reserved for future absolute-URL rewrites in merged metadata)
      */
-    public ComposerImportMerge(final Storage storage, final Optional<String> baseUrl) {
+    public ComposerImportMerge(final Storage storage, final Optional<String> baseUrl) { // NOPMD UnusedFormalParameter - public API; baseUrl is reserved for upcoming absolute-URL rewriting in merged dist metadata
         this.storage = storage;
-        this.baseUrl = baseUrl;
         this.mergedPackages = new AtomicLong(0);
         this.mergedVersions = new AtomicLong(0);
         this.failedPackages = new AtomicLong(0);
@@ -535,10 +530,10 @@ public final class ComposerImportMerge {
      * @return True if dev branch
      */
     private boolean isDevBranch(final String version) {
-        final String lower = version.toLowerCase();
+        final String lower = version.toLowerCase(Locale.ROOT);
         return lower.startsWith("dev-")
             || lower.matches(".*\\.x-dev")
-            || lower.equals("dev-master")
+            || "dev-master".equals(lower)
             || (lower.endsWith("-dev") && !lower.matches(".*\\d+\\.\\d+.*-dev"));
     }
 

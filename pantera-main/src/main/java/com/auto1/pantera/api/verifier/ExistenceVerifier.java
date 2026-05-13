@@ -43,6 +43,7 @@ public final class ExistenceVerifier implements Verifier {
      * Validate repository name exists.
      * @return True if exists
      */
+    @Override
     public boolean valid() {
         return this.crs.exists(this.rname);
     }
@@ -51,6 +52,7 @@ public final class ExistenceVerifier implements Verifier {
      * Get error message.
      * @return Error message
      */
+    @Override
     public String message() {
         return String.format("Repository %s does not exist. ", this.rname);
     }

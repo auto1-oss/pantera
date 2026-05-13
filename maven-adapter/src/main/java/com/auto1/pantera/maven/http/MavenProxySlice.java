@@ -12,6 +12,7 @@ package com.auto1.pantera.maven.http;
 
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.cache.Cache;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.cache.ProxyCacheConfig;
@@ -25,6 +26,8 @@ import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
 import com.auto1.pantera.http.slice.SliceSimple;
+import com.auto1.pantera.publishdate.PublishDateRegistries;
+import com.auto1.pantera.publishdate.RegistryBackedInspector;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 
 import java.net.URI;
@@ -36,7 +39,6 @@ import java.util.Queue;
  * Maven proxy repository slice.
  * @since 0.5
  */
-@SuppressWarnings("PMD.ExcessiveParameterList")
 public final class MavenProxySlice extends Slice.Wrap {
 
     /**
@@ -49,7 +51,7 @@ public final class MavenProxySlice extends Slice.Wrap {
     public MavenProxySlice(final ClientSlices clients, final URI remote,
         final Authenticator auth, final Cache cache) {
         this(clients, remote, auth, cache, Optional.empty(), "*",
-            "maven-proxy", com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE, Optional.empty());
+            "maven-proxy", com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE, Optional.empty());
     }
 
     /**
@@ -63,12 +65,12 @@ public final class MavenProxySlice extends Slice.Wrap {
         final Authenticator authenticator
     ) {
         this(client, uri, authenticator, Cache.NOP, Optional.empty(), "*",
-            "maven-proxy", com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE, Optional.empty(),
-            Duration.ofHours(24), Duration.ofHours(24), true);
+            "maven-proxy", com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE, Optional.empty(),
+            Duration.ofHours(24), Duration.ofHours(24), true, null);
     }
 
     /**
-     * New Maven proxy slice with cache.
+     * New Maven proxy slice with cache (no metadata cooldown filter).
      * @param clients HTTP clients
      * @param remote Remote URI
      * @param auth Authenticator
@@ -87,11 +89,42 @@ public final class MavenProxySlice extends Slice.Wrap {
         final Optional<Queue<ProxyArtifactEvent>> events,
         final String rname,
         final String rtype,
-        final com.auto1.pantera.cooldown.CooldownService cooldown,
+        final com.auto1.pantera.cooldown.api.CooldownService cooldown,
         final Optional<Storage> storage
     ) {
         this(clients, remote, auth, cache, events, rname, rtype, cooldown, storage,
-            Duration.ofHours(24), Duration.ofHours(24), true);
+            Duration.ofHours(24), Duration.ofHours(24), true, null);
+    }
+
+    /**
+     * New Maven proxy slice with cache and metadata cooldown filter.
+     * @param clients HTTP clients
+     * @param remote Remote URI
+     * @param auth Authenticator
+     * @param cache Repository cache
+     * @param events Artifact events queue
+     * @param rname Repository name
+     * @param rtype Repository type
+     * @param cooldown Cooldown service
+     * @param storage Storage for persisting checksums
+     * @param cooldownMetadata Cooldown metadata filter service, or null to
+     *                         serve upstream {@code maven-metadata.xml}
+     *                         unfiltered (legacy behaviour)
+     */
+    public MavenProxySlice(
+        final ClientSlices clients,
+        final URI remote,
+        final Authenticator auth,
+        final Cache cache,
+        final Optional<Queue<ProxyArtifactEvent>> events,
+        final String rname,
+        final String rtype,
+        final com.auto1.pantera.cooldown.api.CooldownService cooldown,
+        final Optional<Storage> storage,
+        final com.auto1.pantera.cooldown.metadata.CooldownMetadataService cooldownMetadata
+    ) {
+        this(clients, remote, auth, cache, events, rname, rtype, cooldown, storage,
+            Duration.ofHours(24), Duration.ofHours(24), true, cooldownMetadata);
     }
 
     /**
@@ -108,8 +141,9 @@ public final class MavenProxySlice extends Slice.Wrap {
      * @param metadataTtl TTL for metadata cache
      * @param negativeCacheTtl TTL for negative cache (404s)
      * @param negativeCacheEnabled Whether negative caching is enabled
+     * @param cooldownMetadata Cooldown metadata filter service, or null for
+     *                         unfiltered {@code maven-metadata.xml} responses
      */
-    @SuppressWarnings("PMD.UnusedFormalParameter")
     public MavenProxySlice(
         final ClientSlices clients,
         final URI remote,
@@ -118,14 +152,15 @@ public final class MavenProxySlice extends Slice.Wrap {
         final Optional<Queue<ProxyArtifactEvent>> events,
         final String rname,
         final String rtype,
-        final com.auto1.pantera.cooldown.CooldownService cooldown,
+        final com.auto1.pantera.cooldown.api.CooldownService cooldown,
         final Optional<Storage> storage,
         final Duration metadataTtl,
-        final Duration negativeCacheTtl,
-        final boolean negativeCacheEnabled
+        final Duration negativeCacheTtl, // NOPMD UnusedFormalParameter - public API; reserved for upcoming negative-cache wiring
+        final boolean negativeCacheEnabled, // NOPMD UnusedFormalParameter - public API; reserved for upcoming negative-cache wiring
+        final com.auto1.pantera.cooldown.metadata.CooldownMetadataService cooldownMetadata
     ) {
         this(remote(clients, remote, auth), cache, events, rname, remote.toString(), rtype,
-            cooldown, storage, metadataTtl);
+            cooldown, storage, metadataTtl, cooldownMetadata);
     }
 
     /**
@@ -139,6 +174,7 @@ public final class MavenProxySlice extends Slice.Wrap {
      * @param cooldown Cooldown service
      * @param storage Storage for persisting checksums
      * @param metadataTtl TTL for metadata cache
+     * @param cooldownMetadata Cooldown metadata filter service (nullable)
      */
     private MavenProxySlice(
         final Slice remote,
@@ -147,20 +183,23 @@ public final class MavenProxySlice extends Slice.Wrap {
         final String rname,
         final String upstreamUrl,
         final String rtype,
-        final com.auto1.pantera.cooldown.CooldownService cooldown,
+        final com.auto1.pantera.cooldown.api.CooldownService cooldown,
         final Optional<Storage> storage,
-        final Duration metadataTtl
+        final Duration metadataTtl,
+        final com.auto1.pantera.cooldown.metadata.CooldownMetadataService cooldownMetadata
     ) {
         super(
             buildRoute(remote, cache, events, rname, upstreamUrl, rtype,
-                cooldown, new MavenCooldownInspector(remote), storage, metadataTtl)
+                cooldown,
+                new RegistryBackedInspector("maven", PublishDateRegistries.instance()),
+                storage, metadataTtl,
+                cooldownMetadata)
         );
     }
 
     /**
      * Build the routing slice with ChecksumProxySlice wrapping CachedProxySlice.
      */
-    @SuppressWarnings({"PMD.ExcessiveParameterList", "PMD.CloseResource"})
     private static Slice buildRoute(
         final Slice remote,
         final Cache cache,
@@ -168,16 +207,17 @@ public final class MavenProxySlice extends Slice.Wrap {
         final String rname,
         final String upstreamUrl,
         final String rtype,
-        final com.auto1.pantera.cooldown.CooldownService cooldown,
-        final MavenCooldownInspector inspector,
+        final com.auto1.pantera.cooldown.api.CooldownService cooldown,
+        final CooldownInspector inspector,
         final Optional<Storage> storage,
-        final Duration metadataTtl
+        final Duration metadataTtl,
+        final com.auto1.pantera.cooldown.metadata.CooldownMetadataService cooldownMetadata
     ) {
         // Build ProxyCacheConfig with cooldown enabled so BaseCachedProxySlice
         // delegates to the cooldown service for freshness enforcement.
         final ProxyCacheConfig config = ProxyCacheConfig.withCooldown();
         // Create MetadataCache with provided TTL
-        final com.auto1.pantera.cache.ValkeyConnection valkeyConn =
+        final com.auto1.pantera.cache.ValkeyConnection valkeyConn = // NOPMD CloseResource - shared singleton owned by GlobalCacheConfig; closed at JVM shutdown by the cache config
             com.auto1.pantera.cache.GlobalCacheConfig.valkeyConnection().orElse(null);
         final MetadataCache metadataCache = new MetadataCache(
             metadataTtl,
@@ -188,14 +228,19 @@ public final class MavenProxySlice extends Slice.Wrap {
         return new SliceRoute(
             new RtRulePath(
                 MethodRule.HEAD,
-                new HeadProxySlice(remote)
+                // Track 5 Phase 2B: pass the raw storage so HEAD on a
+                // cached artifact returns 200 + Content-Length from local
+                // metadata without ever touching upstream. Cache-miss still
+                // proxies to upstream HEAD.
+                new HeadProxySlice(remote, storage)
             ),
             new RtRulePath(
                 MethodRule.GET,
                 new ChecksumProxySlice(
                     new CachedProxySlice(
                         remote, cache, events, rname, upstreamUrl, rtype,
-                        cooldown, inspector, storage, config, metadataCache
+                        cooldown, inspector, storage, config, metadataCache,
+                        cooldownMetadata
                     )
                 )
             ),

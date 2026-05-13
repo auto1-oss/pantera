@@ -82,7 +82,7 @@ public enum RpmOptions {
      * Option name.
      * @return String name
      */
-    public final String optionName() {
+    public String optionName() {
         return this.name;
     }
 
@@ -90,7 +90,7 @@ public enum RpmOptions {
      * Builds command line option.
      * @return Instance of {@link Option}.
      */
-    public final Option option() {
+    public Option option() {
         return Option.builder(this.name.substring(0, 1))
             .argName(this.arg)
             .longOpt(this.name)

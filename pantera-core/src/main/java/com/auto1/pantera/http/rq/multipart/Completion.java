@@ -25,7 +25,7 @@ final class Completion<T> {
      * @since 1.0
      */
     static final Completion<?> FAKE = new Completion<>(
-        new Subscriber<Object>() {
+        new Subscriber<>() {
             @Override
             public void onSubscribe(final Subscription sub) {
                 // do nothing
@@ -80,7 +80,6 @@ final class Completion<T> {
     /**
      * Notify downstream item completed.
      */
-    @SuppressWarnings("PMD.AssignmentInOperand")
     void itemCompleted() {
         synchronized (this.lock) {
             if (--this.counter == 0 && this.completed) {

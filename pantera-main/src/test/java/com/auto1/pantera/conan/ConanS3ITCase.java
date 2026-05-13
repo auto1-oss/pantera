@@ -271,7 +271,6 @@ public final class ConanS3ITCase {
      *
      * @return ImageFromDockerfile of testcontainers.
      */
-    @SuppressWarnings("PMD.LineLengthCheck")
     private static TestDeployment.ClientContainer prepareClientContainer() {
         return new TestDeployment.ClientContainer("pantera/conan-tests:1.0")
             .withCommand("tail", "-f", "/dev/null")

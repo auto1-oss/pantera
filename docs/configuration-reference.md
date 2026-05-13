@@ -405,6 +405,35 @@ meta:
         enabled: true
 ```
 
+### DB-backed cooldown settings
+
+These settings are persisted in the `settings` table (key `"cooldown"`)
+and edited via `PUT /api/v1/cooldown/config` or the admin UI
+"Cooldown settings" dialog. They are NOT configured via YAML.
+
+#### history_retention_days
+
+- Type: integer
+- Bounds: `(0, 3650]`
+- Default: 90
+- Description: Days to retain entries in `artifact_cooldowns_history`
+  before automatic purge. Read at job-run time by the pg_cron
+  `purge-cooldown-history` job (via `_cooldown_retention_days()` Postgres
+  function) and by the Vertx fallback's purge routine. Admin changes take
+  effect on the next purge tick without restart.
+
+#### cleanup_batch_limit
+
+- Type: integer
+- Bounds: `[1, 100000]`
+- Default: 10000
+- Description: Maximum rows moved from `artifact_cooldowns` to history
+  in a single cleanup tick (applies to both pg_cron and Vertx fallback
+  paths). Reduce on very large tables to minimize lock contention at the
+  cost of more cleanup iterations per run. Admin changes take effect on
+  the next cleanup tick without restart (via `_cooldown_batch_limit()` or
+  direct CooldownSettings read).
+
 ---
 
 ### 1.10 meta.caches

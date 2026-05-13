@@ -12,7 +12,6 @@ package com.auto1.pantera.http.cache;
 
 import com.amihaiemil.eoyaml.YamlMapping;
 import java.time.Duration;
-import java.util.Locale;
 import java.util.Optional;
 
 /**
@@ -32,7 +31,6 @@ import java.util.Optional;
  *     ttl: PT168H
  *   cooldown:
  *     enabled: true
- *   dedup_strategy: signal          # none | storage | signal
  *   conditional_requests: true      # ETag / If-None-Match
  *   stale_while_revalidate:
  *     enabled: false
@@ -140,16 +138,6 @@ public final class ProxyCacheConfig {
      */
     public boolean cooldownEnabled() {
         return this.boolValue("cache", "cooldown", "enabled").orElse(false);
-    }
-
-    /**
-     * Get request deduplication strategy.
-     * @return Dedup strategy (default: SIGNAL)
-     */
-    public DedupStrategy dedupStrategy() {
-        return this.stringValue("cache", "dedup_strategy")
-            .map(s -> DedupStrategy.valueOf(s.toUpperCase(Locale.ROOT)))
-            .orElse(DedupStrategy.SIGNAL);
     }
 
     /**
@@ -277,15 +265,6 @@ public final class ProxyCacheConfig {
         } catch (final Exception ex) {
             return Optional.empty();
         }
-    }
-
-    /**
-     * Get string value from nested YAML path.
-     * @param path YAML path segments
-     * @return Optional string value
-     */
-    private Optional<String> stringValue(final String... path) {
-        return Optional.ofNullable(this.rawValue(path));
     }
 
     /**

@@ -84,7 +84,6 @@ final class ConcatenationTest {
         );
     }
 
-    @SuppressWarnings("PMD.UnusedPrivateMethod")
     private static Stream<Object[]> flows() {
         final String data = "data";
         return Stream.of(

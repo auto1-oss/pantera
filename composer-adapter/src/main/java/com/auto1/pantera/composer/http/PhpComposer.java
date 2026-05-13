@@ -50,7 +50,8 @@ public final class PhpComposer extends Slice.Wrap {
         final String name,
         final Optional<Queue<ArtifactEvent>> events
     ) {
-        this(repository, policy, auth, null, name, events);
+        this(repository, policy, auth, null, name, events,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
     }
 
     /**
@@ -69,6 +70,23 @@ public final class PhpComposer extends Slice.Wrap {
         final TokenAuthentication tokenAuth,
         final String name,
         final Optional<Queue<ArtifactEvent>> events
+    ) {
+        this(repository, policy, basicAuth, tokenAuth, name, events,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+    }
+
+    /**
+     * Ctor with synchronous artifact-index writer.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public PhpComposer(
+        final Repository repository,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
     ) {
         super(
             new SliceRoute(
@@ -137,7 +155,7 @@ public final class PhpComposer extends Slice.Wrap {
                         MethodRule.PUT
                     ),
                     PhpComposer.createAuthSlice(
-                        new AddArchiveSlice(repository, events, name),
+                        new AddArchiveSlice(repository, events, name, syncIndex),
                         basicAuth,
                         tokenAuth,
                         new OperationControl(

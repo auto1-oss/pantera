@@ -13,6 +13,7 @@ package com.auto1.pantera.importer;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.composer.ComposerImportMerge;
 import com.auto1.pantera.http.log.EcsLogger;
+import java.util.Locale;
 
 import java.util.Optional;
 import java.util.concurrent.CompletionStage;
@@ -128,7 +129,7 @@ public final class ComposerImportPostProcessor {
         if (repoType == null) {
             return false;
         }
-        final String type = repoType.toLowerCase();
-        return type.equals("php") || type.equals("composer");
+        final String type = repoType.toLowerCase(Locale.ROOT);
+        return "php".equals(type) || "composer".equals(type);
     }
 }

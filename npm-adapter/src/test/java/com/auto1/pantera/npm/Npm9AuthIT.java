@@ -50,7 +50,6 @@ import org.testcontainers.containers.GenericContainer;
  *
  * @since 0.11
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 @DisabledOnOs(OS.WINDOWS)
 public final class Npm9AuthIT {
 

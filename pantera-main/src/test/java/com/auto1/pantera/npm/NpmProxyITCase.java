@@ -28,7 +28,6 @@ import org.junit.jupiter.params.provider.CsvSource;
  * Integration test for {@link com.auto1.pantera.npm.proxy.http.NpmProxySlice}.
  * @since 0.13
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 @EnabledOnOs({OS.LINUX, OS.MAC})
 final class NpmProxyITCase {
 

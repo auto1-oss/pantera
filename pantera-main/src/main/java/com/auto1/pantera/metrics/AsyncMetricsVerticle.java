@@ -149,7 +149,7 @@ public final class AsyncMetricsVerticle extends AbstractVerticle {
     public void start(final Promise<Void> startPromise) {
         final HttpServerOptions options = new HttpServerOptions()
             .setPort(this.port)
-            .setHost("0.0.0.0")
+            .setHost("0.0.0.0") // NOPMD AvoidUsingHardCodedIP - server bind on all interfaces (wildcard, not a target IP)
             .setIdleTimeout(60)
             .setTcpKeepAlive(true)
             .setTcpNoDelay(true);
@@ -213,9 +213,9 @@ public final class AsyncMetricsVerticle extends AbstractVerticle {
 
         if (requestPath.equals(this.path) || requestPath.equals(this.path + "/")) {
             handleMetricsRequest(request);
-        } else if (requestPath.equals("/health") || requestPath.equals("/healthz")) {
+        } else if ("/health".equals(requestPath) || "/healthz".equals(requestPath)) {
             handleHealthRequest(request);
-        } else if (requestPath.equals("/ready") || requestPath.equals("/readyz")) {
+        } else if ("/ready".equals(requestPath) || "/readyz".equals(requestPath)) {
             handleReadyRequest(request);
         } else {
             request.response()

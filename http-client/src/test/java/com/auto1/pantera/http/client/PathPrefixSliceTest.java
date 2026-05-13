@@ -35,7 +35,6 @@ final class PathPrefixSliceTest {
         "/my/repo,/123/file.txt?param1=foo&param2=bar,/my/repo/123/file.txt,param1=foo&param2=bar",
         "/aaa/bbb,/%26/file.txt?p=%20%20,/aaa/bbb/%26/file.txt,p=%20%20"
     })
-    @SuppressWarnings("PMD.UseObjectForClearerAPI")
     void shouldAddPrefixToPathAndPreserveEverythingElse(
         final String prefix, final String line, final String path, final String query
     ) {

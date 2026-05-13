@@ -69,6 +69,57 @@ The proxy caches downloaded modules locally. Subsequent fetches from any develop
 
 ---
 
+## Go Proxy (`go-proxy`)
+
+A `go-proxy` repository caches modules from an upstream Go module proxy (typically `https://proxy.golang.org`) on first request, then serves subsequent requests from the local cache. Cached bytes survive upstream outages and are shared across all clients pointing at the same Pantera host.
+
+**When to use**
+
+- Teams that want a shared module cache to reduce egress and speed up CI.
+- Air-gapped or rate-limited environments that need a reliable mirror of `proxy.golang.org`.
+- Any Go development where reproducible, auditable dependency resolution matters.
+
+**Minimal YAML**
+
+```yaml
+# go-proxy.yaml
+repo:
+  type: go-proxy
+  storage:
+    type: fs
+    path: /var/pantera/data
+  remotes:
+    - url: https://proxy.golang.org
+```
+
+Point `GOPROXY` at the proxy URL (see [Configure GOPROXY](#configure-goproxy) above). See [Cooldown](../cooldown.md) for controls over newly published upstream versions, and the [Management UI guide](../ui-guide.md#creating-repositories) for admin workflows.
+
+---
+
+## Go Group (`go-group`)
+
+A `go-group` repository is a virtual repository that fans out requests across a list of member repositories (`go` locals and `go-proxy` proxies) in resolution order. The first member that serves the module wins. Groups do not store artifacts themselves — they delegate to members.
+
+**When to use**
+
+- You want developers to publish internal Go modules to a `go` local while still resolving public modules through a `go-proxy` in the same URL.
+- You want to switch upstream proxies (e.g., primary and fallback) without reconfiguring every client.
+
+**Minimal YAML**
+
+```yaml
+# go-group.yaml
+repo:
+  type: go-group
+  members:
+    - go-local
+    - go-proxy
+```
+
+Clients set `GOPROXY` to the group URL (`http://pantera-host:8080/go-group`); Pantera handles fan-out. See the [Management UI guide](../ui-guide.md#adding-members-to-a-group-repository) for how to add, reorder, and create members from the web interface.
+
+---
+
 ## Common Issues
 
 | Symptom | Cause | Fix |

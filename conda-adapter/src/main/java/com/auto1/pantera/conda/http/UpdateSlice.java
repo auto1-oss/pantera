@@ -89,9 +89,21 @@ public final class UpdateSlice implements Slice {
      * @param repoName Repository name
      */
     public UpdateSlice(Storage asto, Optional<Queue<ArtifactEvent>> events, String repoName) {
+        this(asto, events, repoName, com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+    }
+
+    /** Synchronous artifact-index writer. */
+    private final com.auto1.pantera.index.SyncArtifactIndexer syncIndex;
+
+    /**
+     * Ctor with synchronous index writer.
+     */
+    public UpdateSlice(Storage asto, Optional<Queue<ArtifactEvent>> events, String repoName,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex) {
         this.asto = asto;
         this.events = events;
         this.repoName = repoName;
+        this.syncIndex = syncIndex;
     }
 
     @Override
@@ -119,19 +131,17 @@ public final class UpdateSlice implements Slice {
                                 ).thenCompose(
                                     ignored -> this.asto.move(temp, new Key.From(matcher.group(1)))
                                 );
-                                if (this.events.isPresent()) {
-                                    action = action.thenAccept(
-                                        nothing -> this.events.get().add(
-                                            new ArtifactEvent(
-                                                UpdateSlice.CONDA, this.repoName,
-                                                new Login(headers).getValue(),
-                                                String.join("_", json.getString("name", "<no name>"), json.getString("arch", "<no arch>")),
-                                                json.getString("version"),
-                                                json.getJsonNumber(UpdateSlice.SIZE).longValue()
-                                            )
-                                        )
+                                action = action.thenCompose(nothing -> {
+                                    final ArtifactEvent event = new ArtifactEvent(
+                                        UpdateSlice.CONDA, this.repoName,
+                                        new Login(headers).getValue(),
+                                        String.join("_", json.getString("name", "<no name>"), json.getString("arch", "<no arch>")),
+                                        json.getString("version"),
+                                        json.getJsonNumber(UpdateSlice.SIZE).longValue()
                                     );
-                                }
+                                    this.events.ifPresent(queue -> queue.add(event));
+                                    return this.syncIndex.recordSync(event);
+                                });
                                 return action;
                             }
                         ).thenApply(

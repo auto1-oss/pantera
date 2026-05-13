@@ -52,7 +52,6 @@ import org.testcontainers.utility.MountableFile;
  * To run a command in client container and match a result use {@code assertExec} method.
  * @since 0.19
  */
-@SuppressWarnings({"PMD.TooManyMethods", "PMD.AvoidDuplicateLiterals"})
 public final class TestDeployment implements BeforeEachCallback, AfterEachCallback {
 
     /**
@@ -400,7 +399,6 @@ public final class TestDeployment implements BeforeEachCallback, AfterEachCallba
          *
          * @return Default container definition
          */
-        @SuppressWarnings("PMD.ProhibitPublicStaticMethods")
         public static PanteraContainer defaultDefinition() {
             return new PanteraContainer().withConfig("pantera.yaml");
         }

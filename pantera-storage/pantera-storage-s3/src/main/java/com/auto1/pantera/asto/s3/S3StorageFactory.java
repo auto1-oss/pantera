@@ -16,6 +16,7 @@ import com.auto1.pantera.asto.factory.Config;
 import com.auto1.pantera.asto.factory.StorageFactory;
 import java.net.URI;
 import java.time.Duration;
+import java.util.Locale;
 import java.util.Optional;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
@@ -161,7 +162,7 @@ public final class S3StorageFactory implements StorageFactory {
                 )
             );
         }
-        final SdkAsyncHttpClient netty = NettyNioAsyncHttpClient.builder()
+        final SdkAsyncHttpClient netty = NettyNioAsyncHttpClient.builder() // NOPMD CloseResource - lifecycle owned by built S3 client (closed via builder.httpClient(netty))
             .maxConcurrency(maxConc)
             .maxPendingConnectionAcquires(maxPend)
             .connectionAcquisitionTimeout(acqTmo)
@@ -324,7 +325,7 @@ public final class S3StorageFactory implements StorageFactory {
      * @return Size in bytes
      */
     private static long parseSizeString(final String size) {
-        final String upper = size.trim().toUpperCase();
+        final String upper = size.trim().toUpperCase(Locale.ROOT);
         if (upper.endsWith("GB")) {
             return Long.parseLong(upper.substring(0, upper.length() - 2).trim()) * 1024 * 1024 * 1024;
         } else if (upper.endsWith("MB")) {

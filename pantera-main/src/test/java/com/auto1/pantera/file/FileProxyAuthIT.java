@@ -30,7 +30,6 @@ import org.junit.jupiter.params.provider.ValueSource;
  *
  * @since 0.11
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 @DisabledOnOs(OS.WINDOWS)
 final class FileProxyAuthIT {
 

@@ -37,7 +37,6 @@ import org.yaml.snakeyaml.Yaml;
  *
  * @since 0.2
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class IndexYaml {
     /**
      * The `index.yaml` string.
@@ -118,7 +117,7 @@ public final class IndexYaml {
     private static Map<String, Object> empty() {
         final Map<String, Object> res = new HashMap<>(3);
         res.put("apiVersion", "v1");
-        res.put("entries", new HashMap<String, Object>(0));
+        res.put("entries", new HashMap<>(0));
         res.put("generated", new DateTimeNow().asString());
         return res;
     }

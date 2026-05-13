@@ -118,7 +118,6 @@ public final class BackfillCli {
      * @param args Command-line arguments
      * @return Exit code
      */
-    @SuppressWarnings({"PMD.CyclomaticComplexity", "PMD.NPathComplexity"})
     static int run(final String... args) {
         final Options options = buildOptions();
         for (final String arg : args) {
@@ -222,7 +221,6 @@ public final class BackfillCli {
      * @return Exit code
      * @checkstyle ParameterNumberCheck (15 lines)
      */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
     private static int runBulk(
         final String configDirStr,
         final String storageRootStr,
@@ -384,7 +382,6 @@ public final class BackfillCli {
      * @return Exit code
      * @checkstyle ParameterNumberCheck (15 lines)
      */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
     private static int runSingle(
         final String type,
         final String pathStr,

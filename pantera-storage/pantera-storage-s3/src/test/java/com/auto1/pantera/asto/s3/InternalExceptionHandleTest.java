@@ -24,7 +24,6 @@ import org.junit.jupiter.api.Test;
  *
  * @since 0.1
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 final class InternalExceptionHandleTest {
 
     @Test

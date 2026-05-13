@@ -14,7 +14,7 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.cache.Cache;
 import com.auto1.pantera.asto.cache.FromStorageCache;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.files.FileProxySlice;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
@@ -53,7 +53,7 @@ public final class FileProxy implements Slice {
     ) {
         final Optional<Storage> asto = cfg.storageOpt();
         
-        // Support multiple remotes with GroupSlice (like maven-proxy)
+        // Support multiple remotes with GroupResolver (like maven-proxy)
         // Each remote gets its own FileProxySlice, evaluated in priority order
         this.slice = new RaceSlice(
             cfg.remotes().stream().map(

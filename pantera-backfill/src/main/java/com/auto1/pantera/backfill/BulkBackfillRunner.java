@@ -38,7 +38,6 @@ import org.slf4j.LoggerFactory;
  *
  * @since 1.20.13
  */
-@SuppressWarnings("PMD.ExcessiveImports")
 final class BulkBackfillRunner {
 
     /**
@@ -107,7 +106,6 @@ final class BulkBackfillRunner {
      * @param out Stream for summary output (typically System.err)
      * @checkstyle ParameterNumberCheck (10 lines)
      */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
     BulkBackfillRunner(
         final Path configDir,
         final Path storageRoot,

@@ -10,7 +10,6 @@
  */
 package com.auto1.pantera.http.cache;
 
-import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.cache.GlobalCacheConfig;
 import com.auto1.pantera.cache.NegativeCacheConfig;
 import com.auto1.pantera.cache.ValkeyConnection;
@@ -20,440 +19,345 @@ import io.lettuce.core.ScanArgs;
 import io.lettuce.core.ScanCursor;
 import io.lettuce.core.api.async.RedisAsyncCommands;
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Caches 404 (Not Found) responses to avoid repeated upstream requests for missing artifacts.
- * This is critical for proxy repositories to avoid hammering upstream repositories with
- * requests for artifacts that don't exist (e.g., optional dependencies, typos).
- * 
- * Thread-safe, high-performance cache using Caffeine with automatic TTL expiry.
- * 
- * Performance impact: Eliminates 100% of repeated 404 requests, reducing load on both
- * Pantera and upstream repositories.
- * 
+ * Unified negative cache for 404 responses — single shared instance per JVM.
+ *
+ * <p>Keyed by {@link NegativeCacheKey} ({@code scope:repoType:artifactName:artifactVersion}),
+ * URL-encoded so embedded delimiters survive round-trips. Hosted, proxy, and group
+ * scopes all share one L1 Caffeine + optional L2 Valkey bean.
+ *
  * @since 0.11
  */
 public final class NegativeCache {
-    
-    /**
-     * Default TTL for negative cache (24 hours).
-     */
-    private static final Duration DEFAULT_TTL = Duration.ofHours(24);
-    
-    /**
-     * Default maximum cache size (50,000 entries).
-     * At ~150 bytes per entry = ~7.5MB maximum memory usage.
-     */
-    private static final int DEFAULT_MAX_SIZE = 50_000;
-    
+
     /**
      * Sentinel value for negative cache (we only care about presence, not value).
      */
     private static final Boolean CACHED = Boolean.TRUE;
-    
+
     /**
      * L1 cache for 404 responses (in-memory, hot data).
-     * Thread-safe, high-performance, with automatic TTL expiry.
+     * Keyed by {@link NegativeCacheKey#flat()}.
      */
-    private final Cache<Key, Boolean> notFoundCache;
-    
+    private final Cache<String, Boolean> notFoundCache;
+
     /**
      * L2 cache (Valkey/Redis, warm data) - optional.
      */
     private final RedisAsyncCommands<String, byte[]> l2;
-    
+
     /**
      * Whether two-tier caching is enabled.
      */
     private final boolean twoTier;
-    
+
     /**
      * Whether negative caching is enabled.
      */
     private final boolean enabled;
-    
+
     /**
      * Cache TTL for L2.
      */
     private final Duration ttl;
-    
-    /**
-     * Repository type for cache key namespacing.
-     */
-    private final String repoType;
 
     /**
-     * Repository name for cache key isolation.
-     * Prevents cache collisions in group repositories.
-     */
-    private final String repoName;
-
-    /**
-     * Create negative cache using unified NegativeCacheConfig.
-     * @param repoType Repository type for cache key namespacing (e.g., "npm", "pypi", "go")
-     * @param repoName Repository name for cache key isolation
-     */
-    public NegativeCache(final String repoType, final String repoName) {
-        this(repoType, repoName, NegativeCacheConfig.getInstance());
-    }
-
-    /**
-     * Create negative cache with explicit config.
-     * @param repoType Repository type for cache key namespacing (e.g., "npm", "pypi", "go")
-     * @param repoName Repository name for cache key isolation
+     * Create negative cache from config (the single-instance wiring constructor).
+     *
      * @param config Unified negative cache configuration
      */
-    public NegativeCache(final String repoType, final String repoName, final NegativeCacheConfig config) {
-        this(
-            config.l2Ttl(),
-            true,
-            config.isValkeyEnabled() ? config.l1MaxSize() : config.maxSize(),
-            config.isValkeyEnabled() ? config.l1Ttl() : config.ttl(),
+    public NegativeCache(final NegativeCacheConfig config) {
+        this.enabled = true;
+        this.ttl = config.l2Ttl();
+        final RedisAsyncCommands<String, byte[]> l2Commands =
             GlobalCacheConfig.valkeyConnection()
                 .filter(v -> config.isValkeyEnabled())
                 .map(ValkeyConnection::async)
-                .orElse(null),
-            repoType,
-            repoName
-        );
-    }
-
-    /**
-     * Create negative cache with default 24h TTL and 50K max size (enabled).
-     * @deprecated Use {@link #NegativeCache(String, String)} instead
-     */
-    @Deprecated
-    public NegativeCache() {
-        this(DEFAULT_TTL, true, DEFAULT_MAX_SIZE, DEFAULT_TTL, null, "unknown", "default");
-    }
-
-    /**
-     * Create negative cache with Valkey connection (two-tier).
-     * @param valkey Valkey connection for L2 cache
-     * @deprecated Use {@link #NegativeCache(String, String, NegativeCacheConfig)} instead
-     */
-    @Deprecated
-    public NegativeCache(final ValkeyConnection valkey) {
-        this(
-            DEFAULT_TTL,
-            true,
-            valkey != null ? Math.max(1000, DEFAULT_MAX_SIZE / 10) : DEFAULT_MAX_SIZE,
-            valkey != null ? Duration.ofMinutes(5) : DEFAULT_TTL,
-            valkey != null ? valkey.async() : null,
-            "unknown",
-            "default"
-        );
-    }
-
-    /**
-     * Create negative cache with custom TTL and default max size.
-     * @param ttl Time-to-live for cached 404s
-     * @deprecated Use {@link #NegativeCache(String, String, NegativeCacheConfig)} instead
-     */
-    @Deprecated
-    public NegativeCache(final Duration ttl) {
-        this(ttl, true, DEFAULT_MAX_SIZE, ttl, null, "unknown", "default");
-    }
-
-    /**
-     * Create negative cache with custom TTL and enable flag.
-     * @param ttl Time-to-live for cached 404s
-     * @param enabled Whether negative caching is enabled
-     * @deprecated Use {@link #NegativeCache(String, String, NegativeCacheConfig)} instead
-     */
-    @Deprecated
-    public NegativeCache(final Duration ttl, final boolean enabled) {
-        this(ttl, enabled, DEFAULT_MAX_SIZE, ttl, null, "unknown", "default");
-    }
-
-    /**
-     * Create negative cache with custom TTL, enable flag, and max size.
-     * @param ttl Time-to-live for cached 404s
-     * @param enabled Whether negative caching is enabled
-     * @param maxSize Maximum number of entries (Window TinyLFU eviction)
-     * @param valkey Valkey connection for L2 cache (null uses GlobalCacheConfig)
-     * @deprecated Use {@link #NegativeCache(String, String, NegativeCacheConfig)} instead
-     */
-    @Deprecated
-    public NegativeCache(final Duration ttl, final boolean enabled, final int maxSize,
-            final ValkeyConnection valkey) {
-        this(
-            ttl,
-            enabled,
-            valkey != null ? Math.max(1000, maxSize / 10) : maxSize,
-            valkey != null ? Duration.ofMinutes(5) : ttl,
-            valkey != null ? valkey.async() : null,
-            "unknown",
-            "default"
-        );
-    }
-
-    /**
-     * Create negative cache with custom TTL, enable flag, max size, and repository name.
-     * @param ttl Time-to-live for cached 404s
-     * @param enabled Whether negative caching is enabled
-     * @param maxSize Maximum number of entries (Window TinyLFU eviction)
-     * @param valkey Valkey connection for L2 cache (null uses GlobalCacheConfig)
-     * @param repoName Repository name for cache key isolation
-     * @deprecated Use {@link #NegativeCache(String, String, NegativeCacheConfig)} instead
-     */
-    @Deprecated
-    public NegativeCache(final Duration ttl, final boolean enabled, final int maxSize,
-            final ValkeyConnection valkey, final String repoName) {
-        this(
-            ttl,
-            enabled,
-            valkey != null ? Math.max(1000, maxSize / 10) : maxSize,
-            valkey != null ? Duration.ofMinutes(5) : ttl,
-            valkey != null ? valkey.async() : null,
-            "unknown",
-            repoName
-        );
-    }
-
-    /**
-     * Create negative cache with custom TTL, enable flag, max size, repo type, and repository name.
-     * @param ttl Time-to-live for cached 404s
-     * @param enabled Whether negative caching is enabled
-     * @param maxSize Maximum number of entries (Window TinyLFU eviction)
-     * @param valkey Valkey connection for L2 cache (null uses GlobalCacheConfig)
-     * @param repoType Repository type for cache key namespacing (e.g., "npm", "pypi", "go")
-     * @param repoName Repository name for cache key isolation
-     * @deprecated Use {@link #NegativeCache(String, String, NegativeCacheConfig)} instead
-     */
-    @Deprecated
-    public NegativeCache(final Duration ttl, final boolean enabled, final int maxSize,
-            final ValkeyConnection valkey, final String repoType, final String repoName) {
-        this(
-            ttl,
-            enabled,
-            valkey != null ? Math.max(1000, maxSize / 10) : maxSize,
-            valkey != null ? Duration.ofMinutes(5) : ttl,
-            valkey != null ? valkey.async() : null,
-            repoType,
-            repoName
-        );
-    }
-
-    /**
-     * Primary constructor - all other constructors delegate to this one.
-     * @param ttl TTL for L2 cache
-     * @param enabled Whether negative caching is enabled
-     * @param l1MaxSize Maximum size for L1 cache
-     * @param l1Ttl TTL for L1 cache
-     * @param l2Commands Redis commands for L2 cache (null for single-tier)
-     * @param repoType Repository type for cache key namespacing
-     * @param repoName Repository name for cache key isolation
-     */
-    @SuppressWarnings("PMD.NullAssignment")
-    private NegativeCache(final Duration ttl, final boolean enabled, final int l1MaxSize,
-            final Duration l1Ttl, final RedisAsyncCommands<String, byte[]> l2Commands,
-            final String repoType, final String repoName) {
-        this.enabled = enabled;
-        this.twoTier = l2Commands != null;
+                .orElse(null);
         this.l2 = l2Commands;
-        this.ttl = ttl;
-        this.repoType = repoType != null ? repoType : "unknown";
-        this.repoName = repoName != null ? repoName : "default";
+        this.twoTier = l2Commands != null;
+        final int maxSize = config.isValkeyEnabled() ? config.l1MaxSize() : config.maxSize();
+        final Duration l1Ttl = config.isValkeyEnabled() ? config.l1Ttl() : config.ttl();
         this.notFoundCache = Caffeine.newBuilder()
-            .maximumSize(l1MaxSize)
+            .maximumSize(maxSize)
             .expireAfterWrite(l1Ttl.toMillis(), TimeUnit.MILLISECONDS)
             .recordStats()
             .build();
     }
-    
+
     /**
-     * Check if key is in negative cache (known 404).
-     * Thread-safe - Caffeine handles synchronization.
-     * Caffeine automatically removes expired entries.
-     * 
-     * PERFORMANCE: Only checks L1 cache to avoid blocking request thread.
-     * L2 queries happen asynchronously in background.
-     * 
-     * @param key Key to check
-     * @return True if cached in L1 as not found
+     * Check if a composite key is in negative cache (known 404).
+     * Checks L1 only (synchronous). Use {@link #isKnown404Async(NegativeCacheKey)}
+     * for L1+L2.
+     *
+     * @param key Composite key to check
+     * @return true if cached in L1 as not found
      */
-    public boolean isNotFound(final Key key) {
+    public boolean isKnown404(final NegativeCacheKey key) {
         if (!this.enabled) {
             return false;
         }
-        
+        final String flat = key.flat();
         final long startNanos = System.nanoTime();
-        final boolean found = this.notFoundCache.getIfPresent(key) != null;
-
-        // Track L1 metrics
-        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
-            final long durationMs = (System.nanoTime() - startNanos) / 1_000_000;
-            if (found) {
-                com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheHit("negative", "l1");
-                com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("negative", "l1", "get", durationMs);
-            } else {
-                com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheMiss("negative", "l1");
-                com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("negative", "l1", "get", durationMs);
-            }
-        }
-
+        final boolean found = this.notFoundCache.getIfPresent(flat) != null;
+        recordL1Metrics(found, startNanos);
         return found;
     }
-    
+
     /**
-     * Async check if key is in negative cache (known 404).
-     * Checks both L1 and L2, suitable for async callers.
-     * 
-     * @param key Key to check
-     * @return Future with true if cached as not found
+     * Async check — inspects L1 then L2.
+     *
+     * @param key Composite key to check
+     * @return future resolving to true if the key is a known 404
      */
-    public CompletableFuture<Boolean> isNotFoundAsync(final Key key) {
+    public CompletableFuture<Boolean> isKnown404Async(final NegativeCacheKey key) {
         if (!this.enabled) {
             return CompletableFuture.completedFuture(false);
         }
-        
-        // Check L1 first
-        final long l1StartNanos = System.nanoTime();
-        if (this.notFoundCache.getIfPresent(key) != null) {
-            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
-                final long durationMs = (System.nanoTime() - l1StartNanos) / 1_000_000;
-                com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheHit("negative", "l1");
-                com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("negative", "l1", "get", durationMs);
-            }
+        final String flat = key.flat();
+        final long l1Start = System.nanoTime();
+        if (this.notFoundCache.getIfPresent(flat) != null) {
+            recordL1Metrics(true, l1Start);
             return CompletableFuture.completedFuture(true);
         }
-
-        // L1 MISS
-        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
-            final long durationMs = (System.nanoTime() - l1StartNanos) / 1_000_000;
-            com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheMiss("negative", "l1");
-            com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("negative", "l1", "get", durationMs);
-        }
-        
-        // Check L2 if enabled
+        recordL1Metrics(false, l1Start);
         if (this.twoTier) {
-            final String redisKey = "negative:" + this.repoType + ":" + this.repoName + ":" + key.string();
-            final long l2StartNanos = System.nanoTime();
-
-            return this.l2.get(redisKey)
-                .toCompletableFuture()
-                .orTimeout(100, TimeUnit.MILLISECONDS)
-                .exceptionally(err -> {
-                    // Track L2 error - metrics handled elsewhere
-                    return null;
-                })
-                .thenApply(l2Bytes -> {
-                    final long durationMs = (System.nanoTime() - l2StartNanos) / 1_000_000;
-
-                    if (l2Bytes != null) {
-                        // L2 HIT
-                        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
-                            com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheHit("negative", "l2");
-                            com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("negative", "l2", "get", durationMs);
-                        }
-                        this.notFoundCache.put(key, CACHED);
-                        return true;
-                    }
-
-                    // L2 MISS
-                    if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
-                        com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheMiss("negative", "l2");
-                        com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("negative", "l2", "get", durationMs);
-                    }
-                    return false;
-                });
+            return l2Get(flat);
         }
-        
         return CompletableFuture.completedFuture(false);
     }
-    
+
     /**
-     * Cache a key as not found (404).
-     * Thread-safe - Caffeine handles synchronization and eviction.
-     * 
-     * @param key Key to cache as not found
+     * Cache a composite key as not found in L1 + L2.
+     *
+     * <p><b>Caller contract:</b> only invoke this when absence has been
+     * <em>positively confirmed</em> — either by an explicit upstream
+     * {@code 404 Not Found} response, or by structural knowledge that the
+     * artifact cannot exist in this scope (e.g. a group with no proxy
+     * members, a cooldown-blocked artifact). <b>Never</b> call this on
+     * other client errors (401/403/410/429) or on server errors (5xx,
+     * timeouts, exceptions): those are transient or non-absence signals
+     * and would poison the cache for the negative TTL window
+     * (default 24h).</p>
+     *
+     * @param key Composite key to cache
      */
-    public void cacheNotFound(final Key key) {
+    public void cacheNotFound(final NegativeCacheKey key) {
         if (!this.enabled) {
             return;
         }
-        
-        // Cache in L1
-        this.notFoundCache.put(key, CACHED);
-        
-        // Cache in L2 (if enabled)
+        final String flat = key.flat();
+        this.notFoundCache.put(flat, CACHED);
         if (this.twoTier) {
-            final String redisKey = "negative:" + this.repoType + ":" + this.repoName + ":" + key.string();
-            final byte[] value = new byte[]{1};  // Sentinel value
-            final long seconds = this.ttl.getSeconds();
-            this.l2.setex(redisKey, seconds, value);
-        }
-    }
-    
-    /**
-     * Invalidate specific entry (e.g., when artifact is deployed).
-     * Thread-safe - Caffeine handles synchronization.
-     * 
-     * @param key Key to invalidate
-     */
-    public void invalidate(final Key key) {
-        // Invalidate L1
-        this.notFoundCache.invalidate(key);
-        
-        // Invalidate L2 (if enabled)
-        if (this.twoTier) {
-            final String redisKey = "negative:" + this.repoType + ":" + this.repoName + ":" + key.string();
-            this.l2.del(redisKey);
+            l2Set("negative:" + flat);
         }
     }
 
     /**
-     * Invalidate all entries matching a prefix pattern.
-     * Thread-safe - Caffeine handles synchronization.
+     * Invalidate a single composite key from L1 + L2.
      *
-     * @param prefix Key prefix to match
+     * @param key Composite key to invalidate
      */
-    public void invalidatePrefix(final String prefix) {
-        // Invalidate L1
-        this.notFoundCache.asMap().keySet().removeIf(key -> key.string().startsWith(prefix));
-
-        // Invalidate L2 (if enabled)
+    public void invalidate(final NegativeCacheKey key) {
+        final String flat = key.flat();
+        this.notFoundCache.invalidate(flat);
         if (this.twoTier) {
-            final String scanPattern = "negative:" + this.repoType + ":" + this.repoName + ":" + prefix + "*";
-            this.scanAndDelete(scanPattern);
+            this.l2.del("negative:" + flat);
         }
+    }
+
+    /**
+     * Invalidate every cached entry whose {@code artifactName} matches the
+     * just-uploaded artifact. Called by upload slices after a successful
+     * {@code storage.save} so a request that 404'd before the upload (and
+     * cached the result) doesn't keep returning 404 once the artifact
+     * actually exists.
+     *
+     * <p>Match semantics:
+     * <ul>
+     *   <li><b>Exact</b>: cached name == uploaded name → always invalidate.</li>
+     *   <li><b>Parent prefix</b>: cached name is a parent of uploaded name
+     *       (e.g. cached {@code example.com}, uploaded {@code example.com/hello})
+     *       → invalidate. Go's tooling probes parent paths during module
+     *       resolution; once a child module exists, those probe-404s should
+     *       be re-evaluated.</li>
+     * </ul>
+     *
+     * @param artifactName Canonical artifact identifier just stored
+     * @return number of L1 entries invalidated (L2 may have additional)
+     */
+    public int invalidateByArtifactName(final String artifactName) {
+        if (!this.enabled || artifactName == null || artifactName.isEmpty()) {
+            return 0;
+        }
+        final java.util.List<String> matched = new java.util.ArrayList<>();
+        for (final String flat : this.notFoundCache.asMap().keySet()) {
+            final NegativeCacheKey nck = NegativeCacheKey.parse(flat);
+            if (nck != null && nameMatches(nck.artifactName(), artifactName)) {
+                matched.add(flat);
+            }
+        }
+        for (final String flat : matched) {
+            this.notFoundCache.invalidate(flat);
+        }
+        if (this.twoTier && !matched.isEmpty()) {
+            final String[] redisKeys = matched.stream()
+                .map(f -> "negative:" + f)
+                .toArray(String[]::new);
+            this.l2.del(redisKeys);
+        }
+        return matched.size();
+    }
+
+    private static boolean nameMatches(final String cached, final String uploaded) {
+        return cached.equals(uploaded) || uploaded.startsWith(cached + "/");
+    }
+
+    /**
+     * Synchronously invalidate a batch of composite keys from L1 + L2.
+     *
+     * @param keys List of composite keys to invalidate
+     * @return future completing when invalidation is done
+     */
+    public CompletableFuture<Void> invalidateBatch(final List<NegativeCacheKey> keys) {
+        if (keys == null || keys.isEmpty()) {
+            return CompletableFuture.completedFuture(null);
+        }
+        for (final NegativeCacheKey key : keys) {
+            this.notFoundCache.invalidate(key.flat());
+        }
+        if (this.twoTier) {
+            final String[] redisKeys = keys.stream()
+                .map(k -> "negative:" + k.flat())
+                .toArray(String[]::new);
+            return this.l2.del(redisKeys)
+                .toCompletableFuture()
+                .orTimeout(500, TimeUnit.MILLISECONDS)
+                .exceptionally(err -> 0L)
+                .thenApply(ignored -> null);
+        }
+        return CompletableFuture.completedFuture(null);
     }
 
     /**
      * Clear entire cache.
-     * Thread-safe - Caffeine handles synchronization.
      */
     public void clear() {
-        // Clear L1
         this.notFoundCache.invalidateAll();
-
-        // Clear L2 (if enabled) - scan and delete all negative cache keys
         if (this.twoTier) {
-            this.scanAndDelete("negative:" + this.repoType + ":" + this.repoName + ":*");
+            scanAndDelete("negative:*");
         }
     }
-    
+
     /**
-     * Recursive async scan that collects all matching keys and deletes them in batches.
-     * Uses SCAN instead of KEYS to avoid blocking the Redis server.
-     *
-     * @param pattern Glob pattern to match keys
-     * @return Future that completes when all matching keys are deleted
+     * Remove expired entries (periodic cleanup).
      */
-    private CompletableFuture<Void> scanAndDelete(final String pattern) {
-        return this.scanAndDeleteStep(ScanCursor.INITIAL, pattern);
+    public void cleanup() {
+        this.notFoundCache.cleanUp();
     }
 
     /**
-     * Single step of the recursive SCAN-and-delete loop.
+     * Get current cache size.
      *
-     * @param cursor Current scan cursor
-     * @param pattern Glob pattern to match keys
-     * @return Future that completes when this step and all subsequent steps finish
+     * @return Number of entries in cache
      */
+    public long size() {
+        return this.notFoundCache.estimatedSize();
+    }
+
+    /**
+     * Get cache statistics from Caffeine.
+     *
+     * @return Caffeine cache statistics
+     */
+    public com.github.benmanes.caffeine.cache.stats.CacheStats stats() {
+        return this.notFoundCache.stats();
+    }
+
+    /**
+     * Check if negative caching is enabled.
+     *
+     * @return True if enabled
+     */
+    public boolean isEnabled() {
+        return this.enabled;
+    }
+
+    /**
+     * L2 GET — returns true if found, promotes to L1.
+     */
+    private CompletableFuture<Boolean> l2Get(final String flat) {
+        final String redisKey = "negative:" + flat;
+        final long l2Start = System.nanoTime();
+        return this.l2.get(redisKey)
+            .toCompletableFuture()
+            .orTimeout(100, TimeUnit.MILLISECONDS)
+            .exceptionally(err -> null)
+            .thenApply(l2Bytes -> {
+                final long durationMs = (System.nanoTime() - l2Start) / 1_000_000;
+                if (l2Bytes != null) {
+                    recordL2Metrics(true, durationMs);
+                    this.notFoundCache.put(flat, CACHED);
+                    return true;
+                }
+                recordL2Metrics(false, durationMs);
+                return false;
+            });
+    }
+
+    /**
+     * L2 sentinel value — a single ASCII '1'. The value is presence-only;
+     * we use {@code '1'} (0x31) instead of byte {@code 0x01} so that
+     * {@code valkey-cli GET} renders it as the readable string {@code "1"}
+     * rather than the unreadable escape {@code \x01}.
+     */
+    private static final byte[] L2_SENTINEL = {'1'};
+
+    /**
+     * L2 SET with TTL.
+     */
+    private void l2Set(final String redisKey) {
+        this.l2.setex(redisKey, this.ttl.getSeconds(), L2_SENTINEL);
+    }
+
+    private void recordL1Metrics(final boolean hit, final long startNanos) {
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            final long durationMs = (System.nanoTime() - startNanos) / 1_000_000;
+            final com.auto1.pantera.metrics.MicrometerMetrics m =
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance();
+            if (hit) {
+                m.recordCacheHit("negative", "l1");
+            } else {
+                m.recordCacheMiss("negative", "l1");
+            }
+            m.recordCacheOperationDuration("negative", "l1", "get", durationMs);
+        }
+    }
+
+    private static void recordL2Metrics(final boolean hit, final long durationMs) {
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            final com.auto1.pantera.metrics.MicrometerMetrics m =
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance();
+            if (hit) {
+                m.recordCacheHit("negative", "l2");
+            } else {
+                m.recordCacheMiss("negative", "l2");
+            }
+            m.recordCacheOperationDuration("negative", "l2", "get", durationMs);
+        }
+    }
+
+    /**
+     * Recursive async scan that collects all matching keys and deletes them.
+     */
+    private CompletableFuture<Void> scanAndDelete(final String pattern) {
+        return scanAndDeleteStep(ScanCursor.INITIAL, pattern);
+    }
+
     private CompletableFuture<Void> scanAndDeleteStep(
         final ScanCursor cursor, final String pattern
     ) {
@@ -466,42 +370,7 @@ public final class NegativeCache {
                 if (result.isFinished()) {
                     return CompletableFuture.completedFuture(null);
                 }
-                return this.scanAndDeleteStep(result, pattern);
+                return scanAndDeleteStep(result, pattern);
             });
-    }
-
-    /**
-     * Remove expired entries (periodic cleanup).
-     * Caffeine handles expiry automatically, but calling this
-     * triggers immediate cleanup instead of lazy removal.
-     */
-    public void cleanup() {
-        this.notFoundCache.cleanUp();
-    }
-    
-    /**
-     * Get current cache size.
-     * Thread-safe - Caffeine handles synchronization.
-     * @return Number of entries in cache
-     */
-    public long size() {
-        return this.notFoundCache.estimatedSize();
-    }
-    
-    /**
-     * Get cache statistics from Caffeine.
-     * Includes hit rate, miss rate, eviction count, etc.
-     * @return Caffeine cache statistics
-     */
-    public com.github.benmanes.caffeine.cache.stats.CacheStats stats() {
-        return this.notFoundCache.stats();
-    }
-    
-    /**
-     * Check if negative caching is enabled.
-     * @return True if enabled
-     */
-    public boolean isEnabled() {
-        return this.enabled;
     }
 }

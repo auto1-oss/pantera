@@ -32,7 +32,6 @@ import javax.xml.stream.events.XMLEvent;
  * Maid for primary.xml.
  * @since 0.8
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class XmlPrimaryMaid implements XmlMaid {
 
     /**
@@ -189,7 +188,6 @@ public final class XmlPrimaryMaid implements XmlMaid {
          * @return Valid packages count
          * @throws XMLStreamException If fails
                  */
-        @SuppressWarnings({"PMD.CyclomaticComplexity", "PMD.CognitiveComplexity"})
         private static long processPackagesWithResult(final Collection<String> checksums,
             final XMLEventReader reader, final XMLEventWriter writer,
             final Collection<PackageInfo> infos) throws XMLStreamException {

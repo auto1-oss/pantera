@@ -10,7 +10,7 @@
  */
 package com.auto1.pantera.cooldown.metadata;
 
-import com.auto1.pantera.cooldown.CooldownInspector;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -60,6 +60,11 @@ public final class NoopCooldownMetadataService implements CooldownMetadataServic
 
     @Override
     public void invalidateAll(final String repoType, final String repoName) {
+        // No-op
+    }
+
+    @Override
+    public void clearAll() {
         // No-op
     }
 

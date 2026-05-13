@@ -41,7 +41,6 @@ import java.util.concurrent.CompletionStage;
  * Remove writer of info about charts from index file.
  * @since 0.3
  */
-@SuppressWarnings("PMD.CognitiveComplexity")
 public interface RemoveWriter {
     /**
      * Rewrites source index file avoiding writing down info about charts which
@@ -85,7 +84,6 @@ public interface RemoveWriter {
         }
 
         @Override
-        @SuppressWarnings({"PMD.AvoidDeeplyNestedIfStmts", "PMD.NPathComplexity"})
         public CompletionStage<Void> delete(
             final Key source,
             final Path out,

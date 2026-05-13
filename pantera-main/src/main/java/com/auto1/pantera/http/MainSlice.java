@@ -40,7 +40,7 @@ public final class MainSlice extends Slice.Wrap {
      */
     private static final RtPath EMPTY_PATH = (line, headers, body) -> {
         final String path = line.uri().getPath();
-        if (path.equals("*") || path.equals("/")
+        if ("*".equals(path) || "/".equals(path)
             || path.replaceAll("^/+", "").split("/").length == 0) {
             return Optional.of(CompletableFuture.completedFuture(
                 ResponseBuilder.noContent().build()

@@ -41,7 +41,6 @@ import org.quartz.JobExecutionContext;
  * NPM tarball paths follow convention: {name}/-/{name}-{version}.tgz
  * @since 1.5
  */
-@SuppressWarnings("PMD.DataClass")
 public final class NpmProxyPackageProcessor extends QuartzJob {
 
     /**
@@ -65,7 +64,6 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
     private String host;
 
     @Override
-    @SuppressWarnings("PMD.CyclomaticComplexity")
     public void execute(final JobExecutionContext context) {
         this.resolveFromRegistry(context);
         if (this.asto == null || this.packages == null || this.host == null
@@ -316,7 +314,6 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
      * Set registry key for events queue (JDBC mode).
      * @param key Registry key
      */
-    @SuppressWarnings("PMD.MethodNamingConventions")
     public void setEvents_key(final String key) {
         this.events = JobDataRegistry.lookup(key);
     }
@@ -325,7 +322,6 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
      * Set registry key for packages queue (JDBC mode).
      * @param key Registry key
      */
-    @SuppressWarnings("PMD.MethodNamingConventions")
     public void setPackages_key(final String key) {
         this.packages = JobDataRegistry.lookup(key);
     }
@@ -334,7 +330,6 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
      * Set registry key for storage (JDBC mode).
      * @param key Registry key
      */
-    @SuppressWarnings("PMD.MethodNamingConventions")
     public void setStorage_key(final String key) {
         this.asto = JobDataRegistry.lookup(key);
     }

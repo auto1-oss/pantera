@@ -16,25 +16,28 @@ import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.cache.Cache;
 import com.auto1.pantera.asto.cache.CacheControl;
 import com.auto1.pantera.asto.cache.Remote;
-import com.auto1.pantera.cooldown.CooldownInspector;
-import com.auto1.pantera.cooldown.CooldownRequest;
-import com.auto1.pantera.cooldown.CooldownResponses;
-import com.auto1.pantera.cooldown.CooldownResult;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownBlock;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
+import com.auto1.pantera.cooldown.api.CooldownRequest;
+import com.auto1.pantera.cooldown.config.CooldownAdapterRegistry;
+import com.auto1.pantera.cooldown.response.CooldownResponseFactory;
+import com.auto1.pantera.cooldown.response.CooldownResponseRegistry;
+import com.auto1.pantera.cooldown.api.CooldownResult;
+import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.misc.ConfigDefaults;
+import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.KeyFromPath;
-import com.auto1.pantera.http.trace.MdcPropagation;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
-
-import io.reactivex.Flowable;
 import java.io.IOException;
 import java.net.ConnectException;
 import java.nio.ByteBuffer;
@@ -56,8 +59,10 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
@@ -68,14 +73,27 @@ import java.util.stream.StreamSupport;
  * <p>Implements the shared proxy flow via template method pattern:
  * <ol>
  *   <li>Check negative cache - fast-fail on known 404s</li>
- *   <li>Check local cache (offline-safe) - serve if fresh hit</li>
- *   <li>Evaluate cooldown - block if in cooldown period</li>
- *   <li>Deduplicate concurrent requests for same path</li>
- *   <li>Fetch from upstream</li>
- *   <li>On 200: cache content, compute digests, generate sidecars, enqueue event</li>
+ *   <li>Pre-process hook - adapter-specific short-circuit (e.g. Maven
+ *       primary artifacts route through {@code verifyAndServePrimary}
+ *       in {@code maven-adapter/CachedProxySlice})</li>
+ *   <li>Cacheability check - {@code isCacheable(path)}</li>
+ *   <li>Cache-first lookup - serve from local cache if present (no
+ *       upstream)</li>
+ *   <li>Evaluate cooldown on cache miss - block if in cooldown period</li>
+ *   <li>Single-flight gate around the upstream fetch + cache write -
+ *       N concurrent callers collapse to exactly 1 upstream call; the
+ *       leader runs {@code fetchAndCacheLeader}, followers park on the
+ *       gate and re-enter {@code cacheFirstFlow} on completion</li>
+ *   <li>On 200: cache content, compute digests, generate sidecars,
+ *       enqueue event</li>
  *   <li>On 404: update negative cache</li>
  *   <li>Record metrics</li>
  * </ol>
+ *
+ * <p>The single-flight placement at step 6 is the post-Finding-#2
+ * (2026-05-13) shape — pre-fix the SingleFlight wrapped only the
+ * cache-write step, so concurrent callers each fired their own upstream
+ * call. See {@code analysis/03-findings.md} finding #2 for evidence.</p>
  *
  * <p>Adapters override only the hooks they need:
  * {@link #isCacheable(String)}, {@link #buildCooldownRequest(String, Headers)},
@@ -84,7 +102,6 @@ import java.util.stream.StreamSupport;
  *
  * @since 1.20.13
  */
-@SuppressWarnings({"PMD.GodClass", "PMD.ExcessiveImports"})
 public abstract class BaseCachedProxySlice implements Slice {
 
     /**
@@ -148,9 +165,23 @@ public abstract class BaseCachedProxySlice implements Slice {
     private final CooldownInspector cooldownInspector;
 
     /**
-     * Request deduplicator.
+     * Per-key leader/follower gate. Concurrent callers for the same cache
+     * key collapse: the first caller becomes the leader and runs the
+     * upstream fetch + cache write; subsequent callers park on a {@link
+     * java.util.concurrent.CompletableFuture}{@code <Void>} gate. When the
+     * leader completes (normally or exceptionally), the gate fires and the
+     * followers re-enter {@link #cacheFirstFlow} — which hits the now-warm
+     * cache and returns without firing upstream again. Mirrors the pattern
+     * used by {@code GroupResolver.proxyOnlyFanout} and
+     * {@code MavenGroupSlice.mergeMetadata}.
+     *
+     * <p>Pre-Finding-#2 (2026-05-13) this field was typed
+     * {@code SingleFlight<Key, FetchSignal>} and only collapsed the
+     * cache-write step — so concurrent callers each fired their own
+     * upstream call. The type change to {@code <Key, Void>} matches the
+     * gate semantics of the new placement.</p>
      */
-    private final RequestDeduplicator deduplicator;
+    private final SingleFlight<Key, Void> singleFlight;
 
     /**
      * Raw storage for direct saves (bypasses FromStorageCache lazy tee-content).
@@ -158,7 +189,20 @@ public abstract class BaseCachedProxySlice implements Slice {
     private final Optional<Storage> storage;
 
     /**
-     * Constructor.
+     * Optional post-write callback (Phase-4 / Task-19a extension point). Fires
+     * once per successful primary cache-write; callback exceptions are caught +
+     * logged and never propagate to the cache-write path. Defaults to a no-op.
+     *
+     * <p>This mirrors {@link ProxyCacheWriter#fireOnWrite} for the actual
+     * production cache-write path used by every proxy adapter.
+     */
+    private final Consumer<CacheWriteEvent> onCacheWrite;
+
+    /** No-op {@link CacheWriteEvent} consumer used when no callback is supplied. */
+    private static final Consumer<CacheWriteEvent> NO_OP_ON_CACHE_WRITE = event -> { };
+
+    /**
+     * Constructor with cooldown + post-write callback.
      *
      * @param client Upstream remote slice
      * @param cache Asto cache for artifact storage
@@ -170,8 +214,10 @@ public abstract class BaseCachedProxySlice implements Slice {
      * @param config Unified proxy configuration
      * @param cooldownService Cooldown service (nullable, required if cooldown enabled)
      * @param cooldownInspector Cooldown inspector (nullable, required if cooldown enabled)
+     * @param onCacheWrite Optional post-write callback. May be {@code null}
+     *     (treated as no-op). Throwables propagated from the callback are
+     *     caught + logged and do NOT affect the cache-write outcome.
      */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
     protected BaseCachedProxySlice(
         final Slice client,
         final Cache cache,
@@ -182,7 +228,8 @@ public abstract class BaseCachedProxySlice implements Slice {
         final Optional<Queue<ProxyArtifactEvent>> events,
         final ProxyCacheConfig config,
         final CooldownService cooldownService,
-        final CooldownInspector cooldownInspector
+        final CooldownInspector cooldownInspector,
+        final Consumer<CacheWriteEvent> onCacheWrite
     ) {
         this.client = Objects.requireNonNull(client, "client");
         this.cache = Objects.requireNonNull(cache, "cache");
@@ -195,17 +242,63 @@ public abstract class BaseCachedProxySlice implements Slice {
         this.metadataStore = storage.map(CachedArtifactMetadataStore::new);
         this.storageBacked = this.metadataStore.isPresent()
             && !Objects.equals(this.cache, Cache.NOP);
-        this.negativeCache = config.negativeCacheEnabled()
-            ? new NegativeCache(repoType, repoName) : null;
+        if (!config.negativeCacheEnabled()) {
+            this.negativeCache = null;
+        } else if (NegativeCacheRegistry.instance().isSharedCacheSet()) {
+            this.negativeCache = NegativeCacheRegistry.instance().sharedCache();
+        } else {
+            // No shared bean wired (tests, early startup) — give this slice
+            // its own private cache so other slices' state cannot leak in.
+            this.negativeCache = new NegativeCache(
+                new com.auto1.pantera.cache.NegativeCacheConfig()
+            );
+        }
         this.cooldownService = cooldownService;
         this.cooldownInspector = cooldownInspector;
-        this.deduplicator = new RequestDeduplicator(config.dedupStrategy());
+        this.onCacheWrite = onCacheWrite == null ? NO_OP_ON_CACHE_WRITE : onCacheWrite;
+        // Zombie TTL honours PANTERA_DEDUP_MAX_AGE_MS (default 5 min). 10K max
+        // in-flight entries bounds memory. Completion hops via
+        // ForkJoinPool.commonPool() — the same executor pattern used by the
+        // other WI-05 sites (CachedNpmProxySlice migration).
+        this.singleFlight = new SingleFlight<>(
+            Duration.ofMillis(
+                ConfigDefaults.getLong("PANTERA_DEDUP_MAX_AGE_MS", 300_000L)
+            ),
+            10_000,
+            ContextualExecutor.contextualize(ForkJoinPool.commonPool())
+        );
     }
 
     /**
-     * Convenience constructor without cooldown (for adapters that don't use it).
+     * Constructor with cooldown; no explicit post-write callback. Delegates
+     * to the 11-arg ctor with the {@link CacheWriteCallbackRegistry} shared
+     * callback so a future cache-write consumer can be installed once at
+     * boot rather than threaded through each adapter ctor. With no consumer
+     * installed the registry returns a no-op.
      */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
+    protected BaseCachedProxySlice(
+        final Slice client,
+        final Cache cache,
+        final String repoName,
+        final String repoType,
+        final String upstreamUrl,
+        final Optional<Storage> storage,
+        final Optional<Queue<ProxyArtifactEvent>> events,
+        final ProxyCacheConfig config,
+        final CooldownService cooldownService,
+        final CooldownInspector cooldownInspector
+    ) {
+        this(client, cache, repoName, repoType, upstreamUrl,
+            storage, events, config, cooldownService, cooldownInspector,
+            CacheWriteCallbackRegistry.instance().sharedCallback());
+    }
+
+    /**
+     * Convenience constructor without cooldown or explicit post-write
+     * callback. Delegates with the {@link CacheWriteCallbackRegistry} shared
+     * callback so a future cache-write consumer can be installed once at
+     * boot without per-adapter ctor surgery.
+     */
     protected BaseCachedProxySlice(
         final Slice client,
         final Cache cache,
@@ -217,39 +310,99 @@ public abstract class BaseCachedProxySlice implements Slice {
         final ProxyCacheConfig config
     ) {
         this(client, cache, repoName, repoType, upstreamUrl,
-            storage, events, config, null, null);
+            storage, events, config, null, null,
+            CacheWriteCallbackRegistry.instance().sharedCallback());
     }
 
     @Override
     public final CompletableFuture<Response> response(
         final RequestLine line, final Headers headers, final Content body
     ) {
+        final long entryNs = System.nanoTime();
         final String path = line.uri().getPath();
         if ("/".equals(path) || path.isEmpty()) {
-            return this.handleRootPath(line);
+            return this.handleRootPath(line, headers)
+                .whenComplete((r, e) -> recordProxyPhase("root_path", entryNs));
         }
         final Key key = new KeyFromPath(path);
         // Step 1: Negative cache fast-fail
-        if (this.negativeCache != null && this.negativeCache.isNotFound(key)) {
+        if (this.negativeCache != null
+            && this.negativeCache.isKnown404(this.negKey(path))) {
             this.logDebug("Negative cache hit", path);
+            recordProxyPhase("negative_cache_short_circuit", entryNs);
             return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
         }
         // Step 2: Pre-process hook (adapter-specific short-circuit)
+        final long preProcessNs = System.nanoTime();
         final Optional<CompletableFuture<Response>> pre =
             this.preProcess(line, headers, key, path);
         if (pre.isPresent()) {
-            return pre.get();
+            return pre.get().whenComplete(
+                (r, e) -> recordProxyPhase("pre_process_branch", preProcessNs)
+            );
         }
         // Step 3: Check if path is cacheable at all
         if (!this.isCacheable(path)) {
-            return this.fetchDirect(line, key, new Login(headers).getValue());
+            return this.fetchDirect(line, key, headers, new Login(headers).getValue())
+                .whenComplete((r, e) -> recordProxyPhase("fetch_direct_uncacheable", entryNs));
         }
         // Step 4: Cache-first (offline-safe) — check cache before any network calls
         if (this.storageBacked) {
-            return this.cacheFirstFlow(line, headers, key, path);
+            return this.cacheFirstFlow(line, headers, key, path)
+                .whenComplete((r, e) -> recordProxyPhase("cache_first_flow", entryNs));
         }
         // No persistent storage — go directly to upstream
-        return this.fetchDirect(line, key, new Login(headers).getValue());
+        return this.fetchDirect(line, key, headers, new Login(headers).getValue())
+            .whenComplete((r, e) -> recordProxyPhase("fetch_direct_no_storage", entryNs));
+    }
+
+    /**
+     * Phase 7.5 profiler helper — record per-phase latency on the proxy
+     * cache slice. Tagged with {@code repo_name} so individual proxies are
+     * separable in the dashboard.
+     *
+     * @param phase   phase name (e.g. {@code "cache_first_flow"})
+     * @param startNs nanoTime captured at phase start
+     */
+    private void recordProxyPhase(final String phase, final long startNs) {
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
+                .recordProxyPhaseDuration(this.repoName, phase, System.nanoTime() - startNs);
+        }
+    }
+
+    /**
+     * Build the header set that should accompany an upstream proxy request.
+     * Forwards the client's {@code User-Agent} and {@code Accept} so the
+     * remote registry sees a native ecosystem tool (e.g. {@code npm/...},
+     * {@code Go-http-client/1.1}) rather than Pantera. When the inbound
+     * request omitted {@code User-Agent} entirely, falls back to a realistic
+     * default for this adapter's repo type — so an unidentified client
+     * still doesn't make us look like a bot to the upstream.
+     *
+     * <p>Everything else is dropped (Authorization, Cookie, Host,
+     * X-Forwarded-*, etc.) — those are local-to-Pantera and would either
+     * leak credentials or confuse the upstream router.
+     *
+     * @param incoming Headers from the client request to Pantera (may be empty)
+     * @return Headers safe to forward to the upstream proxy target
+     */
+    private Headers upstreamHeaders(final Headers incoming) {
+        final Headers out = new Headers();
+        final java.util.List<com.auto1.pantera.http.headers.Header> ua =
+            incoming.find("User-Agent");
+        if (ua.isEmpty()) {
+            out.add("User-Agent",
+                com.auto1.pantera.http.EcosystemUserAgents.defaultFor(this.repoType));
+        } else {
+            out.add(ua.get(0), true);
+        }
+        final java.util.List<com.auto1.pantera.http.headers.Header> accept =
+            incoming.find("Accept");
+        if (!accept.isEmpty()) {
+            out.add(accept.get(0), true);
+        }
+        return out;
     }
 
     // ===== Abstract hooks — adapters override these =====
@@ -417,15 +570,21 @@ public abstract class BaseCachedProxySlice implements Slice {
     ) {
         // Checksum sidecars: serve from storage if present, else try upstream
         if (this.isChecksumSidecar(path)) {
-            return this.serveChecksumFromStorage(line, key, new Login(headers).getValue());
+            final long sidecarStartNs = System.nanoTime();
+            return this.serveChecksumFromStorage(line, key, headers, new Login(headers).getValue())
+                .whenComplete((r, e) -> recordProxyPhase("serve_checksum_sidecar", sidecarStartNs));
         }
         final CachedArtifactMetadataStore store = this.metadataStore.orElseThrow();
+        final long cacheLoadStartNs = System.nanoTime();
         return this.cache.load(key, Remote.EMPTY, CacheControl.Standard.ALWAYS)
-            .thenCompose(MdcPropagation.withMdc(cached -> {
+            .thenCompose(cached -> {
+                recordProxyPhase("cache_load", cacheLoadStartNs);
                 if (cached.isPresent()) {
                     this.logDebug("Cache hit", path);
                     // Fast path: serve from cache with async metadata
+                    final long metaStartNs = System.nanoTime();
                     return store.load(key).thenApply(meta -> {
+                        recordProxyPhase("metadata_load_on_hit", metaStartNs);
                         final ResponseBuilder builder = ResponseBuilder.ok()
                             .body(cached.get());
                         meta.ifPresent(m -> builder.headers(stripContentEncoding(m.headers())));
@@ -433,8 +592,10 @@ public abstract class BaseCachedProxySlice implements Slice {
                     });
                 }
                 // Cache miss: evaluate cooldown then fetch
-                return this.evaluateCooldownAndFetch(line, headers, key, path, store);
-            })).toCompletableFuture();
+                final long missStartNs = System.nanoTime();
+                return this.evaluateCooldownAndFetch(line, headers, key, path, store)
+                    .whenComplete((r, e) -> recordProxyPhase("cooldown_and_fetch_miss", missStartNs));
+            }).toCompletableFuture();
     }
 
     /**
@@ -454,22 +615,126 @@ public abstract class BaseCachedProxySlice implements Slice {
                 this.buildCooldownRequest(path, headers);
             if (request.isPresent()) {
                 return this.cooldownService.evaluate(request.get(), this.cooldownInspector)
-                    .thenCompose(MdcPropagation.withMdc(result -> {
+                    .thenCompose(result -> {
                         if (result.blocked()) {
+                            final CooldownBlock block = result.block().orElseThrow();
                             return CompletableFuture.completedFuture(
-                                CooldownResponses.forbidden(result.block().orElseThrow())
+                                buildForbiddenResponse(block, this.repoType)
                             );
                         }
                         return this.fetchAndCache(line, key, headers, store);
-                    }));
+                    });
             }
         }
         return this.fetchAndCache(line, key, headers, store);
     }
 
     /**
+     * Gate the supplied async action with a cooldown evaluation.
+     *
+     * <p>When cooldown is enabled and a {@link CooldownRequest} can be built
+     * for the path, the request is evaluated first. If blocked, a 403
+     * response is returned immediately and {@code onAllow} is never called.
+     * If allowed (or if cooldown is disabled / not applicable), {@code onAllow}
+     * is invoked and its result returned.</p>
+     *
+     * <p>Use this in subclass {@link #preProcess} overrides to gate
+     * adapter-specific short-circuit paths that bypass
+     * {@link #evaluateCooldownAndFetch} (e.g., the Maven ProxyCacheWriter
+     * path introduced by WI-07).</p>
+     *
+     * @param headers Request headers (used by {@link #buildCooldownRequest})
+     * @param path    Request path (used by {@link #buildCooldownRequest})
+     * @param onAllow Supplier of the downstream action to run if allowed
+     * @return Future that resolves to either a 403 block response or the
+     *     result of {@code onAllow}
+     */
+    protected final CompletableFuture<Response> evaluateCooldownOrProceed(
+        final Headers headers,
+        final String path,
+        final Supplier<CompletableFuture<Response>> onAllow
+    ) {
+        if (this.config.cooldownEnabled()
+            && this.cooldownService != null
+            && this.cooldownInspector != null) {
+            final Optional<CooldownRequest> request =
+                this.buildCooldownRequest(path, headers);
+            if (request.isPresent()) {
+                return this.cooldownService.evaluate(request.get(), this.cooldownInspector)
+                    .thenCompose(result -> {
+                        if (result.blocked()) {
+                            return CompletableFuture.completedFuture(
+                                buildForbiddenResponse(result.block().orElseThrow(), this.repoType)
+                            );
+                        }
+                        return onAllow.get();
+                    })
+                    // Fail-open on evaluate errors (inspector timeout, upstream
+                    // HEAD failure, parse error, etc). Availability > strictness:
+                    // a broken cooldown evaluator must NOT block legitimate
+                    // artifact serving. Matches the MetadataFilterService
+                    // pass-through-on-error behavior.
+                    .exceptionallyCompose(err -> {
+                        EcsLogger.warn("com.auto1.pantera.cooldown")
+                            .message("Cooldown evaluate failed; proceeding without block")
+                            .eventCategory("database")
+                            .eventAction("cooldown_evaluate_failure")
+                            .eventOutcome("failure")
+                            .field("repository.type", this.repoType)
+                            .field("repository.name", this.repoName)
+                            .field("url.path", path)
+                            .error(err)
+                            .log();
+                        return onAllow.get();
+                    });
+            }
+        }
+        return onAllow.get();
+    }
+
+    /**
+     * Build a 403 Forbidden response for a cooldown block.
+     * Uses the per-adapter {@link CooldownResponseFactory} from the
+     * {@link CooldownAdapterRegistry} when a bundle is registered for the
+     * repo type; otherwise falls back to the {@link CooldownResponseRegistry}
+     * factory for the same repo type. Factory registration is mandatory —
+     * if neither registry has an entry for {@code repoType}, this method
+     * throws {@link IllegalStateException} (fail-fast; no silent defaults).
+     *
+     * @param block Block details
+     * @param repoType Repository type for factory lookup
+     * @return HTTP 403 response
+     * @throws IllegalStateException if no factory is registered for the
+     *     given repo type in either registry
+     */
+    private static Response buildForbiddenResponse(
+        final CooldownBlock block,
+        final String repoType
+    ) {
+        return CooldownAdapterRegistry.instance().get(repoType)
+            .map(bundle -> bundle.responseFactory().forbidden(block))
+            .orElseGet(() -> CooldownResponseRegistry.instance().getOrThrow(repoType).forbidden(block));
+    }
+
+    /**
      * Fetch from upstream and cache the result, with request deduplication.
      * Uses NIO temp file streaming to avoid buffering full artifacts on heap.
+     *
+     * <p><b>Single-flight placement (Finding #2, analysis/03-findings.md).</b>
+     * The leader does the upstream fetch + cache write inside the
+     * {@link SingleFlight#load} loader. Concurrent followers park on the
+     * leader's gate; when the leader completes they re-enter
+     * {@link #cacheFirstFlow}, which now hits the freshly-warm cache
+     * without re-firing upstream. On leader 404, the negative cache is
+     * populated inside {@link #handle404} so followers short-circuit on
+     * re-entry. On leader 5xx / exception, the gate completes anyway and
+     * followers retry from a cold cache — same upstream cost as if dedup
+     * had never been involved, but no per-caller request amplification
+     * during the leader's in-flight window.</p>
+     *
+     * <p>Mirrors the leader/follower pattern already used by
+     * {@code GroupResolver.proxyOnlyFanout} and
+     * {@code MavenGroupSlice.mergeMetadata}.</p>
      */
     private CompletableFuture<Response> fetchAndCache(
         final RequestLine line,
@@ -477,29 +742,128 @@ public abstract class BaseCachedProxySlice implements Slice {
         final Headers headers,
         final CachedArtifactMetadataStore store
     ) {
+        final boolean[] isLeader = {false};
+        final CompletableFuture<Void> leaderGate = new CompletableFuture<>();
+        final CompletableFuture<Void> gate = this.singleFlight.load(key, () -> {
+            isLeader[0] = true;
+            return leaderGate;
+        });
+        if (isLeader[0]) {
+            return this.fetchAndCacheLeader(line, key, headers, store)
+                .whenComplete((r, e) -> leaderGate.complete(null));
+        }
+        // Follower: wait for leader, then re-enter cacheFirstFlow which
+        // hits the now-warm cache (or, on leader failure, retries from a
+        // cold cache — identical outcome to no-dedup at the cost of a
+        // small parking delay).
+        return gate.exceptionally(err -> null).thenCompose(
+            ignored -> this.cacheFirstFlow(line, headers, key, line.uri().getPath())
+        );
+    }
+
+    /**
+     * Single-flight gate for subclasses that own a custom upstream
+     * fetch path (e.g. Maven's {@code fetchVerifyAndCache} which streams
+     * the body through {@code ProxyCacheWriter} rather than reusing
+     * {@link #fetchAndCache}). Concurrent callers for the same {@code key}
+     * collapse: the first caller becomes the leader and runs
+     * {@code leaderFetch}; followers park on the leader's gate and
+     * then run {@code followerLookup} which is expected to hit the
+     * now-warm cache.
+     *
+     * <p>The leader receives a {@link CompletableFuture} which it MUST
+     * complete when the cache is fully committed (not when the response
+     * future resolves — for stream-through caches the response carries
+     * a not-yet-drained body, so followers waiting on the response
+     * future would re-fire upstream against a still-empty cache). For
+     * adapters that commit synchronously inside their leader fetch, the
+     * caller can complete the gate via {@code .whenComplete} on the
+     * response future; for adapters with a streaming commit (Maven's
+     * {@code streamThroughAndCommit}) the leader hooks the gate to the
+     * artifact's {@code verificationOutcome}.</p>
+     *
+     * <p>On leader failure (exception or non-2xx) the gate still
+     * completes; followers run {@code followerLookup} against a cold
+     * cache — same as the no-dedup path, at the cost of a small parking
+     * delay.</p>
+     *
+     * @param key Cache key used as the per-flight identifier.
+     * @param leaderFetch Function invoked exactly once per flight. The
+     *     argument is the leader-gate future the implementation must
+     *     complete when the cache write is fully durable. Returns the
+     *     {@link Response} the leader observed.
+     * @param followerLookup Supplier invoked for every follower after
+     *     the leader completes its gate. Typically re-enters the cache
+     *     lookup flow so the warm cache serves the response without
+     *     firing upstream again.
+     * @return Response — the leader's response for the leader, the
+     *     follower-lookup's response for followers.
+     * @since 2.2.0 (M4: extends Finding #2 coalescing into adapter-
+     *     specific upstream fetch paths).
+     */
+    protected final CompletableFuture<Response> coalesceUpstream(
+        final Key key,
+        final java.util.function.Function<
+            CompletableFuture<Void>, CompletableFuture<Response>> leaderFetch,
+        final java.util.function.Supplier<CompletableFuture<Response>> followerLookup
+    ) {
+        final boolean[] isLeader = {false};
+        final CompletableFuture<Void> leaderGate = new CompletableFuture<>();
+        final CompletableFuture<Void> gate = this.singleFlight.load(key, () -> {
+            isLeader[0] = true;
+            return leaderGate;
+        });
+        if (isLeader[0]) {
+            // The leader's response future typically resolves BEFORE the
+            // cache write commits (stream-through pattern: body is still
+            // being teed to the temp file). The leader signals cache-
+            // durability via {@code leaderGate} (typically wired to
+            // {@code StreamedArtifact.verificationOutcome}). Only on
+            // exceptional completion do we release followers eagerly so
+            // they retry against a cold cache rather than parking on a
+            // gate the leader will never close.
+            return leaderFetch.apply(leaderGate)
+                .whenComplete((r, e) -> {
+                    if (e != null && !leaderGate.isDone()) {
+                        leaderGate.complete(null);
+                    }
+                });
+        }
+        return gate.exceptionally(err -> null).thenCompose(ignored -> followerLookup.get());
+    }
+
+    /**
+     * The leader's body of {@link #fetchAndCache}: fires the upstream
+     * call, handles all status branches, caches success. Identical
+     * behaviour to the pre-2026-05 placement except for the move into a
+     * helper so the gate management above stays readable.
+     */
+    private CompletableFuture<Response> fetchAndCacheLeader(
+        final RequestLine line,
+        final Key key,
+        final Headers headers,
+        final CachedArtifactMetadataStore store
+    ) {
         final String owner = new Login(headers).getValue();
         final long startTime = System.currentTimeMillis();
-        return this.client.response(line, Headers.EMPTY, Content.EMPTY)
-            .thenCompose(MdcPropagation.withMdc(resp -> {
+        return this.client.response(line, this.upstreamHeaders(headers), Content.EMPTY)
+            .thenCompose(resp -> {
                 final long duration = System.currentTimeMillis() - startTime;
                 if (resp.status().code() == 404) {
                     return this.handle404(resp, key, duration)
                         .thenCompose(signal ->
-                            this.signalToResponse(signal, line, key, headers, store));
+                            this.signalToResponse(signal, line, key, store));
                 }
                 if (!resp.status().success()) {
-                    return this.handleNonSuccess(resp, key, duration)
-                        .thenCompose(signal ->
-                            this.signalToResponse(signal, line, key, headers, store));
+                    return this.handleNonSuccess(resp, duration, key);
                 }
                 this.recordProxyMetric("success", duration);
-                return this.deduplicator.deduplicate(key, () -> {
-                    return this.cacheResponse(resp, key, owner, store)
-                        .thenApply(r -> RequestDeduplicator.FetchSignal.SUCCESS);
-                }).thenCompose(signal ->
-                    this.signalToResponse(signal, line, key, headers, store));
-            }))
-            .handle(MdcPropagation.withMdcBiFunction((resp, error) -> {
+                return this.cacheResponse(resp, key, owner, store)
+                    .thenApply(r -> FetchSignal.SUCCESS)
+                    .thenCompose(signal ->
+                        this.signalToResponse(signal, line, key, store));
+            })
+            .handle((resp, error) -> {
                 if (error != null) {
                     final long duration = System.currentTimeMillis() - startTime;
                     this.trackUpstreamFailure(error);
@@ -523,7 +887,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                     );
                 }
                 return CompletableFuture.completedFuture(resp);
-            }))
+            })
             .thenCompose(future -> future);
     }
 
@@ -531,10 +895,9 @@ public abstract class BaseCachedProxySlice implements Slice {
      * Convert a dedup signal into an HTTP response.
      */
     private CompletableFuture<Response> signalToResponse(
-        final RequestDeduplicator.FetchSignal signal,
+        final FetchSignal signal,
         final RequestLine line,
         final Key key,
-        final Headers headers,
         final CachedArtifactMetadataStore store
     ) {
         switch (signal) {
@@ -560,6 +923,22 @@ public abstract class BaseCachedProxySlice implements Slice {
                 );
             case ERROR:
             default:
+                // Coalescer fetch failed and stale cache unavailable → 503.
+                // Previously this path emitted 503 silently (zero app-layer
+                // log, only the access log). Pair the response with a
+                // structured WARN so operators can distinguish this failure
+                // mode from other 503 sources (circuit-breaker fast-fail,
+                // RepoBulkhead overload, raw upstream passthrough).
+                EcsLogger.warn("com.auto1.pantera." + this.repoType)
+                    .message("SingleFlight coalescer returned ERROR — "
+                        + "serving stale if available, else 503")
+                    .eventCategory("web")
+                    .eventAction("proxy_fetch_coalesced_error")
+                    .eventOutcome("failure")
+                    .field("event.reason", "coalescer_error")
+                    .field("repository.name", this.repoName)
+                    .field("url.path", line.uri().getPath())
+                    .log();
                 return this.tryServeStale(
                     key,
                     () -> CompletableFuture.completedFuture(
@@ -576,15 +955,14 @@ public abstract class BaseCachedProxySlice implements Slice {
      * Streams body to a temp file while computing digests incrementally,
      * then saves from temp file to cache. Never buffers the full artifact on heap.
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
-    private CompletableFuture<RequestDeduplicator.FetchSignal> cacheResponse(
+    private CompletableFuture<FetchSignal> cacheResponse(
         final Response resp,
         final Key key,
         final String owner,
         final CachedArtifactMetadataStore store
     ) {
         final Path tempFile;
-        final FileChannel channel;
+        final FileChannel channel; // NOPMD CloseResource - closed by Subscriber.onComplete/onError below; lifecycle owned by streaming subscriber
         try {
             tempFile = Files.createTempFile("pantera-cache-", ".tmp");
             tempFile.toFile().deleteOnExit();
@@ -604,37 +982,63 @@ public abstract class BaseCachedProxySlice implements Slice {
                 .error(ex)
                 .log();
             return CompletableFuture.completedFuture(
-                RequestDeduplicator.FetchSignal.ERROR
+                FetchSignal.ERROR
             );
         }
         final Map<String, MessageDigest> digests =
             DigestComputer.createDigests(this.digestAlgorithms());
         final AtomicLong totalSize = new AtomicLong(0);
         final CompletableFuture<Void> streamDone = new CompletableFuture<>();
-        Flowable.fromPublisher(resp.body())
-            .doOnNext(buf -> {
-                final int nbytes = buf.remaining();
-                DigestComputer.updateDigests(digests, buf);
-                final ByteBuffer copy = buf.asReadOnlyBuffer();
-                while (copy.hasRemaining()) {
-                    channel.write(copy);
+        resp.body().subscribe(new org.reactivestreams.Subscriber<>() {
+            private org.reactivestreams.Subscription sub;
+
+            @Override
+            public void onSubscribe(final org.reactivestreams.Subscription subscription) {
+                this.sub = subscription;
+                subscription.request(Long.MAX_VALUE);
+            }
+
+            @Override
+            public void onNext(final ByteBuffer buf) {
+                try {
+                    final int nbytes = buf.remaining();
+                    DigestComputer.updateDigests(digests, buf);
+                    final ByteBuffer copy = buf.asReadOnlyBuffer();
+                    while (copy.hasRemaining()) {
+                        channel.write(copy);
+                    }
+                    totalSize.addAndGet(nbytes);
+                } catch (final IOException ex) {
+                    this.sub.cancel();
+                    streamDone.completeExceptionally(ex);
                 }
-                totalSize.addAndGet(nbytes);
-            })
-            .doOnComplete(() -> {
-                channel.force(true);
-                channel.close();
-            })
-            .doOnError(err -> {
+            }
+
+            @Override
+            public void onError(final Throwable throwable) {
                 closeChannelQuietly(channel);
                 deleteTempQuietly(tempFile);
-            })
-            .subscribe(
-                item -> { },
-                streamDone::completeExceptionally,
-                () -> streamDone.complete(null)
-            );
-        return streamDone.thenCompose(MdcPropagation.withMdc(v -> {
+                streamDone.completeExceptionally(throwable);
+            }
+
+            @Override
+            public void onComplete() {
+                try {
+                    // Intentionally NO fsync (channel.force). The cache is a
+                    // regenerable mirror of upstream — if a crash leaves the
+                    // temp file unflushed we'll refetch on the next miss.
+                    // fsync per primary added 5-10s wall on macOS APFS to a
+                    // 500-artifact cold mvn walk (Phase 7 acceptance bench
+                    // debug, 2026-05).
+                    channel.close();
+                    streamDone.complete(null);
+                } catch (final IOException ex) {
+                    closeChannelQuietly(channel);
+                    streamDone.completeExceptionally(ex);
+                }
+            }
+        });
+        return streamDone.thenCompose(v -> {
             final Map<String, String> digestResults =
                 DigestComputer.finalizeDigests(digests);
             final long size = totalSize.get();
@@ -678,10 +1082,15 @@ public abstract class BaseCachedProxySlice implements Slice {
                     return CompletableFuture.allOf(writes);
                 }).thenApply(ignored -> {
                     this.enqueueEvent(key, resp.headers(), size, owner);
+                    // Fire onCacheWrite BEFORE deleting the temp file: the
+                    // CacheWriteEvent.bytesOnDisk() must still be a valid
+                    // path at the moment the consumer receives it. Mirrors
+                    // ProxyCacheWriter.commit() ordering (Task 11).
+                    this.fireOnCacheWrite(key, tempFile, size);
                     deleteTempQuietly(tempFile);
-                    return RequestDeduplicator.FetchSignal.SUCCESS;
+                    return FetchSignal.SUCCESS;
                 });
-        })).exceptionally(MdcPropagation.withMdcFunction(err -> {
+        }).exceptionally(err -> {
             deleteTempQuietly(tempFile);
             EcsLogger.warn("com.auto1.pantera." + this.repoType)
                 .message("Failed to cache upstream response")
@@ -692,8 +1101,8 @@ public abstract class BaseCachedProxySlice implements Slice {
                 .field("file.path", key.string())
                 .error(err)
                 .log();
-            return RequestDeduplicator.FetchSignal.ERROR;
-        }));
+            return FetchSignal.ERROR;
+        });
     }
 
     /**
@@ -705,49 +1114,80 @@ public abstract class BaseCachedProxySlice implements Slice {
      * @param size File size in bytes
      * @return Save future
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private CompletableFuture<?> saveFromTempFile(
         final Key key, final Path tempFile, final long size
     ) {
         if (this.storage.isPresent()) {
-            final Flowable<ByteBuffer> flow = Flowable.using(
-                () -> FileChannel.open(tempFile, StandardOpenOption.READ),
-                chan -> Flowable.<ByteBuffer>generate(emitter -> {
-                    final ByteBuffer buf = ByteBuffer.allocate(65536);
-                    final int read = chan.read(buf);
-                    if (read < 0) {
-                        emitter.onComplete();
-                    } else {
-                        buf.flip();
-                        emitter.onNext(buf);
-                    }
-                }),
-                FileChannel::close
+            final Content content = new Content.From(
+                Optional.of(size), filePublisher(tempFile)
             );
-            final Content content = new Content.From(Optional.of(size), flow);
             return this.storage.get().save(key, content);
         }
         // Fallback: use cache.load (non-storage-backed mode)
-        final Flowable<ByteBuffer> flow = Flowable.using(
-            () -> FileChannel.open(tempFile, StandardOpenOption.READ),
-            chan -> Flowable.<ByteBuffer>generate(emitter -> {
-                final ByteBuffer buf = ByteBuffer.allocate(65536);
-                final int read = chan.read(buf);
-                if (read < 0) {
-                    emitter.onComplete();
-                } else {
-                    buf.flip();
-                    emitter.onNext(buf);
-                }
-            }),
-            FileChannel::close
+        final Content content = new Content.From(
+            Optional.of(size), filePublisher(tempFile)
         );
-        final Content content = new Content.From(Optional.of(size), flow);
         return this.cache.load(
             key,
             () -> CompletableFuture.completedFuture(Optional.of(content)),
             CacheControl.Standard.ALWAYS
         ).toCompletableFuture();
+    }
+
+    /**
+     * Create a reactive-streams {@link org.reactivestreams.Publisher} that reads
+     * a temp file in 64 KB chunks. Replaces the previous {@code Flowable.using}
+     * pattern so this class no longer imports {@code io.reactivex.Flowable}.
+     *
+     * @param tempFile Temp file to read
+     * @return Publisher of ByteBuffer chunks
+     */
+    private static org.reactivestreams.Publisher<ByteBuffer> filePublisher(final Path tempFile) {
+        return subscriber -> {
+            final FileChannel[] holder = new FileChannel[1];
+            try {
+                holder[0] = FileChannel.open(tempFile, StandardOpenOption.READ);
+            } catch (final IOException ex) {
+                subscriber.onSubscribe(new org.reactivestreams.Subscription() {
+                    @Override public void request(final long n) { }
+                    @Override public void cancel() { }
+                });
+                subscriber.onError(ex);
+                return;
+            }
+            final FileChannel chan = holder[0];
+            subscriber.onSubscribe(new org.reactivestreams.Subscription() {
+                private volatile boolean cancelled;
+
+                @Override
+                public void request(final long n) {
+                    try {
+                        long remaining = n;
+                        while (remaining > 0 && !this.cancelled) {
+                            final ByteBuffer buf = ByteBuffer.allocate(65_536);
+                            final int read = chan.read(buf);
+                            if (read < 0) {
+                                chan.close();
+                                subscriber.onComplete();
+                                return;
+                            }
+                            buf.flip();
+                            subscriber.onNext(buf);
+                            remaining--;
+                        }
+                    } catch (final Exception ex) {
+                        closeChannelQuietly(chan);
+                        subscriber.onError(ex);
+                    }
+                }
+
+                @Override
+                public void cancel() {
+                    this.cancelled = true;
+                    closeChannelQuietly(chan);
+                }
+            });
+        };
     }
 
     /**
@@ -786,31 +1226,42 @@ public abstract class BaseCachedProxySlice implements Slice {
      * Fetch directly from upstream without caching (non-cacheable paths).
      */
     private CompletableFuture<Response> fetchDirect(
-        final RequestLine line, final Key key, final String owner
+        final RequestLine line, final Key key,
+        final Headers incomingHeaders, final String owner
     ) {
         final long startTime = System.currentTimeMillis();
-        return this.client.response(line, Headers.EMPTY, Content.EMPTY)
+        return this.client.response(line, this.upstreamHeaders(incomingHeaders), Content.EMPTY)
             .thenCompose(resp -> {
                 final long duration = System.currentTimeMillis() - startTime;
                 if (!resp.status().success()) {
-                    if (resp.status().code() == 404) {
+                    final int code = resp.status().code();
+                    if (code == 404) {
                         if (this.negativeCache != null
                             && !this.isChecksumSidecar(key.string())) {
+                            final NegativeCacheKey nk = this.negKey(line.uri().getPath());
                             resp.body().asBytesFuture().thenAccept(
-                                bytes -> this.negativeCache.cacheNotFound(key)
+                                bytes -> this.negativeCache.cacheNotFound(nk)
                             );
                         }
                         this.recordProxyMetric("not_found", duration);
-                    } else if (resp.status().code() >= 500) {
+                        return resp.body().asBytesFuture()
+                            .thenApply(bytes -> ResponseBuilder.notFound().build());
+                    }
+                    if (code >= 500) {
                         this.trackUpstreamFailure(
-                            new RuntimeException("HTTP " + resp.status().code())
+                            new RuntimeException("HTTP " + code)
                         );
                         this.recordProxyMetric("error", duration);
-                    } else {
-                        this.recordProxyMetric("client_error", duration);
+                        return resp.body().asBytesFuture()
+                            .thenApply(bytes -> ResponseBuilder.unavailable()
+                                .textBody("Upstream temporarily unavailable")
+                                .build());
                     }
-                    return resp.body().asBytesFuture()
-                        .thenApply(bytes -> ResponseBuilder.notFound().build());
+                    // 4xx (non-404): propagate verbatim — preserves 429
+                    // status + Retry-After, 403 auth signal, 410 Gone, etc.
+                    // Crucially does not write NegativeCache for these.
+                    this.recordProxyMetric("client_error", duration);
+                    return CompletableFuture.completedFuture(resp);
                 }
                 this.recordProxyMetric("success", duration);
                 this.enqueueEvent(key, resp.headers(), -1, owner);
@@ -824,7 +1275,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                     )
                 );
             })
-            .exceptionally(MdcPropagation.withMdcFunction(error -> {
+            .exceptionally(error -> {
                 final long duration = System.currentTimeMillis() - startTime;
                 this.trackUpstreamFailure(error);
                 this.recordProxyMetric("exception", duration);
@@ -840,36 +1291,70 @@ public abstract class BaseCachedProxySlice implements Slice {
                 return ResponseBuilder.unavailable()
                     .textBody("Upstream error")
                     .build();
-            }));
+            });
     }
 
-    private CompletableFuture<RequestDeduplicator.FetchSignal> handle404(
+    private CompletableFuture<FetchSignal> handle404(
         final Response resp, final Key key, final long duration
     ) {
         this.recordProxyMetric("not_found", duration);
         return resp.body().asBytesFuture().thenApply(bytes -> {
             if (this.negativeCache != null && !this.isChecksumSidecar(key.string())) {
-                this.negativeCache.cacheNotFound(key);
+                this.negativeCache.cacheNotFound(this.negKey(key.string()));
             }
-            return RequestDeduplicator.FetchSignal.NOT_FOUND;
+            return FetchSignal.NOT_FOUND;
         });
     }
 
-    private CompletableFuture<RequestDeduplicator.FetchSignal> handleNonSuccess(
-        final Response resp, final Key key, final long duration
+    /**
+     * Build a structured negative-cache key for a request path. Stores the
+     * path as artifactName with empty version — sufficient for uniqueness
+     * and gives operators meaningful scope/repoType columns in the admin UI.
+     */
+    private NegativeCacheKey negKey(final String path) {
+        return NegativeCacheKey.fromPath(this.repoName, this.repoType, path);
+    }
+
+    /**
+     * Handle a non-success upstream response (4xx other than 404, or 5xx).
+     * 404 has its own dedicated path via {@link #handle404}.
+     *
+     * <p>Behavior:
+     * <ul>
+     *   <li><b>5xx</b>: record upstream failure, drain upstream body to release the
+     *       connection, then try stale-if-revalidate or return 503. Upstream body
+     *       is not propagated (operators want a clean Pantera message, not the
+     *       upstream's error page).</li>
+     *   <li><b>4xx (non-404)</b>: propagate the upstream response verbatim —
+     *       status, headers (including {@code Retry-After} on 429), and body.
+     *       This covers 401, 403, 410, 429, etc. Crucially, the response is
+     *       <em>not</em> written to {@link NegativeCache}: only true 404 belongs
+     *       there. A transient 429 from upstream must not poison the cache for
+     *       the 24h negative-cache TTL.</li>
+     * </ul>
+     */
+    private CompletableFuture<Response> handleNonSuccess(
+        final Response resp, final long duration, final Key key
     ) {
-        if (resp.status().code() >= 500) {
+        final int code = resp.status().code();
+        if (code >= 500) {
             this.trackUpstreamFailure(
-                new RuntimeException("HTTP " + resp.status().code())
+                new RuntimeException("HTTP " + code)
             );
             this.recordProxyMetric("error", duration);
-        } else {
-            this.recordProxyMetric("client_error", duration);
+            return resp.body().asBytesFuture().thenCompose(ignored ->
+                this.tryServeStale(
+                    key,
+                    () -> CompletableFuture.completedFuture(
+                        ResponseBuilder.unavailable()
+                            .textBody("Upstream temporarily unavailable")
+                            .build()
+                    )
+                )
+            );
         }
-        return resp.body().asBytesFuture()
-            .thenApply(bytes -> resp.status().code() < 500
-                ? RequestDeduplicator.FetchSignal.NOT_FOUND
-                : RequestDeduplicator.FetchSignal.ERROR);
+        this.recordProxyMetric("client_error", duration);
+        return CompletableFuture.completedFuture(resp);
     }
 
     /**
@@ -896,7 +1381,7 @@ public abstract class BaseCachedProxySlice implements Slice {
             return fallback.get();
         }
         if (this.metadataStore.isPresent()) {
-            return this.metadataStore.get().load(key).thenCompose(MdcPropagation.withMdc(metaOpt -> {
+            return this.metadataStore.get().load(key).thenCompose(metaOpt -> {
                 if (metaOpt.isEmpty()) {
                     return this.serveStaleFromStorage(key, fallback);
                 }
@@ -904,19 +1389,19 @@ public abstract class BaseCachedProxySlice implements Slice {
                 final Duration age = Duration.between(meta.savedAt(), Instant.now());
                 if (age.compareTo(this.config.staleMaxAge()) > 0) {
                     EcsLogger.warn("com.auto1.pantera." + this.repoType)
-                        .message("Stale artifact too old, refusing to serve")
+                        .message("Stale artifact too old, refusing to serve"
+                            + " (age_seconds=" + age.getSeconds()
+                            + ", max_age_seconds=" + this.config.staleMaxAge().getSeconds() + ")")
                         .eventCategory("network")
                         .eventAction("stale_too_old")
                         .eventOutcome("failure")
                         .field("repository.name", this.repoName)
                         .field("url.path", key.string())
-                        .field("stale.age.seconds", age.getSeconds())
-                        .field("stale.max.age.seconds", this.config.staleMaxAge().getSeconds())
                         .log();
                     return fallback.get();
                 }
                 return this.serveStaleFromStorageWithAge(key, fallback, age);
-            }));
+            });
         }
         return this.serveStaleFromStorage(key, fallback);
     }
@@ -926,12 +1411,12 @@ public abstract class BaseCachedProxySlice implements Slice {
         final Supplier<CompletableFuture<Response>> fallback
     ) {
         final Storage store = this.storage.get();
-        return store.exists(key).thenCompose(MdcPropagation.withMdc(exists -> {
+        return store.exists(key).thenCompose(exists -> {
             if (!exists) {
                 return fallback.get();
             }
             return serveStaleFromStorageWithAge(key, fallback, null);
-        }));
+        });
     }
 
     private CompletableFuture<Response> serveStaleFromStorageWithAge(
@@ -941,7 +1426,7 @@ public abstract class BaseCachedProxySlice implements Slice {
     ) {
         final Storage store = this.storage.get();
         return store.value(key)
-            .thenApply(MdcPropagation.withMdcFunction(content -> {
+            .thenApply(content -> {
                 EcsLogger.warn("com.auto1.pantera." + this.repoType)
                     .message("Upstream failed, serving stale cached artifact")
                     .eventCategory("network")
@@ -955,9 +1440,9 @@ public abstract class BaseCachedProxySlice implements Slice {
                 if (age != null) {
                     builder.header("Age", String.valueOf(age.getSeconds()));
                 }
-                return (Response) builder.body(content).build();
-            }))
-            .exceptionallyCompose(MdcPropagation.withMdc(err -> {
+                return builder.body(content).build();
+            })
+            .exceptionallyCompose(err -> {
                 EcsLogger.warn("com.auto1.pantera." + this.repoType)
                     .message("Failed to read stale artifact from storage")
                     .eventCategory("web")
@@ -968,14 +1453,15 @@ public abstract class BaseCachedProxySlice implements Slice {
                     .error(err)
                     .log();
                 return fallback.get();
-            }));
+            });
     }
 
     private CompletableFuture<Response> serveChecksumFromStorage(
-        final RequestLine line, final Key key, final String owner
+        final RequestLine line, final Key key,
+        final Headers incomingHeaders, final String owner
     ) {
         return this.cache.load(key, Remote.EMPTY, CacheControl.Standard.ALWAYS)
-            .thenCompose(MdcPropagation.withMdc(cached -> {
+            .thenCompose(cached -> {
                 if (cached.isPresent()) {
                     return CompletableFuture.completedFuture(
                         ResponseBuilder.ok()
@@ -984,12 +1470,14 @@ public abstract class BaseCachedProxySlice implements Slice {
                             .build()
                     );
                 }
-                return this.fetchDirect(line, key, owner);
-            })).toCompletableFuture();
+                return this.fetchDirect(line, key, incomingHeaders, owner);
+            }).toCompletableFuture();
     }
 
-    private CompletableFuture<Response> handleRootPath(final RequestLine line) {
-        return this.client.response(line, Headers.EMPTY, Content.EMPTY)
+    private CompletableFuture<Response> handleRootPath(
+        final RequestLine line, final Headers headers
+    ) {
+        return this.client.response(line, this.upstreamHeaders(headers), Content.EMPTY)
             .thenCompose(resp -> {
                 if (resp.status().success()) {
                     return CompletableFuture.completedFuture(
@@ -1004,15 +1492,59 @@ public abstract class BaseCachedProxySlice implements Slice {
             });
     }
 
+    /**
+     * Invoke the configured {@link Consumer} with a fresh
+     * {@link CacheWriteEvent}. Any throwable from the consumer is caught
+     * and logged at WARN — it MUST NOT propagate, otherwise the cache-
+     * write outcome would be tied to the consumer's correctness. Mirrors
+     * the contract pinned by {@link ProxyCacheWriter#fireOnWrite}.
+     *
+     * @param key      Cache key of the primary artifact just written.
+     * @param tempFile Filesystem path of the source bytes (alive at fire
+     *                 time; deleted by the caller immediately after this
+     *                 method returns).
+     * @param size     Size in bytes of the primary.
+     */
+    private void fireOnCacheWrite(final Key key, final Path tempFile, final long size) {
+        try {
+            this.onCacheWrite.accept(new CacheWriteEvent(
+                this.repoName, key.string(), tempFile, size, Instant.now()
+            ));
+        } catch (final Exception thrown) {
+            EcsLogger.warn("com.auto1.pantera.http.cache")
+                .message("BaseCachedProxySlice onCacheWrite callback threw: "
+                    + thrown.getMessage())
+                .field("repository.name", this.repoName)
+                .field("url.path", key.string())
+                .error(thrown)
+                .log();
+        }
+    }
+
     private void enqueueEvent(
         final Key key, final Headers headers, final long size, final String owner
     ) {
         if (this.events.isEmpty()) {
             return;
         }
-        final Optional<ProxyArtifactEvent> event =
-            this.buildArtifactEvent(key, headers, size, owner);
-        event.ifPresent(e -> this.events.get().offer(e));
+        try {
+            final Optional<ProxyArtifactEvent> event =
+                this.buildArtifactEvent(key, headers, size, owner);
+            event.ifPresent(e -> {
+                if (!this.events.get().offer(e)) {
+                    com.auto1.pantera.metrics.EventsQueueMetrics
+                        .recordDropped(this.repoName);
+                }
+            });
+        } catch (final Throwable t) {
+            EcsLogger.warn("com.auto1.pantera.cache")
+                .message("Failed to enqueue proxy event; serve path unaffected")
+                .eventCategory("process")
+                .eventAction("queue_enqueue")
+                .eventOutcome("failure")
+                .field("repository.name", this.repoName)
+                .log();
+        }
     }
 
     private void trackUpstreamFailure(final Throwable error) {
@@ -1039,7 +1571,6 @@ public abstract class BaseCachedProxySlice implements Slice {
         });
     }
 
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
             if (com.auto1.pantera.metrics.PanteraMetrics.isEnabled()) {

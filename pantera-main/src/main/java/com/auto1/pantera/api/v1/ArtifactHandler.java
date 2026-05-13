@@ -15,7 +15,10 @@ import com.auto1.pantera.api.RepositoryName;
 import com.auto1.pantera.api.perms.ApiRepositoryPermission;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Meta;
-import com.auto1.pantera.http.trace.MdcPropagation;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.http.context.HandlerExecutor;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.RepoData;
 import com.auto1.pantera.settings.repo.CrudRepoSettings;
@@ -25,11 +28,25 @@ import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
+import java.sql.Array;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import javax.json.Json;
 import javax.json.JsonStructure;
+import javax.sql.DataSource;
 
 /**
  * Artifact handler for /api/v1/repositories/:name/artifact* endpoints.
@@ -55,7 +72,7 @@ public final class ArtifactHandler {
 
     static {
         final String seed = System.getenv().getOrDefault(
-            "PANTERA_DOWNLOAD_TOKEN_SECRET",
+            "PANTERA_DOWNLOAD_TOKEN_SECRET", // NOPMD HardCodedCryptoKey - env var name, not key material
             "pantera-download-" + ProcessHandle.current().pid()
                 + "-" + System.getProperty("user.name", "default")
         );
@@ -78,16 +95,83 @@ public final class ArtifactHandler {
     private final Policy<?> policy;
 
     /**
+     * Artifacts DataSource — used by {@link #treeHandler} to hydrate file
+     * entries with upload date, size, and {@code artifact_kind} via a single
+     * batch lookup instead of N per-key metadata calls against storage.
+     * Nullable: when null the handler falls back to a storage-only listing
+     * (no modified date / kind in the response).
+     */
+    private final DataSource dataSource;
+
+    /**
+     * Artifact index — used by the delete handlers to cascade the storage
+     * delete into the DB, so search / locate don't return ghosts.
+     * Nullable for tests; {@link ArtifactIndex#NOP} is a safe default.
+     */
+    private final ArtifactIndex artifactIndex;
+
+    /**
+     * Caffeine-backed cache for storage-level file metadata (size, modified).
+     * Prevents repeated S3 HEADs during burst browsing when the DB has no
+     * matching row for the file path (Go, npm, PyPI, Docker, Helm, Debian).
+     */
+    private final StorageMetaCache metaCache;
+
+    /**
      * Ctor.
+     * @param crs Repository settings CRUD
+     * @param repoData Repository data management
+     * @param policy Pantera security policy
+     * @param dataSource Artifacts DB DataSource (nullable; enables date /
+     *                   kind enrichment for tree listings when present)
+     * @param artifactIndex Index used by delete handlers to cascade DB
+     *                      removal alongside the storage delete
+     */
+    public ArtifactHandler(final CrudRepoSettings crs, final RepoData repoData,
+        final Policy<?> policy, final DataSource dataSource,
+        final ArtifactIndex artifactIndex) {
+        this(crs, repoData, policy, dataSource, artifactIndex, new StorageMetaCache());
+    }
+
+    /**
+     * Primary ctor — all fields.
+     * @param crs Repository settings CRUD
+     * @param repoData Repository data management
+     * @param policy Pantera security policy
+     * @param dataSource Artifacts DB DataSource (nullable)
+     * @param artifactIndex Index used by delete handlers to cascade DB removal
+     * @param metaCache Caffeine-backed storage metadata cache
+     */
+    ArtifactHandler(final CrudRepoSettings crs, final RepoData repoData,
+        final Policy<?> policy, final DataSource dataSource,
+        final ArtifactIndex artifactIndex, final StorageMetaCache metaCache) {
+        this.crs = crs;
+        this.repoData = repoData;
+        this.policy = policy;
+        this.dataSource = dataSource;
+        this.artifactIndex = artifactIndex == null ? ArtifactIndex.NOP : artifactIndex;
+        this.metaCache = metaCache == null ? new StorageMetaCache() : metaCache;
+    }
+
+    /**
+     * Back-compat ctor without the artifact index — delete handlers will
+     * skip DB cascade, matching pre-2.2.0 behaviour.
+     */
+    public ArtifactHandler(final CrudRepoSettings crs, final RepoData repoData,
+        final Policy<?> policy, final DataSource dataSource) {
+        this(crs, repoData, policy, dataSource, ArtifactIndex.NOP);
+    }
+
+    /**
+     * Legacy ctor without DataSource — preserves older wiring that
+     * predates the 2.2.0 tree-handler DB hydration.
      * @param crs Repository settings CRUD
      * @param repoData Repository data management
      * @param policy Pantera security policy
      */
     public ArtifactHandler(final CrudRepoSettings crs, final RepoData repoData,
         final Policy<?> policy) {
-        this.crs = crs;
-        this.repoData = repoData;
-        this.policy = policy;
+        this(crs, repoData, policy, null, ArtifactIndex.NOP);
     }
 
     /**
@@ -142,6 +226,12 @@ public final class ArtifactHandler {
         final String repoName = ctx.pathParam("name");
         final String path = ctx.queryParam("path").stream()
             .findFirst().orElse("/");
+        final String sortBy = normalizeTreeSort(
+            ctx.queryParam("sort").stream().findFirst().orElse("name")
+        );
+        final boolean sortAsc = !"desc".equalsIgnoreCase(
+            ctx.queryParam("sort_dir").stream().findFirst().orElse("asc")
+        );
         final RepositoryName rname = new RepositoryName.Simple(repoName);
         // Resolve the storage key: repo root or sub-path
         final Key prefix;
@@ -153,7 +243,7 @@ public final class ArtifactHandler {
         }
         this.repoData.repoStorage(rname, this.crs)
             .thenCompose(asto -> asto.list(prefix, "/").thenCompose(listing -> {
-                final JsonArray items = new JsonArray();
+                final JsonArray dirItems = new JsonArray();
                 final String prefixStr = prefix.string();
                 final int prefixLen = prefixStr.isEmpty() ? 0 : prefixStr.length() + 1;
                 // Directories first
@@ -171,15 +261,14 @@ public final class ArtifactHandler {
                     final String repoPrefix = repoName + "/";
                     String itemPath = dirStr.startsWith(repoPrefix)
                         ? dirStr.substring(repoPrefix.length()) : dirStr;
-                    items.add(new JsonObject()
+                    dirItems.add(new JsonObject()
                         .put("name", name)
                         .put("path", itemPath)
                         .put("type", "directory"));
                 }
                 // Then files — for PyPI artifacts, check sidecar for
                 // yanked status so the tree can show a "Yanked" badge.
-                final java.util.List<java.util.concurrent.CompletableFuture<JsonObject>>
-                    fileFutures = new java.util.ArrayList<>();
+                final List<CompletableFuture<JsonObject>> fileFutures = new ArrayList<>();
                 for (final Key file : listing.files()) {
                     final String fileStr = file.string();
                     final String name = fileStr.contains("/")
@@ -212,8 +301,7 @@ public final class ArtifactHandler {
                         fileFutures.add(
                             asto.exists(sidecar).thenCompose(exists -> {
                                 if (!exists) {
-                                    return java.util.concurrent.CompletableFuture
-                                        .completedFuture(entry);
+                                    return CompletableFuture.completedFuture(entry);
                                 }
                                 return asto.value(sidecar)
                                     .thenCompose(
@@ -221,10 +309,10 @@ public final class ArtifactHandler {
                                     )
                                     .thenApply(bytes -> {
                                         try (javax.json.JsonReader reader =
-                                            javax.json.Json.createReader(
-                                                new java.io.StringReader(
+                                            Json.createReader(
+                                                new StringReader(
                                                     new String(bytes,
-                                                        java.nio.charset.StandardCharsets.UTF_8)
+                                                        StandardCharsets.UTF_8)
                                                 )
                                             )) {
                                             final javax.json.JsonObject sc =
@@ -239,26 +327,37 @@ public final class ArtifactHandler {
                             })
                         );
                     } else {
-                        fileFutures.add(
-                            java.util.concurrent.CompletableFuture
-                                .completedFuture(entry)
-                        );
+                        fileFutures.add(CompletableFuture.completedFuture(entry));
                     }
                 }
-                return java.util.concurrent.CompletableFuture.allOf(
-                    fileFutures.toArray(
-                        new java.util.concurrent.CompletableFuture[0]
-                    )
-                ).thenAccept(ignored -> {
+                return CompletableFuture.allOf(
+                    fileFutures.toArray(new CompletableFuture[0])
+                ).thenCompose(ignored -> {
+                    final JsonArray fileItems = new JsonArray();
                     for (final var f : fileFutures) {
-                        items.add(f.join());
+                        fileItems.add(f.join());
                     }
-                    ctx.response().setStatusCode(200)
-                        .putHeader("Content-Type", "application/json")
-                        .end(new JsonObject()
-                            .put("items", items)
-                            .put("marker", (String) null)
-                            .put("hasMore", false).encode());
+                    // Fix E (2.2.0): hydrate file entries with DB metadata
+                    // (size, modified, artifact_kind). One IN query batches
+                    // the whole listing; for DB misses, falls back to
+                    // storage metadata + Caffeine cache so burst browsing
+                    // doesn't hammer S3 with repeated HEADs.
+                    return hydrateFilesWithDbMetadata(
+                        this.dataSource, repoName, fileItems,
+                        asto, this.metaCache
+                    ).thenAccept(hydrated -> {
+                        final JsonArray items = sortTreeEntries(
+                            dirItems, hydrated, sortBy, sortAsc
+                        );
+                        ctx.response().setStatusCode(200)
+                            .putHeader("Content-Type", "application/json")
+                            .end(new JsonObject()
+                                .put("items", items)
+                                .put("sort", sortBy)
+                                .put("sort_dir", sortAsc ? "asc" : "desc")
+                                .put("marker", (String) null)
+                                .put("hasMore", false).encode());
+                    });
                 });
             }))
             .exceptionally(err -> {
@@ -266,6 +365,250 @@ public final class ArtifactHandler {
                     err.getCause() != null ? err.getCause().getMessage() : err.getMessage());
                 return null;
             });
+    }
+
+    /**
+     * Normalise the tree sort parameter to a known value. Unknown values
+     * fall back to {@code name} so a typo never breaks the listing.
+     *
+     * @param raw Query parameter value
+     * @return "name", "date", or "size"
+     */
+    private static String normalizeTreeSort(final String raw) {
+        if (raw == null) {
+            return "name";
+        }
+        return switch (raw.toLowerCase(Locale.ROOT)) {
+            case "date", "modified", "created_at" -> "date";
+            case "size" -> "size";
+            default -> "name";
+        };
+    }
+
+    /**
+     * Batch-hydrate file entries with DB-sourced metadata (size, modified
+     * timestamp, artifact_kind). Issues ONE query per listing regardless
+     * of the number of files, then merges by {@code path}.
+     *
+     * <p>For files where the DB has no matching row (Go, npm, PyPI, Docker,
+     * Helm, Debian — whose DB {@code name} is a module/package name, not
+     * a file path), the method falls back to
+     * {@link Storage#metadata(Key)} for size and modified timestamp, and
+     * derives {@code artifact_kind} from the filename. Fallback results are
+     * stored in {@code metaCache} so repeated calls for the same key during
+     * burst browsing do not pay S3 HEAD costs.</p>
+     *
+     * @param ds DataSource — may be null (handler wired without DB)
+     * @param repoName Repository name
+     * @param files File-kind JsonObjects from the storage listing
+     * @param asto Storage instance for the repository (fallback reads)
+     * @param metaCache Caffeine cache for storage metadata (avoids repeat HEADs)
+     * @return Future carrying the same JsonArray with metadata merged in
+     */
+    private static CompletableFuture<JsonArray> hydrateFilesWithDbMetadata(
+        final DataSource ds, final String repoName, final JsonArray files,
+        final Storage asto, final StorageMetaCache metaCache
+    ) {
+        if (files.isEmpty()) {
+            return CompletableFuture.completedFuture(files);
+        }
+        // Step 1: DB batch query (fast path — one round-trip for all files).
+        final Map<String, JsonObject> byPath = new HashMap<>();
+        if (ds != null) {
+            final List<String> paths = new ArrayList<>();
+            for (int i = 0; i < files.size(); i++) {
+                paths.add(files.getJsonObject(i).getString("path"));
+            }
+            try (Connection conn = ds.getConnection();
+                 PreparedStatement stmt = conn.prepareStatement(
+                     "SELECT name, size, created_date, artifact_kind"
+                         + " FROM artifacts"
+                         + " WHERE repo_name = ? AND name = ANY(?)")) {
+                stmt.setString(1, repoName);
+                final Array arr = conn.createArrayOf(
+                    "text", paths.toArray(new String[0])
+                );
+                stmt.setArray(2, arr);
+                try (ResultSet rs = stmt.executeQuery()) {
+                    while (rs.next()) {
+                        byPath.put(rs.getString("name"),
+                            new JsonObject()
+                                .put("size", rs.getLong("size"))
+                                .put("modified",
+                                    Instant.ofEpochMilli(rs.getLong("created_date"))
+                                        .toString())
+                                .put("artifact_kind",
+                                    rs.getString("artifact_kind")));
+                    }
+                }
+            } catch (final SQLException ex) {
+                EcsLogger.warn("com.auto1.pantera.api.v1")
+                    .message("Tree DB hydration failed; falling back"
+                        + " to storage metadata: " + ex.getMessage())
+                    .eventCategory("database")
+                    .eventAction("tree_hydrate_fallback")
+                    .error(ex)
+                    .log();
+                // byPath stays empty — all files will go through the asto fallback
+            }
+        }
+        // Step 2: Apply DB hits; collect misses for the asto fallback.
+        final List<Integer> missingIdx = new ArrayList<>();
+        for (int i = 0; i < files.size(); i++) {
+            final JsonObject file = files.getJsonObject(i);
+            final JsonObject meta = byPath.get(file.getString("path"));
+            if (meta != null) {
+                file.put("size", meta.getLong("size"));
+                file.put("modified", meta.getString("modified"));
+                file.put("artifact_kind", meta.getString("artifact_kind"));
+            } else {
+                missingIdx.add(i);
+            }
+        }
+        if (missingIdx.isEmpty() || asto == null) {
+            return CompletableFuture.completedFuture(files);
+        }
+        // Step 3: Fan out storage metadata reads for DB-miss files.
+        // Check the Caffeine cache first to avoid S3 HEADs on repeated browse.
+        final List<CompletableFuture<Void>> futures = new ArrayList<>();
+        for (final int idx : missingIdx) {
+            final JsonObject file = files.getJsonObject(idx);
+            final String filePath = file.getString("path");
+            final String fileName = file.getString("name");
+            // Derive kind from filename — used regardless of whether asto succeeds.
+            file.put("artifact_kind", deriveArtifactKind(fileName));
+            final java.util.Optional<StorageMetaCache.Entry> cached =
+                metaCache.get(repoName, filePath);
+            if (cached.isPresent()) {
+                final StorageMetaCache.Entry entry = cached.get();
+                if (entry.size() != null) {
+                    file.put("size", entry.size());
+                }
+                if (entry.modifiedIso() != null) {
+                    file.put("modified", entry.modifiedIso());
+                }
+                futures.add(CompletableFuture.completedFuture(null));
+            } else {
+                // Cache miss — read from storage and populate cache.
+                final Key storageKey = new Key.From(repoName, filePath);
+                futures.add(
+                    asto.metadata(storageKey)
+                        .thenAccept(meta -> {
+                            final Long size = meta.read(Meta.OP_SIZE)
+                                .map(Long::longValue).orElse(null);
+                            String modifiedIso = null;
+                            final java.util.Optional<? extends Instant> updated =
+                                meta.read(Meta.OP_UPDATED_AT);
+                            if (updated.isPresent()) {
+                                modifiedIso = updated.get().toString();
+                            } else {
+                                final java.util.Optional<? extends Instant> created =
+                                    meta.read(Meta.OP_CREATED_AT);
+                                if (created.isPresent()) {
+                                    modifiedIso = created.get().toString();
+                                }
+                            }
+                            metaCache.put(repoName, filePath, size, modifiedIso);
+                            if (size != null) {
+                                file.put("size", size);
+                            }
+                            if (modifiedIso != null) {
+                                file.put("modified", modifiedIso);
+                            }
+                        })
+                        .exceptionally(err -> {
+                            // Storage metadata unavailable — leave size/modified unset.
+                            // artifact_kind was already derived from the filename above.
+                            return null;
+                        })
+                );
+            }
+        }
+        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+            .thenApply(ignored -> files);
+    }
+
+    /**
+     * Heuristic classification by filename, used when the artifacts DB has
+     * no row for this path. Returns one of CHECKSUM, SIGNATURE, METADATA,
+     * ARTIFACT. Only the leaf name is inspected.
+     *
+     * @param name File name
+     * @return Kind constant
+     */
+    private static String deriveArtifactKind(final String name) {
+        final String lower = name.toLowerCase(Locale.ROOT);
+        if (lower.endsWith(".sha256") || lower.endsWith(".sha512")
+            || lower.endsWith(".sha1") || lower.endsWith(".md5")) {
+            return "CHECKSUM";
+        }
+        if (lower.endsWith(".asc") || lower.endsWith(".sig")
+            || lower.endsWith(".sigstore")) {
+            return "SIGNATURE";
+        }
+        if (lower.endsWith(".pom") || lower.endsWith(".xml")
+            || lower.endsWith(".info") || lower.endsWith(".mod")
+            || lower.endsWith(".json")
+            || "list".equals(lower) || "index.yaml".equals(lower)
+            || "packages.json".equals(lower)
+            || "maven-metadata.xml".equals(lower)) {
+            return "METADATA";
+        }
+        return "ARTIFACT";
+    }
+
+    /**
+     * Combine directory + file entries into a single sorted list.
+     * Directories always sort first within each direction: users
+     * expect to see folders grouped together regardless of the
+     * active sort key. Within each group, apply the requested sort.
+     *
+     * @param dirs Directory entries (no date — sorted by name only)
+     * @param files File entries (may carry `modified` and `size`)
+     * @param sortBy "name", "date", or "size"
+     * @param sortAsc true for ascending
+     * @return New JsonArray containing dirs then files in sorted order
+     */
+    private static JsonArray sortTreeEntries(
+        final JsonArray dirs, final JsonArray files,
+        final String sortBy, final boolean sortAsc
+    ) {
+        final Comparator<JsonObject> byName = Comparator.comparing(
+            o -> o.getString("name", ""),
+            (a, b) -> a.compareToIgnoreCase(b) != 0
+                ? a.compareToIgnoreCase(b) : a.compareTo(b)
+        );
+        final Comparator<JsonObject> cmp;
+        if ("date".equals(sortBy)) {
+            // Files without `modified` sort as epoch 0; name breaks ties.
+            cmp = Comparator.<JsonObject, String>comparing(
+                o -> o.getString("modified", "1970-01-01T00:00:00Z")
+            ).thenComparing(byName);
+        } else if ("size".equals(sortBy)) {
+            // Files without a hydrated `size` sort as 0; name breaks ties.
+            cmp = Comparator.<JsonObject>comparingLong(
+                o -> o.getLong("size", 0L)
+            ).thenComparing(byName);
+        } else {
+            cmp = byName;
+        }
+        final Comparator<JsonObject> effective = sortAsc ? cmp : cmp.reversed();
+        final List<JsonObject> dirList = new ArrayList<>();
+        for (int i = 0; i < dirs.size(); i++) {
+            dirList.add(dirs.getJsonObject(i));
+        }
+        dirList.sort(
+            sortAsc ? byName : byName.reversed()
+        );
+        final List<JsonObject> fileList = new ArrayList<>();
+        for (int i = 0; i < files.size(); i++) {
+            fileList.add(files.getJsonObject(i));
+        }
+        fileList.sort(effective);
+        final JsonArray out = new JsonArray();
+        dirList.forEach(out::add);
+        fileList.forEach(out::add);
+        return out;
     }
 
     /**
@@ -415,23 +758,35 @@ public final class ArtifactHandler {
                     return asto.value(artifactKey);
                 })
             )
-            .thenAccept(content ->
-                io.reactivex.Flowable.fromPublisher(content)
-                    .map(buf -> {
-                        final byte[] arr = new byte[buf.remaining()];
-                        buf.get(arr);
-                        return io.vertx.core.buffer.Buffer.buffer(arr);
-                    })
-                    .subscribe(
-                        chunk -> ctx.response().write(chunk),
-                        err -> {
-                            if (!ctx.response().ended()) {
-                                ctx.response().end();
-                            }
-                        },
-                        () -> ctx.response().end()
-                    )
-            )
+            .thenAccept(content -> {
+                // Capture the Disposable so a client disconnect (closeHandler) or
+                // response error (exceptionHandler) can cancel the upstream stream
+                // and free any file channels / temp files held by downstream tees.
+                final io.reactivex.disposables.Disposable disposable =
+                    io.reactivex.Flowable.fromPublisher(content)
+                        .map(buf -> io.vertx.core.buffer.Buffer.buffer(
+                            io.netty.buffer.Unpooled.wrappedBuffer(buf)
+                        ))
+                        .subscribe(
+                            chunk -> ctx.response().write(chunk),
+                            err -> {
+                                if (!ctx.response().ended()) {
+                                    ctx.response().end();
+                                }
+                            },
+                            () -> ctx.response().end()
+                        );
+                ctx.response().closeHandler(v -> {
+                    if (!disposable.isDisposed()) {
+                        disposable.dispose();
+                    }
+                });
+                ctx.response().exceptionHandler(err -> {
+                    if (!disposable.isDisposed()) {
+                        disposable.dispose();
+                    }
+                });
+            })
             .exceptionally(err -> {
                 if (!ctx.response().headWritten()) {
                     ApiResponse.sendError(ctx, 404, "NOT_FOUND",
@@ -542,23 +897,35 @@ public final class ArtifactHandler {
                     return asto.value(artifactKey);
                 })
             )
-            .thenAccept(content ->
-                io.reactivex.Flowable.fromPublisher(content)
-                    .map(buf -> {
-                        final byte[] arr = new byte[buf.remaining()];
-                        buf.get(arr);
-                        return io.vertx.core.buffer.Buffer.buffer(arr);
-                    })
-                    .subscribe(
-                        chunk -> ctx.response().write(chunk),
-                        err -> {
-                            if (!ctx.response().ended()) {
-                                ctx.response().end();
-                            }
-                        },
-                        () -> ctx.response().end()
-                    )
-            )
+            .thenAccept(content -> {
+                // Capture the Disposable so a client disconnect (closeHandler) or
+                // response error (exceptionHandler) can cancel the upstream stream
+                // and free any file channels / temp files held by downstream tees.
+                final io.reactivex.disposables.Disposable disposable =
+                    io.reactivex.Flowable.fromPublisher(content)
+                        .map(buf -> io.vertx.core.buffer.Buffer.buffer(
+                            io.netty.buffer.Unpooled.wrappedBuffer(buf)
+                        ))
+                        .subscribe(
+                            chunk -> ctx.response().write(chunk),
+                            err -> {
+                                if (!ctx.response().ended()) {
+                                    ctx.response().end();
+                                }
+                            },
+                            () -> ctx.response().end()
+                        );
+                ctx.response().closeHandler(v -> {
+                    if (!disposable.isDisposed()) {
+                        disposable.dispose();
+                    }
+                });
+                ctx.response().exceptionHandler(err -> {
+                    if (!disposable.isDisposed()) {
+                        disposable.dispose();
+                    }
+                });
+            })
             .exceptionally(err -> {
                 if (!ctx.response().headWritten()) {
                     ApiResponse.sendError(ctx, 404, "NOT_FOUND",
@@ -580,47 +947,44 @@ public final class ArtifactHandler {
         }
         final String name = ctx.pathParam("name");
         final RepositoryName rname = new RepositoryName.Simple(name);
-        ctx.vertx().<String>executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                if (!this.crs.exists(rname)) {
-                    return null;
-                }
-                final JsonStructure config = this.crs.value(rname);
-                if (config == null) {
-                    return null;
-                }
-                if (config instanceof javax.json.JsonObject) {
-                    final javax.json.JsonObject jobj = (javax.json.JsonObject) config;
-                    final javax.json.JsonObject repo = jobj.containsKey("repo")
-                        ? jobj.getJsonObject("repo") : jobj;
-                    return repo.getString("type", "unknown");
-                }
-                return "unknown";
-            }),
-            false
-        ).onSuccess(
-            repoType -> {
-                if (repoType == null) {
-                    ApiResponse.sendError(
-                        ctx, 404, "NOT_FOUND",
-                        String.format("Repository '%s' not found", name)
-                    );
-                    return;
-                }
-                final JsonArray instructions = buildPullInstructions(repoType, name, path);
-                ctx.response()
-                    .setStatusCode(200)
-                    .putHeader("Content-Type", "application/json")
-                    .end(
-                        new JsonObject()
-                            .put("type", repoType)
-                            .put("instructions", instructions)
-                            .encode()
-                    );
+        CompletableFuture.supplyAsync(() -> {
+            if (!this.crs.exists(rname)) {
+                return null;
             }
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+            final JsonStructure config = this.crs.value(rname);
+            if (config == null) {
+                return null;
+            }
+            if (config instanceof javax.json.JsonObject) {
+                final javax.json.JsonObject jobj = (javax.json.JsonObject) config;
+                final javax.json.JsonObject repo = jobj.containsKey("repo")
+                    ? jobj.getJsonObject("repo") : jobj;
+                return repo.getString("type", "unknown");
+            }
+            return "unknown";
+        }, HandlerExecutor.get()).whenComplete((repoType, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                return;
+            }
+            if (repoType == null) {
+                ApiResponse.sendError(
+                    ctx, 404, "NOT_FOUND",
+                    String.format("Repository '%s' not found", name)
+                );
+                return;
+            }
+            final JsonArray instructions = buildPullInstructions(repoType, name, path);
+            ctx.response()
+                .setStatusCode(200)
+                .putHeader("Content-Type", "application/json")
+                .end(
+                    new JsonObject()
+                        .put("type", repoType)
+                        .put("instructions", instructions)
+                        .encode()
+                );
+        });
     }
 
     /**
@@ -646,7 +1010,47 @@ public final class ArtifactHandler {
             return;
         }
         final RepositoryName rname = new RepositoryName.Simple(ctx.pathParam("name"));
-        this.repoData.deleteArtifact(rname, path)
+        final String repoName = rname.toString();
+        // Fix (2.2.0): use DB-fallback storage lookup so DB-only repos
+        // created via the management UI don't 500 with
+        // `No value for key: {repo}.yml`. On success, cascade the delete
+        // into the artifacts DB index so search/locate don't return
+        // ghosts for files that have been removed from storage. The
+        // cascade is best-effort: if it fails we still return 204 and
+        // log — the ghost will resolve next backfill pass.
+        this.repoData.deleteArtifact(rname, path, this.crs)
+            .thenCompose(deleted -> {
+                if (!deleted) {
+                    return CompletableFuture.completedFuture(deleted);
+                }
+                // Evict from metadata cache so the next tree view doesn't
+                // show stale size/modified for a file that no longer exists.
+                this.metaCache.invalidate(repoName, path);
+                // Cover both cases: single file at the exact path, and
+                // directory delete (which also removes any children).
+                return this.artifactIndex.remove(repoName, path)
+                    .thenCompose(
+                        nothing -> this.artifactIndex.removePrefix(
+                            repoName, path.endsWith("/") ? path : path + "/"
+                        )
+                    )
+                    .<Boolean>handle((count, err) -> {
+                        if (err != null) {
+                            EcsLogger.warn("com.auto1.pantera.api.v1")
+                                .message("Artifact deleted from storage but"
+                                    + " DB-index cascade failed; ghost row"
+                                    + " will persist until next backfill: "
+                                    + err.getMessage())
+                                .eventCategory("database")
+                                .eventAction("delete_index_cascade_failed")
+                                .field("repository.name", repoName)
+                                .field("file.path", path)
+                                .error(err)
+                                .log();
+                        }
+                        return deleted;
+                    });
+            })
             .thenAccept(
                 deleted -> ctx.response().setStatusCode(204).end()
             )
@@ -681,7 +1085,36 @@ public final class ArtifactHandler {
             return;
         }
         final RepositoryName rname = new RepositoryName.Simple(ctx.pathParam("name"));
-        this.repoData.deletePackageFolder(rname, path)
+        final String repoName = rname.toString();
+        // Fix (2.2.0): DB-fallback storage lookup + DB-index cascade. See
+        // deleteArtifactHandler for the rationale.
+        this.repoData.deletePackageFolder(rname, path, this.crs)
+            .thenCompose(deleted -> {
+                if (!deleted) {
+                    return CompletableFuture.completedFuture(deleted);
+                }
+                // Evict all cache entries under this folder prefix so the
+                // next tree view doesn't serve stale metadata for deleted files.
+                this.metaCache.invalidatePrefix(repoName, path);
+                return this.artifactIndex.removePrefix(
+                        repoName, path.endsWith("/") ? path : path + "/"
+                    )
+                    .<Boolean>handle((count, err) -> {
+                        if (err != null) {
+                            EcsLogger.warn("com.auto1.pantera.api.v1")
+                                .message("Package folder deleted from storage"
+                                    + " but DB-index cascade failed: "
+                                    + err.getMessage())
+                                .eventCategory("database")
+                                .eventAction("delete_index_cascade_failed")
+                                .field("repository.name", repoName)
+                                .field("file.path", path)
+                                .error(err)
+                                .log();
+                        }
+                        return deleted;
+                    });
+            })
             .thenAccept(
                 deleted -> ctx.response().setStatusCode(204).end()
             )
@@ -701,7 +1134,6 @@ public final class ArtifactHandler {
      * @param path Artifact path within the repository
      * @return JsonArray of instruction strings
      */
-    @SuppressWarnings("PMD.CyclomaticComplexity")
     private static JsonArray buildPullInstructions(final String repoType,
         final String repoName, final String path) {
         final JsonArray instructions = new JsonArray();

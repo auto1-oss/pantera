@@ -22,7 +22,6 @@ import org.junit.jupiter.api.Test;
  * Test for {@link YamlPolicyConfig}.
  * @since 1.2
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class PolicyConfigYamlTest {
 
     @Test

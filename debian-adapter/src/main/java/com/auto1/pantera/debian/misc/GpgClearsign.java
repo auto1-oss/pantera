@@ -41,9 +41,6 @@ import org.bouncycastle.openpgp.operator.jcajce.JcePBESecretKeyDecryptorBuilder;
  * https://github.com/bcgit/bc-java/blob/master/pg/src/main/java/org/bouncycastle/openpgp/examples/ClearSignedFileProcessor.java.
  * @since 0.4
  */
-@SuppressWarnings(
-    {"PMD.AvoidDuplicateLiterals", "PMD.AssignmentInOperand", "PMD.ArrayIsStoredDirectly"}
-)
 public final class GpgClearsign {
 
     /**
@@ -56,7 +53,7 @@ public final class GpgClearsign {
      * @param content Bytes content to sign
      */
     public GpgClearsign(final byte[] content) {
-        this.content = content;
+        this.content = content; // NOPMD ArrayIsStoredDirectly - private final immutable holder; bytes consumed only via signedContent()
     }
 
     /**

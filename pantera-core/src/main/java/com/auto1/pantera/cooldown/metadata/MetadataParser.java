@@ -10,7 +10,9 @@
  */
 package com.auto1.pantera.cooldown.metadata;
 
+import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -64,4 +66,17 @@ public interface MetadataParser<T> {
      * @return MIME content type (e.g., "application/json", "application/xml")
      */
     String contentType();
+
+    /**
+     * Extract release dates from parsed metadata.
+     * Adapters that embed timestamps in their metadata (e.g. npm's {@code time} object)
+     * should override this to enable release-date cache pre-warming.
+     * Other adapters return an empty map (the inspector will fetch dates on demand).
+     *
+     * @param metadata Parsed metadata object
+     * @return Map of version string to release timestamp (may be empty, never null)
+     */
+    default Map<String, Instant> extractReleaseDates(T metadata) {
+        return Map.of();
+    }
 }

@@ -32,6 +32,7 @@ import java.security.PermissionCollection;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 import org.eclipse.jetty.http.HttpStatus;
@@ -178,8 +179,8 @@ public final class SearchHandler {
             .toList();
         // Validate sortBy against allowlist — unknown values fall back to relevance
         final String rawSort = ctx.queryParams().get("sort");
-        final String sortBy = rawSort != null && VALID_SORT_FIELDS.contains(rawSort.toLowerCase())
-            ? rawSort.toLowerCase() : null;
+        final String sortBy = rawSort != null && VALID_SORT_FIELDS.contains(rawSort.toLowerCase(Locale.ROOT))
+            ? rawSort.toLowerCase(Locale.ROOT) : null;
         final boolean sortAsc = !"desc".equalsIgnoreCase(ctx.queryParams().get("sort_dir"));
         final PermissionCollection perms = this.policy.getPermissions(
             new AuthUser(
@@ -191,31 +192,34 @@ public final class SearchHandler {
         // FreePermissions (admin/wildcard) gets null → no restriction in SQL.
         // Otherwise enumerate AdapterBasicPermission read entries.
         final List<String> allowedRepos = resolveAllowedRepos(perms);
-        // Fix 1: map sort string to SortField enum for index
-        final DbArtifactIndex.SortField sortField = DbArtifactIndex.toSortField(sortBy);
         // Effective FTS query: bare terms only (field values are handled as filters).
         // When blank (pure field-filter query like "name:pydantic"), DbArtifactIndex
         // switches to the filter-only LIKE path automatically.
         final String ftsQuery = parsed.ftsQuery();
-        // Fix 5: use the permission-filtered search method directly (no overfetch needed)
+        // Fix A (2.2.0): pass the validated wire-format sort key (e.g. "created_at")
+        // directly; DbArtifactIndex.toSortField() does the canonical parsing.
+        // The previous code round-tripped through SortField.name().toLowerCase(),
+        // which emitted "date" for SortField.DATE — a value that toSortField does
+        // not recognise, silently degrading every created_at sort to RELEVANCE
+        // (rank DESC, name ASC). asc/desc then produced identical orderings.
         final java.util.concurrent.CompletableFuture<com.auto1.pantera.index.SearchResult> future;
         if (this.index instanceof DbArtifactIndex) {
             if (fieldFilters.isEmpty() && parsed.ftsQuery().equals(query)) {
                 // No structured syntax used — fast path (backward compat)
                 future = ((DbArtifactIndex) this.index).search(
                     query, size, dbOffset, repoType, repoName,
-                    sortField.name().toLowerCase(), sortAsc, allowedRepos
+                    sortBy, sortAsc, allowedRepos
                 );
             } else {
                 future = ((DbArtifactIndex) this.index).search(
                     ftsQuery, size, dbOffset, repoType, repoName,
-                    sortField.name().toLowerCase(), sortAsc, allowedRepos, fieldFilters
+                    sortBy, sortAsc, allowedRepos, fieldFilters
                 );
             }
         } else {
             future = this.index.search(
                 query, size, dbOffset, repoType, repoName,
-                sortField.name().toLowerCase(), sortAsc
+                sortBy, sortAsc
             );
         }
         future.whenComplete((result, error) -> {
@@ -233,10 +237,9 @@ public final class SearchHandler {
             // If index is not DbArtifactIndex, fall back to client-side filtering.
             final JsonArray items = new JsonArray();
             for (final var doc : result.documents()) {
-                if (!(this.index instanceof DbArtifactIndex)) {
-                    if (!perms.implies(new AdapterBasicPermission(doc.repoName(), "read"))) {
-                        continue;
-                    }
+                if (!(this.index instanceof DbArtifactIndex)
+                    && !perms.implies(new AdapterBasicPermission(doc.repoName(), "read"))) {
+                    continue;
                 }
                 final JsonObject obj = new JsonObject()
                     .put("repo_type", doc.repoType())
@@ -293,7 +296,7 @@ public final class SearchHandler {
     private static List<String> resolveAllowedRepos(final PermissionCollection perms) {
         // FreePermissions implies everything — no restriction
         if (perms instanceof FreePermissions) {
-            return null;
+            return null; // NOPMD ReturnEmptyCollectionRatherThanNull - null signals "unrestricted"; empty list would mean "deny everything"
         }
         final List<String> repos = new ArrayList<>();
         final Enumeration<Permission> elements = perms.elements();
@@ -303,7 +306,7 @@ public final class SearchHandler {
                 final String name = perm.getName();
                 if ("*".equals(name)) {
                     // Wildcard — unrestricted access
-                    return null;
+                    return null; // NOPMD ReturnEmptyCollectionRatherThanNull - null signals "unrestricted"; empty list would mean "deny everything"
                 }
                 // Include repos the user can read
                 if (perm.implies(new AdapterBasicPermission(name, "read"))) {

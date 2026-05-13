@@ -20,7 +20,6 @@ import org.junit.jupiter.api.Test;
  *
  * @since 1.9.1
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 final class KeyExcludeLastTest {
 
     @Test

@@ -127,7 +127,6 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
      * @param token JWT string
      * @return Authenticated user if valid, empty otherwise
      */
-    @SuppressWarnings("PMD.CyclomaticComplexity")
     private Optional<AuthUser> validate(final String token) {
         final DecodedJWT decoded;
         try {
@@ -146,17 +145,16 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
         }
         switch (type) {
             case ACCESS:
-                if (this.blocklist != null) {
-                    if (this.blocklist.isRevokedJti(jti) || this.blocklist.isRevokedUser(sub)) {
-                        EcsLogger.info("com.auto1.pantera.auth")
-                            .message("Access token rejected: blocklisted")
-                            .eventCategory("authentication")
-                            .eventAction("token_validate")
-                            .eventOutcome("failure")
-                            .field("user.name", sub)
-                            .log();
-                        return Optional.empty();
-                    }
+                if (this.blocklist != null
+                    && (this.blocklist.isRevokedJti(jti) || this.blocklist.isRevokedUser(sub))) {
+                    EcsLogger.info("com.auto1.pantera.auth")
+                        .message("Access token rejected: blocklisted")
+                        .eventCategory("authentication")
+                        .eventAction("token_validate")
+                        .eventOutcome("failure")
+                        .field("user.name", sub)
+                        .log();
+                    return Optional.empty();
                 }
                 break;
             case REFRESH:

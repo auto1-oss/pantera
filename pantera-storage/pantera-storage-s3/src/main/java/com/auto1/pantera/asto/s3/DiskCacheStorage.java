@@ -206,7 +206,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                 if (Files.exists(file) && Files.exists(meta)) {
                     return CacheMeta.read(meta);
                 }
-            } catch (final IOException ex) {
+            } catch (final IOException ex) { // NOPMD EmptyCatchBlock - intentional: any cache read error falls through to network fetch
                 // Fall through to fetch on any cache read error
             }
             return null;
@@ -367,6 +367,22 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                         try { Files.deleteIfExists(tmp); } catch (final IOException ex) {
                             EcsLogger.debug("com.auto1.pantera.asto.cache")
                                 .message("Failed to delete temp file on error")
+                                .error(ex)
+                                .log();
+                        }
+                    })
+                    // Client cancelled mid-write (e.g., closed connection) — mirror doOnError
+                    // so the temp file and channel don't leak when subscription is cancelled.
+                    .doOnCancel(() -> {
+                        try { ch.close(); } catch (final IOException ex) {
+                            EcsLogger.debug("com.auto1.pantera.asto.cache")
+                                .message("Failed to close channel on cancel")
+                                .error(ex)
+                                .log();
+                        }
+                        try { Files.deleteIfExists(tmp); } catch (final IOException ex) {
+                            EcsLogger.debug("com.auto1.pantera.asto.cache")
+                                .message("Failed to delete temp file on cancel")
                                 .error(ex)
                                 .log();
                         }

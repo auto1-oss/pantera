@@ -34,7 +34,6 @@ import org.junit.jupiter.params.provider.ValueSource;
  * Test for {@link MergedXmlPrimary}.
  * @since 1.5
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class MergedXmlPrimaryTest {
 
     @Test

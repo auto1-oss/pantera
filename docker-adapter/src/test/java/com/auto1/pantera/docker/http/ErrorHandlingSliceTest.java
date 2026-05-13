@@ -138,7 +138,6 @@ class ErrorHandlingSliceTest {
         );
     }
 
-    @SuppressWarnings("PMD.UnusedPrivateMethod")
     private static Stream<Arguments> exceptions() {
         final List<Arguments> plain = Stream.concat(
             Stream.of(

@@ -19,7 +19,6 @@ import org.reactivestreams.tck.TestEnvironment;
  * Reactive streams-tck verification suit for {@link OneTimePublisher}.
  * @since 0.23
  */
-@SuppressWarnings("PMD.TestClassWithoutTestCases")
 public final class OneTimePublisherVerificationTest extends PublisherVerification<Integer> {
 
     /**

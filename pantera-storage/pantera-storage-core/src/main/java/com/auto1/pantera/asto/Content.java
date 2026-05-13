@@ -148,7 +148,7 @@ public interface Content extends Publisher<ByteBuffer> {
      */
     default InputStream asInputStream() throws java.io.IOException {
         final PipedInputStream input = new PipedInputStream(64 * 1024); // 64KB buffer
-        final PipedOutputStream output = new PipedOutputStream(input);
+        final PipedOutputStream output = new PipedOutputStream(input); // NOPMD CloseResource - closed by Flowable.subscribe error/complete callbacks below
         final AtomicBoolean completed = new AtomicBoolean(false);
 
         // Subscribe to content and pipe bytes to output stream

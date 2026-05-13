@@ -97,7 +97,7 @@ class PyProxySliceAuthITCase {
                     Optional.empty(),
                     "my-proxy",
                     "pypi-proxy",
-                    com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE
+                    com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE
                 )
             ),
             this.container.port()

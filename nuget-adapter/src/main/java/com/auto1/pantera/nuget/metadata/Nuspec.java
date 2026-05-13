@@ -31,7 +31,6 @@ import org.w3c.dom.NodeList;
  * Package description in .nuspec format.
  * @since 0.6
  */
-@SuppressWarnings("PMD.TooManyMethods")
 public interface Nuspec {
 
     /**
@@ -39,7 +38,6 @@ public interface Nuspec {
      * @return Package id
      * @throws PanteraException If id field is not found
      */
-    @SuppressWarnings("PMD.ShortMethodName")
     NuspecField id();
 
     /**
@@ -144,7 +142,6 @@ public interface Nuspec {
         }
 
         @Override
-        @SuppressWarnings("PMD.ShortMethodName")
         public NuspecField id() {
             return new PackageId(
                 single(

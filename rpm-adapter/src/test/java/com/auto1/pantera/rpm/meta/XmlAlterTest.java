@@ -24,7 +24,6 @@ import org.junit.jupiter.api.io.TempDir;
  * Test {@link XmlAlter}.
  * @since 0.9
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class XmlAlterTest {
 
     @Test

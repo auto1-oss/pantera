@@ -12,7 +12,8 @@ package com.auto1.pantera.index;
 
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.misc.ConfigDefaults;
-import com.auto1.pantera.http.trace.TraceContextExecutor;
+import com.auto1.pantera.http.context.ContextualExecutorService;
+import java.util.Locale;
 
 import javax.sql.DataSource;
 import java.sql.Array;
@@ -31,6 +32,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -46,7 +48,6 @@ import com.auto1.pantera.index.SearchQueryParser.MatchType;
  *
  * @since 1.20.13
  */
-@SuppressWarnings({"PMD.TooManyMethods", "PMD.AvoidCatchingGenericException"})
 public final class DbArtifactIndex implements ArtifactIndex {
 
     /**
@@ -83,45 +84,15 @@ public final class DbArtifactIndex implements ArtifactIndex {
     private static final String DELETE_SQL =
         "DELETE FROM artifacts WHERE repo_name = ? AND name = ?";
 
-    /**
-     * Full-text search SQL using tsvector/GIN index with relevance ranking.
-     * Uses COUNT(*) OVER() window function to get the total hit count in a
-     * single index scan instead of a separate COUNT query.
-     */
-    private static final String FTS_SEARCH_SQL = String.join(
-        " ",
-        "SELECT repo_type, repo_name, name, version, size, created_date, owner,",
-        "ts_rank(search_tokens, plainto_tsquery('simple', ?)) AS rank,",
-        "COUNT(*) OVER() AS total_count",
-        "FROM artifacts WHERE search_tokens @@ plainto_tsquery('simple', ?)",
-        "ORDER BY rank DESC, name, version LIMIT ? OFFSET ?"
-    );
-
-    /**
-     * Prefix-matching FTS SQL using to_tsquery with ':*' suffix.
-     * Matches words starting with query terms: "test" matches "test", "testing", etc.
-     * Uses COUNT(*) OVER() window function to avoid a separate COUNT query.
-     */
-    private static final String PREFIX_FTS_SEARCH_SQL = String.join(
-        " ",
-        "SELECT repo_type, repo_name, name, version, size, created_date, owner,",
-        "ts_rank(search_tokens, to_tsquery('simple', ?)) AS rank,",
-        "COUNT(*) OVER() AS total_count",
-        "FROM artifacts WHERE search_tokens @@ to_tsquery('simple', ?)",
-        "ORDER BY rank DESC, name, version LIMIT ? OFFSET ?"
-    );
-
-    /**
-     * Fallback search SQL with LIKE (used when tsvector is unavailable or returns 0 results).
-     * Uses COUNT(*) OVER() window function to avoid a separate COUNT query.
-     */
-    private static final String LIKE_SEARCH_SQL = String.join(
-        " ",
-        "SELECT repo_type, repo_name, name, version, size, created_date, owner,",
-        "COUNT(*) OVER() AS total_count",
-        "FROM artifacts WHERE LOWER(name) LIKE LOWER(?)",
-        "ORDER BY name, version LIMIT ? OFFSET ?"
-    );
+    // Removed 2.2.0: the static SQL templates FTS_SEARCH_SQL,
+    // PREFIX_FTS_SEARCH_SQL, and LIKE_SEARCH_SQL were kept only as
+    // back-compat entry points for the 3-arg search(query, max, offset)
+    // overload. That overload now delegates to the filtered search path
+    // (searchFilteredFts / PrefixFts / Like), so the SQL is constructed
+    // dynamically via buildOrderBy + buildFilterClauses. Duplicated
+    // constants caused the metadata-noise regression (the filtered path
+    // added `AND artifact_kind = 'ARTIFACT'` but the constants did not),
+    // and divergence is a recurring failure mode worth eliminating.
 
     /**
      * Statement timeout for LIKE fallback queries.
@@ -184,9 +155,14 @@ public final class DbArtifactIndex implements ArtifactIndex {
 
     /**
      * Bounded queue capacity for the default executor.
-     * When the queue is full, {@link ThreadPoolExecutor.CallerRunsPolicy} executes
-     * the task on the submitting thread, propagating backpressure to callers instead
-     * of buffering unboundedly and OOM-ing the JVM under DB latency spikes.
+     * When the queue is full, {@link ThreadPoolExecutor.AbortPolicy} rejects further
+     * submissions with {@link java.util.concurrent.RejectedExecutionException}, which
+     * callers translate into a typed {@link com.auto1.pantera.http.fault.Fault.IndexUnavailable}.
+     * The previous {@link ThreadPoolExecutor.CallerRunsPolicy} applied backpressure by
+     * running the task on the submitting thread, but when that submitting thread was
+     * a Vert.x event-loop thread (e.g. a group-resolver request inlining the index
+     * call), the blocking JDBC work ran on the event loop and stalled the entire
+     * reactor. AbortPolicy keeps the event loop free and fails fast under saturation.
      * Configurable via PANTERA_INDEX_EXECUTOR_QUEUE env var.
      */
     private static final int QUEUE_SIZE =
@@ -216,8 +192,9 @@ public final class DbArtifactIndex implements ArtifactIndex {
      * Constructor with default executor.
      * Creates a bounded thread pool sized to available processors.
      * Uses a {@code QUEUE_SIZE}-slot {@link LinkedBlockingQueue} and
-     * {@link ThreadPoolExecutor.CallerRunsPolicy} to apply backpressure when the
-     * queue fills rather than buffering tasks unboundedly.
+     * {@link ThreadPoolExecutor.AbortPolicy} so saturation surfaces as a
+     * {@link java.util.concurrent.RejectedExecutionException} — never a blocking
+     * run on the submitting thread (which may be a Vert.x event loop).
      *
      * @param source JDBC DataSource
      */
@@ -256,11 +233,28 @@ public final class DbArtifactIndex implements ArtifactIndex {
     /**
      * Build the default bounded executor for DB index operations.
      * Queue size is configurable via PANTERA_INDEX_EXECUTOR_QUEUE (default 500).
-     * When the queue is full, {@link ThreadPoolExecutor.CallerRunsPolicy} runs the
-     * task on the submitting thread, propagating backpressure instead of OOM-ing
-     * the JVM before the per-query statement timeout fires.
+     * When the queue is full, {@link ThreadPoolExecutor.AbortPolicy} rejects new
+     * submissions with {@link java.util.concurrent.RejectedExecutionException}.
+     * Callers that submit via {@link CompletableFuture#supplyAsync(java.util.function.Supplier, java.util.concurrent.Executor)}
+     * observe the REE as a {@link java.util.concurrent.CompletionException} which
+     * {@code GroupResolver} maps to {@link com.auto1.pantera.http.fault.Fault.IndexUnavailable}
+     * via its {@code .exceptionally(...)} branch.
      *
-     * @return Wrapped ExecutorService
+     * <p>Rationale for AbortPolicy over CallerRunsPolicy: when the submitting thread
+     * is a Vert.x event-loop thread — as it is for every inlined group-resolver
+     * request — CallerRunsPolicy would execute the blocking JDBC work on the event
+     * loop and stall the reactor. AbortPolicy guarantees the blocking work never
+     * runs on the caller thread; the caller thread can remain an event loop safely.
+     *
+     * <p>The returned {@link ExecutorService} is a
+     * {@link ContextualExecutorService} wrapping the raw pool: every task-submission
+     * entry point ({@code execute}, {@code submit(Callable/Runnable)},
+     * {@code invokeAll}, {@code invokeAny}) snapshots the submitting thread's
+     * Log4j2 {@link ThreadContext} (ECS fields) and the active Elastic APM span at
+     * submit time, then restores them on the runner thread for the task's duration
+     * — so ECS fields and the trace context stay attached across the thread hop.
+     *
+     * @return Contextualising wrapper around a bounded thread pool
      */
     private static ExecutorService createDbIndexExecutor() {
         final int poolSize = Math.max(2, Runtime.getRuntime().availableProcessors());
@@ -276,16 +270,20 @@ public final class DbArtifactIndex implements ArtifactIndex {
                 thread.setDaemon(true);
                 return thread;
             },
-            new ThreadPoolExecutor.CallerRunsPolicy()
+            new ThreadPoolExecutor.AbortPolicy()
         );
         pool.allowCoreThreadTimeOut(false);
         EcsLogger.info("com.auto1.pantera.index")
             .message("DbArtifactIndex executor initialised ("
-                + poolSize + " threads, queue=" + QUEUE_SIZE + ", policy=caller-runs)")
+                + poolSize + " threads, queue=" + QUEUE_SIZE + ", policy=abort)")
             .eventCategory("configuration")
             .eventAction("pool_init")
             .log();
-        return TraceContextExecutor.wrap(pool);
+        // WI-post-03a: ContextualExecutorService contextualises EVERY submit path
+        // (execute, submit(Callable/Runnable), invokeAll, invokeAny) — fixes the
+        // latent bypass where submit(Callable) went straight to the underlying
+        // pool with empty ThreadContext / no APM span.
+        return ContextualExecutorService.wrap(pool);
     }
 
     /**
@@ -297,7 +295,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
             try (Connection conn = this.source.getConnection();
                  PreparedStatement stmt = conn.prepareStatement("SELECT 1")) {
                 stmt.executeQuery().close();
-            } catch (final SQLException ex) {
+            } catch (final SQLException ex) { // NOPMD EmptyCatchBlock - warm-up is best-effort: any failure just means first real request pays the cost instead
                 // Non-fatal — first real request will pay the cost instead
             }
         });
@@ -344,6 +342,53 @@ public final class DbArtifactIndex implements ArtifactIndex {
                     .log();
                 throw new RuntimeException(
                     String.format("Failed to remove artifact %s from %s", artifactPath, repoName),
+                    ex
+                );
+            }
+        }, this.executor);
+    }
+
+    @Override
+    public CompletableFuture<Integer> removePrefix(
+        final String repoName, final String pathPrefix
+    ) {
+        if (pathPrefix == null || pathPrefix.isEmpty()) {
+            // Refuse to wipe an entire repo via a prefix-empty call — that
+            // should go through the repo-delete flow, which handles orphan
+            // cleanup differently.
+            return CompletableFuture.failedFuture(
+                new IllegalArgumentException("pathPrefix must not be empty")
+            );
+        }
+        // LIKE uses '%' and '_' as wildcards — both are legal path chars in
+        // corner cases (e.g. docker manifests, custom names). Escape them so
+        // the prefix is treated literally. `\` is the default ESCAPE char.
+        final String escaped = pathPrefix
+            .replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_");
+        return CompletableFuture.supplyAsync(() -> {
+            try (Connection conn = this.source.getConnection();
+                 PreparedStatement stmt = conn.prepareStatement(
+                     "DELETE FROM artifacts"
+                         + " WHERE repo_name = ? AND name LIKE ? ESCAPE '\\'"
+                 )) {
+                stmt.setString(1, repoName);
+                stmt.setString(2, escaped + "%");
+                return stmt.executeUpdate();
+            } catch (final SQLException ex) {
+                EcsLogger.error("com.auto1.pantera.index")
+                    .message("Failed to remove artifact prefix")
+                    .eventCategory("database")
+                    .eventAction("db_remove_prefix")
+                    .eventOutcome("failure")
+                    .field("repository.name", repoName)
+                    .field("package.name", pathPrefix)
+                    .error(ex)
+                    .log();
+                throw new RuntimeException(
+                    String.format("Failed to remove prefix %s from %s",
+                        pathPrefix, repoName),
                     ex
                 );
             }
@@ -438,7 +483,6 @@ public final class DbArtifactIndex implements ArtifactIndex {
      * @param fieldFilters Additional field filters (name:, version:) from parsed query
      * @return Search result with matching documents
      */
-    @SuppressWarnings("PMD.ParameterNumber")
     public CompletableFuture<SearchResult> search(
         final String query, final int maxResults, final int offset,
         final String repoType, final String repoName, final String sortBy, final boolean sortAsc,
@@ -508,7 +552,6 @@ public final class DbArtifactIndex implements ArtifactIndex {
      * @param hasRank True when the SELECT includes a rank column (FTS queries)
      * @return SQL ORDER BY clause (without "ORDER BY" keyword)
      */
-    @SuppressWarnings("PMD.CyclomaticComplexity")
     private static String buildOrderBy(
         final SortField field, final boolean sortAsc, final boolean hasRank
     ) {
@@ -517,7 +560,11 @@ public final class DbArtifactIndex implements ArtifactIndex {
             return hasRank ? "rank DESC, name ASC" : "name ASC";
         }
         return switch (field) {
-            case NAME -> "name " + dir;
+            case NAME ->
+                // Fix C (2.2.0): use name_sort (V123) so `pkg-10` sorts after
+                // `pkg-2`. The raw `name` tiebreaker keeps ordering stable
+                // across duplicates and insertion batches.
+                "name_sort " + dir + " NULLS LAST, name " + dir;
             case VERSION ->
                 "version_sort " + dir + " NULLS LAST, version " + dir;
             case DATE -> "created_date " + dir;
@@ -536,7 +583,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
         if (raw == null) {
             return SortField.RELEVANCE;
         }
-        return switch (raw.toLowerCase()) {
+        return switch (raw.toLowerCase(Locale.ROOT)) {
             case "name" -> SortField.NAME;
             case "version" -> SortField.VERSION;
             case "created_at" -> SortField.DATE;
@@ -547,6 +594,12 @@ public final class DbArtifactIndex implements ArtifactIndex {
     /**
      * Build optional WHERE filter clauses for type, repo, and allowed repos.
      * Fix 5: adds AND repo_name = ANY(?) when allowedRepos is non-null.
+     * Fix B (2.2.0): always appends {@code AND artifact_kind = 'ARTIFACT'}
+     * to exclude checksum/signature/metadata rows from user-facing search.
+     * The `artifact_kind` generated column (V124) classifies every row;
+     * non-ARTIFACT rows remain in the index for group routing and
+     * integrity checks but are invisible to search, which was returning
+     * 16k+ `.meta.maven.shards.*` entries per query before this filter.
      *
      * @param repoType Base repo type (e.g. "maven"), or null
      * @param repoName Exact repo name, or null
@@ -556,7 +609,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
     private static String buildFilterClauses(
         final String repoType, final String repoName, final List<String> allowedRepos
     ) {
-        final StringBuilder sb = new StringBuilder();
+        final StringBuilder sb = new StringBuilder(128);
         if (repoType != null && !repoType.isBlank()) {
             sb.append(" AND repo_type IN (?, ?, ?)");
         }
@@ -566,6 +619,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
         if (allowedRepos != null) {
             sb.append(" AND repo_name = ANY(?)");
         }
+        sb.append(" AND artifact_kind = 'ARTIFACT'");
         return sb.toString();
     }
 
@@ -698,7 +752,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
             }
             for (final String value : filter.values()) {
                 final String bound = switch (filter.matchType()) {
-                    case ILIKE -> "%" + value.toLowerCase() + "%";
+                    case ILIKE -> "%" + value.toLowerCase(Locale.ROOT) + "%";
                     case PREFIX -> value + "%";
                     default -> value;
                 };
@@ -1017,11 +1071,11 @@ public final class DbArtifactIndex implements ArtifactIndex {
         final Map<String, Long> counts = new java.util.LinkedHashMap<>();
         try (PreparedStatement stmt = conn.prepareStatement(sql)) {
             int pos = 1;
-            for (int i = 0; i < params.size(); i++) {
-                if (params.get(i) instanceof String) {
-                    stmt.setString(pos++, (String) params.get(i));
-                } else if (params.get(i) instanceof java.sql.Array) {
-                    stmt.setArray(pos++, (java.sql.Array) params.get(i));
+            for (final Object param : params) {
+                if (param instanceof String s) {
+                    stmt.setString(pos++, s);
+                } else if (param instanceof java.sql.Array a) {
+                    stmt.setArray(pos++, a);
                 }
             }
             if (repoType != null && !repoType.isBlank()) {
@@ -1074,7 +1128,6 @@ public final class DbArtifactIndex implements ArtifactIndex {
      * Fix 5: allowedRepos adds AND repo_name = ANY(?) filter.
      * Fix 6: SET LOCAL statement_timeout before FTS aggregations.
      */
-    @SuppressWarnings("PMD.CyclomaticComplexity")
     private static SearchResult searchFilteredPrefixFts(
         final DataSource source, final String query, final int maxResults, final int offset,
         final String repoType, final String repoName, final String sortBy, final boolean sortAsc,
@@ -1091,7 +1144,6 @@ public final class DbArtifactIndex implements ArtifactIndex {
      *
      * @param fieldFilters Additional structured field filters; may be null
      */
-    @SuppressWarnings({"PMD.CyclomaticComplexity", "PMD.ParameterNumber"})
     private static SearchResult searchFilteredPrefixFts(
         final DataSource source, final String query, final int maxResults, final int offset,
         final String repoType, final String repoName, final String sortBy, final boolean sortAsc,
@@ -1198,7 +1250,6 @@ public final class DbArtifactIndex implements ArtifactIndex {
      * Fix 5: allowedRepos adds AND repo_name = ANY(?) filter.
      * Fix 6: SET LOCAL statement_timeout before FTS aggregations.
      */
-    @SuppressWarnings("PMD.CyclomaticComplexity")
     private static SearchResult searchFilteredFts(
         final DataSource source, final String query, final int maxResults, final int offset,
         final String repoType, final String repoName, final String sortBy, final boolean sortAsc,
@@ -1215,7 +1266,6 @@ public final class DbArtifactIndex implements ArtifactIndex {
      *
      * @param fieldFilters Additional structured field filters; may be null
      */
-    @SuppressWarnings({"PMD.CyclomaticComplexity", "PMD.ParameterNumber"})
     private static SearchResult searchFilteredFts(
         final DataSource source, final String query, final int maxResults, final int offset,
         final String repoType, final String repoName, final String sortBy, final boolean sortAsc,
@@ -1316,7 +1366,6 @@ public final class DbArtifactIndex implements ArtifactIndex {
      * Fix 3: fallback COUNT when empty result + non-zero offset.
      * Fix 5: allowedRepos adds AND repo_name = ANY(?) filter.
      */
-    @SuppressWarnings("PMD.CyclomaticComplexity")
     private static SearchResult searchFilteredLike(
         final DataSource source, final String pattern, final int maxResults, final int offset,
         final String repoType, final String repoName, final String sortBy, final boolean sortAsc,
@@ -1333,7 +1382,6 @@ public final class DbArtifactIndex implements ArtifactIndex {
      *
      * @param fieldFilters Additional structured field filters; may be null
      */
-    @SuppressWarnings({"PMD.CyclomaticComplexity", "PMD.ParameterNumber"})
     private static SearchResult searchFilteredLike(
         final DataSource source, final String pattern, final int maxResults, final int offset,
         final String repoType, final String repoName, final String sortBy, final boolean sortAsc,
@@ -1480,7 +1528,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
             }
             for (final String value : filter.values()) {
                 final String bound = switch (filter.matchType()) {
-                    case ILIKE -> "%" + value.toLowerCase() + "%";
+                    case ILIKE -> "%" + value.toLowerCase(Locale.ROOT) + "%";
                     case PREFIX -> value + "%";
                     default -> value;
                 };
@@ -1493,125 +1541,18 @@ public final class DbArtifactIndex implements ArtifactIndex {
     public CompletableFuture<SearchResult> search(
         final String query, final int maxResults, final int offset
     ) {
-        return CompletableFuture.supplyAsync(() -> {
-            // If query contains SQL wildcards, use LIKE directly
-            final boolean uselike = query.contains("%") || query.contains("_");
-            if (uselike) {
-                return DbArtifactIndex.searchWithLike(
-                    this.source, query, maxResults, offset
-                );
-            }
-            // Use prefix-matching FTS: "test" → 'test:*' matches
-            // "test", "test.txt", "testing", etc. Uses GIN index
-            // for efficient search on large datasets (10M+ rows).
-            try {
-                final SearchResult ftsResult = DbArtifactIndex.searchWithPrefixFts(
-                    this.source, query, maxResults, offset
-                );
-                if (ftsResult.totalHits() == 0) {
-                    // Fallback to exact-match FTS (handles phrases)
-                    final SearchResult exact = DbArtifactIndex.searchWithFts(
-                        this.source, query, maxResults, offset
-                    );
-                    if (exact.totalHits() == 0) {
-                        // Final fallback: LIKE search for special chars (@, /, -)
-                        return DbArtifactIndex.searchWithLike(
-                            this.source, "%" + query + "%", maxResults, offset
-                        );
-                    }
-                    return exact;
-                }
-                return ftsResult;
-            } catch (final SQLException ex) {
-                // Graceful degradation: if tsvector column doesn't exist or
-                // any FTS-related error occurs, fall back to LIKE
-                EcsLogger.warn("com.auto1.pantera.index")
-                    .message("FTS search failed, falling back to LIKE: "
-                        + ex.getMessage())
-                    .eventCategory("database")
-                    .eventAction("db_fts_fallback")
-                    .error(ex)
-                    .log();
-                return DbArtifactIndex.searchWithLike(
-                    this.source, "%" + query + "%", maxResults, offset
-                );
-            }
-        }, this.executor);
-    }
-
-    /**
-     * Execute full-text search using tsvector/GIN index.
-     *
-     * @param source DataSource
-     * @param query Search query (plain text, not a pattern)
-     * @param maxResults Max results per page
-     * @param offset Pagination offset
-     * @return SearchResult with ranked results
-     * @throws SQLException On database error (caller should handle for fallback)
-     */
-    private static SearchResult searchWithFts(
-        final DataSource source, final String query,
-        final int maxResults, final int offset
-    ) throws SQLException {
-        long totalHits = 0;
-        final List<ArtifactDocument> docs = new ArrayList<>();
-        try (Connection conn = source.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(FTS_SEARCH_SQL)) {
-            stmt.setString(1, query);
-            stmt.setString(2, query);
-            stmt.setInt(3, maxResults);
-            stmt.setInt(4, offset);
-            try (ResultSet rs = stmt.executeQuery()) {
-                while (rs.next()) {
-                    if (docs.isEmpty()) {
-                        totalHits = rs.getLong("total_count");
-                    }
-                    docs.add(fromResultSet(rs));
-                }
-            }
-        }
-        return new SearchResult(docs, totalHits, offset, null);
-    }
-
-    /**
-     * Execute prefix-matching FTS: "test" becomes "test:*" tsquery,
-     * matching "test", "test.txt", "testing", etc. Uses GIN index.
-     *
-     * @param source DataSource
-     * @param query Raw user query
-     * @param maxResults Max results per page
-     * @param offset Pagination offset
-     * @return SearchResult with ranked results
-     * @throws SQLException On database error
-     */
-    private static SearchResult searchWithPrefixFts(
-        final DataSource source, final String query,
-        final int maxResults, final int offset
-    ) throws SQLException {
-        final String tsquery = DbArtifactIndex.buildPrefixTsQuery(query);
-        if (tsquery.isEmpty()) {
-            return new SearchResult(
-                java.util.Collections.emptyList(), 0, offset, null
-            );
-        }
-        long totalHits = 0;
-        final List<ArtifactDocument> docs = new ArrayList<>();
-        try (Connection conn = source.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(PREFIX_FTS_SEARCH_SQL)) {
-            stmt.setString(1, tsquery);
-            stmt.setString(2, tsquery);
-            stmt.setInt(3, maxResults);
-            stmt.setInt(4, offset);
-            try (ResultSet rs = stmt.executeQuery()) {
-                while (rs.next()) {
-                    if (docs.isEmpty()) {
-                        totalHits = rs.getLong("total_count");
-                    }
-                    docs.add(fromResultSet(rs));
-                }
-            }
-        }
-        return new SearchResult(docs, totalHits, offset, null);
+        // Cleanup 4a (2.2.0): delegate to the filtered search path so a
+        // single code path applies classification (artifact_kind) and
+        // honours sort, permission scoping, and facet suppression. The
+        // old hardcoded-SQL helpers (searchWithFts / searchWithPrefixFts
+        // / searchWithLike) + their constants (FTS_SEARCH_SQL /
+        // PREFIX_FTS_SEARCH_SQL / LIKE_SEARCH_SQL) were deleted — they
+        // diverged silently from the filtered path and bypassed the
+        // metadata-noise filter introduced in 2.2.0.
+        return search(
+            query, maxResults, offset,
+            null, null, "relevance", true, null
+        );
     }
 
     /**
@@ -1635,63 +1576,6 @@ public final class DbArtifactIndex implements ArtifactIndex {
             }
         }
         return sb.toString();
-    }
-
-    /**
-     * Execute search using LIKE pattern matching (fallback).
-     *
-     * @param source DataSource
-     * @param pattern LIKE pattern (should include % wildcards)
-     * @param maxResults Max results per page
-     * @param offset Pagination offset
-     * @return SearchResult
-     */
-    private static SearchResult searchWithLike(
-        final DataSource source, final String pattern,
-        final int maxResults, final int offset
-    ) {
-        long totalHits = 0;
-        final List<ArtifactDocument> docs = new ArrayList<>();
-        try (Connection conn = source.getConnection()) {
-            // SET LOCAL requires an explicit transaction block to persist across statements
-            conn.setAutoCommit(false);
-            try {
-                // Guard against runaway LIKE scans on large tables
-                try (java.sql.Statement guard = conn.createStatement()) {
-                    guard.execute(
-                        "SET LOCAL statement_timeout = '" + LIKE_TIMEOUT_MS + "ms'"
-                    );
-                }
-                // Single query with COUNT(*) OVER() — avoids double index scan
-                try (PreparedStatement stmt = conn.prepareStatement(LIKE_SEARCH_SQL)) {
-                    stmt.setString(1, pattern);
-                    stmt.setInt(2, maxResults);
-                    stmt.setInt(3, offset);
-                    try (ResultSet rs = stmt.executeQuery()) {
-                        while (rs.next()) {
-                            if (docs.isEmpty()) {
-                                totalHits = rs.getLong("total_count");
-                            }
-                            docs.add(fromResultSet(rs));
-                        }
-                    }
-                }
-                conn.commit();
-            } catch (final SQLException inner) {
-                conn.rollback();
-                throw inner;
-            }
-        } catch (final SQLException ex) {
-            EcsLogger.error("com.auto1.pantera.index")
-                .message("LIKE search failed for pattern: " + pattern)
-                .eventCategory("database")
-                .eventAction("db_search_like")
-                .eventOutcome("failure")
-                .error(ex)
-                .log();
-            return SearchResult.EMPTY;
-        }
-        return new SearchResult(docs, totalHits, offset, null);
     }
 
     @Override
@@ -1728,7 +1612,17 @@ public final class DbArtifactIndex implements ArtifactIndex {
 
     @Override
     public CompletableFuture<Optional<List<String>>> locateByName(final String artifactName) {
-        return CompletableFuture.supplyAsync(() -> {
+        try {
+            return CompletableFuture.supplyAsync(() -> locateByNameBody(artifactName), this.executor);
+        } catch (final RejectedExecutionException ree) {
+            // AbortPolicy fired — pool + queue saturated. Return a failed future
+            // so callers handle it via their existing exception path (the caller
+            // may be on the Vert.x event loop; do not rethrow synchronously).
+            return CompletableFuture.failedFuture(ree);
+        }
+    }
+
+    private Optional<List<String>> locateByNameBody(final String artifactName) {
             final List<String> repos = new ArrayList<>();
             try (Connection conn = this.source.getConnection()) {
                 // SET LOCAL requires an explicit transaction block to persist across statements
@@ -1763,7 +1657,6 @@ public final class DbArtifactIndex implements ArtifactIndex {
                 return Optional.empty();
             }
             return Optional.of(repos);
-        }, this.executor);
     }
 
     /**

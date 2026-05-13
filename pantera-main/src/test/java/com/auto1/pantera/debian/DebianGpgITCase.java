@@ -32,7 +32,6 @@ import org.testcontainers.containers.BindMode;
  * @since 0.17
  */
 @EnabledOnOs({OS.LINUX, OS.MAC})
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class DebianGpgITCase {
 
     /**

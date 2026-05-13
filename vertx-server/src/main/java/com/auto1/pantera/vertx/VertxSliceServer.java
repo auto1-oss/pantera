@@ -437,7 +437,6 @@ public final class VertxSliceServer implements Closeable {
      * A handler which proxy incoming requests to encapsulated slice.
      * @return The request handler.
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private Handler<HttpServerRequest> proxyHandler() {
         return (HttpServerRequest req) -> {
             // FAST PATH: Handle NLB/load-balancer health checks directly in Vert.x
@@ -665,6 +664,20 @@ public final class VertxSliceServer implements Closeable {
         final RequestLogContext ctx = RequestLogContext.from(req, requestHeaders);
         final Slice loggedSlice = new EcsLoggingSlice(this.served, ctx.remoteHost());
 
+        // Cancel hook installed by the response subscription (see accept()).
+        // Fired when the client closes the connection, the response write fails,
+        // or the incoming request body stream errors (upload path). This propagates
+        // disconnect downstream so reactive tees (StreamThroughCache / DiskCacheStorage)
+        // release file channels and temp files promptly.
+        final java.util.concurrent.atomic.AtomicReference<Runnable> cancelHook =
+            new java.util.concurrent.atomic.AtomicReference<>(() -> { });
+        // Client closed connection mid-response — cancel upstream work.
+        req.connection().closeHandler(v -> cancelHook.get().run());
+        // Response write failed (TCP reset, buffer overrun) — same treatment.
+        req.response().exceptionHandler(err -> cancelHook.get().run());
+        // Incoming request body error (upload path) — ditto.
+        req.exceptionHandler(err -> cancelHook.get().run());
+
         // Extract or generate trace ID for request correlation
         final String traceId = com.auto1.pantera.http.trace.TraceContext.extractOrGenerate(requestHeaders);
         com.auto1.pantera.http.trace.TraceContext.set(traceId);
@@ -730,7 +743,7 @@ public final class VertxSliceServer implements Closeable {
                         transaction.addLabel("http.status_code", String.valueOf(resp.status().code()));
                     }
 
-                    return VertxSliceServer.accept(req.response(), resp.status(), resp.headers(), resp.body(), isHead, req.version(), guardedResponse);
+                    return VertxSliceServer.accept(req.response(), resp.status(), resp.headers(), resp.body(), isHead, req.version(), guardedResponse, cancelHook);
                 }
             )
             .whenComplete((result, error) -> {
@@ -779,6 +792,20 @@ public final class VertxSliceServer implements Closeable {
         final Headers requestHeaders = Headers.from(req.headers());
         final RequestLogContext ctx = RequestLogContext.from(req, requestHeaders);
         final Slice loggedSlice = new EcsLoggingSlice(this.served, ctx.remoteHost());
+
+        // Cancel hook installed by the response subscription (see accept()).
+        // Fired when the client closes the connection, the response write fails,
+        // or the incoming request body stream errors (upload path). This propagates
+        // disconnect downstream so reactive tees (StreamThroughCache / DiskCacheStorage)
+        // release file channels and temp files promptly.
+        final java.util.concurrent.atomic.AtomicReference<Runnable> cancelHook =
+            new java.util.concurrent.atomic.AtomicReference<>(() -> { });
+        // Client closed connection mid-response — cancel upstream work.
+        req.connection().closeHandler(v -> cancelHook.get().run());
+        // Response write failed (TCP reset, buffer overrun) — same treatment.
+        req.response().exceptionHandler(err -> cancelHook.get().run());
+        // Incoming request body error (upload path) — ditto.
+        req.exceptionHandler(err -> cancelHook.get().run());
 
         // Extract or generate trace ID for request correlation
         final String traceId = com.auto1.pantera.http.trace.TraceContext.extractOrGenerate(requestHeaders);
@@ -836,7 +863,7 @@ public final class VertxSliceServer implements Closeable {
                         transaction.addLabel("http.status_code", String.valueOf(resp.status().code()));
                     }
 
-                    return VertxSliceServer.accept(req.response(), resp.status(), resp.headers(), resp.body(), isHead, req.version(), guardedResponse);
+                    return VertxSliceServer.accept(req.response(), resp.status(), resp.headers(), resp.body(), isHead, req.version(), guardedResponse, cancelHook);
                 }
             )
             .whenComplete((result, error) -> {
@@ -888,6 +915,15 @@ public final class VertxSliceServer implements Closeable {
         final RequestLogContext ctx = RequestLogContext.from(req, requestHeaders);
         final Slice loggedSlice = new EcsLoggingSlice(this.served, ctx.remoteHost());
 
+        // Cancel hook installed by the response subscription (see accept()).
+        // Fired when the client closes the connection or the response write fails.
+        // Propagates disconnect to the slice subscription so downstream reactive
+        // tees release resources promptly.
+        final java.util.concurrent.atomic.AtomicReference<Runnable> cancelHook =
+            new java.util.concurrent.atomic.AtomicReference<>(() -> { });
+        req.connection().closeHandler(v -> cancelHook.get().run());
+        req.response().exceptionHandler(err -> cancelHook.get().run());
+
         // Extract or generate trace ID for request correlation
         final String traceId = com.auto1.pantera.http.trace.TraceContext.extractOrGenerate(requestHeaders);
         com.auto1.pantera.http.trace.TraceContext.set(traceId);
@@ -938,7 +974,7 @@ public final class VertxSliceServer implements Closeable {
                         transaction.addLabel("http.status_code", String.valueOf(resp.status().code()));
                     }
 
-                    return VertxSliceServer.accept(req.response(), resp.status(), resp.headers(), resp.body(), isHead, req.version(), guardedResponse);
+                    return VertxSliceServer.accept(req.response(), resp.status(), resp.headers(), resp.body(), isHead, req.version(), guardedResponse, cancelHook);
                 }
             )
             .whenComplete((result, error) -> {
@@ -1037,7 +1073,8 @@ public final class VertxSliceServer implements Closeable {
     private static CompletionStage<Void> accept(
         HttpServerResponse response, RsStatus status, Headers headers, Content body,
         boolean isHead, io.vertx.core.http.HttpVersion version,
-        GuardedHttpServerResponse guardedResponse
+        GuardedHttpServerResponse guardedResponse,
+        java.util.concurrent.atomic.AtomicReference<Runnable> cancelHook
     ) {
         final CompletableFuture<Void> promise = new CompletableFuture<>();
 
@@ -1094,29 +1131,32 @@ public final class VertxSliceServer implements Closeable {
             if (isHead) {
                 // CRITICAL: Must execute on Vert.x event loop thread for thread safety
                 // DO NOT use observeOn() - it breaks Vert.x threading model and causes corruption
-                vpb.subscribe(
-                    buffer -> { },
-                    error -> {
-                        EcsLogger.error("com.auto1.pantera.vertx")
-                            .message("Error in HEAD response body")
-                            .eventCategory("web")
-                            .eventAction("response_write")
-                            .eventOutcome("failure")
-                            .error(error)
-                            .log();
-                        terminator.fail(error);
-                    },
-                    () -> {
-                        EcsLogger.debug("com.auto1.pantera.vertx")
-                            .message("HEAD response body fully written")
-                            .eventCategory("web")
-                            .eventAction("response_write")
-                            .eventOutcome("success")
-                            .field("http.response.body.bytes", true)
-                            .log();
-                        terminator.end();
-                    }
-                );
+                vpb.doOnSubscribe(sub -> cancelHook.set(() -> {
+                        try { sub.cancel(); } catch (Throwable ignore) { /* idempotent */ } // NOPMD EmptyCatchBlock - cancel is idempotent; any throw is benign
+                    }))
+                    .subscribe(
+                        buffer -> { },
+                        error -> {
+                            EcsLogger.error("com.auto1.pantera.vertx")
+                                .message("Error in HEAD response body")
+                                .eventCategory("web")
+                                .eventAction("response_write")
+                                .eventOutcome("failure")
+                                .error(error)
+                                .log();
+                            terminator.fail(error);
+                        },
+                        () -> {
+                            EcsLogger.debug("com.auto1.pantera.vertx")
+                                .message("HEAD response body fully written")
+                                .eventCategory("web")
+                                .eventAction("response_write")
+                                .eventOutcome("success")
+                                .field("http.response.body.bytes", true)
+                                .log();
+                            terminator.end();
+                        }
+                    );
             } else {
                 // PRODUCTION-GRADE BACKPRESSURE STREAMING
                 // Uses response.toSubscriber() which provides built-in backpressure via
@@ -1165,6 +1205,11 @@ public final class VertxSliceServer implements Closeable {
                            .log();
                        terminator.fail(error);
                    })
+                   // Capture the Subscription so client-disconnect handlers can cancel
+                   // upstream work (see serveWithStream/serveWithBody cancelHook).
+                   .doOnSubscribe(sub -> cancelHook.set(() -> {
+                       try { sub.cancel(); } catch (Throwable ignore) { /* idempotent */ } // NOPMD EmptyCatchBlock - cancel is idempotent; any throw is benign
+                   }))
                    .subscribe(response.toSubscriber());
             }
         } else {
@@ -1183,13 +1228,18 @@ public final class VertxSliceServer implements Closeable {
                 });
                 // CRITICAL: Must execute on Vert.x event loop thread for thread safety
                 // DO NOT use observeOn() - it breaks Vert.x threading model and causes corruption
-                vpb.doOnSubscribe(subscription ->
-                    EcsLogger.debug("com.auto1.pantera.vertx")
-                        .message("Subscribed to chunked response body")
-                        .eventCategory("web")
-                        .eventAction("response_subscribe")
-                        .log()
-                )
+                vpb.doOnSubscribe(subscription -> {
+                        // Capture the Subscription so client-disconnect handlers can
+                        // cancel upstream work (see serveWithStream/serveWithBody cancelHook).
+                        cancelHook.set(() -> {
+                            try { subscription.cancel(); } catch (Throwable ignore) { /* idempotent */ } // NOPMD EmptyCatchBlock - cancel is idempotent; any throw is benign
+                        });
+                        EcsLogger.debug("com.auto1.pantera.vertx")
+                            .message("Subscribed to chunked response body")
+                            .eventCategory("web")
+                            .eventAction("response_subscribe")
+                            .log();
+                    })
                     .doOnError(terminator::fail)
                     .subscribe(response.toSubscriber());
             }

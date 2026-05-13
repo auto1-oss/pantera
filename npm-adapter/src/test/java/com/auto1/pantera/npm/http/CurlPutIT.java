@@ -43,7 +43,6 @@ import org.junit.jupiter.params.provider.CsvSource;
  * @since 0.9
  */
 @DisabledOnOs(OS.WINDOWS)
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 final class CurlPutIT {
 
     /**

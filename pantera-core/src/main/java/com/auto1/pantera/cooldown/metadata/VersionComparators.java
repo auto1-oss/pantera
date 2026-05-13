@@ -11,6 +11,7 @@
 package com.auto1.pantera.cooldown.metadata;
 
 import java.util.Comparator;
+import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -162,23 +163,23 @@ public final class VersionComparators {
      * Get rank for Maven qualifier.
      */
     private static int qualifierRank(final String qualifier) {
-        final String lower = qualifier.toLowerCase();
-        if (lower.startsWith("alpha") || lower.equals("a")) {
+        final String lower = qualifier.toLowerCase(Locale.ROOT);
+        if (lower.startsWith("alpha") || "a".equals(lower)) {
             return 1;
         }
-        if (lower.startsWith("beta") || lower.equals("b")) {
+        if (lower.startsWith("beta") || "b".equals(lower)) {
             return 2;
         }
-        if (lower.startsWith("milestone") || lower.equals("m")) {
+        if (lower.startsWith("milestone") || "m".equals(lower)) {
             return 3;
         }
         if (lower.startsWith("rc") || lower.startsWith("cr")) {
             return 4;
         }
-        if (lower.equals("snapshot")) {
+        if ("snapshot".equals(lower)) {
             return 5;
         }
-        if (lower.isEmpty() || lower.equals("final") || lower.equals("ga") || lower.equals("release")) {
+        if (lower.isEmpty() || "final".equals(lower) || "ga".equals(lower) || "release".equals(lower)) {
             return 6;
         }
         if (lower.startsWith("sp")) {

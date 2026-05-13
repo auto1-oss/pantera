@@ -9,6 +9,19 @@
  * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
  */
 package com.auto1.pantera.cooldown;
+
+import com.auto1.pantera.cooldown.api.CooldownBlock;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
+import com.auto1.pantera.cooldown.api.CooldownReason;
+import com.auto1.pantera.cooldown.api.CooldownRequest;
+import com.auto1.pantera.cooldown.api.CooldownResult;
+import com.auto1.pantera.cooldown.api.CooldownService;
+import com.auto1.pantera.cooldown.cache.CooldownCache;
+import com.auto1.pantera.cooldown.config.CooldownCircuitBreaker;
+import com.auto1.pantera.cooldown.config.CooldownSettings;
+import com.auto1.pantera.cooldown.metadata.FilteredMetadataCache;
+import com.auto1.pantera.cooldown.metrics.CooldownMetrics;
+import com.auto1.pantera.http.log.EcsLogger;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -21,9 +34,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
 import java.util.stream.Collectors;
-import com.auto1.pantera.cooldown.metrics.CooldownMetrics;
-import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.http.trace.MdcPropagation;
+
 
 final class JdbcCooldownService implements CooldownService {
 
@@ -55,6 +66,15 @@ final class JdbcCooldownService implements CooldownService {
         OnBlockRemoved NOOP = (repoType, repoName, artifact, version) -> { };
         void accept(String repoType, String repoName, String artifact, String version);
     }
+
+    /**
+     * Optional filtered-metadata envelope cache invalidator. When non-null,
+     * every block state change (new block, unblock, bulk mark/unmark) fires
+     * an invalidation so the envelope gets re-filtered on the next request
+     * rather than serving a stale "0 blocked" snapshot frozen in Valkey.
+     * Nullable: unit tests and the pre-2.2.0 wiring leave this as null.
+     */
+    private volatile FilteredMetadataCache envelopeInvalidator;
 
     private static final String SYSTEM_ACTOR = "system";
 
@@ -88,14 +108,15 @@ final class JdbcCooldownService implements CooldownService {
     ) {
         this.settings = Objects.requireNonNull(settings);
         this.repository = Objects.requireNonNull(repository);
-        this.executor = Objects.requireNonNull(executor);
+        this.executor = com.auto1.pantera.http.context.ContextualExecutor
+            .contextualize(Objects.requireNonNull(executor));
         this.cache = Objects.requireNonNull(cache);
         this.circuitBreaker = Objects.requireNonNull(circuitBreaker);
     }
 
     /**
      * Get the cooldown cache instance.
-     * Used by CooldownMetadataServiceImpl for cache sharing.
+     * Used by MetadataFilterService for cache sharing.
      * @return CooldownCache instance
      */
     public CooldownCache cache() {
@@ -116,6 +137,76 @@ final class JdbcCooldownService implements CooldownService {
      */
     void setOnBlockRemoved(final OnBlockRemoved callback) {
         this.onBlockRemoved = callback != null ? callback : OnBlockRemoved.NOOP;
+    }
+
+    /**
+     * Wire the filtered-metadata cache for envelope invalidation. Called
+     * by CooldownSupport.createMetadataService after the cache instance
+     * is constructed, since that happens AFTER the JdbcCooldownService
+     * is built.
+     *
+     * @param cache Filtered-metadata cache to invalidate on block changes,
+     *              or null to disable invalidation (no-op)
+     */
+    public void setEnvelopeInvalidator(final FilteredMetadataCache cache) {
+        this.envelopeInvalidator = cache;
+    }
+
+    /**
+     * Invalidate the filtered-metadata envelope for a single package.
+     * Swallows exceptions and logs a WARN so that an invalidation failure
+     * does not break the block-state-change operation that triggered it.
+     *
+     * @param repoType  Repository type (e.g. "maven-proxy")
+     * @param repoName  Repository name (e.g. "central")
+     * @param artifact  Package name (e.g. "com/google/guava/guava")
+     */
+    private void invalidateEnvelope(
+        final String repoType, final String repoName, final String artifact
+    ) {
+        final FilteredMetadataCache cache = this.envelopeInvalidator;
+        if (cache != null) {
+            try {
+                cache.invalidate(repoType, repoName, artifact);
+            } catch (final Exception ex) {
+                EcsLogger.warn("com.auto1.pantera.cooldown")
+                    .message("Envelope invalidation failed; will expire via TTL")
+                    .eventCategory("database")
+                    .eventAction("envelope_invalidate")
+                    .eventOutcome("failure")
+                    .field("repository.type", repoType)
+                    .field("repository.name", repoName)
+                    .field("package.name", artifact)
+                    .error(ex)
+                    .log();
+            }
+        }
+    }
+
+    /**
+     * Invalidate all filtered-metadata envelopes for a repository.
+     * Used when the entire repo is unblocked (unblockAll path).
+     *
+     * @param repoType Repository type
+     * @param repoName Repository name
+     */
+    private void invalidateAllEnvelopes(final String repoType, final String repoName) {
+        final FilteredMetadataCache cache = this.envelopeInvalidator;
+        if (cache != null) {
+            try {
+                cache.invalidateAll(repoType, repoName);
+            } catch (final Exception ex) {
+                EcsLogger.warn("com.auto1.pantera.cooldown")
+                    .message("Envelope invalidation (all) failed; will expire via TTL")
+                    .eventCategory("database")
+                    .eventAction("envelope_invalidate_all")
+                    .eventOutcome("failure")
+                    .field("repository.type", repoType)
+                    .field("repository.name", repoName)
+                    .error(ex)
+                    .log();
+            }
+        }
     }
 
     /**
@@ -260,7 +351,7 @@ final class JdbcCooldownService implements CooldownService {
             request.artifact(),
             request.version(),
             () -> this.evaluateFromDatabase(request, inspector)
-        ).thenCompose(MdcPropagation.withMdc(blocked -> {
+        ).thenCompose(blocked -> {
             if (blocked) {
                 EcsLogger.info("com.auto1.pantera.cooldown")
                     .message("Artifact BLOCKED by cooldown (cache/db)")
@@ -288,7 +379,7 @@ final class JdbcCooldownService implements CooldownService {
                 this.recordVersionAllowedMetric(request.repoType(), request.repoName());
                 return CompletableFuture.completedFuture(CooldownResult.allowed());
             }
-        })).whenComplete(MdcPropagation.withMdcBiConsumer((result, error) -> {
+        }).whenComplete((result, error) -> {
             if (error != null) {
                 this.circuitBreaker.recordFailure();
                 EcsLogger.error("com.auto1.pantera.cooldown")
@@ -303,7 +394,7 @@ final class JdbcCooldownService implements CooldownService {
             } else {
                 this.circuitBreaker.recordSuccess();
             }
-        }));
+        });
     }
 
     @Override
@@ -347,6 +438,10 @@ final class JdbcCooldownService implements CooldownService {
                 }
                 // Unmark all all-blocked packages in this repo and update metric
                 this.unmarkAllBlockedForRepo(repoType, repoName);
+                // Envelope cache invalidation (coherency): drop all cached filtered-metadata
+                // envelopes for the repo unconditionally — active per-version blocks have been
+                // cleared so every package's next metadata request must re-filter.
+                this.invalidateAllEnvelopes(repoType, repoName);
             },
             this.executor
         );
@@ -380,7 +475,7 @@ final class JdbcCooldownService implements CooldownService {
         // Step 1: Check database for existing block (async)
         return CompletableFuture.supplyAsync(() -> {
             return this.checkExistingBlockWithTimestamp(request);
-        }, this.executor).thenCompose(MdcPropagation.withMdc(result -> {
+        }, this.executor).thenCompose(result -> {
             if (result.isPresent()) {
                 final BlockCacheEntry entry = result.get();
                 EcsLogger.debug("com.auto1.pantera.cooldown")
@@ -402,9 +497,9 @@ final class JdbcCooldownService implements CooldownService {
             }
             // Step 2: No existing block - check if artifact should be blocked
             return this.checkNewArtifactAndCache(request, inspector);
-        }));
+        });
     }
-    
+
     /**
      * Get full block result with details from database.
      * Only called when cache says artifact is blocked.
@@ -517,10 +612,13 @@ final class JdbcCooldownService implements CooldownService {
         final CooldownRequest request,
         final CooldownInspector inspector
     ) {
-        // Async fetch release date with timeout to prevent hanging
+        // Async fetch release date with timeout to prevent hanging.
+        // Budget is slightly larger than the per-source HTTP timeout so the
+        // source's own timeout fires (populating its negative cache) rather
+        // than the parent cancelling first and leaving the source dangling.
         return inspector.releaseDate(request.artifact(), request.version())
-            .orTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
-            .exceptionally(MdcPropagation.<Throwable, Optional<Instant>>withMdcFunction(error -> {
+            .orTimeout(1_700, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .exceptionally(error -> {
                 EcsLogger.warn("com.auto1.pantera.cooldown")
                     .message("Failed to fetch release date (allowing)")
                     .eventCategory("database")
@@ -531,23 +629,21 @@ final class JdbcCooldownService implements CooldownService {
                     .field("error.message", error.getMessage())
                     .log();
                 return Optional.empty();
-            }))
-            .thenCompose(MdcPropagation.withMdc(release -> {
-                return this.shouldBlockNewArtifact(request, inspector, release);
-            }));
+            })
+            .thenCompose(release -> {
+                    return this.shouldBlockNewArtifact(request, release);
+            });
     }
 
     /**
      * Check if new artifact should be blocked given a known release date.
      * Returns boolean and creates database record if blocking.
      * @param request Cooldown request
-     * @param inspector Inspector for dependencies
      * @param release Release date (may be empty)
      * @return CompletableFuture with boolean (true=blocked, false=allowed)
      */
     private CompletableFuture<Boolean> shouldBlockNewArtifact(
         final CooldownRequest request,
-        final CooldownInspector inspector,
         final Optional<Instant> release
     ) {
         final Instant now = request.requestedAt();
@@ -597,14 +693,14 @@ final class JdbcCooldownService implements CooldownService {
                 .field("package.release_date", date.toString())
                 .log();
             // Create block in database (async)
-            return this.createBlockInDatabase(request, CooldownReason.FRESH_RELEASE, until)
-                .thenApply(MdcPropagation.withMdcFunction(success -> {
+            return this.createBlockInDatabase(request, CooldownReason.FRESH_RELEASE, until, release)
+                .thenApply(success -> {
                     // Cache as blocked with dynamic TTL (until block expires)
                     this.cache.putBlocked(request.repoName(), request.artifact(),
                         request.version(), until);
                     return true;
-                }))
-                .exceptionally(MdcPropagation.<Throwable, Boolean>withMdcFunction(error -> {
+                })
+                .exceptionally(error -> {
                     EcsLogger.error("com.auto1.pantera.cooldown")
                         .message("Failed to create block (blocking anyway)")
                         .eventCategory("database")
@@ -618,7 +714,7 @@ final class JdbcCooldownService implements CooldownService {
                     this.cache.putBlocked(request.repoName(), request.artifact(),
                         request.version(), until);
                     return true;
-                }));
+                });
         }
 
         EcsLogger.debug("com.auto1.pantera.cooldown")
@@ -645,13 +741,14 @@ final class JdbcCooldownService implements CooldownService {
     private CompletableFuture<Boolean> createBlockInDatabase(
         final CooldownRequest request,
         final CooldownReason reason,
-        final Instant blockedUntil
+        final Instant blockedUntil,
+        final Optional<Instant> releaseDate
     ) {
         return CompletableFuture.supplyAsync(() -> {
             final Instant now = request.requestedAt();
             // Pass the user who tried to install as installed_by
             final Optional<String> installedBy = Optional.ofNullable(request.requestedBy())
-                .filter(s -> !s.isEmpty() && !s.equals("anonymous"));
+                .filter(s -> !s.isEmpty() && !"anonymous".equals(s));
             this.repository.insertBlock(
                 request.repoType(),
                 request.repoName(),
@@ -661,14 +758,18 @@ final class JdbcCooldownService implements CooldownService {
                 now,
                 blockedUntil,
                 SYSTEM_ACTOR,
-                installedBy
+                installedBy,
+                releaseDate
             );
             return true;
-        }, this.executor).thenApply(MdcPropagation.withMdcFunction(result -> {
+        }, this.executor).thenApply(result -> {
             // Increment active blocks metric (O(1), no DB query)
             this.incrementActiveBlocksMetric(request.repoType(), request.repoName());
+            // Envelope cache invalidation (coherency): drop cached filtered metadata so next request
+            // re-filters with the new block state rather than serving a stale "0 blocked" snapshot.
+            this.invalidateEnvelope(request.repoType(), request.repoName(), request.artifact());
             return result;
-        }));
+        });
     }
 
     /**
@@ -707,9 +808,15 @@ final class JdbcCooldownService implements CooldownService {
             .field("repository.type", record.repoType())
             .field("repository.name", record.repoName())
             .log();
-        this.repository.deleteBlock(record.id());
+        this.repository.archiveAndDelete(
+            record.id(),
+            ArchiveReason.EXPIRED,
+            SYSTEM_ACTOR);
         // Decrement active blocks metric (O(1), no DB query)
         this.decrementActiveBlocksMetric(record.repoType(), record.repoName());
+        // Envelope cache invalidation (coherency): drop cached filtered metadata so next request
+        // re-filters with the new block state (block expired → version now visible in metadata).
+        this.invalidateEnvelope(record.repoType(), record.repoName(), record.artifact());
         // Invalidate the filtered metadata cache so clients see the
         // unblocked version immediately. Without this, the metadata
         // cache serves the old filtered response (with the version
@@ -731,10 +838,6 @@ final class JdbcCooldownService implements CooldownService {
                 .error(err)
                 .log();
         }
-        // Invalidate inspector cache (same as unblockSingle does)
-        com.auto1.pantera.cooldown.InspectorRegistry.instance()
-            .invalidate(record.repoType(), record.repoName(),
-                record.artifact(), record.version());
     }
 
     private void unblockSingle(
@@ -746,10 +849,6 @@ final class JdbcCooldownService implements CooldownService {
     ) {
         final Optional<DbBlockRecord> record = this.repository.find(repoType, repoName, artifact, version);
         record.ifPresent(value -> this.release(value, actor, Instant.now()));
-        
-        // Invalidate inspector cache (works for all adapters: Docker, NPM, PyPI, etc.)
-        com.auto1.pantera.cooldown.InspectorRegistry.instance()
-            .invalidate(repoType, repoName, artifact, version);
     }
 
     private int unblockAllBlocking(
@@ -776,11 +875,10 @@ final class JdbcCooldownService implements CooldownService {
                 .field("repository.name", repoName)
                 .log();
         }
-        // Single bulk DELETE instead of N individual updates
-        final int count = this.repository.deleteActiveBlocksForRepo(repoType, repoName);
-        // Clear inspector cache (works for all adapters: Docker, NPM, PyPI, etc.)
-        com.auto1.pantera.cooldown.InspectorRegistry.instance()
-            .clearAll(repoType, repoName);
+        // Single bulk archive+delete instead of N individual updates so that
+        // every unblocked row leaves a MANUAL_UNBLOCK history trail.
+        final int count = this.repository.archiveAndDeleteByRepo(
+            repoType, repoName, ArchiveReason.MANUAL_UNBLOCK, actor);
         return count;
     }
 
@@ -799,7 +897,10 @@ final class JdbcCooldownService implements CooldownService {
             .field("repository.type", record.repoType())
             .field("repository.name", record.repoName())
             .log();
-        this.repository.deleteBlock(record.id());
+        this.repository.archiveAndDelete(
+            record.id(),
+            ArchiveReason.MANUAL_UNBLOCK,
+            actor);
     }
 
     private CooldownBlock toCooldownBlock(final DbBlockRecord record) {
@@ -831,6 +932,11 @@ final class JdbcCooldownService implements CooldownService {
                         .field("package.name", artifact)
                         .log();
                 }
+                if (inserted) {
+                    // Envelope cache invalidation (coherency): drop cached filtered metadata so next
+                    // request re-filters with the new block state (all versions now blocked).
+                    this.invalidateEnvelope(repoType, repoName, artifact);
+                }
             } catch (Exception e) {
                 EcsLogger.warn("com.auto1.pantera.cooldown")
                     .message("Failed to mark package as all-blocked")
@@ -860,6 +966,11 @@ final class JdbcCooldownService implements CooldownService {
                     .field("repository.name", repoName)
                     .field("package.name", artifact)
                     .log();
+            }
+            if (wasBlocked) {
+                // Envelope cache invalidation (coherency): drop cached filtered metadata so next
+                // request re-filters now that the package is no longer universally blocked.
+                this.invalidateEnvelope(repoType, repoName, artifact);
             }
         } catch (Exception e) {
             EcsLogger.warn("com.auto1.pantera.cooldown")
@@ -891,6 +1002,11 @@ final class JdbcCooldownService implements CooldownService {
                     .field("repository.type", repoType)
                     .field("repository.name", repoName)
                     .log();
+            }
+            if (count > 0) {
+                // Envelope cache invalidation (coherency): drop all cached filtered-metadata
+                // envelopes for the repo so next requests re-filter with the cleared block state.
+                this.invalidateAllEnvelopes(repoType, repoName);
             }
         } catch (Exception e) {
             EcsLogger.warn("com.auto1.pantera.cooldown")

@@ -12,6 +12,7 @@ package com.auto1.pantera.cache;
 
 import com.amihaiemil.eoyaml.YamlMapping;
 import java.time.Duration;
+import java.util.Locale;
 import java.util.Optional;
 
 /**
@@ -261,7 +262,7 @@ public final class NegativeCacheConfig {
      * Get the global instance.
      * @return Global config (defaults if not initialized)
      */
-    public static NegativeCacheConfig getInstance() {
+    public static NegativeCacheConfig getInstance() { // NOPMD SingletonClassReturningNewInstance - "configured-or-default" accessor; new is the safe default when init() was never called
         if (instance == null) {
             return new NegativeCacheConfig();
         }
@@ -336,7 +337,7 @@ public final class NegativeCacheConfig {
             return defaultVal;
         }
         try {
-            final String trimmed = value.trim().toLowerCase();
+            final String trimmed = value.trim().toLowerCase(Locale.ROOT);
             if (trimmed.endsWith("d")) {
                 return Duration.ofDays(Long.parseLong(trimmed.substring(0, trimmed.length() - 1)));
             } else if (trimmed.endsWith("h")) {

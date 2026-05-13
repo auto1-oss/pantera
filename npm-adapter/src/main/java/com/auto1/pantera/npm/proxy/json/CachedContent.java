@@ -29,11 +29,6 @@ public final class CachedContent extends TransformedContent {
     private static final String REF_PATTERN = "^(.+)/(%s/-/.+)$";
 
     /**
-     * Package name.
-     */
-    private final String pkg;
-
-    /**
      * Pre-compiled pattern for this package.
      * Compiled once in constructor, reused for all transformRef calls.
      */
@@ -46,7 +41,6 @@ public final class CachedContent extends TransformedContent {
      */
     public CachedContent(final String content, final String pkg) {
         super(content);
-        this.pkg = pkg;
         // Pre-compile pattern once instead of on every transformRef call
         this.compiledPattern = Pattern.compile(
             String.format(CachedContent.REF_PATTERN, Pattern.quote(pkg))

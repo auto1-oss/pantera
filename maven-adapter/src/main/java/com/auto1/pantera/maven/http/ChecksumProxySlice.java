@@ -99,9 +99,21 @@ final class ChecksumProxySlice implements Slice {
                     // Caller (VertxSliceServer) will subscribe to the body and stream to client.
                     return CompletableFuture.completedFuture(checksumResp);
                 }
+                // Only TRUE 404 means "this checksum file doesn't exist
+                // upstream, fall back to computing from the artifact body".
+                // 429, 5xx, 403, etc. are transient or terminal signals
+                // that must propagate verbatim — falling through to
+                // compute-from-artifact would (a) hit the same upstream
+                // condition on the artifact fetch, (b) mask the real
+                // status from the Maven client, and (c) potentially
+                // return a stale-cache-derived checksum for an artifact
+                // the client cannot currently verify.
+                if (checksumResp.status().code() != 404) {
+                    return CompletableFuture.completedFuture(checksumResp);
+                }
                 // Drain non-success response body to release upstream connection
                 return checksumResp.body().asBytesFuture().thenCompose(ignored -> {
-                
+
                 // Checksum not available - FALLBACK: compute from artifact
                 // This is expensive but ensures we can always provide checksums
                 final String artifactPath = checksumPath.substring(
@@ -116,10 +128,17 @@ final class ChecksumProxySlice implements Slice {
                 return this.upstream.response(artifactLine, headers, Content.EMPTY)
                     .thenCompose(artifactResp -> {
                         if (!artifactResp.status().success()) {
-                            // Neither checksum nor artifact found
-                            return CompletableFuture.completedFuture(
-                                ResponseBuilder.notFound().build()
-                            );
+                            // Only TRUE 404 on the artifact means "doesn't
+                            // exist". Other statuses (429, 5xx, 403) must
+                            // propagate verbatim so the Maven client sees
+                            // the real upstream signal instead of a
+                            // misleading 404 for a checksum sidecar.
+                            if (artifactResp.status().code() == 404) {
+                                return CompletableFuture.completedFuture(
+                                    ResponseBuilder.notFound().build()
+                                );
+                            }
+                            return CompletableFuture.completedFuture(artifactResp);
                         }
 
                         // Artifact found - compute checksum using streaming to avoid memory exhaustion
@@ -204,7 +223,7 @@ final class ChecksumProxySlice implements Slice {
                     .eventCategory("web")
                     .eventAction("checksum_computation")
                     .eventOutcome("failure")
-                    .error(err instanceof Throwable ? (Throwable) err : new RuntimeException(err))
+                    .error(err)
                     .field("file.path", artifactPath)
                     .log();
                 return ResponseBuilder.internalError().build();

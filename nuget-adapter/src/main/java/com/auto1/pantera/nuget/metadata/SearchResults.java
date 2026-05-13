@@ -21,7 +21,6 @@ import java.util.Collection;
  * <a href="https://docs.microsoft.com/en-us/nuget/api/search-query-service-resource">Nuget docs</a>.
  * @since 1.2
  */
-@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.UnnecessaryFullyQualifiedName"})
 public final class SearchResults {
 
     /**

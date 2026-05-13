@@ -13,8 +13,9 @@ package com.auto1.pantera.pypi.http;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.cache.FromStorageCache;
 import com.auto1.pantera.asto.cache.StreamThroughCache;
-import com.auto1.pantera.cooldown.CooldownService;
-import com.auto1.pantera.cooldown.NoopCooldownService;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
+import com.auto1.pantera.cooldown.api.CooldownService;
+import com.auto1.pantera.cooldown.impl.NoopCooldownService;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.client.ClientSlices;
@@ -26,6 +27,8 @@ import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
 import com.auto1.pantera.http.slice.SliceSimple;
+import com.auto1.pantera.publishdate.PublishDateRegistries;
+import com.auto1.pantera.publishdate.RegistryBackedInspector;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 
 import java.net.URI;
@@ -66,7 +69,6 @@ public final class PyProxySlice extends Slice.Wrap {
      * @param events Artifact events queue
      * @param rname Repository name
      */
-    @SuppressWarnings("PMD.UnusedFormalParameter")
     public PyProxySlice(
         final ClientSlices clients,
         final URI remote,
@@ -97,13 +99,7 @@ public final class PyProxySlice extends Slice.Wrap {
             rname,
             rtype,
             cooldown,
-            new PyProxyCooldownInspector(
-                // Always use pypi.org for JSON API, regardless of Simple API upstream
-                new UriClientSlice(
-                    clients,
-                    jsonApiUri(remote)
-                )
-            )
+            new RegistryBackedInspector("pypi", PublishDateRegistries.instance())
         );
     }
 
@@ -116,7 +112,7 @@ public final class PyProxySlice extends Slice.Wrap {
         final String rname,
         final String rtype,
         final CooldownService cooldown,
-        final PyProxyCooldownInspector inspector
+        final CooldownInspector inspector
     ) {
         super(
             new SliceRoute(
@@ -132,7 +128,11 @@ public final class PyProxySlice extends Slice.Wrap {
                         rname,
                         rtype,
                         cooldown,
-                        registerInspector(rtype, rname, inspector)
+                        inspector,
+                        // PyPI JSON API upstream — always pypi.org, regardless of the
+                        // Simple-API mirror configured. Used by PypiJsonHandler to
+                        // serve cooldown-filtered /pypi/{pkg}/{ver}/json responses.
+                        new UriClientSlice(clients, jsonApiUri(remote))
                     )
                 ),
                 new RtRulePath(
@@ -143,39 +143,13 @@ public final class PyProxySlice extends Slice.Wrap {
         );
     }
 
-    private static URI baseUri(final URI remote) {
+    private static URI jsonApiUri(final URI remote) {
         final String scheme = remote.getScheme();
         final String authority = remote.getRawAuthority();
         if (scheme == null || authority == null) {
             return remote;
         }
         return URI.create(String.format("%s://%s", scheme, authority));
-    }
-
-    /**
-     * Extract JSON API base URI from remote URI.
-     * For pypi.org/simple → pypi.org
-     * For custom-pypi.com/simple → custom-pypi.com
-     * For pypi.org → pypi.org (unchanged)
-     *
-     * @param remote Remote URI
-     * @return Base URI for JSON API calls
-     */
-    private static URI jsonApiUri(final URI remote) {
-        return baseUri(remote);
-    }
-
-    /**
-     * Register inspector and return it (helper for constructor).
-     */
-    private static PyProxyCooldownInspector registerInspector(
-        final String rtype,
-        final String rname,
-        final PyProxyCooldownInspector inspector
-    ) {
-        com.auto1.pantera.cooldown.InspectorRegistry.instance()
-            .register(rtype, rname, inspector);
-        return inspector;
     }
 
 }

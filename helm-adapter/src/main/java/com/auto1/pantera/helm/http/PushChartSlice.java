@@ -65,17 +65,34 @@ final class PushChartSlice implements Slice {
      */
     private final String rname;
 
+    /** Synchronous artifact-index writer for read-after-write consistency. */
+    private final com.auto1.pantera.index.SyncArtifactIndexer syncIndex;
+
     /**
-     * Ctor.
+     * Legacy ctor (no synchronous index writer).
      * @param storage The storage.
      * @param events Events queue
      * @param rname Repository name
      */
     PushChartSlice(final Storage storage, final Optional<Queue<ArtifactEvent>> events,
         final String rname) {
+        this(storage, events, rname, com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+    }
+
+    /**
+     * Ctor with synchronous index writer.
+     * @param storage The storage.
+     * @param events Events queue
+     * @param rname Repository name
+     * @param syncIndex Synchronous artifact-index writer
+     */
+    PushChartSlice(final Storage storage, final Optional<Queue<ArtifactEvent>> events,
+        final String rname,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex) {
         this.storage = storage;
         this.events = events;
         this.rname = rname;
+        this.syncIndex = syncIndex;
     }
 
     @Override
@@ -98,16 +115,23 @@ final class PushChartSlice implements Slice {
                             () -> {
                                 final Completable res;
                                 if (upd.isEmpty() || "true".equals(upd.get())) {
-                                    res = new IndexYaml(this.storage).update(tgz);
-                                    this.events.ifPresent(
-                                        queue -> queue.add(
-                                            new ArtifactEvent(
-                                                PushChartSlice.REPO_TYPE, this.rname,
-                                                new Login(headers).getValue(),
-                                                chart.name(), chart.version(), tgz.size()
-                                            )
-                                        )
+                                    final ArtifactEvent event = new ArtifactEvent(
+                                        PushChartSlice.REPO_TYPE, this.rname,
+                                        new Login(headers).getValue(),
+                                        chart.name(), chart.version(), tgz.size()
                                     );
+                                    this.events.ifPresent(queue -> queue.add(event));
+                                    res = new IndexYaml(this.storage).update(tgz)
+                                        .andThen(Completable.create(emitter ->
+                                            this.syncIndex.recordSync(event)
+                                                .whenComplete((v, err) -> {
+                                                    if (err == null) {
+                                                        emitter.onComplete();
+                                                    } else {
+                                                        emitter.onError(err);
+                                                    }
+                                                })
+                                        ));
                                 } else {
                                     res = Completable.complete();
                                 }

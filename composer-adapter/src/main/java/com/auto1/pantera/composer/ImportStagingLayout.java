@@ -54,19 +54,13 @@ public final class ImportStagingLayout {
     private final Storage storage;
 
     /**
-     * Repository base URL (e.g., "http://pantera.local/php-api").
-     */
-    private final Optional<String> baseUrl;
-
-    /**
      * Ctor.
-     * 
+     *
      * @param storage Storage
-     * @param baseUrl Base URL for the repository
+     * @param baseUrl Base URL for the repository (reserved for future absolute-URL rewrites in staged metadata)
      */
-    public ImportStagingLayout(final Storage storage, final Optional<String> baseUrl) {
+    public ImportStagingLayout(final Storage storage, final Optional<String> baseUrl) { // NOPMD UnusedFormalParameter - public API; baseUrl is reserved for upcoming absolute-URL rewriting in staged dist metadata
         this.storage = storage;
-        this.baseUrl = baseUrl;
     }
 
     /**

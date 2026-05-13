@@ -25,7 +25,7 @@ public final class StorageMetricsCollector {
     /**
      * Metrics recorder instance (optional).
      */
-    private static volatile MetricsRecorder recorder = null;
+    private static volatile MetricsRecorder recorder;
 
     /**
      * Private constructor to prevent instantiation.

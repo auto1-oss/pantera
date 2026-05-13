@@ -73,9 +73,22 @@ public final class RpmUpload implements Slice {
      */
     RpmUpload(final Storage storage, final RepoConfig config,
         final Optional<Queue<ArtifactEvent>> events) {
+        this(storage, config, events, com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+    }
+
+    /** Synchronous artifact-index writer. */
+    private final com.auto1.pantera.index.SyncArtifactIndexer syncIndex;
+
+    /**
+     * Ctor with synchronous index writer.
+     */
+    RpmUpload(final Storage storage, final RepoConfig config,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex) {
         this.asto = storage;
         this.config = config;
         this.events = events;
+        this.syncIndex = syncIndex;
     }
 
     @Override
@@ -107,20 +120,23 @@ public final class RpmUpload implements Slice {
                                 } else {
                                     final AstoRepoAdd repo =
                                         new AstoRepoAdd(this.asto, this.config);
-                                    result = this.events.map(
-                                        queue -> repo.performWithResult().thenAccept(
-                                            list -> list.forEach(
-                                                info -> queue.add(
-                                                    new ArtifactEvent(
-                                                        RpmUpload.REPO_TYPE, this.config.name(),
-                                                        new Login(headers).getValue(),
-                                                        info.name(), info.version(),
-                                                        info.packageSize()
-                                                    )
-                                                )
-                                            )
-                                        )
-                                    ).orElseGet(repo::perform);
+                                    result = repo.performWithResult().thenCompose(list -> {
+                                        final java.util.List<CompletableFuture<Void>> syncs =
+                                            new java.util.ArrayList<>();
+                                        list.forEach(info -> {
+                                            final ArtifactEvent event = new ArtifactEvent(
+                                                RpmUpload.REPO_TYPE, this.config.name(),
+                                                new Login(headers).getValue(),
+                                                info.name(), info.version(),
+                                                info.packageSize()
+                                            );
+                                            this.events.ifPresent(queue -> queue.add(event));
+                                            syncs.add(this.syncIndex.recordSync(event));
+                                        });
+                                        return CompletableFuture.allOf(
+                                            syncs.toArray(CompletableFuture[]::new)
+                                        );
+                                    });
                                 }
                                 return result;
                             }

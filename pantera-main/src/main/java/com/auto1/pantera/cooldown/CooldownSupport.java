@@ -10,10 +10,12 @@
  */
 package com.auto1.pantera.cooldown;
 
-import com.auto1.pantera.cooldown.NoopCooldownService;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownService;
+import com.auto1.pantera.cooldown.cache.CooldownCache;
+import com.auto1.pantera.cooldown.config.CooldownSettings;
+import com.auto1.pantera.cooldown.impl.NoopCooldownService;
 import com.auto1.pantera.cooldown.metadata.CooldownMetadataService;
-import com.auto1.pantera.cooldown.metadata.CooldownMetadataServiceImpl;
+import com.auto1.pantera.cooldown.metadata.MetadataFilterService;
 import com.auto1.pantera.cooldown.metadata.FilteredMetadataCache;
 import com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheConfig;
 import com.auto1.pantera.cooldown.metadata.NoopCooldownMetadataService;
@@ -87,8 +89,12 @@ public final class CooldownSupport {
     }
 
     public static CooldownService create(final Settings settings, final Executor executor) {
+        // Register all adapter bundles (parser/filter/rewriter/detector/responseFactory)
+        // into the global CooldownAdapterRegistry. This is idempotent and safe to call
+        // early -- the registry is a ConcurrentHashMap, and adapters are stateless.
+        CooldownWiring.registerAllAdapters();
         return settings.artifactsDatabase()
-            .map(ds -> {
+            .<CooldownService>map(ds -> {
                 // Load DB-persisted cooldown config and apply over YAML defaults.
                 // This ensures overrides saved via the UI survive container restarts.
                 loadDbCooldownSettings(settings.cooldown(), ds);
@@ -105,7 +111,7 @@ public final class CooldownSupport {
                 );
                 // Initialize metrics from database (async) - loads actual active block counts
                 service.initializeMetrics();
-                return (CooldownService) service;
+                return service;
             })
             .orElseGet(() -> {
                 EcsLogger.warn("com.auto1.pantera.cooldown")
@@ -153,7 +159,7 @@ public final class CooldownSupport {
             .eventAction("metadata_service_init")
             .log();
         
-        final CooldownMetadataServiceImpl metadataService = new CooldownMetadataServiceImpl(
+        final MetadataFilterService metadataService = new MetadataFilterService(
             cooldownService,
             settings.cooldown(),
             jdbc.cache(),
@@ -180,7 +186,28 @@ public final class CooldownSupport {
                     .log();
             }
         });
+        // Wire envelope invalidation back into the cooldown service so block
+        // state changes invalidate cached filtered-metadata envelopes eagerly
+        // instead of letting them go stale for up to the L2 TTL (10 minutes).
+        // This covers new blocks (createBlockInDatabase), bulk mark
+        // (markAllBlocked), bulk unmark (unmarkAllBlockedPackage / ForRepo),
+        // and manual archive (archiveAndDelete via expire()).
+        jdbc.setEnvelopeInvalidator(metadataCache);
         return metadataService;
+    }
+
+    /**
+     * Extract the CooldownCache from a CooldownService, if it is backed
+     * by JdbcCooldownService. Returns null for NoopCooldownService.
+     *
+     * @param cooldownService The cooldown service
+     * @return CooldownCache or null
+     */
+    public static CooldownCache extractCache(final CooldownService cooldownService) {
+        if (cooldownService instanceof JdbcCooldownService) {
+            return ((JdbcCooldownService) cooldownService).cache();
+        }
+        return null;
     }
 
     /**
@@ -189,8 +216,7 @@ public final class CooldownSupport {
      * @param csettings In-memory cooldown settings to update
      * @param ds Database data source
      */
-    @SuppressWarnings("PMD.CognitiveComplexity")
-    private static void loadDbCooldownSettings(
+    static void loadDbCooldownSettings(
         final CooldownSettings csettings,
         final javax.sql.DataSource ds
     ) {
@@ -221,10 +247,23 @@ public final class CooldownSupport {
                     );
                 }
             }
-            csettings.update(enabled, minAge, overrides);
+            final int historyRetentionDays = cfg.getInt(
+                "history_retention_days", csettings.historyRetentionDays()
+            );
+            final int cleanupBatchLimit = cfg.getInt(
+                "cleanup_batch_limit", csettings.cleanupBatchLimit()
+            );
+            // If out-of-range values are present in the blob, update() throws and
+            // the outer catch logs it as a load failure — YAML defaults apply.
+            csettings.update(
+                enabled, minAge, overrides,
+                historyRetentionDays, cleanupBatchLimit
+            );
             EcsLogger.info("com.auto1.pantera.cooldown")
                 .message("Loaded cooldown settings from database (enabled: "
-                    + enabled + ", overrides: " + overrides.size() + ")")
+                    + enabled + ", overrides: " + overrides.size()
+                    + ", history_retention_days: " + historyRetentionDays
+                    + ", cleanup_batch_limit: " + cleanupBatchLimit + ")")
                 .eventCategory("configuration")
                 .eventAction("cooldown_db_load")
                 .log();

@@ -55,7 +55,7 @@ public interface StorageFactory {
                 ((AutoCloseable) storage).close();
             } catch (final Exception e) {
                 // Log but don't throw - best effort cleanup
-                System.err.println("Failed to close storage: " + e.getMessage());
+                System.err.println("Failed to close storage: " + e.getMessage()); // NOPMD SystemPrintln - factory base interface, no logger dependency available
             }
         }
     }

@@ -186,6 +186,73 @@ Admin panels appear in the sidebar under **Administration** only if you have the
 
 If you do not see the Administration section, you have read-only access. Contact your administrator for elevated permissions.
 
+### Creating Repositories
+
+The **Create Repository** page (`/admin/repositories/create`) allows administrators to create new repositories. The **Type** dropdown lists all supported repository formats:
+
+- **Maven**, **Gradle**, **Docker**, **npm**, **PyPI**, **Go**, **Helm**, **NuGet**, **Debian**, **RPM**, **Conda**, **RubyGems**, **Conan**, **Hex**, **PHP**, **File**, **Binary**
+
+Each format supports Local, Proxy, and/or Group variants where applicable. For example, Go supports Local, Proxy, and Group; Gradle supports all three variants.
+
+### Configuring Group Members
+
+When creating or editing a **Group** repository (e.g., `maven-group`), the **Group Members** section provides:
+
+- **AutoComplete dropdown**: Type to search existing repositories that are compatible with the group type. For a `maven-group`, only `maven` (local) and `maven-proxy` repositories are shown. Each suggestion displays the repository name and type badge.
+- **Reordering**: Use the up/down arrow buttons to set resolution priority. The first matching member wins.
+- **Create new member**: Click **Create new** to open an inline dialog that creates a new compatible repository and immediately adds it to the member list.
+
+---
+
+## Adding Members to a Group Repository
+
+Group repositories aggregate one or more local and/or proxy repositories into a single virtual URL. When you create or edit a group (for example, `maven-group`, `npm-group`, `go-group`, `docker-group`), the **Group Members** panel on the repository configuration page is where you select which repos belong to the group and in what order.
+
+### The Member Picker (AutoComplete)
+
+Each member row uses a PrimeVue **AutoComplete** control that is pre-filtered to show only repositories compatible with the group type:
+
+- Type any portion of a repository name to filter suggestions live.
+- Each suggestion shows the repository name and a small type badge so you can tell locals from proxies at a glance.
+- Repos that are already in the member list are hidden from the suggestion set, so you cannot add the same repo twice.
+- Selecting a suggestion populates the row with the repo name immediately — no cross-view navigation required.
+
+### Type Compatibility Rule
+
+The picker computes compatible member types from the group type by stripping the `-group` suffix and admitting the base type plus its `-proxy` variant:
+
+| Group type | Compatible member types |
+|------------|-------------------------|
+| `maven-group` | `maven`, `maven-proxy` |
+| `npm-group` | `npm`, `npm-proxy` |
+| `docker-group` | `docker`, `docker-proxy` |
+| `pypi-group` | `pypi`, `pypi-proxy` |
+| `go-group` | `go`, `go-proxy` |
+| `gradle-group` | `gradle`, `gradle-proxy` |
+| `php-group` | `php`, `php-proxy` |
+| `file-group` | `file`, `file-proxy` |
+
+Only repositories whose `type` is one of those values appear in the picker. A `docker-group` will never offer an `npm-proxy` as a candidate, for example.
+
+### Reordering Members
+
+Use the up and down arrow buttons on each row to change resolution priority. When a client requests an artifact, Pantera queries members in the listed order and returns the first match — so heavily used locals or fast proxies belong at the top.
+
+### Create New Member Inline
+
+If the repo you need doesn't exist yet, click **Create new** next to **Add member**. A modal opens with:
+
+- A **Type** dropdown restricted to the same compatibility set described above.
+- A **Name** field for the new repository.
+
+Submitting the modal creates the repository through the standard admin API and adds it to the member list in a single step — you never leave the group editor, and the compatible-repos list is refreshed automatically so the new repo is immediately eligible for further edits.
+
+**Note on storage defaults:** the inline create modal currently defaults the new repository to filesystem storage (`storage.type: fs`). Proxy variants also require a remote URL, which the inline modal does not collect — for a proxy member, you will typically create the repository via the full **Create Repository** page (where you can configure `remotes`, authentication, and cooldown) and then add it to the group using the AutoComplete picker.
+
+### Implementation Reference
+
+The group-member picker is implemented in `pantera-ui/src/components/admin/RepoConfigForm.vue` at lines 558-576 (the `AutoComplete` element), with the compatibility rule at `compatibleTypes()` (line 98) and the inline-create handler at `createMemberRepo()` (line 135).
+
 ---
 
 ## Keyboard and Navigation Tips

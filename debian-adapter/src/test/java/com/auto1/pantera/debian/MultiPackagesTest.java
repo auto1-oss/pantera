@@ -25,7 +25,6 @@ import org.junit.jupiter.api.Test;
  * Test for {@link MultiPackages.Unique}.
  * @since 0.6
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class MultiPackagesTest {
 
     @Test

@@ -35,7 +35,6 @@ public final class UncheckedIOScalar<T> implements Scalar<T> {
     }
 
     @Override
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     public T value() {
         try {
             return this.origin.value();

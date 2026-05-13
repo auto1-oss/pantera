@@ -33,7 +33,6 @@ import java.util.stream.Stream;
  *
  * @since 0.17
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 final class BearerAuthSchemeTest {
 
     @Test
@@ -109,7 +108,6 @@ final class BearerAuthSchemeTest {
         );
     }
 
-    @SuppressWarnings("PMD.UnusedPrivateMethod")
     private static Stream<Headers> badHeaders() {
         return Stream.of(
             Headers.from(),

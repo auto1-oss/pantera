@@ -13,6 +13,8 @@ package com.auto1.pantera.debian;
 import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.debian.metadata.ControlField;
 import java.io.BufferedReader;
+import java.io.FilterInputStream;
+import java.io.FilterOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -46,15 +48,13 @@ public interface MultiPackages {
      * does not close input or output streams, these operations should be made from the outside.
      * @since 0.6
      */
-    @SuppressWarnings("PMD.CloseResource")
     final class Unique implements MultiPackages {
 
         @Override
         public void merge(final Collection<InputStream> items, final OutputStream res) {
-            try {
-                final GZIPOutputStream gop = new GZIPOutputStream(res);
+            try (GZIPOutputStream gop = new GZIPOutputStream(new NonClosingOutputStream(res))) {
                 final Set<Pair<String, String>> packages = new HashSet<>(items.size());
-                for (final InputStream inp : items) {
+                for (final InputStream inp : items) { // NOPMD CloseResource - input streams are caller-owned per Unique contract
                     Unique.appendPackages(gop, inp, packages);
                 }
                 gop.finish();
@@ -70,14 +70,14 @@ public interface MultiPackages {
          * @param inp InputStream to read Packages index from
          * @param packages Map with the appended packages
          */
-        @SuppressWarnings("PMD.CyclomaticComplexity")
         private static void appendPackages(
             final OutputStream out, final InputStream inp, final Set<Pair<String, String>> packages
         ) {
-            try {
-                final GZIPInputStream gis = new GZIPInputStream(inp);
-                final BufferedReader rdr =
-                    new BufferedReader(new InputStreamReader(gis, StandardCharsets.UTF_8));
+            try (
+                GZIPInputStream gis = new GZIPInputStream(new NonClosingInputStream(inp));
+                BufferedReader rdr =
+                    new BufferedReader(new InputStreamReader(gis, StandardCharsets.UTF_8))
+            ) {
                 String line;
                 StringBuilder item = new StringBuilder();
                 do {
@@ -100,6 +100,45 @@ public interface MultiPackages {
                 } while (line != null);
             } catch (final IOException err) {
                 throw new PanteraIOException(err);
+            }
+        }
+
+        /**
+         * Wraps an {@link OutputStream} so that {@link #close()} is a no-op – ownership
+         * of the underlying stream is kept by the caller of
+         * {@link Unique#merge(Collection, OutputStream)}.
+         * @since 2.2.0
+         */
+        private static final class NonClosingOutputStream extends FilterOutputStream {
+            NonClosingOutputStream(final OutputStream out) {
+                super(out);
+            }
+
+            @Override
+            public void write(final byte[] buf, final int off, final int len) throws IOException {
+                this.out.write(buf, off, len);
+            }
+
+            @Override
+            public void close() throws IOException {
+                this.flush();
+            }
+        }
+
+        /**
+         * Wraps an {@link InputStream} so that {@link #close()} is a no-op – ownership
+         * of the underlying stream is kept by the caller of
+         * {@link Unique#merge(Collection, OutputStream)}.
+         * @since 2.2.0
+         */
+        private static final class NonClosingInputStream extends FilterInputStream {
+            NonClosingInputStream(final InputStream in) {
+                super(in);
+            }
+
+            @Override
+            public void close() {
+                // Intentionally no-op – the underlying stream is owned by the caller.
             }
         }
     }

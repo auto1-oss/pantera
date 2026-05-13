@@ -27,7 +27,6 @@ import java.util.Optional;
  *
  * @since 2.1.2
  */
-@SuppressWarnings("PMD.TooManyMethods")
 final class ArtifactNameParserMavenStructuralTest {
 
     // ---- Standard whitelisted extensions (must still work) ----

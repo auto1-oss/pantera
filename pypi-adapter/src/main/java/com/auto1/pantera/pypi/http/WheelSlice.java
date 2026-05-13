@@ -40,6 +40,7 @@ import org.reactivestreams.Publisher;
 
 import java.nio.ByteBuffer;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.UUID;
@@ -62,18 +63,37 @@ final class WheelSlice implements Slice {
      */
     private final String rname;
 
+    /** Synchronous artifact-index writer for read-after-write consistency. */
+    private final com.auto1.pantera.index.SyncArtifactIndexer syncIndex;
+
     /**
-     * Ctor.
+     * Legacy ctor (no synchronous index writer).
      *
      * @param storage Storage.
-     * @param events Evenst queue
+     * @param events Events queue
      * @param rname Repository name
      */
     WheelSlice(final Storage storage, final Optional<Queue<ArtifactEvent>> events,
         final String rname) {
+        this(storage, events, rname,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+    }
+
+    /**
+     * Ctor with synchronous index writer.
+     *
+     * @param storage Storage.
+     * @param events Events queue
+     * @param rname Repository name
+     * @param syncIndex Synchronous artifact-index writer
+     */
+    WheelSlice(final Storage storage, final Optional<Queue<ArtifactEvent>> events,
+        final String rname,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex) {
         this.storage = storage;
         this.events = events;
         this.rname = rname;
+        this.syncIndex = syncIndex;
     }
 
     @Override
@@ -104,7 +124,7 @@ final class WheelSlice implements Slice {
                         if (this.events.isPresent()) {
                             move = move.thenCompose(
                                 ignored ->
-                                    this.putArtifactToQueue(name, info, filename, iterable)
+                                    this.putArtifactToQueue(name, info, iterable)
                             );
                         }
                         // Create sidecar metadata for PEP 503/691 compliance
@@ -113,7 +133,7 @@ final class WheelSlice implements Slice {
                                 this.storage,
                                 new Key.From(packageName, info.version(), filename),
                                 info.requiresPython(),
-                                Instant.now()
+                                Instant.now().truncatedTo(ChronoUnit.MICROS)
                             )
                         );
                         // Regenerate package-level index.html after upload
@@ -212,26 +232,25 @@ final class WheelSlice implements Slice {
      * Put uploaded artifact info into events queue.
      * @param key Artifact key in the storage
      * @param info Artifact info
-     * @param filename Artifact filename
      * @param headers Request headers
      * @return Completion action
      */
     private CompletionStage<Void> putArtifactToQueue(
-        final Key key, final PackageInfo info, final String filename,
+        final Key key, final PackageInfo info,
         Headers headers
     ) {
         return this.storage.metadata(key).thenApply(meta -> meta.read(Meta.OP_SIZE).get())
-            .thenAccept(
-                size -> this.events.get().add(
-                    new ArtifactEvent(
-                        WheelSlice.TYPE,
-                        this.rname,
-                        new Login(headers).getValue(),
-                        new NormalizedProjectName.Simple(info.name()).value(),
-                        info.version(),
-                        size
-                    )
-                )
-            );
+            .thenCompose(size -> {
+                final ArtifactEvent event = new ArtifactEvent(
+                    WheelSlice.TYPE,
+                    this.rname,
+                    new Login(headers).getValue(),
+                    new NormalizedProjectName.Simple(info.name()).value(),
+                    info.version(),
+                    size
+                );
+                this.events.ifPresent(queue -> queue.add(event));
+                return this.syncIndex.recordSync(event);
+            });
     }
 }

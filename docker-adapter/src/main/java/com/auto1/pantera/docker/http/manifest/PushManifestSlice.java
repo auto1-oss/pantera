@@ -40,9 +40,18 @@ public class PushManifestSlice extends DockerActionSlice {
 
     private final Queue<ArtifactEvent> queue;
 
+    /** Synchronous artifact-index writer for read-after-write consistency. */
+    private final com.auto1.pantera.index.SyncArtifactIndexer syncIndex;
+
     public PushManifestSlice(Docker docker, Queue<ArtifactEvent> queue) {
+        this(docker, queue, com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+    }
+
+    public PushManifestSlice(Docker docker, Queue<ArtifactEvent> queue,
+        com.auto1.pantera.index.SyncArtifactIndexer syncIndex) {
         super(docker);
         this.queue = queue;
+        this.syncIndex = syncIndex;
     }
 
     @Override
@@ -66,23 +75,30 @@ public class PushManifestSlice extends DockerActionSlice {
                     } else {
                         sizeFuture = CompletableFuture.completedFuture(0L);
                     }
-                    return sizeFuture.thenApply(size -> {
-                        if (queue != null && ImageTag.valid(ref.digest())) {
-                            queue.add(
-                                new ArtifactEvent(
-                                    "docker",
-                                    docker.registryName(),
-                                    new Login(headers).getValue(),
-                                    request.name(), ref.digest(),
-                                    size
-                                )
+                    return sizeFuture.thenCompose(size -> {
+                        final CompletableFuture<Void> indexed;
+                        if (ImageTag.valid(ref.digest())) {
+                            final ArtifactEvent event = new ArtifactEvent(
+                                "docker",
+                                docker.registryName(),
+                                new Login(headers).getValue(),
+                                request.name(), ref.digest(),
+                                size
                             );
+                            if (queue != null) {
+                                queue.add(event);
+                            }
+                            indexed = this.syncIndex.recordSync(event);
+                        } else {
+                            indexed = CompletableFuture.completedFuture(null);
                         }
-                        return ResponseBuilder.created()
-                            .header(new Location(String.format("/v2/%s/manifests/%s", request.name(), ref.digest())))
-                            .header(new ContentLength("0"))
-                            .header(new DigestHeader(manifest.digest()))
-                            .build();
+                        return indexed.thenApply(ignored ->
+                            ResponseBuilder.created()
+                                .header(new Location(String.format("/v2/%s/manifests/%s", request.name(), ref.digest())))
+                                .header(new ContentLength("0"))
+                                .header(new DigestHeader(manifest.digest()))
+                                .build()
+                        );
                     });
                 }
             );

@@ -22,7 +22,6 @@ import org.junit.jupiter.api.Test;
  * Test for {@link DeployMetadata}.
  * @since 0.8
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class DeployMetadataTest {
 
     @Test

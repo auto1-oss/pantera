@@ -17,7 +17,6 @@ import java.util.regex.Pattern;
  * Predicate to test whether request path matches some regex and corresponds to some conditions.
  * @since 0.23
  */
-@SuppressWarnings("PMD.SingularField")
 public enum RqPath implements Predicate<String> {
 
     /**

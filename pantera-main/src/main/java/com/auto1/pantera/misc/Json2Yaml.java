@@ -25,13 +25,23 @@ import java.util.function.Function;
  */
 public final class Json2Yaml implements Function<String, YamlMapping> {
 
+    /**
+     * JSON reader — thread-safe once configured; hoisted to avoid per-call allocation.
+     */
+    private static final ObjectMapper JSON = new ObjectMapper();
+
+    /**
+     * YAML writer configured once with INDENT_ARRAYS_WITH_INDICATOR;
+     * thread-safe for write operations; hoisted to avoid per-call allocation.
+     */
+    private static final YAMLMapper YAML = new YAMLMapper()
+        .configure(YAMLGenerator.Feature.INDENT_ARRAYS_WITH_INDICATOR, true);
+
     @Override
     public YamlMapping apply(final String json) {
         try {
             return Yaml.createYamlInput(
-                new YAMLMapper()
-                    .configure(YAMLGenerator.Feature.INDENT_ARRAYS_WITH_INDICATOR, true)
-                    .writeValueAsString(new ObjectMapper().readTree(json))
+                Json2Yaml.YAML.writeValueAsString(Json2Yaml.JSON.readTree(json))
             ).readYamlMapping();
         } catch (final IOException err) {
             throw new UncheckedIOException(err);

@@ -100,7 +100,7 @@ final class DebianScanner implements Scanner {
             final Path existing = byParent.get(parent);
             if (existing == null) {
                 byParent.put(parent, file);
-            } else if (file.getFileName().toString().equals(PACKAGES_GZ)) {
+            } else if (PACKAGES_GZ.equals(file.getFileName().toString())) {
                 byParent.put(parent, file);
             }
         }
@@ -121,7 +121,7 @@ final class DebianScanner implements Scanner {
             final List<ArtifactRecord> records = new ArrayList<>();
             try (
                 InputStream fis = Files.newInputStream(path);
-                InputStream input = path.getFileName().toString().equals(PACKAGES_GZ)
+                InputStream input = PACKAGES_GZ.equals(path.getFileName().toString())
                     ? new GZIPInputStream(fis) : fis;
                 BufferedReader reader = new BufferedReader(
                     new InputStreamReader(input, StandardCharsets.UTF_8)

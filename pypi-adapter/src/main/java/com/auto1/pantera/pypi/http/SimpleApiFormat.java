@@ -40,10 +40,9 @@ public enum SimpleApiFormat {
      */
     public static SimpleApiFormat fromHeaders(final Headers headers) {
         for (final var header : headers) {
-            if ("accept".equalsIgnoreCase(header.getKey())) {
-                if (header.getValue().contains(JSON_MIME)) {
-                    return JSON;
-                }
+            if ("accept".equalsIgnoreCase(header.getKey())
+                && header.getValue().contains(JSON_MIME)) {
+                return JSON;
             }
         }
         return HTML;

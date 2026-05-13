@@ -31,7 +31,6 @@ import org.junit.jupiter.params.provider.ValueSource;
  *  All the methods of the class should be verified, do not forget to
  *  add tests with different prefixes, including {@link Key#ROOT} as prefix.
  */
-@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.TooManyMethods"})
 class SubStorageTest {
 
     /**

@@ -4,6 +4,13 @@
       <id>pantera</id>
       <username>__USERNAME__</username>
       <password>__PASSWORD__</password>
+      <configuration>
+        <httpConfiguration>
+          <all>
+            <usePreemptive>true</usePreemptive>
+          </all>
+        </httpConfiguration>
+      </configuration>
     </server>
   </servers>
 </settings>

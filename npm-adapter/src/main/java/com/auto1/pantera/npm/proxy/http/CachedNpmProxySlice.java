@@ -18,26 +18,31 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.cache.CachedArtifactMetadataStore;
-import com.auto1.pantera.http.cache.DedupStrategy;
+import com.auto1.pantera.http.cache.FetchSignal;
 import com.auto1.pantera.http.cache.NegativeCache;
-import com.auto1.pantera.http.cache.RequestDeduplicator;
-import com.auto1.pantera.http.cache.RequestDeduplicator.FetchSignal;
+import com.auto1.pantera.http.cache.NegativeCacheRegistry;
+import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.KeyFromPath;
 
+import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ForkJoinPool;
 
 /**
  * NPM proxy slice with negative caching and signal-based request deduplication.
  * Wraps NpmProxySlice to add caching layer that prevents repeated
  * 404 requests and deduplicates concurrent requests.
  *
- * <p>Uses shared {@link RequestDeduplicator} with SIGNAL strategy: concurrent
+ * <p>Uses the unified {@link SingleFlight} coalescer (WI-05): concurrent
  * requests for the same package wait for the first request to complete, then
  * fetch from NpmProxy's storage cache. This eliminates memory buffering while
- * maintaining full deduplication.</p>
+ * maintaining full deduplication. The retained {@link FetchSignal} enum is
+ * the same signal contract as the legacy path — only the coalescer
+ * implementation changed.</p>
  *
  * @since 1.0
  */
@@ -74,9 +79,11 @@ public final class CachedNpmProxySlice implements Slice {
     private final String repoType;
 
     /**
-     * Shared request deduplicator using SIGNAL strategy.
+     * Per-key request coalescer. Concurrent requests for the same cache key
+     * share one upstream fetch, each receiving the same {@link FetchSignal}
+     * terminal state. Wired in WI-05.
      */
-    private final RequestDeduplicator deduplicator;
+    private final SingleFlight<Key, FetchSignal> deduplicator;
 
     /**
      * Ctor with default settings.
@@ -111,9 +118,15 @@ public final class CachedNpmProxySlice implements Slice {
         this.repoName = repoName;
         this.upstreamUrl = upstreamUrl;
         this.repoType = repoType;
-        this.negativeCache = new NegativeCache(repoType, repoName);
+        this.negativeCache = NegativeCacheRegistry.instance().sharedCache();
         this.metadata = storage.map(CachedArtifactMetadataStore::new);
-        this.deduplicator = new RequestDeduplicator(DedupStrategy.SIGNAL);
+        // 5-minute zombie TTL (PANTERA_DEDUP_MAX_AGE_MS = 300 000 ms).
+        // 10K max entries bounds memory.
+        this.deduplicator = new SingleFlight<>(
+            Duration.ofMinutes(5),
+            10_000,
+            ContextualExecutor.contextualize(ForkJoinPool.commonPool())
+        );
     }
 
     @Override
@@ -129,7 +142,7 @@ public final class CachedNpmProxySlice implements Slice {
         }
         final Key key = new KeyFromPath(path);
         // Check negative cache first (404s)
-        if (this.negativeCache.isNotFound(key)) {
+        if (this.negativeCache.isKnown404(this.negKey(path))) {
             return CompletableFuture.completedFuture(
                 ResponseBuilder.notFound().build()
             );
@@ -188,8 +201,8 @@ public final class CachedNpmProxySlice implements Slice {
     }
 
     /**
-     * Fetches from origin with signal-based request deduplication.
-     * Uses shared {@link RequestDeduplicator}: first request fetches from origin
+     * Fetches from origin with signal-based request coalescing.
+     * Uses shared {@link SingleFlight}: first request fetches from origin
      * (which saves to NpmProxy's storage cache). Concurrent requests wait for a
      * signal, then re-fetch from origin which serves from storage cache.
      */
@@ -199,10 +212,10 @@ public final class CachedNpmProxySlice implements Slice {
         final Content body,
         final Key key
     ) {
-        return this.deduplicator.deduplicate(
+        return this.deduplicator.load(
             key,
             () -> this.doFetch(line, headers, body, key)
-        ).thenCompose(signal -> this.handleSignal(signal, line, headers, key));
+        ).thenCompose(signal -> this.handleSignal(signal, line, headers));
     }
 
     /**
@@ -219,7 +232,7 @@ public final class CachedNpmProxySlice implements Slice {
             .thenApply(response -> {
                 final long duration = System.currentTimeMillis() - startTime;
                 if (response.status().code() == 404) {
-                    this.negativeCache.cacheNotFound(key);
+                    this.negativeCache.cacheNotFound(this.negKey(key.string()));
                     this.recordProxyMetric("not_found", duration);
                     return FetchSignal.NOT_FOUND;
                 }
@@ -233,10 +246,20 @@ public final class CachedNpmProxySlice implements Slice {
                     this.recordUpstreamErrorMetric(
                         new RuntimeException("HTTP " + response.status().code())
                     );
-                } else {
-                    this.recordProxyMetric("client_error", duration);
+                    return FetchSignal.ERROR;
                 }
-                return FetchSignal.ERROR;
+                // Non-404 4xx (403 rate-limit / unauthorized, 410 Gone for
+                // unpublished, 451, 409, etc.) means "this remote doesn't
+                // serve this artifact" — semantically equivalent to NOT_FOUND
+                // from the RaceSlice's perspective. Mapping to ERROR (→ 503)
+                // would short-circuit the race because RaceSlice's contract
+                // is "404 → try next remote; anything else → this remote
+                // wins". Surface as NOT_FOUND so a multi-remote npm proxy
+                // (e.g. npmjs + a private mirror) can fall back when one
+                // remote rate-limits. The "client_error" metric still fires
+                // for observability.
+                this.recordProxyMetric("client_error", duration);
+                return FetchSignal.NOT_FOUND;
             })
             .exceptionally(error -> {
                 final long duration = System.currentTimeMillis() - startTime;
@@ -261,8 +284,7 @@ public final class CachedNpmProxySlice implements Slice {
     private CompletableFuture<Response> handleSignal(
         final FetchSignal signal,
         final RequestLine line,
-        final Headers headers,
-        final Key key
+        final Headers headers
     ) {
         switch (signal) {
             case SUCCESS:
@@ -316,7 +338,6 @@ public final class CachedNpmProxySlice implements Slice {
     /**
      * Records metric safely, ignoring errors.
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
             if (com.auto1.pantera.metrics.PanteraMetrics.isEnabled()) {
@@ -328,5 +349,13 @@ public final class CachedNpmProxySlice implements Slice {
                 .error(ex)
                 .log();
         }
+    }
+
+    /**
+     * Build a structured negative-cache key for a request path.
+     */
+    private com.auto1.pantera.http.cache.NegativeCacheKey negKey(final String path) {
+        return com.auto1.pantera.http.cache.NegativeCacheKey.fromPath(
+            this.repoName, this.repoType, path);
     }
 }

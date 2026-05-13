@@ -10,8 +10,8 @@
  */
 package com.auto1.pantera.api.v1;
 
+import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.http.trace.MdcPropagation;
 import com.auto1.pantera.settings.repo.CrudRepoSettings;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
@@ -20,6 +20,7 @@ import io.vertx.ext.web.RoutingContext;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.Statement;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -189,50 +190,49 @@ public final class DashboardHandler {
      */
     private void respondWithCache(final RoutingContext ctx,
         final java.util.function.Function<CachedDashboard, JsonObject> extractor) {
-        ctx.vertx().<JsonObject>executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                final CachedDashboard current = this.cache.get();
-                final boolean expired = current == null
-                    || System.currentTimeMillis() - current.timestamp > CACHE_TTL_MS;
-                if (expired && this.rebuilding.compareAndSet(false, true)) {
-                    // This thread won the rebuild race
-                    try {
-                        final CachedDashboard fresh = this.buildDashboard();
-                        this.cache.set(fresh);
-                        return extractor.apply(fresh);
-                    } finally {
-                        this.rebuilding.set(false);
-                    }
+        CompletableFuture.supplyAsync(() -> {
+            final CachedDashboard current = this.cache.get();
+            final boolean expired = current == null
+                || System.currentTimeMillis() - current.timestamp > CACHE_TTL_MS;
+            if (expired && this.rebuilding.compareAndSet(false, true)) {
+                // This thread won the rebuild race
+                try {
+                    final CachedDashboard fresh = this.buildDashboard();
+                    this.cache.set(fresh);
+                    return extractor.apply(fresh);
+                } finally {
+                    this.rebuilding.set(false);
                 }
-                // Serve current cache — either still valid or another thread is rebuilding
-                final CachedDashboard cached = this.cache.get();
-                if (cached != null) {
-                    return extractor.apply(cached);
+            }
+            // Serve current cache — either still valid or another thread is rebuilding
+            final CachedDashboard cached = this.cache.get();
+            if (cached != null) {
+                return extractor.apply(cached);
+            }
+            // First request race: no cache yet and we lost the rebuild CAS —
+            // wait briefly for the winner to populate it
+            for (int i = 0; i < 50 && this.cache.get() == null; i++) {
+                try { Thread.sleep(20); } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
                 }
-                // First request race: no cache yet and we lost the rebuild CAS —
-                // wait briefly for the winner to populate it
-                for (int i = 0; i < 50 && this.cache.get() == null; i++) {
-                    try { Thread.sleep(20); } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        break;
-                    }
-                }
-                final CachedDashboard ready = this.cache.get();
-                if (ready != null) {
-                    return extractor.apply(ready);
-                }
-                // Fallback: serve empty stats rather than error
-                return extractor.apply(emptyDashboard());
-            }),
-            false
-        ).onSuccess(
-            json -> ctx.response()
-                .setStatusCode(200)
-                .putHeader("Content-Type", "application/json")
-                .end(json.encode())
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+            }
+            final CachedDashboard ready = this.cache.get();
+            if (ready != null) {
+                return extractor.apply(ready);
+            }
+            // Fallback: serve empty stats rather than error
+            return extractor.apply(emptyDashboard());
+        }, HandlerExecutor.get()).whenComplete((json, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
+                ctx.response()
+                    .setStatusCode(200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(json.encode());
+            }
+        });
     }
 
     /**
@@ -315,7 +315,7 @@ public final class DashboardHandler {
                             .put("size", rs.getLong("total_size")));
                     }
                 }
-            } catch (final Exception ex) {
+            } catch (final Exception ex) { // NOPMD EmptyCatchBlock - dashboard is best-effort: DB unavailable or materialized views missing falls through to zeroed counters
                 // DB unavailable or MVs not yet created — return zeros
             }
         }

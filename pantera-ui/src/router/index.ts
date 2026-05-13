@@ -126,9 +126,22 @@ export const routes: RouteRecordRaw[] = [
     meta: { requiresAdmin: true },
   },
   {
+    // Legacy path — performance tuning is now folded into System Settings.
+    // Redirect so any saved bookmarks land in the right place.
+    path: '/admin/performance-tuning',
+    redirect: '/admin/settings',
+    meta: { requiresAdmin: true },
+  },
+  {
     path: '/admin/auth-providers',
     name: 'admin-auth-providers',
     component: () => import('@/views/admin/AuthProvidersView.vue'),
+    meta: { requiresAdmin: true },
+  },
+  {
+    path: '/admin/neg-cache',
+    name: 'admin-neg-cache',
+    component: () => import('@/views/admin/NegativeCacheView.vue'),
     meta: { requiresAdmin: true },
   },
   {

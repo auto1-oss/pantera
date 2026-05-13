@@ -20,7 +20,6 @@ import org.junit.jupiter.api.Test;
  * PackagePath tests.
  * @since 0.1
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public class PackagePathTest {
     @Test
     public void getsPath() {

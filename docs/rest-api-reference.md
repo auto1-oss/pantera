@@ -1686,7 +1686,26 @@ curl http://localhost:8086/api/v1/search/stats \
 
 ## 10. Cooldown Management
 
-Cooldown prevents recently-published upstream artifacts from being cached in proxy repositories for a configurable period, protecting against supply-chain attacks involving newly uploaded malicious packages.
+Cooldown prevents recently-published upstream artifacts from being cached in
+proxy repositories for a configurable period, protecting against supply-chain
+attacks involving newly uploaded malicious packages.
+
+Cooldown is enforced at two layers:
+
+1. **Metadata filtering** -- on every metadata response served from a proxy
+   repository (port 8080), blocked versions are silently removed so client
+   resolvers (npm, pip, go, docker, composer, mvn) never see them. This covers
+   both direct installs and transitive-dependency resolution. See
+   [Cooldown Metadata Filtering](cooldown-metadata-filtering.md) for the full
+   adapter coverage matrix.
+2. **Artifact fetch gate** -- a direct request for a specific blocked artifact
+   returns a format-appropriate 403 (or 404 `MANIFEST_UNKNOWN` for Docker tags)
+   with a `Retry-After` header. For `file-proxy`, which has no metadata
+   filtering, this is the only enforcement layer and triggers based on the
+   artifact's cached-at / remote-modified timestamp.
+
+The management API endpoints below (served on port 8086) control policy and
+state -- the actual filtering happens transparently on the repository port.
 
 ### GET /api/v1/cooldown/config
 
@@ -1759,6 +1778,12 @@ Update cooldown configuration with hot reload. Changes take effect immediately w
 }
 ```
 
+Additional optional fields (v2.2.1+):
+- `history_retention_days` (int, `(0, 3650]`) -- days to retain archive rows before auto-purge. Default 90.
+- `cleanup_batch_limit` (int, `(0, 100000]`) -- max rows moved from live to history per cleanup tick. Default 10000.
+
+Out-of-range values return `400 BAD_REQUEST` with an explanatory message.
+
 **curl example:**
 
 ```bash
@@ -1816,11 +1841,13 @@ Get a paginated list of currently blocked artifacts. Supports server-side search
 
 **Query Parameters:**
 
-| Parameter | Type    | Default | Description                                      |
-|-----------|---------|---------|--------------------------------------------------|
-| `page`    | integer | 0       | Zero-based page number                           |
-| `size`    | integer | 50      | Items per page (max 100)                         |
-| `search`  | string  | --      | Filter by artifact name, repo, or version        |
+| Parameter   | Type    | Default | Description                                      |
+|-------------|---------|---------|--------------------------------------------------|
+| `page`      | integer | 0       | Zero-based page number                           |
+| `size`      | integer | 50      | Items per page (max 100)                         |
+| `search`    | string  | --      | Filter by artifact name, repo, or version        |
+| `repo`      | string  | --      | Exact match on repository name                   |
+| `repo_type` | string  | --      | Exact match on repository type (e.g. `npm-proxy`)|
 
 **Response (200):**
 
@@ -1851,6 +1878,49 @@ Get a paginated list of currently blocked artifacts. Supports server-side search
 curl "http://localhost:8086/api/v1/cooldown/blocked?page=0&size=50&search=guava" \
   -H "Authorization: Bearer eyJhbGciOi..."
 ```
+
+---
+
+### GET /api/v1/cooldown/history
+
+Returns a paginated, permission-scoped list of archived cooldown entries
+(expired or manually unblocked blocks retained for audit).
+
+**Authentication:** JWT Bearer token required.
+**Required permission:** `api_cooldown_history_permissions.read` (global)
+plus `adapter_basic_permissions.read` on a repo to see its rows.
+
+**Query params** (all optional):
+- `page` (int, default 0)
+- `size` (int, default 50)
+- `search` (string, ILIKE match on artifact/version/repo)
+- `repo` (string, exact match)
+- `repo_type` (string, exact match, e.g. `npm-proxy`)
+- `sort_by` (one of `package_name`, `version`, `repo`, `repo_type`,
+  `reason`, `archived_at`, `archive_reason`; default `archived_at`)
+- `sort_dir` (`asc`|`desc`, default `desc`)
+
+**Response:**
+
+    {
+      "items": [
+        {
+          "package_name": "lodash",
+          "version": "4.17.20",
+          "repo": "npm-central",
+          "repo_type": "npm-proxy",
+          "reason": "MALWARE",
+          "blocked_date": "2026-03-15T09:00:00Z",
+          "blocked_until": "2026-03-22T09:00:00Z",
+          "archived_at": "2026-03-22T09:00:02Z",
+          "archive_reason": "EXPIRED",
+          "archived_by": "system"
+        }
+      ],
+      "total": 1,
+      "page": 0,
+      "size": 50
+    }
 
 ---
 

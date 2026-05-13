@@ -33,7 +33,6 @@ import org.junit.jupiter.api.Timeout;
  *
  * @since 0.24
  */
-@SuppressWarnings("PMD.ProhibitPlainJunitAssertionsRule")
 @Timeout(3)
 final class RetryLockTest {
 
@@ -126,7 +125,6 @@ final class RetryLockTest {
      *
      * @since 0.24
      */
-    @SuppressWarnings("PMD.AvoidFieldNameMatchingMethodName")
     private static class FailingLock implements Lock {
 
         /**

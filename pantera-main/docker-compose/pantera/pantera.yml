@@ -59,6 +59,10 @@ meta:
     repo_types:
       npm-proxy:
         enabled: true
+      maven-proxy:
+        enabled: true
+      gradle-proxy:
+        enabled: true
   
   artifacts_database:
     postgres_host: "pantera-db"
@@ -169,3 +173,33 @@ meta:
         l1Ttl: 30d
         l2MaxSize: 500000
         l2Ttl: 30d
+
+    # ArtifactIndexCache positive tier — maps artifactName -> repos that
+    # serve it. Surgical updates (recordUpload / recordDelete) keep entries
+    # accurate without dropping the whole list on upload, so a TTL longer
+    # than uploads-are-frequent windows is safe. L2 + pub/sub make uploads
+    # on one node visible on peer nodes within the pub/sub round-trip.
+    artifact-index-positive:
+      ttl: 10m
+      maxSize: 50000
+      valkey:
+        enabled: true
+        l1MaxSize: 50000
+        l1Ttl: 10m
+        l2MaxSize: 500000
+        l2Ttl: 1h
+
+    # ArtifactIndexCache negative tier — short-lived "no repo has this"
+    # entries to spare the DB on repeated misses during a single resolve.
+    # Surgical recordUpload immediately drops the corresponding negative
+    # entry on every node via pub/sub, so a longer TTL would only matter
+    # if pub/sub is unavailable. Kept short for defence in depth.
+    artifact-index-negative:
+      ttl: 30s
+      maxSize: 50000
+      valkey:
+        enabled: true
+        l1MaxSize: 50000
+        l1Ttl: 30s
+        l2MaxSize: 500000
+        l2Ttl: 5m

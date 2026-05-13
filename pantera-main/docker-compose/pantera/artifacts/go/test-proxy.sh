@@ -88,6 +88,9 @@ download_module "github.com/prometheus/client_golang@v1.21.1"
 # Firebase/Google (larger dependency tree)
 download_module "github.com/firebase/genkit/go/ai@v1.0.5"
 
+# Openai
+download_module "github.com/openai/openai-go/v3"
+
 echo ""
 echo "   Results: $PASS passed, $FAIL failed out of $((PASS + FAIL)) modules"
 if [[ $FAIL -gt 0 ]]; then
@@ -98,7 +101,7 @@ echo "   ✓ All modules downloaded successfully"
 
 echo ""
 echo "4. Testing cooldown block (fresh package should be rejected with 403)..."
-OUTPUT=$(go get -v github.com/go-ap/processing@v0.0.0-20251113155015-1d7cda16040f 2>&1 || true)
+OUTPUT=$(go get -v github.com/go-ap/processing@v0.0.0-20260417143241-6f16acf4256b 2>&1 || true)
 if [[ $OUTPUT == *"403"* ]]; then
   echo "  ✓ Package correctly blocked by cooldown (HTTP 403)"
 else

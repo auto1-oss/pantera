@@ -18,6 +18,7 @@ import io.lettuce.core.pubsub.api.async.RedisPubSubAsyncCommands;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 
 /**
  * Redis/Valkey pub/sub channel for cross-instance cache invalidation.
@@ -108,6 +109,33 @@ public final class CacheInvalidationPubSub implements AutoCloseable {
      */
     public void register(final String name, final Cleanable<String> cache) {
         this.caches.put(name, cache);
+    }
+
+    /**
+     * Subscribe a per-key invalidation handler under the given namespace.
+     * Convenience wrapper around {@link #register(String, Cleanable)} for
+     * callers that only care about per-key invalidation and don't need the
+     * {@link Cleanable#invalidateAll()} broadcast — the adapter no-ops on
+     * invalidateAll because the handler is per-key only.
+     *
+     * @param namespace Cache type / namespace name (e.g. "auth:enabled")
+     * @param handler Consumer invoked with the key when a remote invalidation
+     *     for this namespace arrives
+     */
+    public void subscribe(final String namespace, final Consumer<String> handler) {
+        this.caches.put(namespace, new Cleanable<>() {
+            @Override
+            public void invalidate(final String key) {
+                handler.accept(key);
+            }
+
+            @Override
+            public void invalidateAll() {
+                // No-op: consumer-based subscribers only care about per-key
+                // invalidation; invalidateAll messages for this namespace
+                // are ignored by design.
+            }
+        });
     }
 
     /**

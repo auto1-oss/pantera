@@ -11,6 +11,7 @@
 package com.auto1.pantera.http.rq;
 
 import java.net.URI;
+import java.util.Locale;
 
 /**
  * Request line helper object.
@@ -49,7 +50,7 @@ final class RequestLineFrom {
      * @return Method name
      */
     public RqMethod method() {
-        return RqMethod.valueOf(this.part(0).toUpperCase());
+        return RqMethod.valueOf(this.part(0).toUpperCase(Locale.ROOT));
     }
 
     /**
