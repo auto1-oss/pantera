@@ -389,7 +389,7 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
         }
         final String h = host.toLowerCase(java.util.Locale.ROOT);
         return "localhost".equals(h)
-            || "::1".equals(h)
+            || "::1".equals(h) // NOPMD AvoidUsingHardCodedIP - IPv6 loopback literal is the value we need to detect
             || h.startsWith("127.");
     }
 
