@@ -2,6 +2,108 @@
 
 ## Version 2.2.0
 
+- **Cold maven_group resolve: 38 s → target +2 s overhead vs direct
+  Maven Central — five RCAs fixed in one pass.** Measured before this
+  pass: `mvn dependency:resolve -Dartifact=org.codehaus.mojo:sonar-maven-plugin:4.0.0.4121 -U`
+  in 9.58 s direct vs 37.57-39.07 s through `maven_group` (clean
+  ~/.m2 + cold maven_proxy disk + cold groovy disk + purged
+  `artifacts` DB). The +28 s gap reproduces on every run.
+
+  **RCA-1 — investigation, deferred.** First-cut implementation
+  buffered the leader's response body into a byte[] inside a new
+  `SingleFlight<String, BufferedResponse>` keyed on
+  `method + " " + path` so followers could rebuild fresh `Response`
+  objects from the same bytes. Empirically this REGRESSED cold walk
+  from 38 s to 44 s: serializing the upstream → buffer → re-stream
+  to client converts streaming into wait-then-stream per artifact,
+  and the leader's `mvn` client now waits for the full body to arrive
+  on Pantera before any byte hits the socket. Reverted.
+
+  Root cause runs deeper than concurrent-request dedup at the group:
+  the 30-45 `groovy` fallthroughs that remain per cold walk are
+  `maven_proxy` returning 404 to the group despite Maven Central
+  having the artifact 200. The 404 must originate inside
+  `verifyAndServePrimary` / `fetchVerifyAndCache` (maven adapter) —
+  likely an `exceptionally` swallowing a transient error and
+  collapsing to `notFound()`. Now that RCA-6 makes the fallthrough
+  visible, this becomes a tractable follow-up — but it is NOT solved
+  by a group-layer SingleFlight.
+
+  **RCA-7 — investigated, deferred.** Maven Central was actively
+  rate-limiting the workstation IP during the second half of this
+  perf session (`curl https://repo1.maven.org/maven2/...` returned
+  429). Pantera's `CachedProxySlice.fetchVerifyAndCache` exception
+  handler collapses every upstream 4xx to 404 — so 429 was being
+  treated as a permanent "not found", `ArtifactIndexCache` wrote an
+  `aix:n:<artifact-name>` entry that blocked all versions of the
+  same artifact until L1+L2 evicted, and the group fell through to
+  `groovy.jfrog` for ~100 artifacts per cold walk.
+
+  Tried changing the collapse to only 404/410 → notFound and 429 /
+  4xx-other → 502. Reverted: the load-bearing assumption that
+  "any 4xx from member A means try member B" is wired into the
+  whole maven-group chain, including the second-level `remotes`
+  group, so returning 502 for an artifact that DOES live in groovy
+  but happens to bounce off a transient maven_proxy 4xx breaks
+  `mvn` entirely (`Failed to read artifact descriptor for
+  commons-io:commons-io:jar:2.5`). The real fix needs separate
+  handling for "upstream rate-limited me — back off and retry"
+  vs. "upstream genuinely doesn't have it" — likely a transient-
+  retry decorator inside `fetchPrimaryBody` plus 429-aware
+  `ArtifactIndexCache` write-suppression. Defer to a follow-up
+  PR with proper retry-with-backoff design.
+
+  Files reverted: `maven-adapter/.../CachedProxySlice.java`
+  remains on its pre-RCA-7 behavior.
+
+  **RCA-3 — `MavenSiblingPrefetcher` deleted (1 thread, unbounded
+  queue, ~200 enqueues on cold walk).** The class fired a background
+  fetch of the sibling extension (`.pom` ↔ `.jar`) after every primary
+  commit, but its single worker drained at 5-10 siblings/sec — far
+  slower than the 10-50 ms gap between mvn's matching foreground
+  requests. The race was lost effectively always; the `.jar` request
+  arrived long before the prefetch had even left the queue. Concurrent
+  in-flight prefetches still consumed the per-upstream semaphore and
+  contended with foreground requests. Net measurable benefit: zero.
+  Net latent risk: the unbounded `LinkedBlockingQueue` is an OOM bomb
+  under any sustained burst.
+
+  Files: deleted `maven-adapter/.../MavenSiblingPrefetcher.java` and
+  `MavenSiblingPrefetcherTest.java`; removed the field + wiring from
+  `maven-adapter/.../CachedProxySlice.java`.
+
+  **RCA-4 — auth success log demoted from INFO to DEBUG.**
+  `LoggingAuth` wraps every `Authentication` and logs INFO on every
+  successful authentication. With the production `twoTier` stack
+  (`CachedUsers` wrapping `LocalEnabledFilter`), this wrapper sits on
+  BOTH tiers, so every authenticated request fires two INFO entries.
+  A cold mvn run produced 1062 entries (534 requests × 2) at ~750
+  bytes each — ~800 KB of pure noise per build. Failure path stays at
+  WARN (unchanged).
+
+  File: `pantera-main/.../auth/LoggingAuth.java`.
+
+  **RCA-5 — orphan `vertx.cacheDirBase/tmp-<uuid>` dirs swept at
+  startup.** Vert.x creates a new working dir on every `Vertx.vertx()`
+  call and never cleans up siblings from prior boots. Production
+  carried 11 353 orphans (4.1 GB) under `/var/pantera/cache/tmp`,
+  which slows the surrounding `FileStorage` writes and bloats the
+  cache mount. `VertxMain.cleanupStaleVertxTmpDirs` now sweeps any
+  `tmp-*` dir older than 1 h before Vert.x boots; the current PID's
+  dir is created later and safely outside the cutoff.
+
+  File: `pantera-main/.../VertxMain.java`.
+
+  **RCA-6 — group fallthrough no longer silent.**
+  `tryNextSequentialMember` recursed past 404/non-2xx members with
+  zero log trace, which blocked RCA-1 diagnosis (no way to tell from
+  logs whether maven_proxy had served, 404'd, or errored before groovy
+  got the request). Now each non-2xx falls through with a single
+  `group_member_fallthrough` log line carrying member name, status
+  code, and url.path. 404 → INFO, anything else → WARN.
+
+  File: `pantera-main/.../group/GroupResolver.java`.
+
 - **Track 5: zero upstream I/O on cache hit, architectural fix across
   every proxy adapter.** User reported sudden 429 storms from Maven
   Central starting 2026-05-11 and the diagnostic question that named the

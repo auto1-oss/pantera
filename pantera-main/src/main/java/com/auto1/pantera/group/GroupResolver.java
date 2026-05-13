@@ -831,6 +831,20 @@ public final class GroupResolver implements Slice {
             }
             if (status == RsStatus.NOT_FOUND) {
                 drainBody(resp.body());
+                // RCA-6 (v2.2.0): make member fallthrough visible. Previously
+                // a maven_proxy 404 silently fell through to groovy with no
+                // log trace at all, which blocked perf diagnosis when the
+                // group amplified upstream load by hitting secondary
+                // members for artifacts a primary mirror should own.
+                EcsLogger.info("com.auto1.pantera.group")
+                    .message("Group member returned 404, trying next")
+                    .eventCategory("web")
+                    .eventAction("group_member_fallthrough")
+                    .field("repository.name", this.group)
+                    .field("repository.member", member.name())
+                    .field("http.response.status_code", 404)
+                    .field("url.path", line.uri().getPath())
+                    .log();
                 tryNextSequentialMember(iter, line, headers, requestBytes,
                     isTargetedLocalRead, anyServerError, result, pinArtifactName);
                 return;
@@ -839,6 +853,16 @@ public final class GroupResolver implements Slice {
             drainBody(resp.body());
             member.recordFailure();
             anyServerError.set(true);
+            EcsLogger.warn("com.auto1.pantera.group")
+                .message("Group member returned non-2xx, trying next")
+                .eventCategory("web")
+                .eventAction("group_member_fallthrough")
+                .eventOutcome("failure")
+                .field("repository.name", this.group)
+                .field("repository.member", member.name())
+                .field("http.response.status_code", status.code())
+                .field("url.path", line.uri().getPath())
+                .log();
             tryNextSequentialMember(iter, line, headers, requestBytes,
                 isTargetedLocalRead, anyServerError, result, pinArtifactName);
         });

@@ -127,16 +127,6 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
     private final Optional<Queue<ProxyArtifactEvent>> localEvents;
 
     /**
-     * Track 4 sibling prefetcher: after a successful primary commit, fire
-     * a background fetch of the companion artifact (typically the
-     * {@code .jar} &harr; {@code .pom} partner). Bounded to one worker
-     * per repo so it can't overwhelm upstream. {@code null} when storage
-     * is unavailable (cannot happen post-Track 3 — constructor refuses
-     * empty storage — but defensive against future refactors).
-     */
-    private final MavenSiblingPrefetcher siblingPrefetcher;
-
-    /**
      * Cooldown metadata filter service. When present, {@link #handleMetadata}
      * runs the upstream {@code maven-metadata.xml} bytes through the parser /
      * filter / rewriter chain before returning, so fresh versions inside the
@@ -241,9 +231,6 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 + "with Optional.empty() — check the proxy YAML configuration."
             )),
             repoName
-        );
-        this.siblingPrefetcher = new MavenSiblingPrefetcher(
-            client, storage.get(), this.cacheWriter, repoName, upstreamUrl
         );
         this.cooldownMetadata = cooldownMetadata;
         this.metadataInspector = cooldownMetadata == null
@@ -737,15 +724,6 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 this.enqueueEventForWriter(
                     key, body.headers(), artifact.body().size().orElse(0L)
                 );
-                // Track 4 sibling prefetch: fire after the verification +
-                // commit lands (verificationOutcome completes only after the
-                // primary lands in cache). Failures inside the prefetcher
-                // are logged + swallowed; this thenAccept never throws.
-                artifact.verificationOutcome().thenAccept(commitResult -> {
-                    if (commitResult instanceof Result.Ok) {
-                        this.siblingPrefetcher.onPrimaryCached(key);
-                    }
-                });
                 return ResponseBuilder.ok().body(artifact.body()).build();
             })
         ).exceptionally(err -> {

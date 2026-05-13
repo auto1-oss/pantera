@@ -64,6 +64,7 @@ import org.apache.commons.lang3.tuple.Pair;
 import com.auto1.pantera.diagnostics.BlockedThreadDiagnostics;
 
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -188,6 +189,13 @@ public final class VertxMain {
             com.auto1.pantera.http.log.EcsMdc.SPAN_ID,
             com.auto1.pantera.http.trace.SpanContext.generateHex16()
         );
+        // RCA-5 (v2.2.0): Vert.x writes a per-process cache dir
+        // (vertx.cacheDirBase) on every boot and never cleans up siblings
+        // from prior boots. Production was carrying 11k+ orphan tmp-<uuid>
+        // directories (4 GB) which slowed FileStorage I/O and bloated the
+        // /var/pantera/cache mount. Sweep any tmp-* dir older than 1 hour
+        // before Vert.x boots so the only live one will be ours.
+        cleanupStaleVertxTmpDirs();
         // Pre-parse YAML to detect DB configuration for Quartz JDBC clustering
         final com.amihaiemil.eoyaml.YamlMapping yamlContent =
             com.amihaiemil.eoyaml.Yaml.createYamlInput(this.config.toFile()).readYamlMapping();
@@ -1635,6 +1643,84 @@ public final class VertxMain {
             .log();
 
         return res;
+    }
+
+    /**
+     * Sweep orphan Vert.x cache-dir-base entries left by prior boots.
+     *
+     * <p>Vert.x creates a {@code tmp-<uuid>} working directory under
+     * {@code vertx.cacheDirBase} (defaults to {@code java.io.tmpdir}) on
+     * every {@code Vertx.vertx()} call, but does not clean up siblings from
+     * earlier processes — a fresh dir is created every boot and the old
+     * ones accumulate forever. Production was observed with 11 353
+     * orphans (4.1 GB). We remove any {@code tmp-*} entry older than 1
+     * hour at startup; the current PID's directory will be created later
+     * and is safely beyond that age window.
+     */
+    private static void cleanupStaleVertxTmpDirs() {
+        final String base = System.getProperty("vertx.cacheDirBase",
+            System.getProperty("java.io.tmpdir"));
+        if (base == null || base.isBlank()) {
+            return;
+        }
+        final Path baseDir = Path.of(base);
+        if (!Files.isDirectory(baseDir)) {
+            return;
+        }
+        final long cutoffMillis =
+            System.currentTimeMillis() - java.util.concurrent.TimeUnit.HOURS.toMillis(1);
+        final long[] counters = {0L, 0L}; // [removed, bytesFreed]
+        try (java.util.stream.Stream<Path> stream = Files.list(baseDir)) {
+            stream.filter(p -> p.getFileName().toString().startsWith("tmp-"))
+                .filter(Files::isDirectory)
+                .forEach(dir -> {
+                    try {
+                        final java.nio.file.attribute.FileTime mtime = Files.getLastModifiedTime(dir);
+                        if (mtime.toMillis() > cutoffMillis) {
+                            return;
+                        }
+                        final long[] subtree = {0L};
+                        try (java.util.stream.Stream<Path> walk = Files.walk(dir)) {
+                            walk.sorted(java.util.Comparator.reverseOrder())
+                                .forEach(p -> {
+                                    try {
+                                        if (Files.isRegularFile(p)) {
+                                            subtree[0] += Files.size(p);
+                                        }
+                                        Files.deleteIfExists(p);
+                                    } catch (final IOException ignored) {
+                                        // best-effort
+                                    }
+                                });
+                        }
+                        counters[0]++;
+                        counters[1] += subtree[0];
+                    } catch (final IOException ignored) {
+                        // skip this directory; continue
+                    }
+                });
+        } catch (final IOException ex) {
+            EcsLogger.warn("com.auto1.pantera")
+                .message("Vert.x tmpdir cleanup scan failed: " + ex.getMessage())
+                .eventCategory("process")
+                .eventAction("vertx_tmpdir_cleanup")
+                .eventOutcome("failure")
+                .field("file.directory", base)
+                .log();
+            return;
+        }
+        if (counters[0] > 0L) {
+            EcsLogger.info("com.auto1.pantera")
+                .message("Vert.x tmpdir cleanup: removed " + counters[0]
+                    + " orphan dir(s), freed " + counters[1] + " bytes")
+                .eventCategory("process")
+                .eventAction("vertx_tmpdir_cleanup")
+                .eventOutcome("success")
+                .field("file.directory", base)
+                .field("file.removed_count", counters[0])
+                .field("file.bytes_freed", counters[1])
+                .log();
+        }
     }
 
 }
