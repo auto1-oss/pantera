@@ -529,5 +529,159 @@ public final class MicrometerMetrics {
             .register(registry)
             .increment();
     }
+
+    // ========== M1 (Finding #8): Outbound observability foundation ==========
+    //
+    // Every outbound request (foreground proxy, cooldown HEAD, metadata
+    // refresh — and historically prefetch, deleted in M2) increments one of
+    // these counters. The amplification ratio
+    //   sum(rate(pantera_upstream_requests_total[5m]))
+    //     /
+    //   sum(rate(pantera_http_requests_total{result="success"}[5m]))
+    // is the primary gate the perf harness enforces: any sustained value
+    // above 1.5 is a regression. See analysis/plan/v1/PLAN.md milestone M1.
+
+    /**
+     * Record an outbound HTTP request to an upstream host.
+     *
+     * <p>Emits {@code pantera_upstream_requests_total{upstream_host, caller_tag,
+     * outcome}} so dashboards can compute amplification ratio and per-source
+     * outbound mix. The {@code outcome} label buckets status codes into
+     * coarse groups + isolates {@code 429} for the rate-limit alerting path.
+     *
+     * <p>Also records latency under
+     * {@code pantera_upstream_request_duration_seconds} with the same labels.
+     *
+     * @param upstreamHost the host of the upstream server (e.g.
+     *     {@code "repo1.maven.org"}). Used as the {@code upstream_host} label.
+     * @param callerTag    one of {@code "foreground"}, {@code "cooldown_head"},
+     *     {@code "metadata_refresh"} — identifies which Pantera subsystem
+     *     issued the outbound request. Defaulted from the
+     *     {@code RequestContext.KEY_CALLER_TAG} ThreadContext entry by the
+     *     calling slice.
+     * @param outcome      one of {@code "2xx"}, {@code "3xx"}, {@code "4xx"},
+     *     {@code "429"}, {@code "5xx"}, {@code "timeout"},
+     *     {@code "connect_error"}, {@code "error"}. The {@code "429"} bucket
+     *     is isolated for alerting.
+     * @param durationMs   wall-clock duration of the upstream call in
+     *     milliseconds (request send → response received).
+     */
+    public void recordOutboundRequest(
+        final String upstreamHost,
+        final String callerTag,
+        final String outcome,
+        final long durationMs
+    ) {
+        Counter.builder("pantera.upstream.requests.total")
+            .description("Outbound HTTP requests to upstream registries, "
+                + "labelled by caller subsystem and outcome bucket. "
+                + "Drives the amplification-ratio alert.")
+            .tags(
+                "upstream_host", upstreamHost,
+                "caller_tag", callerTag,
+                "outcome", outcome
+            )
+            .register(registry)
+            .increment();
+        Timer.builder("pantera.upstream.request.duration")
+            .description("Outbound HTTP request latency to upstream registries.")
+            .tags(
+                "upstream_host", upstreamHost,
+                "caller_tag", callerTag,
+                "outcome", outcome
+            )
+            .register(registry)
+            .record(java.time.Duration.ofMillis(durationMs));
+    }
+
+    /**
+     * Record an upstream {@code 429 Too Many Requests} response. Primary
+     * alerting signal for "Maven Central / npm registry / packagist /
+     * etc. is rate-limiting us."
+     *
+     * <p>Emits {@code pantera_proxy_429_total{upstream_host, repo_name}}.
+     * Operators should alert on
+     * {@code sum(increase(pantera_proxy_429_total[10m])) > 0} per host
+     * — any sustained 429 from a known-throttling upstream means our
+     * rate limiter is set too high or our amplification ratio is above 1.
+     *
+     * <p>Called from {@code JettyClientSlice} in addition to
+     * {@link #recordOutboundRequest} (the latter buckets the same response
+     * under {@code outcome="429"} for amplification context).
+     *
+     * @param upstreamHost host that returned 429 (e.g. {@code "repo1.maven.org"}).
+     * @param repoName     repository the foreground request was for
+     *     (e.g. {@code "maven_proxy"}); read from
+     *     {@code ThreadContext.get(RequestContext.KEY_REPO_NAME)} by the
+     *     caller. Pass {@code "unknown"} when not available.
+     */
+    public void recordUpstream429(final String upstreamHost, final String repoName) {
+        Counter.builder("pantera.proxy.429.total")
+            .description("Upstream 429 Too Many Requests responses received, "
+                + "labelled by upstream host and originating repo. Primary "
+                + "throttling alert signal.")
+            .tags("upstream_host", upstreamHost, "repo_name", repoName)
+            .register(registry)
+            .increment();
+    }
+
+    /**
+     * Bucket a response status code into a coarse outcome label.
+     * Isolates {@code 429} from the rest of {@code 4xx} for the alerting
+     * path.
+     *
+     * @param statusCode HTTP status code from the upstream response.
+     * @return one of {@code "2xx"}, {@code "3xx"}, {@code "4xx"},
+     *     {@code "429"}, {@code "5xx"}, or {@code "unknown"}.
+     */
+    public static String outcomeBucket(final int statusCode) {
+        if (statusCode == 429) {
+            return "429";
+        }
+        if (statusCode >= 200 && statusCode < 300) {
+            return "2xx";
+        }
+        if (statusCode >= 300 && statusCode < 400) {
+            return "3xx";
+        }
+        if (statusCode >= 400 && statusCode < 500) {
+            return "4xx";
+        }
+        if (statusCode >= 500 && statusCode < 600) {
+            return "5xx";
+        }
+        return "unknown";
+    }
+
+    /**
+     * Bucket an upstream-call failure into a coarse outcome label.
+     *
+     * @param failure the {@link Throwable} surfaced from the Jetty client.
+     *     {@code null} returns {@code "error"} as a safe default.
+     * @return one of {@code "timeout"}, {@code "connect_error"},
+     *     {@code "error"}.
+     */
+    public static String outcomeFromFailure(final Throwable failure) {
+        if (failure == null) {
+            return "error";
+        }
+        if (failure instanceof java.util.concurrent.TimeoutException) {
+            return "timeout";
+        }
+        if (failure instanceof java.net.ConnectException
+            || failure instanceof java.net.SocketException) {
+            return "connect_error";
+        }
+        // Jetty wraps connection failures sometimes; check the cause too.
+        final Throwable cause = failure.getCause();
+        if (cause instanceof java.net.ConnectException
+            || cause instanceof java.net.SocketException) {
+            return "connect_error";
+        }
+        if (cause instanceof java.util.concurrent.TimeoutException) {
+            return "timeout";
+        }
+        return "error";
+    }
 }
 

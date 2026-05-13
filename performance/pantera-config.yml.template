@@ -1,0 +1,51 @@
+# Pantera SUT config for the scaling benchmark.
+# Schema matches benchmark/setup/pantera-new.yml (canonical bench config).
+# Per-repo YAMLs live in ./repos/ and are mounted at /var/pantera/repo/.
+meta:
+  storage:
+    type: fs
+    path: /var/pantera/repo
+
+  jwt:
+    private-key-path: /etc/pantera/secrets/jwt-private.pem
+    public-key-path: /etc/pantera/secrets/jwt-public.pem
+    access-token-expiry-seconds: 3600
+    refresh-token-expiry-seconds: 604800
+
+  credentials:
+    - type: env
+    - type: jwt-password
+
+  policy:
+    type: pantera
+    eviction_millis: 180000
+    storage:
+      type: fs
+      path: /var/pantera/security
+
+  artifacts_database:
+    postgres_host: postgres
+    postgres_port: 5432
+    postgres_database: pantera
+    postgres_user: pantera
+    postgres_password: pantera
+    pool_max_size: ${SUT_DB_POOL_MAX}
+    pool_min_idle: ${SUT_DB_POOL_MIN}
+
+  http_client:
+    proxy_timeout: 60
+    max_connections_per_destination: 128
+    max_requests_queued_per_destination: 512
+    idle_timeout: 30000
+    connection_timeout: 10000
+    follow_redirects: true
+
+  caches:
+    valkey:
+      enabled: true
+      host: valkey
+      port: 6379
+      timeout: 100ms
+    negative:
+      ttl: 24h
+      maxSize: 5000

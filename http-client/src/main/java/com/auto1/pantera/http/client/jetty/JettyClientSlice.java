@@ -22,6 +22,7 @@ import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.trace.TraceHeaders;
 import com.auto1.pantera.metrics.MicrometerMetrics;
+import org.apache.logging.log4j.ThreadContext;
 import io.reactivex.Flowable;
 import io.reactivex.processors.UnicastProcessor;
 import org.apache.hc.core5.net.URIBuilder;
@@ -97,6 +98,20 @@ final class JettyClientSlice implements Slice {
     ) {
         final Request request = this.buildRequest(headers, line);
         final CompletableFuture<Response> res = new CompletableFuture<>();
+        // M1 (Finding #8): outbound observability. Snapshot caller_tag and
+        // repo_name from the calling thread's MDC BEFORE we hand off to
+        // Jetty's async machinery — once the request.send callback fires we
+        // may be on a Jetty-internal thread that does not carry our
+        // ThreadContext. The recorded values are then closed-over by the
+        // callback below. See analysis/03-findings.md finding #8 + the M1
+        // entry in analysis/plan/v1/PLAN.md.
+        final String callerTag = nullToDefault(
+            ThreadContext.get("caller.tag"), "foreground"
+        );
+        final String repoName = nullToDefault(
+            ThreadContext.get("repository.name"), "unknown"
+        );
+        final long requestStartNanos = System.nanoTime();
         // Streaming: emit chunks as they arrive instead of buffering everything.
         // UnicastProcessor supports backpressure and single-subscriber semantics.
         final UnicastProcessor<ByteBuffer> processor = UnicastProcessor.create();
@@ -188,6 +203,11 @@ final class JettyClientSlice implements Slice {
                         // Complete the processor in case it was created but never used
                         // (edge case: content source callback fired but no chunks)
                         processor.onComplete();
+                        // M1 outbound metric: response received, bucket by status.
+                        recordOutboundMetric(
+                            callerTag, repoName, requestStartNanos,
+                            result.getResponse().getStatus(), null
+                        );
                     } else {
                         final Throwable failure = result.getFailure();
                         // Idle-close is a normal connection-lifecycle event
@@ -214,10 +234,60 @@ final class JettyClientSlice implements Slice {
                         // Complete processor with error so subscribers don't hang
                         processor.onError(failure);
                         res.completeExceptionally(failure);
+                        // M1 outbound metric: request failed, bucket by exception.
+                        recordOutboundMetric(
+                            callerTag, repoName, requestStartNanos, -1, failure
+                        );
                     }
                 }
         );
         return res;
+    }
+
+    /**
+     * M1 (Finding #8) — emit {@code pantera_upstream_requests_total} +
+     * {@code pantera_proxy_429_total} for this outbound call.
+     *
+     * <p>Single funnel through the metric API so every outbound request
+     * is counted exactly once, with caller_tag attribution and outcome
+     * bucketing. Idempotent if MicrometerMetrics is uninitialised (e.g.
+     * tests bootstrap without the registry).</p>
+     *
+     * @param callerTag         caller_tag snapshot taken before
+     *     {@code request.send()} (the Jetty callback may run on a
+     *     thread that does not carry our ThreadContext).
+     * @param repoName          repo_name snapshot, same rationale.
+     * @param requestStartNanos start time captured before send.
+     * @param statusCode        upstream HTTP status, or {@code -1} on
+     *     failure.
+     * @param failure           upstream failure, or {@code null} on success.
+     */
+    private void recordOutboundMetric(
+        final String callerTag,
+        final String repoName,
+        final long requestStartNanos,
+        final int statusCode,
+        final Throwable failure
+    ) {
+        if (!MicrometerMetrics.isInitialized()) {
+            return;
+        }
+        final long durationMillis =
+            (System.nanoTime() - requestStartNanos) / 1_000_000L;
+        final String outcome = (failure == null)
+            ? MicrometerMetrics.outcomeBucket(statusCode)
+            : MicrometerMetrics.outcomeFromFailure(failure);
+        MicrometerMetrics.getInstance().recordOutboundRequest(
+            this.host, callerTag, outcome, durationMillis
+        );
+        if (statusCode == 429) {
+            MicrometerMetrics.getInstance().recordUpstream429(this.host, repoName);
+        }
+    }
+
+    /** Return {@code value} if non-null, otherwise {@code fallback}. */
+    private static String nullToDefault(final String value, final String fallback) {
+        return value == null ? fallback : value;
     }
 
     /**

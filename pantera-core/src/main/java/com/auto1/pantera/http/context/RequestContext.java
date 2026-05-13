@@ -108,6 +108,37 @@ public record RequestContext(
     /** ECS key: {@code url.path}. */
     public static final String KEY_URL_PATH = "url.path";
 
+    /**
+     * Pantera-specific MDC key naming the subsystem that issued the outbound
+     * upstream request. Not an ECS key. Used by {@code JettyClientSlice} to
+     * tag the {@code pantera_upstream_requests_total} metric so the
+     * amplification-ratio dashboard can attribute outbound traffic to its
+     * source. Defaults to {@link #CALLER_TAG_FOREGROUND} when unset.
+     *
+     * <p>Permitted values: {@link #CALLER_TAG_FOREGROUND},
+     * {@link #CALLER_TAG_COOLDOWN_HEAD},
+     * {@link #CALLER_TAG_METADATA_REFRESH}. Tests may use arbitrary tags.</p>
+     *
+     * @since 2.2.0 (M1)
+     */
+    public static final String KEY_CALLER_TAG = "caller.tag";
+
+    /** Default {@code caller_tag} — a client-driven foreground request. */
+    public static final String CALLER_TAG_FOREGROUND = "foreground";
+
+    /**
+     * The cooldown-evaluator's HEAD probe ({@code MavenHeadSource} et al.).
+     * Set by {@code RegistryBackedInspector} before invoking its source.
+     */
+    public static final String CALLER_TAG_COOLDOWN_HEAD = "cooldown_head";
+
+    /**
+     * Background mutable-metadata refresh (maven-metadata.xml, packument,
+     * packages.json, etc.) triggered by SWR cache staleness. Set by the
+     * adapter's metadata-cache refresh path before the upstream call.
+     */
+    public static final String CALLER_TAG_METADATA_REFRESH = "metadata_refresh";
+
     /** Default deadline applied by {@link #minimal(String, String, String, String)}. */
     private static final Duration DEFAULT_BUDGET = Duration.ofSeconds(30);
 
@@ -288,6 +319,51 @@ public record RequestContext(
     }
 
     /**
+     * Set {@link #KEY_CALLER_TAG} on the current ThreadContext for the
+     * duration of a non-foreground outbound call. Pattern:
+     *
+     * <pre>{@code
+     *   try (AutoCloseable bound = RequestContext.bindCallerTag(CALLER_TAG_COOLDOWN_HEAD)) {
+     *       upstreamSlice.response(line, headers, body).get();
+     *   }
+     * }</pre>
+     *
+     * <p>Restores the prior value of {@code caller.tag} on close, NOT the
+     * full ThreadContext — keeps the rest of the ECS keys intact. Use this
+     * around the outbound call site only.</p>
+     *
+     * <p>Foreground requests don't need to call this — the absence of the
+     * key is interpreted as {@link #CALLER_TAG_FOREGROUND} by
+     * {@link #currentCallerTag()}.</p>
+     *
+     * @param tag one of {@link #CALLER_TAG_FOREGROUND},
+     *     {@link #CALLER_TAG_COOLDOWN_HEAD}, {@link #CALLER_TAG_METADATA_REFRESH},
+     *     or a test-only value.
+     * @return an {@link AutoCloseable} that restores the prior {@code caller.tag}
+     *     value on close. Idempotent — double-close is a no-op.
+     * @since 2.2.0 (M1)
+     */
+    public static AutoCloseable bindCallerTag(final String tag) {
+        final String prior = ThreadContext.get(KEY_CALLER_TAG);
+        if (tag == null) {
+            ThreadContext.remove(KEY_CALLER_TAG);
+        } else {
+            ThreadContext.put(KEY_CALLER_TAG, tag);
+        }
+        return new CallerTagRestore(prior);
+    }
+
+    /**
+     * @return the current {@code caller.tag} from the ThreadContext, or
+     *     {@link #CALLER_TAG_FOREGROUND} if unset. Never {@code null}.
+     * @since 2.2.0 (M1)
+     */
+    public static String currentCallerTag() {
+        final String tag = ThreadContext.get(KEY_CALLER_TAG);
+        return tag == null ? CALLER_TAG_FOREGROUND : tag;
+    }
+
+    /**
      * Package identity within a request. {@link #EMPTY} signals
      * "no specific package" — used for metadata / index requests
      * ({@code /-/package/...}, {@code /maven-metadata.xml}, etc).
@@ -333,6 +409,35 @@ public record RequestContext(
             ThreadContext.clearMap();
             if (!this.prior.isEmpty()) {
                 ThreadContext.putAll(this.prior);
+            }
+        }
+    }
+
+    /**
+     * Narrow {@link AutoCloseable} that restores a single ThreadContext key —
+     * used by {@link #bindCallerTag(String)} so that non-foreground outbound
+     * call sites don't have to snapshot the entire ECS context to flip one
+     * label.
+     */
+    private static final class CallerTagRestore implements AutoCloseable {
+        private final String prior;
+        private boolean closed;
+
+        private CallerTagRestore(final String priorTag) {
+            this.prior = priorTag;
+            this.closed = false;
+        }
+
+        @Override
+        public void close() {
+            if (this.closed) {
+                return;
+            }
+            this.closed = true;
+            if (this.prior == null) {
+                ThreadContext.remove(KEY_CALLER_TAG);
+            } else {
+                ThreadContext.put(KEY_CALLER_TAG, this.prior);
             }
         }
     }

@@ -365,4 +365,78 @@ final class RequestContextTest {
         MatcherAssert.assertThat(a, Matchers.is(b));
         MatcherAssert.assertThat(a.hashCode(), Matchers.is(b.hashCode()));
     }
+
+    // ================== caller_tag (M1) ==================
+
+    @Test
+    @DisplayName("currentCallerTag defaults to FOREGROUND when unset")
+    void currentCallerTagDefaultsToForeground() throws Exception {
+        MatcherAssert.assertThat(
+            RequestContext.currentCallerTag(),
+            Matchers.is(RequestContext.CALLER_TAG_FOREGROUND)
+        );
+    }
+
+    @Test
+    @DisplayName("bindCallerTag sets ThreadContext caller.tag and restores on close")
+    void bindCallerTagRoundTripsThroughThreadContext() throws Exception {
+        MatcherAssert.assertThat(
+            ThreadContext.get(RequestContext.KEY_CALLER_TAG),
+            Matchers.nullValue()
+        );
+        try (AutoCloseable bound = RequestContext.bindCallerTag(
+            RequestContext.CALLER_TAG_COOLDOWN_HEAD
+        )) {
+            MatcherAssert.assertThat(
+                "inside the bind, currentCallerTag reflects the bound tag",
+                RequestContext.currentCallerTag(),
+                Matchers.is(RequestContext.CALLER_TAG_COOLDOWN_HEAD)
+            );
+            MatcherAssert.assertThat(
+                "the ThreadContext key matches the binding",
+                ThreadContext.get(RequestContext.KEY_CALLER_TAG),
+                Matchers.is(RequestContext.CALLER_TAG_COOLDOWN_HEAD)
+            );
+        }
+        MatcherAssert.assertThat(
+            "after close, the key is removed (was unset before bind)",
+            ThreadContext.get(RequestContext.KEY_CALLER_TAG),
+            Matchers.nullValue()
+        );
+    }
+
+    @Test
+    @DisplayName("bindCallerTag preserves a prior caller.tag value on close")
+    void bindCallerTagPreservesPriorValue() throws Exception {
+        ThreadContext.put(RequestContext.KEY_CALLER_TAG, "test_prior");
+        try (AutoCloseable bound = RequestContext.bindCallerTag(
+            RequestContext.CALLER_TAG_METADATA_REFRESH
+        )) {
+            MatcherAssert.assertThat(
+                RequestContext.currentCallerTag(),
+                Matchers.is(RequestContext.CALLER_TAG_METADATA_REFRESH)
+            );
+        }
+        MatcherAssert.assertThat(
+            "the prior caller.tag must be restored on close",
+            ThreadContext.get(RequestContext.KEY_CALLER_TAG),
+            Matchers.is("test_prior")
+        );
+    }
+
+    @Test
+    @DisplayName("bindCallerTag double-close is a no-op")
+    void bindCallerTagDoubleCloseIsNoop() throws Exception {
+        ThreadContext.put(RequestContext.KEY_CALLER_TAG, "outer");
+        final AutoCloseable bound = RequestContext.bindCallerTag("inner");
+        bound.close();
+        // After first close, outer is back. Now bind a different value.
+        ThreadContext.put(RequestContext.KEY_CALLER_TAG, "newer");
+        // Second close on the original bound must not clobber the newer value.
+        bound.close();
+        MatcherAssert.assertThat(
+            ThreadContext.get(RequestContext.KEY_CALLER_TAG),
+            Matchers.is("newer")
+        );
+    }
 }
