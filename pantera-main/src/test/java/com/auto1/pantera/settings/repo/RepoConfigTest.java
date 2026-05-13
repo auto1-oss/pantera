@@ -160,19 +160,20 @@ public final class RepoConfigTest {
     }
 
     @Test
-    public void prefetchDefaultsTrueWhenAbsentForProxy() throws Exception {
+    public void prefetchDefaultsFalseWhenAbsentForProxy() throws Exception {
         // repo-cooldown-config.yml uses pypi-proxy with no settings.prefetch.
-        // Default for *-proxy types is true (preserving v2.1 heuristic).
-        Assertions.assertTrue(
+        // Default flipped 2026-05-13 (analysis/03-findings.md #1): opt-in
+        // everywhere. The old "proxy default to true" was the regression
+        // vehicle for the Maven Central 429 storms.
+        Assertions.assertFalse(
             readFromResource("repo-cooldown-config.yml").prefetchEnabled(),
-            "*-proxy repo without settings.prefetch should default to enabled"
+            "any repo without settings.prefetch must default to disabled"
         );
     }
 
     @Test
     public void prefetchDefaultsFalseForNonProxyTypes() throws Exception {
-        // repo-min-config.yml uses 'maven' (hosted). Hosted/group types
-        // default to false because prefetch is only meaningful upstream.
+        // repo-min-config.yml uses 'maven' (hosted).
         Assertions.assertFalse(
             readMin().prefetchEnabled(),
             "hosted (non-proxy) repo without settings.prefetch should default to disabled"
@@ -196,7 +197,7 @@ public final class RepoConfigTest {
         );
         Assertions.assertFalse(
             cfg.prefetchEnabled(),
-            "settings.prefetch=false must override the *-proxy default"
+            "settings.prefetch=false stays disabled"
         );
     }
 

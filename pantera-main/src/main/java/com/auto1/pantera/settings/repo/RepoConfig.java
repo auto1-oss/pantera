@@ -267,16 +267,19 @@ public final class RepoConfig {
     /**
      * Whether prefetch is enabled for this repository. Reads
      * {@code settings.prefetch} (boolean) from the per-repo YAML/JSONB
-     * config. When the field is absent the default depends on the repo
-     * {@link #type() type}: proxy types ({@code *-proxy}) default to
-     * {@code true} (preserving the v2.1 heuristic that any proxy repo
-     * was eligible for prefetch); all other types (hosted, group)
-     * default to {@code false} since prefetch is meaningless for them.
+     * config. When the field is absent the default is {@code false} for
+     * every repo type — operators must explicitly opt in by setting
+     * {@code settings.prefetch: true} in the per-repo config.
      *
-     * <p>Explicit settings always win — a hosted repo with
-     * {@code settings.prefetch: true} returns {@code true}, and a
-     * proxy repo with {@code settings.prefetch: false} returns
-     * {@code false}.</p>
+     * <p>Why the default flipped from "proxy types default to true" to
+     * "explicit opt-in everywhere": the speculative prefetch subsystem
+     * fires N upstream GETs per cached primary (one per direct dep in a
+     * POM / packument), recursively. With per-host concurrency 16
+     * (Maven) / 32 (npm) and no requests-per-second cap, a cold cache
+     * walk amplifies outbound RPS several times above the foreground
+     * client's request rate — enough to trip Maven Central's per-IP
+     * rate limiter (RCA in {@code analysis/03-findings.md} finding #1).
+     * Operators who want prefetch must enable it knowingly per repo.</p>
      *
      * @return {@code true} if prefetch should be considered for this
      *     repo, {@code false} otherwise.
@@ -290,7 +293,7 @@ public final class RepoConfig {
                 return Boolean.parseBoolean(explicit);
             }
         }
-        return this.type != null && this.type.endsWith("-proxy");
+        return false;
     }
 
     /**
