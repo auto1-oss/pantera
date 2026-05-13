@@ -14,6 +14,10 @@ import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.client.ClientSlices;
 import com.auto1.pantera.http.client.HttpClientSettings;
+import com.auto1.pantera.http.client.ratelimit.RateLimitConfig;
+import com.auto1.pantera.http.client.ratelimit.RateLimitedClientSlice;
+import com.auto1.pantera.http.client.ratelimit.UpstreamRateLimiter;
+import java.time.Clock;
 import java.util.concurrent.atomic.AtomicBoolean;
 import com.google.common.base.Strings;
 import org.eclipse.jetty.client.BasicAuthentication;
@@ -89,6 +93,13 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
      * Max time to wait for connection acquisition in milliseconds.
      */
     private final long acquireTimeoutMillis;
+
+    /**
+     * Outbound rate limiter. Shared across the JVM so every per-repo
+     * client honours the same per-upstream-host budget. M3 of
+     * {@code analysis/plan/v1/PLAN.md}.
+     */
+    private final UpstreamRateLimiter rateLimiter;
 
     /**
      * Started flag.
@@ -168,8 +179,35 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
         final int h2MaxPoolSize,
         final int h2MultiplexingLimit
     ) {
+        this(settings, protocol, h2MaxPoolSize, h2MultiplexingLimit,
+            new UpstreamRateLimiter.Default(RateLimitConfig.defaults(), Clock.systemUTC()));
+    }
+
+    /**
+     * Full constructor with an explicit {@link UpstreamRateLimiter}.
+     * Used by the perf harness + integration tests to inject a
+     * test-friendly clock / config; production callers use the 4-arg
+     * overload which builds a JVM-default limiter.
+     */
+    public JettyClientSlices(
+        final HttpClientSettings settings,
+        final HttpProtocol protocol,
+        final int h2MaxPoolSize,
+        final int h2MultiplexingLimit,
+        final UpstreamRateLimiter rateLimiter
+    ) {
         this.clnt = create(settings, protocol, h2MaxPoolSize, h2MultiplexingLimit);
         this.acquireTimeoutMillis = settings.connectionAcquireTimeout();
+        this.rateLimiter = rateLimiter;
+    }
+
+    /**
+     * @return Shared per-JVM rate limiter so callers (e.g. the proxy
+     *     slice's 429 fallback path) can inspect gate state without
+     *     re-resolving the singleton.
+     */
+    public UpstreamRateLimiter rateLimiter() {
+        return this.rateLimiter;
     }
 
     /**
@@ -323,15 +361,36 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
     }
 
     /**
-     * Create slice backed by client.
+     * Create slice backed by client. The returned slice is wrapped in a
+     * {@link RateLimitedClientSlice} so every outbound request through
+     * any adapter funnels through the per-host token bucket + 429 gate.
+     * Loopback hosts ({@code localhost}, {@code 127.x.x.x}, {@code ::1})
+     * bypass the rate limiter — these are exclusively dev / test
+     * fixtures and the limiter would otherwise throttle the harness.
      *
      * @param secure Secure connection flag.
      * @param host Host name.
      * @param port Port.
-     * @return Client slice.
+     * @return Client slice (rate-limited for non-loopback hosts).
      */
     private Slice slice(final boolean secure, final String host, final int port) {
-        return new JettyClientSlice(this.clnt, secure, host, port, this.acquireTimeoutMillis);
+        final JettyClientSlice raw = new JettyClientSlice(
+            this.clnt, secure, host, port, this.acquireTimeoutMillis
+        );
+        if (isLoopback(host)) {
+            return raw;
+        }
+        return new RateLimitedClientSlice(raw, host, this.rateLimiter, Clock.systemUTC());
+    }
+
+    private static boolean isLoopback(final String host) {
+        if (host == null) {
+            return false;
+        }
+        final String h = host.toLowerCase(java.util.Locale.ROOT);
+        return "localhost".equals(h)
+            || "::1".equals(h)
+            || h.startsWith("127.");
     }
 
     /**

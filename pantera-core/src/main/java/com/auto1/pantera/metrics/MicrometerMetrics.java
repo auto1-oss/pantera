@@ -626,6 +626,34 @@ public final class MicrometerMetrics {
     }
 
     /**
+     * Record a self-imposed outbound rate-limit hit. Differs from
+     * {@link #recordUpstream429}: this fires when Pantera's local
+     * token-bucket gate denied an outbound request before it left the
+     * JVM (M3 of {@code analysis/plan/v1/PLAN.md}). A non-zero count
+     * here is normal — it means the limiter is doing its job; a
+     * sustained high rate means the bucket size is too small for the
+     * legitimate workload.
+     *
+     * <p>Emits {@code pantera_outbound_rate_limited_total{upstream_host,
+     * reason}}. {@code reason} ∈ {@code "gate_closed"}
+     * (per-host 429 / Retry-After gate is open) or {@code "bucket_empty"}
+     * (steady-state RPS cap hit, gate is open).
+     *
+     * @param upstreamHost host whose limit was hit.
+     * @param reason {@code "gate_closed"} or {@code "bucket_empty"}.
+     * @since 2.2.0
+     */
+    public void recordOutboundRateLimited(final String upstreamHost, final String reason) {
+        Counter.builder("pantera.outbound.rate_limited.total")
+            .description("Outbound requests denied by Pantera's own per-host token-bucket "
+                + "or 429 gate. Sustained non-zero rate hints the bucket is undersized "
+                + "for legitimate traffic.")
+            .tags("upstream_host", upstreamHost, "reason", reason)
+            .register(registry)
+            .increment();
+    }
+
+    /**
      * Bucket a response status code into a coarse outcome label.
      * Isolates {@code 429} from the rest of {@code 4xx} for the alerting
      * path.

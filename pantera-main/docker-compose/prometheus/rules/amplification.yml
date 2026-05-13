@@ -104,3 +104,32 @@ groups:
             regressed or a new outbound source has been added. Drill into
             pantera_upstream_requests_total by caller_tag to identify which
             subsystem is over-fetching.
+
+      # ------------------------------------------------------------------
+      # Alert: self-imposed rate-limit gate stuck closed.
+      #
+      # M3 added the per-host token bucket + 429 gate. Some non-zero rate
+      # of {reason=bucket_empty} is healthy — the limiter is sized below
+      # peak demand on purpose. {reason=gate_closed} sustained > 10 min
+      # means an upstream is still 429-ing us through the gate's
+      # back-off window; the limit may be set too high.
+      # ------------------------------------------------------------------
+      - alert: PanteraOutboundGateStuckClosed
+        expr: |
+          sum by (upstream_host) (
+            increase(pantera_outbound_rate_limited_total{reason="gate_closed"}[10m])
+          ) > 0
+        for: 10m
+        labels:
+          severity: warn
+          team: devops
+        annotations:
+          summary: "429 gate closed > 10 min on {{ $labels.upstream_host }}"
+          description: |
+            Pantera's per-host 429 gate has been closing requests against
+            {{ $labels.upstream_host }} for over 10 minutes. The upstream
+            is still rate-limiting us through the back-off window. Either
+            drop the per-host token rate (PANTERA_RATE_LIMIT_<HOST>) or
+            investigate a non-foreground source via
+            pantera_upstream_requests_total{caller_tag} — there may be a
+            new outbound subsystem we did not anticipate.
