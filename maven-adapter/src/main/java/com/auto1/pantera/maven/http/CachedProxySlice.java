@@ -796,18 +796,16 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
             err.retryAfter().ifPresent(ra -> rb.header("Retry-After", ra));
             return rb.textBody("Upstream rate-limited").build();
         }
-        if (status == 503) {
-            // 503 WITH Retry-After: upstream cooldown — propagate verbatim.
-            // 503 WITHOUT Retry-After: pure transient — fall through to
-            // badGateway so the group resolver retries another member
-            // without poisoning the cache.
-            if (err.retryAfter().isPresent()) {
-                return ResponseBuilder
-                    .from(com.auto1.pantera.http.RsStatus.SERVICE_UNAVAILABLE)
-                    .header("Retry-After", err.retryAfter().get())
-                    .textBody("Upstream temporarily unavailable")
-                    .build();
-            }
+        // 503 WITH Retry-After: upstream cooldown — propagate verbatim.
+        // 503 WITHOUT Retry-After: pure transient — fall through to
+        // badGateway so the group resolver retries another member
+        // without poisoning the cache.
+        if (status == 503 && err.retryAfter().isPresent()) {
+            return ResponseBuilder
+                .from(com.auto1.pantera.http.RsStatus.SERVICE_UNAVAILABLE)
+                .header("Retry-After", err.retryAfter().get())
+                .textBody("Upstream temporarily unavailable")
+                .build();
         }
         if (status == 401 || status == 403) {
             return ResponseBuilder
