@@ -753,18 +753,73 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
             })
         ).exceptionally(err -> {
             final Throwable cause = unwrap(err);
-            // Upstream-404 must propagate as 404 so RaceSlice can try the
-            // next remote (e.g. .module on maven-central 404 → try
-            // plugins.gradle.org). Other 4xx are also "doesn't have it"
-            // semantically — surface as 404 too.
-            if (cause instanceof UpstreamHttpException upstreamErr
-                && upstreamErr.status() >= 400 && upstreamErr.status() < 500) {
-                return ResponseBuilder.notFound().build();
+            if (cause instanceof UpstreamHttpException upstreamErr) {
+                return mapUpstreamStatus(upstreamErr);
             }
+            // Connection / timeout / SSL → transient infrastructure.
             return ResponseBuilder.badGateway()
                 .textBody("Upstream temporarily unavailable")
                 .build();
         });
+    }
+
+    /**
+     * W6 status-code fidelity (analysis/plan/v1/PLAN.md, RCA-1 + RCA-7):
+     * map upstream non-2xx to the correct outbound response so the group
+     * resolver can act on it, the index cache does not get poisoned, and
+     * clients receive authoritative auth / rate-limit signals.
+     *
+     * <ul>
+     *   <li><b>404, 410</b> → propagate as 404 ({@code notFound}) so
+     *       RaceSlice can try the next remote (e.g. {@code .module} on
+     *       maven-central 404 → try plugins.gradle.org).</li>
+     *   <li><b>429</b> → propagate as 429 with the upstream's
+     *       Retry-After preserved. M3's gate is now closed for this
+     *       host so subsequent calls fail-fast; client backs off.</li>
+     *   <li><b>503 with Retry-After</b> → propagate as 503 + Retry-After
+     *       (transient cooldown).</li>
+     *   <li><b>401, 403</b> → propagate verbatim (auth is authoritative,
+     *       not a fallthrough signal).</li>
+     *   <li><b>5xx (no Retry-After)</b> → 502 badGateway; group fanout
+     *       will try the next member. Index cache MUST NOT write a
+     *       negative-cache entry for these.</li>
+     * </ul>
+     */
+    private static Response mapUpstreamStatus(final UpstreamHttpException err) {
+        final int status = err.status();
+        if (status == 404 || status == 410) {
+            return ResponseBuilder.notFound().build();
+        }
+        if (status == 429) {
+            final ResponseBuilder rb = ResponseBuilder
+                .from(com.auto1.pantera.http.RsStatus.TOO_MANY_REQUESTS);
+            err.retryAfter().ifPresent(ra -> rb.header("Retry-After", ra));
+            return rb.textBody("Upstream rate-limited").build();
+        }
+        if (status == 503) {
+            // 503 WITH Retry-After: upstream cooldown — propagate verbatim.
+            // 503 WITHOUT Retry-After: pure transient — fall through to
+            // badGateway so the group resolver retries another member
+            // without poisoning the cache.
+            if (err.retryAfter().isPresent()) {
+                return ResponseBuilder
+                    .from(com.auto1.pantera.http.RsStatus.SERVICE_UNAVAILABLE)
+                    .header("Retry-After", err.retryAfter().get())
+                    .textBody("Upstream temporarily unavailable")
+                    .build();
+            }
+        }
+        if (status == 401 || status == 403) {
+            return ResponseBuilder
+                .from(com.auto1.pantera.http.RsStatus.byCode(status))
+                .textBody("Upstream auth required")
+                .build();
+        }
+        // 5xx and any other unclassified non-2xx — transient,
+        // surface as bad-gateway so group fanout retries another member.
+        return ResponseBuilder.badGateway()
+            .textBody("Upstream temporarily unavailable")
+            .build();
     }
 
     /**
@@ -781,7 +836,14 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
             .thenApply(resp -> {
                 if (!resp.status().success()) {
                     resp.body().asBytesFuture();
-                    throw new UpstreamHttpException(resp.status().code());
+                    // Preserve Retry-After so the W6 status-fidelity handler
+                    // can propagate it verbatim on 429 / 503.
+                    final java.util.List<String> retryAfter =
+                        resp.headers().values("Retry-After");
+                    throw new UpstreamHttpException(
+                        resp.status().code(),
+                        retryAfter.isEmpty() ? null : retryAfter.get(0)
+                    );
                 }
                 return new UpstreamBody(
                     resp.body().size(), resp.body(), resp.headers()
@@ -817,26 +879,38 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
     }
 
     /**
-     * Carries the upstream HTTP status so {@link #fetchVerifyAndCache} can
-     * distinguish "this upstream truly doesn't have it" (404 → propagate as
-     * 404 to RaceSlice, so other remotes can serve) from "transient failure"
-     * (5xx, timeouts → surface as 503). Without this, every non-2xx upstream
-     * response was mapped to 503 by the cache writer, and RaceSlice treats
-     * 503 as a "winning" response (only 404 triggers race-continue), so a
-     * single 404 from maven-central beat a 200 from plugins.gradle.org for
-     * Gradle plugin .module files.
+     * Carries the upstream HTTP status (and Retry-After when present) so
+     * {@link #fetchVerifyAndCache} can map each non-2xx category to the
+     * right outbound response per W6 status-fidelity:
+     *
+     * <ul>
+     *   <li>404 / 410 → propagate as 404 to RaceSlice (genuine "doesn't
+     *       have it" — next member may have it).</li>
+     *   <li>429 → propagate verbatim with Retry-After (M3's gate honours
+     *       this; mvn / npm clients back off).</li>
+     *   <li>401 / 403 → propagate verbatim (authoritative auth signal).</li>
+     *   <li>503 with Retry-After → propagate verbatim (upstream cooldown).</li>
+     *   <li>5xx → badGateway (transient — group fanout retries another
+     *       member; cache is not poisoned).</li>
+     * </ul>
      */
     private static final class UpstreamHttpException extends IllegalStateException {
         private static final long serialVersionUID = 1L;
         private final int status;
+        private final String retryAfter;
 
-        UpstreamHttpException(final int status) {
+        UpstreamHttpException(final int status, final String retryAfter) {
             super("Upstream returned HTTP " + status);
             this.status = status;
+            this.retryAfter = retryAfter;
         }
 
         int status() {
             return this.status;
+        }
+
+        Optional<String> retryAfter() {
+            return Optional.ofNullable(this.retryAfter);
         }
     }
 

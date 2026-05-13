@@ -354,35 +354,74 @@ public final class VertxMain {
                         .setProtocolVersion(io.vertx.core.http.HttpVersion.HTTP_2)
                         .setUseAlpn(true)
                 );
-            final com.auto1.pantera.publishdate.sources.MavenHeadSource mavenHead =
-                new com.auto1.pantera.publishdate.sources.MavenHeadSource(publishDateClient);
-            final com.auto1.pantera.publishdate.sources.JFrogStorageApiSource jfrogFallback =
-                new com.auto1.pantera.publishdate.sources.JFrogStorageApiSource(
-                    publishDateClient,
-                    "https://groovy.jfrog.io/artifactory",
-                    "plugins-release"
-                );
-            final com.auto1.pantera.publishdate.PublishDateSource mavenSource =
-                new com.auto1.pantera.publishdate.sources.ChainedPublishDateSource(
-                    mavenHead, jfrogFallback
-                );
+            // M5 / W5b (analysis/plan/v1/PLAN.md): MavenHeadSource fires
+            // a HEAD against Maven Central whenever the publish-date L1+L2
+            // cache misses for an (artifact, version) pair. With Track 5
+            // Phase 1B in place, every successful cache write enqueues a
+            // publish_date row sourced from the response Last-Modified —
+            // so steady-state the head-fallback never fires. The remaining
+            // window is the very first fetch of a brand-new (artifact,
+            // version) pair: a HEAD per first-asker. At cold-walk scale
+            // (~50 new versions in a single resolve) that is 50 extra
+            // HEADs to the same upstream we are about to hit anyway, and
+            // each is subject to the same per-IP throttling as the GET.
+            // Default behaviour in 2.2.0 is therefore "skip the HEAD";
+            // operators who explicitly need first-fetch cooldown
+            // enforcement can re-enable via the env var. The trade-off:
+            // the first asker of a freshly-published blocked version
+            // downloads the bytes before the cooldown evaluator catches
+            // it on the next request (publish_date now cached).
+            final boolean headFallbackEnabled = com.auto1.pantera.http.misc.ConfigDefaults
+                .getBoolean("PANTERA_PUBLISH_DATE_HEAD_FALLBACK_ENABLED", false);
+            final java.util.Map<String, com.auto1.pantera.publishdate.PublishDateSource>
+                publishSources = new java.util.HashMap<>();
+            if (headFallbackEnabled) {
+                final com.auto1.pantera.publishdate.sources.MavenHeadSource mavenHead =
+                    new com.auto1.pantera.publishdate.sources.MavenHeadSource(publishDateClient);
+                final com.auto1.pantera.publishdate.sources.JFrogStorageApiSource jfrogFallback =
+                    new com.auto1.pantera.publishdate.sources.JFrogStorageApiSource(
+                        publishDateClient,
+                        "https://groovy.jfrog.io/artifactory",
+                        "plugins-release"
+                    );
+                final com.auto1.pantera.publishdate.PublishDateSource mavenSource =
+                    new com.auto1.pantera.publishdate.sources.ChainedPublishDateSource(
+                        mavenHead, jfrogFallback
+                    );
+                publishSources.put("maven", mavenSource);
+                publishSources.put("gradle", mavenSource);
+            }
+            publishSources.put(
+                "npm",
+                new com.auto1.pantera.publishdate.sources.NpmRegistrySource(publishDateClient)
+            );
+            publishSources.put(
+                "pypi",
+                new com.auto1.pantera.publishdate.sources.PyPiSource(publishDateClient)
+            );
+            publishSources.put(
+                "go",
+                new com.auto1.pantera.publishdate.sources.GoProxySource(publishDateClient)
+            );
+            publishSources.put(
+                "composer",
+                new com.auto1.pantera.publishdate.sources.PackagistSource(publishDateClient)
+            );
+            publishSources.put(
+                "gem",
+                new com.auto1.pantera.publishdate.sources.RubyGemsSource(publishDateClient)
+            );
+            EcsLogger.info("com.auto1.pantera.publishdate")
+                .message("Publish-date sources configured")
+                .field("sources.head_fallback_enabled", headFallbackEnabled)
+                .field("sources.registered", String.join(",", publishSources.keySet()))
+                .eventCategory("configuration")
+                .eventAction("publish_date_init")
+                .eventOutcome("success")
+                .log();
             final com.auto1.pantera.publishdate.DbPublishDateRegistry publishDates =
                 new com.auto1.pantera.publishdate.DbPublishDateRegistry(
-                    ds,
-                    Map.of(
-                        "maven", mavenSource,
-                        "gradle", mavenSource,
-                        "npm",
-                        new com.auto1.pantera.publishdate.sources.NpmRegistrySource(publishDateClient),
-                        "pypi",
-                        new com.auto1.pantera.publishdate.sources.PyPiSource(publishDateClient),
-                        "go",
-                        new com.auto1.pantera.publishdate.sources.GoProxySource(publishDateClient),
-                        "composer",
-                        new com.auto1.pantera.publishdate.sources.PackagistSource(publishDateClient),
-                        "gem",
-                        new com.auto1.pantera.publishdate.sources.RubyGemsSource(publishDateClient)
-                    )
+                    ds, publishSources
                 );
             com.auto1.pantera.publishdate.PublishDateRegistries.installDefault(publishDates);
             // Track 5 Phase 3B: register a header-based publish-date
