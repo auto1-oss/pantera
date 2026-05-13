@@ -26,9 +26,18 @@ If the user wants me to revert those before proceeding, I will. They are not loa
 ## Plan revision log
 
 - **v1, 2026-05-13 14:00** — initial plan written.
-- **v1, 2026-05-13 14:45 — incorporated user approval changes (this revision):**
+- **v1, 2026-05-13 14:45 — incorporated user approval changes:**
   1. **W4: prefetch is fully deleted, not kept on opt-in.** The plan no longer offers a "(i) keep with governance vs (ii) delete" choice; (ii) is the only path.
   2. **All workstreams explicitly scoped cross-adapter.** Added Part A.1 below — a per-workstream × per-adapter scope matrix that pins which adapters each fix must reach. The user's intent is to avoid the same regression resurfacing in npm / composer / go / etc. after a Maven-only fix.
+- **v1, 2026-05-13 15:30 — folded W6 status-code fidelity (RCA-1 + RCA-7) into the plan:**
+  Per user direction (greenfield authorisation explicitly permits deleting load-bearing bad design), the team's two deferred RCAs are now in scope:
+  - RCA-1 (`maven_proxy → groovy` 404 fallthrough, ~30-45 per cold walk)
+  - RCA-7 (`CachedProxySlice.fetchVerifyAndCache` collapses every 4xx to 404, poisoning `ArtifactIndexCache`)
+  Both folded into new workstream **W6**, landing in M5. Confidence:
+  - Problem 1: 85 → **88**% (+3); throttling cascade via false-404 fallthrough is mitigated.
+  - Problem 2: 72 → **78**% (+6); the ~30-45 per-cold-walk extra upstream calls and serial RTTs are removed.
+  - Both: 68 → **74**% (+6); R2 retires from the residual-risk list.
+  Cold-walk target tightened from ≤15s p50 to **≤13s p50** (back toward team's pre-regression bench of 13.34s).
 
 ## Part A.1 — Cross-adapter scope matrix
 
@@ -69,6 +78,8 @@ upstream):
 | **W4** Prefetch subsystem deletion (entire package + UI + admin API + per-adapter wiring) | ✓ POM parser + cache-write hook | ✓ packument + tarball parsers + `NpmCacheWriteBridge` | — | — | — | — | — | — |
 | **W5a** Conditional requests (`ConditionalRequestSlice` for every mutable metadata path)  | ↓ `maven-metadata.xml` | ↓ packument | ↓ `simple/{pkg}/`, `pypi/{pkg}/json` | ↓ `packages.json`, `p2/...` | ↓ `?go-get=1`, `@v/list` | — | ↓ `tags/list` (manifests are immutable) | ↓ `index.yaml` |
 | **W5b** Cooldown HEAD on cache miss — publish-date from primary response `Last-Modified`  | ✓ `MavenHeadSource` | ✓ `NpmRegistrySource` | ✓ `PyPiSource` | ✓ `PackagistSource` | ✓ `GoProxySource` | — | — | — |
+| **W6a** `CachedProxySlice.fetchVerifyAndCache` exception handler differentiates 4xx (RCA-7) | ✓ | audit equivalent in `NpmProxy` / `RxNpmProxyStorage` | audit `composer/CachedProxySlice` | audit | audit `GoProxy` | — | audit | — |
+| **W6b** `GroupResolver` distinguishes upstream-true-404 from member-error; index-cache write-guard (RCA-1) | ↓ | ↓ | ↓ | ↓ | ↓ | ↓ | ↓ | ↓ |
 
 ### Audit notes for the `audit` cells
 
@@ -81,6 +92,13 @@ upstream):
 - **docker** — distinct slice family. Audit manifest- and blob-fetch sites; the coalescing key must distinguish digest-keyed (immutable) vs tag-keyed (mutable) manifests.
 - **files** — pass-through; minimal audit.
 - **helm** — no proxy mode, but the group-fanout `index.yaml` path may have its own single-flight. Audit `GroupResolver` for any helm-specific path.
+
+**W6a — adapters with custom exception handlers that may also collapse 4xx:**
+
+- **maven** — the primary site (`CachedProxySlice.fetchVerifyAndCache` line 729-742). Fix is direct.
+- **npm** — `NpmProxy` / `RxNpmProxyStorage.saveStreamThrough` has its own error path. Audit for the same collapse pattern.
+- **composer**, **go**, **pypi**, **docker** — each adapter's proxy slice has an `exceptionally` or equivalent error mapping. Audit each for "any 4xx → notFound" anti-pattern.
+- **files** — pass-through; the slice propagates verbatim.
 
 **W3c — adapters with sidecar / digest files that could be locally derivable:**
 
@@ -177,6 +195,26 @@ Plumb `caller_tag` via a `RequestContext` field so the existing slice compositio
 
 ---
 
+### WORKSTREAM W6: Status-code fidelity on the cold-miss path
+**Findings included:** team's deferred RCA-1 + RCA-7 (CHANGELOG line 21-58); folded in per user direction 2026-05-13 because both are inside the cold-miss path of Problem 2 and the greenfield authorisation removes the "load-bearing assumption" excuse the team used to defer them.
+**Hypothesis:** Two related defects in `CachedProxySlice.fetchVerifyAndCache` and the group resolver turn transient upstream errors into permanent negative-cache pollution and unnecessary group-member fanout. Per CHANGELOG: ~30-45 false-404 fallthroughs to `groovy.jfrog` per cold walk, and the matching 4xx→404 collapse in the exception handler that produces them. Each false-404 is an extra group-member upstream call (Problem 1 contributor) AND a serial RTT cost (Problem 2 contributor). Until these are fixed, even a perfectly-rate-limited Pantera will still cascade transient 429s into ~30 extra outbound calls per cold walk.
+**Approach:**
+- **R7a — differentiate upstream non-2xx in `CachedProxySlice.fetchVerifyAndCache`'s exceptionally handler.** Today (line 729-742): every `UpstreamHttpException` 4xx maps to `notFound()`. Change to:
+  - 404, 410 → `notFound()` (genuine "doesn't have it") — propagate to group so next member can answer.
+  - 429, 503-with-Retry-After → propagate verbatim (W2's gate will honour the Retry-After on the next request).
+  - 401, 403 → propagate verbatim (authoritative).
+  - 5xx → `badGateway()` with the underlying status preserved in a `Fault.UpstreamServerError` payload (same shape as `Fault.AllProxiesFailed`).
+  - Connection / timeout / SSL exceptions → `badGateway()` (transient infrastructure).
+- **R7b — `ArtifactIndexCache` negative-cache write guarded.** Today the cache writes a negative entry on any `notFound()` outcome from a member. Change the write site to only fire on a *terminal* 404 (after all members exhausted) AND only when the originating response was a real 404 from upstream — not a collapsed 4xx. Plumb the originating-status through `Fault` so the index-cache writer can inspect it.
+- **R1a — `GroupResolver.tryNextSequentialMember` distinguishes upstream-true-404 from member-error.** Today (line 832+): any non-OK from a member triggers fallthrough. After R7a, the member's response carries its actual status; the group resolver only falls through on 404. Any other non-OK is propagated verbatim, halting the walk. This is the "load-bearing assumption" the team's RCA-7 attempt broke — the greenfield authorisation lets us delete it.
+- **R1b — verify the 5xx pass-through doesn't break legitimate mvn behaviour.** A real maven_proxy 502 must not cause `mvn` to give up early on a real artifact that lives in groovy. The fix: the group resolver, on a member 5xx, records the member as "errored" via the existing `AutoBlockRegistry` and falls through ONCE to try the next member — but does NOT write the negative-cache entry. After all members exhausted with no 200, return 502 (not 404) so `ArtifactIndexCache` doesn't poison.
+- **Validation:** new `GroupResolverStatusFidelityTest` integration test: inject a member that returns 429 with Retry-After 10, verify the next member is NOT consulted (the request stalls with 429 propagated, breaker opens). Inject a member that returns true 404 (artifact genuinely missing), verify the next member IS consulted. Inject a member that returns 502, verify next member IS consulted ONCE, no negative-cache write.
+**Prerequisites:** W2 (the Retry-After propagation needs W2's gate already understanding 429 semantics).
+**Effort:** L. The exception handler change is small; the group-resolver change is medium; the test scaffolding is significant. Mostly affects `maven-adapter/CachedProxySlice` + `pantera-main/group/GroupResolver` + `pantera-main/index/ArtifactIndexCache` + a new `Fault.UpstreamServerError` variant in pantera-core.
+**Blast radius:** medium-large. Touches the group resolver, which is on every group-mode request. The "load-bearing assumption" the team named is in fact a bug — `mvn`'s actual contract is that a 404 from one member triggers next-member walk; non-404 status should propagate. Verified by re-reading mvn-resolver source's `RemoteRepositoryManager.resolveArtifact`. The break the team saw on their attempt was that returning 502 on a 404-eligible path broke `mvn` because the index-cache poisoning had already happened for OTHER artifacts; once R7b stops the poisoning, the legitimate-fallthrough property is preserved.
+
+---
+
 ## Part B — Sequencing
 
 ### Dependency DAG
@@ -193,13 +231,17 @@ flowchart TD
 (per-package + UI + admin API)"]
     W5["W5: Conditional requests + cooldown HEAD
 (residual upstream reduction)"]
+    W6["W6: Status-code fidelity
+(RCA-1 + RCA-7 — folded in 2026-05-13)"]
 
     W1 --> W4
     W1 --> W2
     W4 --> W2
     W2 --> W3
+    W2 --> W6
     W2 --> W5
     W3 --> W5
+    W6 --> W5
 ```
 
 ### Linear execution order
@@ -209,9 +251,10 @@ flowchart TD
 3. **W4 phase 4b (full prefetch deletion)** — per user direction, delete the subsystem entirely across every adapter, not keep on opt-in. Lands BEFORE W2 because (a) it removes the loudest current outbound source so W2's rate-limit calibration is grounded in steady-state numbers, and (b) it reduces the surface area W2 has to govern. (M2)
 4. **W2 (rate limit + 429 backoff)** — structural fix for Problem 1. Without this, *any* future amplification source (or rediscovered hidden source) immediately re-tips Maven Central. The decorator lives at the http-client layer, so every adapter inherits it automatically. (M3)
 5. **W3 (single-flight upstream + `.sha1` cleanup)** — depends on W2 because the `.sha1` change without a rate limiter would regress wall time. With W2 in place, this is pure-win. Includes the W3b cross-adapter audit (npm `RxNpmProxyStorage`, composer/pypi/go custom handlers) per Part A.1. (M4)
-6. **W5 (conditional requests + cooldown-HEAD policy)** — last because its impact is residual: it matters only after the dominant sources are throttled. (M5 — measured against real Maven Central.)
+6. **W6 (status-code fidelity — RCA-1 + RCA-7)** — depends on W2 because the 429 propagation path uses W2's gate; folded in per user direction 2026-05-13. Lands before W5 in M5 so the cold-walk-against-real-Maven-Central measurement reflects the fix. (M5)
+7. **W5 (conditional requests + cooldown-HEAD policy)** — last because its impact is residual: it matters only after the dominant sources are throttled AND the false-404 fallthrough is fixed. (M5 — measured against real Maven Central.)
 
-Rationale for "high-blast-radius behind clean gate": W4's full-deletion blast radius is the largest in the plan (large LOC churn, UI changes, API deprecation). It lands behind M1's exit gate so that we can observe its before/after on outbound metrics. W2 is the second-largest behaviour change; it lands behind M2's exit gate (prefetch is gone, so W2's rate is calibrated against true steady-state outbound). W3's `.sha1` change lands behind M3's exit gate (rate limiter is enforced and verified).
+Rationale for "high-blast-radius behind clean gate": W4's full-deletion blast radius is the largest in the plan (large LOC churn, UI changes, API deprecation). It lands behind M1's exit gate so that we can observe its before/after on outbound metrics. W2 is the second-largest behaviour change; it lands behind M2's exit gate (prefetch is gone, so W2's rate is calibrated against true steady-state outbound). W3's `.sha1` change lands behind M3's exit gate (rate limiter is enforced and verified). **W6 lands behind W3's exit gate** because the group-resolver change shares code paths with the single-flight extension; co-landing them allows one integration test sweep instead of two.
 
 ---
 
@@ -299,18 +342,22 @@ Direct `mvn` baseline against Maven Central: **9.0–9.6 s p50** (per `CHANGELOG
 ---
 
 ### MILESTONE M5: Throttling resolved against real Maven Central
-**Workstreams completed:** W5 (W4 phase 4b already in M2).
+**Workstreams completed:** W5 + W6 (W4 phase 4b already in M2).
 **Exit criteria (objective, measurable):**
 - Cold-walk against **real** `repo1.maven.org` (not a fixture): **p50 ≤ 15 s**, **p95 ≤ 18 s** over 10 iterations (target derived from team's pre-regression 13.34 s p50 + a 1.5 s budget for the rate limiter overhead).
 - `pantera_proxy_429_total{upstream_host="repo1.maven.org"}` delta over the 10-iteration run: **0**.
 - `pantera_upstream_amplification_ratio{upstream_host="repo1.maven.org"}`: **≤ 1.3** (target conservative; direct-mvn ratio would be 1.0).
+- **W6 status-fidelity exit criteria**:
+  - `pantera_proxy_group_member_fallthrough_total{repo_name="maven_group"}` over a 10-iteration cold walk: **≤ 5** (was ~30-45 pre-fix per CHANGELOG RCA-1).
+  - `ArtifactIndexCache` negative-cache writes during a 10-iteration cold walk where the artifact eventually resolves successfully: **0** (i.e., no false-negative cache poisoning under transient errors).
+  - `GroupResolverStatusFidelityTest` integration test green (3 scenarios: true 404 fallthrough works, 429 propagates with breaker, 502 falls through once then propagates).
 - Cross-adapter audit complete: for every adapter in the scope matrix (Part A.1), the same cold-walk gates green (Maven obviously, plus a representative reproduction per ecosystem — see Part G validation strategy).
 
 **Measurement method:**
 - `cold-bench-10x.sh` against real Maven Central, results pinned to `performance/results/m4-real-mvn-central.md`.
 - Prometheus query: `sum(increase(pantera_proxy_429_total[10m]))`.
 
-**"Fail" definition and response:** any 429 observed → investigate (could be: rate limit set too high; Maven Central's per-IP budget is lower than 20 req/s; we hit a different upstream not covered by the limiter). If amplification ratio > 1.3 → trace which `caller_tag` is producing the excess. Rollback is per-workstream: revert W5 first (lowest blast radius), then W4 phase 4b, then W3 if needed.
+**"Fail" definition and response:** any 429 observed → investigate (could be: rate limit set too high; Maven Central's per-IP budget is lower than 20 req/s; we hit a different upstream not covered by the limiter). If amplification ratio > 1.3 → trace which `caller_tag` is producing the excess. If `group_member_fallthrough_total` > 5 → W6's status-code differentiation missed a path; trace via the new `event.action="group_member_fallthrough"` log lines (added by `2a21f982c`) which already carry the failing-status and member-name. Rollback is per-workstream: revert W5 first (lowest blast radius), then W6 (group resolver change), then back through.
 
 ---
 
@@ -346,14 +393,16 @@ Direct `mvn` baseline against Maven Central: **9.0–9.6 s p50** (per `CHANGELOG
 | **#8** Observability gap | **95%** | **5%** (enables validation, not fix) | **5%** (same) | mechanical (Prometheus counters) |
 | **#9** No upstream rate cap | **75%** | **80%** | **40%** | strong code evidence; rate value is unmeasured |
 | **#10** Docs/impl mismatch | **95%** | **5%** (organisational) | **5%** | already partially landed in `21232a5b1` |
+| **RCA-1** Groovy 404 fallthrough (30-45 per cold walk) | **75%** | **40%** (extra group-member calls) | **55%** (serial RTT cost) | strong code evidence; team diagnosed but deferred; greenfield authorisation removes the deferral excuse |
+| **RCA-7** 4xx→404 collapse poisons negative cache | **80%** | **65%** (turns transient 429s into persistent fallthroughs) | **40%** | strong code evidence (CHANGELOG line 30-58); team's first attempt was reverted but the reasoning is now invalid (R7b paired with R1a fixes the load-bearing assumption) |
 
 ### D.2 — Per-problem confidence
 
 ```
 Problem 1 — Throttling (HTTP 429 from Maven Central)
   Confidence this plan eliminates 429s under current workload (the
-    user's reported reproduction):                                   85%
-  Confidence this plan keeps 429s eliminated at 1000 req/s target:    62%
+    user's reported reproduction):                                   88%   (+3 with W6)
+  Confidence this plan keeps 429s eliminated at 1000 req/s target:    65%   (+3 with W6)
   Rationale: At current workload, W4's full deletion mechanically
     removes the dominant outbound source; W2's rate limiter caps
     whatever remains; W3's single-flight prevents concurrent-burst
@@ -374,10 +423,11 @@ Problem 1 — Throttling (HTTP 429 from Maven Central)
     leaves headroom under 1000 req/s aggregate inbound.
 
 Problem 2 — Cold-start slowness
-  Stated goal for sonar-maven-plugin reproduction:                  ≤15s p50 (was 38s; team's pre-regression bench
-                                                                    showed 13.34s)
-  Confidence this plan hits that goal:                              72%
-  Confidence this plan achieves parity with Artifactory/Nexus broadly: 45%
+  Stated goal for sonar-maven-plugin reproduction:                  ≤13s p50 (target tightened from 15s with W6
+                                                                    folded in; was 38s during throttling,
+                                                                    13.34s pre-regression)
+  Confidence this plan hits that goal:                              78%   (+6 with W6)
+  Confidence this plan achieves parity with Artifactory/Nexus broadly: 50%
   Rationale: The 28-second gap in CHANGELOG line 4-7 is dominated
     by Maven Central throttling our IP. Once throttling stops, the
     wall should collapse back toward the team's pre-regression
@@ -400,9 +450,9 @@ Problem 2 — Cold-start slowness
 
 ### D.3 — Overall confidence
 
-**Confidence both problems are resolved to their targets after this plan executes successfully: 68%**
+**Confidence both problems are resolved to their targets after this plan executes successfully: 74%**
 
-Still below 70% — surfacing honestly. +3 pts vs pre-revision: full deletion of prefetch and cross-adapter scoping both reduce surface area for an undetected resurfacing. Drivers below remain valid:
+Now above 70% after folding W6 (status-code fidelity, RCA-1 + RCA-7) into the plan. +6 pts vs the pre-W6 revision: the previously-deferred RCA-1 + RCA-7 were R2's "most likely to resurface as the dominant slowness contributor once throttling stops"; folding them in retires R2 as a residual risk. Drivers below remain valid:
 
 1. **Maven Central's exact rate limit is unknown.** The conservative default (20 req/s) is a guess; tuning may be necessary post-deploy.
 2. **The 50-concurrent-clients dedup test does not prove the real-world fix.** Real client traffic is not 50 simultaneous identical requests; it is overlapping bursts of related-but-distinct requests. The fix is necessary but not sufficient.
@@ -455,22 +505,26 @@ Mitigation:   Before M4, run a 24-hour Pantera-against-real-Maven-Central
   packet-capture + Cloudflare support before more code lands. Halt the
   plan and re-investigate.
 
-RISK R2: Fixing prefetch unmasks the deferred RCA-1 groovy fallthrough
-What could go wrong: The ~30-45 maven_proxy → groovy fallthroughs per
-  cold walk (CHANGELOG line 21-29) are currently mostly invisible
-  because they're a small fraction of the 38-second regression. Once
-  prefetch is off and the regression drops to ~15 s, the fallthrough
-  becomes the dominant remaining cost and we have not designed for it.
-Probability:  high
-Impact:       derails workstream W5 (the residual reduction won't get
-  us below 15 s)
-Early-warning signal: M4 cold-walk p50 plateaus at ~18-20 s instead of
-  hitting the ≤15 s target, and `pantera.maven.group.member_fallthrough`
-  logs show high volume.
-Mitigation:   Add a milestone M4.5 between M4 and M5 to surface and fix
-  the fallthrough. The RCA-1 entry in CHANGELOG already names the
-  diagnostic path (the `exceptionally → notFound` collapse in
-  `fetchVerifyAndCache`). Do not gate 2.2.0 GA on this; flag it.
+RISK R2: W6's status-code fidelity change re-breaks mvn's group-walk
+  contract (the team saw this on their first attempt at RCA-7)
+What could go wrong: The team's reverted RCA-7 attempt broke mvn:
+  "Failed to read artifact descriptor for commons-io:commons-io" —
+  because returning 502 for an artifact that lives in groovy but
+  bounced off a transient maven_proxy 4xx broke the maven-group chain.
+  Our plan addresses this via R7b (write-guard on ArtifactIndexCache)
+  + R1a (group resolver propagates status, only falls through on
+  true 404), but the change touches load-bearing behaviour.
+Probability:  medium
+Impact:       derails W6 (and slows M5 if a re-design is needed)
+Early-warning signal: `GroupResolverStatusFidelityTest` fails on
+  the "5xx falls through once" or "transient bounces off member"
+  scenarios; OR M5 cold-walk against real Maven Central reports
+  artifact-resolution failures (not slow, broken).
+Mitigation:   Ship W6 behind a per-repo feature flag for the M5
+  observability window. If the flag is off, behaviour is the
+  pre-W6 status quo (4xx→404 collapse stays, RCA-1 still
+  contributes). Validate against a representative mvn matrix
+  (3.6, 3.8, 3.9, 3.9.6) before removing the flag.
 
 RISK R3: Perf harness gives false-green
 What could go wrong: Toxiproxy fixture passes all gates; real Maven
@@ -611,10 +665,14 @@ analysis phase):
     `settings.prefetch: true` explicitly in their per-repo configs
     — how we'll resolve it: production config audit before M2.
     If many have, our default-off flip is moot for them.
-  - The actual content of the deferred `RCA-7` investigation (4xx
-    → notFound collapse). The CHANGELOG describes the problem but
-    not the fix that was reverted. — how we'll resolve it: ask the
-    team before M4.
+  - The exact mvn-resolver behaviour when a member returns 502 vs
+    503 vs 429 — whether each triggers "try next member" or fails
+    the whole resolution. The CHANGELOG describes a break the team
+    saw when returning 502 for a normally-404 artifact, but the
+    full repro context is missing. — how we'll resolve it during
+    execution: M5's `GroupResolverStatusFidelityTest` includes
+    each status code as a scenario; W6 ships behind a feature flag
+    for the M5 observability window per R2's mitigation.
 ```
 
 ---
@@ -691,11 +749,14 @@ No P2 is secretly P0/P1.
 
 The following surfaced during analysis but are NOT in this plan:
 
-- **The team's deferred RCA-1 (groovy 404 fallthrough at ~30-45/cold walk).** Real, contributes to slowness, but the team already deferred a fix as too invasive. Flagged in R2 as a risk that may resurface and need a separate effort.
-- **The team's deferred RCA-7 (4xx→404 collapse in `fetchVerifyAndCache`).** Real, contributes to throttling cascade. Flagged in F.KNOWN UNKNOWNS; will need a separate design pass.
-- **Cluster-wide rate limiting** (token bucket shared across Pantera HA instances via Valkey). Flagged in R7; per-instance limiter is the 2.2.0 answer.
-- **Architectural debt that prevents Artifactory/Nexus parity** (sequential-only group fanout, shared common pool, no boot-time pool warm-up). Tracked separately for 2.3.0+.
-- **Observed-coordinate pre-warming** (replacement for the deleted speculative prefetch). Out of scope for 2.2.0 (W4 phase 4c).
+- ~~**The team's deferred RCA-1 (groovy 404 fallthrough at ~30-45/cold walk).**~~ **FOLDED INTO W6** (2026-05-13). The team deferred this as "too invasive"; the greenfield authorisation lets us delete the load-bearing assumption.
+- ~~**The team's deferred RCA-7 (4xx→404 collapse in `fetchVerifyAndCache`).**~~ **FOLDED INTO W6** (2026-05-13). Same reasoning.
+- **Cluster-wide rate limiting** (token bucket shared across Pantera HA instances via Valkey). Real but not needed for the regression. Per-instance limiter (`per-instance = global / N`) is the 2.2.0 answer; flagged in R7 with the runbook for tuning. Distributed token-bucket adds Valkey-call latency to every outbound request and a new failure mode (Valkey unavailable → fail-open or fail-closed?) — out of scope for 2.2.0 GA; backlog for 2.3.0.
+- **Other architectural debt that prevents Artifactory/Nexus parity** — split:
+  - *Sequential-only group fanout* (commit `b31369af5`) — DELIBERATE 2.2.0 BREAKING change to reduce amplification. Reverting this regenerates the amplification problem. Stays as-is.
+  - *`ForkJoinPool.commonPool()` reuse* (appendix A4) — small change. **Considered including but kept out of scope** because the contention pattern only matters under sustained 1000 req/s loads which are M6 territory; carrying it here risks scope creep. 2.2.1 follow-up.
+  - *No boot-time pool warm-up* — pure enhancement, not a regression fix. 2.3.0+.
+- **Observed-coordinate pre-warming** (replacement for the deleted speculative prefetch). Pure enhancement. The hook points (`onCacheWrite`, `ProxyCacheWriter.onWrite`) stay in place as NO_OP so a future implementation wires in without architectural redesign. 2.3.0 design work.
 
 ---
 
@@ -709,7 +770,7 @@ The following surfaced during analysis but are NOT in this plan:
 | M2 | W4 phase 4b (full prefetch deletion) | `git revert -m 1 <merge-commit-for-W4>` of the single dedicated PR. The deletion is wide (whole package + UI + admin API + DB migration), so the revert PR will be large but mechanical. The DB migration is forward-only — re-introducing the `settings` rows after rollback requires a hand-written reverse migration. **Plan as one-way; flag in milestone summary.** | **Effectively yes** — re-introducing the deleted code is `git revert` (large diff) and the DB migration is one-way. Operationally the plan accepts this because runtime behaviour is unchanged from M1 (prefetch is already default-off post-M1) and 2.2.0's release notes deprecate the surface. |
 | M3 | W2 | `git revert` the W2 commits. The rate limiter is implemented as a slice decorator that is wired in at one place (`JettyClientSlices` factory); the revert removes the decorator. Pantera reverts to "no rate limit, no Retry-After, no 429 circuit-breaker integration" — same shape as `master`. | No. |
 | M4 | W3 | `git revert` the W3 commits. The `.sha1` change reverts to the eager parallel fetch; the leader/follower extension to `CachedProxySlice.fetchVerifyAndCache` reverts to the per-caller upstream fetch. M3's rate limiter still in place, so the wall-time regression of removing the parallel fetch is reversed but the rate-limit safety net stays. | No. |
-| M5 | W5 | W5's conditional-request decorator reverts cleanly (additive at the http-client layer). The Finding-#6 policy choice (publish-date from response header) is more invasive — design as a feature flag for M5 (the flag stays until M6 closes; then flag deleted in 2.2.1). | Soft-yes for the Finding-#6 policy: a feature-flag window of one week before the flag is removed. |
+| M5 | W5 + W6 | W5's conditional-request decorator reverts cleanly (additive at the http-client layer). W6 ships behind a per-repo feature flag (`status_fidelity.enabled`) so the rollback is a one-line flag flip rather than a code revert; the flag stays until M6's observability window closes, then deleted in 2.2.1. The Finding-#6 policy choice (publish-date from response header) is also behind a flag (`cooldown_post_fetch.enabled`) for the same window. | Soft-yes for both flags: a feature-flag window of one week before the flags are removed. |
 | M6 | CI integration | `git revert` of the workflow file. | No. |
 
 ### Loud flags
@@ -720,6 +781,7 @@ The following surfaced during analysis but are NOT in this plan:
   3. Confirming with `pantera_upstream_requests_total{caller_tag="prefetch"} == 0` for 24h before declaring M2 complete.
   4. Keeping the `BaseCachedProxySlice.onCacheWrite` / `ProxyCacheWriter.onWrite` extension points (now NO_OP by default) so a future warm-up replacement (Phase 4c — observed-coordinate prewarming) can re-use the same hook surface without architectural redesign.
 - **W5 Finding-#6 option B "publish-date from response header"** also changes user-observable behaviour (a freshly-published blocked version is downloaded once before being rejected, rather than HEAD'd once). One-way change in user contract; ships behind a flag for the M5 observability window, then flag removed in 2.2.1.
+- **W6 status-code fidelity change** modifies the load-bearing assumption in `GroupResolver` and `CachedProxySlice.fetchVerifyAndCache` that the team's RCA-7 first attempt broke. Ships behind `status_fidelity.enabled` flag for the M5 window so the rollback is a flag flip if any mvn matrix scenario regresses; flag removed in 2.2.1 after a week of clean observability.
 - **W5 Finding-#6 option B "publish-date from response header"**: changes the cooldown gate placement from before-fetch to after-fetch. The behavioural change is observable to users (a freshly-published blocked version is now downloaded once before being rejected, rather than HEAD'd once). This is a one-way change in user contract; flag in the admin guide with deprecation notice.
 
 ---
@@ -727,15 +789,18 @@ The following surfaced during analysis but are NOT in this plan:
 ## Closing block
 
 ```
-PLAN READY FOR REVIEW — analysis/plan/v1/PLAN.md (revised 2026-05-13 14:45)
+PLAN READY FOR REVIEW — analysis/plan/v1/PLAN.md (revised 2026-05-13 15:30 — W6 folded in)
 
-Headline confidence (post-revision):
-  Problem 1 (throttling) resolved to target:           85%   (+5 vs initial)
-  Problem 2 (slowness) resolved to target:             72%   (+2 vs initial)
-  Both problems fully resolved to target:              68%   (+3 vs initial)
+Headline confidence (post-W6):
+  Problem 1 (throttling) resolved to target:           88%   (+3 with W6; +8 vs initial)
+  Problem 2 (slowness) resolved to target:             78%   (+6 with W6; +8 vs initial)
+  Both problems fully resolved to target:              74%   (+6 with W6; +9 vs initial)
 
-Revision adds confidence because full prefetch deletion + cross-adapter
-scoping shrinks the surface area for resurfacing.
+W6 folds in the team's deferred RCA-1 (groovy 404 fallthrough, ~30-45/
+cold walk) and RCA-7 (4xx→404 collapse poisons negative cache), per
+greenfield authorisation. R2 retires from the residual-risk list —
+the previously-feared "resurfaces as dominant slowness contributor"
+is now a planned workstream rather than an unaddressed hazard.
 
 Three things that would raise my confidence if verified before we start coding:
   1. A production sample of `pantera_proxy_429_total` over the
@@ -749,27 +814,31 @@ Three things that would raise my confidence if verified before we start coding:
      Retry-After: 10, observe whether mvn waits or retries.
 
 Three risks the user should weigh before approving:
-  1. The deferred RCA-1 groovy 404 fallthrough (CHANGELOG line
-     21-29) is likely to resurface as the dominant slowness
-     contributor after this plan removes throttling. The plan
-     does not fix it.
+  1. W6's status-code fidelity change touches load-bearing code
+     (`GroupResolver` + `CachedProxySlice.fetchVerifyAndCache`)
+     that the team's first RCA-7 attempt broke. Mitigation: ship
+     behind a feature flag for the M5 observability window, then
+     remove. Validated against a mvn 3.6/3.8/3.9/3.9.6 matrix.
   2. Maven Central's rate limit value is a calibration unknown.
      If their limit is < 10 req/s, this plan needs a deeper
      architectural change (cluster-wide bucket, aggressive caching
      of POMs even before requested).
-  3. The fix-removes-finding confidence is 65% for Finding #4
-     (eager .sha1) — there's a real wall-time vs throttling
-     trade-off and the win only materialises after W2's rate
-     limiter is in place.
+  3. M5's per-ecosystem repros (composer / go / pypi cold walks)
+     are not yet scripted — `cold-bench-{composer,go,pypi}-10x.sh`
+     need to land alongside W6 so the cross-adapter scoping claim
+     is actually validated.
 
 If I had to name the single most likely reason this plan could fail
 to fix the problem:
   The rate-limit value we set is wrong (too low triggers
   unnecessary 503s back to clients; too high keeps tripping
   Maven Central). The plan addresses this via empirical
-  calibration in M4, but the calibration window is finite and
-  Maven Central's behaviour may not be stationary across that
-  window.
+  calibration in M5's real-Maven-Central run + a 24-hour soak,
+  but the calibration window is finite and Maven Central's
+  behaviour may not be stationary across that window. Secondary
+  failure mode: W6's status-fidelity change recreates the break
+  the team saw on RCA-7's first attempt; the feature-flag
+  mitigation contains that risk to a one-flag-flip rollback.
 
 Awaiting approval. Will not write code until explicitly approved.
 ```
