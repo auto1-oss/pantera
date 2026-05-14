@@ -152,11 +152,36 @@ public final class CircuitBreakingClientSlice implements Slice {
         final RequestLine line, final Headers headers, final Content body
     ) {
         if (this.breaker.isOpen()) {
+            this.recordFastfailMetric();
             return CompletableFuture.completedFuture(synthesise502(this.breaker.timeRemaining()));
         }
         return this.delegate.response(line, headers, body).whenComplete(
             (response, error) -> this.onResponse(response, error)
         );
+    }
+
+    /**
+     * Increment {@code pantera_circuit_breaker_fastfail_total{upstream_host}}
+     * when MicrometerMetrics is wired. No-op in tests + early
+     * bootstrap. T-P02b.
+     */
+    private void recordFastfailMetric() {
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
+                .recordCircuitBreakerFastfail(this.host);
+        }
+    }
+
+    /**
+     * Increment {@code pantera_circuit_breaker_trips_total{upstream_host}}
+     * when MicrometerMetrics is wired. Called from {@link #onResponse}
+     * each time a qualifying failure trips the breaker. T-P02b.
+     */
+    private void recordTripMetric() {
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
+                .recordCircuitBreakerTrip(this.host);
+        }
     }
 
     /**
@@ -167,7 +192,11 @@ public final class CircuitBreakingClientSlice implements Slice {
     private void onResponse(final Response response, final Throwable error) {
         if (error != null) {
             if (this.config.shouldTripOnException().test(error)) {
+                final boolean wasClosed = !this.breaker.isOpen();
                 this.breaker.recordFailure(error);
+                if (wasClosed) {
+                    this.recordTripMetric();
+                }
                 this.scheduleProbe();
             }
             return;
@@ -177,7 +206,11 @@ public final class CircuitBreakingClientSlice implements Slice {
         }
         final int status = response.status().code();
         if (this.config.shouldTripOnStatus().test(status)) {
+            final boolean wasClosed = !this.breaker.isOpen();
             this.breaker.recordFailure(status);
+            if (wasClosed) {
+                this.recordTripMetric();
+            }
             this.scheduleProbe();
         } else {
             this.breaker.recordSuccess();

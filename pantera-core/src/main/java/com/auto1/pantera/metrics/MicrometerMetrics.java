@@ -19,9 +19,11 @@ import io.micrometer.core.instrument.Tags;
 import io.micrometer.prometheus.PrometheusMeterRegistry;
 import com.auto1.pantera.http.log.EcsLogger;
 
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.Map;
+import java.util.function.BooleanSupplier;
 
 /**
  * Micrometer metrics for Pantera.
@@ -649,6 +651,91 @@ public final class MicrometerMetrics {
                 + "or 429 gate. Sustained non-zero rate hints the bucket is undersized "
                 + "for legitimate traffic.")
             .tags("upstream_host", upstreamHost, "reason", reason)
+            .register(registry)
+            .increment();
+    }
+
+    /**
+     * Tracks which hosts already have their circuit-breaker state gauge
+     * registered. {@link io.micrometer.core.instrument.MeterRegistry}
+     * does NOT enforce uniqueness on duplicate {@code register()} calls;
+     * registering the same gauge twice produces two meters with the same
+     * name + tags, which scrapers report as ambiguous. This set makes
+     * registration idempotent at the call site.
+     */
+    private final Set<String> circuitBreakerGaugeHosts = ConcurrentHashMap.newKeySet();
+
+    /**
+     * Register a polling gauge {@code pantera_circuit_breaker_state{upstream_host}}
+     * for the given host. The gauge reads from the supplied
+     * {@link BooleanSupplier} on every scrape, so it reflects the live
+     * state of the breaker (including auto-close after the block window
+     * elapses) without needing explicit transition events.
+     *
+     * <p>Idempotent: calling with the same host twice registers the
+     * gauge exactly once. The {@code BooleanSupplier} passed on
+     * subsequent calls is ignored.
+     *
+     * @param upstreamHost upstream host this breaker protects.
+     * @param isOpen supplier returning {@code true} when the breaker
+     *     is currently open (blocking outbound calls).
+     * @since 2.2.0 (T-P02b)
+     */
+    public void registerCircuitBreakerStateGauge(
+        final String upstreamHost, final BooleanSupplier isOpen
+    ) {
+        if (!this.circuitBreakerGaugeHosts.add(upstreamHost)) {
+            return;
+        }
+        Gauge.builder(
+                "pantera.circuit_breaker.state",
+                isOpen,
+                supplier -> supplier.getAsBoolean() ? 1.0 : 0.0
+            )
+            .description("Per-upstream circuit-breaker state (1=open, 0=closed). "
+                + "Open means outbound calls fast-fail with a synthetic 502. Sustained "
+                + "open is a primary alert signal — surfaces upstream brokenness "
+                + "before the rate-limit gate would.")
+            .tags("upstream_host", upstreamHost)
+            .register(registry);
+    }
+
+    /**
+     * Increment {@code pantera_circuit_breaker_trips_total{upstream_host}}.
+     * Fires once per state transition from closed → open. A trip burst
+     * (several trips in quick succession) indicates either a real
+     * upstream outage or a flapping connection — the rate of this
+     * counter is the canonical "breaker is doing work" signal.
+     *
+     * @param upstreamHost host whose breaker tripped.
+     * @since 2.2.0 (T-P02b)
+     */
+    public void recordCircuitBreakerTrip(final String upstreamHost) {
+        Counter.builder("pantera.circuit_breaker.trips.total")
+            .description("Circuit-breaker trip events per upstream host. A trip is a "
+                + "transition from closed to open; sustained trip rate indicates "
+                + "upstream brokenness or flap.")
+            .tags("upstream_host", upstreamHost)
+            .register(registry)
+            .increment();
+    }
+
+    /**
+     * Increment {@code pantera_circuit_breaker_fastfail_total{upstream_host}}.
+     * Fires every time a client request hits an open breaker and receives
+     * a synthesised 502 without reaching the upstream. High fast-fail
+     * counts during an outage are EXPECTED — they prove the breaker is
+     * absorbing the would-be amplification.
+     *
+     * @param upstreamHost host whose breaker fast-failed the request.
+     * @since 2.2.0 (T-P02b)
+     */
+    public void recordCircuitBreakerFastfail(final String upstreamHost) {
+        Counter.builder("pantera.circuit_breaker.fastfail.total")
+            .description("Synthetic 502 responses returned by the circuit-breaker "
+                + "fast-fail path. High counts during an outage are expected and "
+                + "indicate the breaker is suppressing upstream amplification.")
+            .tags("upstream_host", upstreamHost)
             .register(registry)
             .increment();
     }

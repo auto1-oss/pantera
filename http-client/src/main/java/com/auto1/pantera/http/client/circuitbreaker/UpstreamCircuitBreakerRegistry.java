@@ -75,7 +75,21 @@ public interface UpstreamCircuitBreakerRegistry {
         public UpstreamCircuitBreaker breakerFor(final String host) {
             final String key = normalise(host);
             return this.breakers.computeIfAbsent(
-                key, k -> new UpstreamCircuitBreaker(k, this.config, this.clock)
+                key, k -> {
+                    final UpstreamCircuitBreaker breaker =
+                        new UpstreamCircuitBreaker(k, this.config, this.clock);
+                    // T-P02b: register a polling state gauge so the
+                    // breaker's open/closed state is visible in
+                    // /metrics without needing explicit transition
+                    // events. The gauge is registered exactly once
+                    // per host by MicrometerMetrics' idempotency
+                    // guard.
+                    if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                        com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
+                            .registerCircuitBreakerStateGauge(k, breaker::isOpen);
+                    }
+                    return breaker;
+                }
             );
         }
 
