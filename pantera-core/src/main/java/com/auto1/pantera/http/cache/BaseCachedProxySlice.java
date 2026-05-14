@@ -213,6 +213,18 @@ public abstract class BaseCachedProxySlice implements Slice {
     private static final Consumer<CacheWriteEvent> NO_OP_ON_CACHE_WRITE = event -> { };
 
     /**
+     * Per-repo bulkhead injected post-construction by
+     * {@code RepositorySlices.wire(...)} (T-P12). Null until wired —
+     * tests, early bootstrap, and adapters that haven't been migrated
+     * still construct cleanly. When non-null, every non-trivial branch
+     * of {@link #response(RequestLine, Headers, Content)} acquires a
+     * semaphore permit; saturation returns a 503 with
+     * {@code Retry-After}. Volatile because the wire-up call happens on
+     * a different thread than the request path that reads it.
+     */
+    private volatile com.auto1.pantera.http.resilience.RepoBulkhead bulkhead;
+
+    /**
      * Constructor with cooldown + post-write callback.
      *
      * @param client Upstream remote slice
@@ -326,6 +338,22 @@ public abstract class BaseCachedProxySlice implements Slice {
             CacheWriteCallbackRegistry.instance().sharedCallback());
     }
 
+    /**
+     * Inject the per-repo bulkhead. Called once at wire-up time by
+     * {@code RepositorySlices.wire(...)} for every proxy slice that
+     * has a matching repo entry. Idempotent — re-setting to the same
+     * (or any) instance is safe. {@code null} disables gating (the
+     * default).
+     *
+     * @param bulkhead Per-repo bulkhead, or {@code null} to disable.
+     * @since 2.2.0 (T-P12)
+     */
+    public final void setBulkhead(
+        final com.auto1.pantera.http.resilience.RepoBulkhead bulkhead
+    ) {
+        this.bulkhead = bulkhead;
+    }
+
     @Override
     public final CompletableFuture<Response> response(
         final RequestLine line, final Headers headers, final Content body
@@ -352,7 +380,42 @@ public abstract class BaseCachedProxySlice implements Slice {
                     .build()
             );
         }
-        final String path = canonical.get();
+        // T-P12: bulkhead acquire. Wraps every non-trivial branch — the
+        // two early returns above (root path, unsafe path) are trivial
+        // sync responses that never hit upstream, so they bypass the
+        // semaphore. Everything else (negative cache, preProcess,
+        // fetchDirect, cacheFirstFlow) might fan out to upstream and
+        // must be gated. On semaphore-full the bulkhead synthesises a
+        // 503 with Retry-After and increments
+        // pantera_bulkhead_overflow_total{repo}. The bulkhead is
+        // resolved in this order: (1) explicit setter from wire-up,
+        // (2) JVM-wide RepoBulkheadRegistry by repoName, (3) no gate.
+        com.auto1.pantera.http.resilience.RepoBulkhead bh = this.bulkhead;
+        if (bh == null) {
+            bh = com.auto1.pantera.http.resilience.RepoBulkheadRegistry.instance()
+                .bulkheadFor(this.repoName).orElse(null);
+        }
+        if (bh == null) {
+            return this.dispatchAfterGuard(line, headers, canonical.get(), entryNs);
+        }
+        final java.util.concurrent.CompletionStage<
+            com.auto1.pantera.http.fault.Result<Response>
+        > gated = bh.run(
+            () -> this.dispatchAfterGuard(line, headers, canonical.get(), entryNs)
+                .thenApply(com.auto1.pantera.http.fault.Result::ok)
+        );
+        return gated.toCompletableFuture().thenApply(this::translateBulkheadResult);
+    }
+
+    /**
+     * Body of {@link #response} after the path-traversal guard.
+     * Extracted so {@link #response} can call it either gated by
+     * {@code bulkhead.run} or directly (when no bulkhead is wired).
+     */
+    private CompletableFuture<Response> dispatchAfterGuard(
+        final RequestLine line, final Headers headers,
+        final String path, final long entryNs
+    ) {
         final Key key = new KeyFromPath(path);
         // Step 1: Negative cache fast-fail
         if (this.negativeCache != null
@@ -383,6 +446,39 @@ public abstract class BaseCachedProxySlice implements Slice {
         // No persistent storage — go directly to upstream
         return this.fetchDirect(line, key, headers, new Login(headers).getValue())
             .whenComplete((r, e) -> recordProxyPhase("fetch_direct_no_storage", entryNs));
+    }
+
+    /**
+     * Translate the bulkhead's {@code Result<Response>} back to a plain
+     * {@code Response}. On {@code Fault.Overload} synthesises a 503 with
+     * {@code Retry-After} and increments
+     * {@code pantera_bulkhead_overflow_total{repo}}. Other fault kinds
+     * are not reachable from the gated body but are mapped defensively
+     * to a 500 so the request never disappears.
+     */
+    private Response translateBulkheadResult(
+        final com.auto1.pantera.http.fault.Result<Response> r
+    ) {
+        if (r instanceof com.auto1.pantera.http.fault.Result.Ok<Response> ok) {
+            return ok.value();
+        }
+        final com.auto1.pantera.http.fault.Fault fault =
+            ((com.auto1.pantera.http.fault.Result.Err<Response>) r).fault();
+        if (fault instanceof com.auto1.pantera.http.fault.Fault.Overload overload) {
+            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
+                    .recordBulkheadOverflow(this.repoName);
+            }
+            final long secs = Math.max(1L, overload.retryAfter().toSeconds());
+            return ResponseBuilder.from(RsStatus.SERVICE_UNAVAILABLE)
+                .header("Retry-After", Long.toString(secs))
+                .header("X-Pantera-Bulkhead-Overflow", "true")
+                .textBody("Per-repo bulkhead is full")
+                .build();
+        }
+        return ResponseBuilder.from(RsStatus.INTERNAL_ERROR)
+            .textBody("Bulkhead dispatch failed: " + fault.getClass().getSimpleName())
+            .build();
     }
 
     /**

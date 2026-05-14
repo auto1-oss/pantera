@@ -741,6 +741,25 @@ public final class MicrometerMetrics {
     }
 
     /**
+     * Increment {@code pantera_bulkhead_overflow_total{repo}}. Fires every
+     * time a request hits the per-repo bulkhead while its semaphore is
+     * full and gets fast-failed with a 503. The rate of this counter is
+     * the canonical "this repo is saturating" alert signal.
+     *
+     * @param repo repository name whose bulkhead rejected the request.
+     * @since 2.2.0 (T-P12)
+     */
+    public void recordBulkheadOverflow(final String repo) {
+        Counter.builder("pantera.bulkhead.overflow.total")
+            .description("Per-repo bulkhead rejections — a 503 was returned because "
+                + "the repo's concurrency semaphore was full. Sustained non-zero "
+                + "means the repo is saturated and clients are seeing back-pressure.")
+            .tags("repo", repo)
+            .register(registry)
+            .increment();
+    }
+
+    /**
      * Bucket a response status code into a coarse outcome label.
      * Isolates {@code 429} from the rest of {@code 4xx} for the alerting
      * path.

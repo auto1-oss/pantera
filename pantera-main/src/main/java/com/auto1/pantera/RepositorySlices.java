@@ -628,6 +628,15 @@ public class RepositorySlices {
         SharedJettyClients.Lease clientLease = null;
         JettyClientSlices clientSlices = null; // NOPMD CloseResource - lifecycle owned by clientLease (closed in finally); this is just an alias to lease.client()
         try {
+            // T-P12: ensure every proxy-shaped repo has a per-repo
+            // bulkhead registered so BaseCachedProxySlice.response()
+            // discovers a gate by repoName. The check is cheap (string
+            // suffix); local-only repos skip entirely. The bulkhead is
+            // created lazily via computeIfAbsent so this is safe to
+            // call on every hot-reload of the config.
+            if (cfg.type() != null && cfg.type().endsWith("-proxy")) {
+                getOrCreateBulkhead(cfg.name());
+            }
             switch (cfg.type()) {
             case "file":
                 slice = browsableTrimPathSlice(
@@ -1462,9 +1471,16 @@ public class RepositorySlices {
                     .eventCategory("configuration")
                     .eventAction("bulkhead_init")
                     .log();
-                return new com.auto1.pantera.http.resilience.RepoBulkhead(
-                    n, limits, java.util.concurrent.ForkJoinPool.commonPool()
-                );
+                final com.auto1.pantera.http.resilience.RepoBulkhead bh =
+                    new com.auto1.pantera.http.resilience.RepoBulkhead(
+                        n, limits, java.util.concurrent.ForkJoinPool.commonPool()
+                    );
+                // T-P12: publish to the JVM-wide registry so
+                // BaseCachedProxySlice.response() can discover the bulkhead
+                // without a constructor-time dependency on pantera-main.
+                com.auto1.pantera.http.resilience.RepoBulkheadRegistry.instance()
+                    .register(n, bh);
+                return bh;
             }
         );
     }
