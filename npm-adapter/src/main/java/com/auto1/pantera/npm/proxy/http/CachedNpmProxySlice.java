@@ -44,6 +44,20 @@ import java.util.concurrent.ForkJoinPool;
  * the same signal contract as the legacy path — only the coalescer
  * implementation changed.</p>
  *
+ * <p>G7 (T-P05, analysis/plan/v2/IMPLEMENTATION.md): npm tarball cache
+ * writes already stream-through via {@code RxNpmProxyStorage.saveStreamThrough}
+ * (Phase 12) — the upstream body is tee'd to both the client publisher and
+ * an in-memory buffer that lands in storage on completion. Migration to
+ * {@code ProxyCacheWriter.streamThroughAndCommit} would replace the
+ * NpmProxy / NpmProxyStorage abstraction (RxJava {@code Maybe} semantics)
+ * with no TTFB win because the existing path already emits bytes to the
+ * client as the upstream delivers them. The Phase 12 buffer is in-memory
+ * (typical tarball 10 KB–1 MB; 50 MB worst case) versus the
+ * ProxyCacheWriter NIO temp-file pattern — a future heap-pressure
+ * optimisation, not a correctness fix. NPM tarballs are therefore
+ * <em>already correct</em> for the universal-tee gap (G7); the
+ * adapter-level structural change is deferred.</p>
+ *
  * @since 1.0
  */
 public final class CachedNpmProxySlice implements Slice {

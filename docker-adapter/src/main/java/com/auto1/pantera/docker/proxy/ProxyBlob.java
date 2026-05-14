@@ -25,6 +25,15 @@ import java.util.concurrent.CompletableFuture;
 
 /**
  * Proxy implementation of {@link Blob}.
+ *
+ * <p>G7 (T-P09, analysis/plan/v2/IMPLEMENTATION.md): docker blobs are
+ * digest-addressed (the blob path encodes a {@code sha256:...} digest),
+ * which makes them content-immutable. {@link #content()} already streams
+ * the upstream response body Publisher directly to the caller without
+ * buffering — there is no separate cache-write commit step because the
+ * Docker {@code v2} layer caching is handled at the {@link Layers} level
+ * one layer up (which already stores blobs after streaming). The
+ * universal-tee gap (G7) is therefore <em>already closed</em> for blobs.</p>
  */
 public final class ProxyBlob implements Blob {
 

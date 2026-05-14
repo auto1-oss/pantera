@@ -34,6 +34,21 @@ import java.util.concurrent.CompletableFuture;
 
 /**
  * Proxy implementation of {@link Repo}.
+ *
+ * <p>G7 (T-P09, analysis/plan/v2/IMPLEMENTATION.md): retained sequential
+ * path because docker manifest responses are
+ * <em>request-header-driven</em>. A manifest GET varies by the inbound
+ * {@code Accept} header (OCI image manifest, Docker distribution v1 / v2,
+ * manifest list / image index — see {@link #MANIFEST_ACCEPT_HEADERS}),
+ * so two clients hitting the same {@code /v2/<repo>/manifests/<ref>} can
+ * receive different bodies. The
+ * {@code ProxyCacheWriter.streamThroughAndCommit} primitive is keyed by a
+ * single {@code Key} per primary, which cannot encode the Accept-driven
+ * variant — caching a manifest list response under a key requested with
+ * an image-manifest Accept would corrupt downstream clients. Manifests
+ * stay on the buffered passthrough path; blobs (digest-addressed,
+ * content-immutable) already stream through
+ * {@link com.auto1.pantera.docker.proxy.ProxyBlob#content()}.</p>
  */
 public final class ProxyManifests implements Manifests {
 

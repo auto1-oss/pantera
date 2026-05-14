@@ -48,6 +48,15 @@ import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Binary files proxy {@link Slice} implementation.
+ *
+ * <p>G7 (T-P09, analysis/plan/v2/IMPLEMENTATION.md): the files adapter
+ * already wires {@link StreamThroughCache} into its cache pipeline. The
+ * upstream body is tee'd to the client publisher and a temp file in a
+ * single pass; the temp file commits to storage on stream completion.
+ * Migrating to {@code ProxyCacheWriter.streamThroughAndCommit} would
+ * swap one stream-through primitive for another with no TTFB win — the
+ * universal-tee gap (G7) is therefore <em>already closed</em> at the
+ * cache abstraction layer.</p>
  */
 public final class FileProxySlice implements Slice {
 
