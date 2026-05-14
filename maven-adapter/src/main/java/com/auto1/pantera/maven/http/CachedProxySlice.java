@@ -417,13 +417,7 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
     ) {
         final CompletableFuture<Optional<Content>> loaded = this.metadataCache.load(
             key,
-            () -> this.client().response(line, Headers.EMPTY, Content.EMPTY)
-                .thenApply(resp -> {
-                    if (resp.status().success()) {
-                        return Optional.of(resp.body());
-                    }
-                    return Optional.<Content>empty();
-                })
+            request -> this.fetchMetadata(line, request)
         );
         return loaded.thenCompose(opt -> {
             if (opt.isEmpty()) {
@@ -441,6 +435,65 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
             }
             return this.applyMetadataCooldown(line, opt.get());
         });
+    }
+
+    /**
+     * Conditional upstream fetch for {@code maven-metadata.xml}. Sends
+     * {@code If-None-Match} / {@code If-Modified-Since} when the cache has
+     * matching validators; maps the upstream status to the corresponding
+     * {@link MetadataCache.MetadataFetchResult} variant:
+     *
+     * <ul>
+     *   <li>200 OK → {@code modified} with the new bytes + upstream validators.</li>
+     *   <li>304 Not Modified → {@code unmodified} (no blob rewrite).</li>
+     *   <li>404 Not Found → {@code notFound} (clears the cache entry).</li>
+     *   <li>Any other status → {@code notFound} so the cache surfaces the
+     *       absence to the slice (cache poisoning prevention — we never
+     *       commit upstream 5xx bytes to the metadata cache).</li>
+     * </ul>
+     *
+     * @param line Inbound request line, reused for the upstream call.
+     * @param request Cached validators (may be empty on cold miss).
+     * @return Future with the {@link MetadataCache.MetadataFetchResult}.
+     */
+    private CompletableFuture<MetadataCache.MetadataFetchResult> fetchMetadata(
+        final RequestLine line,
+        final MetadataCache.ConditionalRequest request
+    ) {
+        final Headers upstreamHeaders = new Headers();
+        request.etag().ifPresent(v -> upstreamHeaders.add("If-None-Match", v));
+        request.lastModified().ifPresent(v -> upstreamHeaders.add("If-Modified-Since", v));
+        return this.client().response(line, upstreamHeaders, Content.EMPTY)
+            .thenCompose(resp -> {
+                final int status = resp.status().code();
+                if (status == com.auto1.pantera.http.RsStatus.NOT_MODIFIED.code()) {
+                    // Drain body to release connection — 304 typically has
+                    // empty body but be defensive.
+                    return resp.body().asBytesFuture().thenApply(
+                        ignored -> MetadataCache.MetadataFetchResult.unmodified()
+                    );
+                }
+                if (resp.status().success()) {
+                    final String etag = headerValue(resp.headers(), "ETag");
+                    final String lastModified = headerValue(resp.headers(), "Last-Modified");
+                    return resp.body().asBytesFuture().thenApply(
+                        bytes -> MetadataCache.MetadataFetchResult.modified(
+                            bytes, etag, lastModified
+                        )
+                    );
+                }
+                // 404 or any other non-success — clear the cache entry so a
+                // subsequent fetch goes back to upstream cold. We never store
+                // upstream errors as cache content.
+                return resp.body().asBytesFuture().thenApply(
+                    ignored -> MetadataCache.MetadataFetchResult.notFound()
+                );
+            });
+    }
+
+    private static String headerValue(final Headers headers, final String name) {
+        final List<String> values = headers.values(name);
+        return values.isEmpty() ? null : values.get(0);
     }
 
     /**
