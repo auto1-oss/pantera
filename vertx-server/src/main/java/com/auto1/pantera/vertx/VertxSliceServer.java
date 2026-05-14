@@ -17,6 +17,7 @@ import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.server.SecurityHeadersSlice;
 import com.auto1.pantera.http.log.EcsLogEvent;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.misc.ConfigDefaults;
@@ -290,8 +291,18 @@ public final class VertxSliceServer implements Closeable {
         final long bodyBufferThreshold
     ) {
         this.vertx = Objects.requireNonNull(vertx, "vertx must not be null");
-        this.served = Objects.requireNonNull(served, "served must not be null");
-        this.options = Objects.requireNonNull(options, "options must not be null");
+        // T-S05: wrap the served slice in the outermost security-headers
+        // decorator. Emit HSTS only when this listener is TLS-terminated
+        // — a cleartext HTTP server emitting HSTS would coerce browsers
+        // to HTTPS even though no TLS endpoint exists. options.isSsl()
+        // is the authoritative signal Vert.x uses to configure the
+        // server socket; mirroring it here keeps the slice and listener
+        // in lockstep without an extra config knob.
+        this.served = new SecurityHeadersSlice(
+            Objects.requireNonNull(served, "served must not be null"),
+            Objects.requireNonNull(options, "options must not be null").isSsl()
+        );
+        this.options = options;
         this.requestTimeout = Objects.requireNonNull(requestTimeout, "requestTimeout must not be null");
         this.drainTimeout = Objects.requireNonNull(drainTimeout, "drainTimeout must not be null");
         if (requestTimeout.isNegative()) {
