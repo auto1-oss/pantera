@@ -567,6 +567,35 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
 
         final SslContextFactory.Client factory = new SslContextFactory.Client();
         factory.setTrustAll(settings.trustAll());
+        // T-S06: restrict outbound TLS to 1.2 / 1.3 only, matching the
+        // server-side TlsHardening contract. setIncludeProtocols is a
+        // strict allow-list — anything not listed is rejected even if
+        // the JVM enabled it by default. Mozilla "intermediate" cipher
+        // suites — TLS 1.3 selects from its own AEAD-only set spec'd
+        // by the protocol, so we restrict TLS 1.2 only.
+        factory.setIncludeProtocols("TLSv1.2", "TLSv1.3");
+        factory.setExcludeProtocols("SSLv2", "SSLv2Hello", "SSLv3", "TLSv1", "TLSv1.1");
+        factory.setIncludeCipherSuites(
+            "TLS_AES_256_GCM_SHA384",
+            "TLS_CHACHA20_POLY1305_SHA256",
+            "TLS_AES_128_GCM_SHA256",
+            "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+            "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+            "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256",
+            "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256",
+            "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+            "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+            "TLS_DHE_RSA_WITH_AES_256_GCM_SHA384",
+            "TLS_DHE_RSA_WITH_AES_128_GCM_SHA256"
+        );
+        // Hostname verification is on by default in Jetty 12
+        // (endpointIdentificationAlgorithm = "HTTPS"); calling the
+        // setter explicitly documents the requirement and prevents a
+        // future setTrustAll(true) from accidentally implying "skip
+        // hostname check too" the way it does in some HTTP client libs.
+        // T-S06 rejects any deployment that opts out of hostname
+        // verification — there is no Pantera setting to turn it off.
+        factory.setEndpointIdentificationAlgorithm("HTTPS");
         if (!Strings.isNullOrEmpty(settings.jksPath())) {
             factory.setKeyStoreType("jks");
             factory.setKeyStorePath(settings.jksPath());
