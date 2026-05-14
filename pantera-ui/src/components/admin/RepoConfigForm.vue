@@ -111,7 +111,7 @@ async function fetchCompatibleRepos() {
     const all: RepoListItem[] = resp.items ?? []
     compatibleRepos.value = all.filter(r => types.includes(r.type))
   } catch (e) {
-    console.error('Failed to fetch compatible repos', e)
+    console.error('[RepoConfigForm]', 'Failed to fetch compatible repos', e)
     compatibleRepos.value = []
   }
 }
@@ -188,7 +188,7 @@ async function createMemberRepo() {
     showCreateMemberDialog.value = false
     resetNewMemberFields()
   } catch (e: unknown) {
-    console.error('Failed to create member repo', e)
+    console.error('[RepoConfigForm]', 'Failed to create member repo', e)
   } finally {
     newMemberCreating.value = false
   }

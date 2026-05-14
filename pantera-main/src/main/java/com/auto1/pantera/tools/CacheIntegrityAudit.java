@@ -43,6 +43,21 @@ import java.util.Locale;
  *   <li>{@code 2} — CLI usage error.</li>
  * </ul>
  *
+ * <h2>Logging policy — intentional stdout/stderr usage</h2>
+ * <p>This class uses {@link System#out} / {@link System#err} on purpose. Every
+ * {@code println} in this file is the tool's user-facing output (banner,
+ * progress, offender list, result summary), not a structured log event:
+ * an operator runs the binary from a shell and expects to read the report
+ * directly on the terminal — piping or redirecting structured JSON would
+ * defeat the purpose. The audit-time finding B1 "stdio writes" was
+ * therefore intentionally kept here while every other site in the codebase
+ * was migrated to {@code EcsLogger}.
+ *
+ * <p>For the same reason, each {@code println} in this file carries an
+ * inline {@code NOPMD SystemPrintln} marker — PMD's blanket rule does not
+ * understand the user-facing-CLI exception, so the suppression is the
+ * documented exemption point.
+ *
  * @since 2.2.0
  */
 public final class CacheIntegrityAudit {

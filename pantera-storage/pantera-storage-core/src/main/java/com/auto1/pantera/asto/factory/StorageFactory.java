@@ -12,6 +12,7 @@ package com.auto1.pantera.asto.factory;
 
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.log.EcsLogger;
 
 /**
  * Storage factory interface.
@@ -55,7 +56,11 @@ public interface StorageFactory {
                 ((AutoCloseable) storage).close();
             } catch (final Exception e) {
                 // Log but don't throw - best effort cleanup
-                System.err.println("Failed to close storage: " + e.getMessage()); // NOPMD SystemPrintln - factory base interface, no logger dependency available
+                EcsLogger.error("com.auto1.pantera.asto.factory")
+                    .message("Failed to close storage: " + e.getMessage())
+                    .field("log.source", "application")
+                    .error(e)
+                    .log();
             }
         }
     }
