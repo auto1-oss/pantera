@@ -319,14 +319,17 @@ public final class ImportService {
                 // Configurable import timeout (default: 30 minutes)
                 .orTimeout(Long.getLong("pantera.import.timeout.seconds", 1800L), TimeUnit.SECONDS)
         ).toCompletableFuture().exceptionally(err -> {
-            EcsLogger.error("com.auto1.pantera.importer")
+            // B7: middle-layer log-and-rethrow — the import slice /
+            // verticle that owns the HTTP response is the boundary.
+            // CompletionException re-thrown here propagates with the
+            // full original cause attached.
+            EcsLogger.trace("com.auto1.pantera.importer")
                 .message("Import failed")
                 .eventCategory("web")
                 .eventAction("import_artifact")
-                .eventOutcome("failure")
                 .field("repository.name", request.repo())
                 .field("url.path", request.path())
-                .error(err)
+                .field("error.type", err.getClass().getSimpleName())
                 .field("log.source", "application")
                 .log();
             this.sessions.ifPresent(store -> store.markFailed(session, err.getMessage()));

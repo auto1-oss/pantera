@@ -310,13 +310,15 @@ public final class DbArtifactIndex implements ArtifactIndex {
                 setUpsertParams(stmt, doc);
                 stmt.executeUpdate();
             } catch (final SQLException ex) {
-                EcsLogger.error("com.auto1.pantera.index")
+                // B7: middle-layer log-and-rethrow — DbConsumer / API
+                // handler is the boundary that decides batch retry or
+                // HTTP outcome. Avoid duplicate stack-traces.
+                EcsLogger.trace("com.auto1.pantera.index")
                     .message("Failed to index artifact")
                     .eventCategory("database")
                     .eventAction("db_index")
-                    .eventOutcome("failure")
                     .field("package.name", doc.artifactPath())
-                    .error(ex)
+                    .field("error.type", ex.getClass().getSimpleName())
                     .field("log.source", "application")
                     .log();
                 throw new RuntimeException("Failed to index artifact: " + doc.artifactPath(), ex);
@@ -333,14 +335,14 @@ public final class DbArtifactIndex implements ArtifactIndex {
                 stmt.setString(2, artifactPath);
                 stmt.executeUpdate();
             } catch (final SQLException ex) {
-                EcsLogger.error("com.auto1.pantera.index")
+                // B7: middle-layer log-and-rethrow — see above.
+                EcsLogger.trace("com.auto1.pantera.index")
                     .message("Failed to remove artifact")
                     .eventCategory("database")
                     .eventAction("db_remove")
-                    .eventOutcome("failure")
                     .field("repository.name", repoName)
                     .field("package.name", artifactPath)
-                    .error(ex)
+                    .field("error.type", ex.getClass().getSimpleName())
                     .field("log.source", "application")
                     .log();
                 throw new RuntimeException(
@@ -380,14 +382,14 @@ public final class DbArtifactIndex implements ArtifactIndex {
                 stmt.setString(2, escaped + "%");
                 return stmt.executeUpdate();
             } catch (final SQLException ex) {
-                EcsLogger.error("com.auto1.pantera.index")
+                // B7: middle-layer log-and-rethrow — see above.
+                EcsLogger.trace("com.auto1.pantera.index")
                     .message("Failed to remove artifact prefix")
                     .eventCategory("database")
                     .eventAction("db_remove_prefix")
-                    .eventOutcome("failure")
                     .field("repository.name", repoName)
                     .field("package.name", pathPrefix)
-                    .error(ex)
+                    .field("error.type", ex.getClass().getSimpleName())
                     .field("log.source", "application")
                     .log();
                 throw new RuntimeException(
@@ -1795,12 +1797,12 @@ public final class DbArtifactIndex implements ArtifactIndex {
                 stmt.executeBatch();
                 conn.commit();
             } catch (final SQLException ex) {
-                EcsLogger.error("com.auto1.pantera.index")
+                // B7: middle-layer log-and-rethrow — see above.
+                EcsLogger.trace("com.auto1.pantera.index")
                     .message("Failed to batch index " + docs.size() + " artifacts")
                     .eventCategory("database")
                     .eventAction("db_index_batch")
-                    .eventOutcome("failure")
-                    .error(ex)
+                    .field("error.type", ex.getClass().getSimpleName())
                     .field("log.source", "application")
                     .log();
                 throw new RuntimeException(

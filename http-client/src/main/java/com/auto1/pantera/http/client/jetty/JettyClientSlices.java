@@ -355,12 +355,15 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
                     "Interrupted while stopping Jetty HTTP client.", ie
                 );
             } catch (Exception e) {
-                EcsLogger.error("com.auto1.pantera.http.client")
+                // B7: middle-layer log-and-rethrow — wrapping caller
+                // (Vert.x shutdown / VertxMain stop path) is the
+                // boundary and will log the full PanteraException. Emit
+                // TRACE here so debug-on still shows the original cause.
+                EcsLogger.trace("com.auto1.pantera.http.client")
                     .message("Failed to stop Jetty HTTP client cleanly")
                     .eventCategory("web")
                     .eventAction("http_client_stop")
-                    .eventOutcome("failure")
-                    .error(e)
+                    .field("error.type", e.getClass().getSimpleName())
                     .field("log.source", "application")
                     .log();
                 throw new PanteraException(

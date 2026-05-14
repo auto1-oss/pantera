@@ -128,13 +128,15 @@ public final class CachedDbPolicy implements Policy<UserPermissions>, Cleanable<
             try {
                 return this.createUserPermissions(user).call();
             } catch (final Exception err) {
-                EcsLogger.error("com.auto1.pantera.security")
+                // B7: middle-layer log-and-rethrow — boundary is the
+                // AuthHandler / authz slice that converts the wrapped
+                // PanteraException into an HTTP response.
+                EcsLogger.trace("com.auto1.pantera.security")
                     .message("Failed to get user permissions from DB")
                     .eventCategory("authentication")
                     .eventAction("permissions_get")
-                    .eventOutcome("failure")
                     .field("user.name", user.name())
-                    .error(err)
+                    .field("error.type", err.getClass().getSimpleName())
                     .field("log.source", "application")
                     .log();
                 throw new PanteraException(err);

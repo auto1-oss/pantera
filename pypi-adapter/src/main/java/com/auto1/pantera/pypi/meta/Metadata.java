@@ -128,12 +128,14 @@ public interface Metadata {
             ) {
                 return FromArchive.readArchive(archive);
             } catch (final IOException ex) {
-                EcsLogger.error("com.auto1.pantera.pypi")
+                // B7: middle-layer log-and-rethrow — caller slice that
+                // surfaces the wrapped exception to HTTP / import is the
+                // boundary.
+                EcsLogger.trace("com.auto1.pantera.pypi")
                     .message("Failed to read metadata from archive")
                     .eventCategory("web")
                     .eventAction("metadata_extraction")
-                    .eventOutcome("failure")
-                    .error(ex)
+                    .field("error.type", ex.getClass().getSimpleName())
                     .field("log.source", "application")
                     .log();
                 throw FromArchive.error(ex);

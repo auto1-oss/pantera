@@ -547,12 +547,14 @@ public final class MetadataRegenerator {
                     // MetaUpdate.ByJson now uses storage.exclusively() for atomic updates
                     return new MetaUpdate.ByTgz(tgz).update(new Key.From(packageName), this.storage);
                 } catch (final Exception ex) {
-                    EcsLogger.error("com.auto1.pantera.importer")
+                    // B7: middle-layer log-and-rethrow — the import slice
+                    // / regenerator caller catches the CompletionException
+                    // and decides the HTTP / job outcome.
+                    EcsLogger.trace("com.auto1.pantera.importer")
                         .message("Failed to extract NPM package metadata at key: " + path)
                         .eventCategory("web")
                         .eventAction("npm_metadata_regenerate")
-                        .eventOutcome("failure")
-                        .error(ex)
+                        .field("error.type", ex.getClass().getSimpleName())
                         .field("log.source", "application")
                         .log();
                     throw new CompletionException(ex);
@@ -962,12 +964,13 @@ public final class MetadataRegenerator {
                     // Return null to signal retry needed
                     return null;
                 } else {
-                    EcsLogger.error("com.auto1.pantera.importer")
+                    // B7: middle-layer log-and-rethrow — caller chain
+                    // (slice / verticle) is the boundary.
+                    EcsLogger.trace("com.auto1.pantera.importer")
                         .message("Failed operation '" + description + "' after " + maxRetries + " retry attempts")
                         .eventCategory("web")
                         .eventAction("metadata_regenerate_retry")
-                        .eventOutcome("failure")
-                        .error(error)
+                        .field("error.type", error.getClass().getSimpleName())
                         .field("log.source", "application")
                         .log();
                     throw new CompletionException(error);

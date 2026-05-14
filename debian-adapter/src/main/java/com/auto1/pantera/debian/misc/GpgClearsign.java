@@ -95,22 +95,24 @@ public final class GpgClearsign {
                 return out.toByteArray();
             }
         } catch (final PGPException err) {
-            EcsLogger.error("com.auto1.pantera.debian")
+            // B7: middle-layer log-and-rethrow — the boundary catcher (the
+            // adapter slice that converts to an HTTP response) keeps the
+            // full stack. Emit TRACE here so deep-debug still surfaces
+            // the path without flooding production logs.
+            EcsLogger.trace("com.auto1.pantera.debian")
                 .message("Error while generating gpg-signature")
                 .eventCategory("web")
                 .eventAction("gpg_sign")
-                .eventOutcome("failure")
-                .error(err)
+                .field("error.type", err.getClass().getSimpleName())
                 .field("log.source", "application")
                 .log();
             throw new PanteraException(err);
         } catch (final IOException err) {
-            EcsLogger.error("com.auto1.pantera.debian")
+            EcsLogger.trace("com.auto1.pantera.debian")
                 .message("IO error while generating gpg-signature")
                 .eventCategory("web")
                 .eventAction("gpg_sign")
-                .eventOutcome("failure")
-                .error(err)
+                .field("error.type", err.getClass().getSimpleName())
                 .field("log.source", "application")
                 .log();
             throw new PanteraIOException(err);
@@ -147,22 +149,21 @@ public final class GpgClearsign {
                 return out.toByteArray();
             }
         } catch (final PGPException err) {
-            EcsLogger.error("com.auto1.pantera.debian")
+            // B7: middle-layer log-and-rethrow — see above.
+            EcsLogger.trace("com.auto1.pantera.debian")
                 .message("Error while generating gpg-signature")
                 .eventCategory("web")
                 .eventAction("gpg_sign")
-                .eventOutcome("failure")
-                .error(err)
+                .field("error.type", err.getClass().getSimpleName())
                 .field("log.source", "application")
                 .log();
             throw new PanteraException(err);
         } catch (final IOException err) {
-            EcsLogger.error("com.auto1.pantera.debian")
+            EcsLogger.trace("com.auto1.pantera.debian")
                 .message("IO error while generating gpg-signature")
                 .eventCategory("web")
                 .eventAction("gpg_sign")
-                .eventOutcome("failure")
-                .error(err)
+                .field("error.type", err.getClass().getSimpleName())
                 .field("log.source", "application")
                 .log();
             throw new PanteraIOException(err);
