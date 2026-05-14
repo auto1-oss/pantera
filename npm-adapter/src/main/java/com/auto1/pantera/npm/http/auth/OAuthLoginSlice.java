@@ -13,6 +13,7 @@ package com.auto1.pantera.npm.http.auth;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.LogSanitizer;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
@@ -152,13 +153,18 @@ public final class OAuthLoginSlice implements Slice {
             try {
                 token = this.tokens.generate(user);
             } catch (final Exception err) {
+                // B4: password and request headers are in scope (Basic /
+                // Bearer / X-API-Key). Drop the throwable bundle so a
+                // verbose JWT library message can never echo a token; emit
+                // sanitized exception class + message only.
                 EcsLogger.warn("com.auto1.pantera.npm")
                     .message("Failed to generate npm token via Tokens service")
                     .eventCategory("authentication")
                     .eventAction("token_generation")
                     .eventOutcome("failure")
                     .field("user.name", user.name())
-                    .error(err)
+                    .field("error.type", err.getClass().getSimpleName())
+                    .field("error.message", LogSanitizer.sanitizeMessage(err.getMessage()))
                     .field("log.source", "application")
                     .log();
             }

@@ -92,9 +92,13 @@ public final class Login extends Header {
                     return Optional.of(credentials);
                 }
             } catch (final IllegalArgumentException ex) {
+                // B4: the encoded Basic-auth value is in scope. Drop the
+                // throwable bundle — Base64 implementations may include
+                // the offending character / position in the message, and
+                // the exception class alone is the actionable diagnostic.
                 EcsLogger.debug("com.auto1.pantera.http")
                     .message("Failed to decode Basic auth credentials")
-                    .error(ex)
+                    .field("error.type", ex.getClass().getSimpleName())
                     .field("log.source", "application")
                     .log();
                 return Optional.empty();

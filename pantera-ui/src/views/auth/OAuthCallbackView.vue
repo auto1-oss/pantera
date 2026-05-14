@@ -26,8 +26,22 @@ onMounted(async () => {
   // from the URL — it's attacker-controllable when the redirect URI
   // is open and may carry confusing or misleading text.
   if (idpError) {
+    // B4: the raw `error` query-param is also attacker-controllable —
+    // log only known OAuth2 / OIDC error codes (RFC 6749 §4.1.2.1,
+    // OIDC Core §3.1.2.6). Anything else collapses to 'other' so we
+    // still know an IdP error happened but never echo a hostile value.
+    const known = new Set<string>([
+      'invalid_request', 'unauthorized_client', 'access_denied',
+      'unsupported_response_type', 'invalid_scope', 'server_error',
+      'temporarily_unavailable', 'interaction_required', 'login_required',
+      'account_selection_required', 'consent_required',
+      'invalid_request_uri', 'invalid_request_object',
+      'request_not_supported', 'request_uri_not_supported',
+      'registration_not_supported'
+    ])
+    const code = known.has(idpError) ? idpError : 'other'
     // eslint-disable-next-line no-console
-    console.warn('[auth] IdP returned error in callback', { error: idpError })
+    console.warn('[auth] IdP returned error in callback', { code })
     phase.value = 'error'
     errorMsg.value = 'Sign-in was cancelled or rejected by the identity provider.'
     return

@@ -290,9 +290,21 @@ public final class AdminAuthHandler {
             if (err != null) {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
             } else {
+                // B4: key NAMES are admin-supplied and currently safe to
+                // log (operational signal — which settings changed). Pair
+                // each name with =<redacted> so any future expansion that
+                // accidentally pulls the VALUE in still emits a redaction
+                // placeholder, not the credential.
+                final StringBuilder redactedKeys = new StringBuilder();
+                for (final String name : body.fieldNames()) {
+                    if (redactedKeys.length() > 0) {
+                        redactedKeys.append(',');
+                    }
+                    redactedKeys.append(name).append("=<redacted>");
+                }
                 EcsLogger.info("com.auto1.pantera.api.v1")
                     .message("Admin updated auth settings (keys="
-                        + String.join(",", body.fieldNames()) + ")")
+                        + redactedKeys + ")")
                     .eventCategory("iam")
                     .eventAction("auth_settings_update")
                     .eventOutcome("success")

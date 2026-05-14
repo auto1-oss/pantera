@@ -48,6 +48,7 @@ import com.auto1.pantera.settings.cache.CachedUsers;
 import com.auto1.pantera.settings.cache.GuavaFiltersCache;
 import com.auto1.pantera.settings.cache.PublishingFiltersCache;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.LogSanitizer;
 import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.index.ArtifactIndexCache;
 import com.auto1.pantera.index.DbArtifactIndex;
@@ -903,12 +904,18 @@ public final class YamlSettings implements Settings {
                         : auth;
                     res = new Authentication.Joined(res, gated);
                 } catch (final Exception ex) {
+                    // B4: YAML node `settings` may carry client_secret /
+                    // jwt private-key paths / IdP credentials. Drop the
+                    // throwable bundle and emit only sanitized message +
+                    // exception class so the secret-bearing scope never
+                    // reaches the log document.
                     EcsLogger.warn("com.auto1.pantera.settings")
                         .message("Failed to load auth provider: " + type)
                         .eventCategory("authentication")
                         .eventAction("auth_init")
                         .eventOutcome("failure")
-                        .error(ex)
+                        .field("error.type", ex.getClass().getSimpleName())
+                        .field("error.message", LogSanitizer.sanitizeMessage(ex.getMessage()))
                         .field("log.source", "application")
                         .log();
                 }

@@ -80,6 +80,24 @@ export function formatAuthError(err: unknown): NormalizedAuthError {
 function logDetail(tag: string, err: unknown): void {
   // Developer console only — never reaches the DOM. Useful for debugging
   // a real user-reported issue without leaking anything to a casual viewer.
+  //
+  // B4: dumping the raw err (typically an AxiosError) pulls the full
+  // request config — including Authorization header, request body, and
+  // any user-typed password — into console output, browser extensions,
+  // Sentry breadcrumbs, etc. Emit only the shape we actually need.
+  const detail: { status?: number; code?: string } = {}
+  if (err && typeof err === 'object') {
+    const candidate = err as {
+      response?: { status?: number }
+      code?: string
+    }
+    if (candidate.response && typeof candidate.response.status === 'number') {
+      detail.status = candidate.response.status
+    }
+    if (typeof candidate.code === 'string') {
+      detail.code = candidate.code
+    }
+  }
   // eslint-disable-next-line no-console
-  console.warn(`[auth] ${tag} error`, err)
+  console.warn(`[auth] ${tag} error`, detail)
 }
