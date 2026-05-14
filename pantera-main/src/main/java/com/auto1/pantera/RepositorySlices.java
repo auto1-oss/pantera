@@ -77,6 +77,7 @@ import com.auto1.pantera.pypi.http.PySlice;
 import com.auto1.pantera.rpm.http.RpmSlice;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.scheduling.MetadataEventQueues;
+import com.auto1.pantera.security.AnonymousAccessSlice;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.Settings;
 import com.auto1.pantera.settings.repo.RepoConfig;
@@ -1205,9 +1206,47 @@ public class RepositorySlices {
             filtered, cfg.name(), cfg.type()
         );
 
-        return cfg.contentLengthMax()
+        final Slice withContentLength = cfg.contentLengthMax()
             .<Slice>map(limit -> new ContentLengthRestriction(withMetrics, limit))
             .orElse(withMetrics);
+
+        // T-S07: outermost anonymous-access gate. Sits OUTSIDE the
+        // adapter's own auth (filters / metrics / content-length) so
+        // unauthenticated reads/writes are rejected with 401 before
+        // any per-adapter logic runs. Policy defaults: proxies allow
+        // anon read (curlable maven/npm clients); hosted repos require
+        // auth for both directions.
+        return new AnonymousAccessSlice(
+            withContentLength, anonymousPolicy(cfg), cfg.name()
+        );
+    }
+
+    /**
+     * Resolve the per-repo anonymous-access policy from YAML, falling
+     * back to type-specific defaults. {@code anonymousRead} defaults
+     * to {@code true} when the repo has a {@code remotes} section
+     * (i.e. it's a proxy) and {@code false} otherwise.
+     * {@code anonymousWrite} defaults to {@code false} unconditionally.
+     *
+     * <p>YAML overrides:</p>
+     * <pre>{@code
+     * repo:
+     *   anonymous_read: false
+     *   anonymous_write: false
+     * }</pre>
+     *
+     * @param cfg Repo config.
+     * @return Effective anonymous-access policy.
+     */
+    private static AnonymousAccessSlice.Policy anonymousPolicy(final RepoConfig cfg) {
+        final boolean isProxy = !cfg.remotes().isEmpty();
+        final String readYaml = cfg.repoYaml().string("anonymous_read");
+        final String writeYaml = cfg.repoYaml().string("anonymous_write");
+        final boolean read = readYaml == null
+            ? isProxy
+            : Boolean.parseBoolean(readYaml);
+        final boolean write = writeYaml != null && Boolean.parseBoolean(writeYaml);
+        return new AnonymousAccessSlice.Policy(read, write);
     }
 
     private Authentication authentication() {
