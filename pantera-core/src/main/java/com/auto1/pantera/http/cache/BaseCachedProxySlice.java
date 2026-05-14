@@ -189,6 +189,16 @@ public abstract class BaseCachedProxySlice implements Slice {
     private final Optional<Storage> storage;
 
     /**
+     * Streaming-tee cache writer. Available when {@link #storage} is
+     * present. Used by {@link #streamingCacheWrite} (T-P04). The
+     * Maven adapter retains its own {@link ProxyCacheWriter} instance
+     * for the sidecar-verifying path; this field exists for adapters
+     * that pass empty sidecars (npm, pypi, composer, go, …) and want
+     * the same tee semantics without the verification dance.
+     */
+    private final ProxyCacheWriter teeCacheWriter;
+
+    /**
      * Optional post-write callback (Phase-4 / Task-19a extension point). Fires
      * once per successful primary cache-write; callback exceptions are caught +
      * logged and never propagate to the cache-write path. Defaults to a no-op.
@@ -239,6 +249,7 @@ public abstract class BaseCachedProxySlice implements Slice {
         this.events = Objects.requireNonNull(events, "events");
         this.config = Objects.requireNonNull(config, "config");
         this.storage = storage;
+        this.teeCacheWriter = storage.map(s -> new ProxyCacheWriter(s, repoName)).orElse(null);
         this.metadataStore = storage.map(CachedArtifactMetadataStore::new);
         this.storageBacked = this.metadataStore.isPresent()
             && !Objects.equals(this.cache, Cache.NOP);
@@ -837,6 +848,152 @@ public abstract class BaseCachedProxySlice implements Slice {
                 });
         }
         return gate.exceptionally(err -> null).thenCompose(ignored -> followerLookup.get());
+    }
+
+    /**
+     * Streaming cache-write helper for adapters that have no upstream
+     * sidecar files (npm, pypi, composer, go, …). Fetches the primary,
+     * tees bytes through {@link ProxyCacheWriter#streamThroughAndCommit}
+     * to both the client and storage in one pass, wires the
+     * single-flight leader gate to the verification outcome, and
+     * returns a {@link Response} the caller passes directly to the
+     * response builder. T-P04 of {@code analysis/plan/v2/IMPLEMENTATION.md},
+     * closing the universal-tee half of gap G7.
+     *
+     * <p>Compared with the legacy
+     * {@code BaseCachedProxySlice.cacheResponse} path, this method
+     * does NOT buffer the body to a temp file before serving — the
+     * client gets the first byte at upstream TTFB + a few ms, not
+     * after the storage write completes. The single-flight gate
+     * resolves when the cache write is durable, so followers re-enter
+     * the cache lookup against a warm cache.
+     *
+     * <p>The helper does NOT handle metadata, sidecars, or event
+     * enqueue. Adapters that need those wire them via the existing
+     * {@link #generateSidecars}, {@link #buildArtifactEvent}, and
+     * {@link #digestAlgorithms} hooks <em>plus</em> their own
+     * post-stream wiring; the primary write itself is enough for
+     * 90 % of the cold-walk latency gain.
+     *
+     * <p><b>Storage requirement.</b> The helper requires
+     * {@link Storage} to be wired (the constructor sets
+     * {@link #teeCacheWriter} from it). Adapters without storage
+     * still use {@link #fetchDirect} via the {@code response()}
+     * dispatch.
+     *
+     * @param line        Request line forwarded to the upstream.
+     * @param headers     Inbound headers; the helper applies
+     *                    {@link #upstreamHeaders} before forwarding.
+     * @param key         Cache key for the primary artifact.
+     * @param leaderGate  Single-flight leader gate; completed when
+     *                    the cache write is durable so followers can
+     *                    proceed against the warm cache.
+     * @return Response carrying the tee'd body. Non-2xx upstream
+     *         responses are propagated via {@link #handleNonSuccess}
+     *         and {@link #handle404}; exceptions surface as 502.
+     * @since 2.2.0
+     */
+    protected final CompletableFuture<Response> streamingCacheWrite(
+        final RequestLine line,
+        final Headers headers,
+        final Key key,
+        final CompletableFuture<Void> leaderGate
+    ) {
+        if (this.teeCacheWriter == null) {
+            throw new IllegalStateException(
+                "streamingCacheWrite called without storage configured for repo "
+                    + this.repoName
+            );
+        }
+        final String owner = new Login(headers).getValue();
+        final long startTime = System.currentTimeMillis();
+        return this.client.response(line, this.upstreamHeaders(headers), Content.EMPTY)
+            .thenCompose(resp -> {
+                final long duration = System.currentTimeMillis() - startTime;
+                final int code = resp.status().code();
+                if (code == 404) {
+                    return this.handle404(resp, key, duration).thenApply(signal -> {
+                        if (!leaderGate.isDone()) {
+                            leaderGate.complete(null);
+                        }
+                        return ResponseBuilder.notFound().build();
+                    });
+                }
+                if (!resp.status().success()) {
+                    return this.handleNonSuccess(resp, duration, key).thenApply(r -> {
+                        if (!leaderGate.isDone()) {
+                            leaderGate.complete(null);
+                        }
+                        return r;
+                    });
+                }
+                this.recordProxyMetric("success", duration);
+                final String upstreamUri = this.upstreamUrl + line.uri().getPath();
+                final com.auto1.pantera.http.context.RequestContext ctx =
+                    new com.auto1.pantera.http.context.RequestContext(
+                        org.apache.logging.log4j.ThreadContext.get("trace.id"),
+                        null,
+                        this.repoName,
+                        line.uri().getPath()
+                    );
+                return this.teeCacheWriter.streamThroughAndCommit(
+                    key, upstreamUri, resp.body().size(), resp.body(),
+                    java.util.Map.of(),
+                    null, ctx
+                ).toCompletableFuture().thenApply(result -> {
+                    if (result instanceof com.auto1.pantera.http.fault.Result.Err) {
+                        if (!leaderGate.isDone()) {
+                            leaderGate.complete(null);
+                        }
+                        return ResponseBuilder.badGateway()
+                            .textBody("Upstream temporarily unavailable")
+                            .build();
+                    }
+                    @SuppressWarnings("unchecked")
+                    final ProxyCacheWriter.StreamedArtifact artifact =
+                        ((com.auto1.pantera.http.fault.Result.Ok<ProxyCacheWriter.StreamedArtifact>)
+                            result).value();
+                    artifact.verificationOutcome().whenComplete((outcome, vErr) -> {
+                        if (!leaderGate.isDone()) {
+                            leaderGate.complete(null);
+                        }
+                        if (vErr == null
+                            && outcome instanceof com.auto1.pantera.http.fault.Result.Ok) {
+                            this.enqueueEvent(
+                                key, resp.headers(),
+                                artifact.body().size().orElse(0L), owner
+                            );
+                        }
+                    });
+                    return this.postProcess(
+                        ResponseBuilder.ok()
+                            .headers(stripContentEncoding(resp.headers()))
+                            .body(artifact.body())
+                            .build(),
+                        line
+                    );
+                });
+            })
+            .exceptionally(error -> {
+                if (!leaderGate.isDone()) {
+                    leaderGate.complete(null);
+                }
+                final long duration = System.currentTimeMillis() - startTime;
+                this.trackUpstreamFailure(error);
+                this.recordProxyMetric("exception", duration);
+                EcsLogger.warn("com.auto1.pantera." + this.repoType)
+                    .message("Streaming cache write failed with exception")
+                    .eventCategory("web")
+                    .eventAction("proxy_upstream")
+                    .eventOutcome("failure")
+                    .field("repository.name", this.repoName)
+                    .field("event.duration", duration)
+                    .error(error)
+                    .log();
+                return ResponseBuilder.badGateway()
+                    .textBody("Upstream temporarily unavailable")
+                    .build();
+            });
     }
 
     /**
