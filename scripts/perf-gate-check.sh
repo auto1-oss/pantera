@@ -1,19 +1,26 @@
 #!/usr/bin/env bash
-# perf-gate-check.sh — assert M3-M4 invariants from a running Pantera.
+# perf-gate-check.sh — assert M3-M4 + 2.2.0 invariants from a running
+# Pantera.
 #
 # Scrapes the /metrics/vertx endpoint and fails the build when any of:
 #
-#   pantera_proxy_429_total                      > 0
+#   pantera_proxy_429_total                          > 0
 #   pantera_outbound_rate_limited_total
-#       {reason="gate_closed"}                   > 0
-#   pantera_upstream_amplification_ratio         > 1.5
+#       {reason="gate_closed"}                       > 0
+#   pantera_upstream_amplification_ratio             > 1.5
+#   pantera_circuit_breaker_trips_total              > 0
+#   pantera_circuit_breaker_state (sum at end)       > 0
 #
 # Each is the production paging signal for the corresponding amplifier:
 # the first means an upstream throttled us (M3's gate was set too high),
 # the second means our own gate closed sustained (an upstream is still
 # 429-ing through the back-off), the third means a regression added a
-# new outbound source past M2's prefetch deletion. The thresholds match
-# the Grafana alert rules shipped in
+# new outbound source past M2's prefetch deletion. The last two are
+# T-P02/T-P02b's signals — a clean perf run should never trip the
+# breaker, and if any breaker is left open at end-of-run it means an
+# upstream stayed degraded throughout the test.
+#
+# Thresholds match the Grafana alert rules shipped in
 # pantera-main/docker-compose/prometheus/rules/amplification.yml.
 #
 # Usage:
@@ -92,8 +99,37 @@ else
   echo "(no inbound traffic yet — amplification check skipped)"
 fi
 
+# ------------------------------------------------------------------
+# Check 4 (T-P02/T-P02b): circuit-breaker trips. A clean perf run uses
+# a well-behaved upstream (WireMock in CI). Any trip means either the
+# upstream injected non-2xx responses we did not expect, or the
+# breaker config is over-aggressive. Either is a regression that
+# should surface in CI rather than production.
+# ------------------------------------------------------------------
+cb_trips="$(echo "${METRICS}" \
+  | awk '/^pantera_circuit_breaker_trips_total\{/ { sum += $NF } END { print sum + 0 }')"
+echo "pantera_circuit_breaker_trips_total = ${cb_trips}"
+if awk -v v="${cb_trips}" 'BEGIN { exit !(v + 0 > 0) }'; then
+  echo "FAIL: circuit breaker tripped during this run — upstream health or breaker config regressed" >&2
+  fail=1
+fi
+
+# ------------------------------------------------------------------
+# Check 5 (T-P02/T-P02b): circuit-breaker state at end-of-run. The
+# state gauge reads 1 when a breaker is open. Summed across all hosts,
+# end-of-run > 0 means some upstream stayed degraded through the
+# whole test — the run is not representative.
+# ------------------------------------------------------------------
+cb_open="$(echo "${METRICS}" \
+  | awk '/^pantera_circuit_breaker_state\{/ { sum += $NF } END { print sum + 0 }')"
+echo "pantera_circuit_breaker_state (sum) = ${cb_open}"
+if awk -v v="${cb_open}" 'BEGIN { exit !(v + 0 > 0) }'; then
+  echo "FAIL: at least one circuit breaker is still open at end-of-run — upstream stayed degraded" >&2
+  fail=1
+fi
+
 if [ "${fail}" -eq 0 ]; then
-  echo "PASS: all M3-M4 invariants hold."
+  echo "PASS: all M3-M4 + 2.2.0 invariants hold."
   exit 0
 fi
 exit 1

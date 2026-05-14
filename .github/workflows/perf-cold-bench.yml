@@ -1,0 +1,145 @@
+name: Perf cold-bench (T-P14 — 20s target)
+
+# T-P14 — cold-cache reproduction enforces the Candidate-1 target.
+#
+# Boots the production-shape docker-compose stack (Pantera + Postgres
+# + Valkey + nginx) against a WireMock fixture that simulates the
+# Maven Central CDN at p50 = 80 ms, p95 ≈ 250 ms (Cloudflare-typical),
+# then runs `performance/scripts/run-cold-bench.sh sonar-maven-plugin -i 5`
+# and fails the workflow when median wall-time > 20 s (no throttling)
+# or 25 s (a single 429 is still tolerated — Maven Central does
+# occasionally throttle).
+#
+# Triggers:
+#   - workflow_dispatch  — on-demand, for pre-merge perf check
+#   - schedule (nightly) — drift detection over time
+#   - pull_request when performance/, http-client/, maven-adapter/,
+#     pantera-core/, or pantera-main/ change (the perf-moving paths)
+#
+# Why this is split from perf-gate.yml: the M3-M4 invariants are
+# scrape-only assertions (no time pressure); the cold-bench is wall-
+# clock-sensitive and benefits from running on its own runner so a
+# noisy neighbour does not poison the result.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * *'   # 03:17 UTC nightly
+  pull_request:
+    branches: [master, 2.2.0]
+    paths:
+      - 'pantera-core/**'
+      - 'pantera-main/**'
+      - 'maven-adapter/**'
+      - 'http-client/**'
+      - 'performance/**'
+      - 'scripts/perf-gate-check.sh'
+      - '.github/workflows/perf-cold-bench.yml'
+
+jobs:
+  cold-bench:
+    runs-on: ubuntu-latest
+    # 60 min upper bound: 10 min build + 10 min stack-up + 5 × 4 min
+    # cold runs + 10 min slack.
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: maven
+
+      - name: Build Pantera image
+        working-directory: performance
+        run: make build
+
+      - name: Generate WireMock fixture bodies
+        working-directory: performance
+        run: make setup
+
+      - name: Start Pantera + Postgres + Valkey + WireMock
+        working-directory: performance
+        run: |
+          docker compose -f docker-compose-scaling.yml up -d
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:8087/metrics/vertx > /dev/null 2>&1; then
+              echo "Pantera metrics endpoint is up"
+              break
+            fi
+            sleep 2
+          done
+          curl -fsS http://localhost:8087/metrics/vertx > /dev/null \
+            || (docker compose -f docker-compose-scaling.yml logs --tail=200 pantera; exit 1)
+
+      - name: Run 5× cold-bench (sonar-maven-plugin)
+        id: cold_bench
+        run: |
+          chmod +x performance/scripts/run-cold-bench.sh
+          set -o pipefail
+          output="$(performance/scripts/run-cold-bench.sh sonar-maven-plugin -i 5 | tee /tmp/cold-bench.out)"
+          echo "${output}"
+          # Re-emit the parseable trailer for downstream steps.
+          grep '^COLD_BENCH_' /tmp/cold-bench.out >> "$GITHUB_OUTPUT"
+
+      - name: Enforce 20 s median target
+        env:
+          MEDIAN: ${{ steps.cold_bench.outputs.COLD_BENCH_MEDIAN_SECONDS }}
+          P95: ${{ steps.cold_bench.outputs.COLD_BENCH_P95_SECONDS }}
+        run: |
+          echo "median  = ${MEDIAN} s"
+          echo "p95     = ${P95} s"
+          # Threshold semantics:
+          #   median ≤ 20 s   — Candidate-1 target (no throttling)
+          #   p95 ≤ 25 s      — tolerate one 429 in 5 iterations
+          if awk -v m="${MEDIAN}" 'BEGIN { exit !(m + 0 > 20) }'; then
+            echo "FAIL: median ${MEDIAN} s > 20 s — cold-bench regressed past Candidate-1 target" >&2
+            exit 1
+          fi
+          if awk -v p="${P95}" 'BEGIN { exit !(p + 0 > 25) }'; then
+            echo "FAIL: p95 ${P95} s > 25 s — tail latency regressed" >&2
+            exit 1
+          fi
+          echo "PASS: cold-bench median ${MEDIAN} s ≤ 20 s and p95 ${P95} s ≤ 25 s"
+
+      - name: Perf-gate invariants (M3-M4 + T-P02b CB)
+        if: always()
+        run: |
+          chmod +x scripts/perf-gate-check.sh
+          scripts/perf-gate-check.sh http://localhost:8087/metrics/vertx
+
+      - name: Upload cold-bench artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cold-bench-results
+          path: |
+            /tmp/cold-bench.out
+            /tmp/cold-bench-10x-mvn-*.log
+          retention-days: 30
+
+      - name: Collect logs on failure
+        if: failure()
+        working-directory: performance
+        run: |
+          docker compose -f docker-compose-scaling.yml logs --tail=500 pantera > /tmp/pantera.log || true
+          docker compose -f docker-compose-scaling.yml logs --tail=500 wiremock > /tmp/wiremock.log || true
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cold-bench-diagnostics
+          path: |
+            /tmp/pantera.log
+            /tmp/wiremock.log
+          retention-days: 14
+
+      - name: Tear down
+        if: always()
+        working-directory: performance
+        run: docker compose -f docker-compose-scaling.yml down -v

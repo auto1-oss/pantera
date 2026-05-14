@@ -57,6 +57,9 @@ pantera-main/docker-compose/pantera/keys/
 logs/.analysis/
 performance/*/*
 !performance/results/.gitkeep
+# Keep the CI cold-bench harness (T-P14) in tree.
+!performance/scripts/run-cold-bench.sh
+!performance/scripts/cold-bench-10x.sh
 performance/wiremock/__files/*.bin
 performance/pantera-config.yml
 performance/secrets/*.pem
