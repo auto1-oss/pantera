@@ -223,6 +223,77 @@ final class ProxyCacheWriterStreamThroughTest {
     }
 
     @Test
+    @DisplayName("T-P03: empty sidecar map - verification is a no-op, primary still commits")
+    void emptySidecarMapCommitsWithoutVerification() throws Exception {
+        // T-P03: non-Maven adapters (npm, pypi, composer, go, ...) call
+        // streamThroughAndCommit with an empty sidecar map because their
+        // upstream protocol has no separate sidecar files. The verify
+        // path must short-circuit to Ok the moment the stream completes
+        // and the primary lands in storage.
+        final Storage cache = new InMemoryStorage();
+        final ProxyCacheWriter writer = new ProxyCacheWriter(cache, "stream-test");
+        final Result<ProxyCacheWriter.StreamedArtifact> result =
+            writer.streamThroughAndCommit(
+                PRIMARY_KEY, UPSTREAM_URI,
+                Optional.of((long) PRIMARY_BYTES.length),
+                chunkedUpstream(PRIMARY_BYTES, 8),
+                Map.of(),
+                null, null
+            ).toCompletableFuture().join();
+
+        assertThat("Ok streamed artifact with empty sidecars", result, instanceOf(Result.Ok.class));
+        final ProxyCacheWriter.StreamedArtifact artifact =
+            ((Result.Ok<ProxyCacheWriter.StreamedArtifact>) result).value();
+
+        final byte[] consumed = artifact.body().asBytesFuture().get(5, TimeUnit.SECONDS);
+        assertArrayEquals(PRIMARY_BYTES, consumed, "subscriber sees identical bytes");
+
+        final Result<Void> commit = artifact.verificationOutcome()
+            .toCompletableFuture().get(5, TimeUnit.SECONDS);
+        assertThat(
+            "verificationOutcome resolves to Ok when there are no sidecars to verify",
+            commit, instanceOf(Result.Ok.class)
+        );
+        assertTrue(cache.exists(PRIMARY_KEY).join(), "primary persisted");
+        assertArrayEquals(
+            PRIMARY_BYTES,
+            cache.value(PRIMARY_KEY).join().asBytes(),
+            "cache bytes match upstream"
+        );
+        assertFalse(
+            cache.exists(new Key.From(PRIMARY_KEY.string() + ".sha1")).join(),
+            "no sidecar was fetched or invented for an empty-map call"
+        );
+    }
+
+    @Test
+    @DisplayName("T-P03: null sidecar map - treated as empty, primary still commits")
+    void nullSidecarMapTreatedAsEmpty() throws Exception {
+        final Storage cache = new InMemoryStorage();
+        final ProxyCacheWriter writer = new ProxyCacheWriter(cache, "stream-test");
+        final Result<ProxyCacheWriter.StreamedArtifact> result =
+            writer.streamThroughAndCommit(
+                PRIMARY_KEY, UPSTREAM_URI,
+                Optional.of((long) PRIMARY_BYTES.length),
+                chunkedUpstream(PRIMARY_BYTES, 5),
+                null,
+                null, null
+            ).toCompletableFuture().join();
+
+        assertThat("Ok streamed artifact for null sidecars", result, instanceOf(Result.Ok.class));
+        final ProxyCacheWriter.StreamedArtifact artifact =
+            ((Result.Ok<ProxyCacheWriter.StreamedArtifact>) result).value();
+        artifact.body().asBytesFuture().get(5, TimeUnit.SECONDS);
+        final Result<Void> commit = artifact.verificationOutcome()
+            .toCompletableFuture().get(5, TimeUnit.SECONDS);
+        assertThat("commit succeeds with null sidecars", commit, instanceOf(Result.Ok.class));
+        assertArrayEquals(
+            PRIMARY_BYTES, cache.value(PRIMARY_KEY).join().asBytes(),
+            "cache bytes match upstream"
+        );
+    }
+
+    @Test
     @DisplayName("upstream size carried through to the response body Content")
     void upstreamSizeForwardedToBody() {
         final Storage cache = new InMemoryStorage();

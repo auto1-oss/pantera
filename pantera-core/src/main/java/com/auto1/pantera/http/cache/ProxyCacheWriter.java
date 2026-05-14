@@ -429,7 +429,16 @@ public final class ProxyCacheWriter {
      *                        exactly once by the tee; must not have been
      *                        consumed by the caller.
      * @param fetchSidecars   Per-algorithm sidecar fetchers (typically just
-     *                        {@code SHA1} in the Maven adapter).
+     *                        {@code SHA1} in the Maven adapter). An empty
+     *                        or {@code null} map disables verification
+     *                        entirely — used by adapters that do not have
+     *                        upstream sidecar files (npm, pypi, composer,
+     *                        go, etc.). Without sidecars the
+     *                        {@link StreamedArtifact#verificationOutcome()}
+     *                        future resolves to {@link Result.Ok} as soon
+     *                        as the stream completes and the primary
+     *                        commits to storage — there is nothing to
+     *                        compare digests against.
      * @param nonBlockingAlgos Algorithms whose sidecar fetch must NOT block
      *                        the post-stream verify-and-commit (default
      *                        when null: {@link #NON_BLOCKING_DEFAULT}). These
