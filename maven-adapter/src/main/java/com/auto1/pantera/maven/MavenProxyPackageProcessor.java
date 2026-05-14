@@ -32,6 +32,12 @@ import org.quartz.JobExecutionContext;
 
 /**
  * Processes artifacts uploaded by proxy and adds info to artifacts metadata events queue.
+ *
+ * <p>Multiple distinct error sites in this class (Quartz job lifecycle,
+ * metadata extraction, event-queue dispatch, scheduler shutdown) —
+ * distinct failure modes, kept separate for diagnostic context.
+ * See audit/aggressive-items.md (Tier 4 B7 duplicate-error bucket).
+ *
  * @since 0.10
  */
 public final class MavenProxyPackageProcessor extends QuartzJob {

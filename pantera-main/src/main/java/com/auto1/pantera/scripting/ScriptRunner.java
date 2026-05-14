@@ -28,7 +28,14 @@ import org.slf4j.MDC;
 
 /**
  * Script runner.
- * Job for running script in quartz
+ * Job for running script in quartz.
+ *
+ * <p>Multiple distinct error sites — Quartz Job boundary keeps its
+ * ERROR logs for the retry decision; remaining sites are for the
+ * stopJob helper and force-shutdown paths, each a distinct failure
+ * mode. See audit/aggressive-items.md
+ * (Tier 4 B7 duplicate-error bucket).
+ *
  * @since 0.30
  */
 public final class ScriptRunner implements Job {

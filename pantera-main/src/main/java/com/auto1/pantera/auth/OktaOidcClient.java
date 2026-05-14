@@ -32,6 +32,13 @@ import javax.json.JsonReader;
 
 /**
  * Minimal Okta OIDC / Authentication API client used by {@link AuthFromOkta}.
+ *
+ * <p>Multiple distinct error sites in this class (discovery fetch,
+ * token introspection, userinfo, password / token grants, JWKS
+ * cache refresh) — each Okta endpoint has its own failure mode and
+ * is logged separately for actionable operator triage. Distinct
+ * failure modes — kept separate by design.
+ * See audit/aggressive-items.md (Tier 4 B7 duplicate-error bucket).
  */
 public final class OktaOidcClient {
 

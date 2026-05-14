@@ -41,6 +41,12 @@ import org.slf4j.LoggerFactory;
  *       existing packages that do not yet have one</li>
  * </ul>
  *
+ * <p>Multiple distinct error sites in this CLI driver — each mode
+ * (npm / maven / pypi-metadata / repo-scan) has its own failure
+ * pathways and they are reported separately so the operator can see
+ * exactly which sub-step failed. See audit/aggressive-items.md
+ * (Tier 4 B7 duplicate-error bucket).
+ *
  * @since 1.20.13
  */
 public final class BackfillCli {

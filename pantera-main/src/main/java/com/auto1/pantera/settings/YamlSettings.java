@@ -73,6 +73,13 @@ import com.auto1.pantera.asto.factory.StoragesLoader;
 /**
  * Settings built from YAML.
  *
+ * <p>Multiple distinct error sites — distinct failure modes per
+ * config section (auth providers, storage backends, Valkey,
+ * cooldown, http-client). Each reports its own initialisation
+ * failure so a misconfigured section can be identified by the
+ * operator without re-reading the whole stack.
+ * See audit/aggressive-items.md (Tier 4 B7 duplicate-error bucket).
+ *
  * @since 0.1
  */
 public final class YamlSettings implements Settings {

@@ -36,6 +36,12 @@ import java.util.concurrent.atomic.AtomicLong;
  * Service to watch pantera.yml for changes and hot reload global_prefixes.
  * Implements 500ms debounce to avoid excessive reloads.
  *
+ * <p>Multiple distinct error sites — distinct failure modes (watch
+ * service registration, debounce timer, config reload parse,
+ * shutdown). Each is the boundary for its own decision (close watch
+ * vs. retry vs. abort). Kept separate by design.
+ * See audit/aggressive-items.md (Tier 4 B7 duplicate-error bucket).
+ *
  * @since 1.0
  */
 public final class ConfigWatchService implements AutoCloseable {

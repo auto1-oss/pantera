@@ -46,6 +46,14 @@ import com.auto1.pantera.index.SearchQueryParser.MatchType;
  * This implementation is always "warmed up" since the database is the
  * authoritative source and is always consistent. No warmup scan is needed.
  *
+ * <p>Multiple distinct error sites in this class — distinct failure
+ * modes (index single, batch index, remove single, remove-prefix,
+ * search). The B7 log-and-rethrow chain has already been collapsed
+ * (TRACE downgrade) in Tier 4 commit D-5b; remaining ERROR sites
+ * are independent stat / shutdown paths. Distinct failure modes —
+ * kept separate by design. See audit/aggressive-items.md
+ * (Tier 4 B7 duplicate-error bucket).
+ *
  * @since 1.20.13
  */
 public final class DbArtifactIndex implements ArtifactIndex {

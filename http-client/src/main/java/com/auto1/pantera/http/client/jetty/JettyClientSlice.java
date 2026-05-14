@@ -44,6 +44,11 @@ import java.util.concurrent.TimeoutException;
 /**
  * ClientSlices implementation using Jetty HTTP client as back-end.
  * <a href="https://eclipse.dev/jetty/documentation/jetty-12/programming-guide/index.html#pg-client-http-non-blocking">Docs</a>
+ *
+ * <p>Multiple distinct error sites in this class (request creation,
+ * response parsing, body streaming, error propagation, etc.) — each
+ * is a distinct failure mode that needs its own diagnostic context.
+ * See audit/aggressive-items.md (Tier 4 B7 duplicate-error bucket).
  */
 final class JettyClientSlice implements Slice {
 

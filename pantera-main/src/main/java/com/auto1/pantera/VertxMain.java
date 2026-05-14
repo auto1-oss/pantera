@@ -75,6 +75,14 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Vertx server entry point.
+ *
+ * <p>Multiple distinct error sites in this class — VertxMain is the
+ * process boundary and reports every startup / shutdown sub-failure
+ * separately so the operator can see which initialisation step
+ * actually failed (config load, DB connect, Vertx deploy, scheduler
+ * init, etc.). Distinct failure modes — kept separate by design.
+ * See audit/aggressive-items.md (Tier 4 B7 duplicate-error bucket).
+ *
  * @since 1.0
  */
 public final class VertxMain {

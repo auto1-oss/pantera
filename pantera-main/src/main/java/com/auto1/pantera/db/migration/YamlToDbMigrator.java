@@ -43,6 +43,14 @@ import org.slf4j.LoggerFactory;
  * Checks for {@code migration_completed} flag in settings table.
  * If absent, reads YAML files and populates DB tables.
  * If present, skips entirely.
+ *
+ * <p>Multiple distinct error sites in this class — distinct failure
+ * modes (settings init, per-repo migration, per-user migration,
+ * per-token migration, etc.). Each per-record failure is logged
+ * with its identifying key so partial-migration recovery is
+ * actionable. See audit/aggressive-items.md
+ * (Tier 4 B7 duplicate-error bucket).
+ *
  * @since 1.0
  */
 public final class YamlToDbMigrator {

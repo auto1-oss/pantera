@@ -63,6 +63,13 @@ import java.util.Objects;
 
 /**
  * Vert.x Slice.
+ *
+ * <p>Multiple distinct error sites — this is the HTTP-server boundary
+ * and each request-path / response-path / shutdown failure is logged
+ * separately because each represents a distinct decision (return an
+ * HTTP error, abort the response stream, force-close the server).
+ * Kept separate by design.
+ * See audit/aggressive-items.md (Tier 4 B7 duplicate-error bucket).
  */
 public final class VertxSliceServer implements Closeable {
 

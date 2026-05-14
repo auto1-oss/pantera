@@ -39,6 +39,13 @@ import javax.sql.DataSource;
 
 /**
  * Consumer for artifact records which writes the records into db.
+ *
+ * <p>Multiple distinct error sites in this class — distinct failure
+ * modes (batch UPSERT, dead-letter persist, queue back-pressure,
+ * shutdown await). Each is the boundary for its respective retry /
+ * dead-letter decision so the log lines are intentionally separate.
+ * See audit/aggressive-items.md (Tier 4 B7 duplicate-error bucket).
+ *
  * @since 0.31
  */
 public final class DbConsumer implements Consumer<ArtifactEvent> {

@@ -35,6 +35,12 @@ import java.util.concurrent.atomic.AtomicLong;
  * <p>Blocking JDBC work runs on {@link HandlerExecutor#get()} (the 2.2.0
  * shared worker pool), NOT on the Vertx event loop.
  *
+ * <p>Multiple distinct error sites in this class — distinct failure
+ * modes (timer schedule, sweep run, single-record archive, fallback
+ * cleanup query, shutdown). Each is logged separately so SREs can
+ * triage which step of the fallback failed.
+ * See audit/aggressive-items.md (Tier 4 B7 duplicate-error bucket).
+ *
  * @since 2.2.1
  */
 public final class CooldownCleanupFallback {
