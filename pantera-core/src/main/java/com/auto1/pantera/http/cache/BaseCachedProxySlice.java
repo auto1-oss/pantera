@@ -36,6 +36,7 @@ import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.misc.ConfigDefaults;
 import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.security.PathTraversalGuard;
 import com.auto1.pantera.http.slice.KeyFromPath;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 import java.io.IOException;
@@ -330,11 +331,28 @@ public abstract class BaseCachedProxySlice implements Slice {
         final RequestLine line, final Headers headers, final Content body
     ) {
         final long entryNs = System.nanoTime();
-        final String path = line.uri().getPath();
-        if ("/".equals(path) || path.isEmpty()) {
+        final String rawPath = line.uri().getPath();
+        if ("/".equals(rawPath) || rawPath == null || rawPath.isEmpty()) {
             return this.handleRootPath(line, headers)
                 .whenComplete((r, e) -> recordProxyPhase("root_path", entryNs));
         }
+        // T-S01: path-traversal guard. Reject `..`, `%2e%2e`, NUL bytes,
+        // double-encoded variants, backslash probes, and other unsafe forms
+        // with 400 before any further processing. Sits at the entry point so
+        // every adapter inherits identical handling — no per-adapter shortcut
+        // can bypass it.
+        final Optional<String> canonical =
+            PathTraversalGuard.instance().canonicalise(rawPath);
+        if (canonical.isEmpty()) {
+            this.logDebug("Rejected unsafe path", rawPath);
+            recordProxyPhase("path_traversal_reject", entryNs);
+            return CompletableFuture.completedFuture(
+                ResponseBuilder.badRequest()
+                    .textBody("Unsafe request path")
+                    .build()
+            );
+        }
+        final String path = canonical.get();
         final Key key = new KeyFromPath(path);
         // Step 1: Negative cache fast-fail
         if (this.negativeCache != null
