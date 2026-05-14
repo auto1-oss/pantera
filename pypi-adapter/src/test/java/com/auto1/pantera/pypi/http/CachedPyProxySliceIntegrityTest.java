@@ -37,9 +37,6 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.containsString;
-import static org.hamcrest.Matchers.is;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -68,8 +65,8 @@ final class CachedPyProxySliceIntegrityTest {
         "/alarmtime/alarmtime-0.1.5-py3-none-any.whl";
 
     @Test
-    @DisplayName("upstream SHA-256 mismatch → storage empty + integrity metric incremented")
-    void sha256Mismatch_rejectsWrite() throws Exception {
+    @DisplayName("upstream SHA-256 mismatch → bytes streamed to client; cache stays empty; integrity metric increments (T-P06)")
+    void sha256Mismatch_streamsButDoesNotCache() throws Exception {
         final Storage storage = new InMemoryStorage();
         final MeterRegistry registry = new SimpleMeterRegistry();
         final FakePyUpstream origin = new FakePyUpstream(
@@ -86,18 +83,20 @@ final class CachedPyProxySliceIntegrityTest {
             Content.EMPTY
         ).join();
 
-        final int status = response.status().code();
-        assertThat(
-            "502 on integrity failure (or cache empty if FaultTranslator unwired)",
-            status == 502 || status == 404, is(true)
+        // Stream-through (T-P06): the bytes were already in flight when the
+        // verify step ran, so the client receives 200 with the wheel bytes.
+        // The cache stays empty so the next request re-fetches cleanly; the
+        // integrity-failure metric still fires for observability.
+        assertEquals(RsStatus.OK, response.status(), "200 (bytes streamed to client)");
+        // Drain the body so the verify-and-commit step runs and the integrity
+        // counter increments.
+        assertArrayEquals(
+            WHEEL_BYTES,
+            response.body().asBytesFuture().join(),
+            "wheel bytes streamed to client"
         );
-        if (status == 502) {
-            assertThat(
-                "X-Pantera-Fault: upstream-integrity:<algo>",
-                headerValue(response, "X-Pantera-Fault").orElse(""),
-                containsString("upstream-integrity")
-            );
-        }
+        // Wait briefly for the async commit step to drop the temp file.
+        Thread.sleep(200);
         assertFalse(storage.exists(WHEEL_KEY).join(), "primary NOT in storage");
         assertFalse(
             storage.exists(new Key.From(WHEEL_KEY.string() + ".sha256")).join(),
@@ -168,6 +167,45 @@ final class CachedPyProxySliceIntegrityTest {
         );
     }
 
+    @Test
+    @DisplayName("concurrent cold fetches collapse to one upstream call (T-P06 single-flight)")
+    void concurrentColdFetches_singleFlightCollapses() throws Exception {
+        final Storage storage = new InMemoryStorage();
+        final MeterRegistry registry = new SimpleMeterRegistry();
+        final FakePyUpstream origin = new FakePyUpstream(
+            WHEEL_BYTES, sha256Hex(WHEEL_BYTES), md5Hex(WHEEL_BYTES), null
+        );
+        // Latch upstream so all callers race the same cold key.
+        origin.holdPrimary(true);
+        final CachedPyProxySlice slice = buildSlice(origin, storage, registry);
+
+        final int callers = 8;
+        final java.util.List<CompletableFuture<Response>> futures = new java.util.ArrayList<>();
+        for (int i = 0; i < callers; i++) {
+            futures.add(slice.response(
+                new RequestLine(RqMethod.GET, WHEEL_PATH),
+                Headers.EMPTY,
+                Content.EMPTY
+            ));
+        }
+        // Give followers a moment to enter the single-flight gate.
+        Thread.sleep(100);
+        origin.holdPrimary(false);
+        for (final CompletableFuture<Response> f : futures) {
+            final Response resp = f.join();
+            assertEquals(RsStatus.OK, resp.status(), "every caller gets 200");
+            assertArrayEquals(
+                WHEEL_BYTES,
+                resp.body().asBytesFuture().join(),
+                "every caller receives full wheel bytes"
+            );
+        }
+        assertEquals(
+            1, origin.primaryCalls(),
+            "single-flight collapsed " + callers + " concurrent cold fetches to one upstream call"
+        );
+    }
+
     private static CachedPyProxySlice buildSlice(
         final Slice origin, final Storage storage, final MeterRegistry registry
     ) throws Exception {
@@ -196,14 +234,6 @@ final class CachedPyProxySliceIntegrityTest {
         f.set(slice, new com.auto1.pantera.http.cache.ProxyCacheWriter(
             storage, repoName, registry
         ));
-    }
-
-    private static Optional<String> headerValue(final Response response, final String name) {
-        return java.util.stream.StreamSupport
-            .stream(response.headers().spliterator(), false)
-            .filter(h -> h.getKey().equalsIgnoreCase(name))
-            .map(java.util.Map.Entry::getValue)
-            .findFirst();
     }
 
     private static String sha256Hex(final byte[] body) {
@@ -235,6 +265,8 @@ final class CachedPyProxySliceIntegrityTest {
         private final String md5;
         private final String sha512;
         private final AtomicInteger primaryCalls = new AtomicInteger();
+        private final java.util.concurrent.atomic.AtomicBoolean hold =
+            new java.util.concurrent.atomic.AtomicBoolean();
 
         FakePyUpstream(
             final byte[] primary,
@@ -252,6 +284,10 @@ final class CachedPyProxySliceIntegrityTest {
             return this.primaryCalls.get();
         }
 
+        void holdPrimary(final boolean hold) {
+            this.hold.set(hold);
+        }
+
         @Override
         public CompletableFuture<Response> response(
             final RequestLine line, final Headers headers, final Content body
@@ -267,6 +303,26 @@ final class CachedPyProxySliceIntegrityTest {
                 return serveOrNotFound(this.sha512);
             }
             this.primaryCalls.incrementAndGet();
+            if (this.hold.get()) {
+                // Spin-block in a background thread until released, simulating
+                // a slow upstream so followers race the leader.
+                final CompletableFuture<Response> future = new CompletableFuture<>();
+                final byte[] primaryBytes = this.primary;
+                final java.util.concurrent.atomic.AtomicBoolean held = this.hold;
+                java.util.concurrent.CompletableFuture.runAsync(() -> {
+                    try {
+                        while (held.get()) {
+                            Thread.sleep(20);
+                        }
+                    } catch (final InterruptedException ex) {
+                        Thread.currentThread().interrupt();
+                    }
+                    future.complete(
+                        ResponseBuilder.ok().body(primaryBytes).build()
+                    );
+                });
+                return future;
+            }
             return CompletableFuture.completedFuture(
                 ResponseBuilder.ok()
                     .body(this.primary)

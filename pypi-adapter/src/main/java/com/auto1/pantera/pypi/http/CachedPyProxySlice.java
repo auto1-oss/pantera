@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
@@ -26,13 +27,13 @@ import com.auto1.pantera.http.context.RequestContext;
 import com.auto1.pantera.http.fault.Fault;
 import com.auto1.pantera.http.fault.Fault.ChecksumAlgo;
 import com.auto1.pantera.http.fault.Result;
+import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.slice.KeyFromPath;
 import io.micrometer.core.instrument.MeterRegistry;
 
 import java.io.ByteArrayInputStream;
-import java.io.IOException;
 import java.io.InputStream;
 import java.time.Duration;
 import java.util.Collections;
@@ -43,6 +44,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ForkJoinPool;
 import java.util.function.Supplier;
 
 /**
@@ -51,10 +53,16 @@ import java.util.function.Supplier;
  * requests and caches package metadata.
  *
  * <p>Primary artifact writes (wheels / sdists / zip archives) flow through
- * {@link ProxyCacheWriter} so the PyPI-declared sidecars (MD5 / SHA-256 /
- * SHA-512) are verified against the downloaded bytes before anything
- * lands in the cache — giving PyPI the same primary+sidecar integrity
- * guarantee the Maven adapter received in WI-07 (§9.5).
+ * {@link ProxyCacheWriter#streamThroughAndCommit} (T-P06): bytes are tee'd
+ * to both the client and the local temp file in a single pass, so the
+ * client receives TTFB at upstream TTFB + a few ms rather than after the
+ * full body buffers + sidecar verification. The PyPI-declared sidecars
+ * (MD5 / SHA-256 / SHA-512) are still verified against the downloaded
+ * bytes; on mismatch the cache stays empty (the next request re-fetches
+ * cleanly) while the in-flight bytes have already been served — a
+ * conscious trade-off matching the Maven primary path. Concurrent
+ * requests for the same uncached primary collapse via {@link SingleFlight}
+ * to a single upstream call.
  *
  * @since 1.0
  */
@@ -113,6 +121,14 @@ public final class CachedPyProxySlice implements Slice {
      * commits the pair. Null when {@link #rawStorage} is empty.
      */
     private final ProxyCacheWriter cacheWriter;
+
+    /**
+     * Per-key single-flight gate for the primary-artifact path (T-P06).
+     * Concurrent callers for the same uncached wheel/sdist collapse to a
+     * single upstream call; followers wait on the gate then re-enter
+     * {@link #verifyAndServePrimary} which hits the now-warm cache.
+     */
+    private final SingleFlight<Key, Void> primarySingleFlight;
 
     /**
      * Ctor with default caching (24h TTL, enabled).
@@ -201,6 +217,11 @@ public final class CachedPyProxySlice implements Slice {
         this.cacheWriter = storage
             .map(raw -> new ProxyCacheWriter(raw, repoName, meterRegistry()))
             .orElse(null);
+        this.primarySingleFlight = new SingleFlight<>(
+            Duration.ofMinutes(5),
+            10_000,
+            ContextualExecutor.contextualize(ForkJoinPool.commonPool())
+        );
     }
 
     @Override
@@ -415,18 +436,23 @@ public final class CachedPyProxySlice implements Slice {
         }
     }
 
-    // ===== WI-07 §9.5: ProxyCacheWriter integration =====
+    // ===== T-P06: stream-through primary path =====
 
     /**
      * Primary-artifact flow: if the cache already has the primary, serve
      * from the cache; otherwise fetch the primary + every declared sidecar
-     * upstream in one coupled batch, verify digests, atomically commit,
-     * and serve the freshly-cached bytes.
+     * upstream and tee bytes to both the client and storage in one pass
+     * via {@link ProxyCacheWriter#streamThroughAndCommit}. Concurrent
+     * callers for the same uncached primary collapse via
+     * {@link #primarySingleFlight} — only the leader fires upstream;
+     * followers wait then re-enter this method against the now-warm
+     * cache.
      *
-     * <p>On {@link Fault.UpstreamIntegrity} collapses to 502 with the
-     * {@code X-Pantera-Fault: upstream-integrity:&lt;algo&gt;} header; on
-     * {@link Fault.StorageUnavailable} collapses to 502 and leaves the
-     * cache empty for this key.
+     * <p>Trade-off vs. the legacy buffered path: integrity failures no
+     * longer fail-closed for the in-flight client (bytes are already in
+     * the response stream when the sidecar comparison runs) — the cache
+     * stays empty so the next request re-fetches cleanly. Matches the
+     * Maven primary-path decision.
      */
     private CompletableFuture<Response> verifyAndServePrimary(
         final RequestLine line, final Key key, final String path
@@ -436,7 +462,24 @@ public final class CachedPyProxySlice implements Slice {
             if (present) {
                 return this.serveFromCache(storage, key);
             }
-            return this.fetchVerifyAndCache(line, key, path);
+            // T-P06: single-flight the cache-miss leg. The leader streams
+            // upstream → tee → client + storage; followers park on the
+            // gate and re-enter verifyAndServePrimary which now hits the
+            // warm cache.
+            final boolean[] isLeader = {false};
+            final CompletableFuture<Void> leaderGate = new CompletableFuture<>();
+            final CompletableFuture<Void> gate = this.primarySingleFlight.load(
+                key,
+                () -> {
+                    isLeader[0] = true;
+                    return leaderGate;
+                }
+            );
+            if (isLeader[0]) {
+                return this.streamPrimary(line, key, path, leaderGate);
+            }
+            return gate.exceptionally(err -> null)
+                .thenCompose(ignored -> this.verifyAndServePrimary(line, key, path));
         }).exceptionally(err -> {
             EcsLogger.warn("com.auto1.pantera.pypi")
                 .message("PyPI primary-artifact verify-and-serve failed; returning 502")
@@ -452,14 +495,20 @@ public final class CachedPyProxySlice implements Slice {
     }
 
     /**
-     * Fetch the primary + every sidecar upstream, verify via
-     * {@link ProxyCacheWriter}, then stream the primary from the cache.
-     * Integrity failures collapse to a 502 with the
-     * {@code X-Pantera-Fault: upstream-integrity:&lt;algo&gt;} header and
-     * leave the cache empty for this key.
+     * Stream-through primary fetch: tee upstream body bytes to the client
+     * and the cache temp file in a single pass via
+     * {@link ProxyCacheWriter#streamThroughAndCommit}. The
+     * {@code leaderGate} resolves when the cache write is durable so
+     * followers parked on {@link #primarySingleFlight} can re-enter
+     * {@link #verifyAndServePrimary} against the warm cache. Integrity
+     * failures keep the cache empty for the next request (the in-flight
+     * bytes were already streamed to the client).
      */
-    private CompletableFuture<Response> fetchVerifyAndCache(
-        final RequestLine line, final Key key, final String path
+    private CompletableFuture<Response> streamPrimary(
+        final RequestLine line,
+        final Key key,
+        final String path,
+        final CompletableFuture<Void> leaderGate
     ) {
         final String upstream = this.upstreamUrl + path;
         final RequestContext ctx = new RequestContext(
@@ -473,78 +522,86 @@ public final class CachedPyProxySlice implements Slice {
         sidecars.put(ChecksumAlgo.SHA256, () -> this.fetchSidecar(line, ".sha256"));
         sidecars.put(ChecksumAlgo.MD5, () -> this.fetchSidecar(line, ".md5"));
         sidecars.put(ChecksumAlgo.SHA512, () -> this.fetchSidecar(line, ".sha512"));
-
-        // PyPI sidecars (.sha256/.md5/.sha512) are all in NON_BLOCKING_DEFAULT;
-        // pass an empty non-blocking set so the integrity check is
-        // load-bearing — a digest mismatch must fail-closed (502) instead of
-        // falling through to the deferred path that only logs.
-        return this.cacheWriter.writeAndVerify(
-            key,
-            upstream,
-            () -> this.fetchPrimary(line),
-            sidecars,
-            Collections.emptySet(),
-            ctx
-        ).toCompletableFuture().thenCompose(result -> {
-            if (result instanceof Result.Err<ProxyCacheWriter.VerifiedArtifact> err) {
-                if (err.fault() instanceof Fault.UpstreamIntegrity ui) {
+        return this.origin.response(line, Headers.EMPTY, Content.EMPTY)
+            .thenCompose(resp -> {
+                if (!resp.status().success()) {
+                    // Drain non-2xx body to release the connection.
+                    resp.body().asBytesFuture();
+                    if (!leaderGate.isDone()) {
+                        leaderGate.complete(null);
+                    }
+                    final int status = resp.status().code();
+                    if (status >= 400 && status < 500) {
+                        return CompletableFuture.completedFuture(
+                            ResponseBuilder.notFound().build()
+                        );
+                    }
                     return CompletableFuture.completedFuture(
                         ResponseBuilder.badGateway()
-                            .header(
-                                "X-Pantera-Fault",
-                                "upstream-integrity:"
-                                    + ui.algo().name().toLowerCase(Locale.ROOT)
-                            )
-                            .textBody("Upstream integrity verification failed")
+                            .textBody("Upstream temporarily unavailable")
                             .build()
                     );
                 }
-                // Upstream-404 must propagate as 404, not 503: RaceSlice's
-                // contract is "404 → try the next remote, non-404 → that
-                // remote wins." For PyPI proxies, 404 means the wheel/sdist
-                // doesn't exist at that index — 410 Gone and other 4xx carry
-                // the same "not here" semantics. Surface them all as 404 so
-                // RaceSlice falls back to the next configured index.
-                if (err.fault() instanceof Fault.StorageUnavailable storageErr
-                    && storageErr.cause() instanceof UpstreamHttpException upstreamErr
-                    && upstreamErr.status() >= 400 && upstreamErr.status() < 500) {
-                    return CompletableFuture.completedFuture(
-                        ResponseBuilder.notFound().build()
-                    );
+                return this.cacheWriter.streamThroughAndCommit(
+                    key,
+                    upstream,
+                    resp.body().size(),
+                    resp.body(),
+                    sidecars,
+                    // PyPI sidecars (.sha256/.md5/.sha512) live in
+                    // NON_BLOCKING_DEFAULT; pass an empty non-blocking set so
+                    // a mismatch keeps the cache empty (deferred path would
+                    // commit primary then log on mismatch).
+                    Collections.emptySet(),
+                    ctx
+                ).toCompletableFuture().thenApply(result -> {
+                    if (result instanceof Result.Err<ProxyCacheWriter.StreamedArtifact> err) {
+                        if (!leaderGate.isDone()) {
+                            leaderGate.complete(null);
+                        }
+                        if (err.fault() instanceof Fault.UpstreamIntegrity ui) {
+                            return ResponseBuilder.badGateway()
+                                .header(
+                                    "X-Pantera-Fault",
+                                    "upstream-integrity:"
+                                        + ui.algo().name().toLowerCase(Locale.ROOT)
+                                )
+                                .textBody("Upstream integrity verification failed")
+                                .build();
+                        }
+                        return ResponseBuilder.badGateway()
+                            .textBody("Upstream temporarily unavailable")
+                            .build();
+                    }
+                    @SuppressWarnings("unchecked")
+                    final ProxyCacheWriter.StreamedArtifact artifact =
+                        ((Result.Ok<ProxyCacheWriter.StreamedArtifact>) result).value();
+                    // Release followers only after the cache write commits.
+                    artifact.verificationOutcome()
+                        .whenComplete((r2, e2) -> {
+                            if (!leaderGate.isDone()) {
+                                leaderGate.complete(null);
+                            }
+                        });
+                    return ResponseBuilder.ok().body(artifact.body()).build();
+                });
+            })
+            .exceptionally(err -> {
+                if (!leaderGate.isDone()) {
+                    leaderGate.complete(null);
                 }
-                // StorageUnavailable / anything else → 502; transient failure.
-                return CompletableFuture.completedFuture(
-                    ResponseBuilder.badGateway()
-                        .textBody("Upstream temporarily unavailable")
-                        .build()
-                );
-            }
-            final ProxyCacheWriter.VerifiedArtifact artifact =
-                ((Result.Ok<ProxyCacheWriter.VerifiedArtifact>) result).value();
-            artifact.commitAsync();
-            return CompletableFuture.completedFuture(
-                ResponseBuilder.ok().body(artifact.contentFromTempFile()).build()
-            );
-        });
-    }
-
-    /**
-     * Read the primary from upstream as an {@link InputStream}. On any
-     * non-success status, throws so the writer's outer exception handler
-     * treats it as a transient failure (no cache mutation).
-     */
-    private CompletionStage<InputStream> fetchPrimary(final RequestLine line) {
-        return this.origin.response(line, Headers.EMPTY, Content.EMPTY)
-            .thenApply(resp -> {
-                if (!resp.status().success()) {
-                    resp.body().asBytesFuture();
-                    throw new UpstreamHttpException(resp.status().code());
-                }
-                try {
-                    return resp.body().asInputStream();
-                } catch (final IOException ex) {
-                    throw new IllegalStateException("Upstream body not readable", ex);
-                }
+                EcsLogger.warn("com.auto1.pantera.pypi")
+                    .message("PyPI stream-through primary fetch failed; returning 502")
+                    .eventCategory("web")
+                    .eventAction("cache_write")
+                    .eventOutcome("failure")
+                    .field("repository.name", this.repoName)
+                    .field("url.path", path)
+                    .error(err)
+                    .log();
+                return ResponseBuilder.badGateway()
+                    .textBody("Upstream temporarily unavailable")
+                    .build();
             });
     }
 
@@ -604,27 +661,4 @@ public final class CachedPyProxySlice implements Slice {
         return null;
     }
 
-    /**
-     * Carries the upstream HTTP status so {@link #fetchVerifyAndCache} can
-     * distinguish "this upstream truly doesn't have it" (404 → propagate as
-     * 404 to RaceSlice, so other remotes can serve) from "transient failure"
-     * (5xx, timeouts → surface as 503). Without this, every non-2xx upstream
-     * response was mapped to 503 by the cache writer, and RaceSlice treats
-     * 503 as a "winning" response (only 404 triggers race-continue), so a
-     * single 404 from a PyPI index beat a 200 from another for wheel/sdist
-     * files.
-     */
-    private static final class UpstreamHttpException extends IllegalStateException {
-        private static final long serialVersionUID = 1L;
-        private final int status;
-
-        UpstreamHttpException(final int status) {
-            super("Upstream returned HTTP " + status);
-            this.status = status;
-        }
-
-        int status() {
-            return this.status;
-        }
-    }
 }
