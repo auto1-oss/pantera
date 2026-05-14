@@ -125,6 +125,7 @@ public final class RepoMetricsSlice implements Slice {
                                 EcsLogger.debug("com.auto1.pantera.metrics")
                                     .message("Invalid Content-Length header value")
                                     .error(ex)
+                                    .field("log.source", "application")
                                     .log();
                             }
                         });

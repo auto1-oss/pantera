@@ -128,6 +128,7 @@ class RepoConfigWatcher implements AutoCloseable {
                             .eventAction("config_watch")
                             .eventOutcome("failure")
                             .error(error)
+                            .field("log.source", "application")
                             .log();
                     } else {
                         if (!this.primed.getAndSet(true)) {

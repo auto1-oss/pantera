@@ -116,6 +116,7 @@ public final class WebhookDispatcher {
                     .eventOutcome("success")
                     .field("url.full", webhook.url())
                     .field("event.type", payload.getString("event"))
+                    .field("log.source", "application")
                     .log();
             } else if (attempt < MAX_RETRIES) {
                 final long delay = (long) Math.pow(2, attempt) * 1000L;
@@ -133,6 +134,7 @@ public final class WebhookDispatcher {
                     .eventOutcome("failure")
                     .field("url.full", webhook.url())
                     .field("error.message", error)
+                    .field("log.source", "application")
                     .log();
             }
         });

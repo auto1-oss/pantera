@@ -425,6 +425,7 @@ public class RepositorySlices {
                 .eventOutcome("success")
                 .field("repository.name", name.string())
                 .field("url.port", port)
+                .field("log.source", "application")
                 .log();
             return cached.slice();
         }
@@ -438,6 +439,7 @@ public class RepositorySlices {
                 .eventOutcome("success")
                 .field("repository.name", name.string())
                 .field("url.port", port)
+                .field("log.source", "application")
                 .log();
             return resolved.get().slice();
         }
@@ -452,6 +454,7 @@ public class RepositorySlices {
             .eventOutcome("failure")
             .field("repository.name", name.string())
             .field("url.port", port)
+            .field("log.source", "application")
             .log();
         return new SliceSimple(
             () -> ResponseBuilder.notFound()
@@ -574,6 +577,7 @@ public class RepositorySlices {
                     .eventOutcome("failure")
                     .field("repository.name", cfg.name())
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -583,6 +587,7 @@ public class RepositorySlices {
             .eventCategory("configuration")
             .eventAction("slice_warmup")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
     }
 
@@ -1351,6 +1356,7 @@ public class RepositorySlices {
                     + "removed in a future release")
                 .eventCategory("configuration")
                 .eventAction("yaml_deprecation")
+                .field("log.source", "application")
                 .log();
             return NegativeCacheConfig.fromYaml(caches, "group-negative");
         }
@@ -1423,6 +1429,7 @@ public class RepositorySlices {
                 .eventAction("group_legacy_members_strategy")
                 .field("repository.name", cfg.name())
                 .field("members_strategy.declared", raw.trim())
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -1445,6 +1452,7 @@ public class RepositorySlices {
                         + " (total shared registries: " + (this.memberRegistries.size() + 1) + ")")
                     .eventCategory("configuration")
                     .eventAction("circuit_breaker_init")
+                    .field("log.source", "application")
                     .log();
                 return new AutoBlockRegistry(this.circuitBreakerSettings);
             }
@@ -1470,6 +1478,7 @@ public class RepositorySlices {
                         + ", maxQueueDepth=" + limits.maxQueueDepth() + ")")
                     .eventCategory("configuration")
                     .eventAction("bulkhead_init")
+                    .field("log.source", "application")
                     .log();
                 final com.auto1.pantera.http.resilience.RepoBulkhead bh =
                     new com.auto1.pantera.http.resilience.RepoBulkhead(
@@ -1603,6 +1612,7 @@ public class RepositorySlices {
                 .eventOutcome("success")
                 .field("clients.evicted_no_refs", evictedNoRefs)
                 .field("clients.evicted_with_active_leases", evictedHeld)
+                .field("log.source", "application")
                 .log();
         }
 
@@ -1768,6 +1778,7 @@ public class RepositorySlices {
                         .message(String.format("Jetty client reference count reached zero for settings key '%s'", this.key.metricId()))
                         .eventCategory("network")
                         .eventAction("client_release")
+                        .field("log.source", "application")
                         .log();
                 }
                 return remaining;

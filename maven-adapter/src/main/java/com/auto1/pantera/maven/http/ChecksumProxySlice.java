@@ -149,6 +149,7 @@ final class ChecksumProxySlice implements Slice {
                             .message("Computing " + algorithm + " checksum from artifact (streaming mode): " + artifactPath)
                             .eventCategory("web")
                             .eventAction("checksum_computation")
+                            .field("log.source", "application")
                             .log();
                         return computeChecksumStreaming(artifactResp.body(), algorithm, artifactPath);
                     });
@@ -193,6 +194,7 @@ final class ChecksumProxySlice implements Slice {
                     .eventAction("checksum_computation")
                     .eventOutcome("success")
                     .field("file.path", artifactPath)
+                    .field("log.source", "application")
                     .log();
                 hashFuture.complete(hash);
             })
@@ -203,6 +205,7 @@ final class ChecksumProxySlice implements Slice {
                     .eventAction("checksum_computation")
                     .eventOutcome("failure")
                     .field("error.message", err.getMessage())
+                    .field("log.source", "application")
                     .log();
                 hashFuture.completeExceptionally(err);
             })
@@ -225,6 +228,7 @@ final class ChecksumProxySlice implements Slice {
                     .eventOutcome("failure")
                     .error(err)
                     .field("file.path", artifactPath)
+                    .field("log.source", "application")
                     .log();
                 return ResponseBuilder.internalError().build();
             })

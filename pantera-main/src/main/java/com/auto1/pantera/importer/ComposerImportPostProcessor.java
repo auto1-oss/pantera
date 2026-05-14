@@ -80,6 +80,7 @@ public final class ComposerImportPostProcessor {
             .eventCategory("web")
             .eventAction("import_post_process")
             .field("repository.name", this.repoName)
+            .field("log.source", "application")
             .log();
 
         final ComposerImportMerge merge = new ComposerImportMerge(
@@ -97,6 +98,7 @@ public final class ComposerImportPostProcessor {
                         .eventOutcome("failure")
                         .field("repository.name", this.repoName)
                         .error(error)
+                        .field("log.source", "application")
                         .log();
                 } else if (result.failedPackages > 0) {
                     EcsLogger.warn("com.auto1.pantera.importer")
@@ -106,6 +108,7 @@ public final class ComposerImportPostProcessor {
                         .eventOutcome("failure")
                         .field("event.reason", "partial_failure")
                         .field("repository.name", this.repoName)
+                        .field("log.source", "application")
                         .log();
                 } else {
                     EcsLogger.info("com.auto1.pantera.importer")
@@ -114,6 +117,7 @@ public final class ComposerImportPostProcessor {
                         .eventAction("import_post_process")
                         .eventOutcome("success")
                         .field("repository.name", this.repoName)
+                        .field("log.source", "application")
                         .log();
                 }
             });

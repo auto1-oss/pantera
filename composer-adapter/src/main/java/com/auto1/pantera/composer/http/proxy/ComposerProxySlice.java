@@ -286,6 +286,7 @@ public class ComposerProxySlice implements Slice {
                 .eventCategory("web")
                 .eventAction("proxy_request")
                 .field("url.path", path)
+                .field("log.source", "application")
                 .log();
             return body.asBytesFuture()
                 .thenCompose(ignored -> this.rootHandler.handle(line, user));
@@ -296,6 +297,7 @@ public class ComposerProxySlice implements Slice {
                 .eventCategory("web")
                 .eventAction("proxy_request")
                 .field("url.path", path)
+                .field("log.source", "application")
                 .log();
             return body.asBytesFuture()
                 .thenCompose(ignored -> this.packageHandler.handle(line, user));

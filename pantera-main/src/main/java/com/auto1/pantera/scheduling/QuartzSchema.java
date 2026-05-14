@@ -55,6 +55,7 @@ public final class QuartzSchema {
                 .eventCategory("process")
                 .eventAction("schema_create")
                 .eventOutcome("success")
+                .field("log.source", "application")
                 .log();
         } catch (final SQLException error) {
             throw new PanteraException(

@@ -809,6 +809,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                             .field("repository.name", this.repoName)
                             .field("url.path", path)
                             .error(err)
+                            .field("log.source", "application")
                             .log();
                         return onAllow.get();
                     });
@@ -1103,6 +1104,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                     .field("repository.name", this.repoName)
                     .field("event.duration", duration)
                     .error(error)
+                    .field("log.source", "application")
                     .log();
                 return ResponseBuilder.badGateway()
                     .textBody("Upstream temporarily unavailable")
@@ -1154,6 +1156,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                         .field("repository.name", this.repoName)
                         .field("event.duration", duration)
                         .error(error)
+                        .field("log.source", "application")
                         .log();
                     return this.tryServeStale(
                         key,
@@ -1216,6 +1219,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                     .field("event.reason", "coalescer_error")
                     .field("repository.name", this.repoName)
                     .field("url.path", line.uri().getPath())
+                    .field("log.source", "application")
                     .log();
                 return this.tryServeStale(
                     key,
@@ -1258,6 +1262,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 .field("repository.name", this.repoName)
                 .field("file.path", key.string())
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(
                 FetchSignal.ERROR
@@ -1378,6 +1383,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 .field("repository.name", this.repoName)
                 .field("file.path", key.string())
                 .error(err)
+                .field("log.source", "application")
                 .log();
             return FetchSignal.ERROR;
         });
@@ -1481,6 +1487,7 @@ public abstract class BaseCachedProxySlice implements Slice {
             EcsLogger.debug("com.auto1.pantera.cache")
                 .message("Failed to close file channel")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -1496,6 +1503,7 @@ public abstract class BaseCachedProxySlice implements Slice {
             EcsLogger.debug("com.auto1.pantera.cache")
                 .message("Failed to delete temp file")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -1565,6 +1573,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                     .field("repository.name", this.repoName)
                     .field("event.duration", duration)
                     .error(error)
+                    .field("log.source", "application")
                     .log();
                 return ResponseBuilder.unavailable()
                     .textBody("Upstream error")
@@ -1675,6 +1684,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                         .eventOutcome("failure")
                         .field("repository.name", this.repoName)
                         .field("url.path", key.string())
+                        .field("log.source", "application")
                         .log();
                     return fallback.get();
                 }
@@ -1712,6 +1722,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                     .eventOutcome("success")
                     .field("repository.name", this.repoName)
                     .field("url.path", key.string())
+                    .field("log.source", "application")
                     .log();
                 final ResponseBuilder builder = ResponseBuilder.ok()
                     .header("X-Pantera-Stale", "true");
@@ -1729,6 +1740,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                     .field("repository.name", this.repoName)
                     .field("url.path", key.string())
                     .error(err)
+                    .field("log.source", "application")
                     .log();
                 return fallback.get();
             });
@@ -1795,6 +1807,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 .field("repository.name", this.repoName)
                 .field("url.path", key.string())
                 .error(thrown)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -1821,6 +1834,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 .eventAction("queue_enqueue")
                 .eventOutcome("failure")
                 .field("repository.name", this.repoName)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -1858,6 +1872,7 @@ public abstract class BaseCachedProxySlice implements Slice {
             EcsLogger.debug("com.auto1.pantera.cache")
                 .message("Failed to record metric")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -1869,6 +1884,7 @@ public abstract class BaseCachedProxySlice implements Slice {
             .eventAction("proxy_request")
             .field("repository.name", this.repoName)
             .field("url.path", path)
+            .field("log.source", "application")
             .log();
     }
 
@@ -1923,6 +1939,7 @@ public abstract class BaseCachedProxySlice implements Slice {
             EcsLogger.debug("com.auto1.pantera.cache")
                 .message("Failed to parse Last-Modified header")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             return Optional.empty();
         }

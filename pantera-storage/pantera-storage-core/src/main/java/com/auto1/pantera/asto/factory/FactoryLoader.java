@@ -118,6 +118,7 @@ public abstract class FactoryLoader<F, A, C, O> {
                                 .eventCategory("configuration")
                                 .eventAction("factory_init")
                                 .eventOutcome("success")
+                                .field("log.source", "application")
                                 .log();
                         } catch (final InstantiationException | IllegalAccessException
                             | InvocationTargetException | NoSuchMethodException err) {

@@ -551,6 +551,7 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                             .eventAction("all_versions_blocked")
                             .field("repository.name", this.repoName())
                             .field("package.name", packageName)
+                            .field("log.source", "application")
                             .log();
                         return ResponseBuilder.forbidden()
                             .textBody(
@@ -569,6 +570,7 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                     .field("repository.name", this.repoName())
                     .field("package.name", packageName)
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
                 return ResponseBuilder.ok()
                     .header("Content-Type", "text/xml")
@@ -721,6 +723,7 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 .field("repository.name", this.repoName())
                 .field("url.path", path)
                 .error(err)
+                .field("log.source", "application")
                 .log();
             return ResponseBuilder.badGateway()
                 .textBody("Upstream temporarily unavailable")
@@ -1072,6 +1075,7 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 .eventOutcome("failure")
                 .field("repository.name", this.repoName())
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }

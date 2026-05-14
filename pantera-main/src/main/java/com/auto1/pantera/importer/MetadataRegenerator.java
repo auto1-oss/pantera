@@ -139,6 +139,7 @@ public final class MetadataRegenerator {
             .eventAction("metadata_regenerate")
             .field("repository.name", this.repoName)
             .field("repository.type", this.repoType)
+            .field("log.source", "application")
             .log();
         final CompletionStage<Void> operation = switch (this.repoType.toLowerCase(Locale.ROOT)) {
             case "file", "files", "generic", "docker", "oci", "nuget", "conan" ->
@@ -161,6 +162,7 @@ public final class MetadataRegenerator {
                     .eventOutcome("failure")
                     .field("repository.type", this.repoType)
                     .field("repository.name", this.repoName)
+                    .field("log.source", "application")
                     .log();
                 yield CompletableFuture.completedFuture(null);
             }
@@ -178,6 +180,7 @@ public final class MetadataRegenerator {
                     .field("repository.name", this.repoName)
                     .field("repository.type", this.repoType)
                     .error(error)
+                    .field("log.source", "application")
                     .log();
             }
         });
@@ -253,6 +256,7 @@ public final class MetadataRegenerator {
                         .message("Base key '" + baseKey.string() + "' doesn't exist yet, creating metadata for first version")
                         .eventCategory("web")
                         .eventAction("maven_metadata_regenerate")
+                        .field("log.source", "application")
                         .log();
                     return List.of();
                 })
@@ -316,6 +320,7 @@ public final class MetadataRegenerator {
                     .eventAction("maven_metadata_regenerate")
                     .field("file.directory", firstSegment)
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -443,6 +448,7 @@ public final class MetadataRegenerator {
                 .eventCategory("web")
                 .eventAction("composer_metadata_regenerate")
                 .eventOutcome("failure")
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(null);
         }
@@ -458,6 +464,7 @@ public final class MetadataRegenerator {
                 .eventCategory("web")
                 .eventAction("composer_metadata_regenerate")
                 .eventOutcome("failure")
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(null);
         }
@@ -532,6 +539,7 @@ public final class MetadataRegenerator {
                             .eventCategory("web")
                             .eventAction("npm_metadata_regenerate")
                             .eventOutcome("failure")
+                            .field("log.source", "application")
                             .log();
                         return CompletableFuture.completedFuture(null);
                     }
@@ -545,6 +553,7 @@ public final class MetadataRegenerator {
                         .eventAction("npm_metadata_regenerate")
                         .eventOutcome("failure")
                         .error(ex)
+                        .field("log.source", "application")
                         .log();
                     throw new CompletionException(ex);
                 }
@@ -722,6 +731,7 @@ public final class MetadataRegenerator {
             .message("Debian metadata regeneration not implemented for key: " + artifactKey.string())
             .eventCategory("web")
             .eventAction("debian_metadata_regenerate")
+            .field("log.source", "application")
             .log();
         return CompletableFuture.completedFuture(null);
     }
@@ -737,6 +747,7 @@ public final class MetadataRegenerator {
             .message("RPM metadata regeneration not implemented for key: " + artifactKey.string())
             .eventCategory("web")
             .eventAction("rpm_metadata_regenerate")
+            .field("log.source", "application")
             .log();
         return CompletableFuture.completedFuture(null);
     }
@@ -752,6 +763,7 @@ public final class MetadataRegenerator {
             .message("Conda metadata regeneration not implemented for key: " + artifactKey.string())
             .eventCategory("web")
             .eventAction("conda_metadata_regenerate")
+            .field("log.source", "application")
             .log();
         return CompletableFuture.completedFuture(null);
     }
@@ -849,6 +861,7 @@ public final class MetadataRegenerator {
                                             .eventAction("maven_checksum_generate")
                                             .eventOutcome("failure")
                                             .field("error.message", ex.getMessage())
+                                            .field("log.source", "application")
                                             .log();
                                         return null;
                                     }).toCompletableFuture();
@@ -944,6 +957,7 @@ public final class MetadataRegenerator {
                         .eventCategory("web")
                         .eventAction("metadata_regenerate_retry")
                         .field("error.message", error.getMessage())
+                        .field("log.source", "application")
                         .log();
                     // Return null to signal retry needed
                     return null;
@@ -954,6 +968,7 @@ public final class MetadataRegenerator {
                         .eventAction("metadata_regenerate_retry")
                         .eventOutcome("failure")
                         .error(error)
+                        .field("log.source", "application")
                         .log();
                     throw new CompletionException(error);
                 }

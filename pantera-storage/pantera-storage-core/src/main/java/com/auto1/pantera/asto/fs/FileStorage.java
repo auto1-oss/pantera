@@ -137,6 +137,7 @@ public final class FileStorage implements Storage {
                             .eventAction("list_keys")
                             .eventOutcome("success")
                             .field("file.path", path.toString())
+                            .field("log.source", "application")
                             .log();
                         keys = Collections.emptyList();
                     } catch (final IOException iex) {
@@ -152,6 +153,7 @@ public final class FileStorage implements Storage {
                     .eventOutcome("success")
                     .field("file.path", path.toString())
                     .field("file.directory", this.dir.toString())
+                    .field("log.source", "application")
                     .log();
                 return keys;
             }
@@ -177,6 +179,7 @@ public final class FileStorage implements Storage {
                         .eventAction("list_hierarchical")
                         .eventOutcome("success")
                         .field("file.path", path.toString())
+                        .field("log.source", "application")
                         .log();
                     return ListResult.EMPTY;
                 }
@@ -188,6 +191,7 @@ public final class FileStorage implements Storage {
                         .eventAction("list_hierarchical")
                         .eventOutcome("success")
                         .field("file.path", path.toString())
+                        .field("log.source", "application")
                         .log();
                     return ListResult.EMPTY;
                 }
@@ -232,6 +236,7 @@ public final class FileStorage implements Storage {
                     .eventCategory("file")
                     .eventAction("list_hierarchical")
                     .eventOutcome("success")
+                    .field("log.source", "application")
                     .log();
 
                 return new ListResult.Simple(files, new ArrayList<>(directories));

@@ -242,6 +242,7 @@ final class CachedProxySlice implements Slice {
             .eventAction("proxy_request")
             .field("url.path", path)
             .field("repository.name", this.rname)
+            .field("log.source", "application")
             .log();
 
         if ("/".equals(path) || path.isEmpty()) {
@@ -249,6 +250,7 @@ final class CachedProxySlice implements Slice {
                 .message("Handling root path")
                 .eventCategory("web")
                 .eventAction("proxy_request")
+                .field("log.source", "application")
                 .log();
             return this.handleRootPath(line);
         }
@@ -263,6 +265,7 @@ final class CachedProxySlice implements Slice {
                 .eventAction("proxy_request")
                 .field("url.path", path)
                 .field("repository.name", this.rname)
+                .field("log.source", "application")
                 .log();
             return this.latestHandler.handle(line, user);
         }
@@ -276,6 +279,7 @@ final class CachedProxySlice implements Slice {
                 .eventAction("proxy_request")
                 .field("url.path", path)
                 .field("repository.name", this.rname)
+                .field("log.source", "application")
                 .log();
             return this.listHandler.handle(line, user);
         }
@@ -289,6 +293,7 @@ final class CachedProxySlice implements Slice {
                 .eventCategory("web")
                 .eventAction("proxy_request")
                 .field("package.name", key.string())
+                .field("log.source", "application")
                 .log();
             return this.fetchThroughCache(line, key, headers, Optional.empty(), Optional.empty());
         }
@@ -304,6 +309,7 @@ final class CachedProxySlice implements Slice {
             .field("package.name", module)
             .field("package.version", version)
             .field("user.name", user)
+            .field("log.source", "application")
             .log();
 
         // CRITICAL FIX: Check cache FIRST before any network calls (cooldown/inspector)
@@ -322,6 +328,7 @@ final class CachedProxySlice implements Slice {
                     .eventOutcome("success")
                     .field("package.name", module)
                     .field("package.version", version)
+                    .field("log.source", "application")
                     .log();
                 // Record event for .zip files (with unknown release date since we skip network)
                 if (key.string().endsWith(".zip")) {
@@ -342,6 +349,7 @@ final class CachedProxySlice implements Slice {
                 .eventOutcome("success")
                 .field("package.name", module)
                 .field("package.version", version)
+                .field("log.source", "application")
                 .log();
 
             final CooldownRequest request = new CooldownRequest(
@@ -364,6 +372,7 @@ final class CachedProxySlice implements Slice {
                             .field("event.reason", "cooldown_active")
                             .field("package.name", module)
                             .field("package.version", version)
+                            .field("log.source", "application")
                             .log();
                         return CompletableFuture.completedFuture(
                             CooldownResponseRegistry.instance()
@@ -377,6 +386,7 @@ final class CachedProxySlice implements Slice {
                         .eventAction("proxy_request")
                         .field("package.name", module)
                         .field("package.version", version)
+                        .field("log.source", "application")
                         .log();
                     // Cooldown passed, proceed with fetch
                     // Get the release date for database event
@@ -389,6 +399,7 @@ final class CachedProxySlice implements Slice {
                                 .field("package.name", module)
                                 .field("package.version", version)
                                 .field("package.release_date", releaseDate.orElse(null))
+                                .field("log.source", "application")
                                 .log();
                             return this.fetchFromRemoteAndCache(
                                 line,
@@ -431,6 +442,7 @@ final class CachedProxySlice implements Slice {
                     .eventAction("cache_hit")
                     .eventOutcome("success")
                     .field("package.name", key.string())
+                    .field("log.source", "application")
                     .log();
                 // Record event for .zip files
                 if (key.string().endsWith(".zip") && artifactPath.isPresent()) {
@@ -449,6 +461,7 @@ final class CachedProxySlice implements Slice {
                 .eventAction("cache_miss")
                 .eventOutcome("success")
                 .field("package.name", key.string())
+                .field("log.source", "application")
                 .log();
             return this.fetchFromRemoteAndCache(line, key, owner, artifactPath, releaseDate, rshdr);
         }).toCompletableFuture();
@@ -497,6 +510,7 @@ final class CachedProxySlice implements Slice {
                     .field("event.reason", "degraded_response")
                     .field("package.name", key.string())
                     .field("error.message", err.getMessage())
+                    .field("log.source", "application")
                     .log();
                 return Optional.empty();
             })
@@ -534,6 +548,7 @@ final class CachedProxySlice implements Slice {
                                     .eventOutcome("failure")
                                     .field("package.name", key.string())
                                     .field("error.message", err.getMessage())
+                                    .field("log.source", "application")
                                     .log();
                                 promise.complete(Optional.empty());
                                 return null;
@@ -554,6 +569,7 @@ final class CachedProxySlice implements Slice {
                                 .field("package.name", key.string())
                                 .field("file.path", artifactPath.get())
                                 .field("user.name", owner)
+                                .field("log.source", "application")
                                 .log();
                             this.enqueueEvent(
                                 owner,
@@ -573,6 +589,7 @@ final class CachedProxySlice implements Slice {
                             .eventAction("proxy_request")
                             .eventOutcome("failure")
                             .error(throwable)
+                            .field("log.source", "application")
                             .log();
                     } else {
                         EcsLogger.warn("com.auto1.pantera.go")
@@ -583,6 +600,7 @@ final class CachedProxySlice implements Slice {
                             .field("event.reason", "artifact_not_found")
                             .field("package.name", key.string())
                             .field("repository.name", this.rname)
+                            .field("log.source", "application")
                             .log();
                     }
                     return ResponseBuilder.notFound().build();
@@ -610,6 +628,7 @@ final class CachedProxySlice implements Slice {
                 .eventCategory("web")
                 .eventAction("header_parse")
                 .eventOutcome("failure")
+                .field("log.source", "application")
                 .log();
             return Optional.empty();
         }
@@ -654,6 +673,7 @@ final class CachedProxySlice implements Slice {
                 .eventCategory("web")
                 .eventAction("proxy_request")
                 .eventOutcome("failure")
+                .field("log.source", "application")
                 .log();
             return;
         }
@@ -678,6 +698,7 @@ final class CachedProxySlice implements Slice {
                     .field("repository.name", this.rname)
                     .field("user.name", owner)
                     .field("package.release_date", release.map(Object::toString).orElse(null))
+                    .field("log.source", "application")
                     .log();
             }
         });
@@ -815,6 +836,7 @@ final class CachedProxySlice implements Slice {
                 .field("repository.name", this.rname)
                 .field("url.path", key.string())
                 .error(err)
+                .field("log.source", "application")
                 .log();
             return ResponseBuilder.badGateway().build();
         }).toCompletableFuture();
@@ -928,6 +950,7 @@ final class CachedProxySlice implements Slice {
                     .field("repository.name", this.rname)
                     .field("url.path", key.string())
                     .error(err)
+                    .field("log.source", "application")
                     .log();
                 return ResponseBuilder.badGateway()
                     .textBody("Upstream temporarily unavailable")
@@ -984,6 +1007,7 @@ final class CachedProxySlice implements Slice {
             EcsLogger.debug("com.auto1.pantera.go")
                 .message("MicrometerMetrics registry unavailable; writer will run without metrics")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
         return null;

@@ -86,6 +86,7 @@ public final class EventsProcessor<T> extends QuartzJob {
                                     .eventAction("event_process")
                                     .eventOutcome("failure")
                                     .error(ex)
+                                    .field("log.source", "application")
                                     .log();
                             }
                         }
@@ -96,6 +97,7 @@ public final class EventsProcessor<T> extends QuartzJob {
                                 .eventCategory("process")
                                 .eventAction("event_drop")
                                 .eventOutcome("failure")
+                                .field("log.source", "application")
                                 .log();
                         }
                     }
@@ -105,6 +107,7 @@ public final class EventsProcessor<T> extends QuartzJob {
                     .eventCategory("process")
                     .eventAction("event_process")
                     .eventOutcome("success")
+                    .field("log.source", "application")
                     .log();
             }
         } finally {

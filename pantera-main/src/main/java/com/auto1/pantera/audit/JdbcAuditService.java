@@ -78,9 +78,10 @@ public final class JdbcAuditService implements AuditService {
                     .eventCategory("database")
                     .eventAction("audit_write")
                     .eventOutcome("failure")
-                    .field("audit.action", event.action())
-                    .field("audit.actor", event.actor())
+                    .field("event.action", event.action())
+                    .field("user.name", event.actor())
                     .error(err)
+                    .field("log.source", "application")
                     .log();
             }
         });

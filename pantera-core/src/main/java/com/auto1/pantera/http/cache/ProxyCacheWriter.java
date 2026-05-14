@@ -280,6 +280,7 @@ public final class ProxyCacheWriter {
                     .field("repository.name", this.repoName)
                     .field("url.path", primaryKey.string())
                     .error(cause)
+                    .field("log.source", "application")
                     .log();
                 return Result.err(new Fault.StorageUnavailable(
                     cause, primaryKey.string()
@@ -383,6 +384,7 @@ public final class ProxyCacheWriter {
                     .field("repository.name", this.repoName)
                     .field("url.path", primaryKey.string())
                     .error(cause)
+                    .field("log.source", "application")
                     .log();
                 return Result.err(new Fault.StorageUnavailable(
                     cause, primaryKey.string()
@@ -564,6 +566,7 @@ public final class ProxyCacheWriter {
                     .field("url.path", primaryKey.string())
                     .field("trace.id", traceId(ctx))
                     .error(err)
+                    .field("log.source", "application")
                     .log();
                 verifyDone.complete(Result.err(new Fault.StorageUnavailable(
                     unwrap(err), primaryKey.string()
@@ -583,6 +586,7 @@ public final class ProxyCacheWriter {
                     .field("repository.name", this.repoName)
                     .field("url.path", primaryKey.string())
                     .field("trace.id", traceId(ctx))
+                    .field("log.source", "application")
                     .log();
                 verifyDone.complete(Result.err(new Fault.StorageUnavailable(
                     new IOException("client disconnected mid-stream"),
@@ -737,6 +741,7 @@ public final class ProxyCacheWriter {
             .field("url.path", primaryKey.string())
             .field("url.full", upstreamUri == null ? primaryKey.string() : upstreamUri)
             .field("trace.id", traceId(ctx))
+            .field("log.source", "application")
             .log();
         this.incrementIntegrityFailure(tag);
     }
@@ -760,6 +765,7 @@ public final class ProxyCacheWriter {
             EcsLogger.debug("com.auto1.pantera.cache")
                 .message("Failed to close stream-through temp channel")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -966,6 +972,7 @@ public final class ProxyCacheWriter {
                         .field("url.full", upstreamUri == null
                             ? primaryKey.string() : upstreamUri)
                         .field("trace.id", traceId(ctx))
+                        .field("log.source", "application")
                         .log();
                     this.incrementIntegrityFailure(tag);
                     return CompletableFuture.completedFuture(null);
@@ -983,6 +990,7 @@ public final class ProxyCacheWriter {
                     .field("repository.name", this.repoName)
                     .field("url.path", primaryKey.string())
                     .error(err)
+                    .field("log.source", "application")
                     .log();
                 return null;
             });
@@ -1084,6 +1092,7 @@ public final class ProxyCacheWriter {
                 .message("Failed to materialise onCacheWrite temp file; using response Flowable path")
                 .field("url.path", key.string())
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             return null;
         }
@@ -1116,6 +1125,7 @@ public final class ProxyCacheWriter {
             .field("url.path", primaryKey.string())
             .field("url.full", upstreamUri)
             .field("trace.id", traceId(ctx))
+            .field("log.source", "application")
             .log();
         this.incrementIntegrityFailure(tag);
         return CompletableFuture.completedFuture(
@@ -1234,6 +1244,7 @@ public final class ProxyCacheWriter {
             .field("url.path", primaryKey.string())
             .field("trace.id", traceId(ctx))
             .error(unwrap(cause))
+            .field("log.source", "application")
             .log();
         if (this.metrics != null) {
             Counter.builder("pantera.proxy.cache.write_partial_failure")
@@ -1264,6 +1275,7 @@ public final class ProxyCacheWriter {
                 .field("repository.name", this.repoName)
                 .field("url.path", primaryKey.string())
                 .error(thrown)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -1281,6 +1293,7 @@ public final class ProxyCacheWriter {
             .field("repository.name", this.repoName)
             .field("url.path", primaryKey.string())
             .field("trace.id", traceId(ctx))
+            .field("log.source", "application")
             .log();
     }
 
@@ -1396,6 +1409,7 @@ public final class ProxyCacheWriter {
                 .message("Failed to delete temp file")
                 .field("file.path", path.toString())
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -1555,6 +1569,7 @@ public final class ProxyCacheWriter {
                 .eventAction("integrity_audit")
                 .eventOutcome(mismatches.isEmpty() ? "success" : "failure")
                 .field("repository.name", repoName)
+                .field("log.source", "application")
                 .log();
             return new Report(scanned, mismatches, fix);
         }
@@ -1579,6 +1594,7 @@ public final class ProxyCacheWriter {
                     .field("repository.name", repoName)
                     .field("url.path", primary.string())
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
                 return null;
             }
@@ -1622,6 +1638,7 @@ public final class ProxyCacheWriter {
                     .eventOutcome("failure")
                     .field("repository.name", repoName)
                     .field("url.path", primary.string())
+                    .field("log.source", "application")
                     .log();
             }
             if (fix) {
@@ -1662,6 +1679,7 @@ public final class ProxyCacheWriter {
                     .field("repository.name", repoName)
                     .field("url.path", primary.string())
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
             for (final Key sidecar : sidecars) {
@@ -1673,6 +1691,7 @@ public final class ProxyCacheWriter {
                         .message("Failed to evict sidecar during integrity fix")
                         .field("url.path", sidecar.string())
                         .error(ex)
+                        .field("log.source", "application")
                         .log();
                 }
             }
@@ -1683,6 +1702,7 @@ public final class ProxyCacheWriter {
                 .eventOutcome("success")
                 .field("repository.name", repoName)
                 .field("url.path", primary.string())
+                .field("log.source", "application")
                 .log();
         }
 

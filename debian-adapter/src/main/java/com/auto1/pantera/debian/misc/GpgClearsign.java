@@ -101,6 +101,7 @@ public final class GpgClearsign {
                 .eventAction("gpg_sign")
                 .eventOutcome("failure")
                 .error(err)
+                .field("log.source", "application")
                 .log();
             throw new PanteraException(err);
         } catch (final IOException err) {
@@ -110,6 +111,7 @@ public final class GpgClearsign {
                 .eventAction("gpg_sign")
                 .eventOutcome("failure")
                 .error(err)
+                .field("log.source", "application")
                 .log();
             throw new PanteraIOException(err);
         }
@@ -151,6 +153,7 @@ public final class GpgClearsign {
                 .eventAction("gpg_sign")
                 .eventOutcome("failure")
                 .error(err)
+                .field("log.source", "application")
                 .log();
             throw new PanteraException(err);
         } catch (final IOException err) {
@@ -160,6 +163,7 @@ public final class GpgClearsign {
                 .eventAction("gpg_sign")
                 .eventOutcome("failure")
                 .error(err)
+                .field("log.source", "application")
                 .log();
             throw new PanteraIOException(err);
         }

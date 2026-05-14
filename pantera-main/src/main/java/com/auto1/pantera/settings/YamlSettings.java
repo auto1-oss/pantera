@@ -551,6 +551,7 @@ public final class YamlSettings implements Settings {
             .message("Closing YamlSettings and cleaning up storage resources")
             .eventCategory("configuration")
             .eventAction("settings_close")
+            .field("log.source", "application")
             .log();
         // Close ordering is critical — dependencies flow downward:
         // 1. Tracked storages (may use DataSource / Valkey indirectly)
@@ -573,6 +574,7 @@ public final class YamlSettings implements Settings {
                         .eventCategory("configuration")
                         .eventAction("storage_close")
                         .eventOutcome("success")
+                        .field("log.source", "application")
                         .log();
                 } else if (storage instanceof AutoCloseable) {
                     // Fallback: direct close for AutoCloseable storages
@@ -582,6 +584,7 @@ public final class YamlSettings implements Settings {
                         .eventCategory("configuration")
                         .eventAction("storage_close")
                         .eventOutcome("success")
+                        .field("log.source", "application")
                         .log();
                 }
             } catch (final Exception e) {
@@ -591,6 +594,7 @@ public final class YamlSettings implements Settings {
                     .eventAction("storage_close")
                     .eventOutcome("failure")
                     .error(e)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -603,6 +607,7 @@ public final class YamlSettings implements Settings {
                     .eventCategory("configuration")
                     .eventAction("index_close")
                     .eventOutcome("success")
+                    .field("log.source", "application")
                     .log();
             } catch (final Exception e) {
                 EcsLogger.error("com.auto1.pantera.settings")
@@ -611,6 +616,7 @@ public final class YamlSettings implements Settings {
                     .eventAction("index_close")
                     .eventOutcome("failure")
                     .error(e)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -625,6 +631,7 @@ public final class YamlSettings implements Settings {
                     .eventAction("pubsub_close")
                     .eventOutcome("failure")
                     .error(e)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -639,6 +646,7 @@ public final class YamlSettings implements Settings {
                         .eventCategory("configuration")
                         .eventAction("database_close")
                         .eventOutcome("success")
+                        .field("log.source", "application")
                         .log();
                 } catch (final Exception e) {
                     EcsLogger.error("com.auto1.pantera.settings")
@@ -647,6 +655,7 @@ public final class YamlSettings implements Settings {
                         .eventAction("database_close")
                         .eventOutcome("failure")
                         .error(e)
+                        .field("log.source", "application")
                         .log();
                 }
             }
@@ -660,6 +669,7 @@ public final class YamlSettings implements Settings {
                     .eventCategory("configuration")
                     .eventAction("valkey_close")
                     .eventOutcome("success")
+                    .field("log.source", "application")
                     .log();
             } catch (final Exception e) {
                 EcsLogger.error("com.auto1.pantera.settings")
@@ -668,6 +678,7 @@ public final class YamlSettings implements Settings {
                     .eventAction("valkey_close")
                     .eventOutcome("failure")
                     .error(e)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -677,6 +688,7 @@ public final class YamlSettings implements Settings {
             .eventCategory("configuration")
             .eventAction("settings_close")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
     }
 
@@ -762,6 +774,7 @@ public final class YamlSettings implements Settings {
                 .message("No caches configuration found")
                 .eventCategory("configuration")
                 .eventAction("valkey_init")
+                .field("log.source", "application")
                 .log();
             return Optional.empty();
         }
@@ -771,6 +784,7 @@ public final class YamlSettings implements Settings {
                 .message("No valkey configuration found in caches")
                 .eventCategory("configuration")
                 .eventAction("valkey_init")
+                .field("log.source", "application")
                 .log();
             return Optional.empty();
         }
@@ -782,6 +796,7 @@ public final class YamlSettings implements Settings {
                 .message("Valkey is disabled in configuration (enabled: false)")
                 .eventCategory("configuration")
                 .eventAction("valkey_init")
+                .field("log.source", "application")
                 .log();
             return Optional.empty();
         }
@@ -809,6 +824,7 @@ public final class YamlSettings implements Settings {
             .eventAction("valkey_init")
             .field("destination.address", host)
             .field("destination.port", port)
+            .field("log.source", "application")
             .log();
         try {
             return Optional.of(new ValkeyConnection(host, port, timeout));
@@ -819,6 +835,7 @@ public final class YamlSettings implements Settings {
                 .eventAction("valkey_init")
                 .eventOutcome("failure")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             return Optional.empty();
         }
@@ -852,6 +869,7 @@ public final class YamlSettings implements Settings {
                 .eventCategory("authentication")
                 .eventAction("auth_init")
                 .field("event.provider", "db")
+                .field("log.source", "application")
                 .log();
         } else {
             res = new AuthFromEnv();
@@ -891,6 +909,7 @@ public final class YamlSettings implements Settings {
                         .eventAction("auth_init")
                         .eventOutcome("failure")
                         .error(ex)
+                        .field("log.source", "application")
                         .log();
                 }
             }
@@ -929,6 +948,7 @@ public final class YamlSettings implements Settings {
                 .message(String.format("Initializing auth cache with Valkey L2 cache and JWT TTL cap: expires=%s, expirySeconds=%d", jwtSettings.expires(), jwtSettings.expirySeconds()))
                 .eventCategory("authentication")
                 .eventAction("auth_cache_init")
+                .field("log.source", "application")
                 .log();
             users = new CachedUsers(res, valkey.get(), jwtSettings);
         } else {

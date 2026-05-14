@@ -142,6 +142,7 @@ public final class VertxFileStorage implements Storage {
                     .eventOutcome("success")
                     .field("file.path", path.toString())
                     .field("file.directory", this.dir.toString())
+                    .field("log.source", "application")
                     .log();
                 return keys;
             })
@@ -215,6 +216,7 @@ public final class VertxFileStorage implements Storage {
                     .eventOutcome("success")
                     .field("file.path", path.toString())
                     .field("file.directory", this.dir.toString())
+                    .field("log.source", "application")
                     .log();
                 return new ListResult.Simple(files, new ArrayList<>(directories));
             })

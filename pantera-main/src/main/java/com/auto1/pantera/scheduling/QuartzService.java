@@ -126,6 +126,7 @@ public final class QuartzService {
                 .eventCategory("process")
                 .eventAction("jdbc_cluster_init")
                 .eventOutcome("success")
+                .field("log.source", "application")
                 .log();
         } catch (final SchedulerException error) {
             throw new PanteraException(error);
@@ -282,6 +283,7 @@ public final class QuartzService {
                 .eventOutcome("failure")
                 .field("process.name", key.toString())
                 .error(err)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -328,6 +330,7 @@ public final class QuartzService {
                                 .eventAction("scheduler_shutdown")
                                 .eventOutcome("failure")
                                 .error(error)
+                                .field("log.source", "application")
                                 .log();
                         }
                     }
@@ -405,6 +408,7 @@ public final class QuartzService {
                 .message("Parallel quartz jobs amount limited to thread pool size (" + count + " threads, " + requested + " jobs requested)")
                 .eventCategory("process")
                 .eventAction("job_limit")
+                .field("log.source", "application")
                 .log();
         }
         return count;
@@ -422,6 +426,7 @@ public final class QuartzService {
             .eventCategory("process")
             .eventAction("job_schedule")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
     }
 

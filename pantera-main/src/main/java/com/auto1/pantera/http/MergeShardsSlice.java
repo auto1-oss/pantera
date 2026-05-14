@@ -229,6 +229,7 @@ public final class MergeShardsSlice implements Slice {
             .eventCategory("web")
             .eventAction("metadata_merge")
             .field("repository.name", repoName)
+            .field("log.source", "application")
             .log();
 
         // Get repository configuration
@@ -321,6 +322,7 @@ public final class MergeShardsSlice implements Slice {
                 .eventOutcome("failure")
                 .field("repository.name", repoName)
                 .error(error)
+                .field("log.source", "application")
                 .log();
             // Clean up even on failure
             cleanupTempFolders(storage).exceptionally(e -> {
@@ -330,6 +332,7 @@ public final class MergeShardsSlice implements Slice {
                     .eventAction("cleanup")
                     .eventOutcome("failure")
                     .field("error.message", e.getMessage())
+                    .field("log.source", "application")
                     .log();
                 return null;
             });
@@ -404,6 +407,7 @@ public final class MergeShardsSlice implements Slice {
                                 .eventOutcome("failure")
                                 .field("file.path", p)
                                 .field("error.message", e.getMessage())
+                                .field("log.source", "application")
                                 .log();
                         }
                     })
@@ -415,6 +419,7 @@ public final class MergeShardsSlice implements Slice {
                             .eventOutcome("failure")
                             .field("file.path", p)
                             .field("error.message", e.getMessage())
+                            .field("log.source", "application")
                             .log();
                         return null;
                     });
@@ -613,6 +618,7 @@ public final class MergeShardsSlice implements Slice {
                                 .eventAction("async_error")
                                 .eventOutcome("failure")
                                 .error(err)
+                                .field("log.source", "application")
                                 .log();
                             return null;
                         }));
@@ -633,6 +639,7 @@ public final class MergeShardsSlice implements Slice {
                                 .eventAction("async_error")
                                 .eventOutcome("failure")
                                 .error(err)
+                                .field("log.source", "application")
                                 .log();
                             return null;
                         }));
@@ -686,6 +693,7 @@ public final class MergeShardsSlice implements Slice {
             .message("Starting cleanup of temporary folders after merge")
             .eventCategory("web")
             .eventAction("cleanup")
+            .field("log.source", "application")
             .log();
         final List<CompletionStage<Void>> deletions = new ArrayList<>();
 
@@ -695,6 +703,7 @@ public final class MergeShardsSlice implements Slice {
             .eventCategory("web")
             .eventAction("cleanup")
             .field("file.directory", ".import")
+            .field("log.source", "application")
             .log();
         deletions.add(storage.delete(new Key.From(".import"))
             .thenRun(() -> EcsLogger.debug("com.auto1.pantera.http")
@@ -712,6 +721,7 @@ public final class MergeShardsSlice implements Slice {
                     .eventOutcome("failure")
                     .field("file.directory", ".import")
                     .field("error.message", e.getMessage())
+                    .field("log.source", "application")
                     .log();
                 return null;
             }));
@@ -739,6 +749,7 @@ public final class MergeShardsSlice implements Slice {
                     .eventOutcome("failure")
                     .field("file.directory", ".meta")
                     .field("error.message", e.getMessage())
+                    .field("log.source", "application")
                     .log();
                 return null;
             }));

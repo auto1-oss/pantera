@@ -93,6 +93,7 @@ public final class StreamingBrowseSlice implements Slice {
                 .eventOutcome("success")
                 .field("url.path", key.string())
                 .duration(elapsed)
+                .field("log.source", "application")
                 .log();
 
             // Stream the HTML response
@@ -115,6 +116,7 @@ public final class StreamingBrowseSlice implements Slice {
                 .eventOutcome("failure")
                 .field("url.path", key.string())
                 .error(throwable)
+                .field("log.source", "application")
                 .log();
             return ResponseBuilder.internalError()
                 .textBody("Failed to list directory: " + throwable.getMessage())

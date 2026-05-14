@@ -149,6 +149,7 @@ public final class DockerProxyCooldownSlice implements Slice {
             EcsLogger.debug("com.auto1.pantera.docker")
                 .message("Failed to parse manifest request, falling through to origin")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             return this.origin.response(line, headers, body);
         }
@@ -244,6 +245,7 @@ public final class DockerProxyCooldownSlice implements Slice {
                         .field("package.name", artifact)
                         .field("package.version", version)
                         .error(ex)
+                        .field("log.source", "application")
                         .log();
                     // Register with empty release date on error
                     this.inspector.register(artifact, version, Optional.empty(), user, this.repoName, digest);
@@ -298,6 +300,7 @@ public final class DockerProxyCooldownSlice implements Slice {
                     .field("package.name", artifact)
                     .field("package.version", version)
                     .error(error)
+                    .field("log.source", "application")
                     .log();
             } else if (release.isPresent()) {
                 EcsLogger.debug("com.auto1.pantera.docker")
@@ -308,6 +311,7 @@ public final class DockerProxyCooldownSlice implements Slice {
                     .field("package.name", artifact)
                     .field("package.version", version)
                     .field("package.release_date", release.get().toString())
+                    .field("log.source", "application")
                     .log();
                 // Also record by digest
                 digest.ifPresent(d -> this.inspector.recordRelease(artifact, d, release.get()));
@@ -321,6 +325,7 @@ public final class DockerProxyCooldownSlice implements Slice {
                 .field("package.name", artifact)
                 .field("package.version", version)
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             return Optional.empty();
         });
@@ -362,6 +367,7 @@ public final class DockerProxyCooldownSlice implements Slice {
                     .field("package.name", artifact)
                     .field("package.version", version)
                     .field("package.release_date", release.get().toString())
+                    .field("log.source", "application")
                     .log();
                 this.inspector.recordRelease(artifact, version, release.get());
                 digest.ifPresent(d -> this.inspector.recordRelease(artifact, d, release.get()));
@@ -375,6 +381,7 @@ public final class DockerProxyCooldownSlice implements Slice {
                 .field("package.name", artifact)
                 .field("package.version", version)
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             return null;
         });
@@ -391,6 +398,7 @@ public final class DockerProxyCooldownSlice implements Slice {
                 .eventAction("manifest_build")
                 .eventOutcome("failure")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             return Optional.empty();
         }
@@ -410,6 +418,7 @@ public final class DockerProxyCooldownSlice implements Slice {
                 .eventAction("manifest_parse")
                 .eventOutcome("failure")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
         return Optional.empty();
@@ -437,6 +446,7 @@ public final class DockerProxyCooldownSlice implements Slice {
                     EcsLogger.debug("com.auto1.pantera.docker")
                         .message("Failed to parse date header for release time")
                         .error(ex)
+                        .field("log.source", "application")
                         .log();
                     return Optional.empty();
                 }

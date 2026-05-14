@@ -105,6 +105,7 @@ public final class ProxyManifests implements Manifests {
             .field("container.image.name", this.name)
             .field("container.image.tag", ref.digest())
             .field("url.path", uri)
+            .field("log.source", "application")
             .log();
         final long start = System.currentTimeMillis();
         return new ResponseSink<>(
@@ -124,6 +125,7 @@ public final class ProxyManifests implements Manifests {
                     .field("container.image.tag", ref.digest())
                     .field("http.response.status_code", response.status().code())
                     .duration(duration)
+                    .field("log.source", "application")
                     .log();
                 final CompletableFuture<Optional<Manifest>> result;
                 if (response.status() == RsStatus.OK) {

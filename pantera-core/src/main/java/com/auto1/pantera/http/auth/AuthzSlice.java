@@ -99,6 +99,7 @@ public final class AuthzSlice implements Slice {
                             EcsLogger.debug("com.auto1.pantera.http.auth")
                                 .message("Auth scheme does not provide challenge")
                                 .error(ex)
+                                .field("log.source", "application")
                                 .log();
                         }
                         if (this.control.allowed(result.user())) {

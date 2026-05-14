@@ -202,6 +202,7 @@ final class WheelSlice implements Slice {
                 .message("WS: multipart request body parsed, part found: " + part.toString())
                 .eventCategory("web")
                 .eventAction("upload")
+                .field("log.source", "application")
                 .log()
         ).flatMapSingle(
             // Use non-blocking RxFuture.single instead of blocking SingleInterop.fromFuture

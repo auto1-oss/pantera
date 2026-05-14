@@ -71,6 +71,7 @@ public class GetBlobsSlice extends DockerActionSlice {
                         .eventOutcome("failure")
                         .field("package.checksum", request.digest().string())
                         .error(err)
+                        .field("log.source", "application")
                         .log();
                     return ResponseBuilder.notFound()
                         .jsonBody(new BlobUnknownError(request.digest()).json())

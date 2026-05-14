@@ -68,6 +68,7 @@ public interface Remote extends Supplier<CompletionStage<Optional<? extends Cont
                             .eventAction("remote_get")
                             .eventOutcome("failure")
                             .error(throwable)
+                            .field("log.source", "application")
                             .log();
                         res = Optional.empty();
                     }

@@ -111,6 +111,7 @@ public final class ScriptScheduler {
                                         .eventAction("crontab_load")
                                         .eventOutcome("failure")
                                         .error(exc)
+                                        .field("log.source", "application")
                                         .log();
                                 }
                                 if (valid) {

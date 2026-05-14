@@ -159,6 +159,7 @@ public final class PersistedMetadataCache extends MetadataCache {
                     .eventAction("cache_restore")
                     .eventOutcome("success")
                     .duration(elapsed)
+                    .field("log.source", "application")
                     .log();
             }
         } catch (IOException | ClassNotFoundException e) {
@@ -168,6 +169,7 @@ public final class PersistedMetadataCache extends MetadataCache {
                 .eventAction("cache_restore")
                 .eventOutcome("failure")
                 .field("error.message", e.getMessage())
+                .field("log.source", "application")
                 .log();
             // Continue with empty cache
         }
@@ -187,6 +189,7 @@ public final class PersistedMetadataCache extends MetadataCache {
                 .eventAction("cache_snapshot")
                 .eventOutcome("failure")
                 .field("error.message", e.getMessage())
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -233,6 +236,7 @@ public final class PersistedMetadataCache extends MetadataCache {
             .eventAction("cache_snapshot")
             .eventOutcome("success")
             .duration(elapsed)
+            .field("log.source", "application")
             .log();
     }
     
@@ -261,6 +265,7 @@ public final class PersistedMetadataCache extends MetadataCache {
                     .eventAction("cache_snapshot")
                     .eventOutcome("failure")
                     .field("error.message", e.getMessage())
+                    .field("log.source", "application")
                     .log();
             }
         }

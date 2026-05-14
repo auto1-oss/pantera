@@ -54,6 +54,7 @@ public final class QuartsService {
                                 .eventAction("scheduler_shutdown")
                                 .eventOutcome("failure")
                                 .error(error)
+                                .field("log.source", "application")
                                 .log();
                         }
                     }
@@ -95,6 +96,7 @@ public final class QuartsService {
                 .eventCategory("process")
                 .eventAction("job_schedule")
                 .eventOutcome("success")
+                .field("log.source", "application")
                 .log();
         }
         for (int item = 0; item < count; item = item + 1) {

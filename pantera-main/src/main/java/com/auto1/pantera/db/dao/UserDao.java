@@ -300,6 +300,7 @@ public final class UserDao implements CrudUsers {
                         .eventAction("role_assignment")
                         .eventOutcome("failure")
                         .field("user.name", uname)
+                        .field("log.source", "application")
                         .log();
                     return;
                 }
@@ -317,6 +318,7 @@ public final class UserDao implements CrudUsers {
                 .eventAction("role_assignment")
                 .field("user.name", uname)
                 .field("user.id", String.valueOf(userId))
+                .field("log.source", "application")
                 .log();
         }
         // Insert new role assignments
@@ -331,6 +333,7 @@ public final class UserDao implements CrudUsers {
                 .eventAction("role_assignment")
                 .field("user.name", uname)
                 .field("user.id", String.valueOf(userId))
+                .field("log.source", "application")
                 .log();
             // Filter to only roles that actually exist in the DB. Previously
             // we auto-created missing roles with permissions='{}', which
@@ -361,6 +364,7 @@ public final class UserDao implements CrudUsers {
                     .eventAction("role_assignment")
                     .eventOutcome("failure")
                     .field("user.name", uname)
+                    .field("log.source", "application")
                     .log();
             }
             if (existingRoleNames.isEmpty()) {
@@ -381,6 +385,7 @@ public final class UserDao implements CrudUsers {
                     .eventCategory("iam")
                     .eventAction("role_assignment")
                     .field("user.name", uname)
+                    .field("log.source", "application")
                     .log();
             }
         } else {
@@ -389,6 +394,7 @@ public final class UserDao implements CrudUsers {
                 .eventCategory("iam")
                 .eventAction("role_assignment")
                 .field("user.name", uname)
+                .field("log.source", "application")
                 .log();
         }
     }

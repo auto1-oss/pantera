@@ -146,6 +146,7 @@ public final class UploadSlice implements Slice {
                 .message("Stripped metadata properties from path: " + path + " -> " + sanitizedPath)
                 .eventCategory("web")
                 .eventAction("path_sanitization")
+                .field("log.source", "application")
                 .log();
         } else {
             sanitizedPath = path;
@@ -182,6 +183,7 @@ public final class UploadSlice implements Slice {
                 .eventCategory("web")
                 .eventAction("metadata_upload")
                 .field("package.path", keyPath)
+                .field("log.source", "application")
                 .log();
             return new ContentWithSize(body, headers).asBytesFuture().thenCompose(
                 bytes -> this.fixMetadataBytes(bytes).thenCompose(
@@ -194,6 +196,7 @@ public final class UploadSlice implements Slice {
                                     .eventCategory("web")
                                     .eventAction("metadata_upload")
                                     .field("package.path", keyPath)
+                                    .field("log.source", "application")
                                     .log();
                                 // Generate checksums for the fixed content
                                 return this.generateChecksums(key);
@@ -213,6 +216,7 @@ public final class UploadSlice implements Slice {
                         .eventOutcome("failure")
                         .error(throwable)
                         .field("package.path", keyPath)
+                        .field("log.source", "application")
                         .log();
                     return ResponseBuilder.internalError().build();
                 }
@@ -226,6 +230,7 @@ public final class UploadSlice implements Slice {
                 .eventCategory("web")
                 .eventAction("checksum_upload")
                 .field("package.path", keyPath)
+                .field("log.source", "application")
                 .log();
             // Don't save Maven's checksums - we already generated correct ones
             return CompletableFuture.completedFuture(ResponseBuilder.created().build());
@@ -240,6 +245,7 @@ public final class UploadSlice implements Slice {
                     .eventAction("artifact_upload")
                     .field("package.path", keyPath)
                     .field("package.size", size)
+                    .field("log.source", "application")
                     .log();
 
                 // For non-metadata/checksum files, generate checksums
@@ -261,6 +267,7 @@ public final class UploadSlice implements Slice {
                     .eventOutcome("failure")
                     .error(throwable)
                     .field("package.path", keyPath)
+                    .field("log.source", "application")
                     .log();
                 return ResponseBuilder.internalError().build();
             }
@@ -350,6 +357,7 @@ public final class UploadSlice implements Slice {
                     .eventAction("metadata_fix")
                     .eventOutcome("success")
                     .field("package.version", newLatest)
+                    .field("log.source", "application")
                     .log();
                 return result.getBytes(StandardCharsets.UTF_8);
             } catch (final IllegalArgumentException | SAXException | IOException
@@ -360,6 +368,7 @@ public final class UploadSlice implements Slice {
                     .eventAction("metadata_fix")
                     .eventOutcome("failure")
                     .field("error.message", ex.getMessage())
+                    .field("log.source", "application")
                     .log();
                 return bytes;
             }
@@ -481,6 +490,7 @@ public final class UploadSlice implements Slice {
                 .eventCategory("web")
                 .eventAction("event_creation")
                 .field("package.path", path)
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(null);
         }
@@ -575,6 +585,7 @@ public final class UploadSlice implements Slice {
             .field("package.name", artifactName)
             .field("package.version", version)
             .field("package.size", size)
+            .field("log.source", "application")
             .log();
         // Sync path: write the index row inline so the next group lookup
         // sees the artifact without waiting for the async batch.
@@ -594,6 +605,7 @@ public final class UploadSlice implements Slice {
             EcsLogger.debug("com.auto1.pantera.maven")
                 .message("Failed to record metric")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }

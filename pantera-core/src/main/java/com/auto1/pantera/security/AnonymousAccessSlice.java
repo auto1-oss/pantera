@@ -176,6 +176,7 @@ public final class AnonymousAccessSlice implements Slice {
             .field("url.path", line.uri().getPath())
             .field("repository.name", this.repoName)
             .field("http.response.status_code", 401)
+            .field("log.source", "http")
             .log();
         // Consume the body so Vert.x doesn't leak the request publisher
         // (same contract as AuthzSlice's 403 path).

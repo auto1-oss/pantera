@@ -72,6 +72,7 @@ public final class Gzip {
             .eventAction("archive_extraction")
             .field("file.path", this.file.toString())
             .field("destination.address", dest.toString())
+            .field("log.source", "application")
             .log();
     }
 
@@ -91,6 +92,7 @@ public final class Gzip {
             .eventAction("archive_extraction")
             .field("file.path", this.file.toString())
             .field("destination.address", dest.toString())
+            .field("log.source", "application")
             .log();
     }
 }

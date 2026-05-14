@@ -56,6 +56,7 @@ public final class ComposerGroup implements Slice {
             .message("Created Composer group (" + this.repositories.size() + " repositories)")
             .eventCategory("web")
             .eventAction("group_create")
+            .field("log.source", "application")
             .log();
     }
 
@@ -70,6 +71,7 @@ public final class ComposerGroup implements Slice {
             .eventCategory("web")
             .eventAction("group_request")
             .field("url.path", line.uri().getPath())
+            .field("log.source", "application")
             .log();
         return this.tryRepositories(0, line, headers, body);
     }
@@ -87,6 +89,7 @@ public final class ComposerGroup implements Slice {
                 .eventAction("group_request")
                 .eventOutcome("failure")
                 .field("url.path", line.uri().getPath())
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
         }
@@ -100,6 +103,7 @@ public final class ComposerGroup implements Slice {
                     .eventAction("group_request")
                     .eventOutcome("success")
                     .field("url.path", line.uri().getPath())
+                    .field("log.source", "application")
                     .log();
                 return CompletableFuture.completedFuture(response);
             }
@@ -110,6 +114,7 @@ public final class ComposerGroup implements Slice {
                 .eventOutcome("failure")
                 .field("http.response.status_code", response.status().code())
                 .field("url.path", line.uri().getPath())
+                .field("log.source", "application")
                 .log();
             return this.tryRepositories(index + 1, line, headers, body);
         });

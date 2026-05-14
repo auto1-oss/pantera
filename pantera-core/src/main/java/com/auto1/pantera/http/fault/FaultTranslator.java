@@ -128,6 +128,7 @@ public final class FaultTranslator {
                     .eventAction("fault_translated")
                     .eventOutcome("failure")
                     .field("event.reason", "overload")
+                    .field("log.source", "application")
                     .log();
                 yield ResponseBuilder.from(RsStatus.SERVICE_UNAVAILABLE)
                     .header("Retry-After", Long.toString(ov.retryAfter().toSeconds()))

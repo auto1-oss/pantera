@@ -172,6 +172,7 @@ public final class Http3Server {
                     .eventCategory("configuration")
                     .eventAction("http3_proxy_protocol_enabled")
                     .field("url.port", this.port)
+                    .field("log.source", "application")
                     .log();
             } else {
                 connector = new QuicheServerConnector(

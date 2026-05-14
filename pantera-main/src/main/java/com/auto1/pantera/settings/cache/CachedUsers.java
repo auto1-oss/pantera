@@ -124,6 +124,7 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
                 this.ttl.toSeconds(), jwtSettings != null ? jwtSettings.expirySeconds() : -1))
             .eventCategory("database")
             .eventAction("init")
+            .field("log.source", "application")
             .log();
         
         // L1: Hot data cache for direct Basic Auth only
@@ -466,6 +467,7 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
                     .eventAction("invalidate_all")
                     .eventOutcome("failure")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -512,6 +514,7 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
                     .eventOutcome("failure")
                     .field("user.name", username)
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -521,6 +524,7 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
             .eventAction("invalidate_by_username")
             .eventOutcome("success")
             .field("user.name", username)
+            .field("log.source", "application")
             .log();
     }
 

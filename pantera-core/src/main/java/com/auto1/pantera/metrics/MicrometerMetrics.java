@@ -58,6 +58,7 @@ public final class MicrometerMetrics {
             .eventCategory("configuration")
             .eventAction("micrometer_metrics_init")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
     }
 

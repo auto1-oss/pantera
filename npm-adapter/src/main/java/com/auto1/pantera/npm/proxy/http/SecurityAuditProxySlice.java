@@ -56,6 +56,7 @@ final class SecurityAuditProxySlice implements Slice {
             .eventAction("audit_proxy")
             .field("url.original", line.uri().getPath())
             .field("url.path", upstreamLine.uri().getPath())
+            .field("log.source", "application")
             .log();
 
         // Materialize the body first, then create fresh Content for upstream.

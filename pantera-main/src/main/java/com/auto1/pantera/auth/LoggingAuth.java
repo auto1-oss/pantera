@@ -45,6 +45,7 @@ public final class LoggingAuth implements Authentication {
                 .eventOutcome("failure")
                 .field("user.name", username)
                 .field("event.provider", this.origin.toString())
+                .field("log.source", "application")
                 .log();
         } else {
             // RCA-4 (v2.2.0): demoted from INFO to DEBUG. With twoTier auth
@@ -61,6 +62,7 @@ public final class LoggingAuth implements Authentication {
                 .eventOutcome("success")
                 .field("user.name", username)
                 .field("event.provider", this.origin.toString())
+                .field("log.source", "application")
                 .log();
         }
         return res;

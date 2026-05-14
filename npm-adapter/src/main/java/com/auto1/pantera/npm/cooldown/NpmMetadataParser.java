@@ -134,6 +134,7 @@ public final class NpmMetadataParser implements MetadataParser<JsonNode>, Releas
                     EcsLogger.debug("com.auto1.pantera.npm")
                         .message("Failed to parse NPM version timestamp")
                         .error(ex)
+                        .field("log.source", "application")
                         .log();
                 }
             }

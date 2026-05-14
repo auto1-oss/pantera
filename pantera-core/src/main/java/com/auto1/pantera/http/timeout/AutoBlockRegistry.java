@@ -95,6 +95,7 @@ public final class AutoBlockRegistry {
                         .eventCategory("web")
                         .eventAction("circuit_breaker_probing")
                         .eventOutcome("success")
+                        .field("log.source", "application")
                         .log();
                     return false;
                 }
@@ -208,6 +209,7 @@ public final class AutoBlockRegistry {
                 .eventAction("circuit_breaker_opened")
                 .eventOutcome("failure")
                 .field("event.reason", "failure_rate_threshold_reached")
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -244,6 +246,7 @@ public final class AutoBlockRegistry {
                 .eventAction("circuit_breaker_probe_failed")
                 .eventOutcome("failure")
                 .field("event.reason", "probe_failure")
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -265,6 +268,7 @@ public final class AutoBlockRegistry {
             .eventCategory("web")
             .eventAction("circuit_breaker_closed")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
     }
 

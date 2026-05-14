@@ -227,6 +227,7 @@ public final class DockerManifestByTagHandler {
                     .field("package.name", image)
                     .field("package.version", tag)
                     .field("container.image.hash.all", digest.map(java.util.List::of).orElse(java.util.List.of()))
+                    .field("log.source", "application")
                     .log();
                 return manifestUnknown(tag);
             }
@@ -289,6 +290,7 @@ public final class DockerManifestByTagHandler {
                     .field("package.name", image)
                     .field("package.version", version)
                     .error(err)
+                    .field("log.source", "application")
                     .log();
                 return false;
             });

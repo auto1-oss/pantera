@@ -123,6 +123,7 @@ public final class VersionPolicySlice implements Slice {
                 .eventOutcome("failure")
                 .field("package.version", version)
                 .field("package.path", path)
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(
                 ResponseBuilder.badRequest()
@@ -145,6 +146,7 @@ public final class VersionPolicySlice implements Slice {
                 .eventOutcome("failure")
                 .field("package.version", version)
                 .field("package.path", path)
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(
                 ResponseBuilder.badRequest()
@@ -167,6 +169,7 @@ public final class VersionPolicySlice implements Slice {
             .eventOutcome("success")
             .field("package.path", path)
             .field("package.version", version)
+            .field("log.source", "application")
             .log();
 
         return origin.response(line, headers, body);

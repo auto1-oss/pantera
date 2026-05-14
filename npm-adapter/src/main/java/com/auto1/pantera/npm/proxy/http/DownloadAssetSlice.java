@@ -123,6 +123,7 @@ public final class DownloadAssetSlice implements Slice {
                 .eventOutcome("failure")
                 .field("url.path", line.uri().getPath())
                 .error(cause)
+                .field("log.source", "application")
                 .log();
             
             // Check if it's an HTTP exception with a specific status
@@ -187,6 +188,7 @@ public final class DownloadAssetSlice implements Slice {
                     .eventAction("cache_hit")
                     .eventOutcome("success")
                     .field("package.name", tgz)
+                    .field("log.source", "application")
                     .log();
                 // Queue the proxy event — failures MUST NOT escape the serve path.
                 this.enqueueProxyEvent(tgz, headers, asset);
@@ -237,6 +239,7 @@ public final class DownloadAssetSlice implements Slice {
                         .eventAction("asset_blocked")
                         .field("package.name", req.artifact())
                         .field("package.version", req.version())
+                        .field("log.source", "application")
                         .log();
                     return CompletableFuture.completedFuture(
                         CooldownResponseRegistry.instance()
@@ -307,6 +310,7 @@ public final class DownloadAssetSlice implements Slice {
                     EcsLogger.debug("com.auto1.pantera.npm")
                         .message("Failed to parse asset lastModified for proxy event")
                         .error(ex)
+                        .field("log.source", "application")
                         .log();
                 }
                 final ProxyArtifactEvent event = new ProxyArtifactEvent(
@@ -325,6 +329,7 @@ public final class DownloadAssetSlice implements Slice {
                     .eventAction("queue_enqueue")
                     .eventOutcome("failure")
                     .field("repository.name", this.repoName)
+                    .field("log.source", "application")
                     .log();
             }
         });

@@ -195,6 +195,7 @@ public final class CooldownWiring {
             .eventCategory("configuration")
             .eventAction("adapter_wiring")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
     }
 }

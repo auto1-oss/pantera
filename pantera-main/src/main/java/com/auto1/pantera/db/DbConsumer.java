@@ -180,6 +180,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                 .message("Subscribed to insert/delete db records")
                 .eventCategory("database")
                 .eventAction("subscription_start")
+                .field("log.source", "application")
                 .log();
         }
 
@@ -269,6 +270,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                             .field("repository.name", record.repoName())
                             .field("package.name", record.artifactName())
                             .error(ex)
+                            .field("log.source", "application")
                             .log();
                         errors.add(record);
                     }
@@ -285,6 +287,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                         .eventAction("batch_commit")
                         .eventOutcome("failure")
                         .error(ex)
+                        .field("log.source", "application")
                         .log();
                     final long backoffMs = Math.min(
                         1000L * (1L << (failures - 1)), 8000L
@@ -304,6 +307,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                         .eventAction("batch_dead_letter")
                         .eventOutcome("failure")
                         .error(ex)
+                        .field("log.source", "application")
                         .log();
                     try {
                         final DeadLetterWriter dlWriter = new DeadLetterWriter(
@@ -321,6 +325,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                             .eventAction("dead_letter_write")
                             .eventOutcome("failure")
                             .error(dlError)
+                            .field("log.source", "application")
                             .log();
                     }
                 }
@@ -337,6 +342,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                         .eventCategory("database")
                         .eventAction("event_drop")
                         .eventOutcome("failure")
+                        .field("log.source", "application")
                         .log();
                 }
             }
@@ -350,6 +356,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                 .eventAction("subscription_error")
                 .eventOutcome("failure")
                 .error(error)
+                .field("log.source", "application")
                 .log();
         }
 
@@ -359,6 +366,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                 .message("Subscription cancelled")
                 .eventCategory("database")
                 .eventAction("subscription_complete")
+                .field("log.source", "application")
                 .log();
         }
     }

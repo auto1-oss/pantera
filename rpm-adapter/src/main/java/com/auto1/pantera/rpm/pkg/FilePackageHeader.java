@@ -103,6 +103,7 @@ public final class FilePackageHeader {
                 .message("Parsed RPM header: " + header.toString())
                 .eventCategory("web")
                 .eventAction("package_parsing")
+                .field("log.source", "application")
                 .log();
             final int bufsize = 1024;
             int read = 1;

@@ -103,6 +103,7 @@ public final class AuthFromDb implements Authentication {
                 .eventAction("db_auth_authoritative")
                 .field("user.name", name)
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             return false;
         }
@@ -145,6 +146,7 @@ public final class AuthFromDb implements Authentication {
                 .eventOutcome("failure")
                 .field("user.name", name)
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             return Optional.empty();
         }
@@ -173,6 +175,7 @@ public final class AuthFromDb implements Authentication {
                 .eventCategory("authentication")
                 .eventAction("hash_upgrade")
                 .field("user.name", username)
+                .field("log.source", "application")
                 .log();
         } catch (final Exception ex) {
             EcsLogger.warn("com.auto1.pantera.auth")
@@ -182,6 +185,7 @@ public final class AuthFromDb implements Authentication {
                 .eventOutcome("failure")
                 .field("user.name", username)
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }

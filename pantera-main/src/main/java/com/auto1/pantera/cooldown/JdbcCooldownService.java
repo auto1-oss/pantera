@@ -218,6 +218,7 @@ final class JdbcCooldownService implements CooldownService {
                     .field("repository.name", repoName)
                     .field("package.name", artifact)
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -244,6 +245,7 @@ final class JdbcCooldownService implements CooldownService {
                     .field("repository.type", repoType)
                     .field("repository.name", repoName)
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -260,6 +262,7 @@ final class JdbcCooldownService implements CooldownService {
                 .message("CooldownMetrics not available - metrics will not be initialized")
                 .eventCategory("database")
                 .eventAction("metrics_init")
+                .field("log.source", "application")
                 .log();
             return;
         }
@@ -270,6 +273,7 @@ final class JdbcCooldownService implements CooldownService {
                 .message("CooldownMetrics instance is null - metrics will not be initialized")
                 .eventCategory("database")
                 .eventAction("metrics_init")
+                .field("log.source", "application")
                 .log();
             return;
         }
@@ -295,6 +299,7 @@ final class JdbcCooldownService implements CooldownService {
                         counts.size(), total, allBlocked))
                     .eventCategory("database")
                     .eventAction("metrics_init")
+                    .field("log.source", "application")
                     .log();
             } catch (Exception e) {
                 EcsLogger.error("com.auto1.pantera.cooldown")
@@ -302,6 +307,8 @@ final class JdbcCooldownService implements CooldownService {
                     .eventCategory("database")
                     .eventAction("metrics_init")
                     .error(e)
+                    .field("log.source", "application")
+                    .field("event.outcome", "failure")
                     .log();
             }
         }, this.executor);
@@ -358,6 +365,7 @@ final class JdbcCooldownService implements CooldownService {
                 .field("repository.type", request.repoType())
                 .field("package.name", request.artifact())
                 .field("package.version", request.version())
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(CooldownResult.allowed());
         }
@@ -371,6 +379,7 @@ final class JdbcCooldownService implements CooldownService {
                 .eventOutcome("success")
                 .field("package.name", request.artifact())
                 .field("package.version", request.version())
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(CooldownResult.allowed());
         }
@@ -383,6 +392,7 @@ final class JdbcCooldownService implements CooldownService {
             .field("repository.name", request.repoName())
             .field("package.name", request.artifact())
             .field("package.version", request.version())
+            .field("log.source", "application")
             .log();
 
         return this.evaluateSingleFlight.load(
@@ -418,6 +428,7 @@ final class JdbcCooldownService implements CooldownService {
                     .field("event.reason", "cooldown_active")
                     .field("package.name", request.artifact())
                     .field("package.version", request.version())
+                    .field("log.source", "application")
                     .log();
                 // Record blocked version counter metric
                 this.recordVersionBlockedMetric(request.repoType(), request.repoName());
@@ -431,6 +442,7 @@ final class JdbcCooldownService implements CooldownService {
                     .eventOutcome("success")
                     .field("package.name", request.artifact())
                     .field("package.version", request.version())
+                    .field("log.source", "application")
                     .log();
                 // Record allowed version counter metric
                 this.recordVersionAllowedMetric(request.repoType(), request.repoName());
@@ -447,6 +459,7 @@ final class JdbcCooldownService implements CooldownService {
                     .field("package.name", request.artifact())
                     .field("package.version", request.version())
                     .field("error.message", error.getMessage())
+                    .field("log.source", "application")
                     .log();
             } else {
                 this.circuitBreaker.recordSuccess();
@@ -541,6 +554,7 @@ final class JdbcCooldownService implements CooldownService {
                     .eventAction("db_check")
                     .field("package.name", request.artifact())
                     .field("package.version", request.version())
+                    .field("log.source", "application")
                     .log();
                 // Cache the result with appropriate TTL
                 if (entry.blocked && entry.blockedUntil != null) {
@@ -579,6 +593,7 @@ final class JdbcCooldownService implements CooldownService {
                     .eventAction("block_lookup")
                     .field("package.name", request.artifact())
                     .field("package.version", request.version())
+                    .field("log.source", "application")
                     .log();
                 
                 if (rec.status() == BlockStatus.ACTIVE) {
@@ -593,6 +608,7 @@ final class JdbcCooldownService implements CooldownService {
                             .eventAction("block_expired")
                             .field("package.name", request.artifact())
                             .field("package.version", request.version())
+                            .field("log.source", "application")
                             .log();
                         // Expire the block
                         this.expire(rec, now);
@@ -609,6 +625,7 @@ final class JdbcCooldownService implements CooldownService {
                     .eventAction("block_lookup")
                     .field("package.name", request.artifact())
                     .field("package.version", request.version())
+                    .field("log.source", "application")
                     .log();
             }
             return CooldownResult.allowed();
@@ -684,6 +701,7 @@ final class JdbcCooldownService implements CooldownService {
                     .field("package.name", request.artifact())
                     .field("package.version", request.version())
                     .field("error.message", error.getMessage())
+                    .field("log.source", "application")
                     .log();
                 return Optional.empty();
             })
@@ -715,6 +733,7 @@ final class JdbcCooldownService implements CooldownService {
                 .field("repository.name", request.repoName())
                 .field("package.name", request.artifact())
                 .field("package.version", request.version())
+                .field("log.source", "application")
                 .log();
             this.cache.put(request.repoName(), request.artifact(), request.version(), false);
             return CompletableFuture.completedFuture(false);
@@ -734,6 +753,7 @@ final class JdbcCooldownService implements CooldownService {
             .field("package.name", request.artifact())
             .field("package.version", request.version())
             .field("package.release_date", date.toString())
+            .field("log.source", "application")
             .log();
 
         if (date.plus(fresh).isAfter(now)
@@ -748,6 +768,7 @@ final class JdbcCooldownService implements CooldownService {
                 .field("package.name", request.artifact())
                 .field("package.version", request.version())
                 .field("package.release_date", date.toString())
+                .field("log.source", "application")
                 .log();
             // Create block in database (async)
             return this.createBlockInDatabase(request, CooldownReason.FRESH_RELEASE, until, release)
@@ -766,6 +787,7 @@ final class JdbcCooldownService implements CooldownService {
                         .field("package.name", request.artifact())
                         .field("package.version", request.version())
                         .field("error.message", error.getMessage())
+                        .field("log.source", "application")
                         .log();
                     // Still cache as blocked with dynamic TTL
                     this.cache.putBlocked(request.repoName(), request.artifact(),
@@ -783,6 +805,7 @@ final class JdbcCooldownService implements CooldownService {
             .field("package.version", request.version())
             .field("package.release_date", date.toString())
             .field("package.age", Duration.between(date, now).getSeconds())
+            .field("log.source", "application")
             .log();
         this.cache.put(request.repoName(), request.artifact(), request.version(), false);
         return CompletableFuture.completedFuture(false);
@@ -864,6 +887,7 @@ final class JdbcCooldownService implements CooldownService {
             .field("package.version", record.version())
             .field("repository.type", record.repoType())
             .field("repository.name", record.repoName())
+            .field("log.source", "application")
             .log();
         this.repository.archiveAndDelete(
             record.id(),
@@ -893,6 +917,7 @@ final class JdbcCooldownService implements CooldownService {
                 .eventOutcome("failure")
                 .field("package.name", record.artifact())
                 .error(err)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -930,6 +955,7 @@ final class JdbcCooldownService implements CooldownService {
                 .field("package.version", record.version())
                 .field("repository.type", repoType)
                 .field("repository.name", repoName)
+                .field("log.source", "application")
                 .log();
         }
         // Single bulk archive+delete instead of N individual updates so that
@@ -953,6 +979,7 @@ final class JdbcCooldownService implements CooldownService {
             .field("package.version", record.version())
             .field("repository.type", record.repoType())
             .field("repository.name", record.repoName())
+            .field("log.source", "application")
             .log();
         this.repository.archiveAndDelete(
             record.id(),
@@ -987,6 +1014,7 @@ final class JdbcCooldownService implements CooldownService {
                         .field("repository.type", repoType)
                         .field("repository.name", repoName)
                         .field("package.name", artifact)
+                        .field("log.source", "application")
                         .log();
                 }
                 if (inserted) {
@@ -1002,6 +1030,7 @@ final class JdbcCooldownService implements CooldownService {
                     .field("repository.type", repoType)
                     .field("package.name", artifact)
                     .error(e)
+                    .field("log.source", "application")
                     .log();
             }
         }, this.executor);
@@ -1022,6 +1051,7 @@ final class JdbcCooldownService implements CooldownService {
                     .field("repository.type", repoType)
                     .field("repository.name", repoName)
                     .field("package.name", artifact)
+                    .field("log.source", "application")
                     .log();
             }
             if (wasBlocked) {
@@ -1037,6 +1067,7 @@ final class JdbcCooldownService implements CooldownService {
                 .field("repository.type", repoType)
                 .field("package.name", artifact)
                 .error(e)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -1058,6 +1089,7 @@ final class JdbcCooldownService implements CooldownService {
                     .eventAction("all_blocked_unmark_all")
                     .field("repository.type", repoType)
                     .field("repository.name", repoName)
+                    .field("log.source", "application")
                     .log();
             }
             if (count > 0) {
@@ -1073,6 +1105,7 @@ final class JdbcCooldownService implements CooldownService {
                 .field("repository.type", repoType)
                 .field("repository.name", repoName)
                 .error(e)
+                .field("log.source", "application")
                 .log();
         }
     }

@@ -98,6 +98,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
             .message("Processing NPM batch (size: " + batch.size() + ")")
             .eventCategory("web")
             .eventAction("batch_processing")
+            .field("log.source", "application")
             .log();
 
         List<CompletableFuture<Void>> futures = batch.stream()
@@ -116,6 +117,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
                 .eventAction("batch_processing")
                 .eventOutcome("success")
                 .duration(duration)
+                .field("log.source", "application")
                 .log();
         } catch (Exception err) {
             final long duration = System.currentTimeMillis() - startTime;
@@ -126,6 +128,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
                 .eventOutcome("failure")
                 .duration(duration)
                 .error(err)
+                .field("log.source", "application")
                 .log();
         } finally {
             TraceContext.clear();
@@ -151,6 +154,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
                 .eventCategory("web")
                 .eventAction("package_validation")
                 .field("package.path", item.artifactKey().string())
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(null);
         }
@@ -180,6 +184,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
                     .eventAction("package_processing")
                     .field("package.name", name)
                     .field("package.version", version)
+                    .field("log.source", "application")
                     .log();
             })
             .exceptionally(err -> {
@@ -190,6 +195,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
                     .eventOutcome("failure")
                     .field("package.path", item.artifactKey().string())
                     .error(err)
+                    .field("log.source", "application")
                     .log();
                 return null;
             });

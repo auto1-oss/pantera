@@ -153,6 +153,7 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
                         .eventAction("token_validate")
                         .eventOutcome("failure")
                         .field("user.name", sub)
+                        .field("log.source", "application")
                         .log();
                     return Optional.empty();
                 }
@@ -168,6 +169,7 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
                                 .eventAction("token_validate")
                                 .eventOutcome("failure")
                                 .field("user.name", sub)
+                                .field("log.source", "application")
                                 .log();
                             return Optional.empty();
                         }
@@ -191,6 +193,7 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
                 .eventAction("token_validate")
                 .eventOutcome("failure")
                 .field("user.name", sub)
+                .field("log.source", "application")
                 .log();
             return Optional.empty();
         }

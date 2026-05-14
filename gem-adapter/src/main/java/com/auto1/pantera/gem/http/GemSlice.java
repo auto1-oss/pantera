@@ -222,8 +222,9 @@ public final class GemSlice extends Slice.Wrap {
             } catch (final Exception err) {
                 EcsLogger.warn("com.auto1.pantera.gem")
                     .message("Failed to init specs file")
-                    .field("file", name)
+                    .field("file.name", name)
                     .error(err)
+                    .field("log.source", "application")
                     .log();
             }
         }

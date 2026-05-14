@@ -378,6 +378,7 @@ public final class SearchHandler {
                 ctx.user() != null
                     ? ctx.user().principal().getString(AuthTokenRest.SUB)
                     : null)
+            .field("log.source", "application")
             .log();
         ctx.response()
             .setStatusCode(HttpStatus.ACCEPTED_202)

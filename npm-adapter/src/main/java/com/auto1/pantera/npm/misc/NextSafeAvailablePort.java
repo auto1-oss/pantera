@@ -97,6 +97,7 @@ public class NextSafeAvailablePort {
             EcsLogger.debug("com.auto1.pantera.npm")
                 .message("Port not available")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
         return false;

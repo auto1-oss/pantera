@@ -190,6 +190,7 @@ public final class DbPublishDateRegistry implements PublishDateRegistry {
                     .field("package.name", name)
                     .field("package.version", version)
                     .error(err)
+                    .field("log.source", "application")
                     .log();
                 return Optional.<Instant>empty();
             })
@@ -229,6 +230,7 @@ public final class DbPublishDateRegistry implements PublishDateRegistry {
                 .eventAction("publish_date_read")
                 .eventOutcome("failure")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
         return Optional.empty();
@@ -250,6 +252,7 @@ public final class DbPublishDateRegistry implements PublishDateRegistry {
                 .eventAction("publish_date_write")
                 .eventOutcome("failure")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }

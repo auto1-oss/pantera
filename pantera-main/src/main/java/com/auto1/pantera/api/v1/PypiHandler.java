@@ -105,6 +105,7 @@ public final class PypiHandler {
                     .field("package.name", pkg)
                     .field("package.version", version)
                     .error(err)
+                    .field("log.source", "application")
                     .log();
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
             } else {
@@ -116,6 +117,7 @@ public final class PypiHandler {
                     .field("repository.name", repo)
                     .field("package.name", pkg)
                     .field("package.version", version)
+                    .field("log.source", "application")
                     .log();
                 ctx.response().setStatusCode(204).end();
             }
@@ -144,6 +146,7 @@ public final class PypiHandler {
                     .field("package.name", pkg)
                     .field("package.version", version)
                     .error(err)
+                    .field("log.source", "application")
                     .log();
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
             } else {
@@ -155,6 +158,7 @@ public final class PypiHandler {
                     .field("repository.name", repo)
                     .field("package.name", pkg)
                     .field("package.version", version)
+                    .field("log.source", "application")
                     .log();
                 ctx.response().setStatusCode(204).end();
             }

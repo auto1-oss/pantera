@@ -144,6 +144,7 @@ public final class CacheManifests implements Manifests {
                             .field("container.image.hash.all", ref.digest())
                             .field("url.original", this.upstreamUrl)
                             .duration(duration)
+                            .field("log.source", "application")
                             .log();
                         Manifest manifest = original.get();
                         if (Manifest.MANIFEST_SCHEMA2.equals(manifest.mediaType()) ||
@@ -162,6 +163,7 @@ public final class CacheManifests implements Manifests {
                                 .field("container.image.name", this.name)
                                 .field("container.image.hash.all", ref.digest())
                                 .field("file.type", manifest.mediaType())
+                                .field("log.source", "application")
                                 .log();
                             result = CompletableFuture.completedFuture(original);
                         }
@@ -178,6 +180,7 @@ public final class CacheManifests implements Manifests {
                             .field("container.image.hash.all", ref.digest())
                             .field("url.original", this.upstreamUrl)
                             .duration(duration)
+                            .field("log.source", "application")
                             .log();
                         result = this.cache.manifests().get(ref).exceptionally(ignored -> original);
                     }
@@ -194,6 +197,7 @@ public final class CacheManifests implements Manifests {
                         .field("container.image.hash.all", ref.digest())
                         .field("url.original", this.upstreamUrl)
                         .error(throwable)
+                        .field("log.source", "application")
                         .log();
                     result = this.cache.manifests().get(ref);
                 }
@@ -232,6 +236,7 @@ public final class CacheManifests implements Manifests {
                             .field("container.image.name", this.name)
                             .field("container.image.hash.all", ref.digest())
                             .error(ex)
+                            .field("log.source", "application")
                             .log();
                     }
                     return null;
@@ -266,6 +271,7 @@ public final class CacheManifests implements Manifests {
                         .field("container.image.name", this.name)
                         .field("container.image.hash.all", ref.digest())
                         .field("error.message", ex.getMessage())
+                        .field("log.source", "application")
                         .log();
                     return Optional.empty();
                 })
@@ -414,6 +420,7 @@ public final class CacheManifests implements Manifests {
                     .field("container.image.name", this.name)
                     .field("container.image.hash.all", firstChild.string())
                     .field("error.message", ex.getMessage())
+                    .field("log.source", "application")
                     .log();
                 return Optional.empty();
             });
@@ -434,6 +441,7 @@ public final class CacheManifests implements Manifests {
                 .field("repository.name", this.rname)
                 .field("container.image.name", this.name)
                 .field("error.message", ex.getMessage())
+                .field("log.source", "application")
                 .log();
         }
         return Optional.empty();
@@ -514,6 +522,7 @@ public final class CacheManifests implements Manifests {
             EcsLogger.debug("com.auto1.pantera.docker")
                 .message("Failed to record metric")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }

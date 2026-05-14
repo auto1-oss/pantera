@@ -59,6 +59,7 @@ public final class ScriptRunner implements Job {
                         .eventAction("script_execute")
                         .eventOutcome("failure")
                         .error(exc)
+                        .field("log.source", "application")
                         .log();
                 }
             } else {
@@ -67,6 +68,7 @@ public final class ScriptRunner implements Job {
                     .eventCategory("process")
                     .eventAction("script_execute")
                     .eventOutcome("failure")
+                    .field("log.source", "application")
                     .log();
             }
         } finally {
@@ -87,6 +89,8 @@ public final class ScriptRunner implements Job {
                 .eventCategory("process")
                 .eventAction("job_stop")
                 .field("process.name", key.toString())
+                .field("log.source", "application")
+                .field("event.outcome", "failure")
                 .log();
             new StdSchedulerFactory().getScheduler().deleteJob(key);
             EcsLogger.error("com.auto1.pantera.scripting")
@@ -95,6 +99,7 @@ public final class ScriptRunner implements Job {
                 .eventAction("job_stop")
                 .eventOutcome("success")
                 .field("process.name", key.toString())
+                .field("log.source", "application")
                 .log();
         } catch (final SchedulerException error) {
             EcsLogger.error("com.auto1.pantera.scripting")
@@ -104,6 +109,7 @@ public final class ScriptRunner implements Job {
                 .eventOutcome("failure")
                 .field("process.name", key.toString())
                 .error(error)
+                .field("log.source", "application")
                 .log();
             throw new PanteraException(error);
         }

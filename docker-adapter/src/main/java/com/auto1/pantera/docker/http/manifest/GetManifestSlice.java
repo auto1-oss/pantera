@@ -68,6 +68,7 @@ public class GetManifestSlice extends DockerActionSlice {
                                 .field("file.type", found.mediaType())
                                 .field("package.checksum", found.digest())
                                 .field("http.response.mime_type", found.mediaType())
+                                .field("log.source", "application")
                                 .log();
 
                             return response;
@@ -86,6 +87,7 @@ public class GetManifestSlice extends DockerActionSlice {
                         .eventOutcome("failure")
                         .field("container.image.name", request.name())
                         .error(err)
+                        .field("log.source", "application")
                         .log();
                     return ResponseBuilder.notFound()
                         .jsonBody(new ManifestError(request.reference()).json())

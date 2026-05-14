@@ -170,6 +170,7 @@ public interface Content extends Publisher<ByteBuffer> {
                         EcsLogger.debug("com.auto1.pantera.asto")
                             .message("Failed to close piped output stream on error")
                             .error(ex)
+                            .field("log.source", "application")
                             .log();
                     }
                 },
@@ -181,6 +182,7 @@ public interface Content extends Publisher<ByteBuffer> {
                         EcsLogger.debug("com.auto1.pantera.asto")
                             .message("Failed to close piped output stream on completion")
                             .error(ex)
+                            .field("log.source", "application")
                             .log();
                     }
                 }

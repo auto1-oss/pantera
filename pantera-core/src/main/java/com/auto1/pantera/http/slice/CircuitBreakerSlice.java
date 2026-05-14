@@ -72,6 +72,7 @@ public final class CircuitBreakerSlice implements Slice {
                 .field("event.reason", "auto_block_active")
                 .field("url.path", line.uri().getPath())
                 .field("http.response.status_code", 503)
+                .field("log.source", "http")
                 .log();
             return CompletableFuture.completedFuture(
                 ResponseBuilder.serviceUnavailable(

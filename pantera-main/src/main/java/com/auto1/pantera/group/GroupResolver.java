@@ -328,6 +328,7 @@ public final class GroupResolver implements Slice {
                 .eventCategory("web")
                 .eventAction("group_direct_fanout")
                 .field("url.path", path)
+                .field("log.source", "application")
                 .log();
             return fullTwoPhaseFanout(line, headers, body)
                 .whenComplete((r, e) -> recordPhase("resolve_total", resolveStartNs));
@@ -354,6 +355,7 @@ public final class GroupResolver implements Slice {
                 .eventCategory("database")
                 .eventAction("group_negative_cache_hit")
                 .field("url.path", path)
+                .field("log.source", "application")
                 .log();
             recordPhase("resolve_total", resolveStartNs);
             return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
@@ -378,6 +380,7 @@ public final class GroupResolver implements Slice {
                 .eventAction("group_sibling_pin_hit")
                 .field("url.path", path)
                 .field("repository.name", pinnedRepo)
+                .field("log.source", "application")
                 .log();
             return targetedLocalRead(
                 List.of(pinnedRepo), line, headers, body, path,
@@ -442,6 +445,7 @@ public final class GroupResolver implements Slice {
                     .eventAction("group_index_timeout")
                     .eventOutcome("failure")
                     .field("url.path", path)
+                    .field("log.source", "application")
                     .log();
                 yield CompletableFuture.completedFuture(
                     FaultTranslator.translate(
@@ -457,6 +461,7 @@ public final class GroupResolver implements Slice {
                     .eventAction("group_index_error")
                     .eventOutcome("failure")
                     .field("url.path", path)
+                    .field("log.source", "application")
                     .log();
                 yield CompletableFuture.completedFuture(
                     FaultTranslator.translate(
@@ -512,6 +517,7 @@ public final class GroupResolver implements Slice {
                 .eventCategory("web")
                 .eventAction("group_index_orphan")
                 .field("url.path", path)
+                .field("log.source", "application")
                 .log();
             return fullTwoPhaseFanout(line, headers, body);
         }
@@ -520,6 +526,7 @@ public final class GroupResolver implements Slice {
             .eventCategory("web")
             .eventAction("group_index_hit")
             .field("url.path", path)
+            .field("log.source", "application")
             .log();
 
         // Sequential-only fanout (v2.2.0). Walk targeted members in declared
@@ -543,6 +550,7 @@ public final class GroupResolver implements Slice {
                         .eventCategory("web")
                         .eventAction("group_toctou_fallthrough")
                         .field("url.path", line.uri().getPath())
+                        .field("log.source", "application")
                         .log();
                     return proxyOnlyFanout(line, headers, body, artifactName, negCacheKey);
                 }
@@ -603,6 +611,7 @@ public final class GroupResolver implements Slice {
                 .eventCategory("web")
                 .eventAction("group_index_miss")
                 .field("url.path", line.uri().getPath())
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
         }
@@ -625,6 +634,7 @@ public final class GroupResolver implements Slice {
                 .eventCategory("network")
                 .eventAction("group_index_miss")
                 .field("url.path", line.uri().getPath())
+                .field("log.source", "application")
                 .log();
             return executeProxyFanout(fanoutMembers, line, headers, body, artifactName, negCacheKey)
                 .whenComplete((resp, err) -> leaderGate.complete(null));
@@ -633,6 +643,7 @@ public final class GroupResolver implements Slice {
             .message("Coalescing with in-flight fanout for " + artifactName)
             .eventCategory("web")
             .eventAction("group_fanout_coalesce")
+            .field("log.source", "application")
             .log();
         return gate.exceptionally(err -> null)
             .thenCompose(ignored -> proxyOnlyFanout(line, headers, body, artifactName, negCacheKey));
@@ -675,6 +686,7 @@ public final class GroupResolver implements Slice {
                         .message("All proxies returned 404, caching negative result")
                         .eventCategory("database")
                         .eventAction("group_negative_cache_populate")
+                        .field("log.source", "application")
                         .log();
                 }
                 return resp;
@@ -841,9 +853,10 @@ public final class GroupResolver implements Slice {
                     .eventCategory("web")
                     .eventAction("group_member_fallthrough")
                     .field("repository.name", this.group)
-                    .field("repository.member", member.name())
+                    .field("member.name", member.name())
                     .field("http.response.status_code", 404)
                     .field("url.path", line.uri().getPath())
+                    .field("log.source", "application")
                     .log();
                 tryNextSequentialMember(iter, line, headers, requestBytes,
                     isTargetedLocalRead, anyServerError, result, pinArtifactName);
@@ -859,9 +872,10 @@ public final class GroupResolver implements Slice {
                 .eventAction("group_member_fallthrough")
                 .eventOutcome("failure")
                 .field("repository.name", this.group)
-                .field("repository.member", member.name())
+                .field("member.name", member.name())
                 .field("http.response.status_code", status.code())
                 .field("url.path", line.uri().getPath())
+                .field("log.source", "application")
                 .log();
             tryNextSequentialMember(iter, line, headers, requestBytes,
                 isTargetedLocalRead, anyServerError, result, pinArtifactName);

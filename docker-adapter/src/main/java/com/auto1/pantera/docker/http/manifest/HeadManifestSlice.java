@@ -48,6 +48,7 @@ public class HeadManifestSlice extends DockerActionSlice {
             .eventAction("manifest_head")
             .field("container.image.name", request.name())
             .field("container.image.tag", request.reference().digest())
+            .field("log.source", "application")
             .log();
 
         // Capture the authenticated login before crossing the async boundary.
@@ -73,6 +74,7 @@ public class HeadManifestSlice extends DockerActionSlice {
                                 .field("container.image.tag", request.reference().digest())
                                 .field("package.size", size)
                                 .field("file.type", found.mediaType())
+                                .field("log.source", "application")
                                 .log();
 
                             return ResponseBuilder.ok()
@@ -90,6 +92,7 @@ public class HeadManifestSlice extends DockerActionSlice {
                                 .eventOutcome("failure")
                                 .field("container.image.name", request.name())
                                 .field("container.image.tag", request.reference().digest())
+                                .field("log.source", "application")
                                 .log();
 
                             return ResponseBuilder.notFound()

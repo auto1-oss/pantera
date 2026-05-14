@@ -68,6 +68,7 @@ public final class ImportSlice implements Slice {
                 .eventOutcome("failure")
                 .field("url.path", line.uri().getPath())
                 .error(error)
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(
                 ResponseBuilder.badRequest(error).build()
@@ -87,6 +88,7 @@ public final class ImportSlice implements Slice {
                         .eventAction("import_artifact")
                         .eventOutcome("failure")
                         .error(cause)
+                        .field("log.source", "application")
                         .log();
                     return ResponseBuilder.internalError(cause).build();
                 }).toCompletableFuture();
@@ -99,6 +101,7 @@ public final class ImportSlice implements Slice {
                 .eventAction("import_artifact")
                 .eventOutcome("failure")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(ResponseBuilder.internalError(ex).build());
         }

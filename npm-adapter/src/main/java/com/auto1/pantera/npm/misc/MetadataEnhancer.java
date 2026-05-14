@@ -251,6 +251,7 @@ public final class MetadataEnhancer {
                 EcsLogger.debug("com.auto1.pantera.npm")
                     .message("Failed to parse _publishTime field")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -263,6 +264,7 @@ public final class MetadataEnhancer {
                 EcsLogger.debug("com.auto1.pantera.npm")
                     .message("Failed to parse _time field")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -275,6 +277,7 @@ public final class MetadataEnhancer {
                 EcsLogger.debug("com.auto1.pantera.npm")
                     .message("Failed to parse publishTime field")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
         }

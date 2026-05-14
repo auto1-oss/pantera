@@ -185,6 +185,7 @@ public final class DownloadPackageSlice implements Slice {
                 .eventOutcome("failure")
                 .field("url.path", line.uri().getPath())
                 .error(cause)
+                .field("log.source", "application")
                 .log();
             
             // Check if it's an HTTP exception with a specific status
@@ -360,6 +361,7 @@ public final class DownloadPackageSlice implements Slice {
                             .eventCategory("database")
                             .eventAction("all_versions_blocked")
                             .field("package.name", packageName)
+                            .field("log.source", "application")
                             .log();
                         final String json = String.format(
                             "{\"error\":\"All versions of '%s' are under security cooldown. New packages must wait 7 days before installation.\",\"package\":\"%s\"}",
@@ -377,6 +379,7 @@ public final class DownloadPackageSlice implements Slice {
                     .eventAction("filter_error")
                     .field("package.name", packageName)
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
                 return this.buildResponse(fullBytes, metadata, headers, true, clientETag);
             }
@@ -420,6 +423,7 @@ public final class DownloadPackageSlice implements Slice {
                                 .eventCategory("database")
                                 .eventAction("all_versions_blocked")
                                 .field("package.name", packageName)
+                                .field("log.source", "application")
                                 .log();
                             final String json = String.format(
                                 "{\"error\":\"All versions of '%s' are under security cooldown. New packages must wait 7 days before installation.\",\"package\":\"%s\"}",
@@ -437,6 +441,7 @@ public final class DownloadPackageSlice implements Slice {
                         .eventAction("filter_error")
                         .field("package.name", packageName)
                         .error(ex)
+                        .field("log.source", "application")
                         .log();
                     return this.buildAbbreviatedResponse(abbreviatedBytes, metadata, headers, clientETag);
                 }
@@ -503,6 +508,7 @@ public final class DownloadPackageSlice implements Slice {
                                                         .eventCategory("database")
                                                         .eventAction("all_versions_blocked")
                                                         .field("package.name", packageName)
+                                                        .field("log.source", "application")
                                                         .log();
                                                     final String json = String.format(
                                                         "{\"error\":\"All versions of '%s' are under security cooldown. New packages must wait 7 days before installation.\",\"package\":\"%s\"}",
@@ -520,6 +526,7 @@ public final class DownloadPackageSlice implements Slice {
                                                 .eventAction("filter_error")
                                                 .field("package.name", packageName)
                                                 .error(ex)
+                                                .field("log.source", "application")
                                                 .log();
                                             return this.buildResponse(rawBytes, metadata, headers, false, clientETag);
                                         }
@@ -616,6 +623,7 @@ public final class DownloadPackageSlice implements Slice {
                                     .eventCategory("database")
                                     .eventAction("all_versions_blocked")
                                     .field("package.name", packageName)
+                                    .field("log.source", "application")
                                     .log();
                                 return ResponseBuilder.notFound()
                                     .jsonBody(String.format(
@@ -632,6 +640,7 @@ public final class DownloadPackageSlice implements Slice {
                             .eventAction("filter_error")
                             .field("package.name", packageName)
                             .error(ex)
+                            .field("log.source", "application")
                             .log();
                         return this.buildLatestManifestResponse(rawBytes, packageName);
                     }
@@ -717,6 +726,7 @@ public final class DownloadPackageSlice implements Slice {
                 .eventOutcome("failure")
                 .field("package.name", packageName)
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             return ResponseBuilder.notFound()
                 .jsonBody(String.format(

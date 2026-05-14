@@ -186,6 +186,7 @@ public final class DbGatedAuth implements Authentication {
                     .eventAction("enabled_types_refresh")
                     .eventOutcome("failure")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
                 // Keep the previous snapshot rather than going to no-providers.
                 if (this.snapshot.get() == null) {

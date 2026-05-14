@@ -101,6 +101,7 @@ public final class JwtPasswordAuth implements Authentication {
                     .eventAction("jwt_password_auth")
                     .eventOutcome("failure")
                     .field("user.name", username)
+                    .field("log.source", "application")
                     .log();
                 return Optional.empty();
             }
@@ -112,6 +113,7 @@ public final class JwtPasswordAuth implements Authentication {
                     .eventAction("jwt_password_auth")
                     .eventOutcome("failure")
                     .field("user.name", username)
+                    .field("log.source", "application")
                     .log();
                 return Optional.empty();
             }
@@ -125,6 +127,7 @@ public final class JwtPasswordAuth implements Authentication {
                 .eventAction("jwt_password_auth")
                 .eventOutcome("failure")
                 .field("user.name", username)
+                .field("log.source", "application")
                 .log();
             return Optional.empty();
         } catch (final Exception ex) {
@@ -142,6 +145,7 @@ public final class JwtPasswordAuth implements Authentication {
                 .field("user.name", username)
                 .field("error.message",
                     ex.getMessage() != null ? ex.getMessage() : ex.getClass().getName())
+                .field("log.source", "application")
                 .log();
             return Optional.empty();
         }

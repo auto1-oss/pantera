@@ -139,6 +139,7 @@ public final class CacheLayers implements Layers {
                                 .eventAction("blob_get")
                                 .eventOutcome("failure")
                                 .error(error)
+                                .field("log.source", "application")
                                 .log();
                             return Optional.empty();
                         });
@@ -190,6 +191,7 @@ public final class CacheLayers implements Layers {
             EcsLogger.debug("com.auto1.pantera.docker")
                 .message("Failed to record metric")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }

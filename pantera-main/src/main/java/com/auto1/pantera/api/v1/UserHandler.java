@@ -522,6 +522,7 @@ public final class UserHandler {
                     .eventAction("user_disable")
                     .eventOutcome("success")
                     .field("user.name", uname)
+                    .field("log.source", "application")
                     .log();
             }
         }, HandlerExecutor.get()).whenComplete((ignored, err) -> {

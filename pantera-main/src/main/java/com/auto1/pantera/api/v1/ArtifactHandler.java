@@ -448,6 +448,7 @@ public final class ArtifactHandler {
                     .eventCategory("database")
                     .eventAction("tree_hydrate_fallback")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
                 // byPath stays empty — all files will go through the asto fallback
             }
@@ -1046,6 +1047,7 @@ public final class ArtifactHandler {
                                 .field("repository.name", repoName)
                                 .field("file.path", path)
                                 .error(err)
+                                .field("log.source", "application")
                                 .log();
                         }
                         return deleted;
@@ -1110,6 +1112,7 @@ public final class ArtifactHandler {
                                 .field("repository.name", repoName)
                                 .field("file.path", path)
                                 .error(err)
+                                .field("log.source", "application")
                                 .log();
                         }
                         return deleted;

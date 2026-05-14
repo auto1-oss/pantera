@@ -74,6 +74,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                 .eventCategory("web")
                 .eventAction("proxy_processor")
                 .eventOutcome("failure")
+                .field("log.source", "application")
                 .log();
             super.stopJob(context);
         } else {
@@ -81,6 +82,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                 .message("Go proxy processor running (queue size: " + this.packages.size() + ")")
                 .eventCategory("web")
                 .eventAction("proxy_processor")
+                .field("log.source", "application")
                 .log();
             this.processPackagesBatch();
         }
@@ -104,6 +106,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
             .message("Processing Go batch (size: " + batch.size() + ")")
             .eventCategory("web")
             .eventAction("proxy_processor")
+            .field("log.source", "application")
             .log();
 
         List<CompletableFuture<Void>> futures = batch.stream()
@@ -119,6 +122,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                 .eventCategory("web")
                 .eventAction("proxy_processor")
                 .eventOutcome("success")
+                .field("log.source", "application")
                 .log();
         } catch (Exception err) {
             EcsLogger.error("com.auto1.pantera.go")
@@ -127,6 +131,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                 .eventAction("proxy_processor")
                 .eventOutcome("failure")
                 .error(err)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -143,6 +148,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
             .eventCategory("web")
             .eventAction("proxy_processor")
             .field("package.name", key.string())
+            .field("log.source", "application")
             .log();
 
         // Parse module coordinates from event key
@@ -154,6 +160,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                 .eventAction("proxy_processor")
                 .eventOutcome("failure")
                 .field("package.name", key.string())
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(null);
         }
@@ -173,6 +180,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                     .eventOutcome("failure")
                     .field("package.name", key.string())
                     .field("file.target_path", zipKey.string())
+                    .field("log.source", "application")
                     .log();
                 // Re-add event to queue for retry
                 this.packages.add(event);
@@ -190,6 +198,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                             .eventAction("proxy_processor")
                             .eventOutcome("failure")
                             .field("file.path", zipKey.string())
+                            .field("log.source", "application")
                             .log();
                         return;
                     }
@@ -225,6 +234,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                         .field("package.size", size.get())
                         .field("package.release_date", release == null ? null
                             : java.time.Instant.ofEpochMilli(release).toString())
+                        .field("log.source", "application")
                         .log();
                 });
         }).exceptionally(err -> {
@@ -235,6 +245,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                 .eventOutcome("failure")
                 .field("package.name", key.string())
                 .error(err)
+                .field("log.source", "application")
                 .log();
             return null;
         });

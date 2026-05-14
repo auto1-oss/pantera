@@ -112,6 +112,7 @@ final class AddArchiveSlice implements Slice {
                 .eventAction("archive_upload")
                 .eventOutcome("failure")
                 .field("url.path", uri)
+                .field("log.source", "application")
                 .log();
             return ResponseBuilder.badRequest()
                 .textBody("Path traversal not allowed")
@@ -130,6 +131,7 @@ final class AddArchiveSlice implements Slice {
                 .eventAction("archive_upload")
                 .eventOutcome("failure")
                 .field("url.path", uri)
+                .field("log.source", "application")
                 .log();
             return ResponseBuilder.badRequest()
                 .textBody("Only .zip, .tar.gz, and .tgz archives are supported for Composer packages")
@@ -157,6 +159,7 @@ final class AddArchiveSlice implements Slice {
                             .eventAction("archive_upload")
                             .eventOutcome("failure")
                             .field("url.path", uri)
+                            .field("log.source", "application")
                             .log();
                         return CompletableFuture.completedFuture(
                             ResponseBuilder.badRequest()
@@ -182,6 +185,7 @@ final class AddArchiveSlice implements Slice {
                             .eventAction("archive_upload")
                             .field("package.version", version)
                             .field("file.name", filename)
+                            .field("log.source", "application")
                             .log();
                     }
                     
@@ -194,6 +198,7 @@ final class AddArchiveSlice implements Slice {
                             .eventAction("archive_upload")
                             .eventOutcome("failure")
                             .field("package.name", packageName)
+                            .field("log.source", "application")
                             .log();
                         return CompletableFuture.completedFuture(
                             ResponseBuilder.badRequest()
@@ -226,6 +231,7 @@ final class AddArchiveSlice implements Slice {
                                 .message("Dev version detected, preserving unique identifier: " + uniqueSuffix)
                                 .eventCategory("web")
                                 .eventAction("archive_upload")
+                                .field("log.source", "application")
                                 .log();
                         }
                     }
@@ -258,6 +264,7 @@ final class AddArchiveSlice implements Slice {
                         .field("package.version", version)
                         .field("package.path", artifactPath)
                         .field("file.type", isZip ? "ZIP" : "TAR.GZ")
+                        .field("log.source", "application")
                         .log();
                     
                     // Create appropriate archive handler for final storage
@@ -290,6 +297,7 @@ final class AddArchiveSlice implements Slice {
                                 .eventAction("event_creation")
                                 .eventOutcome("failure")
                                 .field("error.message", e.getMessage())
+                                .field("log.source", "application")
                                 .log();
                             return CompletableFuture.completedFuture(null);
                         }
@@ -314,6 +322,7 @@ final class AddArchiveSlice implements Slice {
                             .field("package.version", version)
                             .field("repository.name", this.rname)
                             .field("package.size", size)
+                            .field("log.source", "application")
                             .log();
                         return this.syncIndex.recordSync(event);
                     });
@@ -328,6 +337,7 @@ final class AddArchiveSlice implements Slice {
                         .eventOutcome("failure")
                         .error(error)
                         .field("file.name", filename)
+                        .field("log.source", "application")
                         .log();
                     return ResponseBuilder.internalError()
                         .textBody(

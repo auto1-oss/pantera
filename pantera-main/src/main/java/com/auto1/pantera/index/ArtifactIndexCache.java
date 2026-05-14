@@ -530,6 +530,7 @@ public final class ArtifactIndexCache implements ArtifactIndex {
             .eventOutcome("failure")
             .field("package.name", name)
             .error(cause)
+            .field("log.source", "application")
             .log();
     }
 

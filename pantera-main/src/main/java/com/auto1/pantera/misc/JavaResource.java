@@ -81,6 +81,7 @@ public final class JavaResource {
             .eventOutcome("success")
             .field("file.path", this.name)
             .field("file.target_path", dest.toString())
+            .field("log.source", "application")
             .log();
     }
 }

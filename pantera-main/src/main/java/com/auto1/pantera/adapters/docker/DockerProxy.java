@@ -84,6 +84,7 @@ public final class DockerProxy implements Slice {
             .eventAction("proxy_request")
             .field("http.request.method", line.method().value())
             .field("url.path", line.uri().getPath())
+            .field("log.source", "application")
             .log();
         return this.delegate.response(line, headers, body)
             .whenComplete((resp, err) -> {
@@ -97,6 +98,7 @@ public final class DockerProxy implements Slice {
                         .field("url.path", line.uri().getPath())
                         .duration(duration)
                         .error(err)
+                        .field("log.source", "application")
                         .log();
                 } else {
                     EcsLogger.info("com.auto1.pantera.docker.proxy")
@@ -107,6 +109,7 @@ public final class DockerProxy implements Slice {
                         .field("url.path", line.uri().getPath())
                         .field("http.response.status_code", resp.status().code())
                         .duration(duration)
+                        .field("log.source", "application")
                         .log();
                 }
             });

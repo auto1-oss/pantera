@@ -434,6 +434,7 @@ public final class FileProxySlice implements Slice {
             EcsLogger.debug("com.auto1.pantera.files")
                 .message("Failed to record metric")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }

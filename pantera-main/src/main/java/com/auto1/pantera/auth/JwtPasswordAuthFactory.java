@@ -107,6 +107,7 @@ public final class JwtPasswordAuthFactory implements AuthFactory {
             .eventCategory("authentication")
             .eventAction("jwt_password_init")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
         return new JwtPasswordAuth(jwtAuth, requireUsernameMatch);
     }

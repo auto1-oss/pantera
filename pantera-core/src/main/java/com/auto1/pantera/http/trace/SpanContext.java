@@ -286,6 +286,7 @@ public final class SpanContext {
             )
             .eventAction("trace_id_regenerated")
             .eventCategory("configuration")
+            .field("log.source", "application")
             .log();
     }
 

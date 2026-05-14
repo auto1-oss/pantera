@@ -81,6 +81,7 @@ public final class RepoData {
                                     .eventAction("data_remove")
                                     .eventOutcome("success")
                                     .field("repository.name", repo)
+                                    .field("log.source", "application")
                                     .log()
                         )
             );
@@ -153,6 +154,7 @@ public final class RepoData {
                                 .eventOutcome("success")
                                 .field("repository.name", repo)
                                 .field("file.path", artifactPath)
+                                .field("log.source", "application")
                                 .log();
                             return true;
                         });
@@ -222,6 +224,7 @@ public final class RepoData {
             .eventOutcome("success")
             .field("repository.name", repo)
             .field("package.path", packagePath)
+            .field("log.source", "application")
             .log();
     }
 
@@ -252,6 +255,7 @@ public final class RepoData {
                                     .eventCategory("web")
                                     .eventAction("data_move")
                                     .eventOutcome("success")
+                                    .field("log.source", "application")
                                     .log()
                         )
             );

@@ -104,6 +104,7 @@ public final class FromRemoteCache implements Cache {
                                         .eventAction("stream_through_save")
                                         .eventOutcome("failure")
                                         .error(err)
+                                        .field("log.source", "application")
                                         .log();
                                 }
                             });
@@ -114,6 +115,7 @@ public final class FromRemoteCache implements Cache {
                             .eventAction("stream_through_save")
                             .eventOutcome("failure")
                             .error(ex)
+                            .field("log.source", "application")
                             .log();
                     }
                 }

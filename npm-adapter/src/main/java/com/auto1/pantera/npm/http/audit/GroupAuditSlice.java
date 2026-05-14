@@ -104,6 +104,7 @@ public final class GroupAuditSlice implements Slice {
             .eventCategory("web")
             .eventAction("group_audit_start")
             .field("url.path", line.uri().getPath())
+            .field("log.source", "application")
             .log();
 
         // Read the body once (it will be reused for all members)
@@ -149,6 +150,7 @@ public final class GroupAuditSlice implements Slice {
                             .eventAction("group_audit")
                             .eventOutcome("success")
                             .duration(duration)
+                            .field("log.source", "application")
                             .log();
                         return ResponseBuilder.ok()
                             .jsonBody(Json.createObjectBuilder().build())
@@ -161,6 +163,7 @@ public final class GroupAuditSlice implements Slice {
                         .eventAction("group_audit")
                         .eventOutcome("success")
                         .duration(duration)
+                        .field("log.source", "application")
                         .log();
 
                     // Build merged response
@@ -180,6 +183,7 @@ public final class GroupAuditSlice implements Slice {
                         .eventOutcome("failure")
                         .duration(duration)
                         .error(err)
+                        .field("log.source", "application")
                         .log();
                     // On timeout/error, return empty (no vulnerabilities) rather than fail
                     return ResponseBuilder.ok()
@@ -208,6 +212,7 @@ public final class GroupAuditSlice implements Slice {
             .eventCategory("web")
             .eventAction("group_audit")
             .field("url.path", line.uri().getPath())
+            .field("log.source", "application")
             .log();
 
         return member.slice.response(
@@ -222,6 +227,7 @@ public final class GroupAuditSlice implements Slice {
                     .eventCategory("web")
                     .eventAction("group_audit")
                     .field("http.response.status_code", response.status().code())
+                    .field("log.source", "http")
                     .log();
                 // Drain body and return empty
                 return response.body().asBytesFuture()
@@ -236,6 +242,7 @@ public final class GroupAuditSlice implements Slice {
                                 .message("Member returned empty audit response: " + member.name)
                                 .eventCategory("web")
                                 .eventAction("group_audit")
+                                .field("log.source", "application")
                                 .log();
                             return Json.createObjectBuilder().build();
                         }
@@ -245,6 +252,7 @@ public final class GroupAuditSlice implements Slice {
                                 .message(String.format("Member '%s' returned audit data with %d entries", member.name, result.size()))
                                 .eventCategory("web")
                                 .eventAction("group_audit")
+                                .field("log.source", "application")
                                 .log();
                             return result;
                         }
@@ -254,6 +262,7 @@ public final class GroupAuditSlice implements Slice {
                             .eventCategory("web")
                             .eventAction("group_audit")
                             .error(e)
+                            .field("log.source", "application")
                             .log();
                         return Json.createObjectBuilder().build();
                     }
@@ -264,6 +273,7 @@ public final class GroupAuditSlice implements Slice {
                 .eventCategory("web")
                 .eventAction("group_audit")
                 .error(err)
+                .field("log.source", "application")
                 .log();
             return Json.createObjectBuilder().build();
         });

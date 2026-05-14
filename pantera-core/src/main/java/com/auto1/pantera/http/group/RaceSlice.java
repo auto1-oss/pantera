@@ -114,6 +114,7 @@ public final class RaceSlice implements Slice {
                     .eventAction("pending")
                     .eventOutcome("unknown")
                     .field("url.path", line.uri().getPath())
+                    .field("log.source", "application")
                     .log();
                 target.response(line, headers, memberBody)
                 .thenCompose(res -> {
@@ -125,6 +126,7 @@ public final class RaceSlice implements Slice {
                             .eventAction("group_race")
                             .eventOutcome("success")
                             .field("event.reason", "late_response")
+                            .field("log.source", "application")
                             .log();
                         return res.body().asBytesFuture().thenApply(ignored -> null);
                     }
@@ -141,6 +143,7 @@ public final class RaceSlice implements Slice {
                             .eventAction("group_race")
                             .eventOutcome("success")
                             .field("http.response.status_code", code)
+                            .field("log.source", "http")
                             .log();
                         result.complete(res);
                         final DrainedResponse savedForbidden = firstForbidden.getAndSet(null);
@@ -171,6 +174,7 @@ public final class RaceSlice implements Slice {
                                 : is5xx ? "upstream_error"
                                 : "client_error")
                         .field("http.response.status_code", code)
+                        .field("log.source", "http")
                         .log();
                     return res.body().asBytesFuture().thenApply(bytes -> {
                         if (isForbidden) {
@@ -197,6 +201,7 @@ public final class RaceSlice implements Slice {
                         .eventAction("group_race")
                         .eventOutcome("failure")
                         .error(err)
+                        .field("log.source", "application")
                         .log();
                     // Treat exceptions the same as 5xx — race-continue + remember.
                     anyServerError.set(true);

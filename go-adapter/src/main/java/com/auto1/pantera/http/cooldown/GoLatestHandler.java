@@ -218,6 +218,7 @@ public final class GoLatestHandler {
                 .field("repository.name", this.repoName)
                 .field("package.name", module)
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(
                 ResponseBuilder.ok()
@@ -244,6 +245,7 @@ public final class GoLatestHandler {
                 .field("repository.name", this.repoName)
                 .field("package.name", module)
                 .field("package.version", info.version())
+                .field("log.source", "application")
                 .log();
             return this.resolveFallback(info, module, user);
         });
@@ -292,6 +294,7 @@ public final class GoLatestHandler {
                     .field("repository.name", this.repoName)
                     .field("package.name", module)
                     .field("package.version", picked)
+                    .field("log.source", "application")
                     .log();
                 return ResponseBuilder.ok()
                     .header("Content-Type", this.rewriter.contentType())
@@ -312,6 +315,7 @@ public final class GoLatestHandler {
             .field("event.reason", "all_versions_blocked")
             .field("repository.name", this.repoName)
             .field("package.name", module)
+            .field("log.source", "application")
             .log();
         return ResponseBuilder.forbidden()
             .header("X-Pantera-Cooldown", "all-blocked")
@@ -406,6 +410,7 @@ public final class GoLatestHandler {
                     .field("package.name", module)
                     .field("package.version", version)
                     .error(err)
+                    .field("log.source", "application")
                     .log();
                 return false;
             });

@@ -112,6 +112,7 @@ public final class StreamThroughCache implements Cache {
                 .eventCategory("database")
                 .eventAction("stream_through")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             return teeContentInMemory(key, remote);
         }
@@ -144,6 +145,7 @@ public final class StreamThroughCache implements Cache {
                     .eventAction("stream_through")
                     .eventOutcome("failure")
                     .error(err)
+                    .field("log.source", "application")
                     .log();
             })
             // Client cancelled mid-stream (e.g., closed connection) — mirror doOnError cleanup
@@ -157,6 +159,7 @@ public final class StreamThroughCache implements Cache {
                     .eventAction("stream_through")
                     .eventOutcome("unknown")
                     .field("event.reason", "cancel")
+                    .field("log.source", "application")
                     .log();
             });
         return new Content.From(remote.size(), teed);
@@ -192,6 +195,7 @@ public final class StreamThroughCache implements Cache {
                     .eventAction("stream_through")
                     .eventOutcome("failure")
                     .error(err)
+                    .field("log.source", "application")
                     .log();
             });
         return new Content.From(remote.size(), teed);
@@ -233,6 +237,7 @@ public final class StreamThroughCache implements Cache {
                             .eventOutcome("failure")
                             .field("http.response.body.bytes", size)
                             .error(err)
+                            .field("log.source", "application")
                             .log();
                     } else {
                         EcsLogger.debug("com.auto1.pantera.asto.cache")
@@ -241,6 +246,7 @@ public final class StreamThroughCache implements Cache {
                             .eventAction("stream_through_save")
                             .eventOutcome("success")
                             .field("http.response.body.bytes", size)
+                            .field("log.source", "application")
                             .log();
                     }
                 });
@@ -252,6 +258,7 @@ public final class StreamThroughCache implements Cache {
                 .eventAction("stream_through_save")
                 .eventOutcome("failure")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -274,6 +281,7 @@ public final class StreamThroughCache implements Cache {
                             .eventOutcome("failure")
                             .field("http.response.body.bytes", bytes.length)
                             .error(err)
+                            .field("log.source", "application")
                             .log();
                     } else {
                         EcsLogger.debug("com.auto1.pantera.asto.cache")
@@ -282,6 +290,7 @@ public final class StreamThroughCache implements Cache {
                             .eventAction("stream_through_save")
                             .eventOutcome("success")
                             .field("http.response.body.bytes", bytes.length)
+                            .field("log.source", "application")
                             .log();
                     }
                 });
@@ -292,6 +301,7 @@ public final class StreamThroughCache implements Cache {
                 .eventAction("stream_through_save")
                 .eventOutcome("failure")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -310,6 +320,7 @@ public final class StreamThroughCache implements Cache {
             EcsLogger.debug("com.auto1.pantera.asto.cache")
                 .message("Failed to close file channel")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -326,6 +337,7 @@ public final class StreamThroughCache implements Cache {
             EcsLogger.debug("com.auto1.pantera.asto.cache")
                 .message("Failed to delete temp file")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }

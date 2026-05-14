@@ -309,6 +309,7 @@ final class ProxySlice implements Slice {
                 .eventAction("proxy_request")
                 .field("url.path", path)
                 .field("repository.name", this.rname)
+                .field("log.source", "application")
                 .log();
             return this.jsonHandler.handle(line, user);
         }
@@ -319,6 +320,7 @@ final class ProxySlice implements Slice {
                 .eventAction("proxy_request")
                 .field("url.path", path)
                 .field("repository.name", this.rname)
+                .field("log.source", "application")
                 .log();
             return this.simpleHandler.handle(line, user);
         }
@@ -364,6 +366,7 @@ final class ProxySlice implements Slice {
                         .eventOutcome("success")
                         .field("package.name", info.artifact())
                         .field("package.version", info.version())
+                        .field("log.source", "application")
                         .log();
                     // Enqueue event for cache hit — bounded ProxyArtifactEvent queue.
                     // offer() + drop counter so a full queue cannot cascade to 503.
@@ -418,6 +421,7 @@ final class ProxySlice implements Slice {
             .field("user.name", user)
             .field("repository.type", this.rtype)
             .field("repository.name", this.rname)
+            .field("log.source", "application")
             .log();
         return this.cooldown.evaluate(request, this.inspector).thenCompose(evaluation -> {
             if (evaluation.blocked()) {
@@ -428,6 +432,7 @@ final class ProxySlice implements Slice {
                     .eventOutcome("failure")
                     .field("package.name", info.artifact())
                     .field("package.version", info.version())
+                    .field("log.source", "application")
                     .log();
                 return CompletableFuture.completedFuture(
                     CooldownResponseRegistry.instance()
@@ -442,6 +447,7 @@ final class ProxySlice implements Slice {
                 .eventOutcome("success")
                 .field("package.name", info.artifact())
                 .field("package.version", info.version())
+                .field("log.source", "application")
                 .log();
             // Cooldown passed - now serve the artifact (no further cooldown checks)
             return this.serveArtifact(line, user);
@@ -485,6 +491,7 @@ final class ProxySlice implements Slice {
                 .eventOutcome("failure")
                 .field("url.path", line.uri().getPath())
                 .error(err)
+                .field("log.source", "application")
                 .log();
             return ResponseBuilder.notFound().build();
         });
@@ -584,6 +591,7 @@ final class ProxySlice implements Slice {
                 .eventAction("proxy_request")
                 .field("url.path", line.uri().getPath())
                 .field("destination.address", mirror.toString())
+                .field("log.source", "application")
                 .log();
             return this.fetchFromMirror(line, mirror);
         }
@@ -596,6 +604,7 @@ final class ProxySlice implements Slice {
                 .eventCategory("web")
                 .eventAction("proxy_request")
                 .field("url.path", line.uri().getPath())
+                .field("log.source", "application")
                 .log();
             return this.fetchFromMirror(line, filesUri);
         }
@@ -607,6 +616,7 @@ final class ProxySlice implements Slice {
             .eventCategory("web")
             .eventAction("proxy_request")
             .field("url.path", line.uri().getPath())
+            .field("log.source", "application")
             .log();
         return this.origin.response(upstream, upstreamHeaders, Content.EMPTY);
     }
@@ -658,6 +668,7 @@ final class ProxySlice implements Slice {
                     .eventAction("pre_rewrite")
                     .eventOutcome("failure")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
                 return Optional.<Content>of(new Content.From(bytes));
             }
@@ -727,6 +738,7 @@ final class ProxySlice implements Slice {
                                 .eventCategory("database")
                                 .eventAction("stale_while_revalidate")
                                 .eventOutcome("success")
+                                .field("log.source", "application")
                                 .log();
                             return CompletableFuture.completedFuture((Void) null);
                         }
@@ -766,6 +778,7 @@ final class ProxySlice implements Slice {
                                 .eventAction("stale_while_revalidate")
                                 .eventOutcome("failure")
                                 .error(err)
+                                .field("log.source", "application")
                                 .log();
                         } else {
                             EcsLogger.debug("com.auto1.pantera.pypi")
@@ -773,6 +786,7 @@ final class ProxySlice implements Slice {
                                 .eventCategory("database")
                                 .eventAction("stale_while_revalidate")
                                 .eventOutcome("success")
+                                .field("log.source", "application")
                                 .log();
                         }
                     });
@@ -784,6 +798,7 @@ final class ProxySlice implements Slice {
                     .eventAction("stale_while_revalidate")
                     .eventOutcome("failure")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
         });
@@ -842,6 +857,7 @@ final class ProxySlice implements Slice {
                             .eventAction("proxy_request")
                             .field("url.path", line.uri().getPath())
                             .field("destination.address", mirror.toString())
+                            .field("log.source", "application")
                             .log();
                         fetch = this.fetchFromMirror(line, mirror);
                     } else if (this.isPackageFilePath(line)) {
@@ -855,6 +871,7 @@ final class ProxySlice implements Slice {
                             .eventAction("proxy_request")
                             .field("url.path", line.uri().getPath())
                             .field("destination.address", filesUri.toString())
+                            .field("log.source", "application")
                             .log();
                         fetch = this.fetchFromMirror(line, filesUri).thenApply(resp -> {
                             EcsLogger.debug("com.auto1.pantera.pypi")
@@ -863,6 +880,7 @@ final class ProxySlice implements Slice {
                                 .eventAction("proxy_request")
                                 .field("url.path", line.uri().getPath())
                                 .field("http.response.status_code", resp.status().code())
+                                .field("log.source", "http")
                                 .log();
                             return resp;
                         });
@@ -874,6 +892,7 @@ final class ProxySlice implements Slice {
                             .eventAction("proxy_request")
                             .field("url.path", line.uri().getPath())
                             .field("destination.address", upstream.uri().toString())
+                            .field("log.source", "application")
                             .log();
                         fetch = this.origin.response(upstream, Headers.EMPTY, Content.EMPTY);
                     }
@@ -1018,6 +1037,7 @@ final class ProxySlice implements Slice {
                     .eventAction("proxy_request")
                     .field("package.name", key.string())
                     .field("package.size", content.size().orElse(-1L))
+                    .field("log.source", "application")
                     .log();
                 final ResponseBuilder builder = ResponseBuilder.ok()
                     .headers(Headers.from(ProxySlice.contentType(remote, line)))
@@ -1059,6 +1079,7 @@ final class ProxySlice implements Slice {
                             .eventCategory("web")
                             .eventAction("index_rewrite")
                             .eventOutcome("failure")
+                            .field("log.source", "application")
                             .log();
                         return Optional.empty();
                     }
@@ -1087,6 +1108,7 @@ final class ProxySlice implements Slice {
                             .eventAction("index_rewrite")
                             .eventOutcome("failure")
                             .error(error)
+                            .field("log.source", "application")
                             .log();
                         return Optional.of(new Content.From(new byte[0]));
                     }
@@ -1142,6 +1164,7 @@ final class ProxySlice implements Slice {
             .eventAction("index_rewrite")
             .field("url.path", line.uri().getPath())
             .field("url.path", base)
+            .field("log.source", "application")
             .log();
         String result = body;
         if (this.isHtml(header) || this.looksLikeHtml(body)) {
@@ -1271,6 +1294,7 @@ final class ProxySlice implements Slice {
             .eventCategory("web")
             .eventAction("path_classification")
             .field("url.original", line.uri().getPath())
+            .field("log.source", "application")
             .log();
         return isPackage;
     }
@@ -1324,6 +1348,7 @@ final class ProxySlice implements Slice {
             .eventAction("mirror_registration")
             .field("url.path", path)
             .field("destination.address", upstream.toString())
+            .field("log.source", "application")
             .log();
         if (!path.endsWith(".metadata")) {
             final URI metadata = ProxySlice.metadataUri(upstream);
@@ -1334,6 +1359,7 @@ final class ProxySlice implements Slice {
                 .eventAction("mirror_registration")
                 .field("url.path", path + ".metadata")
                 .field("url.original", metadata.toString())
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -1427,6 +1453,7 @@ final class ProxySlice implements Slice {
                     EcsLogger.debug("com.auto1.pantera.pypi")
                         .message("Failed to parse Last-Modified header")
                         .error(ex)
+                        .field("log.source", "application")
                         .log();
                     return Optional.empty();
                 }

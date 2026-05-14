@@ -135,6 +135,7 @@ public final class CachedDbPolicy implements Policy<UserPermissions>, Cleanable<
                     .eventOutcome("failure")
                     .field("user.name", user.name())
                     .error(err)
+                    .field("log.source", "application")
                     .log();
                 throw new PanteraException(err);
             }
@@ -187,6 +188,7 @@ public final class CachedDbPolicy implements Policy<UserPermissions>, Cleanable<
                 .eventOutcome("failure")
                 .field("user.name", username)
                 .error(err)
+                .field("log.source", "application")
                 .log();
             return false;
         }
@@ -251,6 +253,7 @@ public final class CachedDbPolicy implements Policy<UserPermissions>, Cleanable<
                 .eventOutcome("failure")
                 .field("user.roles", role)
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             return EmptyPermissions.INSTANCE;
         }
@@ -378,6 +381,7 @@ public final class CachedDbPolicy implements Policy<UserPermissions>, Cleanable<
                             .eventAction("user_lookup")
                             .eventOutcome("failure")
                             .field("user.name", username)
+                            .field("log.source", "application")
                             .log();
                         return new UserRecord(true, Collections.emptyList());
                     }
@@ -402,6 +406,7 @@ public final class CachedDbPolicy implements Policy<UserPermissions>, Cleanable<
                     .eventOutcome("failure")
                     .field("user.name", username)
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
                 return new UserRecord(true, Collections.emptyList());
             }

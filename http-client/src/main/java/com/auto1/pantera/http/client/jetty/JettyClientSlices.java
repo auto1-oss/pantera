@@ -319,6 +319,7 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
                     .message("Stopping Jetty HTTP client (" + this.clnt.getDestinations().size() + " destinations)")
                     .eventCategory("web")
                     .eventAction("http_client_stop")
+                    .field("log.source", "application")
                     .log();
 
                 // First, stop accepting new requests
@@ -337,6 +338,7 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
                         .message("Circuit-breaker probe executor did not terminate within 5s")
                         .eventCategory("web")
                         .eventAction("http_client_stop")
+                        .field("log.source", "application")
                         .log();
                 }
 
@@ -345,6 +347,7 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
                     .eventCategory("web")
                     .eventAction("http_client_stop")
                     .eventOutcome("success")
+                    .field("log.source", "application")
                     .log();
             } catch (final InterruptedException ie) {
                 Thread.currentThread().interrupt();
@@ -358,6 +361,7 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
                     .eventAction("http_client_stop")
                     .eventOutcome("failure")
                     .error(e)
+                    .field("log.source", "application")
                     .log();
                 throw new PanteraException(
                     "Failed to stop Jetty HTTP client. Some connections may not be closed properly.",
@@ -534,6 +538,7 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
                 .message("HTTP/3 transport requested but not supported in Jetty 12.1+")
                 .eventCategory("web")
                 .eventAction("http_client_init")
+                .field("log.source", "application")
                 .log();
         }
 
@@ -629,6 +634,7 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
                 maxBucketSize, maxHeapMemory / (1024 * 1024), maxDirectMemory / (1024 * 1024)))
             .eventCategory("web")
             .eventAction("http_client_init")
+            .field("log.source", "application")
             .log();
 
         settings.proxies().forEach(

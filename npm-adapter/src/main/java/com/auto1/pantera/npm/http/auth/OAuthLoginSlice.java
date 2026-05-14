@@ -77,6 +77,7 @@ public final class OAuthLoginSlice implements Slice {
                     .eventCategory("authentication")
                     .eventAction("login")
                     .field("user.name", username)
+                    .field("log.source", "application")
                     .log();
 
                 // Validate credentials via Authentication (synchronous)
@@ -92,6 +93,7 @@ public final class OAuthLoginSlice implements Slice {
                         .eventAction("login")
                         .eventOutcome("success")
                         .field("user.name", authUser.name())
+                        .field("log.source", "application")
                         .log();
                     final String token = createToken(authUser, username, password, headers);
                     return CompletableFuture.completedFuture(
@@ -105,6 +107,7 @@ public final class OAuthLoginSlice implements Slice {
                     .eventAction("login")
                     .eventOutcome("failure")
                     .field("user.name", username)
+                    .field("log.source", "application")
                     .log();
                 return CompletableFuture.completedFuture(
                     ResponseBuilder.unauthorized()
@@ -119,6 +122,7 @@ public final class OAuthLoginSlice implements Slice {
                     .eventAction("login")
                     .eventOutcome("failure")
                     .error(e)
+                    .field("log.source", "application")
                     .log();
                 return CompletableFuture.completedFuture(
                     ResponseBuilder.badRequest()
@@ -155,6 +159,7 @@ public final class OAuthLoginSlice implements Slice {
                     .eventOutcome("failure")
                     .field("user.name", user.name())
                     .error(err)
+                    .field("log.source", "application")
                     .log();
             }
         }

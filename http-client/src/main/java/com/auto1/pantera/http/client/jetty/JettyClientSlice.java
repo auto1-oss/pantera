@@ -132,6 +132,7 @@ final class JettyClientSlice implements Slice {
                         .eventAction("http_request_body")
                         .eventOutcome("failure")
                         .error(throwable)
+                        .field("log.source", "application")
                         .log()
                 );
             request.body(async);
@@ -155,6 +156,7 @@ final class JettyClientSlice implements Slice {
                         .eventAction("http_response_receive")
                         .field("http.response.status_code", response.getStatus())
                         .field("http.response.headers", sanitizedRespHeaders.toString())
+                        .field("log.source", "http")
                         .log();
                     res.complete(
                         ResponseBuilder.from(status)
@@ -178,6 +180,7 @@ final class JettyClientSlice implements Slice {
             .field("url.path", LogSanitizer.sanitizeUrl(request.getPath()))
             .field("http.version", request.getVersion().toString())
             .field("http.request.headers", sanitizedHeaders.toString())
+            .field("log.source", "http")
             .log();
         request.send(
                 result -> {
@@ -199,6 +202,7 @@ final class JettyClientSlice implements Slice {
                                 .eventAction("http_response_receive")
                                 .field("http.response.status_code",
                                     result.getResponse().getStatus())
+                                .field("log.source", "http")
                                 .log();
                         }
                         // Complete the processor in case it was created but never used
@@ -222,6 +226,7 @@ final class JettyClientSlice implements Slice {
                                 .eventCategory("web")
                                 .eventAction("http_idle_close")
                                 .error(failure)
+                                .field("log.source", "application")
                                 .log();
                         } else {
                             EcsLogger.error("com.auto1.pantera.http.client")
@@ -230,6 +235,7 @@ final class JettyClientSlice implements Slice {
                                 .eventAction("http_request_send")
                                 .eventOutcome("failure")
                                 .error(failure)
+                                .field("log.source", "application")
                                 .log();
                         }
                         // Complete processor with error so subscribers don't hang
@@ -439,6 +445,7 @@ final class JettyClientSlice implements Slice {
                         .eventOutcome("failure")
                         .field("event.reason", "request_timeout")
                         .field("url.full", this.response.getRequest().getURI().toString())
+                        .field("log.source", "application")
                         .log();
                     final TimeoutException timeout =
                         new TimeoutException("Response reading idle timeout (120s without data)");
@@ -464,6 +471,7 @@ final class JettyClientSlice implements Slice {
                             .eventOutcome("failure")
                             .field("url.full", this.response.getRequest().getURI().toString())
                             .error(failure)
+                            .field("log.source", "application")
                             .log();
                         return;
                     } else {
@@ -486,6 +494,7 @@ final class JettyClientSlice implements Slice {
                                 .eventOutcome("failure")
                                 .field("url.full", this.response.getRequest().getURI().toString())
                                 .error(failure)
+                                .field("log.source", "application")
                                 .log();
                             return;
                         }
@@ -513,6 +522,7 @@ final class JettyClientSlice implements Slice {
                 .eventAction("http_response_read")
                 .eventOutcome("failure")
                 .field("url.full", this.response.getRequest().getURI().toString())
+                .field("log.source", "application")
                 .log();
             final IllegalStateException error =
                 new IllegalStateException("Too many chunks - possible infinite loop");

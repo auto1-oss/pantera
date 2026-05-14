@@ -123,6 +123,7 @@ public final class ConfigWatchService implements AutoCloseable {
                     .eventAction("config_watch_start")
                     .eventOutcome("success")
                     .field("file.path", this.configPath.toString())
+                    .field("log.source", "application")
                     .log();
 
                 this.watchThread = new Thread(this::watchLoop, "pantera.config.watcher");
@@ -135,6 +136,7 @@ public final class ConfigWatchService implements AutoCloseable {
                     .eventAction("config_watch_start")
                     .eventOutcome("failure")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
                 this.running.set(false);
             }
@@ -175,6 +177,7 @@ public final class ConfigWatchService implements AutoCloseable {
                     .eventAction("config_watch")
                     .eventOutcome("failure")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -207,6 +210,7 @@ public final class ConfigWatchService implements AutoCloseable {
                 .eventCategory("configuration")
                 .eventAction("config_reload")
                 .eventOutcome("success")
+                .field("log.source", "application")
                 .log();
         } catch (final Exception ex) {
             EcsLogger.error("com.auto1.pantera.settings")
@@ -216,6 +220,7 @@ public final class ConfigWatchService implements AutoCloseable {
                 .eventOutcome("failure")
                 .field("file.path", this.configPath.toString())
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -264,6 +269,7 @@ public final class ConfigWatchService implements AutoCloseable {
                     .eventAction("config_watch_stop")
                     .eventOutcome("failure")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
             this.executor.shutdown();
@@ -283,6 +289,7 @@ public final class ConfigWatchService implements AutoCloseable {
                 .eventCategory("configuration")
                 .eventAction("config_watch_stop")
                 .eventOutcome("success")
+                .field("log.source", "application")
                 .log();
         }
     }

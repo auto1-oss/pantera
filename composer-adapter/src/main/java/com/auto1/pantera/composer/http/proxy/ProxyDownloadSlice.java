@@ -155,12 +155,14 @@ public final class ProxyDownloadSlice implements Slice {
                 .eventAction("proxy_download")
                 .field("url.path", path)
                 .field("http.request.method", line.method().value())
+                .field("log.source", "http")
                 .log();
             EcsLogger.debug("com.auto1.pantera.composer")
                 .message("Full request URI")
                 .eventCategory("web")
                 .eventAction("proxy_download")
                 .field("url.full", line.uri().toString())
+                .field("log.source", "application")
                 .log();
 
             // Extract package info from rewritten URL
@@ -172,6 +174,7 @@ public final class ProxyDownloadSlice implements Slice {
                     .eventAction("proxy_download")
                     .eventOutcome("failure")
                     .field("url.path", path)
+                    .field("log.source", "application")
                     .log();
                 // Still proxy to remote in case it's a valid request
                 return this.remote.response(line, Headers.EMPTY, Content.EMPTY);
@@ -188,6 +191,7 @@ public final class ProxyDownloadSlice implements Slice {
                 .eventAction("proxy_download")
                 .field("package.name", packageName)
                 .field("package.version", version)
+                .field("log.source", "application")
                 .log();
 
             // Evaluate cooldown before proceeding
@@ -224,6 +228,7 @@ public final class ProxyDownloadSlice implements Slice {
                         .eventOutcome("success")
                         .field("package.name", packageName)
                         .field("package.version", version)
+                        .field("log.source", "application")
                         .log();
                     this.emitEvent(packageName, version, headers);
                     return this.storage.value(foundKey).thenApply(content ->
@@ -244,6 +249,7 @@ public final class ProxyDownloadSlice implements Slice {
                             .field("event.reason", "cooldown_active")
                             .field("package.name", packageName)
                             .field("package.version", version)
+                            .field("log.source", "application")
                             .log();
                         return CompletableFuture.completedFuture(
                             CooldownResponseRegistry.instance()
@@ -278,6 +284,7 @@ public final class ProxyDownloadSlice implements Slice {
                     .eventOutcome("failure")
                     .field("package.name", packageName)
                     .field("package.version", version)
+                    .field("log.source", "application")
                     .log();
                 return CompletableFuture.completedFuture(
                     ResponseBuilder.notFound().build()
@@ -301,6 +308,7 @@ public final class ProxyDownloadSlice implements Slice {
                 .eventCategory("web")
                 .eventAction("proxy_download")
                 .field("url.original", orig)
+                .field("log.source", "application")
                 .log();
             return target.response(newLine, out, Content.EMPTY).thenCompose(response -> {
                 if (!response.status().success()) {
@@ -312,6 +320,7 @@ public final class ProxyDownloadSlice implements Slice {
                         .field("package.name", packageName)
                         .field("package.version", version)
                         .field("http.response.status_code", response.status().code())
+                        .field("log.source", "http")
                         .log();
                     return CompletableFuture.completedFuture(response);
                 }
@@ -325,6 +334,7 @@ public final class ProxyDownloadSlice implements Slice {
                         .field("package.name", packageName)
                         .field("package.version", version)
                         .field("file.size", bytes.length)
+                        .field("log.source", "application")
                         .log();
                     return this.storage.save(
                         distKey, new Content.From(bytes)
@@ -441,6 +451,7 @@ public final class ProxyDownloadSlice implements Slice {
                     .eventAction("proxy_download")
                     .eventOutcome("failure")
                     .field("package.name", packageName)
+                    .field("log.source", "application")
                     .log();
                 return CompletableFuture.completedFuture(Optional.empty());
             }
@@ -502,6 +513,7 @@ public final class ProxyDownloadSlice implements Slice {
                                 .field("package.name", packageName)
                                 .field("package.version", version)
                                 .field("url.original", originalUrl)
+                                .field("log.source", "application")
                                 .log();
                         } else if (dist.containsKey("url")) {
                             // Fallback to "url" for backward compatibility
@@ -513,6 +525,7 @@ public final class ProxyDownloadSlice implements Slice {
                                 .field("package.name", packageName)
                                 .field("package.version", version)
                                 .field("url.original", originalUrl)
+                                .field("log.source", "application")
                                 .log();
                         }
                         if (originalUrl == null || originalUrl.isEmpty()) {
@@ -523,6 +536,7 @@ public final class ProxyDownloadSlice implements Slice {
                                 .eventOutcome("failure")
                                 .field("package.name", packageName)
                                 .field("package.version", version)
+                                .field("log.source", "application")
                                 .log();
                             return Optional.empty();
                         }
@@ -533,6 +547,7 @@ public final class ProxyDownloadSlice implements Slice {
                             .field("package.name", packageName)
                             .field("package.version", version)
                             .field("url.original", originalUrl)
+                            .field("log.source", "application")
                             .log();
                         return Optional.ofNullable(originalUrl);
                     } catch (Exception ex) {
@@ -543,6 +558,7 @@ public final class ProxyDownloadSlice implements Slice {
                             .eventOutcome("failure")
                             .field("package.name", packageName)
                             .error(ex)
+                            .field("log.source", "application")
                             .log();
                         return Optional.empty();
                     }
@@ -576,6 +592,7 @@ public final class ProxyDownloadSlice implements Slice {
                 .eventCategory("web")
                 .eventAction("proxy_download")
                 .field("package.name", packageName)
+                .field("log.source", "application")
                 .log();
             return;
         }
@@ -598,6 +615,7 @@ public final class ProxyDownloadSlice implements Slice {
             .field("package.name", packageName)
             .field("package.version", version)
             .field("user.name", owner)
+            .field("log.source", "application")
             .log();
     }
 }

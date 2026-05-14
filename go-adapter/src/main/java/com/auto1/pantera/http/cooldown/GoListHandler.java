@@ -210,6 +210,7 @@ public final class GoListHandler {
                 .field("repository.name", this.repoName)
                 .field("package.name", module)
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(
                 ResponseBuilder.ok()
@@ -251,6 +252,7 @@ public final class GoListHandler {
                 .eventOutcome("success")
                 .field("repository.name", this.repoName)
                 .field("package.name", module)
+                .field("log.source", "application")
                 .log();
             final byte[] body = serialise(kept, endsWithNewline(upstreamBytes));
             return ResponseBuilder.ok()
@@ -275,6 +277,7 @@ public final class GoListHandler {
             .field("event.reason", "all_versions_blocked")
             .field("repository.name", this.repoName)
             .field("package.name", module)
+            .field("log.source", "application")
             .log();
         return ResponseBuilder.forbidden()
             .header("X-Pantera-Cooldown", "all-blocked")
@@ -337,6 +340,7 @@ public final class GoListHandler {
                     .field("package.name", module)
                     .field("package.version", version)
                     .error(err)
+                    .field("log.source", "application")
                     .log();
                 return false;
             });

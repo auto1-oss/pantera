@@ -222,6 +222,7 @@ public final class AdminAuthHandler {
                     .eventCategory("configuration")
                     .eventAction("circuit_breaker_settings_update")
                     .eventOutcome("success")
+                    .field("log.source", "application")
                     .log();
                 ctx.response().setStatusCode(204).end();
             }
@@ -295,6 +296,7 @@ public final class AdminAuthHandler {
                     .eventCategory("iam")
                     .eventAction("auth_settings_update")
                     .eventOutcome("success")
+                    .field("log.source", "application")
                     .log();
                 ctx.response().setStatusCode(204).end();
             }
@@ -328,6 +330,7 @@ public final class AdminAuthHandler {
                     .eventAction("user_revoke")
                     .eventOutcome("success")
                     .field("user.name", username)
+                    .field("log.source", "application")
                     .log();
                 ctx.response()
                     .setStatusCode(200)

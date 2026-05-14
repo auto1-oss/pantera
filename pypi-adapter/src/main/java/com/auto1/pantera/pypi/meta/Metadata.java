@@ -134,6 +134,7 @@ public interface Metadata {
                     .eventAction("metadata_extraction")
                     .eventOutcome("failure")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
                 throw FromArchive.error(ex);
             }

@@ -121,6 +121,7 @@ public final class JdbcKeyringStore implements KeyringStore {
                 .eventOutcome("failure")
                 .field("pgp.key_id_hex", hex)
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             return Optional.empty();
         }

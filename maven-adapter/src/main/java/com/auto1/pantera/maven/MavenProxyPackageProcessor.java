@@ -121,6 +121,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
             .message("Processing Maven batch (batch size: " + batch.size() + ", unique: " + uniquePackages.size() + ", duplicates removed: " + duplicatesRemoved + ")")
             .eventCategory("web")
             .eventAction("batch_processing")
+            .field("log.source", "application")
             .log();
 
         // Process all unique packages in parallel
@@ -141,6 +142,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                 .eventAction("batch_processing")
                 .eventOutcome("success")
                 .duration(duration)
+                .field("log.source", "application")
                 .log();
         } catch (final RuntimeException err) {
             final long duration = System.currentTimeMillis() - startTime;
@@ -151,6 +153,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                 .eventOutcome("failure")
                 .duration(duration)
                 .error(err)
+                .field("log.source", "application")
                 .log();
         } finally {
             TraceContext.clear();
@@ -181,6 +184,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                             .field("event.reason", "skipped")
                             .field("repository.type", REPO_TYPE)
                             .field("package.name", event.artifactKey().string())
+                            .field("log.source", "application")
                             .log();
                         return CompletableFuture.completedFuture(null);
                     }
@@ -225,6 +229,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                                 .field("package.name", artifactName)
                                 .field("package.version", version)
                                 .field("file.size", size)
+                                .field("log.source", "application")
                                 .log();
                         })
                         .exceptionally(err -> {
@@ -239,6 +244,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                         .eventOutcome("failure")
                         .field("repository.type", REPO_TYPE)
                         .error(err)
+                        .field("log.source", "application")
                         .log();
                     return CompletableFuture.completedFuture(null);
                 }
@@ -252,6 +258,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                     .field("repository.type", REPO_TYPE)
                     .field("package.name", event.artifactKey().string())
                     .error(err)
+                    .field("log.source", "application")
                     .log();
                 return null;
             });
@@ -355,6 +362,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                     .field("repository.type", REPO_TYPE)
                     .field("package.name", event.artifactKey().string())
                     .error(err)
+                    .field("log.source", "application")
                     .log();
             } else {
                 // Max retries reached, give up and clean up retry count
@@ -369,6 +377,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                     .field("repository.type", REPO_TYPE)
                     .field("package.name", event.artifactKey().string())
                     .error(err)
+                    .field("log.source", "application")
                     .log();
             }
         } else {
@@ -380,6 +389,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                 .field("repository.type", REPO_TYPE)
                 .field("package.name", event.artifactKey().string())
                 .error(err)
+                .field("log.source", "application")
                 .log();
         }
     }

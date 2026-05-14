@@ -221,6 +221,7 @@ public final class MetadataFilterService implements CooldownMetadataService {
                 .eventAction("metadata_filter")
                 .field("repository.type", repoType)
                 .field("package.name", packageName)
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(rawMetadata);
         }
@@ -266,6 +267,7 @@ public final class MetadataFilterService implements CooldownMetadataService {
                     .eventAction("metadata_filter")
                     .field("repository.type", repoType)
                     .field("package.name", packageName)
+                    .field("log.source", "application")
                     .log();
                 // No versions - cache with max TTL
                 return FilteredMetadataCache.CacheEntry.noBlockedVersions(rawMetadata, this.maxTtl);
@@ -358,6 +360,7 @@ public final class MetadataFilterService implements CooldownMetadataService {
                 .eventAction("metadata_filter")
                 .field("repository.type", repoType)
                 .field("package.name", packageName)
+                .field("log.source", "application")
                 .log();
 
             return new FilterContext<>(
@@ -416,6 +419,7 @@ public final class MetadataFilterService implements CooldownMetadataService {
                     .eventAction("metadata_filter")
                     .field("repository.type", ctx.repoType)
                     .field("package.name", ctx.packageName)
+                    .field("log.source", "application")
                     .log();
 
                 // Note: Blocked versions gauge is updated by JdbcCooldownService on block/unblock
@@ -450,6 +454,7 @@ public final class MetadataFilterService implements CooldownMetadataService {
                             .eventCategory("database")
                             .eventAction("metadata_filter")
                             .field("package.name", ctx.packageName)
+                            .field("log.source", "application")
                             .log();
                     }
                 }
@@ -469,6 +474,7 @@ public final class MetadataFilterService implements CooldownMetadataService {
                     .field("repository.type", ctx.repoType)
                     .field("package.name", ctx.packageName)
                     .field("event.duration", durationMs)
+                    .field("log.source", "application")
                     .log();
 
                 // Record metrics via CooldownMetrics
@@ -565,6 +571,7 @@ public final class MetadataFilterService implements CooldownMetadataService {
                 .eventAction("cache_prewarm")
                 .field("repository.name", repoName)
                 .field("package.name", packageName)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -586,6 +593,7 @@ public final class MetadataFilterService implements CooldownMetadataService {
             .field("repository.type", repoType)
             .field("repository.name", repoName)
             .field("package.name", packageName)
+            .field("log.source", "application")
             .log();
     }
 
@@ -601,6 +609,7 @@ public final class MetadataFilterService implements CooldownMetadataService {
             .eventAction("cache_invalidate")
             .field("repository.type", repoType)
             .field("repository.name", repoName)
+            .field("log.source", "application")
             .log();
     }
 
@@ -614,6 +623,7 @@ public final class MetadataFilterService implements CooldownMetadataService {
             .message("Cleared all metadata caches (policy change)")
             .eventCategory("database")
             .eventAction("cache_clear_all")
+            .field("log.source", "application")
             .log();
     }
 

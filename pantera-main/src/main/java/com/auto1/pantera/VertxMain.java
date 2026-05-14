@@ -230,6 +230,7 @@ public final class VertxMain {
                 .eventCategory("process")
                 .eventAction("quartz_jdbc_init")
                 .eventOutcome("success")
+                .field("log.source", "application")
                 .log();
         } else {
             sharedDs = Optional.empty();
@@ -245,6 +246,7 @@ public final class VertxMain {
                 .eventCategory("configuration")
                 .eventAction("logging_configure")
                 .eventOutcome("success")
+                .field("log.source", "application")
                 .log();
         }
 
@@ -418,6 +420,7 @@ public final class VertxMain {
                 .eventCategory("configuration")
                 .eventAction("publish_date_init")
                 .eventOutcome("success")
+                .field("log.source", "application")
                 .log();
             final com.auto1.pantera.publishdate.DbPublishDateRegistry publishDates =
                 new com.auto1.pantera.publishdate.DbPublishDateRegistry(
@@ -488,6 +491,7 @@ public final class VertxMain {
                     .eventCategory("configuration")
                     .eventAction("http_client_settings_change")
                     .field("settings.key", changedKey)
+                    .field("log.source", "application")
                     .log();
                 slices.invalidateUpstreamClients();
             });
@@ -523,6 +527,7 @@ public final class VertxMain {
                     .eventCategory("configuration")
                     .eventAction("cooldown_fallback_skip")
                     .eventOutcome("success")
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -536,6 +541,7 @@ public final class VertxMain {
                     .eventAction("metrics_configure")
                     .eventOutcome("failure")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -565,6 +571,7 @@ public final class VertxMain {
                                             .eventAction("event_process")
                                             .eventOutcome("failure")
                                             .error(err)
+                                            .field("log.source", "application")
                                             .log();
                                         return;
                                     }
@@ -615,6 +622,7 @@ public final class VertxMain {
                                             .eventAction("event_process")
                                             .eventOutcome("failure")
                                             .error(err)
+                                            .field("log.source", "application")
                                             .log();
                                         return;
                                     }
@@ -634,6 +642,7 @@ public final class VertxMain {
                                             .eventAction("event_process")
                                             .eventOutcome("failure")
                                             .error(err)
+                                            .field("log.source", "application")
                                             .log();
                                         return;
                                     }
@@ -654,6 +663,7 @@ public final class VertxMain {
                         .eventAction("event_process")
                         .eventOutcome("failure")
                         .error(err)
+                        .field("log.source", "application")
                         .log();
                 }
             }
@@ -676,6 +686,7 @@ public final class VertxMain {
             .eventAction("server_start")
             .eventOutcome("success")
             .field("url.port", main)
+            .field("log.source", "application")
             .log();
         this.startRepos(this.vertx, settings, repos, this.port, slices);
         
@@ -696,6 +707,7 @@ public final class VertxMain {
                         .eventCategory("api")
                         .eventAction("api_deploy")
                         .eventOutcome("success")
+                        .field("log.source", "application")
                         .log();
                 } else {
                     EcsLogger.error("com.auto1.pantera.api")
@@ -704,6 +716,7 @@ public final class VertxMain {
                         .eventAction("api_deploy")
                         .eventOutcome("failure")
                         .error(result.cause())
+                        .field("log.source", "application")
                         .log();
                 }
             }
@@ -741,6 +754,7 @@ public final class VertxMain {
                     .eventCategory("web")
                     .eventAction("jit_warmup")
                     .eventOutcome("success")
+                    .field("log.source", "application")
                     .log();
             } catch (final Exception ignored) {
                 // warmup failure is non-fatal
@@ -789,6 +803,7 @@ public final class VertxMain {
                                 .eventOutcome("success")
                                 .field("destination.port", metricsPort)
                                 .field("url.path", metricsPath)
+                                .field("log.source", "application")
                                 .log();
                         } else {
                             EcsLogger.error("com.auto1.pantera.metrics")
@@ -797,6 +812,7 @@ public final class VertxMain {
                                 .eventAction("metrics_verticle_deploy")
                                 .eventOutcome("failure")
                                 .error(metricsResult.cause())
+                                .field("log.source", "application")
                                 .log();
                         }
                     }
@@ -815,6 +831,7 @@ public final class VertxMain {
                 .eventCategory("configuration")
                 .eventAction("config_watch_start")
                 .eventOutcome("success")
+                .field("log.source", "application")
                 .log();
         } catch (final IOException ex) {
             EcsLogger.error("com.auto1.pantera")
@@ -823,6 +840,7 @@ public final class VertxMain {
                 .eventAction("config_watch_start")
                 .eventOutcome("failure")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
         
@@ -835,6 +853,7 @@ public final class VertxMain {
             .eventCategory("web")
             .eventAction("server_stop")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
         // 1. Stop HTTP/3 servers
         this.http3.forEach((port, server) -> {
@@ -846,6 +865,7 @@ public final class VertxMain {
                     .eventAction("http3_stop")
                     .eventOutcome("success")
                     .field("destination.port", port)
+                    .field("log.source", "application")
                     .log();
             } catch (final Exception e) {
                 EcsLogger.error("com.auto1.pantera")
@@ -855,6 +875,7 @@ public final class VertxMain {
                     .eventOutcome("failure")
                     .field("destination.port", port)
                     .error(e)
+                    .field("log.source", "application")
                     .log();
             }
         });
@@ -868,6 +889,7 @@ public final class VertxMain {
                     .eventAction("server_stop")
                     .eventOutcome("success")
                     .field("destination.port", s.port())
+                    .field("log.source", "application")
                     .log();
             } catch (final Exception e) {
                 EcsLogger.error("com.auto1.pantera")
@@ -876,6 +898,7 @@ public final class VertxMain {
                     .eventAction("server_stop")
                     .eventOutcome("failure")
                     .error(e)
+                    .field("log.source", "application")
                     .log();
             }
         });
@@ -890,6 +913,7 @@ public final class VertxMain {
                     .eventAction("quartz_stop")
                     .eventOutcome("failure")
                     .error(e)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -910,6 +934,7 @@ public final class VertxMain {
                     .eventCategory("web")
                     .eventAction("settings_cache_stop")
                     .eventOutcome("success")
+                    .field("log.source", "application")
                     .log();
             } catch (final Exception e) {
                 EcsLogger.error("com.auto1.pantera.settings.runtime")
@@ -918,6 +943,7 @@ public final class VertxMain {
                     .eventAction("settings_cache_stop")
                     .eventOutcome("failure")
                     .error(e)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -932,6 +958,7 @@ public final class VertxMain {
                     .eventAction("config_watch_stop")
                     .eventOutcome("failure")
                     .error(e)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -943,6 +970,7 @@ public final class VertxMain {
                 .eventCategory("web")
                 .eventAction("diagnostics_shutdown")
                 .eventOutcome("success")
+                .field("log.source", "application")
                 .log();
         } catch (final Exception e) {
             EcsLogger.error("com.auto1.pantera")
@@ -951,6 +979,7 @@ public final class VertxMain {
                 .eventAction("diagnostics_shutdown")
                 .eventOutcome("failure")
                 .error(e)
+                .field("log.source", "application")
                 .log();
         }
         // 6. Close settings (releases storage resources, S3AsyncClient, etc.)
@@ -962,6 +991,7 @@ public final class VertxMain {
                     .eventCategory("web")
                     .eventAction("resource_cleanup")
                     .eventOutcome("success")
+                    .field("log.source", "application")
                     .log();
             } catch (final Exception e) {
                 EcsLogger.error("com.auto1.pantera")
@@ -970,6 +1000,7 @@ public final class VertxMain {
                     .eventAction("resource_cleanup")
                     .eventOutcome("failure")
                     .error(e)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -981,6 +1012,7 @@ public final class VertxMain {
                 .eventCategory("web")
                 .eventAction("executor_shutdown")
                 .eventOutcome("success")
+                .field("log.source", "application")
                 .log();
         } catch (final Exception e) {
             EcsLogger.error("com.auto1.pantera")
@@ -989,6 +1021,7 @@ public final class VertxMain {
                 .eventAction("executor_shutdown")
                 .eventOutcome("failure")
                 .error(e)
+                .field("log.source", "application")
                 .log();
         }
         // 7b. Cancel cooldown cleanup fallback timers (must run before
@@ -1001,6 +1034,7 @@ public final class VertxMain {
                     .eventCategory("web")
                     .eventAction("cooldown_fallback_stop")
                     .eventOutcome("success")
+                    .field("log.source", "application")
                     .log();
             } catch (final Exception e) {
                 EcsLogger.error("com.auto1.pantera.cooldown.cleanup")
@@ -1009,6 +1043,7 @@ public final class VertxMain {
                     .eventAction("cooldown_fallback_stop")
                     .eventOutcome("failure")
                     .error(e)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -1021,6 +1056,7 @@ public final class VertxMain {
                     .eventCategory("web")
                     .eventAction("vertx_close")
                     .eventOutcome("success")
+                    .field("log.source", "application")
                     .log();
             } catch (final Exception e) {
                 EcsLogger.error("com.auto1.pantera")
@@ -1029,6 +1065,7 @@ public final class VertxMain {
                     .eventAction("vertx_close")
                     .eventOutcome("failure")
                     .error(e)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -1037,6 +1074,7 @@ public final class VertxMain {
             .eventCategory("web")
             .eventAction("server_shutdown")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
     }
 
@@ -1068,6 +1106,7 @@ public final class VertxMain {
                 .eventAction("port_configure")
                 .eventOutcome("success")
                 .field("destination.port", defp)
+                .field("log.source", "application")
                 .log();
             port = defp;
         }
@@ -1081,6 +1120,7 @@ public final class VertxMain {
             .eventCategory("web")
             .eventAction("server_start")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
         final VertxMain app = new VertxMain(config, port);
 
@@ -1091,6 +1131,7 @@ public final class VertxMain {
                 .eventCategory("web")
                 .eventAction("shutdown_hook")
                 .eventOutcome("success")
+                .field("log.source", "application")
                 .log();
             app.stop();
         }, "pantera-shutdown-hook"));
@@ -1101,6 +1142,7 @@ public final class VertxMain {
             .eventCategory("web")
             .eventAction("server_start")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
     }
 
@@ -1153,6 +1195,7 @@ public final class VertxMain {
                             .eventOutcome("success")
                             .field("repository.name", name)
                             .field("destination.port", prt)
+                            .field("log.source", "application")
                             .log();
                     },
                     () -> EcsLogger.info("com.auto1.pantera")
@@ -1162,6 +1205,7 @@ public final class VertxMain {
                         .eventOutcome("success")
                         .field("repository.name", repo.name())
                         .field("destination.port", port)
+                        .field("log.source", "application")
                         .log()
                 );
             } catch (final IllegalStateException err) {
@@ -1181,6 +1225,7 @@ public final class VertxMain {
                     .eventOutcome("failure")
                     .field("repository.name", repo.name())
                     .error(err)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -1248,6 +1293,7 @@ public final class VertxMain {
                 .eventAction("proxy_protocol_enable")
                 .eventOutcome("success")
                 .field("destination.port", serverPort)
+                .field("log.source", "application")
                 .log();
         }
         final VertxSliceServer server = new VertxSliceServer( // NOPMD CloseResource - lifecycle owned by this.servers list (closed on shutdown)
@@ -1395,6 +1441,7 @@ public final class VertxMain {
                     .eventOutcome("success")
                     .field("destination.port", endpoint.get().getValue())
                     .field("url.path", endpoint.get().getKey())
+                    .field("log.source", "application")
                     .log();
             }
         } else {
@@ -1406,6 +1453,7 @@ public final class VertxMain {
             .eventCategory("configuration")
             .eventAction("vertx_configure")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
 
         return res;
@@ -1472,6 +1520,7 @@ public final class VertxMain {
                 .eventAction("vertx_tmpdir_cleanup")
                 .eventOutcome("failure")
                 .field("file.directory", base)
+                .field("log.source", "application")
                 .log();
             return;
         }
@@ -1485,6 +1534,7 @@ public final class VertxMain {
                 .field("file.directory", base)
                 .field("file.removed_count", counters[0])
                 .field("file.bytes_freed", counters[1])
+                .field("log.source", "application")
                 .log();
         }
     }

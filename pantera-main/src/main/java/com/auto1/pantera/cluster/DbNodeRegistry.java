@@ -97,6 +97,7 @@ public final class DbNodeRegistry {
                 .eventCategory("database")
                 .eventAction("create_table")
                 .eventOutcome("success")
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -136,6 +137,7 @@ public final class DbNodeRegistry {
                 .eventCategory("host")
                 .eventAction("node_register")
                 .eventOutcome("success")
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -162,6 +164,7 @@ public final class DbNodeRegistry {
                     .eventCategory("host")
                     .eventAction("node_heartbeat")
                     .eventOutcome("failure")
+                    .field("log.source", "application")
                     .log();
             } else {
                 EcsLogger.debug(DbNodeRegistry.LOGGER)
@@ -169,6 +172,7 @@ public final class DbNodeRegistry {
                     .eventCategory("host")
                     .eventAction("node_heartbeat")
                     .eventOutcome("success")
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -194,6 +198,7 @@ public final class DbNodeRegistry {
                 .eventCategory("host")
                 .eventAction("node_deregister")
                 .eventOutcome("success")
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -241,6 +246,7 @@ public final class DbNodeRegistry {
             .eventCategory("host")
             .eventAction("live_nodes_query")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
         return result;
     }
@@ -270,6 +276,7 @@ public final class DbNodeRegistry {
                 .eventCategory("host")
                 .eventAction("node_evict")
                 .eventOutcome("success")
+                .field("log.source", "application")
                 .log();
         }
         return evicted;

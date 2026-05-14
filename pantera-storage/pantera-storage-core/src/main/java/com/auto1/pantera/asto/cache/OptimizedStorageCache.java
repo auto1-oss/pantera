@@ -248,6 +248,7 @@ public final class OptimizedStorageCache {
                                 .field("file.path", filePath.toString())
                                 .field("file.size", fileSize)
                                 .field("http.response.body.bytes", totalRead)
+                                .field("log.source", "application")
                                 .log();
                             cancelled = true;
                             break;
@@ -324,6 +325,7 @@ public final class OptimizedStorageCache {
                         .eventAction("buffer_cleanup")
                         .eventOutcome("failure")
                         .error(ex)
+                        .field("log.source", "application")
                         .log();
                 }
             }

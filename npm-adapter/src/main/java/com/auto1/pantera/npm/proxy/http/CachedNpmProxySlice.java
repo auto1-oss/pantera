@@ -287,6 +287,7 @@ public final class CachedNpmProxySlice implements Slice {
                     .field("repository.name", this.repoName)
                     .field("package.name", key.string())
                     .error(error)
+                    .field("log.source", "application")
                     .log();
                 return FetchSignal.ERROR;
             });
@@ -361,6 +362,7 @@ public final class CachedNpmProxySlice implements Slice {
             EcsLogger.debug("com.auto1.pantera.npm")
                 .message("Failed to record metric")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }

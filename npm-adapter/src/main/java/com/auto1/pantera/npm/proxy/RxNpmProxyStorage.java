@@ -86,6 +86,7 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
                 .message("npm storage phaseRecorder threw; serve path unaffected")
                 .field("phase", phase)
                 .error(thrown)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -157,6 +158,7 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
                 .eventAction("generate_abbreviated")
                 .eventOutcome("success")
                 .field("package.name", packageName)
+                .field("log.source", "application")
                 .log();
             return result;
         } catch (final Exception e) {
@@ -167,6 +169,7 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
                 .eventOutcome("failure")
                 .field("package.name", packageName)
                 .error(e)
+                .field("log.source", "application")
                 .log();
             return new byte[0];
         }
@@ -289,6 +292,7 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
                 .eventOutcome("failure")
                 .field("url.path", asset.path())
                 .error(err)
+                .field("log.source", "application")
                 .log()
         );
         // Phase 12: tee the upstream Publisher. Bytes flow to the client as
@@ -328,6 +332,7 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
                                     .eventAction("stream_through_data_save")
                                     .eventOutcome("failure")
                                     .error(err)
+                                    .field("log.source", "application")
                                     .log()
                             );
                         } catch (final Exception ex) {

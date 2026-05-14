@@ -95,6 +95,7 @@ public final class Login extends Header {
                 EcsLogger.debug("com.auto1.pantera.http")
                     .message("Failed to decode Basic auth credentials")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
                 return Optional.empty();
             }

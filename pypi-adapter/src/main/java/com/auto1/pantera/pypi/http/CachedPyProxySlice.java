@@ -242,6 +242,7 @@ public final class CachedPyProxySlice implements Slice {
                 .eventCategory("web")
                 .eventAction("proxy_request")
                 .field("package.name", key.string())
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(
                 ResponseBuilder.notFound().build()
@@ -311,6 +312,7 @@ public final class CachedPyProxySlice implements Slice {
                     .eventCategory("web")
                     .eventAction("proxy_request")
                     .field("package.name", key.string())
+                    .field("log.source", "application")
                     .log();
                 // Metadata exists - serve cached with headers
                 return CompletableFuture.completedFuture(
@@ -339,6 +341,7 @@ public final class CachedPyProxySlice implements Slice {
             .eventCategory("web")
             .eventAction("proxy_request")
             .field("package.name", key.string())
+            .field("log.source", "application")
             .log();
         return this.origin.response(line, headers, body)
             .thenCompose(response -> {
@@ -350,6 +353,7 @@ public final class CachedPyProxySlice implements Slice {
                         .eventCategory("web")
                         .eventAction("proxy_request")
                         .field("package.name", key.string())
+                        .field("log.source", "application")
                         .log();
                     // Cache 404 to avoid repeated upstream requests
                     this.negativeCache.cacheNotFound(
@@ -368,6 +372,7 @@ public final class CachedPyProxySlice implements Slice {
                             .eventCategory("web")
                             .eventAction("proxy_request")
                             .field("package.name", key.string())
+                            .field("log.source", "application")
                             .log();
                         // Note: Full metadata caching with body digests would require
                         // consuming the response body, which is complex.
@@ -432,6 +437,7 @@ public final class CachedPyProxySlice implements Slice {
             EcsLogger.debug("com.auto1.pantera.pypi")
                 .message("Failed to record metric")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -489,6 +495,7 @@ public final class CachedPyProxySlice implements Slice {
                 .field("repository.name", this.repoName)
                 .field("url.path", path)
                 .error(err)
+                .field("log.source", "application")
                 .log();
             return ResponseBuilder.badGateway().build();
         });
@@ -598,6 +605,7 @@ public final class CachedPyProxySlice implements Slice {
                     .field("repository.name", this.repoName)
                     .field("url.path", path)
                     .error(err)
+                    .field("log.source", "application")
                     .log();
                 return ResponseBuilder.badGateway()
                     .textBody("Upstream temporarily unavailable")
@@ -656,6 +664,7 @@ public final class CachedPyProxySlice implements Slice {
             EcsLogger.debug("com.auto1.pantera.pypi")
                 .message("MicrometerMetrics registry unavailable; writer will run without metrics")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
         return null;

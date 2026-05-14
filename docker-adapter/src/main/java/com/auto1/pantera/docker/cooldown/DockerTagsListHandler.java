@@ -226,6 +226,7 @@ public final class DockerTagsListHandler {
                 .field("repository.name", this.repoName)
                 .field("package.name", image)
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(
                 ResponseBuilder.ok()
@@ -266,6 +267,7 @@ public final class DockerTagsListHandler {
                     .eventOutcome("success")
                     .field("repository.name", this.repoName)
                     .field("package.name", image)
+                    .field("log.source", "application")
                     .log();
                 return ResponseBuilder.ok()
                     .header("Content-Type", this.rewriter.contentType())
@@ -280,6 +282,7 @@ public final class DockerTagsListHandler {
                     .field("repository.name", this.repoName)
                     .field("package.name", image)
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
                 return ResponseBuilder.ok()
                     .header("Content-Type", this.rewriter.contentType())
@@ -337,6 +340,7 @@ public final class DockerTagsListHandler {
                     .field("package.name", image)
                     .field("package.version", tag)
                     .error(err)
+                    .field("log.source", "application")
                     .log();
                 return false;
             });

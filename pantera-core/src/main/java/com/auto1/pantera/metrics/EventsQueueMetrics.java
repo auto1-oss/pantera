@@ -75,6 +75,7 @@ public final class EventsQueueMetrics {
             .eventAction("queue_overflow")
             .eventOutcome("failure")
             .field("repository.name", repoName == null ? "unknown" : repoName)
+            .field("log.source", "application")
             .log();
         if (MicrometerMetrics.isInitialized()) {
             try {

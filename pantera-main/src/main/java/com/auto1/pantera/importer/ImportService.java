@@ -175,6 +175,7 @@ public final class ImportService {
                     .eventAction("import_normalize")
                     .field("url.original", path)
                     .field("url.path", normalized)
+                    .field("log.source", "application")
                     .log();
                 return normalized;
             }
@@ -189,6 +190,7 @@ public final class ImportService {
                 .eventAction("import_normalize")
                 .field("url.original", path)
                 .field("url.path", normalized)
+                .field("log.source", "application")
                 .log();
             return normalized;
         }
@@ -245,6 +247,7 @@ public final class ImportService {
                 .eventAction("import_artifact")
                 .eventOutcome("unknown")
                 .field("event.reason", "skipped")
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(
                 new ImportResult(
@@ -264,6 +267,7 @@ public final class ImportService {
                 .eventAction("import_artifact")
                 .field("repository.name", request.repo())
                 .field("url.path", request.path())
+                .field("log.source", "application")
                 .log();
             final long size = request.size().orElse(0L);
             this.sessions.ifPresent(store -> store.markCompleted(session, size, buildExpectedDigests(request)));
@@ -323,6 +327,7 @@ public final class ImportService {
                 .field("repository.name", request.repo())
                 .field("url.path", request.path())
                 .error(err)
+                .field("log.source", "application")
                 .log();
             this.sessions.ifPresent(store -> store.markFailed(session, err.getMessage()));
             throw new CompletionException(err);
@@ -370,6 +375,7 @@ public final class ImportService {
                 .field("repository.name", request.repo())
                 .field("url.path", request.path())
                 .field("error.message", mismatch.get())
+                .field("log.source", "application")
                 .log();
             final Storage root = rootStorage(storage).orElse(storage);
             if (root == storage) { // NOPMD CompareObjectsWithEquals - intentional identity check (orElse returned the same instance)
@@ -423,6 +429,7 @@ public final class ImportService {
                             .eventAction("import_cleanup")
                             .eventOutcome("failure")
                             .field("error.message", cleanupErr.getMessage())
+                            .field("log.source", "application")
                             .log();
                         return null;
                     });
@@ -441,6 +448,7 @@ public final class ImportService {
                                     .eventCategory("web")
                                     .eventAction("import_artifact")
                                     .field("repository.name", request.repo())
+                                    .field("log.source", "application")
                                     .log();
                             }
                             return writeShardsForImport(storage, target, request, size, toPersist, baseUrl)
@@ -452,6 +460,7 @@ public final class ImportService {
                                         .eventOutcome("failure")
                                         .field("repository.name", request.repo())
                                         .field("error.message", err.getMessage())
+                                        .field("log.source", "application")
                                         .log();
                                     return null;
                                 })
@@ -482,6 +491,7 @@ public final class ImportService {
                                         .eventOutcome("failure")
                                         .field("repository.name", request.repo())
                                         .field("error.message", err.getMessage())
+                                        .field("log.source", "application")
                                         .log();
                                     return null; // Continue even if metadata regeneration fails
                                 })
@@ -688,6 +698,7 @@ public final class ImportService {
                         .eventCategory("web")
                         .eventAction("import_cleanup")
                         .field("error.message", err.getMessage())
+                        .field("log.source", "application")
                         .log();
                     return null;
                 })
@@ -702,6 +713,7 @@ public final class ImportService {
                                     .eventCategory("web")
                                     .eventAction("import_cleanup")
                                     .field("error.message", err.getMessage())
+                                    .field("log.source", "application")
                                     .log();
                                 return null;
                             })
@@ -716,6 +728,7 @@ public final class ImportService {
                                                 .eventCategory("web")
                                                 .eventAction("import_cleanup")
                                                 .field("error.message", err.getMessage())
+                                                .field("log.source", "application")
                                                 .log();
                                             return null;
                                         });
@@ -795,6 +808,7 @@ public final class ImportService {
                 .eventCategory("configuration")
                 .eventAction("settings_read")
                 .field("error.message", ex.getMessage())
+                .field("log.source", "application")
                 .log();
         }
         final String prop = System.getProperty("pantera.metadata.merge.mode", "");
@@ -906,6 +920,7 @@ public final class ImportService {
                 .message("Skipping maven-metadata.xml file at path: " + path)
                 .eventCategory("web")
                 .eventAction("import_shard_write")
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(null);
         }
@@ -917,6 +932,7 @@ public final class ImportService {
                 .eventAction("import_shard_write")
                 .field("package.name", request.artifact().orElse(null))
                 .field("package.version", request.version().orElse(null))
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(null);
         }
@@ -928,6 +944,7 @@ public final class ImportService {
             .field("file.path", coords.groupPath)
             .field("package.name", coords.artifactId)
             .field("package.version", coords.version)
+            .field("log.source", "application")
             .log();
         final String shard = String.format(
             Locale.ROOT,
@@ -947,6 +964,7 @@ public final class ImportService {
             .message("Extracted filename '" + filename + "' from path: " + path)
             .eventCategory("web")
             .eventAction("import_shard_write")
+            .field("log.source", "application")
             .log();
         // Build shard key parts, avoiding empty groupPath
         final java.util.List<String> keyParts = new java.util.ArrayList<>();
@@ -972,6 +990,7 @@ public final class ImportService {
             .message("Creating shard key (parts: " + keyParts.toString() + ")")
             .eventCategory("web")
             .eventAction("import_shard_write")
+            .field("log.source", "application")
             .log();
         final Key shardKey = new Key.From(keyParts.toArray(new String[0]));
         return storage.save(shardKey, new Content.From(shard.getBytes(StandardCharsets.UTF_8)))
@@ -1026,6 +1045,7 @@ public final class ImportService {
                 .eventCategory("web")
                 .eventAction("import_shard_write")
                 .field("file.name", file)
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(null);
         }
@@ -1073,6 +1093,7 @@ public final class ImportService {
             .field("url.path", path)
             .field("package.name", hdrArtifact)
             .field("package.version", hdrVersion)
+            .field("log.source", "application")
             .log();
         // Check if path starts with slash and remove it
         String normalizedPath = path;
@@ -1084,6 +1105,7 @@ public final class ImportService {
                 .eventAction("maven_coords_infer")
                 .field("url.original", path)
                 .field("url.path", normalizedPath)
+                .field("log.source", "application")
                 .log();
         }
         if (hdrArtifact != null && hdrVersion != null && !hdrVersion.isEmpty()) {
@@ -1091,6 +1113,7 @@ public final class ImportService {
                 .message("Using headers for coordinates")
                 .eventCategory("web")
                 .eventAction("maven_coords_infer")
+                .field("log.source", "application")
                 .log();
             final int idx = normalizedPath.lastIndexOf('/');
             if (idx > 0) {
@@ -1107,6 +1130,7 @@ public final class ImportService {
             .message("Using path parsing fallback")
             .eventCategory("web")
             .eventAction("maven_coords_infer")
+            .field("log.source", "application")
             .log();
         // Fallback: .../{artifactId}/{version}/{file}
         final String[] segs = normalizedPath.split("/");
@@ -1115,6 +1139,7 @@ public final class ImportService {
             .eventCategory("web")
             .eventAction("maven_coords_infer")
             .field("url.path", normalizedPath)
+            .field("log.source", "application")
             .log();
         if (segs.length < 3) {
             EcsLogger.debug("com.auto1.pantera.importer")
@@ -1122,6 +1147,7 @@ public final class ImportService {
                 .eventCategory("web")
                 .eventAction("maven_coords_infer")
                 .eventOutcome("failure")
+                .field("log.source", "application")
                 .log();
             return null;
         }
@@ -1141,6 +1167,7 @@ public final class ImportService {
             .field("package.name", artifactId)
             .field("package.version", version)
             .field("file.path", groupPath)
+            .field("log.source", "application")
             .log();
         if (groupPath.isEmpty()) {
             return null;
@@ -1220,6 +1247,7 @@ public final class ImportService {
                 .eventAction("base_url_resolve")
                 .field("repository.name", config.name())
                 .field("error.message", ex.getMessage())
+                .field("log.source", "application")
                 .log();
             return Optional.empty();
         }

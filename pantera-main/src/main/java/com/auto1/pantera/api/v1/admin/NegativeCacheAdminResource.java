@@ -256,6 +256,7 @@ public final class NegativeCacheAdminResource {
             .eventAction("neg_cache_invalidate")
             .eventOutcome("success")
             .field("user.name", user)
+            .field("log.source", "application")
             .log();
         // T-S04: audit the cache invalidation as an admin mutation.
         NegativeCacheAdminResource.audit(user, "CACHE_CLEAR",
@@ -341,6 +342,7 @@ public final class NegativeCacheAdminResource {
                 .eventAction("neg_cache_invalidate")
                 .eventOutcome("success")
                 .field("user.name", user)
+                .field("log.source", "application")
                 .log();
             ctx.response()
                 .setStatusCode(200)
@@ -421,6 +423,7 @@ public final class NegativeCacheAdminResource {
             EcsLogger.warn(LOGGER)
                 .message("Cannot access L1 cache for admin listing")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             return null;
         }

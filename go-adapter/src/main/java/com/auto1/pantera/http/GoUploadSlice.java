@@ -141,6 +141,7 @@ final class GoUploadSlice implements Slice {
                 .eventAction("upload")
                 .field("url.original", path)
                 .field("url.path", sanitizedPath)
+                .field("log.source", "application")
                 .log();
         } else {
             sanitizedPath = path;
@@ -185,12 +186,14 @@ final class GoUploadSlice implements Slice {
                             .eventCategory("database")
                             .eventAction("neg_cache_invalidate_on_upload")
                             .field("package.name", module)
+                            .field("log.source", "application")
                             .log();
                     }
                 } catch (final RuntimeException ex) {
                     EcsLogger.warn("com.auto1.pantera.go")
                         .message("Negative-cache invalidation after upload failed")
                         .error(ex)
+                        .field("log.source", "application")
                         .log();
                 }
             });

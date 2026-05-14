@@ -166,6 +166,7 @@ public final class FileSystemBrowseSlice implements Slice {
                     .eventOutcome("success")
                     .field("url.path", key.string())
                     .duration(elapsed)
+                    .field("log.source", "application")
                     .log();
 
                 return ResponseBuilder.ok()
@@ -181,6 +182,7 @@ public final class FileSystemBrowseSlice implements Slice {
                     .eventOutcome("failure")
                     .field("url.path", key.string())
                     .error(e)
+                    .field("log.source", "application")
                     .log();
                 return ResponseBuilder.internalError()
                     .textBody("Failed to browse directory: " + e.getMessage())

@@ -84,6 +84,7 @@ public final class EventQueue<T> {
                 .message(String.format("Event queue full, dropping event: capacity=%d, size=%d", this.capacity, current))
                 .eventCategory("process")
                 .eventAction("queue_drop")
+                .field("log.source", "application")
                 .log();
             return false;
         }

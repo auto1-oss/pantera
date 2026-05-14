@@ -277,6 +277,8 @@ public final class AuthHandler {
                     .eventCategory("authentication")
                     .eventAction("sso_redirect")
                     .error(err)
+                    .field("log.source", "application")
+                    .field("event.outcome", "failure")
                     .log();
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
                     "Sign-in is temporarily unavailable. Please try again.");
@@ -288,6 +290,7 @@ public final class AuthHandler {
                     .message("SSO redirect rejected: " + result.getString("error"))
                     .eventCategory("authentication")
                     .eventAction("sso_redirect")
+                    .field("log.source", "application")
                     .log();
                 ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
                     "Sign-in provider is not configured correctly.");
@@ -388,6 +391,7 @@ public final class AuthHandler {
                         .eventAction("sso_callback")
                         .eventOutcome("failure")
                         .field("http.response.status_code", resp.statusCode())
+                        .field("log.source", "http")
                         .log();
                     throw new IllegalStateException(
                         "Token exchange failed with status " + resp.statusCode()
@@ -445,6 +449,7 @@ public final class AuthHandler {
                         .eventCategory("authentication")
                         .eventAction("sso_groups")
                         .field("user.name", username)
+                        .field("log.source", "application")
                         .log();
                 }
                 EcsLogger.info("com.auto1.pantera.api.v1")
@@ -454,6 +459,7 @@ public final class AuthHandler {
                     .eventCategory("authentication")
                     .eventAction("sso_groups")
                     .field("user.name", username)
+                    .field("log.source", "application")
                     .log();
                 // ACCESS GATE 1: allowed-groups check.
                 // If meta.auth.providers[*].allowed-groups is configured,
@@ -484,6 +490,7 @@ public final class AuthHandler {
                             .eventAction("sso_callback")
                             .eventOutcome("failure")
                             .field("user.name", username)
+                            .field("log.source", "application")
                             .log();
                         throw new IllegalStateException(
                             "Access denied: user is not in any allowed group for this provider"
@@ -498,6 +505,7 @@ public final class AuthHandler {
                         .eventCategory("authentication")
                         .eventAction("sso_callback")
                         .field("user.name", username)
+                        .field("log.source", "application")
                         .log();
                 }
                 // ACCESS GATE 2: enabled check.
@@ -516,6 +524,7 @@ public final class AuthHandler {
                             .eventAction("sso_callback")
                             .eventOutcome("failure")
                             .field("user.name", username)
+                            .field("log.source", "application")
                             .log();
                         throw new IllegalStateException(
                             "Access denied: user is disabled"
@@ -562,6 +571,7 @@ public final class AuthHandler {
                         .eventCategory("authentication")
                         .eventAction("sso_role_mapping")
                         .field("user.name", username)
+                        .field("log.source", "application")
                         .log();
                 }
                 for (final String grp : groups) {
@@ -583,6 +593,7 @@ public final class AuthHandler {
                         .eventCategory("authentication")
                         .eventAction("sso_role_mapping")
                         .field("user.name", username)
+                        .field("log.source", "application")
                         .log();
                 }
                 // If Okta sent groups but none mapped to a role AND there's
@@ -599,6 +610,7 @@ public final class AuthHandler {
                             .eventCategory("authentication")
                             .eventAction("sso_role_mapping")
                             .field("user.name", username)
+                            .field("log.source", "application")
                             .log();
                     }
                 }
@@ -631,6 +643,7 @@ public final class AuthHandler {
                         .eventCategory("authentication")
                         .eventAction("sso_provision")
                         .field("user.name", username)
+                        .field("log.source", "application")
                         .log();
                     AuthHandler.this.users.addOrUpdate(userInfo.build(), username);
                     // Invalidate the cached UserPermissions so the next /me
@@ -647,6 +660,7 @@ public final class AuthHandler {
                         .eventCategory("authentication")
                         .eventAction("sso_provision")
                         .field("user.name", username)
+                        .field("log.source", "application")
                         .log();
                 }
                 EcsLogger.info("com.auto1.pantera.api.v1")
@@ -657,6 +671,7 @@ public final class AuthHandler {
                     .eventAction("sso_callback")
                     .eventOutcome("success")
                     .field("user.name", username)
+                    .field("log.source", "application")
                     .log();
                 // Generate Pantera JWT pair
                 final AuthUser authUser = new AuthUser(username, provider);
@@ -688,6 +703,7 @@ public final class AuthHandler {
                     .eventAction("sso_callback")
                     .eventOutcome("failure")
                     .error(cause)
+                    .field("log.source", "application")
                     .log();
                 if (detail.contains("Provider '") && detail.contains("not found")) {
                     ApiResponse.sendError(ctx, 404, "NOT_FOUND",
@@ -766,6 +782,7 @@ public final class AuthHandler {
                 .eventAction("token_generate")
                 .eventOutcome("failure")
                 .field("event.reason", "permanent_tokens_disabled")
+                .field("log.source", "application")
                 .log();
             ApiResponse.sendError(ctx, 400, "PERMANENT_TOKENS_DISABLED",
                 "Permanent API tokens are disabled by administrator policy. "
@@ -780,6 +797,7 @@ public final class AuthHandler {
                     + " max=" + maxTokenDays)
                 .eventCategory("authentication")
                 .eventAction("token_generate")
+                .field("log.source", "application")
                 .log();
         } else {
             expiryDays = requestedDays;
@@ -843,6 +861,7 @@ public final class AuthHandler {
             .eventCategory("authentication")
             .eventAction("token_refresh")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
         ctx.response()
             .setStatusCode(200)
@@ -961,6 +980,7 @@ public final class AuthHandler {
                     .eventAction("me_user_lookup")
                     .eventOutcome("failure")
                     .field("user.name", sub)
+                    .field("log.source", "application")
                     .log();
             }
         }

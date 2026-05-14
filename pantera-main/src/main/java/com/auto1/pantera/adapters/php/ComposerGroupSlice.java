@@ -271,6 +271,7 @@ public final class ComposerGroupSlice implements Slice {
                 .eventAction("packages_fetch")
                 .eventOutcome("failure")
                 .field("repository.name", this.group)
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
         }
@@ -284,6 +285,7 @@ public final class ComposerGroupSlice implements Slice {
             .eventCategory("web")
             .eventAction("packages_fetch")
             .field("repository.name", this.group)
+            .field("log.source", "application")
             .log();
 
         return memberSlice.response(rewritten, sanitized, Content.EMPTY)
@@ -299,6 +301,7 @@ public final class ComposerGroupSlice implements Slice {
                     .eventOutcome("failure")
                     .field("http.response.status_code", resp.status().code())
                     .field("repository.name", this.group)
+                    .field("log.source", "http")
                     .log();
                 // Drain non-OK body to release upstream connection, then recurse.
                 return resp.body().asBytesFuture()
@@ -312,6 +315,7 @@ public final class ComposerGroupSlice implements Slice {
                     .eventOutcome("failure")
                     .field("error.message", ex.getMessage())
                     .field("repository.name", this.group)
+                    .field("log.source", "application")
                     .log();
                 return null;
             })
@@ -348,6 +352,7 @@ public final class ComposerGroupSlice implements Slice {
                 .eventOutcome("failure")
                 .field("error.message", e.getMessage())
                 .field("repository.name", this.group)
+                .field("log.source", "application")
                 .log();
             return ResponseBuilder.notFound().build();
         }
@@ -379,7 +384,8 @@ public final class ComposerGroupSlice implements Slice {
                 .eventAction("packages_fetch")
                 .eventOutcome("success")
                 .field("repository.name", this.group)
-                .field("repository.member", member)
+                .field("member.name", member)
+                .field("log.source", "application")
                 .log();
         } else {
             // Traditional format: copy packages, inject uid where missing,
@@ -418,7 +424,8 @@ public final class ComposerGroupSlice implements Slice {
                 .eventAction("packages_fetch")
                 .eventOutcome("success")
                 .field("repository.name", this.group)
-                .field("repository.member", member)
+                .field("member.name", member)
+                .field("log.source", "application")
                 .log();
         }
 

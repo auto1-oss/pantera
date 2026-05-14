@@ -278,6 +278,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
                 + poolSize + " threads, queue=" + QUEUE_SIZE + ", policy=abort)")
             .eventCategory("configuration")
             .eventAction("pool_init")
+            .field("log.source", "application")
             .log();
         // WI-post-03a: ContextualExecutorService contextualises EVERY submit path
         // (execute, submit(Callable/Runnable), invokeAll, invokeAny) — fixes the
@@ -316,6 +317,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
                     .eventOutcome("failure")
                     .field("package.name", doc.artifactPath())
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
                 throw new RuntimeException("Failed to index artifact: " + doc.artifactPath(), ex);
             }
@@ -339,6 +341,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
                     .field("repository.name", repoName)
                     .field("package.name", artifactPath)
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
                 throw new RuntimeException(
                     String.format("Failed to remove artifact %s from %s", artifactPath, repoName),
@@ -385,6 +388,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
                     .field("repository.name", repoName)
                     .field("package.name", pathPrefix)
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
                 throw new RuntimeException(
                     String.format("Failed to remove prefix %s from %s",
@@ -457,6 +461,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
                     .eventCategory("database")
                     .eventAction("db_fts_fallback")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
                 return DbArtifactIndex.searchFilteredLike(
                     this.source, "%" + query + "%", maxResults, offset,
@@ -531,6 +536,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
                     .eventCategory("database")
                     .eventAction("db_fts_fallback")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
                 return DbArtifactIndex.searchFilteredLike(
                     this.source, "%" + fts + "%", maxResults, offset,
@@ -1229,6 +1235,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
                             .eventCategory("database")
                             .eventAction("db_fts_agg_timeout")
                             .error(ex)
+                            .field("log.source", "application")
                             .log();
                         typeCounts = Map.of();
                         repoCounts = Map.of();
@@ -1345,6 +1352,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
                             .eventCategory("database")
                             .eventAction("db_fts_agg_timeout")
                             .error(ex)
+                            .field("log.source", "application")
                             .log();
                         typeCounts = Map.of();
                         repoCounts = Map.of();
@@ -1470,6 +1478,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
                 .eventAction("db_search_filtered_like")
                 .eventOutcome("failure")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             return SearchResult.EMPTY;
         }
@@ -1603,6 +1612,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
                     .eventAction("db_locate")
                     .eventOutcome("failure")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
                 return List.of();
             }
@@ -1653,6 +1663,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
                     .eventAction("locate_by_name")
                     .eventOutcome("failure")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
                 return Optional.empty();
             }
@@ -1739,6 +1750,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
                         .eventCategory("database")
                         .eventAction("db_stats_mv_fallback")
                         .error(ex)
+                        .field("log.source", "application")
                         .log();
                 }
                 if (count < 0) {
@@ -1756,6 +1768,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
                     .eventAction("db_stats")
                     .eventOutcome("failure")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
             stats.put("documents", count);
@@ -1788,6 +1801,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
                     .eventAction("db_index_batch")
                     .eventOutcome("failure")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
                 throw new RuntimeException(
                     "Failed to batch index " + docs.size() + " artifacts", ex

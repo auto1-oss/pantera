@@ -521,6 +521,7 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                     .eventOutcome("success")
                     .field("url.port", this.actualPort)
                     .field("url.scheme", schema)
+                    .field("log.source", "application")
                     .log();
             })
             .onFailure(
@@ -531,6 +532,7 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                     .eventOutcome("failure")
                     .field("url.port", this.port)
                     .error(err)
+                    .field("log.source", "application")
                     .log()
             );
     }

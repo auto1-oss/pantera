@@ -196,6 +196,7 @@ public final class MemberSlice {
             .message(String.format("MemberSlice '%s' rewritePath: %s to %s", this.name, raw, result.uri().getPath()))
             .eventCategory("web")
             .eventAction("path_rewrite")
+            .field("log.source", "application")
             .log();
 
         return result;

@@ -124,6 +124,7 @@ public final class PgListenNotify {
                 EcsLogger.warn("com.auto1.pantera.settings.runtime")
                     .message("LISTEN connection lost; reconnecting in 5s")
                     .field("error.message", ex.getMessage())
+                    .field("log.source", "application")
                     .log();
                 try {
                     Thread.sleep(LISTEN_BACKOFF_MS);
@@ -143,6 +144,7 @@ public final class PgListenNotify {
                 .message("Settings change listener threw")
                 .field("settings.key", n.getParameter())
                 .field("error.message", t.getMessage())
+                .field("log.source", "application")
                 .log();
         }
     }

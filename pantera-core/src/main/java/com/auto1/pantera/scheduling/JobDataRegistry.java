@@ -80,6 +80,7 @@ public final class JobDataRegistry {
                 .eventCategory("process")
                 .eventAction("job_data_overflow")
                 .eventOutcome("failure")
+                .field("log.source", "application")
                 .log();
         }
         DATA.put(key, value);

@@ -298,6 +298,7 @@ public final class MavenGroupSlice implements Slice {
                                 .eventOutcome("failure")
                                 .field("url.path", path)
                                 .error(e)
+                                .field("log.source", "application")
                                 .log();
                             return ResponseBuilder.internalError()
                                 .textBody("Failed to compute checksum")
@@ -337,6 +338,7 @@ public final class MavenGroupSlice implements Slice {
                     .eventOutcome("success")
                     .field("repository.name", this.group)
                     .field("url.path", path)
+                    .field("log.source", "application")
                     .log();
                 return CompletableFuture.completedFuture(
                     ResponseBuilder.ok()
@@ -377,6 +379,7 @@ public final class MavenGroupSlice implements Slice {
                 .eventAction("metadata_fetch_coalesce")
                 .field("repository.name", this.group)
                 .field("url.path", path)
+                .field("log.source", "application")
                 .log();
             // Follower: re-enter response() once the gate resolves. Swallow
             // any exception the gate might carry — the L1/L2 cache is the
@@ -421,6 +424,7 @@ public final class MavenGroupSlice implements Slice {
                         .field("repository.name", this.group)
                         .field("url.path", path)
                         .error(cause)
+                        .field("log.source", "application")
                         .log();
                     return ResponseBuilder.internalError()
                         .textBody("Failed to fetch metadata: " + cause.getMessage())
@@ -481,7 +485,8 @@ public final class MavenGroupSlice implements Slice {
                                             .field("repository.name", this.group)
                                             .field("url.path", path)
                                             .field("event.duration", fetchDuration)
-                                            .field("repository.member", member)
+                                            .field("member.name", member)
+                                            .field("log.source", "application")
                                             .log();
                                     }
                                     return ResponseBuilder.ok()
@@ -502,9 +507,10 @@ public final class MavenGroupSlice implements Slice {
                         .eventAction("metadata_fetch")
                         .eventOutcome("failure")
                         .field("repository.name", this.group)
-                        .field("repository.member", member)
+                        .field("member.name", member)
                         .field("http.response.status_code", resp.status().code())
                         .field("url.path", path)
+                        .field("log.source", "http")
                         .log();
                 }
                 return resp.body().asBytesFuture()
@@ -519,9 +525,10 @@ public final class MavenGroupSlice implements Slice {
                     .eventAction("metadata_fetch")
                     .eventOutcome("failure")
                     .field("repository.name", this.group)
-                    .field("repository.member", member)
+                    .field("member.name", member)
                     .field("url.path", path)
                     .error(err)
+                    .field("log.source", "application")
                     .log();
                 return null;
             })
@@ -558,6 +565,7 @@ public final class MavenGroupSlice implements Slice {
                         .field("repository.name", this.group)
                         .field("url.path", path)
                         .field("event.duration", fetchDuration)
+                        .field("log.source", "application")
                         .log();
                     return ResponseBuilder.ok()
                         .header("Content-Type", "application/xml")
@@ -572,6 +580,7 @@ public final class MavenGroupSlice implements Slice {
                     .field("repository.name", this.group)
                     .field("url.path", path)
                     .field("event.duration", fetchDuration)
+                    .field("log.source", "application")
                     .log();
                 return ResponseBuilder.notFound().build();
             });
@@ -648,6 +657,7 @@ public final class MavenGroupSlice implements Slice {
                 .field("repository.name", this.group)
                 .field("url.path", path)
                 .error(err)
+                .field("log.source", "application")
                 .log();
             return mergedBytes;
         });

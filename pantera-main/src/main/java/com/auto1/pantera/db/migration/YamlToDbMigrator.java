@@ -516,8 +516,8 @@ public final class YamlToDbMigrator {
                 assign.setInt(1, userId);
                 assign.executeUpdate();
             }
-            LOG.warn("Bootstrapped default admin user — username='admin' "
-                + "password='admin' (must_change_password=TRUE on first login). "
+            LOG.warn("Bootstrapped default admin user — username='<redacted>' "
+                + "password='<redacted>' (must_change_password=TRUE on first login). "
                 + "CHANGE THIS IMMEDIATELY in production.");
         } catch (final Exception ex) {
             LOG.error("Failed to bootstrap default admin user", ex);

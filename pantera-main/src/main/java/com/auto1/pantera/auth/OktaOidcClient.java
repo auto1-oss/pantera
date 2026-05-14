@@ -112,6 +112,7 @@ public final class OktaOidcClient {
             .eventCategory("authentication")
             .eventAction("login")
             .field("user.name", username)
+            .field("log.source", "application")
             .log();
         final JsonObject authnReq = Json.createObjectBuilder()
             .add("username", username)
@@ -134,6 +135,7 @@ public final class OktaOidcClient {
                 EcsLogger.debug("com.auto1.pantera.auth")
                     .message("Failed to parse Okta error response as JSON")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
             final int authnStatus = response.statusCode();
@@ -147,6 +149,7 @@ public final class OktaOidcClient {
                 .eventOutcome("failure")
                 .field("user.name", username)
                 .field("http.response.status_code", authnStatus)
+                .field("log.source", "application")
                 .log();
             return null;
         }
@@ -165,6 +168,7 @@ public final class OktaOidcClient {
                 .eventAction("login")
                 .eventOutcome("failure")
                 .field("user.name", username)
+                .field("log.source", "application")
                 .log();
             return null;
         }
@@ -173,6 +177,7 @@ public final class OktaOidcClient {
             .eventCategory("authentication")
             .eventAction("login")
             .field("user.name", username)
+            .field("log.source", "application")
             .log();
         final String code = exchangeSessionForCode(sessionToken, username);
         if (code == null || code.isEmpty()) {
@@ -182,6 +187,7 @@ public final class OktaOidcClient {
                 .eventAction("login")
                 .eventOutcome("failure")
                 .field("user.name", username)
+                .field("log.source", "application")
                 .log();
             return null;
         }
@@ -190,6 +196,7 @@ public final class OktaOidcClient {
             .eventCategory("authentication")
             .eventAction("login")
             .field("user.name", username)
+            .field("log.source", "application")
             .log();
         final TokenResponse tokens = exchangeCodeForTokens(code, username);
         if (tokens == null || tokens.idToken == null) {
@@ -199,6 +206,7 @@ public final class OktaOidcClient {
                 .eventAction("login")
                 .eventOutcome("failure")
                 .field("user.name", username)
+                .field("log.source", "application")
                 .log();
             return null;
         }
@@ -207,6 +215,7 @@ public final class OktaOidcClient {
             .eventCategory("authentication")
             .eventAction("login")
             .field("user.name", username)
+            .field("log.source", "application")
             .log();
         return parseIdToken(tokens.idToken, tokens.accessToken, username);
     }
@@ -296,6 +305,7 @@ public final class OktaOidcClient {
                         .eventAction("mfa")
                         .eventOutcome("success")
                         .field("user.name", username)
+                        .field("log.source", "application")
                         .log();
                     return token;
                 }
@@ -321,6 +331,7 @@ public final class OktaOidcClient {
             .eventAction("login")
             .eventOutcome("failure")
             .field("user.name", username)
+            .field("log.source", "application")
             .log();
         return null;
     }
@@ -375,6 +386,7 @@ public final class OktaOidcClient {
                 .eventOutcome("failure")
                 .field("user.name", username)
                 .field("http.response.status_code", resp.statusCode())
+                .field("log.source", "application")
                 .log();
             return null;
         }
@@ -387,6 +399,7 @@ public final class OktaOidcClient {
                 .eventOutcome("failure")
                 .field("user.name", username)
                 .field("http.response.status_code", resp.statusCode())
+                .field("log.source", "application")
                 .log();
             return null;
         }
@@ -396,6 +409,7 @@ public final class OktaOidcClient {
             .eventCategory("authentication")
             .eventAction("login")
             .field("user.name", username)
+            .field("log.source", "application")
             .log();
         final URI loc = URI.create(location);
         final String queryStr = loc.getQuery();
@@ -406,6 +420,7 @@ public final class OktaOidcClient {
                 .eventAction("login")
                 .eventOutcome("failure")
                 .field("user.name", username)
+                .field("log.source", "application")
                 .log();
             return null;
         }
@@ -438,6 +453,7 @@ public final class OktaOidcClient {
                 .eventAction("login")
                 .eventOutcome("failure")
                 .field("user.name", username)
+                .field("log.source", "application")
                 .log();
             return null;
         }
@@ -448,6 +464,7 @@ public final class OktaOidcClient {
                 .eventAction("login")
                 .eventOutcome("failure")
                 .field("user.name", username)
+                .field("log.source", "application")
                 .log();
             return null;
         }
@@ -483,6 +500,7 @@ public final class OktaOidcClient {
                 .eventOutcome("failure")
                 .field("user.name", username)
                 .field("http.response.status_code", tokenStatus)
+                .field("log.source", "application")
                 .log();
             return null;
         }
@@ -517,6 +535,7 @@ public final class OktaOidcClient {
                     .eventAction("login")
                     .eventOutcome("failure")
                     .field("user.name", username)
+                    .field("log.source", "application")
                     .log();
                 return null;
             }
@@ -530,6 +549,7 @@ public final class OktaOidcClient {
                     .eventAction("login")
                     .eventOutcome("failure")
                     .field("user.name", username)
+                    .field("log.source", "application")
                     .log();
                 return null;
             }
@@ -547,6 +567,7 @@ public final class OktaOidcClient {
                     .eventAction("login")
                     .eventOutcome("failure")
                     .field("user.name", username)
+                    .field("log.source", "application")
                     .log();
                 return null;
             }
@@ -580,6 +601,7 @@ public final class OktaOidcClient {
                 .eventOutcome("success")
                 .field("user.name", uname)
                 .field("user.email", email != null ? email : "")
+                .field("log.source", "application")
                 .log();
             return new OktaAuthResult(uname, email, groups);
         } catch (final IllegalArgumentException err) {
@@ -590,6 +612,7 @@ public final class OktaOidcClient {
                 .eventOutcome("failure")
                 .field("user.name", username)
                 .error(err)
+                .field("log.source", "application")
                 .log();
             return null;
         }
@@ -627,6 +650,7 @@ public final class OktaOidcClient {
                     .eventOutcome("failure")
                     .field("user.name", username)
                     .field("http.response.status_code", resp.statusCode())
+                    .field("log.source", "application")
                     .log();
                 return null; // NOPMD ReturnEmptyCollectionRatherThanNull - JsonObject is a single record, not a collection; null signals userinfo fetch failure
             }
@@ -637,6 +661,7 @@ public final class OktaOidcClient {
                 .eventAction("userinfo")
                 .eventOutcome("success")
                 .field("user.name", username)
+                .field("log.source", "application")
                 .log();
             return userinfo;
         } catch (final InterruptedException err) {
@@ -647,6 +672,7 @@ public final class OktaOidcClient {
                 .eventOutcome("failure")
                 .field("user.name", username)
                 .error(err)
+                .field("log.source", "application")
                 .log();
             Thread.currentThread().interrupt();
             return null; // NOPMD ReturnEmptyCollectionRatherThanNull - JsonObject is a single record, not a collection; null signals fetch failure on interrupt
@@ -658,6 +684,7 @@ public final class OktaOidcClient {
                 .eventOutcome("failure")
                 .field("user.name", username)
                 .error(err)
+                .field("log.source", "application")
                 .log();
             return null; // NOPMD ReturnEmptyCollectionRatherThanNull - JsonObject is a single record, not a collection; null signals fetch I/O failure
         }

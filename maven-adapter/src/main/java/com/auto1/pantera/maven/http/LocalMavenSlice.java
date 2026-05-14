@@ -178,6 +178,7 @@ final class LocalMavenSlice implements Slice {
             EcsLogger.debug("com.auto1.pantera.maven")
                 .message("Failed to record metric")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }

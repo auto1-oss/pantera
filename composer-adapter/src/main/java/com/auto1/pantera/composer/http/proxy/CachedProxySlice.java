@@ -257,6 +257,7 @@ final class CachedProxySlice implements Slice {
                 .eventCategory("web")
                 .eventAction("proxy_request")
                 .field("url.path", path)
+                .field("log.source", "application")
                 .log();
 
             // WI-07 §9.5 — integrity-verified atomic primary+sidecar write on
@@ -306,6 +307,7 @@ final class CachedProxySlice implements Slice {
                     .eventAction("cache_hit")
                     .eventOutcome("success")
                     .field("package.name", name)
+                    .field("log.source", "application")
                     .log();
                 return cached.get().asBytesFuture().thenCompose(bytes -> {
                     // Stale-while-revalidate: check freshness, trigger background refresh if stale
@@ -375,6 +377,7 @@ final class CachedProxySlice implements Slice {
                 .eventCategory("web")
                 .eventAction("cooldown_check")
                 .field("package.name", name)
+                .field("log.source", "application")
                 .log();
             return this.cooldown.evaluate(cooldownReq.get(), this.inspector)
                 .thenCompose(result -> this.afterCooldown(result, line, name, headers));
@@ -406,6 +409,7 @@ final class CachedProxySlice implements Slice {
                 .eventOutcome("failure")
                 .field("event.reason", "cooldown_active")
                 .field("package.name", name)
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(
                 CooldownResponseRegistry.instance()
@@ -419,6 +423,7 @@ final class CachedProxySlice implements Slice {
             .eventAction("allowed")
             .eventOutcome("success")
             .field("package.name", name)
+            .field("log.source", "application")
             .log();
         return this.fetchThroughCache(line, name, headers);
     }
@@ -446,6 +451,7 @@ final class CachedProxySlice implements Slice {
                         .eventAction("stale_while_revalidate")
                         .eventOutcome("success")
                         .field("package.name", name)
+                        .field("log.source", "application")
                         .log();
                 } catch (final Exception err) {
                     EcsLogger.warn("com.auto1.pantera.composer")
@@ -455,6 +461,7 @@ final class CachedProxySlice implements Slice {
                         .eventOutcome("failure")
                         .field("package.name", name)
                         .error(err)
+                        .field("log.source", "application")
                         .log();
                 } finally {
                     this.refreshing.remove(name);
@@ -498,6 +505,7 @@ final class CachedProxySlice implements Slice {
                                     .eventCategory("web")
                                     .eventAction("metadata_rewrite")
                                     .field("package.name", name)
+                                    .field("log.source", "application")
                                     .log();
                                 return Optional.of(
                                     (Content) new Content.From(rewritten)
@@ -509,6 +517,7 @@ final class CachedProxySlice implements Slice {
                             .eventCategory("web")
                             .eventAction("metadata_fetch")
                             .field("package.name", name)
+                            .field("log.source", "application")
                             .log();
                         return CompletableFuture.completedFuture(
                             Optional.<Content>empty()
@@ -532,6 +541,7 @@ final class CachedProxySlice implements Slice {
                                 .eventOutcome("failure")
                                 .field("event.reason", "cooldown_active")
                                 .field("package.name", name)
+                                .field("log.source", "application")
                                 .log();
                             return CompletableFuture.completedFuture(
                                 CooldownResponseRegistry.instance()
@@ -548,6 +558,7 @@ final class CachedProxySlice implements Slice {
                                     .eventCategory("web")
                                     .eventAction("metadata_save")
                                     .field("package.name", metadataKey.string())
+                                    .field("log.source", "application")
                                     .log();
                                 return ResponseBuilder.ok()
                                     .header("Content-Type", "application/json")
@@ -563,6 +574,7 @@ final class CachedProxySlice implements Slice {
                 .eventAction("cache_read")
                 .eventOutcome("failure")
                 .field("error.message", throwable.getMessage())
+                .field("log.source", "application")
                 .log();
             return ResponseBuilder.notFound().build();
         }).toCompletableFuture();
@@ -587,6 +599,7 @@ final class CachedProxySlice implements Slice {
                     .message("Satis format detected (packages is array), skipping cooldown check")
                     .eventCategory("web")
                     .eventAction("cooldown_check")
+                    .field("log.source", "application")
                     .log();
                 return CompletableFuture.completedFuture(CooldownResult.allowed());
             }
@@ -622,6 +635,7 @@ final class CachedProxySlice implements Slice {
                 .eventAction("cooldown_check")
                 .eventOutcome("failure")
                 .field("error.message", LogSanitizer.sanitizeMessage(e.getMessage()))
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(CooldownResult.allowed());
         }
@@ -648,6 +662,7 @@ final class CachedProxySlice implements Slice {
                         EcsLogger.debug("com.auto1.pantera.composer")
                             .message("Failed to parse Composer version time")
                             .error(ex)
+                            .field("log.source", "application")
                             .log();
                     }
                 }
@@ -675,6 +690,7 @@ final class CachedProxySlice implements Slice {
                         EcsLogger.debug("com.auto1.pantera.composer")
                             .message("Failed to parse Composer version time")
                             .error(ex)
+                            .field("log.source", "application")
                             .log();
                     }
                 }
@@ -702,6 +718,7 @@ final class CachedProxySlice implements Slice {
                 .eventAction("metadata_rewrite")
                 .eventOutcome("failure")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             return original;
         }
@@ -735,6 +752,7 @@ final class CachedProxySlice implements Slice {
                 .eventAction("event_creation")
                 .eventOutcome("failure")
                 .field("package.name", name)
+                .field("log.source", "application")
                 .log();
             return;
         }
@@ -745,6 +763,7 @@ final class CachedProxySlice implements Slice {
                 .eventAction("event_creation")
                 .eventOutcome("failure")
                 .field("package.name", name)
+                .field("log.source", "application")
                 .log();
             return;
         }
@@ -765,6 +784,7 @@ final class CachedProxySlice implements Slice {
             .eventOutcome("success")
             .field("package.name", name)
             .field("user.name", owner)
+            .field("log.source", "application")
             .log();
     }
 
@@ -786,6 +806,7 @@ final class CachedProxySlice implements Slice {
             EcsLogger.debug("com.auto1.pantera.composer")
                 .message("Failed to parse Last-Modified header for release date")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             return null;
         }
@@ -813,6 +834,7 @@ final class CachedProxySlice implements Slice {
                                 .eventAction("remote_fetch")
                                 .field("url.path", line.uri().getPath())
                                 .field("http.response.status_code", response.status().code())
+                                .field("log.source", "http")
                                 .log();
                             if (response.status().success()) {
                                 this.recordProxyMetric("success", duration);
@@ -840,6 +862,7 @@ final class CachedProxySlice implements Slice {
                                     .eventOutcome("failure")
                                     .field("url.path", line.uri().getPath())
                                     .field("http.response.status_code", response.status().code())
+                                    .field("log.source", "http")
                                     .log();
                                 return Optional.empty();
                             });
@@ -896,6 +919,7 @@ final class CachedProxySlice implements Slice {
             EcsLogger.debug("com.auto1.pantera.composer")
                 .message("Failed to record metric")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -973,6 +997,7 @@ final class CachedProxySlice implements Slice {
                 .field("repository.name", this.rname)
                 .field("url.path", path)
                 .error(err)
+                .field("log.source", "application")
                 .log();
             return ResponseBuilder.badGateway().build();
         }).toCompletableFuture();
@@ -1079,6 +1104,7 @@ final class CachedProxySlice implements Slice {
                     .field("repository.name", this.rname)
                     .field("url.path", path)
                     .error(err)
+                    .field("log.source", "application")
                     .log();
                 return ResponseBuilder.badGateway()
                     .textBody("Upstream temporarily unavailable")
@@ -1135,6 +1161,7 @@ final class CachedProxySlice implements Slice {
             EcsLogger.debug("com.auto1.pantera.composer")
                 .message("MicrometerMetrics registry unavailable; writer will run without metrics")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
         return null;

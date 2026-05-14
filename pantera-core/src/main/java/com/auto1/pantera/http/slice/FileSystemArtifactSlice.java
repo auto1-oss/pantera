@@ -149,6 +149,7 @@ public final class FileSystemArtifactSlice implements Slice {
                     .eventOutcome("success")
                     .duration(elapsed)
                     .field("file.size", fileSize)
+                    .field("log.source", "application")
                     .log();
 
                 return ResponseBuilder.ok()
@@ -164,6 +165,7 @@ public final class FileSystemArtifactSlice implements Slice {
                     .eventAction("artifact_serve")
                     .eventOutcome("failure")
                     .error(e)
+                    .field("log.source", "application")
                     .log();
                 return ResponseBuilder.internalError()
                     .textBody("Failed to serve artifact: " + e.getMessage())
@@ -461,6 +463,7 @@ public final class FileSystemArtifactSlice implements Slice {
                         .eventAction("buffer_cleanup")
                         .eventOutcome("failure")
                         .error(ex)
+                        .field("log.source", "application")
                         .log();
                 }
             }

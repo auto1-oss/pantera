@@ -167,6 +167,7 @@ public final class AsyncMetricsVerticle extends AbstractVerticle {
                     .eventOutcome("success")
                     .field("destination.port", this.port)
                     .field("url.path", this.path)
+                    .field("log.source", "application")
                     .log();
                 startPromise.complete();
             } else {
@@ -176,6 +177,7 @@ public final class AsyncMetricsVerticle extends AbstractVerticle {
                     .eventAction("metrics_server_start")
                     .eventOutcome("failure")
                     .error(ar.cause())
+                    .field("log.source", "application")
                     .log();
                 startPromise.fail(ar.cause());
             }
@@ -192,6 +194,7 @@ public final class AsyncMetricsVerticle extends AbstractVerticle {
                         .eventCategory("configuration")
                         .eventAction("metrics_server_stop")
                         .eventOutcome("success")
+                        .field("log.source", "application")
                         .log();
                     stopPromise.complete();
                 } else {
@@ -258,6 +261,7 @@ public final class AsyncMetricsVerticle extends AbstractVerticle {
                     .eventAction("scrape")
                     .eventOutcome("failure")
                     .error(e)
+                    .field("log.source", "application")
                     .log();
 
                 // Return stale cache on error
@@ -344,6 +348,7 @@ public final class AsyncMetricsVerticle extends AbstractVerticle {
                 .eventOutcome("success")
                 .field("event.reason", "slow_response")
                 .field("event.duration", scrapeDuration)
+                .field("log.source", "application")
                 .log();
         }
 
@@ -444,6 +449,7 @@ public final class AsyncMetricsVerticle extends AbstractVerticle {
                     .eventAction("cache_refresh")
                     .eventOutcome("failure")
                     .error(ar.cause())
+                    .field("log.source", "application")
                     .log();
             }
         });

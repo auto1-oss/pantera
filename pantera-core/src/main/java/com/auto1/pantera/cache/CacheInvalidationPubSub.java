@@ -99,6 +99,7 @@ public final class CacheInvalidationPubSub implements AutoCloseable {
             .eventCategory("database")
             .eventAction("pubsub_start")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
     }
 
@@ -173,6 +174,7 @@ public final class CacheInvalidationPubSub implements AutoCloseable {
             .eventCategory("database")
             .eventAction("pubsub_stop")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
     }
 
@@ -212,6 +214,7 @@ public final class CacheInvalidationPubSub implements AutoCloseable {
                 .eventCategory("database")
                 .eventAction("remote_invalidate")
                 .eventOutcome("success")
+                .field("log.source", "application")
                 .log();
         }
     }

@@ -137,6 +137,7 @@ public final class DashboardHandler {
                     .eventAction("dashboard_cache_refresh")
                     .eventOutcome("failure")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             } finally {
                 this.rebuilding.set(false);

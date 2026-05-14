@@ -142,6 +142,7 @@ public final class CachedLocalEnabledFilter implements Authentication {
                 + ", l2TimeoutMs=" + ac.l2TimeoutMs() + ")")
             .eventCategory("authentication")
             .eventAction("auth_cache_init")
+            .field("log.source", "application")
             .log();
     }
 
@@ -190,6 +191,7 @@ public final class CachedLocalEnabledFilter implements Authentication {
                     .eventOutcome("failure")
                     .field("user.name", username)
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -211,6 +213,7 @@ public final class CachedLocalEnabledFilter implements Authentication {
                     .eventOutcome("failure")
                     .field("user.name", username)
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -256,6 +259,7 @@ public final class CachedLocalEnabledFilter implements Authentication {
                     .eventOutcome("failure")
                     .field("user.name", username)
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
         }

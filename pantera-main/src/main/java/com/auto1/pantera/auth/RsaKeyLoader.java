@@ -59,6 +59,7 @@ public final class RsaKeyLoader {
             .eventCategory("configuration")
             .eventAction("key_load")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
     }
 

@@ -207,6 +207,7 @@ public final class ComposerRootPackagesHandler {
                 .field("event.reason", "upstream_malformed")
                 .field("repository.name", this.repoName)
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(
                 ResponseBuilder.ok()
@@ -226,6 +227,7 @@ public final class ComposerRootPackagesHandler {
                     .eventOutcome("success")
                     .field("repository.name", this.repoName)
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
             return CompletableFuture.completedFuture(
@@ -248,6 +250,7 @@ public final class ComposerRootPackagesHandler {
                 .eventAction("root_filter")
                 .eventOutcome("success")
                 .field("repository.name", this.repoName)
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(
                 ResponseBuilder.ok()
@@ -281,6 +284,7 @@ public final class ComposerRootPackagesHandler {
                     .eventAction("root_filter")
                     .eventOutcome("success")
                     .field("repository.name", this.repoName)
+                    .field("log.source", "application")
                     .log();
                 return ResponseBuilder.ok()
                     .header("Content-Type", CONTENT_TYPE)
@@ -294,6 +298,7 @@ public final class ComposerRootPackagesHandler {
                     .eventOutcome("failure")
                     .field("repository.name", this.repoName)
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
                 return ResponseBuilder.ok()
                     .header("Content-Type", CONTENT_TYPE)
@@ -355,6 +360,7 @@ public final class ComposerRootPackagesHandler {
                     .field("package.name", pkg)
                     .field("package.version", version)
                     .error(err)
+                    .field("log.source", "application")
                     .log();
                 return false;
             });

@@ -222,6 +222,7 @@ public final class ComposerPackageMetadataHandler {
                 .field("repository.name", this.repoName)
                 .field("package.name", pkg)
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(
                 ResponseBuilder.ok()
@@ -266,6 +267,7 @@ public final class ComposerPackageMetadataHandler {
                     .eventOutcome("success")
                     .field("repository.name", this.repoName)
                     .field("package.name", pkg)
+                    .field("log.source", "application")
                     .log();
                 return ResponseBuilder.ok()
                     .header("Content-Type", CONTENT_TYPE)
@@ -280,6 +282,7 @@ public final class ComposerPackageMetadataHandler {
                     .field("repository.name", this.repoName)
                     .field("package.name", pkg)
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
                 return ResponseBuilder.ok()
                     .header("Content-Type", CONTENT_TYPE)
@@ -303,6 +306,7 @@ public final class ComposerPackageMetadataHandler {
             .field("event.reason", "all_versions_blocked")
             .field("repository.name", this.repoName)
             .field("package.name", pkg)
+            .field("log.source", "application")
             .log();
         return ResponseBuilder.notFound()
             .header("X-Pantera-Cooldown", "all-blocked")
@@ -361,6 +365,7 @@ public final class ComposerPackageMetadataHandler {
                     .field("package.name", pkg)
                     .field("package.version", version)
                     .error(err)
+                    .field("log.source", "application")
                     .log();
                 return false;
             });

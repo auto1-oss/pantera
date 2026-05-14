@@ -87,6 +87,7 @@ public final class RuntimeSettingsCache {
             .eventAction("settings_cache_start")
             .eventOutcome("success")
             .field("settings.keys", this.snapshot.raw().size())
+            .field("log.source", "application")
             .log();
     }
 
@@ -144,6 +145,7 @@ public final class RuntimeSettingsCache {
                         EcsLogger.warn("com.auto1.pantera.settings.runtime")
                             .message("Subscriber for " + prefix + " threw")
                             .field("error.message", t.getMessage())
+                            .field("log.source", "application")
                             .log();
                     }
                 }
@@ -168,11 +170,13 @@ public final class RuntimeSettingsCache {
                 EcsLogger.warn("com.auto1.pantera.settings.runtime")
                     .message("Polling fallback detected " + changed.size()
                         + " missed changes; reloading")
+                    .field("log.source", "application")
                     .log();
                 changed.keySet().forEach(this::onKeyChanged);
             }
         } catch (final Throwable t) {
             EcsLogger.warn("com.auto1.pantera.settings.runtime")
+                .field("log.source", "application")
                 .message("Settings poll failed: " + t.getMessage()).log();
         }
     }

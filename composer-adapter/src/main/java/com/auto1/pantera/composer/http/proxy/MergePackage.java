@@ -144,6 +144,7 @@ public interface MergePackage {
                 .eventCategory("web")
                 .eventAction("package_merge")
                 .field("package.name", this.name)
+                .field("log.source", "application")
                 .log();
             vrsns.forEach(
                 vers -> bldr.add(

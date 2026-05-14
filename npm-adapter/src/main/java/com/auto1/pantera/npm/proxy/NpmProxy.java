@@ -609,6 +609,7 @@ public class NpmProxy {
                 .message("npm phaseRecorder threw; serve path unaffected")
                 .field("phase", phase)
                 .error(thrown)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -630,6 +631,7 @@ public class NpmProxy {
                 .eventOutcome("failure")
                 .field("url.path", path)
                 .error(thrown)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -753,6 +755,7 @@ public class NpmProxy {
                 .eventOutcome("failure")
                 .field("package.name", name)
                 .error(thrown)
+                .field("log.source", "application")
                 .log();
         }
     }

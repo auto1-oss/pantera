@@ -99,6 +99,7 @@ public final class DbSyncArtifactIndexer implements SyncArtifactIndexer {
                 .field("package.name", event.artifactName())
                 .field("package.version", event.artifactVersion())
                 .error(err)
+                .field("log.source", "application")
                 .log();
             return null;
         });

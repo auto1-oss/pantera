@@ -58,6 +58,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                 .eventCategory("web")
                 .eventAction("proxy_processor")
                 .eventOutcome("failure")
+                .field("log.source", "application")
                 .log();
             super.stopJob(context);
         } else {
@@ -65,6 +66,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                 .message("Composer proxy processor running (queue size: " + this.packages.size() + ")")
                 .eventCategory("web")
                 .eventAction("proxy_processor")
+                .field("log.source", "application")
                 .log();
             while (!this.packages.isEmpty()) {
                 final ProxyArtifactEvent event = this.packages.poll();
@@ -75,6 +77,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                         .eventCategory("web")
                         .eventAction("proxy_processor")
                         .field("package.path", key.string())
+                        .field("log.source", "application")
                         .log();
                     try {
                         // Key format is now "vendor/package/version" from ProxyDownloadSlice
@@ -87,6 +90,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                                 .eventAction("proxy_processor")
                                 .eventOutcome("failure")
                                 .field("package.path", key.string())
+                                .field("log.source", "application")
                                 .log();
                             continue;
                         }
@@ -149,6 +153,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                             .field("repository.name", event.repoName())
                             .field("user.name", owner)
                             .field("package.release_date", release == null ? null : java.time.Instant.ofEpochMilli(release).toString())
+                            .field("log.source", "application")
                             .log();
 
                         // Remove all duplicate events from queue
@@ -164,6 +169,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                             .eventOutcome("failure")
                             .field("package.path", key.string())
                             .error(err)
+                            .field("log.source", "application")
                             .log();
                     }
                 }
@@ -259,6 +265,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                     .eventCategory("web")
                     .eventAction("proxy_processor")
                     .field("package.name", packageName)
+                    .field("log.source", "application")
                     .log();
                 return null;
             }
@@ -302,6 +309,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                     .field("package.name", packageName)
                     .field("package.version", version)
                     .field("package.release_date", timeStr)
+                    .field("log.source", "application")
                     .log();
                 return releaseMillis;
             }
@@ -316,6 +324,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                 .field("package.name", packageName)
                 .field("package.version", version)
                 .field("error.message", err.getMessage())
+                .field("log.source", "application")
                 .log();
             return null;
         }

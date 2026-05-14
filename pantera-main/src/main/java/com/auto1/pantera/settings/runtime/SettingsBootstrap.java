@@ -50,6 +50,7 @@ public final class SettingsBootstrap {
                 + existing + " keys already present")
             .field("settings.seeded", seeded)
             .field("settings.existing", existing)
+            .field("log.source", "application")
             .log();
     }
 

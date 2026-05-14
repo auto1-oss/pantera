@@ -103,6 +103,7 @@ public final class LocalEnabledFilter implements Authentication {
                 .eventAction("login")
                 .eventOutcome("failure")
                 .field("user.name", username)
+                .field("log.source", "application")
                 .log();
             return Optional.empty();
         }
@@ -146,6 +147,7 @@ public final class LocalEnabledFilter implements Authentication {
                 .eventOutcome("failure")
                 .field("user.name", username)
                 .error(err)
+                .field("log.source", "application")
                 .log();
             return false;
         }

@@ -186,6 +186,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                         EcsLogger.debug("com.auto1.pantera.asto.cache")
                             .message("Failed to clean up orphaned file")
                             .error(ex)
+                            .field("log.source", "application")
                             .log();
                     }
                 });
@@ -193,6 +194,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
             EcsLogger.debug("com.auto1.pantera.asto.cache")
                 .message("Failed to walk directory for orphan cleanup")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -254,6 +256,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                 EcsLogger.debug("com.auto1.pantera.asto.cache")
                     .message("Failed to update cache metadata after hit")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
         });
@@ -288,6 +291,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
             EcsLogger.debug("com.auto1.pantera.asto.cache")
                 .message("Failed to invalidate cache entry")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -349,6 +353,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                                     EcsLogger.debug("com.auto1.pantera.asto.cache")
                                         .message("Failed to write cache metadata after fetch")
                                         .error(ex)
+                                        .field("log.source", "application")
                                         .log();
                                 }
                                 return null;
@@ -362,12 +367,14 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                             EcsLogger.debug("com.auto1.pantera.asto.cache")
                                 .message("Failed to close channel on error")
                                 .error(ex)
+                                .field("log.source", "application")
                                 .log();
                         }
                         try { Files.deleteIfExists(tmp); } catch (final IOException ex) {
                             EcsLogger.debug("com.auto1.pantera.asto.cache")
                                 .message("Failed to delete temp file on error")
                                 .error(ex)
+                                .field("log.source", "application")
                                 .log();
                         }
                     })
@@ -378,12 +385,14 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                             EcsLogger.debug("com.auto1.pantera.asto.cache")
                                 .message("Failed to close channel on cancel")
                                 .error(ex)
+                                .field("log.source", "application")
                                 .log();
                         }
                         try { Files.deleteIfExists(tmp); } catch (final IOException ex) {
                             EcsLogger.debug("com.auto1.pantera.asto.cache")
                                 .message("Failed to delete temp file on cancel")
                                 .error(ex)
+                                .field("log.source", "application")
                                 .log();
                         }
                     });
@@ -439,6 +448,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
             EcsLogger.debug("com.auto1.pantera.asto.cache")
                 .message("Failed to close file channel in publisher")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         } });
     }
@@ -461,6 +471,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                     EcsLogger.warn("com.auto1.pantera.asto.cache")
                         .message("Failed to close delegate storage")
                         .error(ex)
+                        .field("log.source", "application")
                         .log();
                 }
             }
@@ -475,6 +486,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                 EcsLogger.warn("com.auto1.pantera.asto.cache")
                     .message("Cache cleanup failed")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -523,6 +535,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                     EcsLogger.debug("com.auto1.pantera.asto.cache")
                         .message("Failed to read cache metadata during cleanup")
                         .error(ex)
+                        .field("log.source", "application")
                         .log();
                 }
             }
@@ -560,6 +573,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                 EcsLogger.debug("com.auto1.pantera.asto.cache")
                     .message("Failed to delete cache file during eviction")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
             if (freed >= target) {

@@ -88,6 +88,7 @@ public final class HttpNpmRemote implements NpmRemote {
                         .eventOutcome("failure")
                         .field("event.reason", "artifact_not_found")
                         .field("package.name", name)
+                        .field("log.source", "application")
                         .log();
                     return Maybe.empty();
                 }
@@ -99,6 +100,7 @@ public final class HttpNpmRemote implements NpmRemote {
                     .eventOutcome("failure")
                     .field("package.name", name)
                     .error(throwable)
+                    .field("log.source", "application")
                     .log();
                 return Maybe.error(throwable);
             }
@@ -129,6 +131,7 @@ public final class HttpNpmRemote implements NpmRemote {
                         .eventOutcome("failure")
                         .field("event.reason", "artifact_not_found")
                         .field("package.path", path)
+                        .field("log.source", "application")
                         .log();
                     return Maybe.empty();
                 }
@@ -140,6 +143,7 @@ public final class HttpNpmRemote implements NpmRemote {
                     .eventOutcome("failure")
                     .field("package.path", path)
                     .error(throwable)
+                    .field("log.source", "application")
                     .log();
                 return Maybe.error(throwable);
             }

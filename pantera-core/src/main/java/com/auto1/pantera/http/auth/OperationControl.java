@@ -81,6 +81,7 @@ public final class OperationControl {
             .field("user.name", user.name())
             .field("user.roles", this.perms.toString())
             .field("event.reason", res ? "allowed" : "denied")
+            .field("log.source", "application")
             .log();
         return res;
     }

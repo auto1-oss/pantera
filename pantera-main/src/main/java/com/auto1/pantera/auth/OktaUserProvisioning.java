@@ -106,6 +106,7 @@ public final class OktaUserProvisioning {
                 .eventOutcome("failure")
                 .field("user.name", username)
                 .error(err)
+                .field("log.source", "application")
                 .log();
         }
     }

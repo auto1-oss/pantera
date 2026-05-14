@@ -103,6 +103,7 @@ public final class CooldownSupport {
                     .eventCategory("configuration")
                     .eventAction("cooldown_init")
                     .eventOutcome("success")
+                    .field("log.source", "application")
                     .log();
                 final JdbcCooldownService service = new JdbcCooldownService(
                     settings.cooldown(),
@@ -119,6 +120,7 @@ public final class CooldownSupport {
                     .eventCategory("configuration")
                     .eventAction("cooldown_init")
                     .eventOutcome("failure")
+                    .field("log.source", "application")
                     .log();
                 return NoopCooldownService.INSTANCE;
             });
@@ -157,6 +159,7 @@ public final class CooldownSupport {
                 ", L2OnlyMode=" + metadataCache.isL2OnlyMode())
             .eventCategory("configuration")
             .eventAction("metadata_service_init")
+            .field("log.source", "application")
             .log();
         
         final MetadataFilterService metadataService = new MetadataFilterService(
@@ -183,6 +186,7 @@ public final class CooldownSupport {
                     .eventOutcome("failure")
                     .field("package.name", artifact)
                     .error(err)
+                    .field("log.source", "application")
                     .log();
             }
         });
@@ -266,6 +270,7 @@ public final class CooldownSupport {
                     + ", cleanup_batch_limit: " + cleanupBatchLimit + ")")
                 .eventCategory("configuration")
                 .eventAction("cooldown_db_load")
+                .field("log.source", "application")
                 .log();
         } catch (final Exception ex) {
             EcsLogger.warn("com.auto1.pantera.cooldown")
@@ -274,6 +279,7 @@ public final class CooldownSupport {
                 .eventCategory("configuration")
                 .eventAction("cooldown_db_load")
                 .eventOutcome("failure")
+                .field("log.source", "application")
                 .log();
         }
     }

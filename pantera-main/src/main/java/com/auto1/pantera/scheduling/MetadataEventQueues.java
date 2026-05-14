@@ -187,6 +187,7 @@ public final class MetadataEventQueues {
                                 .eventAction("metadata_job_init")
                                 .eventOutcome("success")
                                 .field("repository.name", config.name())
+                                .field("log.source", "application")
                                 .log();
                         } catch (final SchedulerException err) {
                             throw new PanteraException(err);
@@ -210,6 +211,7 @@ public final class MetadataEventQueues {
                     .eventOutcome("failure")
                     .field("repository.name", config.name())
                     .error(err)
+                    .field("log.source", "application")
                     .log();
                 result = Optional.empty();
             }

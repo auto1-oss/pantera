@@ -225,6 +225,7 @@ public final class CachedYamlPolicy implements Policy<UserPermissions>, Cleanabl
                     .eventOutcome("failure")
                     .field("user.name", user.name())
                     .error(err)
+                    .field("log.source", "application")
                     .log();
                 throw new PanteraException(err);
             }
@@ -275,6 +276,7 @@ public final class CachedYamlPolicy implements Policy<UserPermissions>, Cleanabl
                 .eventOutcome("failure")
                 .field("file.name", filename)
                 .field("user.roles", role)
+                .field("log.source", "application")
                 .log();
             res = EmptyPermissions.INSTANCE;
         }
@@ -472,6 +474,7 @@ public final class CachedYamlPolicy implements Policy<UserPermissions>, Cleanabl
                     .eventOutcome("failure")
                     .field("file.name", filename)
                     .field("user.name", username)
+                    .field("log.source", "application")
                     .log();
                 res = Yaml.createYamlMappingBuilder().build();
             }

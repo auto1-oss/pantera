@@ -75,6 +75,7 @@ public final class DualCrudRepoSettings implements CrudRepoSettings {
                 .message("Failed to save repo config to secondary (YAML)")
                 .field("repository.name", rname.toString())
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -89,6 +90,7 @@ public final class DualCrudRepoSettings implements CrudRepoSettings {
                 .message("Failed to delete repo config from secondary (YAML)")
                 .field("repository.name", rname.toString())
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -103,6 +105,7 @@ public final class DualCrudRepoSettings implements CrudRepoSettings {
                 .message("Failed to move repo config in secondary (YAML)")
                 .field("repository.name", rname.toString())
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }

@@ -78,6 +78,7 @@ public class StoragesCache implements Cleanable<YamlMapping> {
             .eventCategory("database")
             .eventAction("cache_init")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
 
 
@@ -184,6 +185,7 @@ public class StoragesCache implements Cleanable<YamlMapping> {
                 .eventCategory("database")
                 .eventAction("cache_evict")
                 .eventOutcome("success")
+                .field("log.source", "application")
                 .log();
 
             // Record eviction metric

@@ -217,6 +217,7 @@ public final class OsvDevClient {
                 .eventAction("osv_parse")
                 .eventOutcome("failure")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             throw new OsvException("Failed to parse OSV.dev response", ex);
         }

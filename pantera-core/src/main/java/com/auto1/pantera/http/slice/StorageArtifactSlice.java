@@ -114,6 +114,7 @@ public final class StorageArtifactSlice implements Slice {
                 .eventCategory("file")
                 .eventAction("artifact_slice_select")
                 .eventOutcome("success")
+                .field("log.source", "application")
                 .log();
             // Use original storage to preserve SubStorage prefix (repo scoping)
             // Wrap with RangeSlice for HTTP Range request support (resumable/parallel downloads)
@@ -128,6 +129,7 @@ public final class StorageArtifactSlice implements Slice {
             .eventCategory("file")
             .eventAction("artifact_slice_select")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
         // Wrap with RangeSlice for HTTP Range request support (resumable/parallel downloads)
         return new RangeSlice(new GenericArtifactSlice(this.storage));
@@ -261,6 +263,7 @@ public final class StorageArtifactSlice implements Slice {
                     .eventAction("artifact_serve")
                     .eventOutcome("failure")
                     .error(throwable)
+                    .field("log.source", "application")
                     .log();
                 return ResponseBuilder.internalError()
                     .textBody("Failed to serve artifact: " + throwable.getMessage())

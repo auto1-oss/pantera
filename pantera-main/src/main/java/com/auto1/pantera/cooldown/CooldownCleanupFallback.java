@@ -88,6 +88,7 @@ public final class CooldownCleanupFallback {
                 + " (interval_min=10"
                 + ", batch_limit=" + this.settings.cleanupBatchLimit()
                 + ", retention_days=" + this.settings.historyRetentionDays() + ")")
+            .field("log.source", "application")
             .log();
         this.cleanupTimerId = vertx.setPeriodic(TEN_MINUTES_MS,
             id -> this.dispatchCleanup());
@@ -145,6 +146,8 @@ public final class CooldownCleanupFallback {
                         + " (iteration=" + i
                         + ", total_archived=" + totalArchived + ")")
                     .error(err)
+                    .field("log.source", "application")
+                    .field("event.outcome", "failure")
                     .log();
                 return;
             }
@@ -156,6 +159,7 @@ public final class CooldownCleanupFallback {
         if (totalArchived > 0L) {
             EcsLogger.info("com.auto1.pantera.cooldown.cleanup")
                 .message("fallback cleanup completed (archived=" + totalArchived + ")")
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -184,6 +188,8 @@ public final class CooldownCleanupFallback {
                         + " (iteration=" + i
                         + ", total_purged=" + totalPurged + ")")
                     .error(err)
+                    .field("log.source", "application")
+                    .field("event.outcome", "failure")
                     .log();
                 return;
             }
@@ -198,6 +204,7 @@ public final class CooldownCleanupFallback {
                 .message("fallback history purge completed"
                     + " (purged=" + totalPurged
                     + ", retention_days=" + retentionDays + ")")
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -227,6 +234,8 @@ public final class CooldownCleanupFallback {
                         + " (iteration=" + i
                         + ", total_purged=" + totalPurged + ")")
                     .error(err)
+                    .field("log.source", "application")
+                    .field("event.outcome", "failure")
                     .log();
                 return;
             }
@@ -241,6 +250,7 @@ public final class CooldownCleanupFallback {
                 .message("fallback publish-date purge completed"
                     + " (purged=" + totalPurged
                     + ", retention_days=" + retentionDays + ")")
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -249,6 +259,8 @@ public final class CooldownCleanupFallback {
         EcsLogger.error("com.auto1.pantera.cooldown.cleanup")
             .message("fallback cleanup tick failed")
             .error(unwrap(err))
+            .field("log.source", "application")
+            .field("event.outcome", "failure")
             .log();
         return null;
     }
@@ -257,6 +269,8 @@ public final class CooldownCleanupFallback {
         EcsLogger.error("com.auto1.pantera.cooldown.history")
             .message("fallback purge tick failed")
             .error(unwrap(err))
+            .field("log.source", "application")
+            .field("event.outcome", "failure")
             .log();
         return null;
     }

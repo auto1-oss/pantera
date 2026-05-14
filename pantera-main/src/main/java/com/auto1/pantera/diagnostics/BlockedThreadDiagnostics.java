@@ -101,6 +101,7 @@ public final class BlockedThreadDiagnostics {
                 .message("Blocked thread diagnostics disabled via environment variable")
                 .eventCategory("host")
                 .eventAction("diagnostics_disabled")
+                .field("log.source", "application")
                 .log();
             return null;
         }
@@ -114,6 +115,7 @@ public final class BlockedThreadDiagnostics {
                     GC_PAUSE_THRESHOLD_MS))
                 .eventCategory("host")
                 .eventAction("diagnostics_init")
+                .field("log.source", "application")
                 .log();
         }
         return instance;
@@ -168,6 +170,7 @@ public final class BlockedThreadDiagnostics {
                         gcTimeDelta, gcCountDelta, avgPauseMs, totalGcTime))
                     .eventCategory("host")
                     .eventAction("gc_pause")
+                    .field("log.source", "application")
                     .log();
 
                 // Also log thread states during long GC
@@ -215,6 +218,7 @@ public final class BlockedThreadDiagnostics {
                         blockedCount, waitingCount, runnableCount))
                     .eventCategory("host")
                     .eventAction("thread_state")
+                    .field("log.source", "application")
                     .log();
                 this.logAllBlockedThreads();
             }
@@ -250,6 +254,8 @@ public final class BlockedThreadDiagnostics {
                         .eventCategory("host")
                         .eventAction("blocked_thread")
                         .field("error.stack_trace", sb.toString())
+                        .field("log.source", "application")
+                        .field("event.outcome", "failure")
                         .log();
                 }
             }

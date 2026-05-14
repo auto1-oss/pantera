@@ -90,6 +90,7 @@ final class HeadProxySlice implements Slice {
                     .eventAction("head_cache_hit")
                     .field("url.path", rawPath)
                     .error(err)
+                    .field("log.source", "application")
                     .log();
                 return ResponseBuilder.ok().build();
             });

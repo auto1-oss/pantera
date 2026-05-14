@@ -218,6 +218,7 @@ public final class Manifest {
             .eventAction("manifest_size")
             .field("package.checksum", this.manifestDigest.string())
             .field("package.size", size)
+            .field("log.source", "application")
             .log();
         return size;
     }
