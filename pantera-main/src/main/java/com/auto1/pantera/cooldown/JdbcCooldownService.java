@@ -22,6 +22,7 @@ import com.auto1.pantera.cooldown.config.CooldownSettings;
 import com.auto1.pantera.cooldown.metadata.FilteredMetadataCache;
 import com.auto1.pantera.cooldown.metrics.CooldownMetrics;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.resilience.SingleFlight;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -43,6 +44,24 @@ final class JdbcCooldownService implements CooldownService {
     private final Executor executor;
     private final CooldownCache cache;
     private final CooldownCircuitBreaker circuitBreaker;
+
+    /**
+     * Per-key single-flight for {@link #evaluate}. Closes the
+     * thundering-herd window between L1-cooldown-miss and the
+     * DB lookup that follows: N concurrent callers asking about the
+     * same {@link CooldownKey} share one downstream evaluation.
+     *
+     * <p>TTL 30 s is comfortably above the {@code inspector.releaseDate}
+     * 1.7 s timeout in {@link #checkNewArtifactAndCache} and the
+     * synchronous DB calls in {@link #checkExistingBlockWithTimestamp}.
+     * Max 10000 distinct keys is well above any realistic per-instance
+     * burst — Caffeine's LRU eviction handles overflow without
+     * affecting in-flight callers.
+     *
+     * <p>The coalescer holds <em>in-flight work only</em>; result
+     * caching is handled by the existing 3-tier {@link CooldownCache}.
+     */
+    private final SingleFlight<CooldownKey, CooldownResult> evaluateSingleFlight;
 
     /**
      * Callback invoked when a cooldown block expires or is removed,
@@ -112,6 +131,27 @@ final class JdbcCooldownService implements CooldownService {
             .contextualize(Objects.requireNonNull(executor));
         this.cache = Objects.requireNonNull(cache);
         this.circuitBreaker = Objects.requireNonNull(circuitBreaker);
+        this.evaluateSingleFlight = new SingleFlight<>(
+            Duration.ofSeconds(30), 10_000, this.executor
+        );
+    }
+
+    /**
+     * Coalescing key for {@link #evaluate}. Stable record of the
+     * upstream-affecting tuple — {@code requestedAt} and
+     * {@code requestedBy} deliberately excluded so concurrent callers
+     * with slightly different request metadata still share the same
+     * underlying evaluation.
+     */
+    private record CooldownKey(
+        String repoType, String repoName, String artifact, String version
+    ) {
+        static CooldownKey of(final CooldownRequest request) {
+            return new CooldownKey(
+                request.repoType(), request.repoName(),
+                request.artifact(), request.version()
+            );
+        }
     }
 
     /**
@@ -344,8 +384,25 @@ final class JdbcCooldownService implements CooldownService {
             .field("package.name", request.artifact())
             .field("package.version", request.version())
             .log();
-        
-        // Use cache (3-tier: L1 -> L2 -> Database)
+
+        return this.evaluateSingleFlight.load(
+            CooldownKey.of(request),
+            () -> this.evaluateCoalesced(request, inspector)
+        );
+    }
+
+    /**
+     * Coalesced evaluation body — runs at most once per concurrent
+     * burst sharing the same {@link CooldownKey}. The 3-tier
+     * {@link CooldownCache} stays as the result store; this wrapper
+     * only collapses the parallel cache-miss → DB-lookup window that
+     * would otherwise produce N DB queries for the same package
+     * version.
+     */
+    private CompletableFuture<CooldownResult> evaluateCoalesced(
+        final CooldownRequest request,
+        final CooldownInspector inspector
+    ) {
         return this.cache.isBlocked(
             request.repoName(),
             request.artifact(),
