@@ -23,6 +23,7 @@ import com.auto1.pantera.cooldown.response.CooldownResponseRegistry;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.http.cache.ProxyCacheWriter;
+import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.cooldown.GoLatestHandler;
 import com.auto1.pantera.http.cooldown.GoListHandler;
 import com.auto1.pantera.http.context.RequestContext;
@@ -32,6 +33,7 @@ import com.auto1.pantera.http.fault.Result;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.slice.KeyFromPath;
@@ -45,6 +47,7 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
+import java.time.Duration;
 import java.util.Collections;
 import java.util.EnumMap;
 import java.util.Locale;
@@ -53,6 +56,7 @@ import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicReference;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
@@ -151,6 +155,14 @@ final class CachedProxySlice implements Slice {
     private final ProxyCacheWriter cacheWriter;
 
     /**
+     * Per-key single-flight gate for the primary-artifact path (T-P08).
+     * Concurrent callers for the same uncached {@code .zip} collapse to a
+     * single upstream call; followers wait on the gate then re-enter
+     * {@link #verifyAndServePrimary} which hits the now-warm cache.
+     */
+    private final SingleFlight<Key, Void> primarySingleFlight;
+
+    /**
      * {@code /@latest} cooldown handler: intercepts {@code go get
      * <module>} (without a pseudo-version) resolution, rewrites the
      * response to the highest non-blocked version when the upstream
@@ -204,6 +216,11 @@ final class CachedProxySlice implements Slice {
         this.cacheWriter = storage
             .map(raw -> new ProxyCacheWriter(raw, rname, meterRegistry()))
             .orElse(null);
+        this.primarySingleFlight = new SingleFlight<>(
+            Duration.ofMinutes(5),
+            10_000,
+            ContextualExecutor.contextualize(ForkJoinPool.commonPool())
+        );
         this.latestHandler = new GoLatestHandler(
             client, cooldown, inspector, rtype, rname
         );
@@ -738,20 +755,21 @@ final class CachedProxySlice implements Slice {
             });
     }
 
-    // ===== WI-07 §9.5: ProxyCacheWriter integration =====
+    // ===== T-P08: stream-through primary path =====
 
     /**
-     * Primary-artifact flow for {@code *.zip} module archives.
+     * Primary-artifact flow (T-P08) for {@code *.zip} module archives. On
+     * cache hit, serves from raw storage. On miss, the cache-miss leg is
+     * single-flighted: the leader streams upstream → tee → client +
+     * storage in a single pass via
+     * {@link ProxyCacheWriter#streamThroughAndCommit}; followers wait on
+     * the gate then re-enter against the now-warm cache.
      *
-     * <p>On cache hit, serves from the raw storage. On cache miss, fetches
-     * the primary + the Go {@code .ziphash} SHA-256 sidecar upstream in
-     * one coupled batch, verifies the declared digest against the
-     * downloaded bytes via {@link ProxyCacheWriter}, atomically commits
-     * on agreement, and streams the freshly-cached bytes back.
-     *
-     * <p>Integrity failures collapse to a 502 with
-     * {@code X-Pantera-Fault: upstream-integrity:sha256}; storage failures
-     * collapse to a 502 and leave the cache empty for this key.
+     * <p>Trade-off vs. the legacy buffered path: integrity failures no
+     * longer fail-closed for the in-flight client (bytes are already in
+     * the response stream when the sidecar comparison runs) — the cache
+     * stays empty so the next request re-fetches cleanly. Matches the
+     * Maven primary-path decision.
      */
     private CompletableFuture<Response> verifyAndServePrimary(
         final RequestLine line,
@@ -769,7 +787,25 @@ final class CachedProxySlice implements Slice {
                 }
                 return this.serveFromCache(raw, key);
             }
-            return this.fetchVerifyAndCache(line, key, owner, artifactPath, releaseDate, rshdr);
+            // T-P08: single-flight the cache-miss leg. Leader streams;
+            // followers re-enter verifyAndServePrimary against the warm cache.
+            final boolean[] isLeader = {false};
+            final CompletableFuture<Void> leaderGate = new CompletableFuture<>();
+            final CompletableFuture<Void> gate = this.primarySingleFlight.load(
+                key,
+                () -> {
+                    isLeader[0] = true;
+                    return leaderGate;
+                }
+            );
+            if (isLeader[0]) {
+                return this.streamPrimary(
+                    line, key, owner, artifactPath, releaseDate, rshdr, leaderGate
+                );
+            }
+            return gate.exceptionally(err -> null).thenCompose(ignored ->
+                this.verifyAndServePrimary(line, key, owner, artifactPath, releaseDate, rshdr)
+            );
         }).exceptionally(err -> {
             EcsLogger.warn("com.auto1.pantera.go")
                 .message("Go primary-artifact verify-and-serve failed; returning 502")
@@ -785,16 +821,21 @@ final class CachedProxySlice implements Slice {
     }
 
     /**
-     * Cache-miss branch: fetch primary + sidecar upstream via
-     * {@link ProxyCacheWriter} and serve from the freshly-cached bytes.
+     * Stream-through primary fetch (T-P08): tee upstream body bytes to the
+     * client and the cache temp file in a single pass via
+     * {@link ProxyCacheWriter#streamThroughAndCommit}. The
+     * {@code leaderGate} resolves when the cache write is durable so
+     * followers parked on {@link #primarySingleFlight} can re-enter
+     * {@link #verifyAndServePrimary} against the warm cache.
      */
-    private CompletionStage<Response> fetchVerifyAndCache(
+    private CompletableFuture<Response> streamPrimary(
         final RequestLine line,
         final Key key,
         final String owner,
         final Optional<String> artifactPath,
         final Optional<Instant> releaseDate,
-        final AtomicReference<Headers> rshdr
+        final AtomicReference<Headers> rshdr,
+        final CompletableFuture<Void> leaderGate
     ) {
         final RequestContext ctx = new RequestContext(
             org.apache.logging.log4j.ThreadContext.get("trace.id"),
@@ -805,88 +846,92 @@ final class CachedProxySlice implements Slice {
         final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> sidecars =
             new EnumMap<>(ChecksumAlgo.class);
         sidecars.put(ChecksumAlgo.SHA256, () -> this.fetchSidecar(line, ".ziphash"));
-        // Go's only sidecar is .ziphash (SHA-256), which is in NON_BLOCKING_DEFAULT;
-        // pass an empty non-blocking set so the verification is load-bearing —
-        // a mismatch must fail-closed (502) instead of falling through the
-        // deferred path that only logs.
-        return this.cacheWriter.writeAndVerify(
-            key,
-            key.string(),
-            () -> this.fetchPrimary(line, rshdr),
-            sidecars,
-            Collections.emptySet(),
-            ctx
-        ).thenCompose(result -> {
-            if (result instanceof Result.Err<ProxyCacheWriter.VerifiedArtifact> err) {
-                if (err.fault() instanceof Fault.UpstreamIntegrity ui) {
-                    return CompletableFuture.<Response>completedFuture(
+        return this.client.response(line, Headers.EMPTY, Content.EMPTY)
+            .thenCompose(resp -> {
+                if (!resp.status().success()) {
+                    resp.body().asBytesFuture();
+                    if (!leaderGate.isDone()) {
+                        leaderGate.complete(null);
+                    }
+                    final int status = resp.status().code();
+                    if (status >= 400 && status < 500) {
+                        return CompletableFuture.completedFuture(
+                            ResponseBuilder.notFound().build()
+                        );
+                    }
+                    return CompletableFuture.completedFuture(
                         ResponseBuilder.badGateway()
-                            .header(
-                                "X-Pantera-Fault",
-                                "upstream-integrity:"
-                                    + ui.algo().name().toLowerCase(Locale.ROOT)
-                            )
-                            .textBody("Upstream integrity verification failed")
+                            .textBody("Upstream temporarily unavailable")
                             .build()
                     );
                 }
-                // Upstream-404 must propagate as 404, not 503: RaceSlice's
-                // contract is "404 → try the next remote, non-404 → that
-                // remote wins." Mapping 404 → 503 caused a single remote's
-                // 404 to short-circuit the race even when another remote
-                // had the artifact. For Go module proxies, 404 means the
-                // module/version genuinely doesn't exist at that remote —
-                // other 4xx (410 Gone, etc.) carry the same "not here"
-                // semantics. Surface them all as 404 so RaceSlice falls back.
-                if (err.fault() instanceof Fault.StorageUnavailable storageErr
-                    && storageErr.cause() instanceof UpstreamHttpException upstreamErr
-                    && upstreamErr.status() >= 400 && upstreamErr.status() < 500) {
-                    return CompletableFuture.completedFuture(
-                        ResponseBuilder.notFound().build()
-                    );
-                }
-                // StorageUnavailable / anything else → 502; transient failure.
-                return CompletableFuture.<Response>completedFuture(
-                    ResponseBuilder.badGateway()
-                        .textBody("Upstream temporarily unavailable")
-                        .build()
-                );
-            }
-            final ProxyCacheWriter.VerifiedArtifact artifact =
-                ((Result.Ok<ProxyCacheWriter.VerifiedArtifact>) result).value();
-            if (artifactPath.isPresent()) {
-                this.enqueueEvent(
-                    owner, artifactPath,
-                    releaseDate.or(() -> this.parseLastModified(rshdr.get()))
-                );
-            }
-            artifact.commitAsync();
-            return CompletableFuture.completedFuture(
-                ResponseBuilder.ok().body(artifact.contentFromTempFile()).build()
-            );
-        });
-    }
-
-    /**
-     * Read the primary from upstream as an {@link InputStream}. On any
-     * non-success status, throws so the writer's outer exception handler
-     * treats it as a transient failure (no cache mutation).
-     */
-    private CompletionStage<InputStream> fetchPrimary(
-        final RequestLine line, final AtomicReference<Headers> rshdr
-    ) {
-        return this.client.response(line, Headers.EMPTY, Content.EMPTY)
-            .thenApply(resp -> {
-                if (!resp.status().success()) {
-                    resp.body().asBytesFuture();
-                    throw new UpstreamHttpException(resp.status().code());
-                }
                 rshdr.set(resp.headers());
-                try {
-                    return resp.body().asInputStream();
-                } catch (final IOException ex) {
-                    throw new IllegalStateException("Upstream body not readable", ex);
+                return this.cacheWriter.streamThroughAndCommit(
+                    key,
+                    key.string(),
+                    resp.body().size(),
+                    resp.body(),
+                    sidecars,
+                    // Go's only sidecar is .ziphash (SHA-256), which lives
+                    // in NON_BLOCKING_DEFAULT; pass an empty non-blocking
+                    // set so the verification keeps the cache empty on
+                    // mismatch.
+                    Collections.emptySet(),
+                    ctx
+                ).toCompletableFuture().thenApply(result -> {
+                    if (result instanceof Result.Err<ProxyCacheWriter.StreamedArtifact> err) {
+                        if (!leaderGate.isDone()) {
+                            leaderGate.complete(null);
+                        }
+                        if (err.fault() instanceof Fault.UpstreamIntegrity ui) {
+                            return ResponseBuilder.badGateway()
+                                .header(
+                                    "X-Pantera-Fault",
+                                    "upstream-integrity:"
+                                        + ui.algo().name().toLowerCase(Locale.ROOT)
+                                )
+                                .textBody("Upstream integrity verification failed")
+                                .build();
+                        }
+                        return ResponseBuilder.badGateway()
+                            .textBody("Upstream temporarily unavailable")
+                            .build();
+                    }
+                    @SuppressWarnings("unchecked")
+                    final ProxyCacheWriter.StreamedArtifact artifact =
+                        ((Result.Ok<ProxyCacheWriter.StreamedArtifact>) result).value();
+                    if (artifactPath.isPresent()) {
+                        this.enqueueEvent(
+                            owner, artifactPath,
+                            releaseDate.or(() -> this.parseLastModified(rshdr.get()))
+                        );
+                    }
+                    // Release followers only after the cache write commits.
+                    artifact.verificationOutcome()
+                        .whenComplete((r2, e2) -> {
+                            if (!leaderGate.isDone()) {
+                                leaderGate.complete(null);
+                            }
+                        });
+                    return ResponseBuilder.ok().body(artifact.body()).build();
+                });
+            })
+            .exceptionally(err -> {
+                if (!leaderGate.isDone()) {
+                    leaderGate.complete(null);
                 }
+                EcsLogger.warn("com.auto1.pantera.go")
+                    .message("Go stream-through primary fetch failed; returning 502")
+                    .eventCategory("web")
+                    .eventAction("cache_write")
+                    .eventOutcome("failure")
+                    .field("repository.name", this.rname)
+                    .field("url.path", key.string())
+                    .error(err)
+                    .log();
+                return ResponseBuilder.badGateway()
+                    .textBody("Upstream temporarily unavailable")
+                    .build();
             });
     }
 
@@ -944,26 +989,4 @@ final class CachedProxySlice implements Slice {
         return null;
     }
 
-    /**
-     * Carries the upstream HTTP status so {@link #fetchVerifyAndCache} can
-     * distinguish "this upstream truly doesn't have it" (404 → propagate as
-     * 404 to RaceSlice, so other remotes can serve) from "transient failure"
-     * (5xx, timeouts → surface as 503). Without this, every non-2xx upstream
-     * response was mapped to 503 by the cache writer, and RaceSlice treats
-     * 503 as a "winning" response (only 404 triggers race-continue), so a
-     * single 404 from a remote beat a 200 from another for Go module files.
-     */
-    private static final class UpstreamHttpException extends IllegalStateException {
-        private static final long serialVersionUID = 1L;
-        private final int status;
-
-        UpstreamHttpException(final int status) {
-            super("Upstream returned HTTP " + status);
-            this.status = status;
-        }
-
-        int status() {
-            return this.status;
-        }
-    }
 }
