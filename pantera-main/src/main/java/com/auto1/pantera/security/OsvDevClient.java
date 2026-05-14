@@ -11,6 +11,7 @@
 package com.auto1.pantera.security;
 
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.trace.TraceHeaders;
 
 import java.io.StringReader;
 import java.net.URI;
@@ -154,12 +155,12 @@ public final class OsvDevClient {
             .add("version", version)
             .build()
             .toString();
-        final HttpRequest request = HttpRequest.newBuilder()
+        final HttpRequest request = withTrace(HttpRequest.newBuilder()
             .uri(this.endpoint)
             .timeout(this.timeout)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")
-            .header("User-Agent", "pantera/2.2.0")
+            .header("User-Agent", "pantera/2.2.0"))
             .POST(HttpRequest.BodyPublishers.ofString(payload))
             .build();
         final HttpResponse<String> response;
@@ -178,6 +179,24 @@ public final class OsvDevClient {
             );
         }
         return parseVulnerabilities(response.body());
+    }
+
+    /**
+     * Inject {@code traceparent} + {@code X-B3-*} on the outbound request so
+     * the OSV.dev hop is correlated with the originating Pantera request in
+     * APM and ECS logs. No-op when MDC has no trace context (e.g. boot-time
+     * health checks).
+     *
+     * @param builder Request builder to augment.
+     * @return Same builder for chaining.
+     */
+    private static HttpRequest.Builder withTrace(final HttpRequest.Builder builder) {
+        final String[] hdrs = TraceHeaders.httpClientHeaders();
+        HttpRequest.Builder result = builder;
+        for (int i = 0; i < hdrs.length; i += 2) {
+            result = result.header(hdrs[i], hdrs[i + 1]);
+        }
+        return result;
     }
 
     /**

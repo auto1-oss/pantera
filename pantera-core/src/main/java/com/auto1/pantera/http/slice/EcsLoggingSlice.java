@@ -23,6 +23,7 @@ import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.trace.SpanContext;
 import org.slf4j.MDC;
 
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -132,6 +133,16 @@ public final class EcsLoggingSlice implements Slice {
         if (span.parentSpanId() != null) {
             MDC.put(EcsMdc.PARENT_SPAN_ID, span.parentSpanId());
         }
+        // transaction.id — APM root-span correlation. If MDC already has one
+        // (e.g. an upstream auth middleware seeded it from the APM agent),
+        // preserve it; otherwise mint a fresh hex id so the access-log line
+        // and every downstream log line share the same value.
+        if (MDC.get(EcsMdc.TRANSACTION_ID) == null) {
+            MDC.put(
+                EcsMdc.TRANSACTION_ID,
+                UUID.randomUUID().toString().replace("-", "").substring(0, 16)
+            );
+        }
         if (clientIp != null && !clientIp.isEmpty() && !"unknown".equals(clientIp)) {
             MDC.put(EcsMdc.CLIENT_IP, clientIp);
         }
@@ -210,6 +221,7 @@ public final class EcsLoggingSlice implements Slice {
                 MDC.remove(EcsMdc.USER_NAME);
                 MDC.remove(EcsMdc.REPO_NAME);
                 MDC.remove(EcsMdc.REPO_TYPE);
+                MDC.remove(EcsMdc.TRANSACTION_ID);
             });
     }
 
@@ -225,9 +237,21 @@ public final class EcsLoggingSlice implements Slice {
         final String userName,
         final RequestLine line
     ) {
+        // transaction.id is sourced from MDC (set above at request entry). If MDC
+        // somehow lost it on this thread (e.g. an executor hop that didn't
+        // contextualize), fall back to a fresh hex id rather than emit null —
+        // null transaction.id breaks the access-log Kibana filter.
+        final String transactionId;
+        final String mdcTxId = MDC.get(EcsMdc.TRANSACTION_ID);
+        if (mdcTxId == null) {
+            transactionId =
+                UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+        } else {
+            transactionId = mdcTxId;
+        }
         return new RequestContext(
             span.traceId(),
-            /* transactionId */ null,
+            transactionId,
             span.spanId(),
             /* httpRequestId */ null,
             userName == null ? "anonymous" : userName,

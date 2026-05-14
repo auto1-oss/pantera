@@ -472,8 +472,15 @@ public final class VertxSliceServer implements Closeable {
                 req.response().end("Service Unavailable: server is shutting down");
                 return;
             }
-            // Create APM transaction for this HTTP request
-            final Transaction transaction = ElasticApm.startTransaction();
+            // Create APM transaction for this HTTP request.
+            // Extract incoming W3C traceparent / B3 headers FIRST so the APM
+            // transaction inherits the upstream trace.id, then EcsLoggingSlice
+            // downstream re-derives the same trace.id from the same headers via
+            // SpanContext.extract — keeping APM trace-id and ECS log trace.id
+            // aligned for an inbound request that already carries one.
+            final Transaction transaction = ElasticApm.startTransactionWithRemoteParent(
+                req::getHeader
+            );
 
             // Create request ID for logging and debugging
             final String requestId = req.method().name() + " " + extractRouteName(req.uri())

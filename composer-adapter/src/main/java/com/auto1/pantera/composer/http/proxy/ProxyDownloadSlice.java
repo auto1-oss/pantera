@@ -44,6 +44,15 @@ import java.time.Instant;
  * Slice for downloading actual package zip files through proxy.
  * Emits events to database when packages are actually downloaded.
  *
+ * <p><b>Trace context contract.</b> Trace context (trace.id / span.id /
+ * span.parent.id) is inherited from the {@code EcsLoggingSlice} MDC scope
+ * set at request entry. Any async hop introduced in this slice MUST use
+ * {@code ContextualExecutor.contextualize(...)} (or an equivalent MDC
+ * capture-and-restore) to preserve trace.id across the executor
+ * boundary — without it, log lines emitted from the worker thread
+ * surface in Kibana with no trace correlation back to the originating
+ * request.
+ *
  * @since 1.0
  */
 public final class ProxyDownloadSlice implements Slice {

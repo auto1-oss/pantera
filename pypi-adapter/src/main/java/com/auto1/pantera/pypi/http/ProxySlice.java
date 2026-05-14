@@ -24,6 +24,7 @@ import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.response.CooldownResponseRegistry;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
@@ -58,6 +59,7 @@ import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
@@ -801,7 +803,7 @@ final class ProxySlice implements Slice {
                     .field("log.source", "application")
                     .log();
             }
-        });
+        }, ContextualExecutor.contextualize(ForkJoinPool.commonPool()));
     }
 
     /**

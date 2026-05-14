@@ -32,6 +32,15 @@ import java.util.concurrent.ExecutionException;
  * NOT a group repository resolver. For group/virtual repository resolution
  * with index lookup, member flattening, and negative caching, see
  * {@link com.auto1.pantera.group.GroupResolver} in pantera-main.
+ *
+ * <p><b>Trace context contract.</b> Trace context (trace.id / span.id /
+ * span.parent.id) is inherited from the {@code EcsLoggingSlice} MDC scope
+ * set at request entry. Per-leg completion callbacks may execute on the
+ * executor that completed the upstream future; late-arriving losers in
+ * particular can drop MDC. Any async hop introduced in this slice MUST
+ * use {@code ContextualExecutor.contextualize(...)} (or an equivalent
+ * MDC capture-and-restore) so leg logs stay correlated to the originating
+ * request.
  */
 public final class RaceSlice implements Slice {
 

@@ -189,6 +189,10 @@ public final class QuartzService {
                 data.put("elements", queue);
                 data.put("action", Objects.requireNonNull(consumer.get(item)));
             }
+            // Stamp the scheduling thread's MDC trace context so the Quartz
+            // worker thread (possibly on another node in JDBC cluster mode)
+            // can restore trace.id / span.id when Job.execute runs.
+            TracingJobWrapper.stampMdc(data);
             this.scheduler.scheduleJob(
                 JobBuilder.newJob(EventsProcessor.class).setJobData(data).withIdentity(
                     QuartzService.jobId(id, item), EventsProcessor.class.getSimpleName()
@@ -225,6 +229,9 @@ public final class QuartzService {
             .startNow().withSchedule(SimpleScheduleBuilder.repeatSecondlyForever(seconds));
         final int count = this.parallelJobs(threads);
         final Set<JobKey> res = new HashSet<>(count);
+        // Stamp the scheduling thread's MDC trace context once for all jobs
+        // built from this shared JobDataMap; see TracingJobWrapper.
+        TracingJobWrapper.stampMdc(data);
         for (int item = 0; item < count; item = item + 1) {
             final JobKey key = new JobKey(QuartzService.jobId(id, item), clazz.getSimpleName());
             this.scheduler.scheduleJob(
@@ -251,6 +258,8 @@ public final class QuartzService {
     public <T extends Job> void schedulePeriodicJob(
         final String cronexp, final Class<T> clazz, final JobDataMap data
     ) throws SchedulerException {
+        // Stamp scheduling-thread MDC trace context; see TracingJobWrapper.
+        TracingJobWrapper.stampMdc(data);
         final JobDetail job = JobBuilder
             .newJob()
             .ofType(clazz)

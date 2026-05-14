@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.http.cache;
 
+import com.auto1.pantera.http.context.ContextualExecutor;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import io.micrometer.core.instrument.Counter;
@@ -20,6 +21,7 @@ import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ForkJoinPool;
 import java.util.function.Supplier;
 
 /**
@@ -320,7 +322,8 @@ public final class SwrMetadataCache<K, V> {
                 } finally {
                     this.refreshing.remove(key);
                 }
-            })
+            }),
+            ContextualExecutor.contextualize(ForkJoinPool.commonPool())
         );
     }
 

@@ -12,6 +12,7 @@ package com.auto1.pantera.cache;
 
 import com.auto1.pantera.asto.misc.Cleanable;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsMdc;
 import io.lettuce.core.pubsub.RedisPubSubAdapter;
 import io.lettuce.core.pubsub.StatefulRedisPubSubConnection;
 import io.lettuce.core.pubsub.api.async.RedisPubSubAsyncCommands;
@@ -19,6 +20,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
+import org.slf4j.MDC;
 
 /**
  * Redis/Valkey pub/sub channel for cross-instance cache invalidation.
@@ -32,9 +34,15 @@ import java.util.function.Consumer;
  * Messages published by this instance are ignored on receipt to avoid
  * invalidating caches that were already updated locally.
  * <p>
- * Message format: {@code instanceId|cacheType|key}
+ * Wire format (current, v2):
+ * {@code v2:instanceId|traceId|spanId|cacheType|key} — the {@code v2:}
+ * prefix carries the originating-request trace context so the receiver
+ * can restore MDC trace.id / span.id for the duration of the
+ * invalidate() callback. Legacy {@code instanceId|cacheType|key} (v1)
+ * is still parsed for rolling-deploy compatibility — handler runs with
+ * no trace MDC, exactly as before this change.
  * <br>
- * For invalidateAll: {@code instanceId|cacheType|*}
+ * For invalidateAll the {@code key} field is the wildcard {@code *}.
  *
  * @since 1.20.13
  */
@@ -54,6 +62,15 @@ public final class CacheInvalidationPubSub implements AutoCloseable {
      * Message field separator.
      */
     private static final String SEP = "|";
+
+    /**
+     * Wire-format version prefix that prepends trace.id / span.id between
+     * the cacheType/key fields and the rest of the envelope. Receivers
+     * that see this prefix restore the trace context into MDC for the
+     * handler callback; v1 receivers see only the original 3-field
+     * envelope and degrade gracefully (no MDC restore).
+     */
+    private static final String PAYLOAD_VERSION_TRACE = "v2:";
 
     /**
      * Unique instance identifier to filter out self-messages.
@@ -146,10 +163,10 @@ public final class CacheInvalidationPubSub implements AutoCloseable {
      * @param key Cache key to invalidate
      */
     public void publish(final String cacheType, final String key) {
-        final String msg = String.join(
-            CacheInvalidationPubSub.SEP, this.instanceId, cacheType, key
+        this.pubCommands.publish(
+            CacheInvalidationPubSub.CHANNEL,
+            wireMessage(cacheType, key)
         );
-        this.pubCommands.publish(CacheInvalidationPubSub.CHANNEL, msg);
     }
 
     /**
@@ -158,11 +175,30 @@ public final class CacheInvalidationPubSub implements AutoCloseable {
      * @param cacheType Cache type name
      */
     public void publishAll(final String cacheType) {
-        final String msg = String.join(
-            CacheInvalidationPubSub.SEP, this.instanceId, cacheType,
-            CacheInvalidationPubSub.ALL
+        this.pubCommands.publish(
+            CacheInvalidationPubSub.CHANNEL,
+            wireMessage(cacheType, CacheInvalidationPubSub.ALL)
         );
-        this.pubCommands.publish(CacheInvalidationPubSub.CHANNEL, msg);
+    }
+
+    /**
+     * Encode the v2 wire envelope:
+     * {@code v2:<instanceId>|<traceId>|<spanId>|<cacheType>|<key>}.
+     * trace.id / span.id are sourced from MDC (empty if absent).
+     */
+    private String wireMessage(final String cacheType, final String key) {
+        final String traceId = nullToEmpty(MDC.get(EcsMdc.TRACE_ID));
+        final String spanId = nullToEmpty(MDC.get(EcsMdc.SPAN_ID));
+        return CacheInvalidationPubSub.PAYLOAD_VERSION_TRACE
+            + String.join(
+                CacheInvalidationPubSub.SEP,
+                this.instanceId, traceId, spanId, cacheType, key
+            );
+    }
+
+    /** Coalesce nulls to empty strings to keep the wire format positional. */
+    private static String nullToEmpty(final String value) {
+        return value == null ? "" : value;
     }
 
     @Override
@@ -187,35 +223,89 @@ public final class CacheInvalidationPubSub implements AutoCloseable {
             if (!CacheInvalidationPubSub.CHANNEL.equals(channel)) {
                 return;
             }
-            final String[] parts = message.split(
-                "\\" + CacheInvalidationPubSub.SEP, 3
-            );
-            if (parts.length < 3) {
-                return;
+            // Decode wire envelope. v2 carries trace.id + span.id between
+            // the instance id and the cacheType/key pair. Anything without
+            // the prefix is a v1 message from an older instance still in
+            // the rolling deploy — fall back to the legacy 3-field parse.
+            final String body;
+            final boolean v2;
+            if (message.startsWith(CacheInvalidationPubSub.PAYLOAD_VERSION_TRACE)) {
+                body = message.substring(
+                    CacheInvalidationPubSub.PAYLOAD_VERSION_TRACE.length()
+                );
+                v2 = true;
+            } else {
+                body = message;
+                v2 = false;
             }
-            final String sender = parts[0];
+            final String sender;
+            final String traceId;
+            final String spanId;
+            final String cacheType;
+            final String key;
+            if (v2) {
+                final String[] parts = body.split(
+                    "\\" + CacheInvalidationPubSub.SEP, 5
+                );
+                if (parts.length < 5) {
+                    return;
+                }
+                sender = parts[0];
+                traceId = parts[1];
+                spanId = parts[2];
+                cacheType = parts[3];
+                key = parts[4];
+            } else {
+                final String[] parts = body.split(
+                    "\\" + CacheInvalidationPubSub.SEP, 3
+                );
+                if (parts.length < 3) {
+                    return;
+                }
+                sender = parts[0];
+                traceId = "";
+                spanId = "";
+                cacheType = parts[1];
+                key = parts[2];
+            }
             if (CacheInvalidationPubSub.this.instanceId.equals(sender)) {
                 return;
             }
-            final String cacheType = parts[1];
-            final String key = parts[2];
             final Cleanable<String> cache =
                 CacheInvalidationPubSub.this.caches.get(cacheType);
             if (cache == null) {
                 return;
             }
-            if (CacheInvalidationPubSub.ALL.equals(key)) {
-                cache.invalidateAll();
-            } else {
-                cache.invalidate(key);
+            final boolean restoreTrace = !traceId.isEmpty();
+            if (restoreTrace) {
+                MDC.put(EcsMdc.TRACE_ID, traceId);
+                if (!spanId.isEmpty()) {
+                    MDC.put(EcsMdc.SPAN_ID, spanId);
+                }
             }
-            EcsLogger.debug("com.auto1.pantera.cache")
-                .message("Remote cache invalidation: " + cacheType + ":" + key)
-                .eventCategory("database")
-                .eventAction("remote_invalidate")
-                .eventOutcome("success")
-                .field("log.source", "application")
-                .log();
+            try {
+                if (CacheInvalidationPubSub.ALL.equals(key)) {
+                    cache.invalidateAll();
+                } else {
+                    cache.invalidate(key);
+                }
+                EcsLogger.debug("com.auto1.pantera.cache")
+                    .message(
+                        "Remote cache invalidation: " + cacheType + ":" + key
+                    )
+                    .eventCategory("database")
+                    .eventAction("remote_invalidate")
+                    .eventOutcome("success")
+                    .field("log.source", "application")
+                    .log();
+            } finally {
+                if (restoreTrace) {
+                    MDC.remove(EcsMdc.TRACE_ID);
+                    if (!spanId.isEmpty()) {
+                        MDC.remove(EcsMdc.SPAN_ID);
+                    }
+                }
+            }
         }
     }
 }

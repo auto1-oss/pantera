@@ -40,6 +40,18 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.StreamSupport;
 
+/**
+ * Cooldown evaluator for the docker-proxy adapter.
+ *
+ * <p><b>Trace context contract.</b> Trace context (trace.id / span.id /
+ * span.parent.id) is inherited from the {@code EcsLoggingSlice} MDC scope
+ * set at request entry. Any async hop introduced in this slice MUST use
+ * {@code ContextualExecutor.contextualize(...)} (or an equivalent MDC
+ * capture-and-restore) to preserve trace.id across the executor
+ * boundary — without it, log lines emitted from the worker thread
+ * surface in Kibana with no trace correlation back to the originating
+ * request.
+ */
 public final class DockerProxyCooldownSlice implements Slice {
 
     private static final String DIGEST_HEADER = "Docker-Content-Digest";
