@@ -56,6 +56,7 @@ public final class AuthFromKeycloak implements Authentication {
                 .eventCategory("authentication")
                 .eventAction("login")
                 .eventOutcome("failure")
+                .field("log.source", "application")
                 .field("http.response.status_code", status)
                 .error(err);
             final String urlPath = MDC.get("url.path");
@@ -76,6 +77,7 @@ public final class AuthFromKeycloak implements Authentication {
                 .eventCategory("authentication")
                 .eventAction("login")
                 .eventOutcome("failure")
+                .field("log.source", "application")
                 .error(err);
             final String urlPath = MDC.get("url.path");
             if (urlPath != null) {

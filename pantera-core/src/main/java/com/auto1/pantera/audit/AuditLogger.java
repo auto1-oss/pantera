@@ -88,6 +88,7 @@ public final class AuditLogger {
             .eventCategory("file")
             .eventAction("artifact_resolution")
             .eventOutcome("success")
+            .field("log.source", "audit")
             .field("package.name", packageName);
         mdcField(logger, "repository.type", EcsMdc.REPO_TYPE);
         mdcField(logger, "repository.name", EcsMdc.REPO_NAME);
@@ -117,6 +118,7 @@ public final class AuditLogger {
             .eventCategory("database")
             .eventAction("artifact_publish")
             .eventOutcome("success")
+            .field("log.source", "audit")
             .field("repository.type", repoType)
             .field("repository.name", repoName)
             .field("package.name", artifactName)
@@ -134,7 +136,8 @@ public final class AuditLogger {
             .message(message)
             .eventCategory("file")
             .eventAction(action)
-            .eventOutcome("success");
+            .eventOutcome("success")
+            .field("log.source", "audit");
         mdcField(logger, "repository.type", EcsMdc.REPO_TYPE);
         mdcField(logger, "repository.name", EcsMdc.REPO_NAME);
         mdcField(logger, "package.name", EcsMdc.PACKAGE_NAME);

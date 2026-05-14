@@ -379,6 +379,7 @@ public final class VertxSliceServer implements Closeable {
                 .message(String.format("Initiating graceful shutdown, draining %d in-flight requests", this.inFlightRequests.get()))
                 .eventCategory("web")
                 .eventAction("server_drain")
+                .field("log.source", "application")
                 .log();
             // Phase 2: Wait for in-flight requests to drain
             final long deadline = System.currentTimeMillis() + this.drainTimeout.toMillis();
@@ -398,6 +399,7 @@ public final class VertxSliceServer implements Closeable {
                     .eventAction("server_drain")
                     .eventOutcome("failure")
                     .field("event.reason", "request_timeout")
+                    .field("log.source", "application")
                     .log();
             } else {
                 EcsLogger.info("com.auto1.pantera.vertx")
@@ -405,6 +407,7 @@ public final class VertxSliceServer implements Closeable {
                     .eventCategory("web")
                     .eventAction("server_drain")
                     .eventOutcome("success")
+                    .field("log.source", "application")
                     .log();
             }
             // Phase 3: Close the server
@@ -416,6 +419,7 @@ public final class VertxSliceServer implements Closeable {
                 .eventAction("server_stop")
                 .eventOutcome("unknown")
                 .field("event.reason", "skipped")
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -517,6 +521,7 @@ public final class VertxSliceServer implements Closeable {
                                 .eventCategory("web")
                                 .eventAction("request_buffer")
                                 .field("http.request.body.bytes", body.length())
+                                .field("log.source", "application")
                                 .log();
                             this.serveWithBody(req, body, guardedResponse).whenComplete((result, throwable) -> {
                                 try {
@@ -527,6 +532,7 @@ public final class VertxSliceServer implements Closeable {
                                             .eventAction("request_serve")
                                             .eventOutcome("failure")
                                             .error(throwable)
+                                            .field("log.source", "application")
                                             .log();
                                         transaction.captureException(throwable);
                                         transaction.setResult("error");
@@ -551,6 +557,7 @@ public final class VertxSliceServer implements Closeable {
                             .eventCategory("web")
                             .eventAction("request_stream")
                             .field("http.request.body.bytes", contentLength)
+                            .field("log.source", "application")
                             .log();
                         this.serveWithStream(req, contentLength, guardedResponse).whenComplete((result, throwable) -> {
                             try {
@@ -561,6 +568,7 @@ public final class VertxSliceServer implements Closeable {
                                         .eventAction("request_serve")
                                         .eventOutcome("failure")
                                         .error(throwable)
+                                        .field("log.source", "application")
                                         .log();
                                     transaction.captureException(throwable);
                                     transaction.setResult("error");
@@ -589,6 +597,7 @@ public final class VertxSliceServer implements Closeable {
                                     .eventAction("request_serve")
                                     .eventOutcome("failure")
                                     .error(throwable)
+                                    .field("log.source", "application")
                                     .log();
                                 transaction.captureException(throwable);
                                 transaction.setResult("error");
@@ -613,6 +622,7 @@ public final class VertxSliceServer implements Closeable {
                     .eventAction("request_handle")
                     .eventOutcome("failure")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
                 transaction.captureException(ex);
                 transaction.setResult("error");
@@ -700,7 +710,8 @@ public final class VertxSliceServer implements Closeable {
                 .eventAction("request_serve_stream")
                 .field("http.request.method", req.method().name())
                 .field("url.path", LogSanitizer.sanitizeUrl(req.uri()))
-                .field("http.request.body.bytes", contentLength),
+                .field("http.request.body.bytes", contentLength)
+                .field("log.source", "http"),
             ctx
         ).log();
 
@@ -745,7 +756,8 @@ public final class VertxSliceServer implements Closeable {
                             .eventAction("response_accept")
                             .field("http.request.method", req.method().name())
                             .field("url.path", LogSanitizer.sanitizeUrl(req.uri()))
-                            .field("http.response.status_code", resp.status().code()),
+                            .field("http.response.status_code", resp.status().code())
+                            .field("log.source", "http"),
                         ctx
                     ).log();
 
@@ -768,7 +780,8 @@ public final class VertxSliceServer implements Closeable {
                             .eventOutcome("failure")
                             .field("http.request.method", req.method().name())
                             .field("url.path", LogSanitizer.sanitizeUrl(req.uri()))
-                            .error(error),
+                            .error(error)
+                            .field("log.source", "http"),
                         ctx
                     ).log();
                 } else {
@@ -779,7 +792,8 @@ public final class VertxSliceServer implements Closeable {
                             .eventAction("request_serve")
                             .eventOutcome("success")
                             .field("http.request.method", req.method().name())
-                            .field("url.path", LogSanitizer.sanitizeUrl(req.uri())),
+                            .field("url.path", LogSanitizer.sanitizeUrl(req.uri()))
+                            .field("log.source", "http"),
                         ctx
                     ).log();
                 }
@@ -828,7 +842,8 @@ public final class VertxSliceServer implements Closeable {
                 .eventCategory("web")
                 .eventAction("request_serve")
                 .field("http.request.method", req.method().name())
-                .field("url.path", LogSanitizer.sanitizeUrl(req.uri())),
+                .field("url.path", LogSanitizer.sanitizeUrl(req.uri()))
+                .field("log.source", "http"),
             ctx
         ).log();
 
@@ -864,7 +879,8 @@ public final class VertxSliceServer implements Closeable {
                             .eventAction("response_accept")
                             .field("http.request.method", req.method().name())
                             .field("url.path", LogSanitizer.sanitizeUrl(req.uri()))
-                            .field("http.response.status_code", resp.status().code()),
+                            .field("http.response.status_code", resp.status().code())
+                            .field("log.source", "http"),
                         ctx
                     ).log();
 
@@ -889,7 +905,8 @@ public final class VertxSliceServer implements Closeable {
                             .eventOutcome("failure")
                             .field("http.request.method", req.method().name())
                             .field("url.path", LogSanitizer.sanitizeUrl(req.uri()))
-                            .error(error),
+                            .error(error)
+                            .field("log.source", "http"),
                         ctx
                     ).log();
                 } else {
@@ -900,7 +917,8 @@ public final class VertxSliceServer implements Closeable {
                             .eventAction("request_serve")
                             .eventOutcome("success")
                             .field("http.request.method", req.method().name())
-                            .field("url.path", LogSanitizer.sanitizeUrl(req.uri())),
+                            .field("url.path", LogSanitizer.sanitizeUrl(req.uri()))
+                            .field("log.source", "http"),
                         ctx
                     ).log();
                 }
@@ -945,7 +963,8 @@ public final class VertxSliceServer implements Closeable {
                 .eventCategory("web")
                 .eventAction("request_serve")
                 .field("http.request.method", req.method().name())
-                .field("url.path", LogSanitizer.sanitizeUrl(req.uri())),
+                .field("url.path", LogSanitizer.sanitizeUrl(req.uri()))
+                .field("log.source", "http"),
             ctx
         ).log();
 
@@ -975,7 +994,8 @@ public final class VertxSliceServer implements Closeable {
                             .eventAction("response_accept")
                             .field("http.request.method", req.method().name())
                             .field("url.path", LogSanitizer.sanitizeUrl(req.uri()))
-                            .field("http.response.status_code", resp.status().code()),
+                            .field("http.response.status_code", resp.status().code())
+                            .field("log.source", "http"),
                         ctx
                     ).log();
 
@@ -1000,7 +1020,8 @@ public final class VertxSliceServer implements Closeable {
                             .eventOutcome("failure")
                             .field("http.request.method", req.method().name())
                             .field("url.path", LogSanitizer.sanitizeUrl(req.uri()))
-                            .error(error),
+                            .error(error)
+                            .field("log.source", "http"),
                         ctx
                     ).log();
                 } else {
@@ -1011,7 +1032,8 @@ public final class VertxSliceServer implements Closeable {
                             .eventAction("request_serve")
                             .eventOutcome("success")
                             .field("http.request.method", req.method().name())
-                            .field("url.path", LogSanitizer.sanitizeUrl(req.uri())),
+                            .field("url.path", LogSanitizer.sanitizeUrl(req.uri()))
+                            .field("log.source", "http"),
                         ctx
                     ).log();
                 }
@@ -1061,7 +1083,8 @@ public final class VertxSliceServer implements Closeable {
                         .eventOutcome("failure")
                         .field("event.reason", "request_timeout")
                         .field("http.request.method", req.method().name())
-                        .field("url.path", LogSanitizer.sanitizeUrl(req.uri())),
+                        .field("url.path", LogSanitizer.sanitizeUrl(req.uri()))
+                        .field("log.source", "http"),
                     timeoutCtx
                 ).log();
                 return ResponseBuilder.unavailable()
@@ -1096,6 +1119,7 @@ public final class VertxSliceServer implements Closeable {
                 .eventCategory("web")
                 .eventAction("response_accept")
                 .field("http.response.status_code", status.code())
+                .field("log.source", "http")
                 .log();
             promise.complete(null);
             return promise;
@@ -1154,6 +1178,7 @@ public final class VertxSliceServer implements Closeable {
                                 .eventAction("response_write")
                                 .eventOutcome("failure")
                                 .error(error)
+                                .field("log.source", "application")
                                 .log();
                             terminator.fail(error);
                         },
@@ -1164,6 +1189,7 @@ public final class VertxSliceServer implements Closeable {
                                 .eventAction("response_write")
                                 .eventOutcome("success")
                                 .field("http.response.body.bytes", true)
+                                .field("log.source", "application")
                                 .log();
                             terminator.end();
                         }
@@ -1194,6 +1220,7 @@ public final class VertxSliceServer implements Closeable {
                             .eventAction("response_write")
                             .eventOutcome("failure")
                             .field("http.response.body.bytes", bytes)
+                            .field("log.source", "application")
                             .log();
                         terminator.fail(new java.io.IOException(
                             String.format("Incomplete transfer: expected %d bytes, wrote %d bytes",
@@ -1213,6 +1240,7 @@ public final class VertxSliceServer implements Closeable {
                            .eventOutcome("failure")
                            .field("http.response.body.bytes", bytesWritten.get())
                            .error(error)
+                           .field("log.source", "application")
                            .log();
                        terminator.fail(error);
                    })
@@ -1234,6 +1262,7 @@ public final class VertxSliceServer implements Closeable {
                         .eventCategory("web")
                         .eventAction("response_write")
                         .eventOutcome("success")
+                        .field("log.source", "application")
                         .log();
                     terminator.completeWithoutEnding();
                 });
@@ -1249,6 +1278,7 @@ public final class VertxSliceServer implements Closeable {
                             .message("Subscribed to chunked response body")
                             .eventCategory("web")
                             .eventAction("response_subscribe")
+                            .field("log.source", "application")
                             .log();
                     })
                     .doOnError(terminator::fail)
@@ -1455,6 +1485,7 @@ public final class VertxSliceServer implements Closeable {
                     .message("Duplicate response completion suppressed (method: end)")
                     .eventCategory("web")
                     .eventAction("response_complete")
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -1469,6 +1500,7 @@ public final class VertxSliceServer implements Closeable {
                     .message("Duplicate response completion suppressed (method: handler)")
                     .eventCategory("web")
                     .eventAction("response_complete")
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -1481,6 +1513,7 @@ public final class VertxSliceServer implements Closeable {
                     .eventAction("response_stream")
                     .eventOutcome("failure")
                     .error(error)
+                    .field("log.source", "application")
                     .log();
                 // CRITICAL: Must end response even on error to decrement counter
                 // Use guarded response to prevent double-end race conditions
@@ -1509,6 +1542,7 @@ public final class VertxSliceServer implements Closeable {
                             .eventAction("response_end")
                             .eventOutcome("failure")
                             .error(e)
+                            .field("log.source", "application")
                             .log();
                     }
                 }
@@ -1519,6 +1553,7 @@ public final class VertxSliceServer implements Closeable {
                     .eventCategory("web")
                     .eventAction("response_fail")
                     .error(error)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -1567,6 +1602,7 @@ public final class VertxSliceServer implements Closeable {
                     .eventCategory("web")
                     .eventAction("header_filter")
                     .field("http.version", "2.0")
+                    .field("log.source", "application")
                     .log();
             }
         }
