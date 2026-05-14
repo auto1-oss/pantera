@@ -41,9 +41,6 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.containsString;
-import static org.hamcrest.Matchers.is;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -73,8 +70,8 @@ final class CachedProxySliceIntegrityTest {
         new Key.From("dists/vendor/package/sha/vendor-package-1.0.0.zip");
 
     @Test
-    @DisplayName("upstream .sha256 mismatch → storage empty + integrity metric incremented")
-    void sha256Mismatch_rejectsWrite() throws Exception {
+    @DisplayName("upstream .sha256 mismatch → bytes streamed; cache stays empty; integrity metric increments (T-P07)")
+    void sha256Mismatch_streamsButDoesNotCache() throws Exception {
         final Storage storage = new InMemoryStorage();
         final MeterRegistry registry = new SimpleMeterRegistry();
         final FakeComposerUpstream origin = new FakeComposerUpstream(
@@ -89,18 +86,16 @@ final class CachedProxySliceIntegrityTest {
             Content.EMPTY
         ).join();
 
-        assertThat(
-            "response signals fault; writer rejected the write",
-            response.status().code() == 502 || response.status().code() == 404,
-            is(true)
+        // Stream-through (T-P07): bytes were already streamed when verify ran,
+        // so the client sees 200; cache stays empty so the next request
+        // re-fetches cleanly. Integrity counter still fires for observability.
+        assertEquals(RsStatus.OK, response.status(), "200 (bytes streamed to client)");
+        assertArrayEquals(
+            DIST_BYTES,
+            response.body().asBytesFuture().join(),
+            "dist bytes streamed to client"
         );
-        if (response.status().code() == 502) {
-            assertThat(
-                "X-Pantera-Fault: upstream-integrity:<algo>",
-                headerValue(response, "X-Pantera-Fault").orElse(""),
-                containsString("upstream-integrity")
-            );
-        }
+        Thread.sleep(200);
         assertFalse(storage.exists(DIST_KEY).join(), "primary NOT in storage");
         assertFalse(
             storage.exists(new Key.From(DIST_KEY.string() + ".sha256")).join(),
@@ -158,6 +153,43 @@ final class CachedProxySliceIntegrityTest {
         );
     }
 
+    @Test
+    @DisplayName("concurrent cold fetches collapse to one upstream call (T-P07 single-flight)")
+    void concurrentColdFetches_singleFlightCollapses() throws Exception {
+        final Storage storage = new InMemoryStorage();
+        final MeterRegistry registry = new SimpleMeterRegistry();
+        final FakeComposerUpstream origin = new FakeComposerUpstream(
+            DIST_BYTES, sha256Hex(DIST_BYTES)
+        );
+        origin.holdPrimary(true);
+        final CachedProxySlice slice = buildSlice(origin, storage, registry);
+
+        final int callers = 8;
+        final java.util.List<CompletableFuture<Response>> futures = new java.util.ArrayList<>();
+        for (int i = 0; i < callers; i++) {
+            futures.add(slice.response(
+                new RequestLine(RqMethod.GET, DIST_PATH),
+                Headers.EMPTY,
+                Content.EMPTY
+            ));
+        }
+        Thread.sleep(100);
+        origin.holdPrimary(false);
+        for (final CompletableFuture<Response> f : futures) {
+            final Response resp = f.join();
+            assertEquals(RsStatus.OK, resp.status(), "every caller gets 200");
+            assertArrayEquals(
+                DIST_BYTES,
+                resp.body().asBytesFuture().join(),
+                "every caller receives full dist bytes"
+            );
+        }
+        assertEquals(
+            1, origin.primaryCalls(),
+            "single-flight collapsed " + callers + " concurrent cold fetches to one upstream call"
+        );
+    }
+
     private static CachedProxySlice buildSlice(
         final Slice origin, final Storage storage, final MeterRegistry registry
     ) throws Exception {
@@ -190,14 +222,6 @@ final class CachedProxySliceIntegrityTest {
         ));
     }
 
-    private static Optional<String> headerValue(final Response response, final String name) {
-        return java.util.stream.StreamSupport
-            .stream(response.headers().spliterator(), false)
-            .filter(h -> h.getKey().equalsIgnoreCase(name))
-            .map(java.util.Map.Entry::getValue)
-            .findFirst();
-    }
-
     private static String sha256Hex(final byte[] body) {
         try {
             final MessageDigest md = MessageDigest.getInstance("SHA-256");
@@ -217,6 +241,8 @@ final class CachedProxySliceIntegrityTest {
         private final byte[] primary;
         private final String sha256Hex;
         private final AtomicInteger primaryCalls = new AtomicInteger();
+        private final java.util.concurrent.atomic.AtomicBoolean hold =
+            new java.util.concurrent.atomic.AtomicBoolean();
 
         FakeComposerUpstream(final byte[] primary, final String sha256Hex) {
             this.primary = primary;
@@ -225,6 +251,10 @@ final class CachedProxySliceIntegrityTest {
 
         int primaryCalls() {
             return this.primaryCalls.get();
+        }
+
+        void holdPrimary(final boolean hold) {
+            this.hold.set(hold);
         }
 
         @Override
@@ -240,6 +270,24 @@ final class CachedProxySliceIntegrityTest {
                 );
             }
             this.primaryCalls.incrementAndGet();
+            if (this.hold.get()) {
+                final CompletableFuture<Response> future = new CompletableFuture<>();
+                final byte[] primaryBytes = this.primary;
+                final java.util.concurrent.atomic.AtomicBoolean held = this.hold;
+                java.util.concurrent.CompletableFuture.runAsync(() -> {
+                    try {
+                        while (held.get()) {
+                            Thread.sleep(20);
+                        }
+                    } catch (final InterruptedException ex) {
+                        Thread.currentThread().interrupt();
+                    }
+                    future.complete(
+                        ResponseBuilder.ok().body(primaryBytes).build()
+                    );
+                });
+                return future;
+            }
             return CompletableFuture.completedFuture(
                 ResponseBuilder.ok()
                     .body(this.primary)
