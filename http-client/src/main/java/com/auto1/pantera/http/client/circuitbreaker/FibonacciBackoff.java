@@ -34,25 +34,28 @@ import java.util.Objects;
 public final class FibonacciBackoff {
 
     /**
-     * Seed value (both {@code F(0)} and {@code F(1)} equal this).
+     * Seed value in milliseconds (both {@code F(0)} and {@code F(1)}
+     * equal this). Stored as millis (rather than seconds) so
+     * sub-second seeds — useful in tests with tight wall-clock
+     * windows — survive without truncation.
      */
-    private final long seedSeconds;
+    private final long seedMillis;
 
     /**
-     * Upper bound on any value returned by {@link #next()}.
+     * Upper bound (millis) on any value returned by {@link #next()}.
      */
-    private final long capSeconds;
+    private final long capMillis;
 
     /**
-     * Previous value in the sequence. Updated under intrinsic lock.
+     * Previous value (millis). Updated under intrinsic lock.
      */
-    private long prevSeconds;
+    private long prevMillis;
 
     /**
-     * Current value about to be returned by {@link #next()}. Updated
-     * under intrinsic lock.
+     * Current value (millis) about to be returned by {@link #next()}.
+     * Updated under intrinsic lock.
      */
-    private long currSeconds;
+    private long currMillis;
 
     /**
      * Count of {@link #next()} invocations since the last
@@ -79,10 +82,10 @@ public final class FibonacciBackoff {
                 "cap must be >= seed (seed=" + seed + ", cap=" + cap + ")"
             );
         }
-        this.seedSeconds = seed.getSeconds();
-        this.capSeconds = cap.getSeconds();
-        this.prevSeconds = this.seedSeconds;
-        this.currSeconds = this.seedSeconds;
+        this.seedMillis = seed.toMillis();
+        this.capMillis = cap.toMillis();
+        this.prevMillis = this.seedMillis;
+        this.currMillis = this.seedMillis;
         this.invocations = 0;
     }
 
@@ -94,15 +97,15 @@ public final class FibonacciBackoff {
     public synchronized Duration next() {
         final long result;
         if (this.invocations < 2) {
-            result = this.seedSeconds;
+            result = this.seedMillis;
         } else {
-            final long sum = this.prevSeconds + this.currSeconds;
-            result = Math.min(sum, this.capSeconds);
-            this.prevSeconds = this.currSeconds;
-            this.currSeconds = result;
+            final long sum = this.prevMillis + this.currMillis;
+            result = Math.min(sum, this.capMillis);
+            this.prevMillis = this.currMillis;
+            this.currMillis = result;
         }
         this.invocations = this.invocations + 1;
-        return Duration.ofSeconds(result);
+        return Duration.ofMillis(result);
     }
 
     /**
@@ -110,8 +113,8 @@ public final class FibonacciBackoff {
      * call will return the seed again.
      */
     public synchronized void reset() {
-        this.prevSeconds = this.seedSeconds;
-        this.currSeconds = this.seedSeconds;
+        this.prevMillis = this.seedMillis;
+        this.currMillis = this.seedMillis;
         this.invocations = 0;
     }
 
@@ -119,13 +122,13 @@ public final class FibonacciBackoff {
      * @return Configured seed duration.
      */
     public Duration seed() {
-        return Duration.ofSeconds(this.seedSeconds);
+        return Duration.ofMillis(this.seedMillis);
     }
 
     /**
      * @return Configured cap duration.
      */
     public Duration cap() {
-        return Duration.ofSeconds(this.capSeconds);
+        return Duration.ofMillis(this.capMillis);
     }
 }

@@ -14,10 +14,17 @@ import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.client.ClientSlices;
 import com.auto1.pantera.http.client.HttpClientSettings;
+import com.auto1.pantera.http.client.circuitbreaker.CircuitBreakerConfig;
+import com.auto1.pantera.http.client.circuitbreaker.CircuitBreakingClientSlice;
+import com.auto1.pantera.http.client.circuitbreaker.UpstreamCircuitBreaker;
+import com.auto1.pantera.http.client.circuitbreaker.UpstreamCircuitBreakerRegistry;
 import com.auto1.pantera.http.client.ratelimit.RateLimitConfig;
 import com.auto1.pantera.http.client.ratelimit.RateLimitedClientSlice;
 import com.auto1.pantera.http.client.ratelimit.UpstreamRateLimiter;
 import java.time.Clock;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import com.google.common.base.Strings;
 import org.eclipse.jetty.client.BasicAuthentication;
@@ -102,6 +109,31 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
     private final UpstreamRateLimiter rateLimiter;
 
     /**
+     * Per-host circuit-breaker registry. Shared across the JVM so
+     * every per-repo client funnels through the same per-upstream
+     * breaker. T-P02 of {@code analysis/plan/v2/IMPLEMENTATION.md},
+     * closing gap G6 from {@code analysis/reference/gap-analysis.md}.
+     */
+    private final UpstreamCircuitBreakerRegistry circuitBreakerRegistry;
+
+    /**
+     * Daemon executor that runs HEAD recovery probes when the circuit
+     * breaker opens. One per JVM; threads are named
+     * {@code pantera-circuit-probe-N}. Shut down on {@link #stop()}.
+     */
+    private final ScheduledExecutorService circuitProbeExecutor;
+
+    /**
+     * Static circuit-breaker config (seed, cap, trip predicates).
+     */
+    private final CircuitBreakerConfig circuitBreakerConfig;
+
+    /**
+     * Clock used by the circuit breaker slice for probe scheduling.
+     */
+    private final Clock circuitBreakerClock;
+
+    /**
      * Started flag.
      */
     private final AtomicBoolean started = new AtomicBoolean(false);
@@ -184,10 +216,10 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
     }
 
     /**
-     * Full constructor with an explicit {@link UpstreamRateLimiter}.
-     * Used by the perf harness + integration tests to inject a
-     * test-friendly clock / config; production callers use the 4-arg
-     * overload which builds a JVM-default limiter.
+     * Constructor with an explicit {@link UpstreamRateLimiter} only.
+     * Defaults the circuit breaker registry to a JVM-default with
+     * production-tuned trip predicates ({@link CircuitBreakerConfig#defaults()})
+     * and a fresh daemon probe executor.
      */
     public JettyClientSlices(
         final HttpClientSettings settings,
@@ -196,9 +228,50 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
         final int h2MultiplexingLimit,
         final UpstreamRateLimiter rateLimiter
     ) {
+        this(
+            settings, protocol, h2MaxPoolSize, h2MultiplexingLimit,
+            rateLimiter, CircuitBreakerConfig.defaults(), Clock.systemUTC()
+        );
+    }
+
+    /**
+     * Full constructor with explicit rate limiter and circuit-breaker
+     * config. Used by the perf harness + integration tests to inject a
+     * test-friendly clock / trip predicates; production callers use the
+     * 5-arg overload which builds JVM defaults.
+     *
+     * @param settings           Static settings.
+     * @param protocol           Wire protocol.
+     * @param h2MaxPoolSize      Per-destination connection cap.
+     * @param h2MultiplexingLimit Per-connection stream cap.
+     * @param rateLimiter        Per-host reactive 429/503 gate.
+     * @param breakerConfig      Circuit-breaker trip predicates + backoff.
+     * @param clock              Clock for breaker scheduling.
+     */
+    public JettyClientSlices(
+        final HttpClientSettings settings,
+        final HttpProtocol protocol,
+        final int h2MaxPoolSize,
+        final int h2MultiplexingLimit,
+        final UpstreamRateLimiter rateLimiter,
+        final CircuitBreakerConfig breakerConfig,
+        final Clock clock
+    ) {
         this.clnt = create(settings, protocol, h2MaxPoolSize, h2MultiplexingLimit);
         this.acquireTimeoutMillis = settings.connectionAcquireTimeout();
         this.rateLimiter = rateLimiter;
+        this.circuitBreakerConfig = breakerConfig;
+        this.circuitBreakerClock = clock;
+        this.circuitBreakerRegistry = new UpstreamCircuitBreakerRegistry.Default(
+            breakerConfig, clock
+        );
+        this.circuitProbeExecutor = Executors.newSingleThreadScheduledExecutor(
+            r -> {
+                final Thread thread = new Thread(r, "pantera-circuit-probe");
+                thread.setDaemon(true);
+                return thread;
+            }
+        );
     }
 
     /**
@@ -208,6 +281,14 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
      */
     public UpstreamRateLimiter rateLimiter() {
         return this.rateLimiter;
+    }
+
+    /**
+     * @return Shared per-JVM circuit-breaker registry so callers can
+     *     inspect breaker state (e.g. for diagnostics, metrics export).
+     */
+    public UpstreamCircuitBreakerRegistry circuitBreakerRegistry() {
+        return this.circuitBreakerRegistry;
     }
 
     /**
@@ -247,12 +328,29 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
                 // This is critical to prevent connection leaks
                 this.clnt.destroy();
 
+                // Shut down the circuit-breaker probe executor. Daemon
+                // threads exit when the JVM does, but in test / hot-reload
+                // scenarios we want deterministic teardown.
+                this.circuitProbeExecutor.shutdownNow();
+                if (!this.circuitProbeExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                    EcsLogger.warn("com.auto1.pantera.http.client")
+                        .message("Circuit-breaker probe executor did not terminate within 5s")
+                        .eventCategory("web")
+                        .eventAction("http_client_stop")
+                        .log();
+                }
+
                 EcsLogger.debug("com.auto1.pantera.http.client")
                     .message("Jetty HTTP client stopped and destroyed successfully")
                     .eventCategory("web")
                     .eventAction("http_client_stop")
                     .eventOutcome("success")
                     .log();
+            } catch (final InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                throw new PanteraException(
+                    "Interrupted while stopping Jetty HTTP client.", ie
+                );
             } catch (Exception e) {
                 EcsLogger.error("com.auto1.pantera.http.client")
                     .message("Failed to stop Jetty HTTP client cleanly")
@@ -361,17 +459,26 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
     }
 
     /**
-     * Create slice backed by client. The returned slice is wrapped in a
-     * {@link RateLimitedClientSlice} so every outbound request through
-     * any adapter funnels through the per-host token bucket + 429 gate.
-     * Loopback hosts ({@code localhost}, {@code 127.x.x.x}, {@code ::1})
-     * bypass the rate limiter — these are exclusively dev / test
-     * fixtures and the limiter would otherwise throttle the harness.
+     * Create slice backed by client. The returned slice is wrapped in
+     * (outer-to-inner) {@link RateLimitedClientSlice} → {@link
+     * CircuitBreakingClientSlice} → raw Jetty slice, so every outbound
+     * request funnels through both the per-host reactive 429 gate AND
+     * the per-host 5xx / IO circuit breaker. Loopback hosts
+     * ({@code localhost}, {@code 127.x.x.x}, {@code ::1}) bypass both —
+     * these are exclusively dev / test fixtures.
+     *
+     * <p>Ordering rationale: gate-closed (rate-limit) and circuit-open
+     * are independent fast-fail conditions. A gate-closed response is a
+     * synthesised 429 with Retry-After; a circuit-open response is a
+     * synthesised 502 with Retry-After + {@code X-Pantera-Circuit-Open}.
+     * Putting rate-limit outside the breaker means a 429 takes priority
+     * over a 502 when both could fire — preferring the more specific
+     * upstream-side signal.
      *
      * @param secure Secure connection flag.
      * @param host Host name.
      * @param port Port.
-     * @return Client slice (rate-limited for non-loopback hosts).
+     * @return Client slice (rate-limited + circuit-broken for non-loopback hosts).
      */
     private Slice slice(final boolean secure, final String host, final int port) {
         final JettyClientSlice raw = new JettyClientSlice(
@@ -380,7 +487,14 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
         if (isLoopback(host)) {
             return raw;
         }
-        return new RateLimitedClientSlice(raw, host, this.rateLimiter, Clock.systemUTC());
+        final UpstreamCircuitBreaker breaker = this.circuitBreakerRegistry.breakerFor(host);
+        final Slice withBreaker = new CircuitBreakingClientSlice(
+            raw, host, breaker, this.circuitBreakerConfig,
+            this.circuitBreakerClock, this.circuitProbeExecutor
+        );
+        return new RateLimitedClientSlice(
+            withBreaker, host, this.rateLimiter, Clock.systemUTC()
+        );
     }
 
     private static boolean isLoopback(final String host) {
