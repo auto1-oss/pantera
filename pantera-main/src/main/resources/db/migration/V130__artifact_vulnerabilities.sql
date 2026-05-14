@@ -67,9 +67,7 @@ CREATE INDEX IF NOT EXISTS idx_artifact_scan_status_failed
     WHERE scan_failed = TRUE;
 
 COMMENT ON TABLE artifact_vulnerabilities IS
-    'T-S08: CVE findings discovered by VulnerabilityScanner via OSV.dev. '
-    || 'One row per CVE per (repo, artifact_key). NULL cve_id marks a clean scan.';
+    'T-S08: CVE findings discovered by VulnerabilityScanner via OSV.dev. One row per CVE per (repo, artifact_key). NULL cve_id marks a clean scan.';
 
 COMMENT ON TABLE artifact_scan_status IS
-    'T-S08: scan attempt tracking with exponential backoff. Workers poll '
-    || 'next_retry_at WHERE scan_failed = FALSE; the 5th failure flips the flag.';
+    'T-S08: scan attempt tracking with exponential backoff. Workers poll next_retry_at WHERE scan_failed = FALSE; the 5th failure flips the flag.';
