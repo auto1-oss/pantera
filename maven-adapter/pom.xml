@@ -89,6 +89,14 @@ SOFTWARE.
       <version>2.3.2</version>
       <scope>compile</scope>
     </dependency>
+    <!-- T-S03: PGP signature verification for Maven .asc sidecars.
+         Uses the BC LTS distribution already on the project's classpath
+         (debian-adapter / rpm-adapter pull bcpg-lts8on too). -->
+    <dependency>
+      <groupId>org.bouncycastle</groupId>
+      <artifactId>bcpg-lts8on</artifactId>
+      <version>${bouncycastle-lts.version}</version>
+    </dependency>
     
     <dependency>
       <groupId>com.auto1.pantera</groupId>
