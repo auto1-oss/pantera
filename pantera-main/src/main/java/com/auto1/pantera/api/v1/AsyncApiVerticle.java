@@ -198,6 +198,17 @@ public final class AsyncApiVerticle extends AbstractVerticle {
 
     @Override
     public void start() {
+        // T-S04: install the shared AuditService at boot. Admin handlers
+        // pick it up via AuditServiceRegistry.instance().sharedService()
+        // without taking a direct dependency on the concrete impl.
+        if (this.dataSource != null
+            && !com.auto1.pantera.audit.AuditServiceRegistry.instance()
+                .isSharedServiceSet()) {
+            com.auto1.pantera.audit.AuditServiceRegistry.instance()
+                .setSharedService(
+                    new com.auto1.pantera.audit.JdbcAuditService(this.dataSource)
+                );
+        }
         final Router router = Router.router(this.vertx);
         // Body handler for all API routes (1MB limit)
         router.route("/api/v1/*").handler(BodyHandler.create().setBodyLimit(1_048_576));

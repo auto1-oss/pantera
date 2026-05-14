@@ -721,8 +721,21 @@ public final class CooldownHandler {
             })
             .whenComplete((ignored, error) -> {
                 if (error == null) {
+                    CooldownHandler.audit(actor, "COOLDOWN_UNBLOCK", name,
+                        java.util.Map.of(
+                            "repository.type", repoType,
+                            "package.name", artifact,
+                            "package.version", version
+                        ), true);
                     ctx.response().setStatusCode(204).end();
                 } else {
+                    CooldownHandler.audit(actor, "COOLDOWN_UNBLOCK", name,
+                        java.util.Map.of(
+                            "repository.type", repoType,
+                            "package.name", artifact,
+                            "package.version", version,
+                            "error", String.valueOf(error.getMessage())
+                        ), false);
                     ApiResponse.sendError(
                         ctx, 500, "INTERNAL_ERROR", error.getMessage()
                     );
@@ -770,8 +783,15 @@ public final class CooldownHandler {
             })
             .whenComplete((ignored, error) -> {
                 if (error == null) {
+                    CooldownHandler.audit(actor, "COOLDOWN_UNBLOCK_ALL", name,
+                        java.util.Map.of("repository.type", repoType), true);
                     ctx.response().setStatusCode(204).end();
                 } else {
+                    CooldownHandler.audit(actor, "COOLDOWN_UNBLOCK_ALL", name,
+                        java.util.Map.of(
+                            "repository.type", repoType,
+                            "error", String.valueOf(error.getMessage())
+                        ), false);
                     ApiResponse.sendError(
                         ctx, 500, "INTERNAL_ERROR", error.getMessage()
                     );
@@ -862,5 +882,33 @@ public final class CooldownHandler {
         if (CooldownMetrics.isAvailable()) {
             CooldownMetrics.getInstance().recordAdminAction(action);
         }
+    }
+
+    /**
+     * T-S04: emit an audit event for an admin mutation. Looks up the shared
+     * {@link com.auto1.pantera.audit.AuditService} via the registry — when no
+     * service is installed (tests / DB-less boot) this is a no-op. Reads
+     * the client IP from the MDC slot populated by the trace-context
+     * handler at the start of every API request.
+     *
+     * @param actor Authenticated principal
+     * @param action Action verb (SCREAMING_SNAKE_CASE)
+     * @param target Target identifier (repo name)
+     * @param details Structured payload for the {@code details} JSON column
+     * @param success {@code true} on completed mutation
+     */
+    private static void audit(final String actor,
+        final String action, final String target,
+        final Map<String, Object> details, final boolean success) {
+        final String clientIp = org.slf4j.MDC.get(
+            com.auto1.pantera.http.log.EcsMdc.CLIENT_IP
+        );
+        final com.auto1.pantera.audit.AuditEvent event =
+            new com.auto1.pantera.audit.AuditEvent(
+                java.time.Instant.now(), actor, action, target,
+                details, success, clientIp
+            );
+        com.auto1.pantera.audit.AuditServiceRegistry.instance()
+            .sharedService().record(event);
     }
 }

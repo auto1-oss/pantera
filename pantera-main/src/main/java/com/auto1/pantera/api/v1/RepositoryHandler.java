@@ -331,15 +331,23 @@ public final class RepositoryHandler {
             return;
         }
         final String actor = ctx.user().principal().getString(AuthTokenRest.SUB);
+        final String auditAction = exists ? "REPO_UPDATE" : "REPO_CREATE";
         CompletableFuture.runAsync(
             () -> this.crs.save(rname, body, actor),
             HandlerExecutor.get()
         ).whenComplete((ignored, err) -> {
             if (err != null) {
+                RepositoryHandler.audit(actor, auditAction, name,
+                    java.util.Map.of(
+                        "repository.type", repoType,
+                        "error", String.valueOf(err.getMessage())
+                    ), false);
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
             } else {
                 this.filtersCache.invalidate(rname.toString());
                 this.eventBus.publish(RepositoryEvents.ADDRESS, RepositoryEvents.upsert(name));
+                RepositoryHandler.audit(actor, auditAction, name,
+                    java.util.Map.of("repository.type", repoType), true);
                 ctx.response().setStatusCode(200).end();
             }
         });
@@ -352,15 +360,21 @@ public final class RepositoryHandler {
     private void deleteRepository(final RoutingContext ctx) {
         final String name = ctx.pathParam("name");
         final RepositoryName rname = new RepositoryName.Simple(name);
+        final String actor = ctx.user().principal().getString(AuthTokenRest.SUB);
         CompletableFuture.supplyAsync(
             () -> this.crs.exists(rname),
             HandlerExecutor.get()
         ).whenComplete((exists, err) -> {
             if (err != null) {
+                RepositoryHandler.audit(actor, "REPO_DELETE", name,
+                    java.util.Map.of("error", String.valueOf(err.getMessage())),
+                    false);
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
                 return;
             }
             if (!Boolean.TRUE.equals(exists)) {
+                RepositoryHandler.audit(actor, "REPO_DELETE", name,
+                    java.util.Map.of("error", "not_found"), false);
                 ApiResponse.sendError(
                     ctx, 404, "NOT_FOUND",
                     String.format("Repository '%s' not found", name)
@@ -376,6 +390,8 @@ public final class RepositoryHandler {
             this.filtersCache.invalidate(rname.toString());
             this.eventBus.publish(RepositoryEvents.ADDRESS, RepositoryEvents.remove(name));
             this.events.ifPresent(item -> item.stopProxyMetadataProcessing(name));
+            RepositoryHandler.audit(actor, "REPO_DELETE", name,
+                java.util.Map.of(), true);
             ctx.response().setStatusCode(200).end();
         });
     }
@@ -493,5 +509,33 @@ public final class RepositoryHandler {
                     .end(result.encode());
             }
         });
+    }
+
+    /**
+     * T-S04: emit an audit event for an admin mutation. Looks up the shared
+     * {@link com.auto1.pantera.audit.AuditService} via the registry — when no
+     * service is installed (tests / DB-less boot) this is a no-op. Reads
+     * the client IP from the MDC slot populated by the trace-context
+     * handler at the start of every API request.
+     *
+     * @param actor Authenticated principal
+     * @param action Action verb (SCREAMING_SNAKE_CASE)
+     * @param target Repository name
+     * @param details Structured payload for the {@code details} JSON column
+     * @param success {@code true} on completed mutation
+     */
+    private static void audit(final String actor,
+        final String action, final String target,
+        final java.util.Map<String, Object> details, final boolean success) {
+        final String clientIp = org.slf4j.MDC.get(
+            com.auto1.pantera.http.log.EcsMdc.CLIENT_IP
+        );
+        final com.auto1.pantera.audit.AuditEvent event =
+            new com.auto1.pantera.audit.AuditEvent(
+                java.time.Instant.now(), actor, action, target,
+                details, success, clientIp
+            );
+        com.auto1.pantera.audit.AuditServiceRegistry.instance()
+            .sharedService().record(event);
     }
 }
