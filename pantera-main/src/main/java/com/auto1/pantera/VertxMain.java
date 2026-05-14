@@ -414,9 +414,8 @@ public final class VertxMain {
                 new com.auto1.pantera.publishdate.sources.RubyGemsSource(publishDateClient)
             );
             EcsLogger.info("com.auto1.pantera.publishdate")
-                .message("Publish-date sources configured")
-                .field("sources.head_fallback_enabled", headFallbackEnabled)
-                .field("sources.registered", String.join(",", publishSources.keySet()))
+                .message("Publish-date sources configured head_fallback_enabled=" + headFallbackEnabled
+                    + " registered=" + String.join(",", publishSources.keySet()))
                 .eventCategory("configuration")
                 .eventAction("publish_date_init")
                 .eventOutcome("success")
@@ -487,10 +486,9 @@ public final class VertxMain {
         if (this.settingsCache != null) {
             this.settingsCache.addListener("http_client.", changedKey -> {
                 EcsLogger.info("com.auto1.pantera")
-                    .message("http_client.* setting changed; invalidating upstream client pool")
+                    .message("http_client.* setting changed; invalidating upstream client pool key=" + changedKey)
                     .eventCategory("configuration")
                     .eventAction("http_client_settings_change")
-                    .field("settings.key", changedKey)
                     .field("log.source", "application")
                     .log();
                 slices.invalidateUpstreamClients();
@@ -1526,14 +1524,12 @@ public final class VertxMain {
         }
         if (counters[0] > 0L) {
             EcsLogger.info("com.auto1.pantera")
-                .message("Vert.x tmpdir cleanup: removed " + counters[0]
-                    + " orphan dir(s), freed " + counters[1] + " bytes")
+                .message("Vert.x tmpdir cleanup: removed=" + counters[0]
+                    + " freed_bytes=" + counters[1])
                 .eventCategory("process")
                 .eventAction("vertx_tmpdir_cleanup")
                 .eventOutcome("success")
                 .field("file.directory", base)
-                .field("file.removed_count", counters[0])
-                .field("file.bytes_freed", counters[1])
                 .field("log.source", "application")
                 .log();
         }

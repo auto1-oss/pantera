@@ -134,7 +134,7 @@ public final class CacheManifests implements Manifests {
                 if (throwable == null) {
                     if (original.isPresent()) {
                         this.recordProxyMetric("success", duration);
-                        EcsLogger.info("com.auto1.pantera.docker.proxy")
+                        EcsLogger.info("com.auto1.pantera.docker.cache")
                             .message("CacheManifests origin returned manifest")
                             .eventCategory("web")
                             .eventAction("cache_manifest_get")
@@ -169,7 +169,7 @@ public final class CacheManifests implements Manifests {
                         }
                     } else {
                         this.recordProxyMetric("not_found", duration);
-                        EcsLogger.info("com.auto1.pantera.docker.proxy")
+                        EcsLogger.info("com.auto1.pantera.docker.cache")
                             .message("CacheManifests origin returned empty, falling back to cache")
                             .eventCategory("web")
                             .eventAction("cache_manifest_get")

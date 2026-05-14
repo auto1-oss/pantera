@@ -135,7 +135,7 @@ final class GoUploadSlice implements Slice {
         final int semicolonIndex = path.indexOf(';');
         if (semicolonIndex > 0) {
             sanitizedPath = path.substring(0, semicolonIndex);
-            EcsLogger.debug("com.auto1.pantera.go")
+            EcsLogger.debug("com.auto1.pantera.http")
                 .message("Stripped metadata properties from path")
                 .eventCategory("web")
                 .eventAction("upload")
@@ -180,7 +180,7 @@ final class GoUploadSlice implements Slice {
                     final int n = NegativeCacheRegistry.instance().sharedCache()
                         .invalidateByArtifactName(module);
                     if (n > 0) {
-                        EcsLogger.info("com.auto1.pantera.go")
+                        EcsLogger.info("com.auto1.pantera.http")
                             .message("Negative-cache invalidated after upload "
                                 + "(module=" + module + ", invalidated=" + n + ")")
                             .eventCategory("database")
@@ -190,7 +190,7 @@ final class GoUploadSlice implements Slice {
                             .log();
                     }
                 } catch (final RuntimeException ex) {
-                    EcsLogger.warn("com.auto1.pantera.go")
+                    EcsLogger.warn("com.auto1.pantera.http")
                         .message("Negative-cache invalidation after upload failed")
                         .error(ex)
                         .field("log.source", "application")

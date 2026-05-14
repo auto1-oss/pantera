@@ -73,7 +73,7 @@ public final class OperationControl {
     public boolean allowed(final AuthUser user) {
         final boolean res = perms.stream()
             .anyMatch(perm -> policy.getPermissions(user).implies(perm));
-        EcsLogger.debug("com.auto1.pantera.security")
+        EcsLogger.debug("com.auto1.pantera.http.auth")
             .message("Authorization operation")
             .eventCategory("authentication")
             .eventAction("authorization_check")

@@ -52,7 +52,7 @@ public final class ComposerGroup implements Slice {
      */
     public ComposerGroup(final List<Slice> repositories) {
         this.repositories = repositories;
-        EcsLogger.debug("com.auto1.pantera.composer")
+        EcsLogger.debug("com.auto1.pantera.adapters.php")
             .message("Created Composer group (" + this.repositories.size() + " repositories)")
             .eventCategory("web")
             .eventAction("group_create")
@@ -66,7 +66,7 @@ public final class ComposerGroup implements Slice {
         final Headers headers,
         final Content body
     ) {
-        EcsLogger.debug("com.auto1.pantera.composer")
+        EcsLogger.debug("com.auto1.pantera.adapters.php")
             .message("Composer group request")
             .eventCategory("web")
             .eventAction("group_request")
@@ -83,7 +83,7 @@ public final class ComposerGroup implements Slice {
         final Content body
     ) {
         if (index >= this.repositories.size()) {
-            EcsLogger.warn("com.auto1.pantera.composer")
+            EcsLogger.warn("com.auto1.pantera.adapters.php")
                 .message("No repository in group could serve request")
                 .eventCategory("web")
                 .eventAction("group_request")
@@ -97,7 +97,7 @@ public final class ComposerGroup implements Slice {
         final Slice repo = this.repositories.get(index);
         return repo.response(line, headers, body).thenCompose(response -> {
             if (response.status().success()) {
-                EcsLogger.debug("com.auto1.pantera.composer")
+                EcsLogger.debug("com.auto1.pantera.adapters.php")
                     .message("Repository served request successfully (index: " + index + ")")
                     .eventCategory("web")
                     .eventAction("group_request")
@@ -107,7 +107,7 @@ public final class ComposerGroup implements Slice {
                     .log();
                 return CompletableFuture.completedFuture(response);
             }
-            EcsLogger.debug("com.auto1.pantera.composer")
+            EcsLogger.debug("com.auto1.pantera.adapters.php")
                 .message("Repository failed, trying next (index: " + index + ")")
                 .eventCategory("web")
                 .eventAction("group_request")

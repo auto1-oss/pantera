@@ -48,8 +48,6 @@ public final class SettingsBootstrap {
         EcsLogger.info("com.auto1.pantera.settings.runtime")
             .message("SettingsBootstrap complete: " + seeded + " keys seeded, "
                 + existing + " keys already present")
-            .field("settings.seeded", seeded)
-            .field("settings.existing", existing)
             .field("log.source", "application")
             .log();
     }

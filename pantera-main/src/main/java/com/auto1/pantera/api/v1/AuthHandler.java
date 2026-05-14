@@ -776,7 +776,7 @@ public final class AuthHandler {
             allowPermanent = this.settingsDao.getBool("api_token_allow_permanent", true);
         }
         if (requestedDays <= 0 && !allowPermanent) {
-            EcsLogger.info("com.auto1.pantera.auth")
+            EcsLogger.info("com.auto1.pantera.api.v1")
                 .message("Rejected permanent token request — disabled by admin policy")
                 .eventCategory("authentication")
                 .eventAction("token_generate")
@@ -792,7 +792,7 @@ public final class AuthHandler {
         final int expiryDays;
         if (maxTokenDays > 0 && requestedDays > 0 && requestedDays > maxTokenDays) {
             expiryDays = maxTokenDays;
-            EcsLogger.info("com.auto1.pantera.auth")
+            EcsLogger.info("com.auto1.pantera.api.v1")
                 .message("API token expiry capped by admin limit: requested=" + requestedDays
                     + " max=" + maxTokenDays)
                 .eventCategory("authentication")
@@ -856,7 +856,7 @@ public final class AuthHandler {
             return;
         }
         final Tokens.TokenPair pair = this.tokens.generatePair(new AuthUser(sub, context));
-        EcsLogger.debug("com.auto1.pantera.auth")
+        EcsLogger.debug("com.auto1.pantera.api.v1")
             .message("JWT refresh issued for user: " + sub)
             .eventCategory("authentication")
             .eventAction("token_refresh")

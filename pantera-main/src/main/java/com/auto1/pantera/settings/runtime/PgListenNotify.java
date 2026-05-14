@@ -141,8 +141,7 @@ public final class PgListenNotify {
             this.listener.onChanged(n.getParameter());
         } catch (final Throwable t) {
             EcsLogger.warn("com.auto1.pantera.settings.runtime")
-                .message("Settings change listener threw")
-                .field("settings.key", n.getParameter())
+                .message("Settings change listener threw key=" + n.getParameter())
                 .field("error.message", t.getMessage())
                 .field("log.source", "application")
                 .log();

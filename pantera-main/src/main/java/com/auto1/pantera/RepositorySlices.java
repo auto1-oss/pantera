@@ -1428,7 +1428,6 @@ public class RepositorySlices {
                 .eventCategory("configuration")
                 .eventAction("group_legacy_members_strategy")
                 .field("repository.name", cfg.name())
-                .field("members_strategy.declared", raw.trim())
                 .field("log.source", "application")
                 .log();
         }
@@ -1606,12 +1605,11 @@ public class RepositorySlices {
                 }
             }
             EcsLogger.info("com.auto1.pantera")
-                .message("Upstream Jetty client pool invalidated")
+                .message("Upstream Jetty client pool invalidated evicted_no_refs=" + evictedNoRefs
+                    + " evicted_with_active_leases=" + evictedHeld)
                 .eventCategory("configuration")
                 .eventAction("http_client_invalidate")
                 .eventOutcome("success")
-                .field("clients.evicted_no_refs", evictedNoRefs)
-                .field("clients.evicted_with_active_leases", evictedHeld)
                 .field("log.source", "application")
                 .log();
         }

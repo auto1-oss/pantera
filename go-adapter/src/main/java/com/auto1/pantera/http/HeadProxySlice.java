@@ -84,7 +84,7 @@ final class HeadProxySlice implements Slice {
                 );
                 return resp.build();
             }).exceptionally(err -> {
-                EcsLogger.debug("com.auto1.pantera.go")
+                EcsLogger.debug("com.auto1.pantera.http")
                     .message("HEAD cache-hit metadata read failed; serving 200 without length")
                     .eventCategory("web")
                     .eventAction("head_cache_hit")

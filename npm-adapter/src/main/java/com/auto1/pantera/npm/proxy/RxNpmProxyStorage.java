@@ -83,8 +83,7 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
         } catch (final Exception thrown) {
             // Never break serve path on a profiler failure.
             EcsLogger.debug("com.auto1.pantera.npm")
-                .message("npm storage phaseRecorder threw; serve path unaffected")
-                .field("phase", phase)
+                .message("npm storage phaseRecorder threw; serve path unaffected phase=" + phase)
                 .error(thrown)
                 .field("log.source", "application")
                 .log();

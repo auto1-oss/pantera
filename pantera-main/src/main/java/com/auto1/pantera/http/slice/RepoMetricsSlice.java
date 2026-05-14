@@ -122,7 +122,7 @@ public final class RepoMetricsSlice implements Slice {
                                     );
                                 }
                             } catch (final NumberFormatException ex) {
-                                EcsLogger.debug("com.auto1.pantera.metrics")
+                                EcsLogger.debug("com.auto1.pantera.http.slice")
                                     .message("Invalid Content-Length header value")
                                     .error(ex)
                                     .field("log.source", "application")

@@ -183,7 +183,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                             }
                         }
                     } catch (final IOException ex) {
-                        EcsLogger.debug("com.auto1.pantera.asto.cache")
+                        EcsLogger.debug("com.auto1.pantera.asto.s3")
                             .message("Failed to clean up orphaned file")
                             .error(ex)
                             .field("log.source", "application")
@@ -191,7 +191,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                     }
                 });
         } catch (final IOException ex) {
-            EcsLogger.debug("com.auto1.pantera.asto.cache")
+            EcsLogger.debug("com.auto1.pantera.asto.s3")
                 .message("Failed to walk directory for orphan cleanup")
                 .error(ex)
                 .field("log.source", "application")
@@ -253,7 +253,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                     CacheMeta.write(meta, updated);
                 }
             } catch (final IOException ex) {
-                EcsLogger.debug("com.auto1.pantera.asto.cache")
+                EcsLogger.debug("com.auto1.pantera.asto.s3")
                     .message("Failed to update cache metadata after hit")
                     .error(ex)
                     .field("log.source", "application")
@@ -288,7 +288,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
             Files.deleteIfExists(filePath(key));
             Files.deleteIfExists(metaPath(key));
         } catch (final IOException ex) {
-            EcsLogger.debug("com.auto1.pantera.asto.cache")
+            EcsLogger.debug("com.auto1.pantera.asto.s3")
                 .message("Failed to invalidate cache entry")
                 .error(ex)
                 .field("log.source", "application")
@@ -350,7 +350,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                                     cm.hits = 1;
                                     CacheMeta.write(meta, cm);
                                 } catch (final IOException ex) {
-                                    EcsLogger.debug("com.auto1.pantera.asto.cache")
+                                    EcsLogger.debug("com.auto1.pantera.asto.s3")
                                         .message("Failed to write cache metadata after fetch")
                                         .error(ex)
                                         .field("log.source", "application")
@@ -364,14 +364,14 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                     })
                     .doOnError(th -> {
                         try { ch.close(); } catch (final IOException ex) {
-                            EcsLogger.debug("com.auto1.pantera.asto.cache")
+                            EcsLogger.debug("com.auto1.pantera.asto.s3")
                                 .message("Failed to close channel on error")
                                 .error(ex)
                                 .field("log.source", "application")
                                 .log();
                         }
                         try { Files.deleteIfExists(tmp); } catch (final IOException ex) {
-                            EcsLogger.debug("com.auto1.pantera.asto.cache")
+                            EcsLogger.debug("com.auto1.pantera.asto.s3")
                                 .message("Failed to delete temp file on error")
                                 .error(ex)
                                 .field("log.source", "application")
@@ -382,14 +382,14 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                     // so the temp file and channel don't leak when subscription is cancelled.
                     .doOnCancel(() -> {
                         try { ch.close(); } catch (final IOException ex) {
-                            EcsLogger.debug("com.auto1.pantera.asto.cache")
+                            EcsLogger.debug("com.auto1.pantera.asto.s3")
                                 .message("Failed to close channel on cancel")
                                 .error(ex)
                                 .field("log.source", "application")
                                 .log();
                         }
                         try { Files.deleteIfExists(tmp); } catch (final IOException ex) {
-                            EcsLogger.debug("com.auto1.pantera.asto.cache")
+                            EcsLogger.debug("com.auto1.pantera.asto.s3")
                                 .message("Failed to delete temp file on cancel")
                                 .error(ex)
                                 .field("log.source", "application")
@@ -445,7 +445,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
             }
             return ch;
         }, ch -> { try { ch.close(); } catch (final IOException ex) {
-            EcsLogger.debug("com.auto1.pantera.asto.cache")
+            EcsLogger.debug("com.auto1.pantera.asto.s3")
                 .message("Failed to close file channel in publisher")
                 .error(ex)
                 .field("log.source", "application")
@@ -468,7 +468,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                 try {
                     ((AutoCloseable) delegate).close();
                 } catch (final Exception ex) {
-                    EcsLogger.warn("com.auto1.pantera.asto.cache")
+                    EcsLogger.warn("com.auto1.pantera.asto.s3")
                         .message("Failed to close delegate storage")
                         .error(ex)
                         .field("log.source", "application")
@@ -483,7 +483,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
             try {
                 cleanup();
             } catch (final Throwable ex) {
-                EcsLogger.warn("com.auto1.pantera.asto.cache")
+                EcsLogger.warn("com.auto1.pantera.asto.s3")
                     .message("Cache cleanup failed")
                     .error(ex)
                     .field("log.source", "application")
@@ -532,7 +532,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
             CacheMeta cm = null;
             if (Files.exists(meta)) {
                 try { cm = CacheMeta.read(meta); } catch (final Exception ex) {
-                    EcsLogger.debug("com.auto1.pantera.asto.cache")
+                    EcsLogger.debug("com.auto1.pantera.asto.s3")
                         .message("Failed to read cache metadata during cleanup")
                         .error(ex)
                         .field("log.source", "application")
@@ -570,7 +570,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                 Files.deleteIfExists(c.metaFile);
                 freed += c.meta.size;
             } catch (final IOException ex) {
-                EcsLogger.debug("com.auto1.pantera.asto.cache")
+                EcsLogger.debug("com.auto1.pantera.asto.s3")
                     .message("Failed to delete cache file during eviction")
                     .error(ex)
                     .field("log.source", "application")

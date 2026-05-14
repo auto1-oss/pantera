@@ -69,7 +69,7 @@ public final class EventsQueueMetrics {
      */
     public static void recordDropped(final String repoName) {
         final long total = DROP_COUNT.incrementAndGet();
-        EcsLogger.warn("com.auto1.pantera.scheduling.events")
+        EcsLogger.warn("com.auto1.pantera.metrics")
             .message("event queue full — dropping event (drop_count=" + total + ")")
             .eventCategory("process")
             .eventAction("queue_overflow")

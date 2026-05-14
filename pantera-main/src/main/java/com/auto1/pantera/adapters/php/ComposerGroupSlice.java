@@ -265,7 +265,7 @@ public final class ComposerGroupSlice implements Slice {
         final int idx
     ) {
         if (idx >= this.members.size()) {
-            EcsLogger.warn("com.auto1.pantera.composer")
+            EcsLogger.warn("com.auto1.pantera.adapters.php")
                 .message("No member returned packages.json")
                 .eventCategory("web")
                 .eventAction("packages_fetch")
@@ -280,7 +280,7 @@ public final class ComposerGroupSlice implements Slice {
         final RequestLine rewritten = rewritePath(line, member);
         final Headers sanitized = dropFullPathHeader(headers);
 
-        EcsLogger.debug("com.auto1.pantera.composer")
+        EcsLogger.debug("com.auto1.pantera.adapters.php")
             .message("Trying member for packages.json: " + member)
             .eventCategory("web")
             .eventAction("packages_fetch")
@@ -294,7 +294,7 @@ public final class ComposerGroupSlice implements Slice {
                     return resp.body().asBytesFuture()
                         .thenApply(bytes -> rewritePackagesJson(member, bytes));
                 }
-                EcsLogger.debug("com.auto1.pantera.composer")
+                EcsLogger.debug("com.auto1.pantera.adapters.php")
                     .message("Member '" + member + "' non-OK; trying next")
                     .eventCategory("web")
                     .eventAction("packages_fetch")
@@ -308,7 +308,7 @@ public final class ComposerGroupSlice implements Slice {
                     .thenCompose(drained -> tryMembersForPackagesJson(line, headers, idx + 1));
             })
             .exceptionally(ex -> {
-                EcsLogger.warn("com.auto1.pantera.composer")
+                EcsLogger.warn("com.auto1.pantera.adapters.php")
                     .message("Member '" + member + "' threw; trying next")
                     .eventCategory("web")
                     .eventAction("packages_fetch")
@@ -345,7 +345,7 @@ public final class ComposerGroupSlice implements Slice {
         try (JsonReader reader = Json.createReader(new ByteArrayInputStream(bytes))) {
             json = reader.readObject();
         } catch (Exception e) {
-            EcsLogger.warn("com.auto1.pantera.composer")
+            EcsLogger.warn("com.auto1.pantera.adapters.php")
                 .message("Failed to parse packages.json from member: " + member)
                 .eventCategory("web")
                 .eventAction("packages_parse")
@@ -378,7 +378,7 @@ public final class ComposerGroupSlice implements Slice {
             out.add("packages", Json.createObjectBuilder());
             out.add("providers-url", this.basePath + "/p2/%package%.json");
             out.add("providers", json.getJsonObject("providers"));
-            EcsLogger.debug("com.auto1.pantera.composer")
+            EcsLogger.debug("com.auto1.pantera.adapters.php")
                 .message("Sequential winner (Satis format)")
                 .eventCategory("web")
                 .eventAction("packages_fetch")
@@ -418,7 +418,7 @@ public final class ComposerGroupSlice implements Slice {
             }
             out.add("metadata-url", this.basePath + "/p2/%package%.json");
             out.add("packages", packagesBuilder.build());
-            EcsLogger.debug("com.auto1.pantera.composer")
+            EcsLogger.debug("com.auto1.pantera.adapters.php")
                 .message("Sequential winner (traditional format)")
                 .eventCategory("web")
                 .eventAction("packages_fetch")

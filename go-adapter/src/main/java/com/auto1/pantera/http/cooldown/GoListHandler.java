@@ -201,7 +201,7 @@ public final class GoListHandler {
         try {
             versions = this.parser.parse(upstreamBytes);
         } catch (final MetadataParseException ex) {
-            EcsLogger.warn("com.auto1.pantera.go")
+            EcsLogger.warn("com.auto1.pantera.http.cooldown")
                 .message("Failed to parse @v/list body — passing upstream body through")
                 .eventCategory("web")
                 .eventAction("list_filter")
@@ -242,7 +242,7 @@ public final class GoListHandler {
             if (kept.isEmpty()) {
                 return this.allBlockedResponse(module);
             }
-            EcsLogger.info("com.auto1.pantera.go")
+            EcsLogger.info("com.auto1.pantera.http.cooldown")
                 .message("@v/list filtered: removed cooldown-blocked versions"
                     + " (total=" + versions.size()
                     + ", blocked=" + blocked.size()
@@ -269,7 +269,7 @@ public final class GoListHandler {
      * appropriate.
      */
     private Response allBlockedResponse(final String module) {
-        EcsLogger.info("com.auto1.pantera.go")
+        EcsLogger.info("com.auto1.pantera.http.cooldown")
             .message("@v/list has no non-blocked versions — returning 403")
             .eventCategory("web")
             .eventAction("list_filter")
@@ -331,7 +331,7 @@ public final class GoListHandler {
         return this.cooldown.evaluate(req, this.inspector)
             .thenApply(result -> result.blocked())
             .exceptionally(err -> {
-                EcsLogger.warn("com.auto1.pantera.go")
+                EcsLogger.warn("com.auto1.pantera.http.cooldown")
                     .message("Cooldown evaluation failed; treating version as allowed")
                     .eventCategory("database")
                     .eventAction("cooldown_evaluate")

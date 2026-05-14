@@ -291,7 +291,7 @@ public final class MavenGroupSlice implements Slice {
                                 .body(hex.getBytes(java.nio.charset.StandardCharsets.UTF_8))
                                 .build();
                         } catch (java.security.NoSuchAlgorithmException e) {
-                            EcsLogger.error("com.auto1.pantera.maven")
+                            EcsLogger.error("com.auto1.pantera.group")
                                 .message("Failed to compute checksum")
                                 .eventCategory("web")
                                 .eventAction("checksum_compute")
@@ -331,7 +331,7 @@ public final class MavenGroupSlice implements Slice {
         return this.metadataCache.get(cacheKey).thenCompose(cached -> {
             if (cached.isPresent()) {
                 // Cache HIT (L1 or L2)
-                EcsLogger.debug("com.auto1.pantera.maven")
+                EcsLogger.debug("com.auto1.pantera.group")
                     .message("Returning cached merged metadata (cache hit)")
                     .eventCategory("web")
                     .eventAction("metadata_merge")
@@ -373,7 +373,7 @@ public final class MavenGroupSlice implements Slice {
                         (resp, err) -> leaderGate.complete(null)
                     );
             }
-            EcsLogger.debug("com.auto1.pantera.maven")
+            EcsLogger.debug("com.auto1.pantera.group")
                 .message("Coalescing with in-flight metadata fetch")
                 .eventCategory("web")
                 .eventAction("metadata_fetch_coalesce")
@@ -416,7 +416,7 @@ public final class MavenGroupSlice implements Slice {
             return tryMembersSequentially(line, headers, path, cacheKey, 0, fetchStartTime)
                 .exceptionally(err -> {
                     final Throwable cause = err.getCause() != null ? err.getCause() : err;
-                    EcsLogger.error("com.auto1.pantera.maven")
+                    EcsLogger.error("com.auto1.pantera.group")
                         .message("Failed to fetch metadata sequentially")
                         .eventCategory("web")
                         .eventAction("metadata_fetch")
@@ -477,7 +477,7 @@ public final class MavenGroupSlice implements Slice {
                                     );
                                     recordMetadataOperation("fetch", fetchDuration);
                                     if (fetchDuration > 500) {
-                                        EcsLogger.debug("com.auto1.pantera.maven")
+                                        EcsLogger.debug("com.auto1.pantera.group")
                                             .message("Slow sequential metadata fetch")
                                             .eventCategory("web")
                                             .eventAction("metadata_fetch")
@@ -501,7 +501,7 @@ public final class MavenGroupSlice implements Slice {
                 // present in this member); 5xx logs at WARN and falls
                 // through identically — the next member may still answer.
                 if (resp.status() != RsStatus.NOT_FOUND) {
-                    EcsLogger.warn("com.auto1.pantera.maven")
+                    EcsLogger.warn("com.auto1.pantera.group")
                         .message("Member returned non-OK status; trying next")
                         .eventCategory("web")
                         .eventAction("metadata_fetch")
@@ -519,7 +519,7 @@ public final class MavenGroupSlice implements Slice {
                     ));
             })
             .exceptionally(err -> {
-                EcsLogger.warn("com.auto1.pantera.maven")
+                EcsLogger.warn("com.auto1.pantera.group")
                     .message("Member fetch threw; trying next: " + member)
                     .eventCategory("web")
                     .eventAction("metadata_fetch")
@@ -556,7 +556,7 @@ public final class MavenGroupSlice implements Slice {
         return this.metadataCache.getStale(cacheKey)
             .thenApply(stale -> {
                 if (stale.isPresent()) {
-                    EcsLogger.warn("com.auto1.pantera.maven")
+                    EcsLogger.warn("com.auto1.pantera.group")
                         .message("Returning stale metadata (all members 404)")
                         .eventCategory("web")
                         .eventAction("metadata_fetch")
@@ -572,7 +572,7 @@ public final class MavenGroupSlice implements Slice {
                         .body(stale.get())
                         .build();
                 }
-                EcsLogger.warn("com.auto1.pantera.maven")
+                EcsLogger.warn("com.auto1.pantera.group")
                     .message("No member returned metadata and no stale fallback")
                     .eventCategory("web")
                     .eventAction("metadata_fetch")
@@ -648,7 +648,7 @@ public final class MavenGroupSlice implements Slice {
             new com.auto1.pantera.maven.cooldown.MavenMetadataRewriter(),
             Optional.of(inspector)
         ).exceptionally(err -> {
-            EcsLogger.warn("com.auto1.pantera.maven")
+            EcsLogger.warn("com.auto1.pantera.group")
                 .message("Cooldown filter on merged group metadata failed; "
                     + "serving unfiltered bytes")
                 .eventCategory("database")

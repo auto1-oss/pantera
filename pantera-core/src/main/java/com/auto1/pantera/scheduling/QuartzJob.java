@@ -49,7 +49,7 @@ public abstract class QuartzJob implements Job {
                 .message("Job stopped")
                 .eventCategory("process")
                 .eventAction("job_stop")
-                .eventOutcome("success")
+                .eventOutcome("failure")
                 .field("process.name", key.toString())
                 .field("log.source", "application")
                 .log();

@@ -800,7 +800,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                     // artifact serving. Matches the MetadataFilterService
                     // pass-through-on-error behavior.
                     .exceptionallyCompose(err -> {
-                        EcsLogger.warn("com.auto1.pantera.cooldown")
+                        EcsLogger.warn("com.auto1.pantera.http.cache")
                             .message("Cooldown evaluate failed; proceeding without block")
                             .eventCategory("database")
                             .eventAction("cooldown_evaluate_failure")
@@ -1484,7 +1484,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 channel.close();
             }
         } catch (final IOException ex) {
-            EcsLogger.debug("com.auto1.pantera.cache")
+            EcsLogger.debug("com.auto1.pantera.http.cache")
                 .message("Failed to close file channel")
                 .error(ex)
                 .field("log.source", "application")
@@ -1500,7 +1500,7 @@ public abstract class BaseCachedProxySlice implements Slice {
         try {
             Files.deleteIfExists(path);
         } catch (final IOException ex) {
-            EcsLogger.debug("com.auto1.pantera.cache")
+            EcsLogger.debug("com.auto1.pantera.http.cache")
                 .message("Failed to delete temp file")
                 .error(ex)
                 .field("log.source", "application")
@@ -1828,7 +1828,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 }
             });
         } catch (final Throwable t) {
-            EcsLogger.warn("com.auto1.pantera.cache")
+            EcsLogger.warn("com.auto1.pantera.http.cache")
                 .message("Failed to enqueue proxy event; serve path unaffected")
                 .eventCategory("process")
                 .eventAction("queue_enqueue")
@@ -1869,7 +1869,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 metric.run();
             }
         } catch (final Exception ex) {
-            EcsLogger.debug("com.auto1.pantera.cache")
+            EcsLogger.debug("com.auto1.pantera.http.cache")
                 .message("Failed to record metric")
                 .error(ex)
                 .field("log.source", "application")
@@ -1936,7 +1936,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                     DateTimeFormatter.RFC_1123_DATE_TIME.parse(val)
                 ).toEpochMilli());
         } catch (final DateTimeParseException ex) {
-            EcsLogger.debug("com.auto1.pantera.cache")
+            EcsLogger.debug("com.auto1.pantera.http.cache")
                 .message("Failed to parse Last-Modified header")
                 .error(ex)
                 .field("log.source", "application")

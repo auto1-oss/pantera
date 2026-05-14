@@ -209,7 +209,7 @@ public final class GoLatestHandler {
         try {
             info = this.parser.parse(upstreamBytes);
         } catch (final MetadataParseException ex) {
-            EcsLogger.warn("com.auto1.pantera.go")
+            EcsLogger.warn("com.auto1.pantera.http.cooldown")
                 .message("Failed to parse @latest JSON — passing upstream body through")
                 .eventCategory("web")
                 .eventAction("latest_filter")
@@ -236,7 +236,7 @@ public final class GoLatestHandler {
                         .build()
                 );
             }
-            EcsLogger.info("com.auto1.pantera.go")
+            EcsLogger.info("com.auto1.pantera.http.cooldown")
                 .message("@latest version blocked by cooldown; resolving fallback")
                 .eventCategory("web")
                 .eventAction("latest_filter")
@@ -286,7 +286,7 @@ public final class GoLatestHandler {
                         .build();
                 }
                 final GoLatestInfo rewritten = this.filter.updateLatest(upstreamInfo, picked);
-                EcsLogger.info("com.auto1.pantera.go")
+                EcsLogger.info("com.auto1.pantera.http.cooldown")
                     .message("@latest rewritten to non-blocked fallback")
                     .eventCategory("web")
                     .eventAction("latest_filter")
@@ -307,7 +307,7 @@ public final class GoLatestHandler {
      * 403 response for "every version blocked" — Go-client-parseable text.
      */
     private Response allBlockedResponse(final String module) {
-        EcsLogger.info("com.auto1.pantera.go")
+        EcsLogger.info("com.auto1.pantera.http.cooldown")
             .message("@latest has no non-blocked fallback — returning 403")
             .eventCategory("web")
             .eventAction("latest_filter")
@@ -401,7 +401,7 @@ public final class GoLatestHandler {
         return this.cooldown.evaluate(req, this.inspector)
             .thenApply(result -> result.blocked())
             .exceptionally(err -> {
-                EcsLogger.warn("com.auto1.pantera.go")
+                EcsLogger.warn("com.auto1.pantera.http.cooldown")
                     .message("Cooldown evaluation failed; treating version as allowed")
                     .eventCategory("database")
                     .eventAction("cooldown_evaluate")

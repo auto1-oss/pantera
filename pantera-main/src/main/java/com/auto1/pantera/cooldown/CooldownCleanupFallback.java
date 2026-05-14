@@ -229,7 +229,7 @@ public final class CooldownCleanupFallback {
             try {
                 purged = this.repo.purgePublishDatesOlderThan(cutoff, batchLimit);
             } catch (final RuntimeException err) {
-                EcsLogger.error("com.auto1.pantera.publishdate")
+                EcsLogger.error("com.auto1.pantera.cooldown")
                     .message("fallback publish-date purge iteration failed"
                         + " (iteration=" + i
                         + ", total_purged=" + totalPurged + ")")
@@ -246,7 +246,7 @@ public final class CooldownCleanupFallback {
         }
         this.lastPublishDatePurgeAt.set(now);
         if (totalPurged > 0L) {
-            EcsLogger.info("com.auto1.pantera.publishdate")
+            EcsLogger.info("com.auto1.pantera.cooldown")
                 .message("fallback publish-date purge completed"
                     + " (purged=" + totalPurged
                     + ", retention_days=" + retentionDays + ")")

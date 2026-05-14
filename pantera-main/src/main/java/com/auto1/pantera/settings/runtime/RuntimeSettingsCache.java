@@ -82,11 +82,10 @@ public final class RuntimeSettingsCache {
         this.poller.scheduleAtFixedRate(this::pollFallback,
             POLL_FALLBACK_SECONDS, POLL_FALLBACK_SECONDS, TimeUnit.SECONDS);
         EcsLogger.info("com.auto1.pantera.settings.runtime")
-            .message("RuntimeSettingsCache started")
+            .message("RuntimeSettingsCache started keys=" + this.snapshot.raw().size())
             .eventCategory("process")
             .eventAction("settings_cache_start")
             .eventOutcome("success")
-            .field("settings.keys", this.snapshot.raw().size())
             .field("log.source", "application")
             .log();
     }

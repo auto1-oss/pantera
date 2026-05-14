@@ -272,7 +272,7 @@ public final class ProxyCacheWriter {
                 // no log of its own; without this, every cache-write failure
                 // (upstream timeout, integrity reject, storage disk-full) is
                 // indistinguishable in the access logs.
-                EcsLogger.warn("com.auto1.pantera.cache")
+                EcsLogger.warn("com.auto1.pantera.http.cache")
                     .message("Proxy cache write failed; surfacing as 503")
                     .eventCategory("web")
                     .eventAction("cache_write")
@@ -376,7 +376,7 @@ public final class ProxyCacheWriter {
             .exceptionally(err -> {
                 deleteQuietly(tempFile);
                 final Throwable cause = unwrap(err);
-                EcsLogger.warn("com.auto1.pantera.cache")
+                EcsLogger.warn("com.auto1.pantera.http.cache")
                     .message("Proxy cache write-and-verify failed")
                     .eventCategory("web")
                     .eventAction("cache_write")
@@ -557,7 +557,7 @@ public final class ProxyCacheWriter {
                 }
                 closeQuietly(channel);
                 deleteQuietly(tempFile);
-                EcsLogger.warn("com.auto1.pantera.cache")
+                EcsLogger.warn("com.auto1.pantera.http.cache")
                     .message("Stream-through upstream error; cache not populated")
                     .eventCategory("web")
                     .eventAction("cache_write")
@@ -578,7 +578,7 @@ public final class ProxyCacheWriter {
                 }
                 closeQuietly(channel);
                 deleteQuietly(tempFile);
-                EcsLogger.debug("com.auto1.pantera.cache")
+                EcsLogger.debug("com.auto1.pantera.http.cache")
                     .message("Stream-through cancelled by client; cache not populated")
                     .eventCategory("web")
                     .eventAction("cache_write")
@@ -727,7 +727,7 @@ public final class ProxyCacheWriter {
         final RequestContext ctx
     ) {
         final String tag = algo.name().toLowerCase(Locale.ROOT);
-        EcsLogger.error("com.auto1.pantera.cache")
+        EcsLogger.error("com.auto1.pantera.http.cache")
             .message(
                 "Stream-through integrity mismatch — bytes were served to client"
                 + " but NOT committed to cache (algo=" + tag
@@ -762,7 +762,7 @@ public final class ProxyCacheWriter {
         try {
             channel.close();
         } catch (final IOException ex) {
-            EcsLogger.debug("com.auto1.pantera.cache")
+            EcsLogger.debug("com.auto1.pantera.http.cache")
                 .message("Failed to close stream-through temp channel")
                 .error(ex)
                 .field("log.source", "application")
@@ -957,7 +957,7 @@ public final class ProxyCacheWriter {
                 final String have = computed.get(algo);
                 if (!claim.equals(have)) {
                     final String tag = algo.name().toLowerCase(Locale.ROOT);
-                    EcsLogger.warn("com.auto1.pantera.cache")
+                    EcsLogger.warn("com.auto1.pantera.http.cache")
                         .message(
                             "Deferred sidecar disagrees with computed digest;"
                             + " primary already served (algo=" + tag
@@ -982,7 +982,7 @@ public final class ProxyCacheWriter {
                 ).toCompletableFuture();
             })
             .exceptionally(err -> {
-                EcsLogger.debug("com.auto1.pantera.cache")
+                EcsLogger.debug("com.auto1.pantera.http.cache")
                     .message("Deferred sidecar fetch/save failed; primary unaffected")
                     .eventCategory("web")
                     .eventAction("cache_write")
@@ -1088,7 +1088,7 @@ public final class ProxyCacheWriter {
             Files.write(tmp, bytes);
             return tmp;
         } catch (final IOException ex) {
-            EcsLogger.debug("com.auto1.pantera.cache")
+            EcsLogger.debug("com.auto1.pantera.http.cache")
                 .message("Failed to materialise onCacheWrite temp file; using response Flowable path")
                 .field("url.path", key.string())
                 .error(ex)
@@ -1113,7 +1113,7 @@ public final class ProxyCacheWriter {
     ) {
         deleteQuietly(tempFile);
         final String tag = algo.name().toLowerCase(Locale.ROOT);
-        EcsLogger.error("com.auto1.pantera.cache")
+        EcsLogger.error("com.auto1.pantera.http.cache")
             .message("Upstream sidecar disagrees with computed digest; rejecting cache write"
                 + " (algo=" + tag
                 + ", sidecar_claim=" + sidecarClaim
@@ -1235,11 +1235,11 @@ public final class ProxyCacheWriter {
         for (final ChecksumAlgo algo : sidecarAlgos) {
             this.cache.delete(sidecarKey(primaryKey, algo)).exceptionally(ignored -> null);
         }
-        EcsLogger.error("com.auto1.pantera.cache")
+        EcsLogger.error("com.auto1.pantera.http.cache")
             .message("Cache write partial failure; rolled back primary + sidecars")
             .eventCategory("web")
             .eventAction("cache_write")
-            .eventOutcome("partial_failure")
+            .eventOutcome("failure")
             .field("repository.name", this.repoName)
             .field("url.path", primaryKey.string())
             .field("trace.id", traceId(ctx))
@@ -1284,7 +1284,7 @@ public final class ProxyCacheWriter {
     private void logSuccess(
         final Key primaryKey, final Collection<ChecksumAlgo> sidecars, final RequestContext ctx
     ) {
-        EcsLogger.info("com.auto1.pantera.cache")
+        EcsLogger.info("com.auto1.pantera.http.cache")
             .message("Proxy cache write with verified sidecars (algos="
                 + algoList(sidecars) + ")")
             .eventCategory("web")
@@ -1405,7 +1405,7 @@ public final class ProxyCacheWriter {
         try {
             Files.deleteIfExists(path);
         } catch (final IOException ex) {
-            EcsLogger.debug("com.auto1.pantera.cache")
+            EcsLogger.debug("com.auto1.pantera.http.cache")
                 .message("Failed to delete temp file")
                 .field("file.path", path.toString())
                 .error(ex)
@@ -1560,7 +1560,7 @@ public final class ProxyCacheWriter {
                     mismatches.add(found);
                 }
             }
-            EcsLogger.info("com.auto1.pantera.cache")
+            EcsLogger.info("com.auto1.pantera.http.cache")
                 .message("Cache integrity audit complete"
                     + " (scanned=" + scanned
                     + ", mismatches=" + mismatches.size()
@@ -1586,7 +1586,7 @@ public final class ProxyCacheWriter {
             try {
                 computed = computeDigests(storage, primary);
             } catch (final Exception ex) {
-                EcsLogger.warn("com.auto1.pantera.cache")
+                EcsLogger.warn("com.auto1.pantera.http.cache")
                     .message("Integrity audit: failed to read primary")
                     .eventCategory("file")
                     .eventAction("integrity_audit")
@@ -1628,7 +1628,7 @@ public final class ProxyCacheWriter {
                 return null;
             }
             for (final AlgoMismatch m : per) {
-                EcsLogger.warn("com.auto1.pantera.cache")
+                EcsLogger.warn("com.auto1.pantera.http.cache")
                     .message("Cache integrity mismatch detected"
                         + " (algo=" + m.algo().name().toLowerCase(Locale.ROOT)
                         + ", sidecar_claim=" + m.sidecarClaim()
@@ -1674,7 +1674,7 @@ public final class ProxyCacheWriter {
             try {
                 storage.delete(primary).join();
             } catch (final Exception ex) {
-                EcsLogger.warn("com.auto1.pantera.cache")
+                EcsLogger.warn("com.auto1.pantera.http.cache")
                     .message("Failed to evict primary during integrity fix")
                     .field("repository.name", repoName)
                     .field("url.path", primary.string())
@@ -1687,7 +1687,7 @@ public final class ProxyCacheWriter {
                     storage.delete(sidecar).join();
                 } catch (final Exception ex) {
                     // Best-effort cleanup; do not abort.
-                    EcsLogger.debug("com.auto1.pantera.cache")
+                    EcsLogger.debug("com.auto1.pantera.http.cache")
                         .message("Failed to evict sidecar during integrity fix")
                         .field("url.path", sidecar.string())
                         .error(ex)
@@ -1695,7 +1695,7 @@ public final class ProxyCacheWriter {
                         .log();
                 }
             }
-            EcsLogger.info("com.auto1.pantera.cache")
+            EcsLogger.info("com.auto1.pantera.http.cache")
                 .message("Integrity fix: evicted mismatched pair")
                 .eventCategory("file")
                 .eventAction("integrity_audit")

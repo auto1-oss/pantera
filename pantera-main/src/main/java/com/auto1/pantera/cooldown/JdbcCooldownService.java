@@ -942,7 +942,7 @@ final class JdbcCooldownService implements CooldownService {
         // Log each active block before bulk delete
         final List<DbBlockRecord> blocks = this.repository.findActiveForRepo(repoType, repoName);
         for (final DbBlockRecord record : blocks) {
-            EcsLogger.info("com.auto1.pantera.cooldown")
+            EcsLogger.debug("com.auto1.pantera.cooldown")
                 .message("Deleting unblocked cooldown block (bulk unblock-all): reason=" + record.reason().name()
                     + " blocked_at=" + record.blockedAt()
                     + " blocked_until=" + record.blockedUntil()

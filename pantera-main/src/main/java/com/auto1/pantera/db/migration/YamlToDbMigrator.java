@@ -280,7 +280,7 @@ public final class YamlToDbMigrator {
                         builder.add("roles", rolesArr);
                     }
                     dao.addOrUpdate(builder.build(), name);
-                    LOG.info("Migrated user: {}", name);
+                    LOG.debug("Migrated user: {}", name);
                 } catch (final Exception ex) {
                     LOG.error("Failed to migrate user file: {}", file, ex);
                 }
@@ -373,7 +373,7 @@ public final class YamlToDbMigrator {
                 final YamlMapping nested = meta.yamlMapping(section);
                 if (nested != null) {
                     settings.put(section, yamlToJson(nested), "migration");
-                    LOG.info("Migrated settings section: {}", section);
+                    LOG.debug("Migrated settings section: {}", section);
                 }
             }
             // Migrate global_prefixes as a JSON array
@@ -406,7 +406,7 @@ public final class YamlToDbMigrator {
                     final YamlMapping aliasConfig = storages.yamlMapping(key);
                     if (aliasConfig != null) {
                         aliasDao.put(aliasName, null, yamlToJson(aliasConfig));
-                        LOG.info("Migrated storage alias: {}", aliasName);
+                        LOG.debug("Migrated storage alias: {}", aliasName);
                     }
                 }
             }

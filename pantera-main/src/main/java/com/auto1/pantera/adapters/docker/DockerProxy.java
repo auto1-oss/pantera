@@ -78,7 +78,7 @@ public final class DockerProxy implements Slice {
         final Content body
     ) {
         final long start = System.currentTimeMillis();
-        EcsLogger.info("com.auto1.pantera.docker.proxy")
+        EcsLogger.info("com.auto1.pantera.adapters.docker")
             .message("DockerProxy request")
             .eventCategory("web")
             .eventAction("proxy_request")
@@ -90,7 +90,7 @@ public final class DockerProxy implements Slice {
             .whenComplete((resp, err) -> {
                 final long duration = System.currentTimeMillis() - start;
                 if (err != null) {
-                    EcsLogger.error("com.auto1.pantera.docker.proxy")
+                    EcsLogger.error("com.auto1.pantera.adapters.docker")
                         .message("DockerProxy error")
                         .eventCategory("web")
                         .eventAction("proxy_request")
@@ -101,7 +101,7 @@ public final class DockerProxy implements Slice {
                         .field("log.source", "application")
                         .log();
                 } else {
-                    EcsLogger.info("com.auto1.pantera.docker.proxy")
+                    EcsLogger.info("com.auto1.pantera.adapters.docker")
                         .message("DockerProxy response")
                         .eventCategory("web")
                         .eventAction("proxy_request")

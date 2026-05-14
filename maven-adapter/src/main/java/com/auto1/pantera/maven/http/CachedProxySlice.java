@@ -715,7 +715,7 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
             // the uncategorised exception path (storage faults, cooldown
             // service errors, single-flight gate aborts, H2 read idle
             // timeouts after the abort) which M5 missed.
-            EcsLogger.warn("com.auto1.pantera.cache")
+            EcsLogger.warn("com.auto1.pantera.maven.http")
                 .message("Primary-artifact verify-and-serve failed; surfacing 502 so group does not poison the negative cache")
                 .eventCategory("web")
                 .eventAction("cache_write")
@@ -1068,7 +1068,7 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 }
             });
         } catch (final Exception ex) {
-            EcsLogger.warn("com.auto1.pantera.cache")
+            EcsLogger.warn("com.auto1.pantera.maven.http")
                 .message("Failed to enqueue proxy event; serve path unaffected")
                 .eventCategory("process")
                 .eventAction("queue_enqueue")

@@ -864,7 +864,7 @@ public final class YamlSettings implements Settings {
         if (dataSource != null) {
             // Database is the primary source of truth for user credentials
             res = new AuthFromDb(dataSource);
-            EcsLogger.info("com.auto1.pantera.security")
+            EcsLogger.info("com.auto1.pantera.settings")
                 .message("Using AuthFromDb as primary authenticator")
                 .eventCategory("authentication")
                 .eventAction("auth_init")
@@ -903,7 +903,7 @@ public final class YamlSettings implements Settings {
                         : auth;
                     res = new Authentication.Joined(res, gated);
                 } catch (final Exception ex) {
-                    EcsLogger.warn("com.auto1.pantera.security")
+                    EcsLogger.warn("com.auto1.pantera.settings")
                         .message("Failed to load auth provider: " + type)
                         .eventCategory("authentication")
                         .eventAction("auth_init")

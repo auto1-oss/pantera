@@ -606,8 +606,7 @@ public class NpmProxy {
         } catch (final Exception thrown) {
             // Recorder must never break the serve path.
             EcsLogger.debug("com.auto1.pantera.npm.proxy")
-                .message("npm phaseRecorder threw; serve path unaffected")
-                .field("phase", phase)
+                .message("npm phaseRecorder threw; serve path unaffected phase=" + phase)
                 .error(thrown)
                 .field("log.source", "application")
                 .log();

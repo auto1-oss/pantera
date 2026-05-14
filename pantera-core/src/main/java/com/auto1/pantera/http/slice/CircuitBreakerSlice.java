@@ -63,7 +63,7 @@ public final class CircuitBreakerSlice implements Slice {
             // upstream 5xx or an overload. WARN level because a tripped
             // circuit means upstream has already failed N times; it's a
             // noteworthy event but not an error originating in Pantera.
-            EcsLogger.warn("com.auto1.pantera.http.client")
+            EcsLogger.warn("com.auto1.pantera.http.slice")
                 .message("Circuit breaker OPEN — fast-failing with 503 without upstream call"
                     + " (remote=" + this.remoteId + ")")
                 .eventCategory("web")

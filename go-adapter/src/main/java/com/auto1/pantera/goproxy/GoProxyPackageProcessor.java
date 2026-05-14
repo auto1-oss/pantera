@@ -69,7 +69,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
     public void execute(final JobExecutionContext context) {
         this.resolveFromRegistry(context);
         if (this.asto == null || this.packages == null || this.events == null) {
-            EcsLogger.error("com.auto1.pantera.go")
+            EcsLogger.error("com.auto1.pantera.goproxy")
                 .message("Go proxy processor not initialized properly")
                 .eventCategory("web")
                 .eventAction("proxy_processor")
@@ -78,7 +78,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                 .log();
             super.stopJob(context);
         } else {
-            EcsLogger.debug("com.auto1.pantera.go")
+            EcsLogger.debug("com.auto1.pantera.goproxy")
                 .message("Go proxy processor running (queue size: " + this.packages.size() + ")")
                 .eventCategory("web")
                 .eventAction("proxy_processor")
@@ -102,7 +102,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
             return;
         }
 
-        EcsLogger.info("com.auto1.pantera.go")
+        EcsLogger.info("com.auto1.pantera.goproxy")
             .message("Processing Go batch (size: " + batch.size() + ")")
             .eventCategory("web")
             .eventAction("proxy_processor")
@@ -117,7 +117,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
                 .orTimeout(30, TimeUnit.SECONDS)
                 .join();
-            EcsLogger.info("com.auto1.pantera.go")
+            EcsLogger.info("com.auto1.pantera.goproxy")
                 .message("Go batch processing complete (size: " + batch.size() + ")")
                 .eventCategory("web")
                 .eventAction("proxy_processor")
@@ -125,7 +125,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                 .field("log.source", "application")
                 .log();
         } catch (Exception err) {
-            EcsLogger.error("com.auto1.pantera.go")
+            EcsLogger.error("com.auto1.pantera.goproxy")
                 .message("Go batch processing failed (size: " + batch.size() + ")")
                 .eventCategory("web")
                 .eventAction("proxy_processor")
@@ -143,7 +143,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
      */
     private CompletableFuture<Void> processGoPackageAsync(final ProxyArtifactEvent event) {
         final Key key = event.artifactKey();
-        EcsLogger.debug("com.auto1.pantera.go")
+        EcsLogger.debug("com.auto1.pantera.goproxy")
             .message("Processing Go proxy event")
             .eventCategory("web")
             .eventAction("proxy_processor")
@@ -154,7 +154,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
         // Parse module coordinates from event key
         final ModuleCoordinates coords = parseCoordinates(key);
         if (coords == null) {
-            EcsLogger.warn("com.auto1.pantera.go")
+            EcsLogger.warn("com.auto1.pantera.goproxy")
                 .message("Could not parse coordinates, skipping")
                 .eventCategory("web")
                 .eventAction("proxy_processor")
@@ -173,7 +173,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
         // Check existence and get metadata asynchronously
         return this.asto.exists(zipKey).thenCompose(exists -> {
             if (!exists) {
-                EcsLogger.warn("com.auto1.pantera.go")
+                EcsLogger.warn("com.auto1.pantera.goproxy")
                     .message("No .zip file found, re-queuing for retry")
                     .eventCategory("web")
                     .eventAction("proxy_processor")
@@ -192,7 +192,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                 .thenApply(sizeOpt -> sizeOpt.map(Long::longValue))
                 .thenAccept(size -> {
                     if (size.isEmpty()) {
-                        EcsLogger.warn("com.auto1.pantera.go")
+                        EcsLogger.warn("com.auto1.pantera.goproxy")
                             .message("Missing size metadata, skipping")
                             .eventCategory("web")
                             .eventAction("proxy_processor")
@@ -223,7 +223,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                         )
                     );
 
-                    EcsLogger.info("com.auto1.pantera.go")
+                    EcsLogger.info("com.auto1.pantera.goproxy")
                         .message("Recorded Go proxy module")
                         .eventCategory("web")
                         .eventAction("proxy_processor")
@@ -238,7 +238,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                         .log();
                 });
         }).exceptionally(err -> {
-            EcsLogger.error("com.auto1.pantera.go")
+            EcsLogger.error("com.auto1.pantera.goproxy")
                 .message("Failed to process Go package")
                 .eventCategory("web")
                 .eventAction("proxy_processor")

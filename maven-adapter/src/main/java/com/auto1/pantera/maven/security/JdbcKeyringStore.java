@@ -115,11 +115,10 @@ public final class JdbcKeyringStore implements KeyringStore {
         } catch (final SQLException | java.io.IOException
                 | org.bouncycastle.openpgp.PGPException ex) {
             EcsLogger.warn(LOGGER)
-                .message("Failed to load PGP key from DB")
+                .message("Failed to load PGP key from DB key_id_hex=" + hex)
                 .eventCategory("database")
                 .eventAction("pgp_key_lookup")
                 .eventOutcome("failure")
-                .field("pgp.key_id_hex", hex)
                 .error(ex)
                 .field("log.source", "application")
                 .log();
