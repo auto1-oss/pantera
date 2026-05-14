@@ -216,14 +216,28 @@ public final class MavenProxySlice extends Slice.Wrap {
         // Build ProxyCacheConfig with cooldown enabled so BaseCachedProxySlice
         // delegates to the cooldown service for freshness enforcement.
         final ProxyCacheConfig config = ProxyCacheConfig.withCooldown();
-        // Create MetadataCache with provided TTL
+        // Create MetadataCache with explicit soft/hard TTLs (T-P11):
+        // - softTtl: per-config default 30 s, no upstream call within window.
+        // - hardTtl: per-config default 2 h, between soft and hard windows
+        //   we serve cached and fire single-flighted background refreshes.
+        //
+        // The legacy {@code metadataTtl} constructor argument is honoured
+        // as the hardTtl bound when callers pass a value below the
+        // ProxyCacheConfig default — so existing test fixtures and pre-T-P11
+        // explicit overrides continue to behave the same.
         final com.auto1.pantera.cache.ValkeyConnection valkeyConn = // NOPMD CloseResource - shared singleton owned by GlobalCacheConfig; closed at JVM shutdown by the cache config
             com.auto1.pantera.cache.GlobalCacheConfig.valkeyConnection().orElse(null);
+        final Duration configuredSoftTtl = config.metadataSoftTtl();
+        final Duration configuredHardTtl = chooseHardTtl(metadataTtl, config.metadataHardTtl());
+        final Duration effectiveSoftTtl = configuredSoftTtl.compareTo(configuredHardTtl) > 0
+            ? configuredHardTtl : configuredSoftTtl;
         final MetadataCache metadataCache = new MetadataCache(
-            metadataTtl,
+            effectiveSoftTtl,
+            configuredHardTtl,
             new MavenCacheConfig().metadataMaxSize(),
             valkeyConn,
-            rname
+            rname,
+            java.time.Clock.systemUTC()
         );
         return new SliceRoute(
             new RtRulePath(
@@ -265,5 +279,24 @@ public final class MavenProxySlice extends Slice.Wrap {
         final Authenticator auth
     ) {
         return new AuthClientSlice(new UriClientSlice(client, remote), auth);
+    }
+
+    /**
+     * Reconcile the legacy {@code metadataTtl} constructor argument with the
+     * T-P11 {@code metadataHardTtl} ProxyCacheConfig knob. Use the shorter
+     * of the two so an explicit ctor override (e.g., a fixture that wants
+     * a 5-minute cache) still wins over the 2-hour default; otherwise the
+     * ProxyCacheConfig default applies.
+     */
+    private static Duration chooseHardTtl(
+        final Duration legacy, final Duration configured
+    ) {
+        if (legacy == null) {
+            return configured;
+        }
+        if (configured == null) {
+            return legacy;
+        }
+        return legacy.compareTo(configured) < 0 ? legacy : configured;
     }
 }

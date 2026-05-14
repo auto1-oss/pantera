@@ -62,6 +62,21 @@ public final class ProxyCacheConfig {
     public static final Duration DEFAULT_METADATA_TTL = Duration.ofDays(7);
 
     /**
+     * Default metadata soft TTL for the stale-while-revalidate fast path
+     * (30 s). Within this window of {@code lastVerified}, requests serve
+     * cached metadata with no upstream call.
+     */
+    public static final Duration DEFAULT_METADATA_SOFT_TTL = Duration.ofSeconds(30);
+
+    /**
+     * Default metadata hard TTL — the stale-while-revalidate budget
+     * (2 hours). Between soft and hard TTL, requests serve cached and fire
+     * a background single-flighted refresh. Past hard TTL, requests block
+     * on upstream.
+     */
+    public static final Duration DEFAULT_METADATA_HARD_TTL = Duration.ofHours(2);
+
+    /**
      * Default stale-while-revalidate max age (1 hour).
      */
     public static final Duration DEFAULT_STALE_MAX_AGE = Duration.ofHours(1);
@@ -130,6 +145,38 @@ public final class ProxyCacheConfig {
     public Duration metadataCacheTtl() {
         return this.durationValue("cache", "metadata", "ttl")
             .orElse(DEFAULT_METADATA_TTL);
+    }
+
+    /**
+     * Get metadata stale-while-revalidate soft TTL.
+     *
+     * <p>Within this window of {@code lastVerified}, metadata refreshes
+     * serve from the cache with no upstream call. T-P11
+     * (analysis/plan/v2/IMPLEMENTATION.md): default 30 s, configurable per
+     * repository via {@code cache.metadata.soft_ttl} in YAML.</p>
+     *
+     * @return Soft TTL duration (default: 30 s)
+     */
+    public Duration metadataSoftTtl() {
+        return this.durationValue("cache", "metadata", "soft_ttl")
+            .orElse(DEFAULT_METADATA_SOFT_TTL);
+    }
+
+    /**
+     * Get metadata stale-while-revalidate hard TTL.
+     *
+     * <p>Between {@link #metadataSoftTtl()} and this value, metadata
+     * refreshes serve cached bytes immediately AND fire a single-flighted
+     * background refresh. Past this value, refreshes block on the upstream
+     * call (the cold-miss path). T-P11
+     * (analysis/plan/v2/IMPLEMENTATION.md): default 2 h, configurable per
+     * repository via {@code cache.metadata.hard_ttl} in YAML.</p>
+     *
+     * @return Hard TTL duration (default: 2 h)
+     */
+    public Duration metadataHardTtl() {
+        return this.durationValue("cache", "metadata", "hard_ttl")
+            .orElse(DEFAULT_METADATA_HARD_TTL);
     }
 
     /**
