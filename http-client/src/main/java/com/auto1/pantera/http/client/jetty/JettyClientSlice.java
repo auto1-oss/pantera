@@ -72,6 +72,7 @@ final class JettyClientSlice implements Slice {
      */
     private final long acquireTimeoutMillis;
 
+
     /**
      * @param client HTTP client.
      * @param secure Secure connection flag.
@@ -354,6 +355,19 @@ final class JettyClientSlice implements Slice {
         ).method(req.method().value());
         if (this.acquireTimeoutMillis > 0) {
             request.timeout(this.acquireTimeoutMillis, TimeUnit.MILLISECONDS);
+        }
+        // Per-request idle timeout, lifted from the HttpClient's configured
+        // value. The client-level setIdleTimeout only catches *connection*
+        // idleness, but under H2 a connection is rarely idle — sibling
+        // streams keep it busy while one specific stream wedges (no further
+        // DATA frames, no terminal RST). Pantera v2.2.0 saw exactly that
+        // shape on cold Maven Central walks: headers arrived in <1 s,
+        // body bytes never resumed, and {@link Request#timeout} did not
+        // abort. Applying the same idle value per request makes Jetty
+        // abort the stuck stream while sibling streams continue.
+        final long idleMs = this.client.getIdleTimeout();
+        if (idleMs > 0) {
+            request.idleTimeout(idleMs, TimeUnit.MILLISECONDS);
         }
         // Inject B3 + W3C trace propagation headers from the current MDC,
         // so every upstream call from any adapter (maven, npm, docker,

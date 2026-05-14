@@ -387,7 +387,7 @@ public abstract class BaseCachedProxySlice implements Slice {
      * @param incoming Headers from the client request to Pantera (may be empty)
      * @return Headers safe to forward to the upstream proxy target
      */
-    private Headers upstreamHeaders(final Headers incoming) {
+    protected Headers upstreamHeaders(final Headers incoming) {
         final Headers out = new Headers();
         final java.util.List<com.auto1.pantera.http.headers.Header> ua =
             incoming.find("User-Agent");
@@ -816,15 +816,22 @@ public abstract class BaseCachedProxySlice implements Slice {
         if (isLeader[0]) {
             // The leader's response future typically resolves BEFORE the
             // cache write commits (stream-through pattern: body is still
-            // being teed to the temp file). The leader signals cache-
-            // durability via {@code leaderGate} (typically wired to
-            // {@code StreamedArtifact.verificationOutcome}). Only on
-            // exceptional completion do we release followers eagerly so
-            // they retry against a cold cache rather than parking on a
-            // gate the leader will never close.
+            // being teed to the temp file). On a 2xx leader response the
+            // adapter wires {@code leaderGate} to the cache-durability
+            // signal (e.g. {@code StreamedArtifact.verificationOutcome})
+            // so followers retry against a warm cache. For every other
+            // terminal state — exception OR non-2xx Response — the cache
+            // was not populated; release followers eagerly so they retry
+            // against the (still-cold) cache rather than parking on a
+            // gate the leader will never close. Without this, the
+            // adapter's {@code Err} / {@code mapUpstreamStatus} branches
+            // (which return a Response with {@code e == null}) leak the
+            // gate and every follower hits its inbound request timeout.
             return leaderFetch.apply(leaderGate)
                 .whenComplete((r, e) -> {
-                    if (e != null && !leaderGate.isDone()) {
+                    final boolean leaderFailed =
+                        e != null || (r != null && !r.status().success());
+                    if (leaderFailed && !leaderGate.isDone()) {
                         leaderGate.complete(null);
                     }
                 });

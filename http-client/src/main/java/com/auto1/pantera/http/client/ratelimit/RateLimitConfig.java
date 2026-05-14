@@ -27,11 +27,16 @@ import java.util.Objects;
  * <p>Defaults are conservative and derived from observed third-party
  * registry tolerances:
  * <ul>
- *   <li>{@code repo1.maven.org}: 20 req/s, burst 40. Maven Central's
- *       Cloudflare front-end starts 429-ing around 25-30 req/s
- *       per-IP; 20 leaves headroom.</li>
- *   <li>{@code registry.npmjs.org}: 30 req/s, burst 60. npm's CDN is
- *       more permissive but still bursty under cold-cache walks.</li>
+ *   <li>{@code repo1.maven.org}: 20 req/s steady, burst 200. Maven
+ *       Central's Cloudflare front-end starts 429-ing around 25-30
+ *       req/s per-IP, so 20 leaves the steady-state headroom; the
+ *       burst absorbs the cold-cache spike (mvn fires the whole tree
+ *       of POMs + jars in the first second of dependency resolution)
+ *       without surfacing synthesized 429s to the client.</li>
+ *   <li>{@code registry.npmjs.org}: 30 req/s steady, burst 300. npm's
+ *       CDN is more permissive and packument-driven cold walks tend to
+ *       fan out wider than Maven's POM walks — larger burst matches
+ *       the observed traffic shape.</li>
  *   <li>Default (any other host): 10 req/s, burst 20. Conservative so
  *       a misconfigured upstream cannot induce a 429 storm before an
  *       operator notices.</li>
@@ -75,9 +80,20 @@ public final class RateLimitConfig {
      * @return Config with the default per-registry rates.
      */
     public static RateLimitConfig defaults() {
+        // Burst capacity sized for the cold-cache burst pattern a typical
+        // Maven or npm build emits at the start of dependency resolution:
+        // ~80-150 concurrent fetches fired by the client's connection pool
+        // within the first second. Pre-2.2.0-fix the burst was 40 and the
+        // refill rate was the only headroom — every cold build with more
+        // than 40 parallel asks bottomed out the bucket, surfaced as
+        // synthesized 429s with 1s Retry-After, and added 10-40s of pure
+        // throttle wait to the wall-clock. The steady-state refill stays
+        // conservative (Maven Central Cloudflare front-end starts 429-ing
+        // around 25-30 req/s per-IP) — the change is that we now absorb
+        // the initial spike instead of throttling on it.
         return builder()
-            .perHost(MAVEN_CENTRAL, 20.0, 40.0)
-            .perHost(NPM_PUBLIC, 30.0, 60.0)
+            .perHost(MAVEN_CENTRAL, 20.0, 200.0)
+            .perHost(NPM_PUBLIC, 30.0, 300.0)
             .build();
     }
 

@@ -8,19 +8,21 @@ Pantera is a multi-format binary artifact registry (Maven, Docker, npm, PyPI, Go
 
 ## Common commands
 
-Java:
-- `mvn clean verify` -- full build: compile, unit tests, PMD, license headers.
-- `mvn test` -- unit tests only (Surefire, `*Test.java`).
-- `mvn verify -Pitcase` -- integration tests (Failsafe, `*IT.java` / `*ITCase.java`, requires Docker for TestContainers).
-- `mvn install -pl maven-adapter -am -DskipTests` -- build one module + its deps. Replace module name as needed.
-- `mvn test -pl pantera-core -Dtest=NegativeCacheTest` -- single test class.
-- `VALKEY_HOST=localhost mvn test -pl pantera-core` -- run Valkey-gated tests (annotated `@EnabledIfEnvironmentVariable(named = "VALKEY_HOST", ...)`).
-- `mvn install -DskipTests -Dpmd.skip=true` -- fastest build, skips both tests and PMD.
-- `mvn license:format` -- add missing GPL-3.0 headers (`LICENSE.header`); required on every Java file.
-- `mvn clean install -U -DskipTests -T 1C` -- parallel build.
+**Use these exact commands. Do not substitute or improvise.**
 
-Local stack (Docker Compose, uses `.env.dev`):
-- `make up` / `make down` / `make logs` / `make ps` / `make rebuild` -- the Makefile chains `pantera-main/docker-compose/docker-compose.yaml` with `docker-compose.dev.yaml`.
+Build (no tests): `mvn clean install -T8 -DskipTests=true`
+Build + tests: `mvn clean install -T8`
+Single test class: `mvn test -pl pantera-core -Dtest=NegativeCacheTest`
+Valkey-gated tests: `VALKEY_HOST=localhost mvn test -pl pantera-core` (annotated `@EnabledIfEnvironmentVariable(named = "VALKEY_HOST", ...)`).
+License headers: `mvn license:format` (required on every Java file from `LICENSE.header`).
+
+Local stack — `cd pantera-main/docker-compose/` first, then:
+- Stop: `docker compose down`
+- Start: `docker compose up`
+- Restart with new code: `docker compose down && docker compose up`
+
+**Do NOT use the Makefile** — it is wrong and forbidden.
+**Do NOT read `.env` files** — they hold local secrets that must not be inspected by tooling.
 
 UI (`cd pantera-ui`):
 - `npm install && npm run dev` -- Vite dev server.

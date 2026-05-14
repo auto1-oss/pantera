@@ -107,7 +107,12 @@ final class RateLimitedClientSliceTest {
     }
 
     @Test
-    void emptyBucketSynthesises429WithOneSecondRetryAfter() {
+    void burstBucketSettingsDoNotThrottleSuccessiveCalls() {
+        // 2026-05-14: token-bucket admission removed. Even an aggressive
+        // 1 req/s + burst 1 configuration must not produce a synthesised
+        // 429 — successive calls flow through. The bucket/refill values
+        // are kept on the config surface for the reactive gate's
+        // bookkeeping only.
         final TestClock clock = new TestClock(Instant.parse("2026-05-13T10:00:00Z"));
         final UpstreamRateLimiter limiter = new UpstreamRateLimiter.Default(
             RateLimitConfig.uniform(1.0, 1.0), clock
@@ -117,19 +122,13 @@ final class RateLimitedClientSliceTest {
         final RateLimitedClientSlice slice = new RateLimitedClientSlice(
             downstream, "h.example", limiter, clock
         );
-        // First call drains the single burst token
-        slice.response(GET, Headers.EMPTY, Content.EMPTY).join();
-        // Second call: bucket empty, synthesise 429
-        final Response second = slice.response(GET, Headers.EMPTY, Content.EMPTY).join();
-        MatcherAssert.assertThat(
-            "second call gets synthesised 429",
-            second.status(), new IsEqual<>(RsStatus.TOO_MANY_REQUESTS)
-        );
-        MatcherAssert.assertThat(
-            "Retry-After is at most 1 s for bucket-empty",
-            second.headers().values("Retry-After"),
-            new IsEqual<>(List.of("1"))
-        );
+        for (int i = 0; i < 5; i++) {
+            final Response r = slice.response(GET, Headers.EMPTY, Content.EMPTY).join();
+            MatcherAssert.assertThat(
+                "call " + i + " must pass through (no proactive throttling)",
+                r.status(), new IsEqual<>(RsStatus.OK)
+            );
+        }
     }
 
     /** Tracks invocation count + lets the test return canned responses. */

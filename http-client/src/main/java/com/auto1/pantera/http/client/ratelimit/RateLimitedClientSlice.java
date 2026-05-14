@@ -24,32 +24,42 @@ import java.time.Instant;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * Outbound rate-limit decorator. Wraps any client-side {@link Slice} —
- * placed by {@link com.auto1.pantera.http.client.jetty.JettyClientSlices}
- * around every per-host Jetty slice — and enforces a per-host token
- * bucket plus a 429 / Retry-After gate.
+ * Outbound rate-limit decorator — JFrog Artifactory / Sonatype Nexus
+ * model. Wraps any client-side {@link Slice}, placed by
+ * {@link com.auto1.pantera.http.client.jetty.JettyClientSlices} around
+ * every per-host Jetty slice. The proxy forwards at the inbound
+ * client's natural rate and only backs off when the upstream itself
+ * pushes back. There is no proactive token-bucket admission — the
+ * configured refill / burst values feed the reactive gate only.
  *
  * <p>Decision flow per outbound call:
  * <ol>
- *   <li>If the per-host gate is closed: synthesise a local 429 response
+ *   <li>If the per-host gate is closed (an upstream 429 / 503 with
+ *       Retry-After was seen recently): synthesise a local 429 response
  *       carrying a {@code Retry-After} header pointing at the gate
- *       deadline. The Jetty layer is never invoked, so the outbound
- *       request never leaves Pantera — the upstream sees no traffic
- *       while gated.</li>
- *   <li>Otherwise, attempt to acquire a token. On success, delegate
- *       through to the wrapped slice. On failure (bucket empty),
- *       synthesise a 429 with a one-second Retry-After. The bucket
- *       refills continuously, so the next attempt has a token within a
- *       fraction of a second.</li>
+ *       deadline. The Jetty layer is never invoked, so the upstream
+ *       sees no traffic while gated.</li>
+ *   <li>Otherwise: delegate to the wrapped slice immediately. No token
+ *       check, no synthetic back-pressure.</li>
  *   <li>When the wrapped slice completes, inspect the response status.
- *       A 429 (or 503 with Retry-After) closes the gate via
- *       {@link UpstreamRateLimiter#recordResponse(String, int, Duration)}
- *       so subsequent acquires fail-fast for the gate duration.</li>
+ *       A real upstream 429 (or 503 with Retry-After) closes the gate
+ *       via {@link UpstreamRateLimiter#recordResponse(String, int, Duration)}
+ *       so subsequent calls fail-fast for the gate duration.</li>
  * </ol>
  *
- * <p>The synthesised 429 carries header {@code X-Pantera-Rate-Limited: true}
- * so callers (BaseCachedProxySlice, future cluster-wide propagation) can
- * distinguish self-imposed gating from upstream-imposed 429.
+ * <p>Why no token bucket? Before 2026-05-14 a proactive token bucket
+ * (Maven Central: 20 req/s, burst 40) sat in front of the gate. A
+ * cold-cache mvn build of ~100 deps drained the bucket within a second
+ * and then ran at the refill rate — capping us at ~25 % of native mvn
+ * throughput. Maven Central's Cloudflare front-end tolerates ~100
+ * req/s per IP; the bucket throttled us well below that for no
+ * upstream-side benefit. JFrog and Nexus's proxy modes work the same
+ * way: forward at line rate, honour upstream's 429 + Retry-After.
+ *
+ * <p>The synthesised 429 (gate-closed path) carries header
+ * {@code X-Pantera-Rate-Limited: true} so callers (BaseCachedProxySlice,
+ * future cluster-wide propagation) can distinguish self-imposed gating
+ * from upstream-imposed 429.
  *
  * @since 2.2.0
  */
@@ -57,9 +67,6 @@ public final class RateLimitedClientSlice implements Slice {
 
     /** Header marker: response was generated locally by the rate limiter. */
     public static final String PANTERA_LIMITED_HEADER = "X-Pantera-Rate-Limited";
-
-    /** Default Retry-After when the bucket is empty (no upstream gate active). */
-    private static final Duration BUCKET_EMPTY_RETRY_AFTER = Duration.ofSeconds(1);
 
     private final Slice delegate;
     private final String host;
@@ -90,10 +97,6 @@ public final class RateLimitedClientSlice implements Slice {
             return CompletableFuture.completedFuture(
                 synthesise429(Duration.between(this.clock.instant(), gateUntil))
             );
-        }
-        if (!this.limiter.tryAcquire(this.host)) {
-            recordRateLimited("bucket_empty");
-            return CompletableFuture.completedFuture(synthesise429(BUCKET_EMPTY_RETRY_AFTER));
         }
         return this.delegate.response(line, headers, body).thenApply(
             response -> {

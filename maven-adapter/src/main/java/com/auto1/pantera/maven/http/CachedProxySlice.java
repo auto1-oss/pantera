@@ -644,14 +644,24 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                     // through the stream-through tee).
                     return this.coalesceUpstream(
                         key,
-                        leaderGate -> this.fetchVerifyAndCache(line, key, path, leaderGate),
+                        leaderGate -> this.fetchVerifyAndCache(line, headers, key, path, leaderGate),
                         () -> this.verifyAndServePrimary(line, headers, key, path)
                     );
                 }).toCompletableFuture()
             );
         }).exceptionally(err -> {
+            // RCA-NC1 (v2.2.0): MUST surface as bad-gateway, never 404. The
+            // GroupResolver writes the response status into the shared
+            // negative cache when querySequentially's terminal status is
+            // 404, so returning notFound() here would lock the artifact
+            // out of every group lookup for the cache TTL — even though
+            // upstream serves it fine. M5 fixed the same hazard for
+            // categorised upstream non-2xx (mapUpstreamStatus); this is
+            // the uncategorised exception path (storage faults, cooldown
+            // service errors, single-flight gate aborts, H2 read idle
+            // timeouts after the abort) which M5 missed.
             EcsLogger.warn("com.auto1.pantera.cache")
-                .message("Primary-artifact verify-and-serve failed; falling back to not-found")
+                .message("Primary-artifact verify-and-serve failed; surfacing 502 so group does not poison the negative cache")
                 .eventCategory("web")
                 .eventAction("cache_write")
                 .eventOutcome("failure")
@@ -659,7 +669,9 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 .field("url.path", path)
                 .error(err)
                 .log();
-            return ResponseBuilder.notFound().build();
+            return ResponseBuilder.badGateway()
+                .textBody("Upstream temporarily unavailable")
+                .build();
         });
     }
 
@@ -686,7 +698,8 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      * re-fetches cleanly from upstream.
      */
     private CompletableFuture<Response> fetchVerifyAndCache(
-        final RequestLine line, final Key key, final String path,
+        final RequestLine line, final Headers inboundHeaders,
+        final Key key, final String path,
         final CompletableFuture<Void> singleFlightGate
     ) {
         this.rawStorage.orElseThrow(); // guard: storage must be configured
@@ -707,8 +720,8 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         // (same behaviour as Maven Central).
         final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> sidecars =
             new EnumMap<>(ChecksumAlgo.class);
-        sidecars.put(ChecksumAlgo.SHA1, () -> this.fetchSidecar(line, ".sha1"));
-        return this.fetchPrimaryBody(line).toCompletableFuture().thenCompose(body ->
+        sidecars.put(ChecksumAlgo.SHA1, () -> this.fetchSidecar(line, inboundHeaders, ".sha1"));
+        return this.fetchPrimaryBody(line, inboundHeaders).toCompletableFuture().thenCompose(body ->
             this.cacheWriter.streamThroughAndCommit(
                 key, upstreamUri, body.size(), body.publisher(),
                 sidecars, null, ctx
@@ -829,8 +842,14 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      * any non-success status, throws {@link UpstreamHttpException} after
      * draining the response body to release the connection.
      */
-    private CompletionStage<UpstreamBody> fetchPrimaryBody(final RequestLine line) {
-        return this.remote.response(line, Headers.EMPTY, Content.EMPTY)
+    private CompletionStage<UpstreamBody> fetchPrimaryBody(
+        final RequestLine line, final Headers inboundHeaders
+    ) {
+        // Forward the inbound client's User-Agent + Accept so Maven
+        // Central / Cloudflare sees `Apache-Maven/...` rather than an
+        // empty-UA bot-shaped request (the latter falls into a stricter
+        // rate-limit category on Cloudflare-fronted CDNs).
+        return this.remote.response(line, this.upstreamHeaders(inboundHeaders), Content.EMPTY)
             .thenApply(resp -> {
                 if (!resp.status().success()) {
                     resp.body().asBytesFuture();
@@ -919,13 +938,13 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      * never blocks the primary write.
      */
     private CompletionStage<Optional<InputStream>> fetchSidecar(
-        final RequestLine primary, final String extension
+        final RequestLine primary, final Headers inboundHeaders, final String extension
     ) {
         final String sidecarPath = primary.uri().getPath() + extension;
         final RequestLine sidecarLine = new RequestLine(
             primary.method().value(), sidecarPath
         );
-        return this.remote.response(sidecarLine, Headers.EMPTY, Content.EMPTY)
+        return this.remote.response(sidecarLine, this.upstreamHeaders(inboundHeaders), Content.EMPTY)
             .thenCompose(resp -> {
                 if (!resp.status().success()) {
                     return resp.body().asBytesFuture()

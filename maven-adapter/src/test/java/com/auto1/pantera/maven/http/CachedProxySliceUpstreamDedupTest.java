@@ -162,6 +162,87 @@ final class CachedProxySliceUpstreamDedupTest {
         }
     }
 
+    /**
+     * Pre-fix: when the leader's {@code fetchVerifyAndCache} returned a
+     * non-2xx Response (e.g. upstream 5xx propagated through M5
+     * status-fidelity, or {@code streamThroughAndCommit} hit the {@code Err}
+     * temp-file path), the leader's response future completed normally
+     * with {@code e == null}, so {@link
+     * com.auto1.pantera.http.cache.BaseCachedProxySlice#coalesceUpstream}'s
+     * whenComplete safety net — keyed on {@code e != null} — never
+     * completed the gate. Followers parked until their own inbound 120s
+     * request timeout fired and the client saw 502. Verifies all callers
+     * finish within a tight wall-clock window, not the 120s timeout.
+     */
+    @Test
+    void leader5xxDoesNotParkFollowersOnTheGate() throws Exception {
+        final AtomicInteger primaryHits = new AtomicInteger();
+        final com.auto1.pantera.http.Slice upstream = (line, headers, body) -> {
+            final String path = line.uri().getPath();
+            if (path.endsWith(".sha1")) {
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.notFound().build()
+                );
+            }
+            primaryHits.incrementAndGet();
+            try {
+                Thread.sleep(150);
+            } catch (final InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            }
+            return CompletableFuture.completedFuture(
+                ResponseBuilder.from(com.auto1.pantera.http.RsStatus.INTERNAL_ERROR)
+                    .textBody("upstream down").build()
+            );
+        };
+        final Storage storage = new InMemoryStorage();
+        final CachedProxySlice slice = new CachedProxySlice(
+            upstream,
+            new com.auto1.pantera.asto.cache.FromStorageCache(storage),
+            Optional.of(this.events), "maven-proxy",
+            "https://repo.maven.apache.org/maven2", "maven-proxy",
+            NoopCooldownService.INSTANCE, noopInspector(), Optional.of(storage)
+        );
+        final ExecutorService pool = Executors.newFixedThreadPool(CONCURRENCY);
+        try {
+            final CountDownLatch start = new CountDownLatch(1);
+            final CountDownLatch done = new CountDownLatch(CONCURRENCY);
+            final AtomicInteger nonSuccessCount = new AtomicInteger();
+            for (int i = 0; i < CONCURRENCY; i++) {
+                pool.submit(() -> {
+                    try {
+                        start.await();
+                        final Response r = slice.response(
+                            new RequestLine(RqMethod.GET, PRIMARY_PATH),
+                            Headers.EMPTY, Content.EMPTY
+                        ).join();
+                        if (!r.status().success()) {
+                            nonSuccessCount.incrementAndGet();
+                        }
+                        r.body().asBytesFuture().toCompletableFuture().join();
+                    } catch (final InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                    } finally {
+                        done.countDown();
+                    }
+                });
+            }
+            start.countDown();
+            MatcherAssert.assertThat(
+                "all 50 clients finish quickly when the leader returns non-2xx — "
+                    + "pre-fix they parked on an orphan gate until the inbound timeout",
+                done.await(10, TimeUnit.SECONDS),
+                new IsEqual<>(true)
+            );
+            MatcherAssert.assertThat(
+                "every client sees the propagated non-2xx",
+                nonSuccessCount.get(), new IsEqual<>(CONCURRENCY)
+            );
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
     private static String sha1Hex(final byte[] data) {
         try {
             final MessageDigest md = MessageDigest.getInstance("SHA-1");
