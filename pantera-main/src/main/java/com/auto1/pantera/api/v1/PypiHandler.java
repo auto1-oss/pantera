@@ -257,6 +257,8 @@ public final class PypiHandler {
             final String reason = json.getString("reason");
             return reason == null || reason.isBlank() ? null : reason;
         } catch (final Exception ex) {
+            // EXPECTED: reason is optional metadata — malformed JSON or
+            // missing field returns null and the action proceeds.
             return null;
         }
     }

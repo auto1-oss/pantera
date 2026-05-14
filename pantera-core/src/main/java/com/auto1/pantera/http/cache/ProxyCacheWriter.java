@@ -1606,6 +1606,10 @@ public final class ProxyCacheWriter {
                 try {
                     present = storage.exists(sidecarKey).join();
                 } catch (final Exception ex) {
+                    // EXPECTED: integrity audit is read-only and
+                    // best-effort — a transient storage error on the
+                    // sidecar existence check just means this checksum
+                    // alg is skipped on this pass.
                     continue;
                 }
                 if (!present) {

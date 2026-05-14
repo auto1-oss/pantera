@@ -107,7 +107,9 @@ public final class OptimizedStorageCache {
                 return getFileSystemContent((FileStorage) storage, key);
             }
         } catch (Exception e) { // NOPMD EmptyCatchBlock - intentional: any reflection/unwrap failure falls through to the standard storage.value() path below
-            // If unwrapping fails, fall back to standard storage.value()
+            // EXPECTED: if reflection-based unwrap fails (e.g. SubStorage
+            // internal layout changes), fall back to the standard
+            // storage.value() path below. Correctness preserved.
         }
         
         // For S3 and others, use standard storage.value()

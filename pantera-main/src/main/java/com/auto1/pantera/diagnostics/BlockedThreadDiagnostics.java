@@ -177,7 +177,9 @@ public final class BlockedThreadDiagnostics {
                 this.logAllBlockedThreads();
             }
         } catch (final Exception ex) { // NOPMD EmptyCatchBlock - diagnostics is best-effort: any thread/JMX failure must not propagate to the host
-            // Ignore diagnostics errors
+            // EXPECTED: diagnostics is best-effort. JMX / GC bean access
+            // can throw on shutdown or under SecurityManager — must not
+            // propagate or it kills the host.
         }
     }
 
@@ -223,7 +225,9 @@ public final class BlockedThreadDiagnostics {
                 this.logAllBlockedThreads();
             }
         } catch (final Exception ex) { // NOPMD EmptyCatchBlock - diagnostics is best-effort: any thread/JMX failure must not propagate to the host
-            // Ignore diagnostics errors
+            // EXPECTED: diagnostics is best-effort. JMX / GC bean access
+            // can throw on shutdown or under SecurityManager — must not
+            // propagate or it kills the host.
         }
     }
 
@@ -260,7 +264,9 @@ public final class BlockedThreadDiagnostics {
                 }
             }
         } catch (final Exception ex) { // NOPMD EmptyCatchBlock - diagnostics is best-effort: any thread/JMX failure must not propagate to the host
-            // Ignore diagnostics errors
+            // EXPECTED: diagnostics is best-effort. JMX / GC bean access
+            // can throw on shutdown or under SecurityManager — must not
+            // propagate or it kills the host.
         }
     }
 
@@ -295,6 +301,8 @@ public final class BlockedThreadDiagnostics {
                 this.scheduler.shutdownNow();
             }
         } catch (final InterruptedException e) {
+            // EXPECTED: shutdown signalled while waiting for scheduler
+            // termination — force-stop and restore interrupt flag.
             this.scheduler.shutdownNow();
             Thread.currentThread().interrupt();
         }

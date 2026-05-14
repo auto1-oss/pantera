@@ -524,6 +524,10 @@ public final class FileSystemBrowseSlice implements Slice {
                     delegate.setAccessible(true);
                     current = (Storage) delegate.get(current);
                 } catch (Exception e) {
+                    // EXPECTED: reflective unwrap failure (e.g. delegate
+                    // field renamed) — stop the loop with whatever we
+                    // have. Correctness preserved by the caller's
+                    // storage.value() / list() path.
                     break;
                 }
             } else {

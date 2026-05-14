@@ -172,9 +172,12 @@ public final class ConfigWatchService implements AutoCloseable {
                 }
                 key.reset();
             } catch (final InterruptedException ex) {
+                // EXPECTED: shutdown signalled mid-take. Restore the
+                // interrupt flag and exit the loop cleanly.
                 Thread.currentThread().interrupt();
                 break;
             } catch (final ClosedWatchServiceException ex) {
+                // EXPECTED: close() ran on another thread; exit the loop.
                 break;
             } catch (final Exception ex) {
                 EcsLogger.error("com.auto1.pantera.settings")

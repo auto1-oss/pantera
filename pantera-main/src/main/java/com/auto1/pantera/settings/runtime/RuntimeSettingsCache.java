@@ -96,6 +96,9 @@ public final class RuntimeSettingsCache {
         try {
             this.poller.awaitTermination(2, TimeUnit.SECONDS);
         } catch (InterruptedException ie) {
+            // EXPECTED: shutdown signalled while waiting for the poll
+            // worker to exit — restore interrupt and continue with
+            // listener.stop() so the rest of the shutdown completes.
             Thread.currentThread().interrupt();
         }
         this.listener.stop();

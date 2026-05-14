@@ -175,6 +175,11 @@ final class NpmScanner implements Scanner {
                                         try {
                                             return Files.size(p);
                                         } catch (final IOException ex) {
+                                            // EXPECTED: missing/unreadable
+                                            // tgz means size 0 — the
+                                            // backfill record still
+                                            // imports without an
+                                            // authoritative size.
                                             return 0L;
                                         }
                                     }

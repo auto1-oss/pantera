@@ -320,7 +320,12 @@ public final class ArtifactHandler {
                                             entry.put("yanked",
                                                 sc.getBoolean("yanked", false));
                                         } catch (final Exception ignored) {
-                                            // skip
+                                            // EXPECTED: sidecar yanked.json
+                                            // is optional metadata — its
+                                            // absence or malformed shape
+                                            // means we just don't tag the
+                                            // entry yanked. The response
+                                            // is still well-formed.
                                         }
                                         return entry;
                                     });
@@ -691,7 +696,9 @@ public final class ArtifactHandler {
                                             sc.getString("yanked-reason", ""));
                                     }
                                 } catch (final Exception ignored) {
-                                    // Sidecar parse error — omit yanked field
+                                    // EXPECTED: sidecar parse error — omit
+                                    // yanked field. Sidecar is optional
+                                    // metadata, response stays valid.
                                 }
                                 return result;
                             });

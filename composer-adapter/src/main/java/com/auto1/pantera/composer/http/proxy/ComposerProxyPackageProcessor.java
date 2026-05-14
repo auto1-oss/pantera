@@ -123,7 +123,10 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                             }
                             }
                         } catch (final Exception ignored) {
-                            // Fall back to 0 if size cannot be read
+                            // EXPECTED: size is a best-effort hint for the
+                            // artifact event; zero is a valid fallback and
+                            // the import will continue with the rest of
+                            // the metadata.
                         }
 
                         // Record only the specific version that was downloaded

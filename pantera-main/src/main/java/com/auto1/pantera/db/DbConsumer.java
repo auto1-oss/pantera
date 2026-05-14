@@ -302,6 +302,10 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                     try {
                         Thread.sleep(backoffMs);
                     } catch (final InterruptedException ie) {
+                        // EXPECTED: shutdown signalled mid-backoff —
+                        // restore interrupt and let the re-queue happen
+                        // (the consumer thread will exit on its own
+                        // shutdown check).
                         Thread.currentThread().interrupt();
                     }
                     sortedEvents.forEach(DbConsumer.this.subject::onNext);

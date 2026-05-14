@@ -412,7 +412,16 @@ public final class FileSystemArtifactSlice implements Slice {
                     try {
                         channel.close();
                     } catch (IOException e) { // NOPMD EmptyCatchBlock - close() failure during cleanup is benign; resource is being released anyway
-                        // Ignore close errors
+                        // B7 decision-tree #2: secondary cleanup failure.
+                        // Surface at DEBUG so SREs can see the cause when
+                        // debugging file-descriptor leaks; the primary
+                        // request error (if any) is unaffected.
+                        EcsLogger.debug("com.auto1.pantera.http.slice")
+                            .message("Failed to close file channel during cleanup")
+                            .eventAction("resource_cleanup_failed")
+                            .error(e)
+                            .field("log.source", "application")
+                            .log();
                     }
                     channel = null;
                 }

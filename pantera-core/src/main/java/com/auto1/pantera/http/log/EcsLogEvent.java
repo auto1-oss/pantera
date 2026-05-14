@@ -434,7 +434,9 @@ public final class EcsLogEvent {
                         return Optional.of(decoded.substring(0, colon));
                     }
                 } catch (IllegalArgumentException e) { // NOPMD EmptyCatchBlock - intentional: invalid Base64 is treated as no extractable username; falls through to Optional.empty()
-                    // Invalid base64, ignore
+                    // EXPECTED: invalid Base64 in Authorization header is
+                    // not actionable here — fall through to Optional.empty()
+                    // so the request still gets logged without a username.
                 }
             }
         }

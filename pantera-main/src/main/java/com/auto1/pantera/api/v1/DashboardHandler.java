@@ -214,6 +214,9 @@ public final class DashboardHandler {
             // wait briefly for the winner to populate it
             for (int i = 0; i < 50 && this.cache.get() == null; i++) {
                 try { Thread.sleep(20); } catch (InterruptedException e) {
+                    // EXPECTED: shutdown signalled — restore interrupt
+                    // and exit the spin-wait. Cache may still be empty;
+                    // the caller falls back to zeros.
                     Thread.currentThread().interrupt();
                     break;
                 }
@@ -317,7 +320,9 @@ public final class DashboardHandler {
                     }
                 }
             } catch (final Exception ex) { // NOPMD EmptyCatchBlock - dashboard is best-effort: DB unavailable or materialized views missing falls through to zeroed counters
-                // DB unavailable or MVs not yet created — return zeros
+                // EXPECTED: DB unavailable or MVs not yet created —
+                // return zeros (documented in CLAUDE.md as a known
+                // deployment prerequisite, not a bug).
             }
         }
         final JsonObject stats = new JsonObject()

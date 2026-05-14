@@ -83,6 +83,10 @@ public final class PgListenNotify {
             try {
                 t.join(2_000L);
             } catch (InterruptedException ie) {
+                // EXPECTED: caller's shutdown was interrupted while
+                // waiting for the listener thread to exit. Restore the
+                // interrupt flag — caller handles via its own shutdown
+                // checks.
                 Thread.currentThread().interrupt();
             }
         }
@@ -129,6 +133,8 @@ public final class PgListenNotify {
                 try {
                     Thread.sleep(LISTEN_BACKOFF_MS);
                 } catch (final InterruptedException ie) {
+                    // EXPECTED: shutdown signalled during reconnect
+                    // backoff — restore interrupt and exit the loop.
                     Thread.currentThread().interrupt();
                     return;
                 }

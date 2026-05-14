@@ -296,6 +296,9 @@ public final class PypiJsonHandler {
             }
             return out;
         } catch ( final Exception ex) {
+            // EXPECTED: a malformed upstream JSON response just yields
+            // an empty release list — the cooldown gate downgrades to
+            // "no candidates" rather than 500.
             return List.of();
         }
     }

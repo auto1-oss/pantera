@@ -460,6 +460,10 @@ public final class VertxMain {
                                     .parse(val)
                             ));
                     } catch (final java.time.format.DateTimeParseException ex) {
+                        // EXPECTED: an upstream Last-Modified header that
+                        // doesn't match RFC 1123 falls back to the DB
+                        // consumer's currentTimeMillis() default — no
+                        // diagnostic value in logging every parse miss.
                         return java.util.Optional.empty();
                     }
                 };
@@ -751,7 +755,10 @@ public final class VertxMain {
                                 .GET().build();
                             hc.send(req, java.net.http.HttpResponse.BodyHandlers.discarding());
                         } catch (final Exception ignored) {
-                            // warmup failure is non-fatal
+                            // EXPECTED: JIT warmup failure is non-fatal —
+                            // it just means the first real request pays
+                            // the JIT cost, which is a performance hint,
+                            // not a correctness issue.
                         }
                     }
                 }
@@ -763,7 +770,9 @@ public final class VertxMain {
                     .field("log.source", "application")
                     .log();
             } catch (final Exception ignored) {
-                // warmup failure is non-fatal
+                // EXPECTED: outer warmup failure is non-fatal — see
+                // inner catch comment above. The success log inside
+                // the try ran (or didn't) and that's all we need.
             }
         }, "pantera-jit-warmup");
         warmupThread.setDaemon(true);
@@ -1509,14 +1518,20 @@ public final class VertxMain {
                                         }
                                         Files.deleteIfExists(p);
                                     } catch (final IOException ignored) {
-                                        // best-effort
+                                        // EXPECTED: best-effort per-file
+                                        // cleanup — next boot's sweep
+                                        // will retry, and the directory
+                                        // total still counts what we did.
                                     }
                                 });
                         }
                         counters[0]++;
                         counters[1] += subtree[0];
                     } catch (final IOException ignored) {
-                        // skip this directory; continue
+                        // EXPECTED: skip this directory and continue —
+                        // the outer scan logs a WARN if the whole sweep
+                        // fails, but a single inaccessible subtree just
+                        // gets skipped this pass.
                     }
                 });
         } catch (final IOException ex) {

@@ -88,7 +88,10 @@ public final class EventsQueueMetrics {
                     .register(MicrometerMetrics.getInstance().getRegistry())
                     .increment();
             } catch (final RuntimeException ignored) {
-                // metrics registration must never escape the serve path
+                // EXPECTED: metrics registration must never escape the
+                // serve path. Micrometer can throw on race conditions
+                // during shutdown — we already logged the queue
+                // overflow at WARN above, so swallowing here is correct.
             }
         }
     }

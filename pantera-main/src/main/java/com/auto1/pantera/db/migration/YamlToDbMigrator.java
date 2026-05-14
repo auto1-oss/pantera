@@ -551,6 +551,9 @@ public final class YamlToDbMigrator {
                     try {
                         builder.add(keyStr, Long.parseLong(resolved));
                     } catch (final NumberFormatException nfe) {
+                        // EXPECTED: not a parseable number — keep the
+                        // original string. This is type coercion, not a
+                        // failure.
                         builder.add(keyStr, resolved);
                     }
                 }

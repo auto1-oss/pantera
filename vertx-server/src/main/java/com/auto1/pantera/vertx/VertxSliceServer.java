@@ -394,6 +394,9 @@ public final class VertxSliceServer implements Closeable {
                 try {
                     Thread.sleep(100);
                 } catch (InterruptedException e) {
+                    // EXPECTED: outer shutdown re-interrupted us during
+                    // drain — restore the flag and exit the wait loop;
+                    // the remaining-count log below will report status.
                     Thread.currentThread().interrupt();
                     break;
                 }

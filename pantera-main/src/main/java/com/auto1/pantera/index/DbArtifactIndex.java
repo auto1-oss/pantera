@@ -305,7 +305,9 @@ public final class DbArtifactIndex implements ArtifactIndex {
                  PreparedStatement stmt = conn.prepareStatement("SELECT 1")) {
                 stmt.executeQuery().close();
             } catch (final SQLException ex) { // NOPMD EmptyCatchBlock - warm-up is best-effort: any failure just means first real request pays the cost instead
-                // Non-fatal — first real request will pay the cost instead
+                // EXPECTED: warm-up is best-effort. Failure here just
+                // means the first real request pays the ~100ms cold-
+                // start cost — not a correctness issue.
             }
         });
     }
@@ -1829,6 +1831,9 @@ public final class DbArtifactIndex implements ArtifactIndex {
                     this.executor.shutdownNow();
                 }
             } catch (final InterruptedException ex) {
+                // EXPECTED: shutdown signalled mid-await — force-stop
+                // the executor and restore the interrupt flag for the
+                // caller's exit path.
                 this.executor.shutdownNow();
                 Thread.currentThread().interrupt();
             }

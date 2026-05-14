@@ -249,7 +249,9 @@ final class ComposerScanner implements Scanner {
                             size = Files.size(legacyFile);
                         }
                     } catch (final IOException ignored) {
-                        // keep size = 0
+                        // EXPECTED: keep size = 0; missing/inaccessible
+                        // artifact file just means we backfill the record
+                        // without an authoritative size.
                     }
                 }
                 final String pathPrefix = proxyMode

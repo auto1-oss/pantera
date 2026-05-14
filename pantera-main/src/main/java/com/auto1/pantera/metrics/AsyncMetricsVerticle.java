@@ -308,6 +308,9 @@ public final class AsyncMetricsVerticle extends AbstractVerticle {
                     return cached.content != null ? cached.content : "";
                 }
             } catch (InterruptedException e) {
+                // EXPECTED: shutdown signalled mid-scrape — restore
+                // interrupt and serve from cache (or empty) so the
+                // metrics endpoint still returns promptly.
                 Thread.currentThread().interrupt();
                 final CachedMetrics cached = this.cachedMetrics.get();
                 return cached.content != null ? cached.content : "";

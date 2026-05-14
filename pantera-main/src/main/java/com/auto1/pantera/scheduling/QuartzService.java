@@ -150,6 +150,9 @@ public final class QuartzService {
             return this.scheduler.isStarted() && !this.scheduler.isShutdown()
                 && !this.scheduler.isInStandbyMode();
         } catch (final SchedulerException ex) {
+            // EXPECTED: scheduler state probe — any access failure means
+            // "not running", which is the safe default for health
+            // checks and readiness probes.
             return false;
         }
     }

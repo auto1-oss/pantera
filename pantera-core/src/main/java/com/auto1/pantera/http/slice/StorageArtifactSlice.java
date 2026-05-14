@@ -176,7 +176,10 @@ public final class StorageArtifactSlice implements Slice {
                 }
                 
             } catch (Exception e) {
-                // Can't unwrap this layer, stop trying
+                // EXPECTED: reflection-based storage unwrapping fails
+                // (no `origin` field, security manager, etc.) → stop
+                // unwrapping and use what we have. Correctness is
+                // preserved by the standard storage.value() path.
                 break;
             }
         }

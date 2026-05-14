@@ -781,7 +781,9 @@ public final class ImportService {
                 return Optional.of((Storage) origin.get(storage));
             }
         } catch (final Exception ignore) { // NOPMD EmptyCatchBlock - intentional: any reflection failure means the storage is not a SubStorage; return empty
-            // ignore and treat as not a SubStorage
+            // EXPECTED: any reflection failure (class missing, field
+            // missing, security manager) means the runtime storage isn't
+            // a SubStorage, so we return Optional.empty.
         }
         return Optional.empty();
     }
