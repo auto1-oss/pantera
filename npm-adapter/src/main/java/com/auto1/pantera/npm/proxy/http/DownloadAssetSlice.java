@@ -329,6 +329,7 @@ public final class DownloadAssetSlice implements Slice {
                     .eventAction("queue_enqueue")
                     .eventOutcome("failure")
                     .field("repository.name", this.repoName)
+                    .error(t)
                     .field("log.source", "application")
                     .log();
             }

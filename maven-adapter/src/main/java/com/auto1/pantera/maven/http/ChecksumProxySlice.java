@@ -204,7 +204,7 @@ final class ChecksumProxySlice implements Slice {
                     .eventCategory("web")
                     .eventAction("checksum_computation")
                     .eventOutcome("failure")
-                    .field("error.message", err.getMessage())
+                    .error(err)
                     .field("log.source", "application")
                     .log();
                 hashFuture.completeExceptionally(err);

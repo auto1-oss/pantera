@@ -210,7 +210,7 @@ final class DockerScanner implements Scanner {
         try {
             digest = Files.readString(linkFile, StandardCharsets.UTF_8).trim();
         } catch (final IOException ex) {
-            LOG.warn("Cannot read link file {}: {}", linkFile, ex.getMessage());
+            LOG.warn("Cannot read link file {}: {}", linkFile, ex.getMessage(), ex);
             return null;
         }
         if (digest.isEmpty()) {
@@ -256,11 +256,11 @@ final class DockerScanner implements Scanner {
         } catch (final JsonException ex) {
             LOG.warn(
                 "Corrupted manifest JSON for digest {}: {}",
-                digest, ex.getMessage()
+                digest, ex.getMessage(), ex
             );
             return 0L;
         } catch (final IOException ex) {
-            LOG.warn("Cannot read blob {}: {}", blobPath, ex.getMessage());
+            LOG.warn("Cannot read blob {}: {}", blobPath, ex.getMessage(), ex);
             return 0L;
         }
         if (manifest.containsKey("manifests")
@@ -337,7 +337,7 @@ final class DockerScanner implements Scanner {
                 total += DockerScanner.sumLayersAndConfig(childManifest);
             } catch (final JsonException | IOException ex) {
                 LOG.warn("Cannot read child manifest {}: {}",
-                    childDigest, ex.getMessage());
+                    childDigest, ex.getMessage(), ex);
             }
         }
         return total;

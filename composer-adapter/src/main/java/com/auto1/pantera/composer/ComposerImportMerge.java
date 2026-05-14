@@ -257,7 +257,7 @@ public final class ComposerImportMerge {
                     .eventAction("import_merge")
                     .eventOutcome("failure")
                     .field("file.name", fileKey.string())
-                    .field("error.message", ex.getMessage())
+                    .error(ex)
                     .field("log.source", "application")
                     .log();
                 return Optional.<String>empty();
@@ -487,7 +487,7 @@ public final class ComposerImportMerge {
                         .eventAction("import_merge")
                         .eventOutcome("failure")
                         .field("file.name", key.string())
-                        .field("error.message", error.getMessage())
+                        .error(error)
                         .field("log.source", "application")
                         .log();
                     return Optional.<JsonObject>empty();
@@ -500,7 +500,7 @@ public final class ComposerImportMerge {
                     .eventAction("import_merge")
                     .eventOutcome("failure")
                     .field("file.name", key.string())
-                    .field("error.message", error.getMessage())
+                    .error(error)
                     .field("log.source", "application")
                     .log();
                 return Optional.empty();
@@ -530,7 +530,7 @@ public final class ComposerImportMerge {
                     .eventCategory("web")
                     .eventAction("import_merge")
                     .eventOutcome("failure")
-                    .field("error.message", error.getMessage())
+                    .error(error)
                     .field("log.source", "application")
                     .log();
                 return null;

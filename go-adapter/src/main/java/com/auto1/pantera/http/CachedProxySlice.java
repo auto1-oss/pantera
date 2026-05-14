@@ -628,6 +628,7 @@ final class CachedProxySlice implements Slice {
                 .eventCategory("web")
                 .eventAction("header_parse")
                 .eventOutcome("failure")
+                .error(ex)
                 .field("log.source", "application")
                 .log();
             return Optional.empty();

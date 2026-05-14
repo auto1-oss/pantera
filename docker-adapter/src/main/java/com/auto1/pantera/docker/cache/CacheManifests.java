@@ -270,7 +270,7 @@ public final class CacheManifests implements Manifests {
                         .field("repository.name", this.rname)
                         .field("container.image.name", this.name)
                         .field("container.image.hash.all", ref.digest())
-                        .field("error.message", ex.getMessage())
+                        .error(ex)
                         .field("log.source", "application")
                         .log();
                     return Optional.empty();

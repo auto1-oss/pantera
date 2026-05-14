@@ -296,7 +296,7 @@ final class AddArchiveSlice implements Slice {
                                 .eventCategory("web")
                                 .eventAction("event_creation")
                                 .eventOutcome("failure")
-                                .field("error.message", e.getMessage())
+                                .error(e)
                                 .field("log.source", "application")
                                 .log();
                             return CompletableFuture.completedFuture(null);

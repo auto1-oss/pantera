@@ -350,7 +350,7 @@ public final class ComposerGroupSlice implements Slice {
                 .eventCategory("web")
                 .eventAction("packages_parse")
                 .eventOutcome("failure")
-                .field("error.message", e.getMessage())
+                .error(e)
                 .field("repository.name", this.group)
                 .field("log.source", "application")
                 .log();

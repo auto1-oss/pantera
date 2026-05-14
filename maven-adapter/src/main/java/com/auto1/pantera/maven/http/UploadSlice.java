@@ -367,7 +367,7 @@ public final class UploadSlice implements Slice {
                     .eventCategory("web")
                     .eventAction("metadata_fix")
                     .eventOutcome("failure")
-                    .field("error.message", ex.getMessage())
+                    .error(ex)
                     .field("log.source", "application")
                     .log();
                 return bytes;

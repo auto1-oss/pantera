@@ -331,7 +331,7 @@ public final class MergeShardsSlice implements Slice {
                     .eventCategory("web")
                     .eventAction("cleanup")
                     .eventOutcome("failure")
-                    .field("error.message", e.getMessage())
+                    .error(e)
                     .field("log.source", "application")
                     .log();
                 return null;
@@ -406,7 +406,7 @@ public final class MergeShardsSlice implements Slice {
                                 .eventAction("shard_parse")
                                 .eventOutcome("failure")
                                 .field("file.path", p)
-                                .field("error.message", e.getMessage())
+                                .error(e)
                                 .field("log.source", "application")
                                 .log();
                         }
@@ -418,7 +418,7 @@ public final class MergeShardsSlice implements Slice {
                             .eventAction("shard_read")
                             .eventOutcome("failure")
                             .field("file.path", p)
-                            .field("error.message", e.getMessage())
+                            .error(e)
                             .field("log.source", "application")
                             .log();
                         return null;

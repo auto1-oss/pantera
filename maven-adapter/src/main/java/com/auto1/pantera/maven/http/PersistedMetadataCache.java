@@ -168,7 +168,7 @@ public final class PersistedMetadataCache extends MetadataCache {
                 .eventCategory("web")
                 .eventAction("cache_restore")
                 .eventOutcome("failure")
-                .field("error.message", e.getMessage())
+                .error(e)
                 .field("log.source", "application")
                 .log();
             // Continue with empty cache
@@ -264,7 +264,7 @@ public final class PersistedMetadataCache extends MetadataCache {
                     .eventCategory("web")
                     .eventAction("cache_snapshot")
                     .eventOutcome("failure")
-                    .field("error.message", e.getMessage())
+                    .error(e)
                     .field("log.source", "application")
                     .log();
             }

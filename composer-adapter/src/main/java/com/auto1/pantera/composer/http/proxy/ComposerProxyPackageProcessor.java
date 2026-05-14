@@ -323,7 +323,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                 .eventOutcome("failure")
                 .field("package.name", packageName)
                 .field("package.version", version)
-                .field("error.message", err.getMessage())
+                .error(err)
                 .field("log.source", "application")
                 .log();
             return null;

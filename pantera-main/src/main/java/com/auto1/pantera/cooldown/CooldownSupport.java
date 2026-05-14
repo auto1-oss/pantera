@@ -279,6 +279,7 @@ public final class CooldownSupport {
                 .eventCategory("configuration")
                 .eventAction("cooldown_db_load")
                 .eventOutcome("failure")
+                .error(ex)
                 .field("log.source", "application")
                 .log();
         }

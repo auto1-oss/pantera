@@ -176,7 +176,9 @@ public final class RuntimeSettingsCache {
         } catch (final Throwable t) {
             EcsLogger.warn("com.auto1.pantera.settings.runtime")
                 .field("log.source", "application")
-                .message("Settings poll failed: " + t.getMessage()).log();
+                .message("Settings poll failed: " + t.getMessage())
+                .error(t)
+                .log();
         }
     }
 }

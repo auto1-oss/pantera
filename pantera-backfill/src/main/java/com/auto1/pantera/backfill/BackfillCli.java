@@ -130,7 +130,7 @@ public final class BackfillCli {
         try {
             cmd = new DefaultParser().parse(options, args);
         } catch (final ParseException ex) {
-            LOG.error("Failed to parse arguments: {}", ex.getMessage());
+            LOG.error("Failed to parse arguments: {}", ex.getMessage(), ex);
             printHelp(options);
             return 1;
         }
@@ -416,7 +416,7 @@ public final class BackfillCli {
             scanner = ScannerFactory.create(type);
         } catch (final IllegalArgumentException ex) {
             LOG.error(
-                "Invalid scanner type '{}': {}", type, ex.getMessage()
+                "Invalid scanner type '{}': {}", type, ex.getMessage(), ex
             );
             return 1;
         }

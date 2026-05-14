@@ -125,6 +125,7 @@ public final class FileSystemIoConfig {
                     .eventCategory("configuration")
                     .eventAction("thread_pool_config")
                     .eventOutcome("failure")
+                    .error(ex)
                     .field("log.source", "application")
                     .log();
             }
@@ -142,6 +143,7 @@ public final class FileSystemIoConfig {
                     .eventCategory("configuration")
                     .eventAction("thread_pool_config")
                     .eventOutcome("failure")
+                    .error(ex)
                     .field("log.source", "application")
                     .log();
             }

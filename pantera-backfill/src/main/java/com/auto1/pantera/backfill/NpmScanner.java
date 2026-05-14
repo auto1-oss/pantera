@@ -207,7 +207,7 @@ final class NpmScanner implements Scanner {
                     } catch (final IOException ex) {
                         LOG.warn(
                             "Cannot list .versions dir {}: {}",
-                            versionsDir, ex.getMessage()
+                            versionsDir, ex.getMessage(), ex
                         );
                     }
                 });
@@ -354,7 +354,7 @@ final class NpmScanner implements Scanner {
             JsonReader reader = Json.createReader(input)) {
             json = reader.readObject();
         } catch (final JsonException ex) {
-            LOG.warn("Malformed JSON in {}: {}", metaPath, ex.getMessage());
+            LOG.warn("Malformed JSON in {}: {}", metaPath, ex.getMessage(), ex);
             return Stream.empty();
         } catch (final IOException ex) {
             throw new UncheckedIOException(ex);

@@ -573,7 +573,7 @@ final class CachedProxySlice implements Slice {
                 .eventCategory("web")
                 .eventAction("cache_read")
                 .eventOutcome("failure")
-                .field("error.message", throwable.getMessage())
+                .error(throwable)
                 .field("log.source", "application")
                 .log();
             return ResponseBuilder.notFound().build();
@@ -634,6 +634,7 @@ final class CachedProxySlice implements Slice {
                 .eventCategory("web")
                 .eventAction("cooldown_check")
                 .eventOutcome("failure")
+                .error(e)
                 .field("error.message", LogSanitizer.sanitizeMessage(e.getMessage()))
                 .field("log.source", "application")
                 .log();

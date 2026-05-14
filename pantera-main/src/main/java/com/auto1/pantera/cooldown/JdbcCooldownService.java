@@ -700,7 +700,7 @@ final class JdbcCooldownService implements CooldownService {
                     .eventOutcome("failure")
                     .field("package.name", request.artifact())
                     .field("package.version", request.version())
-                    .field("error.message", error.getMessage())
+                    .error(error)
                     .field("log.source", "application")
                     .log();
                 return Optional.empty();

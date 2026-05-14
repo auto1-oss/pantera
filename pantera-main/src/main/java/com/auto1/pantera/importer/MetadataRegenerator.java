@@ -860,7 +860,7 @@ public final class MetadataRegenerator {
                                             .eventCategory("web")
                                             .eventAction("maven_checksum_generate")
                                             .eventOutcome("failure")
-                                            .field("error.message", ex.getMessage())
+                                            .error(ex)
                                             .field("log.source", "application")
                                             .log();
                                         return null;

@@ -144,7 +144,7 @@ final class PypiMetadataBackfill {
                     } catch (final IOException ex) {
                         LOG.warn(
                             "Failed to write sidecar {}: {}",
-                            sidecar, ex.getMessage()
+                            sidecar, ex.getMessage(), ex
                         );
                     }
                 });
@@ -263,7 +263,7 @@ final class PypiMetadataBackfill {
         } catch (final IOException ex) {
             LOG.warn(
                 "Could not extract Requires-Python from {}: {}",
-                path.getFileName(), ex.getMessage()
+                path.getFileName(), ex.getMessage(), ex
             );
             return "";
         }
@@ -361,7 +361,7 @@ final class PypiMetadataBackfill {
         } catch (final IOException ex) {
             LOG.warn(
                 "Cannot read last-modified time of {}: {}",
-                path.getFileName(), ex.getMessage()
+                path.getFileName(), ex.getMessage(), ex
             );
             return Instant.now();
         }
