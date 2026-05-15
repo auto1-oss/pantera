@@ -835,7 +835,8 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 // resolve to "just published" and triggering an upstream
                 // HEAD via MavenHeadSource on the very next request.
                 this.enqueueEventForWriter(
-                    key, body.headers(), artifact.body().size().orElse(0L)
+                    key, body.headers(), artifact.body().size().orElse(0L),
+                    new com.auto1.pantera.http.headers.Login(inboundHeaders).getValue()
                 );
                 return ResponseBuilder.ok().body(artifact.body()).build();
             })
@@ -1071,14 +1072,15 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      * @param size           Artifact size in bytes (0 when unavailable).
      */
     private void enqueueEventForWriter(
-        final Key key, final Headers upstreamHeaders, final long size
+        final Key key, final Headers upstreamHeaders, final long size,
+        final String owner
     ) {
         if (this.localEvents.isEmpty()) {
             return;
         }
         try {
             final Optional<ProxyArtifactEvent> event = this.buildArtifactEvent(
-                key, upstreamHeaders, size, ArtifactEvent.DEF_OWNER
+                key, upstreamHeaders, size, owner
             );
             event.ifPresent(e -> {
                 if (!this.localEvents.get().offer(e)) {

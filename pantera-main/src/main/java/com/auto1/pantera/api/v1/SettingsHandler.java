@@ -406,6 +406,15 @@ public final class SettingsHandler {
             ).readObject();
             this.settingsDao.put(section, jobj, actor);
         }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
+            // T-S04 audit log: every settings mutation lands a row in
+            // audit_log so SOC2 review can answer "who changed cooldown
+            // duration on 2026-05-15 at 14:32 and to what". The value
+            // payload is preserved verbatim in the details column.
+            SettingsHandler.audit(
+                actor, "SETTINGS_SECTION_UPDATE", section,
+                java.util.Map.of("value", body.encode()),
+                err == null
+            );
             if (err != null) {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
             } else {
@@ -787,6 +796,16 @@ public final class SettingsHandler {
             this.settingsDao.put(key, jakarta, actor);
         }, HandlerExecutor.get())
             .whenComplete((ignored, err) -> {
+                // T-S04 audit log: per-key runtime tunable mutations
+                // are SOC2-significant (cooldown duration, http_client
+                // protocol, etc.). Land an audit_log row with the new
+                // value verbatim — a config-induced production change
+                // is traceable to the operator who made it.
+                SettingsHandler.audit(
+                    actor, "SETTINGS_RUNTIME_UPDATE", key,
+                    java.util.Map.of("value", body.getValue("value")),
+                    err == null
+                );
                 if (err != null) {
                     ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
                         err.getMessage());
@@ -826,9 +845,21 @@ public final class SettingsHandler {
                 "Database not configured");
             return;
         }
+        final String deleteActor = ctx.user() != null
+            ? ctx.user().principal().getString("sub", "unknown")
+            : "unknown";
         CompletableFuture.runAsync(() -> this.settingsDao.delete(key),
             HandlerExecutor.get())
             .whenComplete((ignored, err) -> {
+                // T-S04 audit log: reverting a runtime tunable back to
+                // the spec default is a deliberate operator action and
+                // SOC2-significant — it implicitly changes production
+                // behaviour even though no "value" is supplied.
+                SettingsHandler.audit(
+                    deleteActor, "SETTINGS_RUNTIME_DELETE", key,
+                    java.util.Map.of(),
+                    err == null
+                );
                 if (err != null) {
                     ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
                         err.getMessage());
@@ -836,6 +867,30 @@ public final class SettingsHandler {
                     ctx.response().setStatusCode(204).end();
                 }
             });
+    }
+
+    /**
+     * Write a SOC2-shaped audit row for a settings mutation. Same
+     * contract as the audit helpers in {@link CooldownHandler},
+     * {@link RepositoryHandler}, and {@link BulkAccessPolicyHandler}
+     * — actor + action + target + details JSON + success bit, plus
+     * the per-request {@code client.ip} pulled from MDC. Persistence
+     * failures are swallowed by {@code JdbcAuditService}'s contract so
+     * an audit-write hiccup never blocks the user's setting change.
+     */
+    private static void audit(final String actor,
+        final String action, final String target,
+        final java.util.Map<String, Object> details, final boolean success) {
+        final String clientIp = org.slf4j.MDC.get(
+            com.auto1.pantera.http.log.EcsMdc.CLIENT_IP
+        );
+        final com.auto1.pantera.audit.AuditEvent event =
+            new com.auto1.pantera.audit.AuditEvent(
+                java.time.Instant.now(), actor, action, target,
+                details, success, clientIp
+            );
+        com.auto1.pantera.audit.AuditServiceRegistry.instance()
+            .sharedService().record(event);
     }
 
     /**
