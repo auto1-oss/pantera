@@ -416,6 +416,10 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             this.cooldown,
             this.vertx.eventBus()
         ).register(router);
+        new BulkAccessPolicyHandler(
+            crs, this.security.policy(),
+            this.caches.filtersCache(), this.vertx.eventBus()
+        ).register(router);
         if (users != null) {
             // Wire the revocation blocklist + token DAO so that
             // disabling a user via the admin UI also immediately

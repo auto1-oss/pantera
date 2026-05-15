@@ -272,7 +272,7 @@ public final class RepositoryHandler {
     /**
      * PUT /api/v1/repositories/:name — create or update repository.
      * @param ctx Routing context
-     * @checkstyle ExecutableStatementCountCheck (70 lines)
+     * @checkstyle ExecutableStatementCountCheck (90 lines)
      */
     private void createOrUpdateRepository(final RoutingContext ctx) {
         final String name = ctx.pathParam("name");
@@ -312,6 +312,24 @@ public final class RepositoryHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
                 "Repository storage is required for non-group repositories");
             return;
+        }
+        if (repo.containsKey("anonymous_read")) {
+            final javax.json.JsonValue.ValueType vt = repo.get("anonymous_read").getValueType();
+            if (vt != javax.json.JsonValue.ValueType.TRUE
+                && vt != javax.json.JsonValue.ValueType.FALSE) {
+                ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                    "anonymous_read must be a boolean");
+                return;
+            }
+        }
+        if (repo.containsKey("anonymous_write")) {
+            final javax.json.JsonValue.ValueType vt = repo.get("anonymous_write").getValueType();
+            if (vt != javax.json.JsonValue.ValueType.TRUE
+                && vt != javax.json.JsonValue.ValueType.FALSE) {
+                ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                    "anonymous_write must be a boolean");
+                return;
+            }
         }
         final boolean exists = this.crs.exists(rname);
         final ApiRepositoryPermission needed;
