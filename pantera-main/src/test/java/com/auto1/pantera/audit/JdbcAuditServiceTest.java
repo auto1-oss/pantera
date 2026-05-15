@@ -72,6 +72,10 @@ final class JdbcAuditServiceTest {
             call.action, new IsEqual<>("COOLDOWN_UNBLOCK")
         );
         assertThat(
+            "reason: resource_type derived from action's first segment (V100 NOT NULL constraint)",
+            call.resourceType, new IsEqual<>("cooldown")
+        );
+        assertThat(
             "reason: target arg matches event",
             call.target, new IsEqual<>("maven-central")
         );
@@ -177,6 +181,42 @@ final class JdbcAuditServiceTest {
     }
 
     @Test
+    @DisplayName("resourceTypeFrom — derives V100 resource_type category from action verbs")
+    void resourceTypeDerivation() {
+        // Cover every action prefix used in production handlers
+        // (CooldownHandler, RepositoryHandler, NegativeCacheAdminResource,
+        // BulkAccessPolicyHandler, SettingsHandler).
+        assertThat(JdbcAuditService.resourceTypeFrom("COOLDOWN_UNBLOCK"),
+            new IsEqual<>("cooldown"));
+        assertThat(JdbcAuditService.resourceTypeFrom("COOLDOWN_UNBLOCK_ALL"),
+            new IsEqual<>("cooldown"));
+        assertThat(JdbcAuditService.resourceTypeFrom("REPO_CREATE"),
+            new IsEqual<>("repo"));
+        assertThat(JdbcAuditService.resourceTypeFrom("REPO_DELETE"),
+            new IsEqual<>("repo"));
+        assertThat(JdbcAuditService.resourceTypeFrom("REPOSITORY_ACCESS_POLICY_UPDATE"),
+            new IsEqual<>("repository"));
+        assertThat(JdbcAuditService.resourceTypeFrom("CACHE_CLEAR"),
+            new IsEqual<>("cache"));
+        assertThat(JdbcAuditService.resourceTypeFrom("SETTINGS_SECTION_UPDATE"),
+            new IsEqual<>("settings"));
+        assertThat(JdbcAuditService.resourceTypeFrom("SETTINGS_RUNTIME_UPDATE"),
+            new IsEqual<>("settings"));
+        assertThat(JdbcAuditService.resourceTypeFrom("SETTINGS_RUNTIME_DELETE"),
+            new IsEqual<>("settings"));
+        // Action without underscore → use the whole action lowercased.
+        assertThat(JdbcAuditService.resourceTypeFrom("BOOTSTRAP"),
+            new IsEqual<>("bootstrap"));
+        // Edge cases — should never break audit persistence.
+        assertThat(JdbcAuditService.resourceTypeFrom(null),
+            new IsEqual<>("system"));
+        assertThat(JdbcAuditService.resourceTypeFrom(""),
+            new IsEqual<>("system"));
+        assertThat(JdbcAuditService.resourceTypeFrom("_LEADING_UNDERSCORE"),
+            new IsEqual<>("system"));
+    }
+
+    @Test
     @DisplayName("Registry stores and retrieves an installed service")
     void registryStoresInstalledService() {
         final AuditServiceRegistry reg = AuditServiceRegistry.instance();
@@ -209,7 +249,8 @@ final class JdbcAuditServiceTest {
      * {@link PreparedStatement#executeUpdate} call.
      */
     private record CapturedCall(
-        Timestamp timestamp, String actor, String action, String target,
+        Timestamp timestamp, String actor, String action,
+        String resourceType, String target,
         String detailsJson, boolean success, String ipAddress
     ) {
     }
@@ -301,6 +342,7 @@ final class JdbcAuditServiceTest {
                 (Timestamp) this.args[1],
                 (String) this.args[2],
                 (String) this.args[3],
+                (String) this.args[4],
                 (String) this.args[5],
                 (String) this.args[6],
                 (Boolean) this.args[7],

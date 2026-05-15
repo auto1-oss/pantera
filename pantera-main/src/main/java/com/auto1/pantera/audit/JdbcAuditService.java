@@ -102,11 +102,16 @@ public final class JdbcAuditService implements AuditService {
             }
             stmt.setString(2, event.actor());
             stmt.setString(3, event.action());
-            // resource_type is a pre-existing column from V100. AuditEvent
-            // doesn't carry a separate resource-type concept — the action
-            // verb already encodes it (e.g. COOLDOWN_UNBLOCK, REPO_CREATE).
-            // Set to NULL; queries can filter on `action` instead.
-            stmt.setNull(4, Types.VARCHAR);
+            // resource_type is a pre-existing column from V100 with a
+            // NOT NULL constraint. AuditEvent doesn't carry a separate
+            // resource-type concept — the action verb encodes it as
+            // its first `_`-separated segment (COOLDOWN_UNBLOCK,
+            // REPO_CREATE, SETTINGS_SECTION_UPDATE, …). Derive the
+            // category from there so the existing
+            // idx_audit_log_resource (resource_type, resource_name)
+            // index stays useful for category-scoped queries while
+            // every row remains insertable.
+            stmt.setString(4, resourceTypeFrom(event.action()));
             stmt.setString(5, event.target());
             stmt.setString(6, renderJson(event.details()));
             stmt.setBoolean(7, event.success());
@@ -119,6 +124,36 @@ public final class JdbcAuditService implements AuditService {
         } catch (final SQLException ex) {
             throw new AuditPersistenceException(ex);
         }
+    }
+
+    /**
+     * Derive the {@code resource_type} category from an action verb.
+     * The convention is "&lt;CATEGORY&gt;_&lt;VERB&gt;" — for example,
+     * {@code COOLDOWN_UNBLOCK} → {@code "cooldown"},
+     * {@code REPOSITORY_ACCESS_POLICY_UPDATE} → {@code "repository"},
+     * {@code SETTINGS_SECTION_UPDATE} → {@code "settings"}. Lowercased
+     * so the V100 {@code idx_audit_log_resource} index has consistent
+     * keys. Falls back to {@code "system"} when the action is null,
+     * empty, or contains no underscore.
+     *
+     * <p>Length-capped at 50 chars to match the {@code VARCHAR(50)}
+     * column definition; truncates rather than rejecting so an
+     * unconventional caller never breaks audit persistence.
+     *
+     * @param action The audit action verb.
+     * @return Non-null lowercase category, max 50 chars.
+     */
+    static String resourceTypeFrom(final String action) {
+        if (action == null || action.isEmpty()) {
+            return "system";
+        }
+        final int sep = action.indexOf('_');
+        final String head = sep < 0 ? action : action.substring(0, sep);
+        if (head.isEmpty()) {
+            return "system";
+        }
+        final String lower = head.toLowerCase(java.util.Locale.ROOT);
+        return lower.length() <= 50 ? lower : lower.substring(0, 50);
     }
 
     /**
