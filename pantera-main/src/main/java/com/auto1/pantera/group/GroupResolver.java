@@ -134,12 +134,11 @@ public final class GroupResolver implements Slice {
     /**
      * Full constructor.
      *
-     * <p><b>Sequential-only fanout (v2.2.0).</b> Members are tried in declared
-     * order; the first 2xx wins; subsequent members are only consulted on 404
-     * from the previous one. There is no parallel mode — the legacy
-     * {@code MembersStrategy} enum and the {@code members_strategy} YAML key
-     * have been removed (the YAML key is still tolerated at parse time with a
-     * one-time WARN, see {@link com.auto1.pantera.RepositorySlices}).
+     * <p><b>Sequential-only fanout.</b> Members are tried in declared order;
+     * the first 2xx wins; subsequent members are only consulted on 404 from
+     * the previous one. There is no parallel mode. The YAML parser tolerates
+     * an unrecognised {@code members_strategy} key for forward-compat with
+     * pre-2.2.0 configs but the value is discarded silently.
      *
      * @param group Group repository name
      * @param members Flattened member slices with circuit breakers

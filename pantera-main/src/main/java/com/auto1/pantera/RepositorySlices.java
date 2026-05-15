@@ -900,7 +900,6 @@ public class RepositorySlices {
                 );
                 break;
             case "npm-group":
-                warnIfLegacyMembersStrategy(cfg);
                 final List<String> npmFlatMembers = flattenMembers(cfg.name());
                 final Slice npmGroupSlice = new GroupResolver(
                     this::slice, cfg.name(), npmFlatMembers, port, depth,
@@ -968,7 +967,6 @@ public class RepositorySlices {
                 break;
             case "file-group":
             case "php-group":
-                warnIfLegacyMembersStrategy(cfg);
                 final List<String> composerFlatMembers = flattenMembers(cfg.name());
                 final GroupResolver composerDelegate = new GroupResolver(
                     this::slice, cfg.name(), composerFlatMembers, port, depth,
@@ -1007,7 +1005,6 @@ public class RepositorySlices {
                 // metadata format as Maven, so it routes through the same
                 // slice — previously gradle-group fell into the generic
                 // GroupResolver case which can't merge metadata.
-                warnIfLegacyMembersStrategy(cfg);
                 final List<String> mavenFlatMembers = flattenMembers(cfg.name());
                 final GroupResolver mavenDelegate = new GroupResolver(
                     this::slice, cfg.name(), mavenFlatMembers, port, depth,
@@ -1046,7 +1043,6 @@ public class RepositorySlices {
             case "go-group":
             case "pypi-group":
             case "docker-group":
-                warnIfLegacyMembersStrategy(cfg);
                 final List<String> genericFlatMembers = flattenMembers(cfg.name());
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
@@ -1390,47 +1386,6 @@ public class RepositorySlices {
                     .orElse(List.of())
             );
         return flattener.flatten(groupName);
-    }
-
-    /**
-     * Names of group repos that have already had their legacy
-     * {@code members_strategy} YAML key WARN'd about, so the WARN fires at
-     * most once per (process-lifetime, group). Sequential is the only
-     * fanout mode in v2.2.0 — the YAML key is preserved for forward-compat
-     * config tolerance only.
-     */
-    private static final java.util.Set<String> WARNED_LEGACY_STRATEGY_REPOS =
-        java.util.concurrent.ConcurrentHashMap.newKeySet();
-
-    /**
-     * Tolerate the legacy {@code members_strategy} YAML key (removed in
-     * v2.2.0). If present and non-blank, log a one-time WARN per group at
-     * boot identifying the deprecated key; the key is otherwise ignored —
-     * group fanout is sequential everywhere now (Nexus / JFrog style).
-     *
-     * @param cfg Group repository config
-     */
-    private static void warnIfLegacyMembersStrategy(final RepoConfig cfg) {
-        final String raw = cfg.settings()
-            .map(yaml -> yaml.string("members_strategy"))
-            .orElse(null);
-        if (raw == null || raw.isBlank()) {
-            return;
-        }
-        if (WARNED_LEGACY_STRATEGY_REPOS.add(cfg.name())) {
-            EcsLogger.warn("com.auto1.pantera")
-                .message("Group '" + cfg.name()
-                    + "' YAML still declares members_strategy='" + raw.trim()
-                    + "'. The members_strategy key is removed in v2.2.0; "
-                    + "all group fanout is now sequential (members tried in "
-                    + "declared order, first 2xx wins). The key is ignored. "
-                    + "See docs/admin-guide/group-member-ordering.md.")
-                .eventCategory("configuration")
-                .eventAction("group_legacy_members_strategy")
-                .field("repository.name", cfg.name())
-                .field("log.source", "application")
-                .log();
-        }
     }
 
     /**

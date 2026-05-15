@@ -20,10 +20,11 @@ latency improvement (a sequential walk usually hits the first member
 anyway, because group ordering by 2.1.x convention had hosted/primary
 first). Parallel is removed in v2.2.0.
 
-The `members_strategy` YAML key is preserved for forward-compat
-tolerance: if it's still present and non-blank, pantera logs a one-time
-WARN per group at boot and ignores the value. Remove the key or update
-your config-management to stop emitting it.
+The `members_strategy` YAML key is silently ignored — Pantera's YAML
+parser tolerates unrecognised keys, so old configs do not break on
+upgrade, but the value has no effect (sequential is the only mode).
+Remove the key from your config-management as part of the 2.2.0
+migration; it is purely noise at this point.
 
 ## Heuristics
 
