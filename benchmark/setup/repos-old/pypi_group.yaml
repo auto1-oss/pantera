@@ -1,5 +1,0 @@
-repo:
-  type: pypi-group
-  members:
-    - pypi
-    - pypi_proxy

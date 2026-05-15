@@ -34,10 +34,7 @@ agents/
 
 # Git worktrees
 .worktrees/
-/benchmark/fixtures
-/benchmark/results
 /docs/plans
-/docs/superpowers
 *.csv
 *.png
 !docs/pantera-banner.png
@@ -45,13 +42,9 @@ agents/
 /.superpowers
 /pantera-ui/mockups
 pantera-backfill/dependency-reduced-pom.xml
-/benchmark/isolated/results
 pantera-main/docker-compose/pantera/artifacts/npm/package-lock.json
 pantera-main/docker-compose/pantera/artifacts/php/composer.lock
 /pantera-main/docker-compose/pantera/security
-/pantera-main/docker-compose/pantera/security
-/benchmark/setup/repos-old/.system
-/benchmark/setup/repos-old/.tmp
 /pantera-backfill
 pantera-main/docker-compose/pantera/keys/
 logs/.analysis/
@@ -65,6 +58,13 @@ performance/pantera-config.yml
 performance/secrets/*.pem
 performance/fixtures/uploads/*.tgz
 
-# Logging audit workspace (transient)
+# Working / transient analysis + audit directories — never committed.
+# These hold model deliverables, scratch findings, internal RCA notes,
+# perf-bench harness outputs, and design specs that are not part of the
+# shipped product. Keep them on disk locally, but out of the repo so the
+# tree stays tight for users / admins / devs.
+analysis/
 audit/
-fields.csv
+benchmark/
+docs/analysis/
+docs/superpowers/
