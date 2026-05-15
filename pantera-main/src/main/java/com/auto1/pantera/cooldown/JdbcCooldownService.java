@@ -765,13 +765,21 @@ final class JdbcCooldownService implements CooldownService {
                     .log();
                 
                 if (rec.status() == BlockStatus.ACTIVE) {
-                    // Check if block has expired
+                    // DYNAMIC re-evaluation against current
+                    // minimumAllowedAge — see
+                    // checkExistingBlockWithTimestamp for the rationale.
+                    // When release_date is unknown, fall back to the
+                    // stored blocked_until.
                     final Instant now = Instant.now();
-                    if (rec.blockedUntil().isBefore(now)) {
+                    final Instant effectiveBlockedUntil = rec.releaseDate()
+                        .map(rd -> rd.plus(this.effectiveDuration(request)))
+                        .orElse(rec.blockedUntil());
+                    if (effectiveBlockedUntil.isBefore(now)) {
                         EcsLogger.info("com.auto1.pantera.cooldown")
                             .message(String.format(
-                                "Block has EXPIRED - allowing artifact (blockedUntil=%s)",
-                                rec.blockedUntil()))
+                                "Block has EXPIRED (effective blockedUntil=%s by current policy; "
+                                    + "stored=%s) — allowing artifact",
+                                effectiveBlockedUntil, rec.blockedUntil()))
                             .eventCategory("database")
                             .eventAction("block_expired")
                             .field("package.name", request.artifact())
@@ -830,12 +838,27 @@ final class JdbcCooldownService implements CooldownService {
         if (existing.isPresent()) {
             final DbBlockRecord record = existing.get();
             if (record.status() == BlockStatus.ACTIVE) {
-                if (record.blockedUntil().isAfter(now)) {
-                    // Blocked with expiration timestamp
-                    return Optional.of(new BlockCacheEntry(true, record.blockedUntil()));
+                // DYNAMIC re-evaluation against the CURRENT
+                // minimumAllowedAge config — admin lowering the cooldown
+                // duration from (say) 30 d to 15 d should release blocks
+                // that no longer qualify under the new policy on the very
+                // next evaluation, not wait out the stale 30 d window
+                // baked into `blocked_until` at creation time.
+                //
+                // Re-evaluation requires release_date. When release_date
+                // is unknown (older block rows that pre-date Track-5
+                // Phase-1B) we fall back to the stored `blocked_until`
+                // — same behaviour as before this change.
+                final Instant effectiveBlockedUntil = record.releaseDate()
+                    .map(rd -> rd.plus(this.effectiveDuration(request)))
+                    .orElse(record.blockedUntil());
+                if (effectiveBlockedUntil.isAfter(now)) {
+                    return Optional.of(new BlockCacheEntry(true, effectiveBlockedUntil));
                 }
+                // Current policy says this block is no longer warranted
+                // (either time elapsed or duration shortened by config).
+                // Archive the row and treat as allowed.
                 this.expire(record, now);
-                // Expired block = allowed
                 return Optional.of(new BlockCacheEntry(false, null));
             }
             // Inactive block = allowed
