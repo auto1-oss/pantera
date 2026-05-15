@@ -203,6 +203,12 @@ function cancelCreateMember() {
 const cooldownEnabled = ref(false)
 const cooldownDuration = ref('P30D')
 
+// Anonymous access (per-repo flags — exposed as an "Access" card below).
+// Defaults are filled in from the repo type during decomposeConfig() when the
+// server-side payload doesn't carry explicit values.
+const anonymousRead = ref(false)
+const anonymousWrite = ref(false)
+
 // Computed type flags
 const isProxy = computed(() => repoType.value.endsWith('-proxy'))
 const isGroup = computed(() => repoType.value.endsWith('-group'))
@@ -278,6 +284,15 @@ function decomposeConfig(raw: RepoConfigEnvelope) {
   const repo = raw.repo
 
   repoType.value = repo.type ?? 'file'
+
+  // Anonymous access defaults: proxy + group repos default-read-open (they
+  // mirror public upstreams); hosted (no remotes, no -group suffix) is locked
+  // down. Writes are always default-off — uploads must be authenticated unless
+  // an operator explicitly opens them up.
+  const isProxyShape = (repo.remotes?.length ?? 0) > 0
+    || repoType.value.endsWith('-group')
+  anonymousRead.value  = repo.anonymous_read  ?? isProxyShape
+  anonymousWrite.value = repo.anonymous_write ?? false
 
   // Storage
   if (typeof repo.storage === 'string') {
@@ -395,6 +410,14 @@ function buildConfig(): RepoConfigEnvelope {
     repo.cooldown = { duration: cooldownDuration.value }
   }
 
+  // Always emit both anonymous-access fields explicitly. If we omitted them
+  // and only sent the type, a later type change on the server side would flip
+  // the effective default policy (e.g. switching from -proxy to hosted would
+  // silently close down anonymous reads). Emitting the current resolved
+  // values makes the operator's intent persistent.
+  repo.anonymous_read  = anonymousRead.value
+  repo.anonymous_write = anonymousWrite.value
+
   return { repo }
 }
 
@@ -410,11 +433,21 @@ watch(
     repoType, storageType, storagePath, selectedS3Alias,
     s3Bucket, s3Region, s3Endpoint,
     cooldownEnabled, cooldownDuration,
+    anonymousRead, anonymousWrite,
   ],
   () => { emitConfig() },
 )
 watch(remotes, () => { emitConfig() }, { deep: true })
 watch(groupMembers, () => { emitConfig() }, { deep: true })
+
+// Exposed so tests and parent views can read the resolved per-repo policy
+// flags without round-tripping through emitted config payloads.
+defineExpose({
+  cooldownEnabled,
+  cooldownDuration,
+  anonymousRead,
+  anonymousWrite,
+})
 </script>
 
 <template>
@@ -786,6 +819,33 @@ watch(groupMembers, () => { emitConfig() }, { deep: true })
           <InputText v-model="cooldownDuration" placeholder="P30D" class="w-48" />
           <p class="text-xs text-gray-400 mt-1">e.g. P30D = 30 days, P7D = 7 days, PT12H = 12 hours</p>
         </div>
+      </div>
+    </template>
+  </Card>
+
+  <!-- Access (anonymous reads / writes — applies to every repo type) -->
+  <Card class="shadow-sm">
+    <template #title>Access</template>
+    <template #content>
+      <div class="space-y-3">
+        <div class="flex items-center gap-2">
+          <Checkbox v-model="anonymousRead" :binary="true" input-id="anonRead" />
+          <label for="anonRead" class="text-sm cursor-pointer">
+            Allow anonymous reads (no Authorization header)
+          </label>
+        </div>
+        <div class="flex items-center gap-2">
+          <Checkbox v-model="anonymousWrite" :binary="true" input-id="anonWrite" />
+          <label for="anonWrite" class="text-sm cursor-pointer">
+            Allow anonymous writes (uploads, deletes, …)
+          </label>
+        </div>
+        <p class="text-xs text-gray-400">
+          When disabled, unauthenticated requests get
+          <code>401 Unauthorized</code> with
+          <code>WWW-Authenticate: Basic realm=&quot;pantera&quot;</code>
+          so package managers (mvn, npm, pip, docker) prompt for credentials.
+        </p>
       </div>
     </template>
   </Card>
