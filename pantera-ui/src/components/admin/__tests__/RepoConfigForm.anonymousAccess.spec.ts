@@ -49,7 +49,7 @@ function lastEmittedRepo(wrapper: ReturnType<typeof mountForm>) {
 describe('RepoConfigForm — anonymous-access defaults', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
-  it('defaults a proxy repo to anonymous_read=true, anonymous_write=false', async () => {
+  it('defaults a proxy repo to both flags off (deny-by-default)', async () => {
     const wrapper = mountForm({
       repo: {
         type: 'maven-proxy',
@@ -61,11 +61,11 @@ describe('RepoConfigForm — anonymous-access defaults', () => {
     const exposed = wrapper.vm as unknown as {
       anonymousRead: boolean; anonymousWrite: boolean
     }
-    expect(exposed.anonymousRead).toBe(true)
+    expect(exposed.anonymousRead).toBe(false)
     expect(exposed.anonymousWrite).toBe(false)
 
     const repo = lastEmittedRepo(wrapper)
-    expect(repo.anonymous_read).toBe(true)
+    expect(repo.anonymous_read).toBe(false)
     expect(repo.anonymous_write).toBe(false)
   })
 
@@ -88,22 +88,22 @@ describe('RepoConfigForm — anonymous-access defaults', () => {
     expect(repo.anonymous_write).toBe(false)
   })
 
-  it('honours an explicit anonymous_read=false on a proxy (overrides the default)', async () => {
+  it('honours an explicit anonymous_read=true on a proxy (admin opt-in)', async () => {
     const wrapper = mountForm({
       repo: {
         type: 'maven-proxy',
         storage: { type: 'fs', path: '/var/pantera/data' },
         remotes: [{ url: 'https://repo1.maven.org/maven2' }],
-        anonymous_read: false,
+        anonymous_read: true,
         anonymous_write: false,
       },
     })
     await flushPromises()
     const exposed = wrapper.vm as unknown as { anonymousRead: boolean }
-    expect(exposed.anonymousRead).toBe(false)
+    expect(exposed.anonymousRead).toBe(true)
 
     const repo = lastEmittedRepo(wrapper)
-    expect(repo.anonymous_read).toBe(false)
+    expect(repo.anonymous_read).toBe(true)
   })
 
   it('emits the toggled value in the next update:config payload', async () => {
@@ -115,14 +115,14 @@ describe('RepoConfigForm — anonymous-access defaults', () => {
       },
     })
     await flushPromises()
-    // Default is true for proxy — flip via the exposed ref (simulating the
-    // user un-checking the "Allow anonymous reads" checkbox).
+    // Default is false for every repo — flip on via the exposed ref
+    // (simulating the operator checking the "Allow anonymous reads" box).
     const exposed = wrapper.vm as unknown as { anonymousRead: boolean }
-    exposed.anonymousRead = false
+    exposed.anonymousRead = true
     await flushPromises()
 
     const repo = lastEmittedRepo(wrapper)
-    expect(repo.anonymous_read).toBe(false)
+    expect(repo.anonymous_read).toBe(true)
     expect(repo.anonymous_write).toBe(false)
   })
 })

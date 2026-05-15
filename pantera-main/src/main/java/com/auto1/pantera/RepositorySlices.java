@@ -1232,29 +1232,40 @@ public class RepositorySlices {
     }
 
     /**
-     * Resolve the per-repo anonymous-access policy from YAML, falling
-     * back to type-specific defaults. {@code anonymousRead} defaults
-     * to {@code true} when the repo has a {@code remotes} section
-     * (i.e. it's a proxy) and {@code false} otherwise.
-     * {@code anonymousWrite} defaults to {@code false} unconditionally.
+     * Resolve the per-repo anonymous-access policy from YAML. BOTH
+     * {@code anonymous_read} and {@code anonymous_write} default to
+     * {@code false} (deny-by-default). An admin must explicitly opt in
+     * via the per-repo YAML to allow unauthenticated reads (typical for
+     * curlable OSS-mirror proxy repos) or unauthenticated writes
+     * (rare; usually wrong).
      *
-     * <p>YAML overrides:</p>
+     * <p>This is the more secure default — it matches the deny-by-default
+     * stance that Artifactory's hosted-default and Nexus's
+     * {@code anonymous} role both use. Operators who want an open
+     * curlable proxy mirror set the flag explicitly:</p>
+     *
      * <pre>{@code
      * repo:
-     *   anonymous_read: false
-     *   anonymous_write: false
+     *   type: maven-proxy
+     *   anonymous_read: true     # allow curl / mvn without credentials
+     *   anonymous_write: false   # uploads still require auth (default)
      * }</pre>
+     *
+     * <p><b>Breaking change vs prior 2.2.0 behaviour</b>: proxy repos
+     * used to default {@code anonymous_read} to {@code true} when no
+     * value was set. Existing proxy YAMLs that relied on that implicit
+     * default now require an explicit
+     * {@code anonymous_read: true} line. The UI's "Access" card on the
+     * per-repo form makes this discoverable; the bulk-policy admin
+     * action can roll the flag across many repos at once.</p>
      *
      * @param cfg Repo config.
      * @return Effective anonymous-access policy.
      */
     private static AnonymousAccessSlice.Policy anonymousPolicy(final RepoConfig cfg) {
-        final boolean isProxy = !cfg.remotes().isEmpty();
         final String readYaml = cfg.repoYaml().string("anonymous_read");
         final String writeYaml = cfg.repoYaml().string("anonymous_write");
-        final boolean read = readYaml == null
-            ? isProxy
-            : Boolean.parseBoolean(readYaml);
+        final boolean read = readYaml != null && Boolean.parseBoolean(readYaml);
         final boolean write = writeYaml != null && Boolean.parseBoolean(writeYaml);
         return new AnonymousAccessSlice.Policy(read, write);
     }

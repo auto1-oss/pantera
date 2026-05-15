@@ -285,13 +285,11 @@ function decomposeConfig(raw: RepoConfigEnvelope) {
 
   repoType.value = repo.type ?? 'file'
 
-  // Anonymous access defaults: proxy + group repos default-read-open (they
-  // mirror public upstreams); hosted (no remotes, no -group suffix) is locked
-  // down. Writes are always default-off — uploads must be authenticated unless
-  // an operator explicitly opens them up.
-  const isProxyShape = (repo.remotes?.length ?? 0) > 0
-    || repoType.value.endsWith('-group')
-  anonymousRead.value  = repo.anonymous_read  ?? isProxyShape
+  // Anonymous access is deny-by-default for every repo type. An admin
+  // must explicitly enable anonymous reads (typical for curlable
+  // public-mirror proxies) or anonymous writes (rare; usually wrong).
+  // Matches the backend RepositorySlices.anonymousPolicy contract.
+  anonymousRead.value  = repo.anonymous_read  ?? false
   anonymousWrite.value = repo.anonymous_write ?? false
 
   // Storage

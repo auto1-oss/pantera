@@ -75,9 +75,15 @@ public final class AnonymousAccessSlice implements Slice {
     public record Policy(boolean anonymousRead, boolean anonymousWrite) {
 
         /**
-         * Default policy for hosted (local) repositories. Hosted repos
-         * are usually internal release/snapshot caches, so anonymous
-         * access is off by default.
+         * Locked-down policy — both anonymous reads and writes denied.
+         * This is the system-wide default applied by
+         * {@code RepositorySlices.anonymousPolicy} when neither YAML
+         * key is set; an admin must explicitly opt in to either flag
+         * via {@code anonymous_read: true} / {@code anonymous_write: true}.
+         *
+         * <p>Historically called {@code hostedDefault} — kept under
+         * that name for source compatibility, but it now describes the
+         * default for <em>every</em> repo type, not just hosted.
          *
          * @return Policy with both anon read + write disabled.
          */
@@ -86,10 +92,15 @@ public final class AnonymousAccessSlice implements Slice {
         }
 
         /**
-         * Default policy for proxy repositories. Proxies serve
-         * upstream OSS artefacts; anonymous READ is on by default
-         * (curlable maven/npm clients work out of the box), anonymous
-         * WRITE is off (uploads always require auth).
+         * Open-read-locked-write policy — typical opt-in shape for a
+         * public OSS-mirror proxy where {@code mvn} / {@code npm} /
+         * {@code curl} should work without credentials but uploads
+         * are reserved for authenticated callers.
+         *
+         * <p>This is NOT the production default for proxy repos — the
+         * production default is {@link #hostedDefault()} (deny-by-
+         * default). An admin opts in to this policy by setting
+         * {@code anonymous_read: true} in the per-repo YAML.
          *
          * @return Policy with anon read enabled, anon write disabled.
          */
