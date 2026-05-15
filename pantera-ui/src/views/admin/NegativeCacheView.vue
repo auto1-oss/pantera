@@ -227,7 +227,7 @@ onMounted(() => {
                 <InputText v-model="filterName" placeholder="Artifact name..." class="w-full" />
                 <InputText v-model="filterVersion" placeholder="Version (empty for metadata)" class="w-full" />
               </div>
-              <DataTable :value="entries" :loading="entriesLoading" stripedRows>
+              <DataTable :value="entries" :loading="entriesLoading" striped-rows>
                 <Column header="Scope">
                   <template #body="{ data }">{{ data.key.scope }}</template>
                 </Column>
@@ -259,7 +259,7 @@ onMounted(() => {
               <Paginator
                 v-if="entriesTotal > entriesSize"
                 :rows="entriesSize"
-                :totalRecords="entriesTotal"
+                :total-records="entriesTotal"
                 :first="entriesPage * entriesSize"
                 @page="(e: any) => { entriesPage = e.page; entriesSize = e.rows; loadEntries() }"
               />

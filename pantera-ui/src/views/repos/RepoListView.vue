@@ -83,8 +83,8 @@ onMounted(fetchRepos)
         <Select
           v-model="typeFilter"
           :options="REPO_TYPE_FILTERS"
-          optionLabel="label"
-          optionValue="value"
+          option-label="label"
+          option-value="value"
           placeholder="All Types"
           class="w-44"
           @change="onTypeChange"
@@ -130,10 +130,10 @@ onMounted(fetchRepos)
       <Paginator
         v-if="total > size"
         :rows="size"
-        :totalRecords="total"
+        :total-records="total"
         :first="page * size"
+        :rows-per-page-options="[10, 20, 50]"
         @page="onPageChange"
-        :rowsPerPageOptions="[10, 20, 50]"
       />
     </div>
   </AppLayout>

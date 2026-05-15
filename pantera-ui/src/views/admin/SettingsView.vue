@@ -666,15 +666,15 @@ async function saveExternalLinks() {
                 >
                   <Tag :value="rt.name" class="min-w-[120px]" />
                   <InputSwitch
-                    :modelValue="rt.enabled"
-                    @update:modelValue="toggleRepoType(rt.name)"
+                    :model-value="rt.enabled"
+                    @update:model-value="toggleRepoType(rt.name)"
                   />
                   <span class="text-xs text-gray-500">{{ rt.enabled ? 'Enabled' : 'Disabled' }}</span>
                   <InputText
-                    :modelValue="rt.minimum_allowed_age"
+                    :model-value="rt.minimum_allowed_age"
                     class="w-24 text-sm"
                     placeholder="7d"
-                    @update:modelValue="(v: string) => updateRepoTypeAge(rt.name, v)"
+                    @update:model-value="(v: string) => updateRepoTypeAge(rt.name, v)"
                   />
                   <Button
                     icon="pi pi-trash"
@@ -689,11 +689,11 @@ async function saveExternalLinks() {
                 <AutoComplete
                   v-model="newRepoType"
                   :suggestions="proxyTypeSuggestions"
-                  @complete="searchProxyTypes"
-                  :completeOnFocus="true"
+                  :complete-on-focus="true"
                   class="w-56 text-sm"
-                  inputClass="w-full"
+                  input-class="w-full"
                   placeholder="Select proxy type..."
+                  @complete="searchProxyTypes"
                   @keyup.enter="addRepoType"
                 />
                 <Button
@@ -796,8 +796,8 @@ async function saveExternalLinks() {
                 :id="`field-${key}`"
                 v-model="runtime.edited[key]"
                 :options="PROTOCOL_OPTIONS"
-                optionLabel="label"
-                optionValue="value"
+                option-label="label"
+                option-value="value"
                 class="w-full max-w-xs"
                 :data-testid="`runtime-input-${key}`"
               />

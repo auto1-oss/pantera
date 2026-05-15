@@ -425,10 +425,10 @@ onMounted(() => {
           <DataTable
             :value="blocked"
             :loading="loading"
-            stripedRows
+            striped-rows
             :lazy="true"
-            :sortField="sortField ?? undefined"
-            :sortOrder="sortOrder"
+            :sort-field="sortField ?? undefined"
+            :sort-order="sortOrder"
             @sort="onSort"
           >
             <Column field="package_name" header="Package" sortable>
@@ -484,11 +484,11 @@ onMounted(() => {
             >
               <template #body="{ data }">
                 <Button
+                  v-tooltip="'Unblock'"
                   icon="pi pi-unlock"
                   text
                   size="small"
                   severity="danger"
-                  v-tooltip="'Unblock'"
                   @click="handleUnblock(data)"
                 />
               </template>
@@ -524,7 +524,7 @@ onMounted(() => {
           <Paginator
             v-if="blockedTotal > blockedSize"
             :rows="blockedSize"
-            :totalRecords="blockedTotal"
+            :total-records="blockedTotal"
             :first="blockedPage * blockedSize"
             @page="
               (e: any) => {

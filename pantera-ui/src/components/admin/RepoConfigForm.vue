@@ -461,8 +461,8 @@ defineExpose({
           <Select
             v-model="repoType"
             :options="repoTypes"
-            optionLabel="label"
-            optionValue="value"
+            option-label="label"
+            option-value="value"
             placeholder="Select type"
             class="w-full"
           />
@@ -642,14 +642,14 @@ defineExpose({
           <AutoComplete
             v-model="groupMembers[idx]"
             :suggestions="filteredRepos"
-            optionLabel="name"
+            option-label="name"
             field="name"
-            @complete="searchRepos"
-            @item-select="(e: any) => { groupMembers[idx] = e.value.name }"
             placeholder="Search repos..."
             class="flex-1"
             :dropdown="true"
-            forceSelection
+            force-selection
+            @complete="searchRepos"
+            @item-select="(e: any) => { groupMembers[idx] = e.value.name }"
           >
             <template #option="{ option }">
               <div class="flex items-center gap-2">
@@ -723,8 +723,8 @@ defineExpose({
             <Select
               v-model="newMemberType"
               :options="compatibleTypes(repoType).map(t => ({ label: t, value: t }))"
-              optionLabel="label"
-              optionValue="value"
+              option-label="label"
+              option-value="value"
               placeholder="Select type"
               class="w-full"
             />
@@ -811,7 +811,7 @@ defineExpose({
     <template #content>
       <div class="space-y-3">
         <div class="flex items-center gap-2">
-          <Checkbox v-model="cooldownEnabled" :binary="true" inputId="cdEnabled" />
+          <Checkbox v-model="cooldownEnabled" :binary="true" input-id="cdEnabled" />
           <label for="cdEnabled" class="text-sm cursor-pointer">Enable cooldown period</label>
         </div>
         <div v-if="cooldownEnabled">

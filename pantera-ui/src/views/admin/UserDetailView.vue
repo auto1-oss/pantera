@@ -123,8 +123,10 @@ async function toggleEnabled() {
         <template #title>
           <div class="flex items-center gap-3">
             {{ user.name }}
-            <Tag :value="user.enabled !== false ? 'Active' : 'Disabled'"
-              :severity="user.enabled !== false ? 'success' : 'danger'" />
+            <Tag
+              :value="user.enabled !== false ? 'Active' : 'Disabled'"
+              :severity="user.enabled !== false ? 'success' : 'danger'"
+            />
           </div>
         </template>
         <template #content>
@@ -134,9 +136,11 @@ async function toggleEnabled() {
           </div>
           <div class="flex gap-2 mt-6">
             <Button label="Reset Password" icon="pi pi-key" severity="secondary" @click="pwdVisible = true" />
-            <Button :label="user.enabled !== false ? 'Disable' : 'Enable'"
+            <Button
+              :label="user.enabled !== false ? 'Disable' : 'Enable'"
               :icon="user.enabled !== false ? 'pi pi-ban' : 'pi pi-check-circle'"
-              :severity="user.enabled !== false ? 'warn' : 'success'" @click="toggleEnabled" />
+              :severity="user.enabled !== false ? 'warn' : 'success'" @click="toggleEnabled"
+            />
           </div>
         </template>
       </Card>
@@ -177,7 +181,7 @@ async function toggleEnabled() {
             The user should change this password on their next sign-in.
           </p>
           <PasswordComplexityForm
-            v-model:oldPassword="unusedOldPassword"
+            v-model:old-password="unusedOldPassword"
             v-model:password="newPassword"
             :username="user?.name ?? ''"
             :disabled="pwdSubmitting"

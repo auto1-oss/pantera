@@ -182,7 +182,7 @@ onMounted(load)
         <Button v-if="auth.hasAction('api_alias_permissions', 'create')" label="Add Storage" icon="pi pi-plus" @click="openCreate" />
       </div>
 
-      <DataTable :value="aliases" :loading="loading" stripedRows class="shadow-sm">
+      <DataTable :value="aliases" :loading="loading" striped-rows class="shadow-sm">
         <template #empty>
           <div class="text-center py-8 text-gray-500">
             <i class="pi pi-database text-4xl mb-3 block" />
@@ -230,7 +230,7 @@ onMounted(load)
 
           <div>
             <label class="block text-sm font-medium mb-1">Type</label>
-            <Select v-model="formType" :options="storageTypes" optionLabel="label" optionValue="value" class="w-full" />
+            <Select v-model="formType" :options="storageTypes" option-label="label" option-value="value" class="w-full" />
           </div>
 
           <!-- File System fields -->
@@ -262,7 +262,7 @@ onMounted(load)
 
             <div>
               <label class="block text-sm font-medium mb-1">Credentials</label>
-              <Select v-model="s3CredType" :options="credentialTypes" optionLabel="label" optionValue="value" class="w-full" />
+              <Select v-model="s3CredType" :options="credentialTypes" option-label="label" option-value="value" class="w-full" />
             </div>
 
             <template v-if="s3CredType === 'basic'">

@@ -288,13 +288,15 @@ const SORT_OPTIONS = [
               <div class="font-semibold text-gray-900 dark:text-white mb-2">Search syntax</div>
               <table class="w-full text-xs">
                 <tbody>
-                  <tr v-for="row in [
-                    ['pydantic', 'Full-text search'],
-                    ['name:pydantic', 'Filter by package name'],
-                    ['version:2.12', 'Filter by version'],
-                    ['repo:pypi-proxy', 'Filter by repository'],
-                    ['type:maven', 'Filter by repo type'],
-                  ]" :key="row[0]" class="border-b border-gray-100 dark:border-gray-800 last:border-0">
+                  <tr
+                    v-for="row in [
+                      ['pydantic', 'Full-text search'],
+                      ['name:pydantic', 'Filter by package name'],
+                      ['version:2.12', 'Filter by version'],
+                      ['repo:pypi-proxy', 'Filter by repository'],
+                      ['type:maven', 'Filter by repo type'],
+                    ]" :key="row[0]" class="border-b border-gray-100 dark:border-gray-800 last:border-0"
+                  >
                     <td class="py-1.5 pr-3 font-mono text-orange-500 whitespace-nowrap">{{ row[0] }}</td>
                     <td class="py-1.5 text-gray-500">{{ row[1] }}</td>
                   </tr>
@@ -441,7 +443,7 @@ const SORT_OPTIONS = [
             </div>
 
             <!-- Browse -->
-            <router-link :to="browseUrl(item)" custom v-slot="{ navigate }">
+            <router-link v-slot="{ navigate }" :to="browseUrl(item)" custom>
               <Button
                 icon="pi pi-folder-open"
                 label="Browse"
@@ -458,10 +460,10 @@ const SORT_OPTIONS = [
           <Paginator
             v-if="total > size"
             :rows="size"
-            :totalRecords="total"
+            :total-records="total"
             :first="page * size"
+            :rows-per-page-options="[10, 20, 50]"
             @page="onPageChange"
-            :rowsPerPageOptions="[10, 20, 50]"
           />
         </div>
       </div>

@@ -40,7 +40,7 @@ onMounted(async () => {
       'registration_not_supported'
     ])
     const code = known.has(idpError) ? idpError : 'other'
-    // eslint-disable-next-line no-console
+     
     console.warn('[auth] IdP returned error in callback', { code })
     phase.value = 'error'
     errorMsg.value = 'Sign-in was cancelled or rejected by the identity provider.'

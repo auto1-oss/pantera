@@ -417,10 +417,10 @@ onMounted(load)
               </div>
             </div>
             <InputSwitch
-              :modelValue="p.enabled"
+              :model-value="p.enabled"
               :disabled="isProtected(p)"
               :title="isProtected(p) ? 'Protected providers cannot be disabled' : ''"
-              @update:modelValue="(v: boolean) => handleToggle(p, v)"
+              @update:model-value="(v: boolean) => handleToggle(p, v)"
             />
             <Button
               v-if="fieldsFor(p).length > 0"
@@ -560,8 +560,8 @@ onMounted(load)
             <Select
               v-model="addType"
               :options="CREATABLE_SCHEMAS"
-              optionLabel="label"
-              optionValue="type"
+              option-label="label"
+              option-value="type"
               class="w-full"
               @change="onAddTypeChange"
             />

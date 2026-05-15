@@ -153,18 +153,18 @@ onMounted(load)
       </div>
 
       <DataTable
+        v-model:selection="selected"
         :value="repos"
         :loading="loading"
-        v-model:selection="selected"
-        :selectAll="selectAll"
+        :select-all="selectAll"
+        data-key="."
+        striped-rows
+        class="shadow-sm"
         @select-all-change="onSelectAllChange"
         @row-select="onRowSelection"
         @row-unselect="onRowSelection"
-        dataKey="."
-        stripedRows
-        class="shadow-sm"
       >
-        <Column v-if="canUpdate" selectionMode="multiple" headerStyle="width: 3rem" />
+        <Column v-if="canUpdate" selection-mode="multiple" header-style="width: 3rem" />
         <Column header="Name" sortable>
           <template #body="{ data }">
             <span class="font-medium">{{ data }}</span>
@@ -181,8 +181,10 @@ onMounted(load)
         </Column>
       </DataTable>
 
-      <Paginator v-if="total > size" :rows="size" :totalRecords="total" :first="page * size"
-        @page="(e: any) => { page = e.page; size = e.rows; load() }" :rowsPerPageOptions="[10, 20, 50]" />
+      <Paginator
+        v-if="total > size" :rows="size" :total-records="total" :first="page * size"
+        :rows-per-page-options="[10, 20, 50]" @page="(e: any) => { page = e.page; size = e.rows; load() }"
+      />
 
       <!-- Delete Confirmation -->
       <Dialog v-model:visible="deleteVisible" header="Confirm Delete" modal class="w-96">

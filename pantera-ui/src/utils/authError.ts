@@ -98,6 +98,6 @@ function logDetail(tag: string, err: unknown): void {
       detail.code = candidate.code
     }
   }
-  // eslint-disable-next-line no-console
+   
   console.warn(`[auth] ${tag} error`, detail)
 }
