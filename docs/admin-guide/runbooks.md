@@ -76,6 +76,21 @@ This means clients that previously saw a synthesized `502` may now see `503`, `5
 
 ---
 
+## v2.2.0 perf-pack alert runbooks
+
+The 2.2.0 release ships four alert-specific runbooks under `docs/runbooks/`. Open the matching page when the alert fires:
+
+| Alert | Runbook |
+|---|---|
+| `upstream-circuit-breaker-open` | [Upstream Circuit Breaker Open](../runbooks/upstream-circuit-breaker-open.md) |
+| `bulkhead-overflow` | [Bulkhead Overflow](../runbooks/bulkhead-overflow.md) |
+| `upstream-429-sustained` | [Upstream 429 Sustained](../runbooks/upstream-429-sustained.md) |
+| `low-conditional-get-hit-rate` | [Low Conditional-GET Hit Rate](../runbooks/low-conditional-get-hit-rate.md) |
+
+Each runbook covers what the signal means, the metric to confirm the diagnosis, and the immediate operator action. The companion Grafana dashboards live under [Observability: Grafana Dashboards](../observability/dashboards.md).
+
+---
+
 ## Related Pages
 
 - [Troubleshooting](troubleshooting.md) -- Diagnostic tool catalogue.

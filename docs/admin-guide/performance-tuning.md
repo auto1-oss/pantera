@@ -253,6 +253,42 @@ A conservative estimate: `(concurrent_users * 4) + db_pool + s3_concurrency + 10
 
 ---
 
+## Per-Repo Bulkhead (v2.2.0+)
+
+Every `*-proxy` repository sits behind its own bounded semaphore. Saturation in one repo can no longer steal concurrency budget from another — refusals are local to the saturated repo, return `503` with a `Retry-After` header, and increment the `pantera_bulkhead_overflow_total{repo_name}` counter.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| Concurrent permits | 200 | Maximum in-flight requests per proxy repo. |
+| Queue depth | 1000 | Requests waiting on a permit before refusing with 503. |
+| `Retry-After` (seconds) | 1 | Header value returned on refusal. |
+
+**Tuning guidance:**
+
+- The defaults are sized for a single Pantera node handling roughly 500–1000 concurrent users against any single proxy repo. Scale horizontally (more nodes behind the LB) before raising the per-repo limits.
+- If `pantera_bulkhead_overflow_total{repo_name="..."}` is climbing for one specific repo while the others are quiet, that upstream is slow — check the [Bulkhead Overflow runbook](../runbooks/bulkhead-overflow.md) for the diagnostic walk.
+- If the same counter is climbing across **all** repos at once, the JVM is CPU- or thread-saturated and the bulkhead is doing its job by shedding load uniformly. Look at the named worker pools and the event-loop block diagnostics before touching the bulkhead numbers.
+
+---
+
+## Upstream Circuit Breaker (v2.2.0+)
+
+Per-host state-machine circuit breaker in front of the Jetty client. Trips closed → open on every 5xx / 401 / 407 / non-rejection exception (429 is owned by the rate limiter, not the breaker, by design). Fibonacci backoff with daemon HEAD probe at expiry. While open the client sees a synthesised `502` (`X-Pantera-Fault: circuit-breaker-open`) and the broken upstream is left alone.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| Seed backoff | 30 s | First open-window duration after a trip. |
+| Max backoff | 60 min | Cap on the Fibonacci envelope. |
+| Sequence (with defaults) | 30, 30, 60, 90, 150, 240, 390, 630, 1020, 1650, 2670, 3600... | F(n) = F(n-1) + F(n-2), clamped at cap. |
+| Trip on status | 5xx, 401, 407 | 429 is explicitly excluded. |
+| Trip on exception | every exception except `RejectedExecutionException` | Local backpressure ≠ upstream brokenness. |
+
+**Observability:** `pantera_circuit_breaker_state{upstream_host}` (1=open), `pantera_circuit_breaker_trips_total{upstream_host}`, `pantera_circuit_breaker_fastfail_total{upstream_host}`. Open the **Upstream Circuit Breaker** Grafana dashboard or the [Upstream Circuit Breaker Open runbook](../runbooks/upstream-circuit-breaker-open.md) when the matching alert fires.
+
+**Tuning guidance:** The 30 s seed is conservative — for upstreams with known slow recovery (Maven Central during a CDN incident, npm registry under a regional outage) you can bump the seed up but the cap should stay at 60 min. There is no operator knob to disable the breaker; the kill-switch is "set the seed and cap to small numbers and accept the additional upstream load".
+
+---
+
 ## Related Pages
 
 - [Installation](installation.md) -- Resource recommendations for Docker

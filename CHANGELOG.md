@@ -19,6 +19,14 @@
   ([@aydasraf](https://github.com/aydasraf))
 - **CI perf-gate workflow** validates every PR touching proxy / cache code against three invariants: zero upstream 429s, no sustained rate-limit gate closures, amplification ratio at or below 1.5.
   ([@aydasraf](https://github.com/aydasraf))
+- **Observability pack for the perf surface.** Two new Grafana dashboards ship under `pantera-main/src/main/resources/grafana/` — one for the per-host upstream circuit breaker (state, trip counts, fast-fail rate, time-since-last-trip) and one for proxy-phase latency (stacked p99 by phase and repo, the canonical view for cold-bench debugging). Recording-rule alerts cover the 2.2.0 perf-pack (circuit-breaker-open, bulkhead overflow, sustained upstream 429s, low conditional-GET hit rate) with matching runbooks under `docs/runbooks/`.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Per-repo anonymous-access controls.** A new `anonymous_read` / `anonymous_write` flag per repo decides whether unauthenticated requests get challenged. Defaults match the Artifactory/Nexus convention — proxy repos allow anonymous reads (so curlable OSS mirrors keep working), hosted repos require credentials on every method. Absent credentials return `401` with a `WWW-Authenticate: Basic realm="pantera"` header so every package manager prompts.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Async CVE scanner skeleton.** Asynchronous OSV.dev vulnerability-scan plumbing landed (worker pool, exponential backoff, `artifact_vulnerabilities` + `artifact_scan_status` tables). Wiring to the cache-write hot path and the admin REST surface is deferred to a follow-up; the scanner is dormant in 2.2.0 unless explicitly invoked.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Trace propagation completed across every async hop on the request path.** A single `trace.id` now connects an inbound request to its Vert.x WebClient outbound (webhooks), `java.net.http.HttpClient` outbound (OSV.dev), Valkey pub/sub envelope (v2; v1 still parsed for rolling-deploy compatibility), Quartz job execution, and every internal `CompletableFuture` continuation. `transaction.id` is now a first-class MDC key. Audit-log entries inherit the originating request's `trace.id` so an artifact upload and its HTTP session join in Kibana with a single field.
+  ([@aydasraf](https://github.com/aydasraf))
 
 ### ⚡ Performance
 
@@ -26,13 +34,23 @@
   ([@aydasraf](https://github.com/aydasraf))
 - **Per-host outbound rate limit and 429 back-off.** A token-bucket governor caps the rate at which Pantera issues upstream requests. Defaults are conservative (Maven Central 20 req/s, npm public registry 30 req/s) and configurable per host. On an upstream 429 or 503-with-`Retry-After`, Pantera holds back outbound traffic for that host until the deadline passes and propagates the same `Retry-After` to the calling client.
   ([@aydasraf](https://github.com/aydasraf))
+- **Per-host circuit breaker + per-repo bulkhead.** Every upstream now has a state-machine circuit breaker in front of the Jetty client: closed → open on 5xx / 401 / 407 / non-rejection exceptions (429 stays the rate-limiter's responsibility), Fibonacci backoff with a 30 s seed and 60 min cap, daemon HEAD probe at expiry. While the breaker is open the client sees a fast-fail `502` (`X-Pantera-Fault: circuit-breaker-open`) and the broken upstream is left alone. In parallel, every `*-proxy` repo has its own bounded semaphore (defaults: 200 concurrent, 1000 queue) so a saturated repo can no longer steal concurrency budget from its neighbours; refusals return `503` with a `Retry-After` header and increment a `pantera_bulkhead_overflow_total` counter. Both surfaces are observable via Prometheus (`pantera_circuit_breaker_state`, `_trips_total`, `_fastfail_total`).
+  ([@aydasraf](https://github.com/aydasraf))
 - **Single-flight coalescing on cache-miss.** Concurrent client requests for the same uncached artifact share one upstream fetch instead of firing independent calls.
   ([@aydasraf](https://github.com/aydasraf))
-- **Stream-through cache writes.** The client receives the first byte as upstream emits it; integrity verification runs on stream completion before the cache commits.
+- **Single-flight cooldown evaluation.** Concurrent `evaluate()` calls for the same `(repoType, repoName, artifact, version)` collapse to a single downstream inspector lookup with a short TTL (30 s) on top of the existing 3-tier cooldown cache. Burst cache-miss patterns no longer fan a hundred lookups onto the publish-date registry for the same tuple.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Stream-through cache writes.** The client receives the first byte as upstream emits it; integrity verification runs on stream completion before the cache commits. In v2.2.0 the same stream-through path is now applied to PyPI, Composer, Go and any other npm-shape adapter that has no sidecar primary/sig contract. Maven keeps its sidecar-verifying path (the digest pairing is load-bearing). Docker, files-proxy and local-only adapters retain their existing serve paths — documented as deliberate exceptions in the migration matrix.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Conditional GET + stale-while-revalidate on Maven metadata.** `MetadataCache` now persists `ETag` / `Last-Modified` validators and emits `If-None-Match` / `If-Modified-Since` on refresh — a `304` bumps `lastVerified` without rewriting the blob. Within the soft TTL (default 30 s) hits are served straight from cache; between soft and hard TTL (default 2 h) the cached bytes serve immediately while a single-flighted background refresh runs. After hard TTL the call blocks on the upstream.
   ([@aydasraf](https://github.com/aydasraf))
 - **Maven proxy fetches only `.sha1` alongside the primary** on cache-miss. `.md5`, `.sha256`, and `.sha512` are proxied on demand only.
   ([@aydasraf](https://github.com/aydasraf))
 - **First-fetch cooldown HEAD against Maven Central is opt-in.** Publish-date is populated from the primary GET's `Last-Modified` header; set `PANTERA_PUBLISH_DATE_HEAD_FALLBACK_ENABLED=true` to restore the pre-2.2.0 behaviour.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Cold-bench perf gate (CI).** A new nightly + per-PR workflow runs the cold-bench against a fixed Maven coordinate, fails when the median build exceeds 20 s or p95 exceeds 25 s, and asserts circuit-breaker invariants (zero trips, no breaker left open at end of run) on top of the existing M3-M4 amplification checks.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Logging hot path retuned.** The logging audit collapsed log-and-rethrow chains, removed duplicate-error sites, sanitised secret-adjacent emissions and migrated the remaining `System.out`/SLF4J writers (backfill CLI included) to the structured `EcsLogger`. The net effect on the request path is fewer allocations per emission and zero stderr leakage from the SAX parser, library bootstrap, or CLI flows.
   ([@aydasraf](https://github.com/aydasraf))
 
 ### 🔧 Bug fixes
@@ -45,12 +63,28 @@
   ([@aydasraf](https://github.com/aydasraf))
 - **Vert.x temporary cache directories are swept at startup.** Pantera now cleans up stale per-PID `tmp-<uuid>` directories older than one hour before booting, preventing slow accumulation on long-lived hosts.
   ([@aydasraf](https://github.com/aydasraf))
+- **`COMMENT IS` migration concatenation collapsed (V130).** The `audit_log` column comment string is now a single literal — Flyway's parser tripped on the previous multi-line `||` concatenation and failed the migration on fresh installs.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Settings-layer integration test cleanup.** `SettingsLayerIntegrationTest` now `TRUNCATE`s `audit_log` between cases instead of `DELETE` — the v2.2.0 write-once triggers on `audit_log` refuse `DELETE` by design.
+  ([@aydasraf](https://github.com/aydasraf))
 
 ### 🔒 Security
 
 - **RS256 JWT migration completed.** Every token-validation path requires RS256; HS256 fallback paths removed.
   ([@aydasraf](https://github.com/aydasraf))
 - **Authentication-policy settings are server-enforced**, not just UI-displayed. `api_token_max_ttl_seconds` and `api_token_allow_permanent` round-trip through the admin settings API and are honoured at token-mint time.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Path-traversal guard + Authorization stripping at the proxy entry point.** A canonicalising guard sits at the top of `BaseCachedProxySlice.response()` and rejects (with `400`) raw `..`, percent-encoded `%2e%2e` / `%252e`, NUL bytes, control characters, Windows-style backslash probes, and malformed percent-encoding — no per-adapter shortcut can bypass it. The upstream-header whitelist (User-Agent + Accept only) is now pinned by an explicit test, and `LogSanitizer` masks `Authorization`, `Cookie`, `X-API-Key`, `X-Auth-Token`, and `Proxy-Authorization` in every emitted log.
+  ([@aydasraf](https://github.com/aydasraf))
+- **TLS 1.2+ enforcement with Mozilla "intermediate" cipher suites** on every inbound TLS listener and every outbound HTTPS call. SSLv2 / SSLv2Hello / SSLv3 / TLS 1.0 / TLS 1.1 are rejected at the handshake stage; the cipher list excludes RC4, 3DES, NULL, EXPORT, and anonymous suites. Hostname verification is explicitly enabled on the outbound Jetty client to prevent a future code change from silently disabling it.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Hardened response headers on every Pantera HTTP response.** `SecurityHeadersSlice` wraps the outermost server slice and injects HSTS (TLS listeners only), `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, CSP and Permissions-Policy baselines. Routes that need a relaxed value (UI's `SAMEORIGIN`, per-route CSP) keep winning — the slice yields to any header the inner slice has already emitted.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Insert-only audit log with DB-enforced immutability.** V129 hardens `audit_log` with BEFORE UPDATE / BEFORE DELETE triggers (raise `feature_not_supported`), adds `details JSONB` / `success` / `ip_address` columns, and ships the `AuditEvent` / `AuditService` abstraction. Cooldown unblock, cooldown unblock-all, repo create/update/delete and negative-cache invalidation all write through the pipeline. Entries inherit the originating request's `trace.id`. Operators can no longer rewrite history by mistake — see the admin guide for how to rotate retention by truncating partitions.
+  ([@aydasraf](https://github.com/aydasraf))
+- **PGP signature verifier + keyring (scoped subset).** `PgpVerifier` (Bouncy Castle LTS), `KeyringStore` interface with `JdbcKeyringStore` (V131 `pgp_keyring` table) and `InMemoryKeyringStore` (tests, no-DB boots). Five-state `Result` (`VERIFIED` / `TAMPERED` / `UNTRUSTED_KEY` / `MISSING_SIGNATURE` / `MALFORMED`) maps cleanly to HTTP + audit outcomes. The admin REST endpoint for keyring management is deferred to a follow-up.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Logging audit closes the secret-adjacent perimeter.** Every `EcsLogger` emission now carries a `log.source` field (`audit` / `application` / `http`) so the shipper routes each line to the right Elasticsearch index; non-ECS extension fields under `auto1.*` were renamed or dropped (`audit.action` → `event.action`, `audit.actor` → `user.name`, `repository.member` → `member.name`); the bootstrap default-credential string no longer appears in the WARN body. Defensive sanitisation pinned at every credential-bearing log site (`YamlSettings`, `JwtPasswordAuth`, `Login`, `OAuthLoginSlice`, `AdminAuthHandler`). Browser-side telemetry (`authError.ts`, OAuth callback view) sends a `{ status, code }` shape instead of dumping raw `AxiosError` / IdP error payloads. Previously-swallowed exceptions are now surfaced at `WARN` or `ERROR` with `event.outcome: failure` — operators may see a brief uptick post-deploy; this is intentional.
   ([@aydasraf](https://github.com/aydasraf))
 
 ---

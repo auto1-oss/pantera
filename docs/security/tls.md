@@ -104,3 +104,120 @@ must terminate with `tlsv1 alert protocol version` or equivalent.
   names through the platform SSL provider. Java 21 maps every name in the
   list above to a real implementation (verified via
   `SSLContext.getInstance("TLS").getSupportedSSLParameters().getCipherSuites()`).
+
+---
+
+# Anonymous Access Controls (v2.2.0+)
+
+Every repo carries two independent flags that decide whether unauthenticated
+requests get a `401` challenge or pass through to downstream auth:
+
+| Flag             | Default for proxy repos | Default for hosted repos |
+|------------------|------------------------|--------------------------|
+| `anonymous_read` | `true`                 | `false`                  |
+| `anonymous_write`| `false`                | `false`                  |
+
+The defaults match the Artifactory / Nexus convention — proxy repos stay
+curlable for OSS mirrors, hosted repos require credentials on every method.
+
+When a request arrives with **no** `Authorization` header and the matching
+flag is `false`, `AnonymousAccessSlice` returns:
+
+```
+HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Basic realm="pantera"
+```
+
+The `WWW-Authenticate` challenge makes every package manager (mvn, npm, pip,
+docker login, ...) prompt for credentials instead of silently failing the
+request.
+
+YAML overrides per repo:
+
+```yaml
+repo:
+  anonymous_read: false
+  anonymous_write: false
+```
+
+The slice is the outermost wrap on every per-repo chain (wired by
+`RepositorySlices.wrapIntoCommonSlices`), so the flags apply uniformly across
+all 15 adapter types. When the header is present the slice passes through
+unconditionally — real credential validation stays the downstream auth
+slice's job.
+
+---
+
+# Audit Log (v2.2.0+)
+
+Pantera 2.2.0 introduces a **write-once** audit log for admin operations,
+backed by the `audit_log` table. Flyway migration V129 attaches `BEFORE
+UPDATE` and `BEFORE DELETE` triggers that raise `feature_not_supported` on
+any mutation attempt — a SOC2 / ISO 27001 immutability requirement.
+
+## What is audited
+
+The `AuditEvent` / `AuditService` pipeline is wired into:
+
+- Cooldown unblock (`POST /api/v1/cooldown/unblock`).
+- Cooldown unblock-all (`POST /api/v1/cooldown/unblock-all`).
+- Repository CRUD (`POST` / `PUT` / `DELETE /api/v1/repositories/...`).
+- Negative-cache invalidation.
+
+Each entry records `actor` (username), `action`, `target`, `details` (JSONB),
+`success` (boolean), `ip_address`, and `created_at`. Audit entries inherit
+the originating HTTP request's `trace.id` via the captured MDC at event
+construction.
+
+## Rotation under immutability
+
+`UPDATE` and `DELETE` against `audit_log` will fail. Retention is owned by
+either:
+
+1. **Partition rotation (recommended)** — create monthly partitions
+   (`audit_log_YYYY_MM`) ahead of time via a `pg_cron` job, then detach and
+   drop partitions older than the retention horizon.
+2. **`TRUNCATE`** — allowed (bypasses the triggers) but takes an
+   `ACCESS EXCLUSIVE` lock. Schedule for a maintenance window. Tests that
+   need to reset the table between cases must use `TRUNCATE`, never
+   `DELETE`.
+
+---
+
+# PGP Signature Verifier (v2.2.0+, scoped subset)
+
+The Maven adapter ships a PGP detached-signature verifier in 2.2.0. The
+**verifier + keyring + DB migration + tests** are in place; the **admin REST
+endpoint to upload trusted public keys is deferred** to a follow-up. This is
+documented here so operators do not look for an admin UI surface that does
+not yet exist.
+
+## Components
+
+- `PgpVerifier` — stateless verifier built on the Bouncy Castle LTS
+  distribution already on the classpath. Returns one of five results:
+  `VERIFIED`, `TAMPERED`, `UNTRUSTED_KEY`, `MISSING_SIGNATURE`, `MALFORMED`.
+- `KeyringStore` — trust-anchor abstraction keyed by 64-bit OpenPGP long
+  key id.
+- `JdbcKeyringStore` — reads from the `pgp_keyring` table (V131 migration)
+  with a 256-entry / 5-minute Caffeine cache to keep verification off the
+  HikariCP pool for repeats.
+- `InMemoryKeyringStore` — used by tests, no-DB boots, and as an L1 layer.
+
+## Loading trusted keys before the admin endpoint lands
+
+Until the admin REST endpoint ships, populate the `pgp_keyring` table
+directly via SQL:
+
+```sql
+INSERT INTO pgp_keyring (key_id_hex, fingerprint, public_key_armored,
+                         uploaded_by, uploaded_at)
+VALUES ('ABCDEF0123456789',
+        'ABCDEF0123456789ABCDEF0123456789ABCDEF01',
+        '-----BEGIN PGP PUBLIC KEY BLOCK-----\n... -----END PGP PUBLIC KEY BLOCK-----',
+        'admin',
+        NOW());
+```
+
+The `JdbcKeyringStore` cache picks up new keys within 5 minutes (or restart
+the instance for immediate effect).

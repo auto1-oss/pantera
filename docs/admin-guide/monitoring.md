@@ -95,6 +95,21 @@ scrape_configs:
 | `hikaricp_connections_pending` | Gauge | Threads waiting for a connection |
 | `hikaricp_connections_max` | Gauge | Maximum pool size |
 
+### Resilience Metrics (v2.2.0+)
+
+Pantera 2.2.0 introduced a per-host upstream circuit breaker and a per-repo concurrency bulkhead. Both surfaces are observable as Prometheus metrics — log scraping is **not** the supported diagnostic path.
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `pantera_circuit_breaker_state` | Gauge | `upstream_host` | 1 = open (fast-fail mode), 0 = closed (normal). Polled from the breaker's wall-clock `isOpen()`. |
+| `pantera_circuit_breaker_trips_total` | Counter | `upstream_host` | Incremented on every closed → open transition. |
+| `pantera_circuit_breaker_fastfail_total` | Counter | `upstream_host` | Incremented on every synthesised 502 returned while the breaker is open. |
+| `pantera_bulkhead_overflow_total` | Counter | `repo_name` | Incremented on every 503 returned by the per-repo semaphore. |
+| `pantera_proxy_429_total` | Counter | `upstream_host` | Upstream 429 responses (already in the repo since 2.1.x). |
+| `proxy_phase_duration_seconds` | Histogram | `phase`, `repo` | Latency per logical proxy phase (negative-cache, preProcess, cacheFirst, cooldown, fetchDirect, store). |
+
+**Alerting hooks:** The v2.2.0 release ships Prometheus recording-rule alerts (`pantera-main/docker-compose/prometheus/rules/`) and four corresponding runbooks under `docs/runbooks/` — `upstream-circuit-breaker-open.md`, `bulkhead-overflow.md`, `upstream-429-sustained.md`, `low-conditional-get-hit-rate.md`. See [Runbooks](runbooks.md).
+
 ---
 
 ## Grafana Dashboards
@@ -106,6 +121,13 @@ The Docker Compose stack includes pre-configured Grafana with dashboards for:
 - Storage operation throughput
 - Thread pool utilization
 - Database connection pool status
+
+Two dashboards new in v2.2.0 ship under `pantera-main/src/main/resources/grafana/` (importable into any Grafana 10+ instance):
+
+- **Upstream Circuit Breaker** (`upstream-circuit-breaker.json`) — per-host breaker state, trip frequency, fast-fail rate, time-since-last-trip. Open this first when the `upstream-circuit-breaker-open` alert fires.
+- **Proxy Phase Latency** (`proxy-phase-latency.json`) — stacked p99 of `proxy_phase_duration_seconds` per `(phase, repo)`. The dominant phase identifies the bottleneck — read this before launching any further performance work.
+
+See [Grafana Dashboards](../observability/dashboards.md) for import instructions and metric coverage detail.
 
 Access Grafana at `http://pantera-host:3000` (default credentials from `.env`).
 

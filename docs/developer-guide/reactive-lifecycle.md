@@ -77,6 +77,55 @@ Before merging a new reactive site, ask:
 
 ---
 
+---
+
+## ContextualExecutor for Async Hops (v2.2.0+)
+
+Every async hop on the request path MUST preserve MDC + APM transaction context. Without it, `trace.id`, `span.id`, `transaction.id`, `user.name`, `client.ip`, and the active APM transaction get dropped on the worker thread — and every log line emitted past the hop is unjoinable in Kibana.
+
+As of v2.2.0 the v1 helper (`MdcPropagation.withMdc*`) is folded into a single `ContextualExecutor` that:
+
+1. **Captures** the current MDC map and APM transaction reference on the calling thread.
+2. **Restores** them at the start of the callback on the worker thread.
+3. **Cleans up** with `try / finally` so the pooled worker thread leaves no MDC residue for the next task.
+
+### When you MUST use it
+
+Any of these on the request path:
+
+- `CompletableFuture.{supplyAsync, thenApplyAsync, thenComposeAsync, ...}` — any flavour where the continuation runs on a different thread.
+- `Flowable.observeOn(...)` / `Maybe.subscribeOn(...)` / similar RxJava boundaries that move to a worker.
+- `executor.submit(...)` / `executor.execute(...)` for any bounded executor (DB consumer, drain pool, Quartz).
+- Quartz jobs — handled automatically via `TracingJobWrapper` if you use `scheduleJob`; raw `Scheduler.scheduleJob(...)` calls bypass it.
+- Pub/sub envelopes — encode trace context in the v2 envelope (see below).
+
+### Pub/sub v2 envelope
+
+`ClusterEventBus` and `CacheInvalidationPubSub` now ship messages in a versioned envelope. The v2 prefix carries `trace.id` + `span.id` alongside the payload; v1 envelopes are still parsed for **rolling-deploy compatibility** so a v2.1.x node can publish to a v2.2.0 subscriber and vice versa during the rolling upgrade window.
+
+When emitting from new code: use the existing `ClusterEventBus.publish(channel, payload)` API; the envelope wrapping is internal. When consuming: the trace.id is restored to MDC for the duration of the subscriber callback — no caller action required.
+
+### Non-Jetty outbound transports
+
+The `JettyClientSlices` decorator chain injects `traceparent` + `X-B3-*` automatically on every outbound proxy fetch. Other outbound transports do **not** get this for free — they must use `TraceHeaders.httpClientHeaders()` and merge the resulting map into their outbound request headers:
+
+- `WebhookDispatcher` (Vert.x WebClient) — already wired.
+- `OsvDevClient` (`java.net.http.HttpClient`) — already wired.
+- Any new outbound transport you add — must follow the same pattern.
+
+If you add a new outbound HTTP call on the request path and skip this step, the receiving system cannot join its logs to the originating Pantera request in Kibana.
+
+### Self-check
+
+Before merging a new async hop:
+
+1. "Does the callback emit any `EcsLogger` line?" If yes, MDC must be preserved.
+2. "Did I use `ContextualExecutor.contextualize(...)` or `MdcPropagation.withMdc*(...)` for the continuation?"
+3. "If this is a new outbound transport, am I calling `TraceHeaders.httpClientHeaders()`?"
+4. "Is there a test asserting `MDC.get(TRACE_ID)` is non-null inside the callback?"
+
+---
+
 ## Related Pages
 
 - [Caching](caching.md) -- Cache reads/writes must also honor cancel.
