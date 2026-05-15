@@ -691,6 +691,42 @@ final class JdbcCooldownServiceTest {
         );
     }
 
+    @Test
+    void manualUnblockInvalidatesEnvelopeAndFiresOnBlockRemoved() {
+        // Arrange: an active block exists AND both the envelope invalidator
+        // and the onBlockRemoved callback are wired BEFORE the unblock.
+        // This exercises the Gap 1 fix in release(): mirroring the
+        // expire() pattern so manual unblock drops the metadata cache the
+        // same way natural expiry does.
+        final Instant now = Instant.now();
+        this.repository.insertBlock(
+            "maven-proxy", "central", "com.gap1.pkg", "1.2.3",
+            CooldownReason.FRESH_RELEASE,
+            now, now.plus(Duration.ofHours(72)), "system",
+            Optional.empty(), Optional.empty()
+        );
+        final TrackingCache trackingCache = new TrackingCache();
+        this.service.setEnvelopeInvalidator(trackingCache);
+        final List<String> callbackCalls = new ArrayList<>();
+        this.service.setOnBlockRemoved((repoType, repoName, artifact, version) ->
+            callbackCalls.add(repoType + ":" + repoName + ":" + artifact + ":" + version)
+        );
+        // Act: manual single-version unblock (release() path inside unblockSingle)
+        this.service.unblock("maven-proxy", "central", "com.gap1.pkg", "1.2.3", "alice").join();
+        // Assert: envelope invalidator was called for (repoType, repoName, artifact)
+        MatcherAssert.assertThat(
+            "envelope must be invalidated on manual unblock",
+            trackingCache.wasInvalidated("maven-proxy", "central", "com.gap1.pkg"),
+            Matchers.is(true)
+        );
+        // AND onBlockRemoved was called for the full (repoType, repoName, artifact, version)
+        MatcherAssert.assertThat(
+            "onBlockRemoved must fire on manual unblock with full coordinates",
+            callbackCalls,
+            Matchers.hasItem("maven-proxy:central:com.gap1.pkg:1.2.3")
+        );
+    }
+
     private void truncate() {
         try (Connection conn = this.dataSource.getConnection();
             PreparedStatement stmt = conn.prepareStatement(

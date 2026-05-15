@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.cooldown;
 
+import com.auto1.pantera.cache.CacheInvalidationPubSub;
 import com.auto1.pantera.cooldown.api.CooldownBlock;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownReason;
@@ -94,6 +95,36 @@ final class JdbcCooldownService implements CooldownService {
      * Nullable: unit tests and the pre-2.2.0 wiring leave this as null.
      */
     private volatile FilteredMetadataCache envelopeInvalidator;
+
+    /**
+     * Optional cross-instance pub/sub for cache invalidation fan-out. When
+     * non-null, every block state change broadcasts on two channels —
+     * {@link #CHANNEL_DECISIONS} keyed by {@link CooldownCache#blockKey}
+     * and {@link #CHANNEL_ENVELOPE} keyed by {@link
+     * FilteredMetadataCache#cacheKey} — so peers' Caffeine L1 entries drop
+     * immediately rather than waiting on per-entry TTL.
+     *
+     * <p>Nullable: single-instance deployments and unit tests leave this
+     * as null. Self-message filtering is handled by {@code
+     * CacheInvalidationPubSub} via instance UUID — no extra guard needed
+     * here. The receive side calls {@link CooldownCache#invalidate(String)}
+     * and {@link FilteredMetadataCache#invalidate(String)}, both of which
+     * deliberately do <em>not</em> re-publish — that's the no-loop
+     * guarantee for this wiring.</p>
+     */
+    private volatile CacheInvalidationPubSub pubsub;
+
+    /**
+     * Pub/sub channel name for cooldown decision (per-version block state)
+     * invalidations. Keys are {@link CooldownCache#blockKey} outputs.
+     */
+    private static final String CHANNEL_DECISIONS = "cooldown-decisions";
+
+    /**
+     * Pub/sub channel name for filtered-metadata envelope invalidations.
+     * Keys are {@link FilteredMetadataCache#cacheKey} outputs.
+     */
+    private static final String CHANNEL_ENVELOPE = "cooldown-envelope";
 
     private static final String SYSTEM_ACTOR = "system";
 
@@ -190,6 +221,132 @@ final class JdbcCooldownService implements CooldownService {
      */
     public void setEnvelopeInvalidator(final FilteredMetadataCache cache) {
         this.envelopeInvalidator = cache;
+    }
+
+    /**
+     * Wire the cross-instance pub/sub bus for cache invalidation fan-out.
+     * Called by {@code CooldownSupport.createMetadataService} when a Valkey
+     * pub/sub is available. Null is well-tolerated: single-instance
+     * deployments and unit tests skip this wiring and every publish becomes
+     * a no-op.
+     *
+     * @param bus Pub/sub bus, or null to disable peer fan-out
+     */
+    public void setCacheInvalidationPubSub(final CacheInvalidationPubSub bus) {
+        this.pubsub = bus;
+    }
+
+    /**
+     * Broadcast a per-key cooldown-decisions invalidation. No-op if pub/sub
+     * is unwired. Swallows any publish failure with a debug log — a Valkey
+     * stutter must not break the state-change operation that triggered it.
+     */
+    private void publishDecisionInvalidation(
+        final String repoName, final String artifact, final String version
+    ) {
+        final CacheInvalidationPubSub bus = this.pubsub; // NOPMD CloseResource - lifecycle owned by YamlSettings.cachePubSub (closed on shutdown); this is just a snapshot of the volatile field
+        if (bus == null) {
+            return;
+        }
+        try {
+            bus.publish(CHANNEL_DECISIONS, this.cache.blockKey(repoName, artifact, version));
+            EcsLogger.debug("com.auto1.pantera.cooldown")
+                .message("Published cooldown-decisions invalidation")
+                .eventCategory("database")
+                .eventAction("pubsub_publish")
+                .eventOutcome("success")
+                .field("repository.name", repoName)
+                .field("package.name", artifact)
+                .field("package.version", version)
+                .field("log.source", "application")
+                .log();
+        } catch (final Exception ex) {
+            EcsLogger.debug("com.auto1.pantera.cooldown")
+                .message("Failed to publish cooldown-decisions invalidation; peers will TTL-expire")
+                .eventCategory("database")
+                .eventAction("pubsub_publish")
+                .eventOutcome("failure")
+                .field("repository.name", repoName)
+                .field("package.name", artifact)
+                .field("package.version", version)
+                .error(ex)
+                .field("log.source", "application")
+                .log();
+        }
+    }
+
+    /**
+     * Broadcast a per-key cooldown-envelope invalidation. No-op if pub/sub
+     * is unwired.
+     */
+    private void publishEnvelopeInvalidation(
+        final String repoType, final String repoName, final String artifact
+    ) {
+        final CacheInvalidationPubSub bus = this.pubsub; // NOPMD CloseResource - lifecycle owned by YamlSettings.cachePubSub (closed on shutdown); this is just a snapshot of the volatile field
+        if (bus == null) {
+            return;
+        }
+        try {
+            bus.publish(
+                CHANNEL_ENVELOPE,
+                FilteredMetadataCache.cacheKey(repoType, repoName, artifact)
+            );
+            EcsLogger.debug("com.auto1.pantera.cooldown")
+                .message("Published cooldown-envelope invalidation")
+                .eventCategory("database")
+                .eventAction("pubsub_publish")
+                .eventOutcome("success")
+                .field("repository.type", repoType)
+                .field("repository.name", repoName)
+                .field("package.name", artifact)
+                .field("log.source", "application")
+                .log();
+        } catch (final Exception ex) {
+            EcsLogger.debug("com.auto1.pantera.cooldown")
+                .message("Failed to publish cooldown-envelope invalidation; peers will TTL-expire")
+                .eventCategory("database")
+                .eventAction("pubsub_publish")
+                .eventOutcome("failure")
+                .field("repository.type", repoType)
+                .field("repository.name", repoName)
+                .field("package.name", artifact)
+                .error(ex)
+                .field("log.source", "application")
+                .log();
+        }
+    }
+
+    /**
+     * Broadcast a bulk invalidation on both pub/sub channels. Used by
+     * {@code unblockAll}; coarser than per-key but acceptable since
+     * unblockAll is a rare admin op and the cooldown L1 namespace is
+     * shared across repos.
+     */
+    private void publishBulkInvalidation() {
+        final CacheInvalidationPubSub bus = this.pubsub; // NOPMD CloseResource - lifecycle owned by YamlSettings.cachePubSub (closed on shutdown); this is just a snapshot of the volatile field
+        if (bus == null) {
+            return;
+        }
+        try {
+            bus.publishAll(CHANNEL_DECISIONS);
+            bus.publishAll(CHANNEL_ENVELOPE);
+            EcsLogger.debug("com.auto1.pantera.cooldown")
+                .message("Published bulk cooldown invalidation (decisions + envelope)")
+                .eventCategory("database")
+                .eventAction("pubsub_publish_all")
+                .eventOutcome("success")
+                .field("log.source", "application")
+                .log();
+        } catch (final Exception ex) {
+            EcsLogger.debug("com.auto1.pantera.cooldown")
+                .message("Failed to publish bulk cooldown invalidation; peers will TTL-expire")
+                .eventCategory("database")
+                .eventAction("pubsub_publish_all")
+                .eventOutcome("failure")
+                .error(ex)
+                .field("log.source", "application")
+                .log();
+        }
     }
 
     /**
@@ -477,6 +634,12 @@ final class JdbcCooldownService implements CooldownService {
     ) {
         // Update cache to false first (immediate effect)
         this.cache.unblock(repoName, artifact, version);
+        // Peer fan-out for the cooldown-decisions channel: covers the case where no DB
+        // record exists (find() returns empty inside unblockSingle and release() never
+        // runs) — without this, peer L1 entries would stick around until TTL even though
+        // the local L1 was just cleared. When release() does run it also publishes; the
+        // duplicate publish is harmless (self-message filtering is by instanceId).
+        this.publishDecisionInvalidation(repoName, artifact, version);
         // Then update database and metrics
         return CompletableFuture.runAsync(
             () -> {
@@ -498,6 +661,11 @@ final class JdbcCooldownService implements CooldownService {
     ) {
         // Update all cache entries to false (immediate effect)
         this.cache.unblockAll(repoName);
+        // Peer fan-out: broadcast bulk invalidation on both channels. unblockAll is rare
+        // (admin op) so coarse broadcast (peers drop all cooldown-decision + envelope L1
+        // entries, not just this repo's) is acceptable — the alternative is keying every
+        // entry, which costs an L1 scan on every peer.
+        this.publishBulkInvalidation();
         // Then update database and metrics
         return CompletableFuture.runAsync(
             () -> {
@@ -920,6 +1088,10 @@ final class JdbcCooldownService implements CooldownService {
                 .field("log.source", "application")
                 .log();
         }
+        // Peer fan-out: local L1+L2 are already updated; broadcast so other
+        // instances drop their L1 immediately rather than waiting on TTL.
+        this.publishDecisionInvalidation(record.repoName(), record.artifact(), record.version());
+        this.publishEnvelopeInvalidation(record.repoType(), record.repoName(), record.artifact());
     }
 
     private void unblockSingle(
@@ -985,6 +1157,35 @@ final class JdbcCooldownService implements CooldownService {
             record.id(),
             ArchiveReason.MANUAL_UNBLOCK,
             actor);
+        // Envelope cache invalidation (coherency): drop cached filtered metadata so next request
+        // re-filters with the new block state (block released → version now visible in metadata).
+        // Mirrors expire(): without this, manual unblock leaves the per-package envelope cache
+        // stale until its TTL — clients keep seeing the version stripped out for up to an hour.
+        this.invalidateEnvelope(record.repoType(), record.repoName(), record.artifact());
+        // Invalidate the filtered metadata cache so clients see the unblocked version
+        // immediately. Mirrors expire(): the L1 Caffeine cache is especially sticky because
+        // L2 purge doesn't clear it, and the per-adapter metadata cache used by Maven, npm,
+        // PyPI, Composer, Helm, etc. would otherwise stay stale for the cache TTL.
+        try {
+            this.onBlockRemoved.accept(
+                record.repoType(), record.repoName(),
+                record.artifact(), record.version()
+            );
+        } catch (final Exception err) {
+            EcsLogger.warn("com.auto1.pantera.cooldown")
+                .message("Failed to invalidate metadata cache on manual unblock")
+                .eventCategory("database")
+                .eventAction("metadata_cache_invalidate")
+                .eventOutcome("failure")
+                .field("package.name", record.artifact())
+                .error(err)
+                .field("log.source", "application")
+                .log();
+        }
+        // Peer fan-out: local L1+L2 are already updated; broadcast so other instances drop
+        // their L1 immediately rather than waiting on TTL.
+        this.publishDecisionInvalidation(record.repoName(), record.artifact(), record.version());
+        this.publishEnvelopeInvalidation(record.repoType(), record.repoName(), record.artifact());
     }
 
     private CooldownBlock toCooldownBlock(final DbBlockRecord record) {

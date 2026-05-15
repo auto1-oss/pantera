@@ -195,6 +195,21 @@ public interface Settings extends AutoCloseable {
     }
 
     /**
+     * Optional cross-instance cache-invalidation pub/sub bus. Returned
+     * present only when Valkey is configured — the bus needs a real
+     * Valkey connection for its subscribe/publish channels. Used by the
+     * cooldown wiring to fan out L1 invalidations to peers so they don't
+     * serve stale block decisions / filtered-metadata envelopes for the
+     * cache TTL after an unblock or expiry on another instance.
+     *
+     * @return Pub/sub bus, or empty for single-instance deployments
+     */
+    default Optional<com.auto1.pantera.cache.CacheInvalidationPubSub>
+        cacheInvalidationPubSub() {
+        return Optional.empty();
+    }
+
+    /**
      * Cached filter for the "local user enabled" JDBC lookup, if the
      * deployment has a dataSource configured and the auth chain was
      * wrapped with {@code CachedLocalEnabledFilter}. Returned empty

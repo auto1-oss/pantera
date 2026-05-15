@@ -197,6 +197,26 @@ public final class CooldownSupport {
         // (markAllBlocked), bulk unmark (unmarkAllBlockedPackage / ForRepo),
         // and manual archive (archiveAndDelete via expire()).
         jdbc.setEnvelopeInvalidator(metadataCache);
+        // Cross-instance pub/sub fan-out wiring. Without this, peer L1
+        // entries only refresh on per-entry TTL, so an unblock on instance A
+        // takes effect on instance B as much as an hour later. Two channels:
+        // "cooldown-decisions" drops the per-version block decision L1 entry;
+        // "cooldown-envelope" drops the per-package filtered-metadata
+        // envelope L1 entry. Subscribers (registered below) call
+        // Cleanable#invalidate / #invalidateAll on the raw cache instances —
+        // those receive paths do NOT republish, so there's no loop.
+        settings.cacheInvalidationPubSub().ifPresent(bus -> {
+            jdbc.setCacheInvalidationPubSub(bus);
+            bus.register("cooldown-decisions", jdbc.cache());
+            bus.register("cooldown-envelope", metadataCache);
+            EcsLogger.info("com.auto1.pantera.cooldown")
+                .message("Wired cooldown pub/sub fan-out (channels: cooldown-decisions, cooldown-envelope)")
+                .eventCategory("configuration")
+                .eventAction("cooldown_pubsub_wire")
+                .eventOutcome("success")
+                .field("log.source", "application")
+                .log();
+        });
         return metadataService;
     }
 

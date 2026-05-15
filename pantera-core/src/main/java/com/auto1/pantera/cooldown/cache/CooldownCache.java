@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.cooldown.cache;
 
+import com.auto1.pantera.asto.misc.Cleanable;
 import com.auto1.pantera.cache.ValkeyConnection;
 
 import com.github.benmanes.caffeine.cache.Cache;
@@ -42,7 +43,7 @@ import org.checkerframework.checker.index.qual.NonNegative;
  *
  * @since 1.0
  */
-public final class CooldownCache {
+public final class CooldownCache implements Cleanable<String> {
 
     /**
      * L1 cache for block decisions (in-memory, hot data).
@@ -418,8 +419,19 @@ public final class CooldownCache {
     /**
      * Generate cache key for block decision.
      * Format: cooldown:{repo_name}:{artifact}:{version}:block
+     *
+     * <p>Exposed so {@code JdbcCooldownService} can pass the canonical key
+     * shape into {@link com.auto1.pantera.cache.CacheInvalidationPubSub}
+     * when broadcasting cross-instance invalidations — the subscriber side
+     * calls {@link #invalidate(String)} with the same shape so the L1 entry
+     * is dropped on every peer.</p>
+     *
+     * @param repoName Repository name
+     * @param artifact Artifact name
+     * @param version Version
+     * @return Canonical L1/L2 cache key
      */
-    private String blockKey(
+    public String blockKey(
         final String repoName,
         final String artifact,
         final String version
@@ -430,6 +442,36 @@ public final class CooldownCache {
             artifact,
             version
         );
+    }
+
+    /**
+     * Drop a single L1 entry by its canonical key. Receive-side handler for
+     * cross-instance pub/sub fan-out: the originator already cleared its
+     * own L1+L2; peers only need to drop their local L1 so the next read
+     * re-loads from L2 (or the database).
+     *
+     * <p><b>Does not publish.</b> Re-publishing here would create an
+     * invalidation loop. This is the no-op-loop guarantee that lets
+     * {@link com.auto1.pantera.cache.CacheInvalidationPubSub} register
+     * {@code CooldownCache} directly without a decorator.</p>
+     *
+     * @param key Canonical cache key produced by {@link #blockKey}
+     */
+    @Override
+    public void invalidate(final String key) {
+        this.decisions.invalidate(key);
+        this.inflight.remove(key);
+    }
+
+    /**
+     * Drop all L1 entries. Receive-side handler for cross-instance pub/sub
+     * fan-out of {@code unblockAll}. Does not publish — see {@link
+     * #invalidate(String)} for the rationale.
+     */
+    @Override
+    public void invalidateAll() {
+        this.decisions.invalidateAll();
+        this.inflight.clear();
     }
 
     /**

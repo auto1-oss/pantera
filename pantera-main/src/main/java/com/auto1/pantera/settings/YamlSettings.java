@@ -502,6 +502,11 @@ public final class YamlSettings implements Settings {
     }
 
     @Override
+    public Optional<CacheInvalidationPubSub> cacheInvalidationPubSub() {
+        return Optional.ofNullable(this.cachePubSub);
+    }
+
+    @Override
     public Optional<com.auto1.pantera.auth.CachedLocalEnabledFilter>
         cachedLocalEnabledFilter() {
         return Optional.ofNullable(this.cachedLocalEnabledFilter);

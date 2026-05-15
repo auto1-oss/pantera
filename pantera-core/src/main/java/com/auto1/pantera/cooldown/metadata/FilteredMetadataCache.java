@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.cooldown.metadata;
 
+import com.auto1.pantera.asto.misc.Cleanable;
 import com.auto1.pantera.cache.ValkeyConnection;
 import com.auto1.pantera.cooldown.metrics.CooldownMetrics;
 
@@ -61,7 +62,7 @@ import java.util.concurrent.TimeUnit;
  *
  * @since 1.0
  */
-public class FilteredMetadataCache {
+public class FilteredMetadataCache implements Cleanable<String> {
 
     /**
      * Default L1 cache size (number of packages).
@@ -490,13 +491,57 @@ public class FilteredMetadataCache {
 
     /**
      * Generate cache key.
+     *
+     * <p>Exposed so {@code JdbcCooldownService} can pass the canonical key
+     * shape into {@link com.auto1.pantera.cache.CacheInvalidationPubSub}
+     * when broadcasting cross-instance invalidations — the subscriber side
+     * calls {@link #invalidate(String)} with the same shape so the L1
+     * envelope entry is dropped on every peer.</p>
+     *
+     * @param repoType Repository type
+     * @param repoName Repository name
+     * @param packageName Package name
+     * @return Canonical L1/L2 cache key
      */
-    private String cacheKey(
+    public static String cacheKey(
         final String repoType,
         final String repoName,
         final String packageName
     ) {
         return String.format("metadata:%s:%s:%s", repoType, repoName, packageName);
+    }
+
+    /**
+     * Drop a single L1 entry by its full canonical key. Receive-side
+     * handler for cross-instance pub/sub fan-out: the originator already
+     * cleared its own L1+L2; peers only need to drop their local L1.
+     *
+     * <p><b>Does not publish and does not delete from L2.</b> Re-publishing
+     * here would create an invalidation loop; the L2 deletion was already
+     * issued by the originator's local mutator path. Double-deleting L2 is
+     * harmless but wasteful, so we skip it.</p>
+     *
+     * @param key Canonical cache key produced by {@link #cacheKey}
+     */
+    @Override
+    public void invalidate(final String key) {
+        if (this.l1Cache != null) {
+            this.l1Cache.invalidate(key);
+        }
+        this.inflight.remove(key);
+    }
+
+    /**
+     * Drop all L1 entries. Receive-side handler for cross-instance pub/sub
+     * fan-out of {@code unblockAll}. Does not publish and does not touch
+     * L2 — see {@link #invalidate(String)} for the rationale.
+     */
+    @Override
+    public void invalidateAll() {
+        if (this.l1Cache != null) {
+            this.l1Cache.invalidateAll();
+        }
+        this.inflight.clear();
     }
 
     /**
