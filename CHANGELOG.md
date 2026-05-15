@@ -4,7 +4,7 @@
 
 ### ⚠️ Breaking changes
 
-- **Sequential-only group resolution.** Members are tried in declared order; the first 2xx response wins, and remaining members are consulted only on 404. The `members_strategy: parallel|sequential` YAML key is parsed and ignored with a one-time WARN. Order `members:` lists with the most-likely-to-have-the-artifact entry first (typically hosted before proxy).
+- **Sequential-only group resolution.** Members are tried in declared order; the first 2xx response wins, and remaining members are consulted only on 404. Parallel fanout has been removed — sequential is now the **only** mode (Nexus / JFrog style). The legacy `members_strategy` YAML key is silently ignored regardless of value (a one-time WARN per group is emitted at boot, naming the deprecated key, then the key is dropped from the effective config). Order `members:` lists with the most-likely-to-have-the-artifact entry first (typically hosted before proxy).
   ([@aydasraf](https://github.com/aydasraf))
 - **No metadata union-merge across group members.** `maven-metadata.xml` and `packages.json` group lookups now return the first member's 200 response verbatim. Configs that need union semantics should split into multiple group repos.
   ([@aydasraf](https://github.com/aydasraf))
