@@ -11,6 +11,8 @@
 package com.auto1.pantera.settings.runtime;
 
 import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
@@ -18,6 +20,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import javax.sql.DataSource;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.zaxxer.hikari.HikariDataSource;
 import org.postgresql.PGConnection;
 import org.postgresql.PGNotification;
 
@@ -104,9 +107,32 @@ public final class PgListenNotify {
         return this.listening.await(timeout.toMillis(), TimeUnit.MILLISECONDS);
     }
 
+    /**
+     * Open a dedicated long-lived JDBC connection for the LISTEN loop.
+     * If the supplied {@link DataSource} is a {@link HikariDataSource}
+     * we bypass the pool entirely via {@link DriverManager} —
+     * LISTEN/NOTIFY needs a permanently-held connection and Hikari's
+     * leak detection (default 30 s) would otherwise log a noisy
+     * "connection leak detected" WARN at boot. For non-Hikari sources
+     * (tests, embedded H2, etc.) we fall back to {@code getConnection()}.
+     */
+    private Connection openListenerConnection() throws SQLException {
+        // NOPMD CloseResource — we do not own `hikari`, we are only
+        // reading its JDBC URL/credentials. The caller (VertxMain etc.)
+        // owns the DataSource lifecycle and closes it at shutdown.
+        if (this.source instanceof HikariDataSource hikari) { // NOPMD CloseResource
+            return DriverManager.getConnection(
+                hikari.getJdbcUrl(),
+                hikari.getUsername(),
+                hikari.getPassword()
+            );
+        }
+        return this.source.getConnection();
+    }
+
     private void loop() {
         while (this.running.get()) {
-            try (Connection conn = this.source.getConnection()) {
+            try (Connection conn = openListenerConnection()) {
                 try (Statement st = conn.createStatement()) {
                     st.execute("LISTEN settings_changed");
                 }

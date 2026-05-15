@@ -657,14 +657,25 @@ public final class MicrometerMetrics {
     }
 
     /**
-     * Tracks which hosts already have their circuit-breaker state gauge
-     * registered. {@link io.micrometer.core.instrument.MeterRegistry}
-     * does NOT enforce uniqueness on duplicate {@code register()} calls;
-     * registering the same gauge twice produces two meters with the same
-     * name + tags, which scrapers report as ambiguous. This set makes
-     * registration idempotent at the call site.
+     * Per-host registry of circuit-breaker {@link BooleanSupplier}s that
+     * back the {@code pantera_circuit_breaker_state} gauge. Serves two
+     * purposes:
+     *
+     * <ol>
+     *   <li><b>Idempotency.</b> {@link io.micrometer.core.instrument.MeterRegistry}
+     *       does NOT deduplicate {@code register()} calls; registering the
+     *       same gauge twice produces ambiguous scrapes. Presence of the
+     *       key is the "already registered" signal.</li>
+     *   <li><b>Strong reference retention.</b> Micrometer holds the
+     *       second-arg state object of {@code Gauge.builder(name, obj, fn)}
+     *       via a {@link java.lang.ref.WeakReference}. If the
+     *       {@code BooleanSupplier} we pass is only referenced from the
+     *       caller's stack at register time, GC clears it and the gauge
+     *       returns {@code NaN} on every subsequent scrape. Storing the
+     *       supplier here keeps it strongly reachable for the JVM lifetime.</li>
+     * </ol>
      */
-    private final Set<String> circuitBreakerGaugeHosts = ConcurrentHashMap.newKeySet();
+    private final Map<String, BooleanSupplier> circuitBreakerGaugeHosts = new ConcurrentHashMap<>();
 
     /**
      * Register a polling gauge {@code pantera_circuit_breaker_state{upstream_host}}
@@ -685,7 +696,14 @@ public final class MicrometerMetrics {
     public void registerCircuitBreakerStateGauge(
         final String upstreamHost, final BooleanSupplier isOpen
     ) {
-        if (!this.circuitBreakerGaugeHosts.add(upstreamHost)) {
+        // putIfAbsent + retained reference: the map STRONGLY holds the
+        // BooleanSupplier so Micrometer's WeakReference inside the gauge
+        // cannot clear it. Without this, the lambda goes out of scope
+        // after this method returns and every subsequent scrape returns
+        // NaN. Re-register attempts are no-ops (idempotent by host).
+        final BooleanSupplier prev =
+            this.circuitBreakerGaugeHosts.putIfAbsent(upstreamHost, isOpen);
+        if (prev != null) {
             return;
         }
         Gauge.builder(
