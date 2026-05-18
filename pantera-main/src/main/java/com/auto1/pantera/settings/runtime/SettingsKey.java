@@ -21,15 +21,23 @@ import java.util.stream.Collectors;
  *
  * <p>{@code defaultRepr} is the JSON literal as it would be stored in the
  * {@code settings.value -> 'value'} field. The protocol default is
- * {@code "\"h2\""} — a quoted JSON string — so
+ * {@code "\"auto\""} — a quoted JSON string — so
  * {@code Json.createReader(new StringReader(repr)).readValue()} parses it
  * to a JSON string in Task 5's {@code SettingsBootstrap}. Numbers and
  * booleans are JSON literals already ({@code "1"}, {@code "true"}).
  */
 public enum SettingsKey {
-    HTTP_CLIENT_PROTOCOL("http_client.protocol", "\"h2\""),
+    HTTP_CLIENT_PROTOCOL("http_client.protocol", "\"auto\""),
     HTTP_CLIENT_H2_MAX_POOL_SIZE("http_client.http2_max_pool_size", "4"),
-    HTTP_CLIENT_H2_MULTIPLEXING_LIMIT("http_client.http2_multiplexing_limit", "100");
+    HTTP_CLIENT_H2_MULTIPLEXING_LIMIT("http_client.http2_multiplexing_limit", "100"),
+    BULKHEAD_ADAPTIVE("http_client.bulkhead.adaptive", "true"),
+    BULKHEAD_MIN_PERMITS("http_client.bulkhead.min_permits", "5"),
+    BULKHEAD_MAX_PERMITS("http_client.bulkhead.max_permits", "100"),
+    BULKHEAD_INITIAL_PERMITS("http_client.bulkhead.initial_permits", "10"),
+    BULKHEAD_TARGET_P99_MS("http_client.bulkhead.target_p99_ms", "500"),
+    BULKHEAD_WINDOW_SECONDS("http_client.bulkhead.window_seconds", "5"),
+    BULKHEAD_RAMP_UP_STEP("http_client.bulkhead.ramp_up_step", "1"),
+    BULKHEAD_RAMP_DOWN_FACTOR("http_client.bulkhead.ramp_down_factor", "0.5");
 
     private static final Set<String> ALL_KEYS = Arrays.stream(values())
         .map(SettingsKey::key)

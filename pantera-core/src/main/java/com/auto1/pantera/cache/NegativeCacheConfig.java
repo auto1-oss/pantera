@@ -73,11 +73,6 @@ public final class NegativeCacheConfig {
     public static final Duration DEFAULT_L2_TIMEOUT = Duration.ofMillis(50);
 
     /**
-     * Global instance (singleton).
-     */
-    private static volatile NegativeCacheConfig instance;
-
-    /**
      * TTL for single-tier or fallback.
      */
     private final Duration ttl;
@@ -241,48 +236,6 @@ public final class NegativeCacheConfig {
      */
     public Duration l2Timeout() {
         return this.l2Timeout;
-    }
-
-    /**
-     * Initialize global instance from YAML.
-     * Should be called once at startup.
-     * @param caches The caches YAML mapping from _server.yaml
-     */
-    public static void initialize(final YamlMapping caches) {
-        if (instance == null) {
-            synchronized (NegativeCacheConfig.class) {
-                if (instance == null) {
-                    instance = fromYaml(caches);
-                }
-            }
-        }
-    }
-
-    /**
-     * Get the global instance.
-     * @return Global config (defaults if not initialized)
-     */
-    public static NegativeCacheConfig getInstance() { // NOPMD SingletonClassReturningNewInstance - "configured-or-default" accessor; new is the safe default when init() was never called
-        if (instance == null) {
-            return new NegativeCacheConfig();
-        }
-        return instance;
-    }
-
-    /**
-     * Reset for testing.
-     */
-    public static void reset() {
-        instance = null;
-    }
-
-    /**
-     * Parse configuration from YAML under the {@code negative} sub-key.
-     * @param caches The caches YAML mapping
-     * @return Parsed config
-     */
-    public static NegativeCacheConfig fromYaml(final YamlMapping caches) {
-        return fromYaml(caches, "negative");
     }
 
     /**

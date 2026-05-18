@@ -103,6 +103,19 @@ const RUNTIME_INT_RANGES: Record<RuntimeSettingKey, IntRange | null> = {
   'http_client.protocol': null,
   'http_client.http2_max_pool_size': { min: 1, max: 8 },
   'http_client.http2_multiplexing_limit': { min: 1, max: 1000 },
+  'http_client.bulkhead.adaptive': null,
+  'http_client.bulkhead.min_permits': { min: 1, max: 1000 },
+  'http_client.bulkhead.max_permits': { min: 1, max: 5000 },
+  'http_client.bulkhead.initial_permits': { min: 1, max: 5000 },
+  'http_client.bulkhead.target_p99_ms': { min: 1, max: 60_000 },
+  'http_client.bulkhead.window_seconds': { min: 1, max: 600 },
+  'http_client.bulkhead.ramp_up_step': { min: 1, max: 100 },
+  'http_client.bulkhead.ramp_down_factor': null,
+}
+
+interface DoubleRange { min: number; max: number; step: number }
+const RUNTIME_DOUBLE_RANGES: Partial<Record<RuntimeSettingKey, DoubleRange>> = {
+  'http_client.bulkhead.ramp_down_factor': { min: 0.05, max: 0.95, step: 0.05 },
 }
 
 const HTTP_RUNTIME_KEYS: RuntimeSettingKey[] = [
@@ -111,10 +124,29 @@ const HTTP_RUNTIME_KEYS: RuntimeSettingKey[] = [
   'http_client.http2_multiplexing_limit',
 ]
 
+const BULKHEAD_RUNTIME_KEYS: RuntimeSettingKey[] = [
+  'http_client.bulkhead.adaptive',
+  'http_client.bulkhead.min_permits',
+  'http_client.bulkhead.max_permits',
+  'http_client.bulkhead.initial_permits',
+  'http_client.bulkhead.target_p99_ms',
+  'http_client.bulkhead.window_seconds',
+  'http_client.bulkhead.ramp_up_step',
+  'http_client.bulkhead.ramp_down_factor',
+]
+
 const RUNTIME_LABELS: Record<RuntimeSettingKey, string> = {
   'http_client.protocol': 'Protocol',
   'http_client.http2_max_pool_size': 'HTTP/2 max pool size',
   'http_client.http2_multiplexing_limit': 'HTTP/2 multiplexing limit',
+  'http_client.bulkhead.adaptive': 'Adaptive (AIMD)',
+  'http_client.bulkhead.min_permits': 'Minimum permits',
+  'http_client.bulkhead.max_permits': 'Maximum permits',
+  'http_client.bulkhead.initial_permits': 'Initial permits',
+  'http_client.bulkhead.target_p99_ms': 'Target p99 latency (ms)',
+  'http_client.bulkhead.window_seconds': 'Evaluation window (seconds)',
+  'http_client.bulkhead.ramp_up_step': 'Ramp-up step',
+  'http_client.bulkhead.ramp_down_factor': 'Ramp-down factor',
 }
 
 const RUNTIME_HELP: Partial<Record<RuntimeSettingKey, string>> = {
@@ -127,6 +159,25 @@ const RUNTIME_HELP: Partial<Record<RuntimeSettingKey, string>> = {
     + 'unless you have a specific need to fan out.',
   'http_client.http2_multiplexing_limit':
     'Max concurrent streams per HTTP/2 connection.',
+  'http_client.bulkhead.adaptive':
+    'When on, each per-repo bulkhead AIMD-tunes its in-flight permit ceiling '
+    + 'on every evaluation window. When off, the ceiling stays at "Initial permits".',
+  'http_client.bulkhead.min_permits':
+    'Lower bound on the dynamic permit ceiling. AIMD never shrinks below this.',
+  'http_client.bulkhead.max_permits':
+    'Hard cap on concurrent in-flight requests per repository. AIMD never grows above this.',
+  'http_client.bulkhead.initial_permits':
+    'Starting permit ceiling when a bulkhead is (re)created. Must lie between min and max.',
+  'http_client.bulkhead.target_p99_ms':
+    'Upstream latency target. Windows whose peak latency exceeds 2× this trigger a soft ramp-down; '
+    + 'windows at or below this and free of errors trigger ramp-up.',
+  'http_client.bulkhead.window_seconds':
+    'How often the AIMD controller evaluates the last window of outcomes.',
+  'http_client.bulkhead.ramp_up_step':
+    'Permits added to the ceiling per healthy window (additive increase).',
+  'http_client.bulkhead.ramp_down_factor':
+    'Multiplier on the ceiling when a window contains errors (multiplicative decrease). '
+    + 'Lower = more aggressive back-off.',
 }
 
 onMounted(async () => {
@@ -816,6 +867,105 @@ async function saveExternalLinks() {
                 <template v-if="RUNTIME_INT_RANGES[key]">
                   Allowed range:
                   {{ RUNTIME_INT_RANGES[key]?.min }}–{{ RUNTIME_INT_RANGES[key]?.max }}.
+                </template>
+                Default: {{ runtime.rows[key]?.default }}.
+              </div>
+              <div class="flex gap-2 mt-1">
+                <Button
+                  label="Save"
+                  icon="pi pi-save"
+                  size="small"
+                  :loading="runtime.saving[key]"
+                  :disabled="!runtime.isDirty(key) || runtime.saving[key]"
+                  :data-testid="`runtime-save-${key}`"
+                  @click="runtime.saveOne(key)"
+                />
+                <Button
+                  v-if="runtime.isOverridden(key)"
+                  label="Reset to default"
+                  icon="pi pi-undo"
+                  size="small"
+                  severity="secondary"
+                  text
+                  :loading="runtime.saving[key]"
+                  :data-testid="`runtime-reset-${key}`"
+                  @click="runtime.resetOne(key)"
+                />
+              </div>
+            </div>
+          </div>
+        </template>
+      </Card>
+
+      <!-- Bulkhead (Adaptive Concurrency) -->
+      <Card class="shadow-sm">
+        <template #title>Bulkhead (Adaptive Concurrency)</template>
+        <template #subtitle>
+          Per-repository in-flight concurrency budget. When adaptive mode is on
+          an AIMD controller grows the ceiling on healthy windows and halves it
+          on the first error or sustained high-latency window. Changes take
+          effect on the next bulkhead acquire (existing in-flight requests are
+          unaffected).
+        </template>
+        <template #content>
+          <div v-if="runtime.loading.value" class="text-sm text-gray-500">Loading…</div>
+          <div
+            v-else-if="runtime.loadError.value"
+            class="text-sm text-red-700 dark:text-red-300"
+          >
+            Failed to load bulkhead settings: {{ runtime.loadError.value }}
+          </div>
+          <div v-else class="space-y-5">
+            <div
+              v-for="key in BULKHEAD_RUNTIME_KEYS"
+              :key="key"
+              class="flex flex-col gap-1"
+              :data-testid="`runtime-row-${key}`"
+            >
+              <label
+                :for="`field-${key}`"
+                class="text-sm font-medium text-gray-700 dark:text-gray-200"
+              >
+                {{ RUNTIME_LABELS[key] }}
+              </label>
+              <InputSwitch
+                v-if="key === 'http_client.bulkhead.adaptive'"
+                :id="`field-${key}`"
+                v-model="runtime.edited[key] as boolean"
+                :data-testid="`runtime-input-${key}`"
+              />
+              <InputNumber
+                v-else-if="RUNTIME_DOUBLE_RANGES[key]"
+                :id="`field-${key}`"
+                v-model="runtime.edited[key] as number"
+                :min="RUNTIME_DOUBLE_RANGES[key]?.min"
+                :max="RUNTIME_DOUBLE_RANGES[key]?.max"
+                :step="RUNTIME_DOUBLE_RANGES[key]?.step"
+                :min-fraction-digits="2"
+                :max-fraction-digits="2"
+                show-buttons
+                class="w-48"
+                :input-props="{ 'data-testid': `runtime-input-${key}` }"
+              />
+              <InputNumber
+                v-else
+                :id="`field-${key}`"
+                v-model="runtime.edited[key] as number"
+                :min="RUNTIME_INT_RANGES[key]?.min"
+                :max="RUNTIME_INT_RANGES[key]?.max"
+                show-buttons
+                class="w-48"
+                :input-props="{ 'data-testid': `runtime-input-${key}` }"
+              />
+              <div v-if="RUNTIME_HELP[key]" class="text-xs text-gray-500">
+                {{ RUNTIME_HELP[key] }}
+                <template v-if="RUNTIME_INT_RANGES[key]">
+                  Allowed range:
+                  {{ RUNTIME_INT_RANGES[key]?.min }}–{{ RUNTIME_INT_RANGES[key]?.max }}.
+                </template>
+                <template v-else-if="RUNTIME_DOUBLE_RANGES[key]">
+                  Allowed range:
+                  {{ RUNTIME_DOUBLE_RANGES[key]?.min }}–{{ RUNTIME_DOUBLE_RANGES[key]?.max }}.
                 </template>
                 Default: {{ runtime.rows[key]?.default }}.
               </div>

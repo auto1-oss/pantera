@@ -24,17 +24,14 @@ import com.auto1.pantera.http.trace.TraceHeaders;
 import com.auto1.pantera.metrics.MicrometerMetrics;
 import org.apache.logging.log4j.ThreadContext;
 import io.reactivex.Flowable;
-import io.reactivex.processors.UnicastProcessor;
 import org.apache.hc.core5.net.URIBuilder;
 import org.eclipse.jetty.client.AsyncRequestContent;
 import org.eclipse.jetty.client.HttpClient;
 import org.eclipse.jetty.client.Request;
 import org.eclipse.jetty.http.HttpFields;
 import org.eclipse.jetty.http.HttpVersion;
-import org.eclipse.jetty.io.Content;
 import org.eclipse.jetty.util.Callback;
 import java.net.URI;
-import java.nio.ByteBuffer;
 import java.util.Locale;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
@@ -118,9 +115,16 @@ final class JettyClientSlice implements Slice {
             ThreadContext.get("repository.name"), "unknown"
         );
         final long requestStartNanos = System.nanoTime();
-        // Streaming: emit chunks as they arrive instead of buffering everything.
-        // UnicastProcessor supports backpressure and single-subscriber semantics.
-        final UnicastProcessor<ByteBuffer> processor = UnicastProcessor.create();
+        // Response-body publisher is constructed inside the
+        // onResponseContentSource callback below — Jetty owns the
+        // Content.Source lifecycle and only exposes it once headers
+        // have been parsed. The JettyContentSourcePublisher bridges
+        // it to Reactive Streams with proper backpressure
+        // (replaces the old UnicastProcessor + StreamingDemander).
+        // Mutable holder so we can complete the publisher with an
+        // empty body in the no-body / failure paths below.
+        final java.util.concurrent.atomic.AtomicReference<JettyContentSourcePublisher>
+            responseBody = new java.util.concurrent.atomic.AtomicReference<>();
         if (line.method() != RqMethod.HEAD) {
             final AsyncRequestContent async = new AsyncRequestContent(); // NOPMD CloseResource - lifecycle owned by Jetty request; closed via Flowable.doFinally(async::close)
             Flowable.fromPublisher(body)
@@ -149,9 +153,12 @@ final class JettyClientSlice implements Slice {
         request.onResponseBegin(JettyClientSlice::recordHttp2Negotiation);
         request.onResponseContentSource(
                 (response, source) -> {
-                    // Complete the response future NOW with headers + streaming body.
-                    // Client receives the Response as soon as headers arrive,
-                    // body bytes stream through the processor as Demander reads them.
+                    // Bridge Jetty's Content.Source to a Reactive Streams
+                    // Publisher with proper backpressure. The downstream
+                    // subscriber's request(n) flows back to the H2 layer:
+                    // we only release chunks (which triggers WINDOW_UPDATE)
+                    // after copying them out, and we only demand new
+                    // chunks while downstream still wants data.
                     final RsStatus status = RsStatus.byCode(response.getStatus());
                     final Headers respHeaders = toHeaders(response.getHeaders());
                     final Headers sanitizedRespHeaders = LogSanitizer.sanitizeHeaders(respHeaders);
@@ -163,15 +170,41 @@ final class JettyClientSlice implements Slice {
                         .field("http.response.headers", sanitizedRespHeaders.toString())
                         .field("log.source", "http")
                         .log();
+                    final JettyContentSourcePublisher publisher =
+                        new JettyContentSourcePublisher(source, response);
+                    responseBody.set(publisher);
+                    // Start the eager pre-drain on this I/O thread
+                    // BEFORE delivering the response: the bridge copies
+                    // each chunk into a heap buffer and releases the
+                    // pooled Jetty buffer immediately, which is what
+                    // lets HTTP/1.1 keep-alive reclaim the connection
+                    // even when downstream never subscribes. By the
+                    // time {@code res.complete} fires below, the
+                    // staging buffer already holds whatever bytes were
+                    // ready on the wire, and continuing chunks are
+                    // pulled via {@link Content.Source#demand} on this
+                    // same I/O thread.
+                    publisher.primeOnIoThread();
                     res.complete(
                         ResponseBuilder.from(status)
                             .headers(respHeaders)
-                            .body(processor)
+                            .body(publisher)
                             .build()
                     );
-                    // Start streaming body chunks through the processor.
-                    final Runnable demander = new StreamingDemander(source, response, processor);
-                    demander.run();
+                    // Safety net for callers that never subscribe to the
+                    // body publisher. Pool buffers are already released
+                    // by {@link #primeOnIoThread} — this just frees the
+                    // staged heap copies and prevents a late subscriber
+                    // from racing against the discard. 5 ms is much
+                    // longer than the typical synchronous-subscriber
+                    // turnaround (microseconds), so blocking consumers
+                    // (test patterns that do {@code .get().body().asBytes()})
+                    // win the CAS first; only abandoned bodies fall
+                    // through to the discard.
+                    JettyClientSlice.this.client.getScheduler().schedule(
+                        publisher::discardIfUnsubscribed,
+                        5, TimeUnit.MILLISECONDS
+                    );
                 }
         );
         final Headers sanitizedHeaders = LogSanitizer.sanitizeHeaders(toHeaders(request.getHeaders()));
@@ -192,7 +225,9 @@ final class JettyClientSlice implements Slice {
                     if (result.getFailure() == null) {
                         // For responses where onResponseContentSource never fired
                         // (empty body, HEAD, etc.), complete here with empty body.
-                        // If already completed by onResponseContentSource, this is a no-op.
+                        // If already completed by onResponseContentSource, this is a no-op
+                        // — the JettyContentSourcePublisher handles its own
+                        // completion via Jetty's source.read returning isLast.
                         if (res.complete(
                             ResponseBuilder.from(
                                 RsStatus.byCode(result.getResponse().getStatus())
@@ -210,9 +245,14 @@ final class JettyClientSlice implements Slice {
                                 .field("log.source", "http")
                                 .log();
                         }
-                        // Complete the processor in case it was created but never used
-                        // (edge case: content source callback fired but no chunks)
-                        processor.onComplete();
+                        // Pool-buffer release is handled by
+                        // {@link JettyContentSourcePublisher#primeOnIoThread}
+                        // during {@code onResponseContentSource} — by
+                        // the time we reach here the source is already
+                        // drained, so there is nothing to discard from
+                        // the success path. The scheduled fallback
+                        // covers the case where the caller never
+                        // subscribes (clears staged heap copies).
                         // M1 outbound metric: response received, bucket by status.
                         recordOutboundMetric(
                             callerTag, repoName, requestStartNanos,
@@ -243,8 +283,18 @@ final class JettyClientSlice implements Slice {
                                 .field("log.source", "application")
                                 .log();
                         }
-                        // Complete processor with error so subscribers don't hang
-                        processor.onError(failure);
+                        // If a body publisher was created but never
+                        // subscribed (edge: send-side failure after
+                        // onResponseContentSource fired), discard its
+                        // buffered chunks so we don't leak. Jetty's
+                        // source.fail() also propagates the failure
+                        // to any future subscriber; the discard guard
+                        // just makes sure release() runs even if no
+                        // one ever subscribes.
+                        final JettyContentSourcePublisher pub = responseBody.get();
+                        if (pub != null) {
+                            pub.discardIfUnsubscribed();
+                        }
                         res.completeExceptionally(failure);
                         // M1 outbound metric: request failed, bucket by exception.
                         recordOutboundMetric(
@@ -391,166 +441,7 @@ final class JettyClientSlice implements Slice {
         return request;
     }
 
-    /**
-     * Streaming demander that emits response content chunks through a UnicastProcessor
-     * as they arrive, instead of buffering everything in memory. This allows callers to
-     * start processing bytes immediately without waiting for the full response.
-     *
-     * <p>See <a href="https://eclipse.dev/jetty/documentation/jetty-12/programming-guide/index.html#pg-client-http-content-response">jetty docs</a>
-     * for more details on the Content.Source demand model.</p>
-     *
-     * @since 0.3
-     */
-    private static final class StreamingDemander implements Runnable {
-
-        /**
-         * Content source.
-         */
-        private final Content.Source source;
-
-        /**
-         * Response.
-         */
-        private final org.eclipse.jetty.client.Response response;
-
-        /**
-         * Processor that streams chunks to subscribers.
-         */
-        private final UnicastProcessor<ByteBuffer> processor;
-
-        /**
-         * Ctor.
-         * @param source Content source
-         * @param response Response
-         * @param processor Processor to emit chunks through
-         */
-        private StreamingDemander(
-            final Content.Source source,
-            final org.eclipse.jetty.client.Response response,
-            final UnicastProcessor<ByteBuffer> processor
-        ) {
-            this.source = source;
-            this.response = response;
-            this.processor = processor;
-        }
-
-        @Override
-        public void run() {
-            long lastDataTime = System.nanoTime();
-            final long idleTimeoutNanos = TimeUnit.SECONDS.toNanos(120);
-            int iterations = 0;
-            final int maxIterations = 1_000_000;
-
-            while (iterations++ < maxIterations) {
-                if (System.nanoTime() - lastDataTime > idleTimeoutNanos) {
-                    EcsLogger.error("com.auto1.pantera.http.client")
-                        .message(String.format("Response reading idle timeout (120s without data) after %d iterations", iterations))
-                        .eventCategory("web")
-                        .eventAction("http_response_read")
-                        .eventOutcome("failure")
-                        .field("event.reason", "request_timeout")
-                        .field("url.full", this.response.getRequest().getURI().toString())
-                        .field("log.source", "application")
-                        .log();
-                    final TimeoutException timeout =
-                        new TimeoutException("Response reading idle timeout (120s without data)");
-                    this.processor.onError(timeout);
-                    this.response.abort(timeout);
-                    return;
-                }
-
-                final Content.Chunk chunk = this.source.read();
-                if (chunk == null) {
-                    this.source.demand(this);
-                    return;
-                }
-                if (Content.Chunk.isFailure(chunk)) {
-                    final Throwable failure = chunk.getFailure();
-                    if (chunk.isLast()) {
-                        this.processor.onError(failure);
-                        this.response.abort(failure);
-                        EcsLogger.error("com.auto1.pantera.http.client")
-                            .message("HTTP response read failed")
-                            .eventCategory("web")
-                            .eventAction("http_response_read")
-                            .eventOutcome("failure")
-                            .field("url.full", this.response.getRequest().getURI().toString())
-                            .error(failure)
-                            .field("log.source", "application")
-                            .log();
-                        return;
-                    } else {
-                        // A transient failure such as a read timeout.
-                        if (RsStatus.byCode(this.response.getStatus()).success()) {
-                            // Release chunk before retry to prevent leak
-                            if (chunk.canRetain()) {
-                                chunk.release();
-                            }
-                            // Try to read again.
-                            continue;
-                        } else {
-                            // The transient failure is treated as a terminal failure.
-                            this.processor.onError(failure);
-                            this.response.abort(failure);
-                            EcsLogger.error("com.auto1.pantera.http.client")
-                                .message("Transient failure treated as terminal")
-                                .eventCategory("web")
-                                .eventAction("http_response_read")
-                                .eventOutcome("failure")
-                                .field("url.full", this.response.getRequest().getURI().toString())
-                                .error(failure)
-                                .field("log.source", "application")
-                                .log();
-                            return;
-                        }
-                    }
-                }
-                final ByteBuffer stored;
-                try {
-                    stored = JettyClientSlice.copyChunk(chunk);
-                } finally {
-                    chunk.release();
-                }
-                // Stream chunk to subscriber immediately instead of buffering
-                this.processor.onNext(stored);
-                lastDataTime = System.nanoTime();
-                if (chunk.isLast()) {
-                    this.processor.onComplete();
-                    return;
-                }
-            }
-
-            // Max iterations exceeded
-            EcsLogger.error("com.auto1.pantera.http.client")
-                .message("Max iterations exceeded while reading response (max: " + maxIterations + ")")
-                .eventCategory("web")
-                .eventAction("http_response_read")
-                .eventOutcome("failure")
-                .field("url.full", this.response.getRequest().getURI().toString())
-                .field("log.source", "application")
-                .log();
-            final IllegalStateException error =
-                new IllegalStateException("Too many chunks - possible infinite loop");
-            this.processor.onError(error);
-            this.response.abort(error);
-        }
-    }
-
-    private static ByteBuffer copyChunk(final Content.Chunk chunk) {
-        final ByteBuffer original = chunk.getByteBuffer();
-        if (original.hasArray() && original.arrayOffset() == 0 && original.position() == 0
-            && original.remaining() == original.capacity()) {
-            // Fast-path: reuse backing array when buffer fully represents it
-            return ByteBuffer.wrap(original.array()).asReadOnlyBuffer();
-        }
-        final ByteBuffer slice = original.slice();
-        final ByteBuffer copy = ByteBuffer.allocate(slice.remaining());
-        copy.put(slice);
-        copy.flip();
-        return copy;
-    }
-
-    /**
+/**
      * Increment {@code pantera_http2_negotiated_total{upstream_host,version}}
      * for an upstream response, using ALPN canonical names for the version
      * label ({@code "h2"} for HTTP/2, {@code "http/1.1"} for HTTP/1.1).

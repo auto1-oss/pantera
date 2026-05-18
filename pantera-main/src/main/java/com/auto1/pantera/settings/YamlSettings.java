@@ -294,8 +294,6 @@ public final class YamlSettings implements Settings {
         // `auth-enabled`) can be resolved by accessors like
         // GlobalCacheConfig.getInstance().authEnabled().
         GlobalCacheConfig.initialize(valkey, this.meta().yamlMapping("caches"));
-        // Initialize unified negative cache config
-        NegativeCacheConfig.initialize(this.meta().yamlMapping("caches"));
         // Initialize cooldown metadata cache config
         FilteredMetadataCacheConfig.initialize(this.meta().yamlMapping("caches"));
         // Parse ArtifactIndexCache tier configs eagerly so the index wiring

@@ -298,6 +298,31 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
         if (started.compareAndSet(false, true)) {
             try {
                 this.clnt.start();
+                // Jetty's HttpClient.doStart() registers the built-in
+                // WWWAuthenticationProtocolHandler (handles 401) and
+                // ProxyAuthenticationProtocolHandler (handles 407) into
+                // its protocol-handler map. We MUST remove them AFTER
+                // start() — removing before is a no-op because the map
+                // is empty at that point.
+                //
+                // Why remove them: Pantera does its own bearer / basic
+                // auth via AuthClientSlice + BearerAuthenticator. Jetty's
+                // built-in handlers also attempt to react to 401/407,
+                // and they throw {@code HttpResponseException("HTTP
+                // protocol violation: Authentication challenge without
+                // WWW-Authenticate header")} whenever an upstream replies
+                // 401 / 407 without the matching challenge header — which
+                // happens with several real-world registries (some Docker
+                // mirrors, Maven repos behind permission-denied gates,
+                // PyPI internal authn paths). The thrown exception
+                // surfaces as a hard failure on what would otherwise be
+                // a normal 401-then-auth-retry flow.
+                this.clnt.getProtocolHandlers().remove(
+                    org.eclipse.jetty.client.WWWAuthenticationProtocolHandler.NAME
+                );
+                this.clnt.getProtocolHandlers().remove(
+                    org.eclipse.jetty.client.ProxyAuthenticationProtocolHandler.NAME
+                );
             } catch (Exception e) {
                 started.set(false);  // Reset on failure
                 throw new PanteraException(
@@ -655,14 +680,12 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
             }
         );
         result.setFollowRedirects(settings.followRedirects());
-        // Remove Jetty's built-in AuthenticationProtocolHandler. Some upstream registries
-        // return 401 without a WWW-Authenticate header (non-compliant but common), which
-        // causes Jetty to throw "HTTP protocol violation". Pantera handles authentication
-        // itself via AuthClientSlice, so the built-in handler is unnecessary.
-        result.getProtocolHandlers().remove(
-            org.eclipse.jetty.client.WWWAuthenticationProtocolHandler.NAME
-        );
-        
+        // Note: Jetty's built-in WWW/Proxy authentication protocol
+        // handlers are removed in {@link Lease#start()} AFTER
+        // {@code HttpClient.start()} runs — they are added by
+        // {@code HttpClient.doStart()}, so removing them here in the
+        // constructor body is a no-op (the handler map is still empty).
+
         // CRITICAL FIX: Jetty 12 has a NPE bug when connectTimeout is 0
         // When timeout is 0 (infinite), don't set it - let Jetty use its default behavior
         // This prevents: "Cannot invoke Scheduler$Task.cancel() because connect.timeout is null"

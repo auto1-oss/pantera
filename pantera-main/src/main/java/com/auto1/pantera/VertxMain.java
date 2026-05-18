@@ -496,6 +496,7 @@ public final class VertxMain {
         // their existing client until release; this is the v2.2 mechanism
         // that RuntimeSettingsCache was designed to enable.
         if (this.settingsCache != null) {
+            slices.setBulkheadTuningSupplier(this.settingsCache::bulkheadTuning);
             this.settingsCache.addListener("http_client.", changedKey -> {
                 EcsLogger.info("com.auto1.pantera")
                     .message("http_client.* setting changed; invalidating upstream client pool key=" + changedKey)
@@ -503,7 +504,11 @@ public final class VertxMain {
                     .eventAction("http_client_settings_change")
                     .field("log.source", "application")
                     .log();
-                slices.invalidateUpstreamClients();
+                if (changedKey != null && changedKey.startsWith("http_client.bulkhead.")) {
+                    slices.invalidateBulkheads();
+                } else {
+                    slices.invalidateUpstreamClients();
+                }
             });
         }
         // M2 (analysis/plan/v1/PLAN.md): the prefetch subsystem boot wiring

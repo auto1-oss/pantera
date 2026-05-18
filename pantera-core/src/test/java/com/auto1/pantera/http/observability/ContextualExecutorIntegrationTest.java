@@ -70,9 +70,22 @@ final class ContextualExecutorIntegrationTest {
         // the caller; the follower thread that's dispatched for completion
         // is the one wrapped by ContextualExecutor. We assert the completion
         // callback sees the caller's context.
+        //
+        // Await fut before wiring thenApplyAsync to remove a pre-existing
+        // submission race: thenApplyAsync schedules via the executor's
+        // execute() at the moment its dependency completes, on whichever
+        // thread completes it. If the loader's supplyAsync finishes before
+        // the main thread reaches thenApplyAsync, the JDK invokes execute()
+        // on a backing-pool thread that has no ThreadContext, so the
+        // ContextualExecutor snapshot is empty and the handler sees null.
+        // Awaiting forces submission to happen on the main thread (where
+        // the test installed the caller's context) while still exercising
+        // ContextualExecutor's restore-on-runner semantics — the handler
+        // runs on the backing pool either way.
         final CompletableFuture<String> fut = sf.load("k1", () ->
             CompletableFuture.supplyAsync(() -> "value", this.backing)
         );
+        fut.get(5L, TimeUnit.SECONDS);
         fut.thenApplyAsync(v -> {
             seenTrace.set(ThreadContext.get("trace.id"));
             seenRepo.set(ThreadContext.get("repository.name"));

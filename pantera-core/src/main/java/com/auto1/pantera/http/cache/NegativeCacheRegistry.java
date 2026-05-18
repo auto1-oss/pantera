@@ -70,6 +70,63 @@ public final class NegativeCacheRegistry {
         this.shared = null;
     }
 
+    /**
+     * Invalidate every negative-cache entry whose canonical artifact name
+     * matches {@code artifactName} (exact or parent-prefix; see
+     * {@link NegativeCache#invalidateByArtifactName(String)}). Called by
+     * every adapter's upload / publish path so a 404 cached before the
+     * artifact existed does not keep shadowing it for the negative TTL.
+     *
+     * <p>The invalidation is published on {@code CacheInvalidationPubSub}
+     * (via {@link NegativeCache#invalidateByArtifactName}) so peer
+     * instances in a multi-node cluster also drop their L1 entries; the
+     * uploading instance's L1 + the shared L2 are cleared synchronously
+     * before this method returns.
+     *
+     * <p>Never throws — an exception in cache cleanup must not break the
+     * user-facing upload.
+     *
+     * @param repoType  Repository type (e.g. {@code "maven-proxy"},
+     *                  {@code "npm-hosted"}) for logging only.
+     * @param artifactName Canonical artifact name as the cache stores it
+     *                  (e.g. {@code "com/google/guava/guava"} for Maven,
+     *                  {@code "lodash"} for npm). {@code null} or empty
+     *                  → no-op.
+     * @return number of L1 entries invalidated on this instance (0 on null/empty input or on failure).
+     */
+    public int invalidateAfterUpload(final String repoType, final String artifactName) {
+        if (artifactName == null || artifactName.isEmpty()) {
+            return 0;
+        }
+        try {
+            final int count = this.sharedCache().invalidateByArtifactName(artifactName);
+            if (count > 0) {
+                com.auto1.pantera.http.log.EcsLogger.info("com.auto1.pantera.cache")
+                    .message("Negative-cache invalidated after upload (n=" + count + ")")
+                    .eventCategory("database")
+                    .eventAction("neg_cache_invalidate_on_upload")
+                    .eventOutcome("success")
+                    .field("package.name", artifactName)
+                    .field("repository.type", repoType == null ? "unknown" : repoType)
+                    .field("log.source", "application")
+                    .log();
+            }
+            return count;
+        } catch (final RuntimeException ex) {
+            com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.cache")
+                .message("Negative-cache invalidation failed; entry will expire via TTL")
+                .eventCategory("database")
+                .eventAction("neg_cache_invalidate_on_upload")
+                .eventOutcome("failure")
+                .field("package.name", artifactName)
+                .field("repository.type", repoType == null ? "unknown" : repoType)
+                .error(ex)
+                .field("log.source", "application")
+                .log();
+            return 0;
+        }
+    }
+
     private static NegativeCache createFallback() {
         return new NegativeCache(new com.auto1.pantera.cache.NegativeCacheConfig());
     }

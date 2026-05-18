@@ -173,28 +173,12 @@ final class GoUploadSlice implements Slice {
             // probe-against-group that cached a 404 keeps shadowing the
             // newly-published artifact and `go get` returns 404.
             extra = extra.whenComplete((ignored, error) -> {
-                if (error != null) {
-                    return;
-                }
-                try {
-                    final int n = NegativeCacheRegistry.instance().sharedCache()
-                        .invalidateByArtifactName(module);
-                    if (n > 0) {
-                        EcsLogger.info("com.auto1.pantera.http")
-                            .message("Negative-cache invalidated after upload "
-                                + "(module=" + module + ", invalidated=" + n + ")")
-                            .eventCategory("database")
-                            .eventAction("neg_cache_invalidate_on_upload")
-                            .field("package.name", module)
-                            .field("log.source", "application")
-                            .log();
-                    }
-                } catch (final RuntimeException ex) {
-                    EcsLogger.warn("com.auto1.pantera.http")
-                        .message("Negative-cache invalidation after upload failed")
-                        .error(ex)
-                        .field("log.source", "application")
-                        .log();
+                if (error == null) {
+                    NegativeCacheRegistry.instance()
+                        .invalidateAfterUpload("go-proxy", module);
+                    com.auto1.pantera.cooldown.metadata
+                        .FilteredMetadataCacheRegistry.instance()
+                        .invalidateAfterUpload("go-proxy", module);
                 }
             });
         } else {

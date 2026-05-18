@@ -240,17 +240,24 @@ final class WheelSlice implements Slice {
         final Key key, final PackageInfo info,
         Headers headers
     ) {
+        final String normalized = new NormalizedProjectName.Simple(info.name()).value();
         return this.storage.metadata(key).thenApply(meta -> meta.read(Meta.OP_SIZE).get())
             .thenCompose(size -> {
                 final ArtifactEvent event = new ArtifactEvent(
                     WheelSlice.TYPE,
                     this.rname,
                     new Login(headers).getValue(),
-                    new NormalizedProjectName.Simple(info.name()).value(),
+                    normalized,
                     info.version(),
                     size
                 );
                 this.events.ifPresent(queue -> queue.add(event));
+                // Drop any cached 404 for this package so requests that
+                // 404'd before publish do not keep returning 404.
+                com.auto1.pantera.http.cache.NegativeCacheRegistry.instance()
+                    .invalidateAfterUpload("pypi", normalized);
+                com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry.instance()
+                    .invalidateAfterUpload("pypi", normalized);
                 return this.syncIndex.recordSync(event);
             });
     }

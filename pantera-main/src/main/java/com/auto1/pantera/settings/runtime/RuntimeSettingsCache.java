@@ -57,11 +57,13 @@ public final class RuntimeSettingsCache {
 
     private record Snapshot(
         HttpTuning http,
+        BulkheadTuning bulkhead,
         Map<String, JsonObject> raw
     ) {
         static Snapshot defaults() {
             return new Snapshot(
                 HttpTuning.defaults(),
+                BulkheadTuning.defaults(),
                 Map.of()
             );
         }
@@ -106,6 +108,10 @@ public final class RuntimeSettingsCache {
 
     public HttpTuning httpTuning() {
         return this.snapshot.http();
+    }
+
+    public BulkheadTuning bulkheadTuning() {
+        return this.snapshot.bulkhead();
     }
 
     public Map<String, JsonObject> raw() {
@@ -160,6 +166,7 @@ public final class RuntimeSettingsCache {
         final Map<String, JsonObject> rows = this.dao.listAll();
         this.snapshot = new Snapshot(
             HttpTuning.fromMap(rows),
+            BulkheadTuning.fromMap(rows),
             Map.copyOf(rows)
         );
         this.lastReadAt = now;

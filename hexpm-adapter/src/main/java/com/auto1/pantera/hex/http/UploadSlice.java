@@ -176,6 +176,11 @@ public final class UploadSlice implements Slice {
                             name.get(), version.get(), tarcontent.get().length
                         );
                         this.events.ifPresent(queue -> queue.add(event));
+                        com.auto1.pantera.http.cache.NegativeCacheRegistry.instance()
+                            .invalidateAfterUpload("hexpm", name.get());
+                        com.auto1.pantera.cooldown.metadata
+                            .FilteredMetadataCacheRegistry.instance()
+                            .invalidateAfterUpload("hexpm", name.get());
                         // Block on the index UPSERT before returning 201 so
                         // the next group lookup sees the artifact.
                         return this.syncIndex.recordSync(event).thenApply(ignored ->

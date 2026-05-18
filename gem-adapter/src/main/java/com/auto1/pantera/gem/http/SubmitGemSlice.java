@@ -119,6 +119,11 @@ final class SubmitGemSlice implements Slice {
                                     pair.getKey(), pair.getValue(), size
                                 );
                                 this.events.ifPresent(queue -> queue.add(event));
+                                com.auto1.pantera.http.cache.NegativeCacheRegistry.instance()
+                                    .invalidateAfterUpload("gem", pair.getKey());
+                                com.auto1.pantera.cooldown.metadata
+                                    .FilteredMetadataCacheRegistry.instance()
+                                    .invalidateAfterUpload("gem", pair.getKey());
                                 return this.syncIndex.recordSync(event);
                             })
                     );

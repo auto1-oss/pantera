@@ -24,6 +24,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
+import java.util.function.IntSupplier;
 
 /**
  * Micrometer metrics for Pantera.
@@ -774,6 +775,62 @@ public final class MicrometerMetrics {
                 + "the repo's concurrency semaphore was full. Sustained non-zero "
                 + "means the repo is saturated and clients are seeing back-pressure.")
             .tags("repo", repo)
+            .register(registry)
+            .increment();
+    }
+
+    /**
+     * Strong references to per-repo AIMD permit suppliers, mirroring the
+     * circuit-breaker pattern above. Micrometer holds gauges weakly; without
+     * this map the supplier lambda is GC'd after registration and the gauge
+     * scrapes NaN forever.
+     */
+    private final Map<String, IntSupplier> bulkheadPermitsSuppliers = new ConcurrentHashMap<>();
+
+    /**
+     * Register a polling gauge {@code pantera_bulkhead_permits_current{repo}}
+     * that reflects the current AIMD-tuned permit ceiling for the given
+     * repository. Idempotent per repo — the first registration wins.
+     *
+     * @param repo Repository name.
+     * @param permitsSupplier Supplier returning the current permit ceiling.
+     * @since 2.2.0
+     */
+    public void registerBulkheadPermitsGauge(
+        final String repo, final IntSupplier permitsSupplier
+    ) {
+        final IntSupplier prev =
+            this.bulkheadPermitsSuppliers.putIfAbsent(repo, permitsSupplier);
+        if (prev != null) {
+            return;
+        }
+        Gauge.builder(
+                "pantera.bulkhead.permits.current",
+                permitsSupplier,
+                IntSupplier::getAsInt
+            )
+            .description("Current AIMD-tuned permit ceiling for the per-repo bulkhead. "
+                + "Tracks how aggressively the controller is letting traffic through right now. "
+                + "Sustained min = upstream is unhealthy; sustained max = upstream is healthy and "
+                + "demand exceeds the cap (consider raising max_permits).")
+            .tags("repo", repo)
+            .register(registry);
+    }
+
+    /**
+     * Increment {@code pantera_bulkhead_ramp_events_total{repo,direction}}.
+     * Fires once per AIMD step that actually changed the permit ceiling.
+     *
+     * @param repo Repository name.
+     * @param direction Either {@code "up"} (additive increase) or {@code "down"} (multiplicative decrease).
+     * @since 2.2.0
+     */
+    public void recordBulkheadRampEvent(final String repo, final String direction) {
+        Counter.builder("pantera.bulkhead.ramp.events.total")
+            .description("Per-repo AIMD permit-ceiling adjustments. Up = healthy window "
+                + "increased the ceiling; down = error or high-latency window halved it. "
+                + "A sustained ramp-down rate indicates upstream instability or under-provisioned max.")
+            .tags("repo", repo, "direction", direction)
             .register(registry)
             .increment();
     }

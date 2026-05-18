@@ -210,6 +210,19 @@ public class RepositorySlices {
         new ConcurrentHashMap<>();
 
     /**
+     * Supplier of bulkhead tuning sourced from the v2.2 runtime settings
+     * cache. Read on every {@link #getOrCreateBulkhead(String)} call so a
+     * post-{@link #invalidateBulkheads()} miss rebuilds with the latest
+     * {@code http_client.bulkhead.*} values. Defaults to
+     * {@link com.auto1.pantera.settings.runtime.BulkheadTuning#defaults()}
+     * until {@code VertxMain} wires the real supplier in.
+     */
+    private volatile java.util.function.Supplier<
+        com.auto1.pantera.settings.runtime.BulkheadTuning
+    > bulkheadTuningSupplier =
+        com.auto1.pantera.settings.runtime.BulkheadTuning::defaults;
+
+    /**
      * Supplier of circuit-breaker settings. Every new {@link AutoBlockRegistry}
      * constructed in {@link #getOrCreateMemberRegistry} receives this supplier
      * so admin-time settings updates (via the system-settings UI) flow into
@@ -361,7 +374,14 @@ public class RepositorySlices {
         // Load negative cache config once at construction time.
         // Reads repo-negative first; falls back to group-negative with deprecation WARN.
         this.negativeCacheConfig = loadNegativeCacheConfig(settings);
-        this.sharedNegativeCache = new NegativeCache(this.negativeCacheConfig);
+        // Cross-instance invalidation: wire the pub/sub channel when
+        // Valkey is configured so an upload on instance A drops L1 on
+        // every peer. Without this, peer L1 entries serve stale 404s
+        // for the negative TTL (default 5 minutes) after an upload.
+        // Same pattern as CooldownSupport wires for cooldown caches.
+        final com.auto1.pantera.cache.CacheInvalidationPubSub negPubsub =
+            settings == null ? null : settings.cacheInvalidationPubSub().orElse(null);
+        this.sharedNegativeCache = new NegativeCache(this.negativeCacheConfig, negPubsub);
         com.auto1.pantera.http.cache.NegativeCacheRegistry.instance()
             .setSharedCache(this.sharedNegativeCache);
         this.slices = CacheBuilder.newBuilder()
@@ -525,6 +545,53 @@ public class RepositorySlices {
      */
     public void invalidateUpstreamClients() {
         this.sharedClients.invalidateAll();
+    }
+
+    /**
+     * Install (or replace) the supplier from which
+     * {@link #getOrCreateBulkhead(String)} reads bulkhead tuning. Called by
+     * the {@code VertxMain} boot wiring once the runtime settings cache is
+     * available; tests and legacy boot paths can leave the default in place.
+     *
+     * @param supplier Non-null supplier returning the current snapshot.
+     */
+    public void setBulkheadTuningSupplier(
+        final java.util.function.Supplier<
+            com.auto1.pantera.settings.runtime.BulkheadTuning
+        > supplier
+    ) {
+        this.bulkheadTuningSupplier = java.util.Objects.requireNonNull(supplier, "supplier");
+    }
+
+    /**
+     * Drop every cached per-repo bulkhead so the next
+     * {@link #getOrCreateBulkhead(String)} call rebuilds with the current
+     * {@link com.auto1.pantera.settings.runtime.BulkheadTuning} snapshot.
+     *
+     * <p>Existing in-flight operations gated by the old bulkheads finish
+     * normally — only the controller's AIMD tick is cancelled. The
+     * registry is refreshed so subsequent acquires get the new bulkhead.
+     *
+     * <p>Called from the boot wiring's {@code RuntimeSettingsCache} listener
+     * on every {@code http_client.bulkhead.*} change.
+     */
+    public void invalidateBulkheads() {
+        final java.util.List<com.auto1.pantera.http.resilience.RepoBulkhead> drained =
+            new java.util.ArrayList<>(this.repoBulkheads.values());
+        this.repoBulkheads.clear();
+        for (final com.auto1.pantera.http.resilience.RepoBulkhead bh : drained) {
+            com.auto1.pantera.http.resilience.RepoBulkheadRegistry.instance()
+                .deregister(bh.repo());
+            bh.close();
+        }
+        EcsLogger.info("com.auto1.pantera")
+            .message("Per-repo bulkheads invalidated; " + drained.size()
+                + " entries dropped — next acquire will rebuild from current tuning")
+            .eventCategory("configuration")
+            .eventAction("bulkhead_invalidate")
+            .eventOutcome("success")
+            .field("log.source", "application")
+            .log();
     }
 
     /**
@@ -1435,12 +1502,20 @@ public class RepositorySlices {
         return this.repoBulkheads.computeIfAbsent(
             repoName,
             n -> {
-                final com.auto1.pantera.http.resilience.BulkheadLimits limits =
-                    com.auto1.pantera.http.resilience.BulkheadLimits.defaults();
+                final com.auto1.pantera.http.resilience.AdaptiveBulkheadLimits limits =
+                    this.bulkheadTuningSupplier.get().toLimits();
+                // Detail (repo name, permits, window) is folded into the
+                // message string only — "bulkhead.*" is not ECS and would
+                // 400 in Elastic. Live values surface via the Prometheus
+                // gauge pantera_bulkhead_permits_current{repo}.
                 EcsLogger.info("com.auto1.pantera")
                     .message("Per-repo bulkhead created for: " + n
-                        + " (maxConcurrent=" + limits.maxConcurrent()
-                        + ", maxQueueDepth=" + limits.maxQueueDepth() + ")")
+                        + " (adaptive=" + limits.adaptive()
+                        + " min=" + limits.minPermits()
+                        + " max=" + limits.maxPermits()
+                        + " initial=" + limits.initialPermits()
+                        + " targetP99Ms=" + limits.targetP99Millis()
+                        + " windowSec=" + limits.windowSeconds() + ")")
                     .eventCategory("configuration")
                     .eventAction("bulkhead_init")
                     .field("log.source", "application")
@@ -1454,6 +1529,11 @@ public class RepositorySlices {
                 // without a constructor-time dependency on pantera-main.
                 com.auto1.pantera.http.resilience.RepoBulkheadRegistry.instance()
                     .register(n, bh);
+                // Expose the AIMD-tuned permit ceiling as a Prometheus gauge.
+                if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                    com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
+                        .registerBulkheadPermitsGauge(n, bh::currentPermits);
+                }
                 return bh;
             }
         );

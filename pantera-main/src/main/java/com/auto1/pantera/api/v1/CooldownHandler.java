@@ -236,6 +236,10 @@ public final class CooldownHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "JSON body is required");
             return;
         }
+        // Capture the pre-mutation state for the audit_log.old_value column.
+        // Must happen before any csettings.update() / repository.archive*()
+        // call so the snapshot reflects what the operator is replacing.
+        final String oldValueJson = this.snapshotConfig().encode();
         final boolean newEnabled = body.getBoolean("enabled", this.csettings.enabled());
         final Duration newAge = body.containsKey("minimum_allowed_age")
             ? CooldownHandler.parseDuration(body.getString("minimum_allowed_age"))
@@ -356,6 +360,18 @@ public final class CooldownHandler {
                 + " (enabled=" + newEnabled
                 + ", minimum_allowed_age=" + CooldownHandler.formatDuration(newAge) + ")")
             .info();
+        final String auditActor = ctx.user() != null
+            ? ctx.user().principal().getString(AuthTokenRest.SUB, "system")
+            : "system";
+        // Build the post-mutation snapshot AFTER csettings.update so the
+        // "new_value" reflects what readers will see going forward.
+        // "details" is intentionally empty: every field of the policy is
+        // captured in old_value / new_value, so duplicating it here would
+        // just bloat the row and create a second source of truth.
+        final String newValueJson = this.snapshotConfig().encode();
+        CooldownHandler.audit(auditActor, "COOLDOWN_POLICY_UPDATE",
+            "cooldown", Map.of(), true, CooldownHandler.clientIp(ctx),
+            oldValueJson, newValueJson);
         ctx.response()
             .setStatusCode(200)
             .putHeader("Content-Type", "application/json")
@@ -700,6 +716,7 @@ public final class CooldownHandler {
             return;
         }
         final String actor = ctx.user().principal().getString(AuthTokenRest.SUB);
+        final String unblockIp = CooldownHandler.clientIp(ctx);
         // DB write completes first, then synchronous cache invalidation, then response
         this.cooldown.unblock(repoType, name, artifact, version, actor)
             .thenRun(() -> {
@@ -726,7 +743,7 @@ public final class CooldownHandler {
                             "repository.type", repoType,
                             "package.name", artifact,
                             "package.version", version
-                        ), true);
+                        ), true, unblockIp);
                     ctx.response().setStatusCode(204).end();
                 } else {
                     CooldownHandler.audit(actor, "COOLDOWN_UNBLOCK", name,
@@ -735,7 +752,7 @@ public final class CooldownHandler {
                             "package.name", artifact,
                             "package.version", version,
                             "error", String.valueOf(error.getMessage())
-                        ), false);
+                        ), false, unblockIp);
                     ApiResponse.sendError(
                         ctx, 500, "INTERNAL_ERROR", error.getMessage()
                     );
@@ -764,6 +781,7 @@ public final class CooldownHandler {
             return;
         }
         final String actor = ctx.user().principal().getString(AuthTokenRest.SUB);
+        final String unblockAllIp = CooldownHandler.clientIp(ctx);
         // DB write completes first, then synchronous cache invalidation, then response
         this.cooldown.unblockAll(repoType, name, actor)
             .thenRun(() -> {
@@ -784,14 +802,14 @@ public final class CooldownHandler {
             .whenComplete((ignored, error) -> {
                 if (error == null) {
                     CooldownHandler.audit(actor, "COOLDOWN_UNBLOCK_ALL", name,
-                        java.util.Map.of("repository.type", repoType), true);
+                        java.util.Map.of("repository.type", repoType), true, unblockAllIp);
                     ctx.response().setStatusCode(204).end();
                 } else {
                     CooldownHandler.audit(actor, "COOLDOWN_UNBLOCK_ALL", name,
                         java.util.Map.of(
                             "repository.type", repoType,
                             "error", String.valueOf(error.getMessage())
-                        ), false);
+                        ), false, unblockAllIp);
                     ApiResponse.sendError(
                         ctx, 500, "INTERNAL_ERROR", error.getMessage()
                     );
@@ -887,28 +905,120 @@ public final class CooldownHandler {
     /**
      * T-S04: emit an audit event for an admin mutation. Looks up the shared
      * {@link com.auto1.pantera.audit.AuditService} via the registry — when no
-     * service is installed (tests / DB-less boot) this is a no-op. Reads
-     * the client IP from the MDC slot populated by the trace-context
-     * handler at the start of every API request.
+     * service is installed (tests / DB-less boot) this is a no-op.
+     *
+     * <p>The {@code clientIp} parameter is the per-request client address
+     * extracted with {@link #clientIp(RoutingContext)} on the routing
+     * thread. We do NOT read it from MDC inside this method because
+     * handlers dispatched via {@code HandlerExecutor} can run on a worker
+     * thread whose MDC was not yet inherited at audit time; passing the
+     * IP explicitly guarantees {@code ip_address} is always populated.
+     * A null/blank value falls through to MDC as a defensive fallback for
+     * call paths that still depend on MDC propagation.
      *
      * @param actor Authenticated principal
      * @param action Action verb (SCREAMING_SNAKE_CASE)
      * @param target Target identifier (repo name)
      * @param details Structured payload for the {@code details} JSON column
      * @param success {@code true} on completed mutation
+     * @param clientIp Client IP extracted from the request (may be null)
      */
     private static void audit(final String actor,
         final String action, final String target,
-        final Map<String, Object> details, final boolean success) {
-        final String clientIp = org.slf4j.MDC.get(
-            com.auto1.pantera.http.log.EcsMdc.CLIENT_IP
-        );
+        final Map<String, Object> details, final boolean success,
+        final String clientIp) {
+        CooldownHandler.audit(actor, action, target, details, success,
+            clientIp, null, null);
+    }
+
+    /**
+     * Same as {@link #audit(String, String, String, Map, boolean, String)}
+     * with explicit pre / post snapshots written to the V100
+     * {@code old_value} / {@code new_value} JSONB columns. Used by the
+     * cooldown policy PUT so reviewers can answer "what changed".
+     *
+     * @param actor Authenticated principal
+     * @param action Action verb
+     * @param target Target identifier
+     * @param details Free-form structured payload
+     * @param success {@code true} on completed mutation
+     * @param clientIp Client IP extracted from the request (may be null)
+     * @param oldValueJson JSON literal of the prior state (may be null)
+     * @param newValueJson JSON literal of the new state (may be null)
+     */
+    private static void audit(final String actor,
+        final String action, final String target,
+        final Map<String, Object> details, final boolean success,
+        final String clientIp,
+        final String oldValueJson, final String newValueJson) {
+        final String effectiveIp;
+        if (clientIp != null && !clientIp.isBlank()) {
+            effectiveIp = clientIp;
+        } else {
+            effectiveIp = org.slf4j.MDC.get(
+                com.auto1.pantera.http.log.EcsMdc.CLIENT_IP
+            );
+        }
         final com.auto1.pantera.audit.AuditEvent event =
             new com.auto1.pantera.audit.AuditEvent(
                 java.time.Instant.now(), actor, action, target,
-                details, success, clientIp
+                details, success, effectiveIp, oldValueJson, newValueJson
             );
         com.auto1.pantera.audit.AuditServiceRegistry.instance()
             .sharedService().record(event);
+    }
+
+    /**
+     * Snapshot of the live cooldown configuration as a JSON object — the
+     * same shape returned by {@code GET /api/v1/cooldown/config}. Captured
+     * before and after {@code updateConfig} mutations so the {@code old_value}
+     * and {@code new_value} audit columns can diff what changed.
+     *
+     * @return JSON snapshot of {@code this.csettings}.
+     */
+    private JsonObject snapshotConfig() {
+        final JsonObject snap = new JsonObject()
+            .put("enabled", this.csettings.enabled())
+            .put("minimum_allowed_age",
+                CooldownHandler.formatDuration(this.csettings.minimumAllowedAge()))
+            .put("history_retention_days", this.csettings.historyRetentionDays())
+            .put("cleanup_batch_limit", this.csettings.cleanupBatchLimit());
+        final JsonObject overrides = new JsonObject();
+        for (final Map.Entry<String, CooldownSettings.RepoTypeConfig> entry
+            : this.csettings.repoTypeOverrides().entrySet()) {
+            overrides.put(entry.getKey(), new JsonObject()
+                .put("enabled", entry.getValue().enabled())
+                .put("minimum_allowed_age",
+                    CooldownHandler.formatDuration(entry.getValue().minimumAllowedAge())));
+        }
+        snap.put("repo_types", overrides);
+        return snap;
+    }
+
+    /**
+     * Extract the per-request client IP from the routing context, in the
+     * same order the early {@code /api/v1/*} trace handler uses:
+     * {@code X-Forwarded-For} (first entry) → {@code X-Real-IP} → the
+     * TCP remote address.
+     *
+     * @param ctx Vert.x routing context (never null)
+     * @return Client IP, or {@code null} when no address can be determined
+     */
+    private static String clientIp(final RoutingContext ctx) {
+        final io.vertx.core.http.HttpServerRequest req = ctx.request();
+        String hint = req.getHeader("X-Forwarded-For");
+        if (hint != null && hint.contains(",")) {
+            hint = hint.substring(0, hint.indexOf(',')).trim();
+        }
+        if (hint == null || hint.isBlank()) {
+            hint = req.getHeader("X-Real-IP");
+        }
+        if (hint == null || hint.isBlank()) {
+            final io.vertx.core.net.SocketAddress remote = req.remoteAddress();
+            if (remote != null) {
+                hint = remote.host();
+            }
+        }
+        return hint != null && !hint.isBlank() ? hint : null;
     }
 }

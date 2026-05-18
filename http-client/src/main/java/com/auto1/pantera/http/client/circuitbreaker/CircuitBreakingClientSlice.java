@@ -277,7 +277,7 @@ public final class CircuitBreakingClientSlice implements Slice {
 
     /**
      * HEAD probe terminal state. Same trip semantics as a real
-     * outbound call: trip on 5xx / 401 / 407 / qualifying exception,
+     * outbound call: trip on 5xx / qualifying exception,
      * success otherwise (including a 404 — that just means "the
      * upstream is reachable but doesn't have /").
      */

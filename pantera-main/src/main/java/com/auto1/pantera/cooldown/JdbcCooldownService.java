@@ -1084,6 +1084,13 @@ final class JdbcCooldownService implements CooldownService {
             record.id(),
             ArchiveReason.EXPIRED,
             SYSTEM_ACTOR);
+        // Update the local L1 + L2 caches to "allowed". Without this the
+        // cache keeps blocked=true after the DB row is archived, and the
+        // very next request gets cache-hit→DB-miss and logs the WARN
+        // "Cache said blocked but no DB record found - allowing". The
+        // peer pubsub at the end of this method covers OTHER instances;
+        // unblock() updates THIS instance.
+        this.cache.unblock(record.repoName(), record.artifact(), record.version());
         // Decrement active blocks metric (O(1), no DB query)
         this.decrementActiveBlocksMetric(record.repoType(), record.repoName());
         // Envelope cache invalidation (coherency): drop cached filtered metadata so next request

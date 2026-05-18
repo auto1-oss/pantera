@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.http.cache;
 
+import com.auto1.pantera.cache.CacheInvalidationPubSub;
 import com.auto1.pantera.cache.GlobalCacheConfig;
 import com.auto1.pantera.cache.NegativeCacheConfig;
 import com.auto1.pantera.cache.ValkeyConnection;
@@ -66,11 +67,49 @@ public final class NegativeCache {
     private final Duration ttl;
 
     /**
+     * Cross-instance invalidation pubsub channel — null when running
+     * single-node (no Valkey, or pub/sub disabled). Published-on every
+     * call to {@link #invalidate}, {@link #invalidateByArtifactName},
+     * and {@link #invalidateBatch}. Self-messages are filtered out by
+     * {@link CacheInvalidationPubSub}'s instance-id; peer messages drop
+     * the local L1 entry without re-publishing.
+     */
+    private final CacheInvalidationPubSub pubsub;
+
+    /**
+     * Pub/sub channel name used by {@link #pubsub}. Single-key
+     * invalidations publish the {@link NegativeCacheKey#flat()} form;
+     * {@link #invalidateByArtifactName} publishes the artifact name
+     * prefixed with {@value #NAME_PREFIX} so receivers know to run
+     * their own SCAN-and-match.
+     */
+    static final String PUBSUB_CHANNEL = "negative";
+
+    /** Wire-prefix for an "invalidate by artifact name" peer message. */
+    private static final String NAME_PREFIX = "name:";
+
+    /**
      * Create negative cache from config (the single-instance wiring constructor).
      *
      * @param config Unified negative cache configuration
      */
     public NegativeCache(final NegativeCacheConfig config) {
+        this(config, null);
+    }
+
+    /**
+     * Create negative cache wired with a cross-instance invalidation
+     * pubsub channel. When {@code pubsub} is non-null, every
+     * invalidation method publishes on the {@value #PUBSUB_CHANNEL}
+     * namespace AFTER the local L1 + L2 wipe, and the constructor
+     * subscribes to the same namespace so peer invalidations drop
+     * this instance's L1 entries.
+     *
+     * @param config Unified negative cache configuration.
+     * @param pubsub Cross-instance pubsub (may be {@code null} for
+     *               single-node deployments and tests).
+     */
+    public NegativeCache(final NegativeCacheConfig config, final CacheInvalidationPubSub pubsub) {
         this.enabled = true;
         this.ttl = config.l2Ttl();
         final RedisAsyncCommands<String, byte[]> l2Commands =
@@ -87,6 +126,55 @@ public final class NegativeCache {
             .expireAfterWrite(l1Ttl.toMillis(), TimeUnit.MILLISECONDS)
             .recordStats()
             .build();
+        this.pubsub = pubsub;
+        if (pubsub != null) {
+            pubsub.subscribe(PUBSUB_CHANNEL, this::onPeerInvalidate);
+        }
+    }
+
+    /**
+     * Handler for peer-invalidation messages. Drops L1 (and L2 if
+     * two-tier, though the publishing peer already cleared L2). Never
+     * re-publishes — would cause an infinite ping-pong otherwise.
+     */
+    private void onPeerInvalidate(final String key) {
+        if (key == null || key.isEmpty()) {
+            return;
+        }
+        if ("*".equals(key)) {
+            this.notFoundCache.invalidateAll();
+            return;
+        }
+        if (key.startsWith(NAME_PREFIX)) {
+            final String name = key.substring(NAME_PREFIX.length());
+            this.invalidateByArtifactNameLocal(name);
+            return;
+        }
+        this.notFoundCache.invalidate(key);
+    }
+
+    /** Local-only artifact-name match invalidation; does not publish. */
+    private int invalidateByArtifactNameLocal(final String artifactName) {
+        if (!this.enabled || artifactName == null || artifactName.isEmpty()) {
+            return 0;
+        }
+        final java.util.List<String> matched = new java.util.ArrayList<>();
+        for (final String flat : this.notFoundCache.asMap().keySet()) {
+            final NegativeCacheKey nck = NegativeCacheKey.parse(flat);
+            if (nck != null && cachedNameMatchesUploaded(nck.artifactName(), artifactName)) {
+                matched.add(flat);
+            }
+        }
+        for (final String flat : matched) {
+            this.notFoundCache.invalidate(flat);
+        }
+        return matched.size();
+    }
+
+    private static boolean cachedNameMatchesUploaded(
+        final String cached, final String uploaded
+    ) {
+        return cached.equals(uploaded) || uploaded.startsWith(cached + "/");
     }
 
     /**
@@ -168,6 +256,9 @@ public final class NegativeCache {
         if (this.twoTier) {
             this.l2.del("negative:" + flat);
         }
+        if (this.pubsub != null) {
+            this.pubsub.publish(PUBSUB_CHANNEL, flat);
+        }
     }
 
     /**
@@ -197,7 +288,7 @@ public final class NegativeCache {
         final java.util.List<String> matched = new java.util.ArrayList<>();
         for (final String flat : this.notFoundCache.asMap().keySet()) {
             final NegativeCacheKey nck = NegativeCacheKey.parse(flat);
-            if (nck != null && nameMatches(nck.artifactName(), artifactName)) {
+            if (nck != null && cachedNameMatchesUploaded(nck.artifactName(), artifactName)) {
                 matched.add(flat);
             }
         }
@@ -210,11 +301,15 @@ public final class NegativeCache {
                 .toArray(String[]::new);
             this.l2.del(redisKeys);
         }
+        // Peer fan-out — every other Pantera instance runs the same
+        // name-match scan over its local L1. The publish carries the
+        // artifact name rather than every matched flat-key so the
+        // payload stays bounded regardless of how many local matches a
+        // given peer might have.
+        if (this.pubsub != null) {
+            this.pubsub.publish(PUBSUB_CHANNEL, NAME_PREFIX + artifactName);
+        }
         return matched.size();
-    }
-
-    private static boolean nameMatches(final String cached, final String uploaded) {
-        return cached.equals(uploaded) || uploaded.startsWith(cached + "/");
     }
 
     /**
@@ -230,6 +325,11 @@ public final class NegativeCache {
         for (final NegativeCacheKey key : keys) {
             this.notFoundCache.invalidate(key.flat());
         }
+        if (this.pubsub != null) {
+            for (final NegativeCacheKey key : keys) {
+                this.pubsub.publish(PUBSUB_CHANNEL, key.flat());
+            }
+        }
         if (this.twoTier) {
             final String[] redisKeys = keys.stream()
                 .map(k -> "negative:" + k.flat())
@@ -244,12 +344,15 @@ public final class NegativeCache {
     }
 
     /**
-     * Clear entire cache.
+     * Clear entire cache (local L1 + L2 + peers).
      */
     public void clear() {
         this.notFoundCache.invalidateAll();
         if (this.twoTier) {
             scanAndDelete("negative:*");
+        }
+        if (this.pubsub != null) {
+            this.pubsub.publishAll(PUBSUB_CHANNEL);
         }
     }
 

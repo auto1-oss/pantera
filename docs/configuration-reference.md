@@ -352,6 +352,26 @@ meta:
     connection_acquire_timeout: 120000
 ```
 
+#### Runtime-tunable HTTP client keys (DB-backed, hot-reloaded)
+
+The following keys live in the `settings` table and are editable from the admin UI or via `PATCH /api/v1/settings/runtime/<key>`. They are NOT read from `pantera.yml`. Changes apply without a restart; admin operations are written to the immutable `audit_log` with old + new values.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `http_client.protocol` | string | `auto` | One of `auto`, `h2`, `h1`. `auto` lets ALPN negotiate (HTTP/2 with HTTP/1.1 fallback) and is the recommended default; `h2` forces HTTP/2-only; `h1` forces HTTP/1.1. |
+| `http_client.http2_max_pool_size` | int | `4` | Max pooled HTTP/2 connections per upstream destination. |
+| `http_client.http2_multiplexing_limit` | int | `100` | Max concurrent streams per HTTP/2 connection. |
+| `http_client.bulkhead.adaptive` | boolean | `true` | When `true` the per-repo bulkhead permit count grows/shrinks based on observed p99 latency; when `false` the bulkhead is fixed at `initial_permits`. |
+| `http_client.bulkhead.min_permits` | int | `5` | Floor for the adaptive permit count — the controller will never shrink below this. |
+| `http_client.bulkhead.max_permits` | int | `100` | Ceiling for the adaptive permit count. |
+| `http_client.bulkhead.initial_permits` | int | `10` | Permit count on cold start; also the fixed value when `adaptive=false`. |
+| `http_client.bulkhead.target_p99_ms` | int | `500` | Latency target. p99 above this triggers a permit-down step; p99 below triggers a permit-up step. |
+| `http_client.bulkhead.window_seconds` | int | `5` | Length of the rolling latency window the controller samples. |
+| `http_client.bulkhead.ramp_up_step` | int | `1` | Permits added per up-step. |
+| `http_client.bulkhead.ramp_down_factor` | float | `0.5` | Fraction the controller multiplies the current permit count by on a down-step (e.g. `0.5` halves). |
+
+> **Migration note (v2.2.0):** the v2.2.0 perf-pack default was `http_client.protocol = "h2"`. The 2.2.0 final default is `"auto"` after upstream interop issues (`go mod` over `h2://...` returning `EOFException: Stream has been reset` on slow Maven Central walks) showed that ALPN-negotiated HTTP/1.1 fallback was the more reliable choice. Operators who pinned `h2` for raw throughput can still set it explicitly in the UI; the recommended baseline is `auto`.
+
 ---
 
 ### 1.8 meta.http_server
@@ -466,14 +486,19 @@ Each named cache section supports:
 
 **Named cache sections:**
 
-| Cache Name | Purpose |
-|-----------|---------|
-| `cooldown` | Cooldown result cache (upstream failure tracking) |
-| `negative` | Negative lookup cache (artifact-not-found results) |
-| `auth` | Authentication/authorization decision cache |
-| `maven-metadata` | Maven metadata XML cache |
-| `npm-search` | NPM package search index cache |
-| `cooldown-metadata` | Long-lived cooldown metadata cache |
+| Cache Name | Purpose | Reader |
+|-----------|---------|---|
+| `auth-enabled` | Per-user enabled-flag cache for `LocalEnabledFilter` (L1+L2) | `GlobalCacheConfig.authEnabled()` |
+| `group-metadata-stale` | Last-known-good metadata for group repos during upstream outage | `GlobalCacheConfig.groupMetadataStale()` |
+| `repo-negative` | Shared 404 negative cache (legacy alias: `group-negative`, deprecated with WARN) | `RepositorySlices.loadNegativeCacheConfig()` |
+| `cooldown-metadata` | Filtered-metadata envelope cache for cooldown re-evaluation | `FilteredMetadataCacheConfig.fromYaml()` |
+| `artifact-index-positive` | Search-index positive tier (`repos that have this artifact`) | `ArtifactIndexCacheConfig.fromYaml(caches, POSITIVE_SUBKEY)` |
+| `artifact-index-negative` | Search-index 404 sentinels | `ArtifactIndexCacheConfig.fromYaml(caches, NEGATIVE_SUBKEY)` |
+| `auth` | User credential cache | `CachedUsers` via generic `CacheConfig.from()` |
+| `npm-search` | npm package-search index | `InMemoryPackageIndex` via generic `CacheConfig.from()` |
+| `policy-perms` / `policy-users` / `policy-roles` | Authorization policy YAML caches | `CachedYamlPolicy` via generic `CacheConfig.from()` |
+| `filters` | Parsed per-repo filter configurations | `GuavaFiltersCache` via generic `CacheConfig.from()` |
+| `profiles.<name>` | Shared L1/L2 profile referenced by other blocks via `profile:` field | `CacheConfig.fromProfile()` |
 
 ```yaml
 meta:
@@ -484,26 +509,28 @@ meta:
       port: 6379
       timeout: 100ms
 
-    cooldown:
-      ttl: 24h
-      maxSize: 1000
+    # Global shared NegativeCache used by GroupResolver, BaseCachedProxySlice,
+    # and per-adapter proxy slices via NegativeCacheRegistry. One instance
+    # per Pantera node. Covers hosted/proxy/group repo types after the
+    # WI-06 consolidation. The earlier key name `group-negative` is still
+    # accepted at boot with a deprecation WARN and will be removed in
+    # a future release — admins should migrate to `repo-negative`.
+    #
+    # For per-repository overrides (e.g. different TTL on a specific
+    # Maven proxy), use the per-repo `cache.negative.{enabled,ttl,maxSize}`
+    # block in `repo/<name>.yaml`, NOT this global key.
+    repo-negative:
+      ttl: 5m
+      maxSize: 10000
       valkey:
         enabled: true
-        l1MaxSize: 1000
-        l1Ttl: 24h
-        l2MaxSize: 5000000
-        l2Ttl: 7d
+        l1MaxSize: 10000
+        l1Ttl: 5m
+        l2MaxSize: 1000000
+        l2Ttl: 5m
 
-    negative:
-      ttl: 24h
-      maxSize: 5000
-      valkey:
-        enabled: true
-        l1MaxSize: 5000
-        l1Ttl: 24h
-        l2MaxSize: 5000000
-        l2Ttl: 7d
-
+    # User credential cache. Read by CachedUsers via the generic CacheConfig
+    # factory; see pantera-main/settings/cache/CachedUsers.java:158.
     auth:
       ttl: 5m
       maxSize: 1000
@@ -514,16 +541,8 @@ meta:
         l2MaxSize: 100000
         l2Ttl: 5m
 
-    maven-metadata:
-      ttl: 24h
-      maxSize: 1000
-      valkey:
-        enabled: true
-        l1MaxSize: 0
-        l1Ttl: 24h
-        l2MaxSize: 1000000
-        l2Ttl: 72h
-
+    # npm package-search index cache. Read by InMemoryPackageIndex via the
+    # generic CacheConfig factory; see npm-adapter/.../InMemoryPackageIndex.java:112.
     npm-search:
       ttl: 24h
       maxSize: 1000
@@ -534,6 +553,9 @@ meta:
         l2MaxSize: 1000000
         l2Ttl: 72h
 
+    # Cooldown-filtered metadata envelope cache. Read by
+    # FilteredMetadataCacheConfig.fromYaml; see
+    # pantera-core/.../FilteredMetadataCacheConfig.java:268.
     cooldown-metadata:
       ttl: 30d
       maxSize: 1000
@@ -544,6 +566,15 @@ meta:
         l2MaxSize: 500000
         l2Ttl: 30d
 ```
+
+> **Note — keys NOT to use.** Earlier docs listed `meta.caches.cooldown.*`,
+> `meta.caches.negative.*`, and `meta.caches.maven-metadata.*` as configurable. None of these are read by the current
+> code path. The cooldown decision cache (`CooldownCache`) is constructed
+> via its no-arg constructor with hardcoded defaults; the generic
+> `meta.caches.negative` block is parsed into a singleton that has zero
+> production consumers; `maven-metadata` only appears as a metric tag,
+> not a YAML key. See [admin-guide/cache-configuration.md](admin-guide/cache-configuration.md)
+> for the authoritative cache key inventory.
 
 ---
 

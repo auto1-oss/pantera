@@ -197,6 +197,15 @@ public final class CooldownSupport {
         // (markAllBlocked), bulk unmark (unmarkAllBlockedPackage / ForRepo),
         // and manual archive (archiveAndDelete via expire()).
         jdbc.setEnvelopeInvalidator(metadataCache);
+        // Publish the cache via a registry so adapter upload paths can
+        // drop stale envelopes after publish without crossing module
+        // boundaries — mirrors NegativeCacheRegistry. The cache key
+        // shape (metadata:repoType:repoName:packageName) means an upload
+        // to local_b also invalidates envelopes for group_a containing
+        // local_b — the registry's invalidateAfterUpload helper handles
+        // the suffix match.
+        com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry.instance()
+            .setSharedCache(metadataCache);
         // Cross-instance pub/sub fan-out wiring. Without this, peer L1
         // entries only refresh on per-entry TTL, so an unblock on instance A
         // takes effect on instance B as much as an hour later. Two channels:

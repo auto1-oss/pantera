@@ -10,6 +10,14 @@ export type RuntimeSettingKey =
   | 'http_client.protocol'
   | 'http_client.http2_max_pool_size'
   | 'http_client.http2_multiplexing_limit'
+  | 'http_client.bulkhead.adaptive'
+  | 'http_client.bulkhead.min_permits'
+  | 'http_client.bulkhead.max_permits'
+  | 'http_client.bulkhead.initial_permits'
+  | 'http_client.bulkhead.target_p99_ms'
+  | 'http_client.bulkhead.window_seconds'
+  | 'http_client.bulkhead.ramp_up_step'
+  | 'http_client.bulkhead.ramp_down_factor'
 
 /**
  * Decoded runtime value. Strings (protocol) and numbers (pool, multiplexing)
@@ -132,7 +140,15 @@ export async function resetRuntimeSetting(key: RuntimeSettingKey): Promise<void>
  * default field. Kept in sync with the documented v2.2.0 catalog.
  */
 export const SPEC_DEFAULTS: Record<RuntimeSettingKey, RuntimeValue> = {
-  'http_client.protocol': 'h2',
+  'http_client.protocol': 'auto',
   'http_client.http2_max_pool_size': 1,
   'http_client.http2_multiplexing_limit': 100,
+  'http_client.bulkhead.adaptive': true,
+  'http_client.bulkhead.min_permits': 5,
+  'http_client.bulkhead.max_permits': 100,
+  'http_client.bulkhead.initial_permits': 10,
+  'http_client.bulkhead.target_p99_ms': 500,
+  'http_client.bulkhead.window_seconds': 5,
+  'http_client.bulkhead.ramp_up_step': 1,
+  'http_client.bulkhead.ramp_down_factor': 0.5,
 }

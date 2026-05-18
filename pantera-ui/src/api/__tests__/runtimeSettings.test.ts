@@ -133,11 +133,19 @@ describe('runtimeSettings API wrappers', () => {
   describe('SPEC_DEFAULTS', () => {
     it('catalogues all server-side keys', () => {
       const keys = Object.keys(SPEC_DEFAULTS)
-      expect(keys.length).toBe(3)
+      expect(keys.length).toBe(11)
       // Must include every documented key from SettingsKey.java
       expect(keys).toContain('http_client.protocol')
       expect(keys).toContain('http_client.http2_max_pool_size')
       expect(keys).toContain('http_client.http2_multiplexing_limit')
+      expect(keys).toContain('http_client.bulkhead.adaptive')
+      expect(keys).toContain('http_client.bulkhead.min_permits')
+      expect(keys).toContain('http_client.bulkhead.max_permits')
+      expect(keys).toContain('http_client.bulkhead.initial_permits')
+      expect(keys).toContain('http_client.bulkhead.target_p99_ms')
+      expect(keys).toContain('http_client.bulkhead.window_seconds')
+      expect(keys).toContain('http_client.bulkhead.ramp_up_step')
+      expect(keys).toContain('http_client.bulkhead.ramp_down_factor')
     })
   })
 })

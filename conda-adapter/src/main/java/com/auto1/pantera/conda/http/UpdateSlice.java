@@ -132,14 +132,21 @@ public final class UpdateSlice implements Slice {
                                     ignored -> this.asto.move(temp, new Key.From(matcher.group(1)))
                                 );
                                 action = action.thenCompose(nothing -> {
+                                    final String pkgName = json.getString("name", "<no name>");
                                     final ArtifactEvent event = new ArtifactEvent(
                                         UpdateSlice.CONDA, this.repoName,
                                         new Login(headers).getValue(),
-                                        String.join("_", json.getString("name", "<no name>"), json.getString("arch", "<no arch>")),
+                                        String.join("_", pkgName, json.getString("arch", "<no arch>")),
                                         json.getString("version"),
                                         json.getJsonNumber(UpdateSlice.SIZE).longValue()
                                     );
                                     this.events.ifPresent(queue -> queue.add(event));
+                                    com.auto1.pantera.http.cache.NegativeCacheRegistry
+                                        .instance()
+                                        .invalidateAfterUpload("conda", pkgName);
+                                    com.auto1.pantera.cooldown.metadata
+                                        .FilteredMetadataCacheRegistry.instance()
+                                        .invalidateAfterUpload("conda", pkgName);
                                     return this.syncIndex.recordSync(event);
                                 });
                                 return action;

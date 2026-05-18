@@ -76,8 +76,8 @@ meta:
   http_client:
     proxy_timeout: 120
     max_connections_per_destination: 512
-    max_requests_queued_per_destination: 2048
-    idle_timeout: 30000
+    max_requests_queued_per_destination: 4096
+    idle_timeout: 60000
     connection_timeout: 15000
     follow_redirects: true
     connection_acquire_timeout: 120000  # ms to wait for pooled connection before failing
@@ -96,110 +96,108 @@ meta:
   global_prefixes:
     - test_prefix
 
+  # Cache configuration — aligned with pantera-performance-tuned.yaml so
+  # the docker-compose dev stack behaves like production. See that file
+  # for the per-cache rationale; sizes are the same.
   caches:
     valkey:
       enabled: true
       host: valkey
       port: 6379
-      timeout: 100ms
+      timeout: 150ms
 
-    cooldown:
-      ttl: 24h
-      maxSize: 1000
+    auth-enabled:
+      l1:
+        maxSize: 30000
+        ttlSeconds: 300
+      l2:
+        enabled: true
+        ttlSeconds: 3600
+        timeoutMs: 100
+
+    group-metadata-stale:
+      l1:
+        maxSize: 100000
+        ttlSeconds: 2592000
+      l2:
+        enabled: true
+        ttlSeconds: 604800
+        timeoutMs: 100
+
+    repo-negative:
+      ttl: 1h
+      maxSize: 200000
       valkey:
         enabled: true
-        l1MaxSize: 1000
-        l1Ttl: 24h
-        l2MaxSize: 5000000
-        l2Ttl: 7d
+        l1MaxSize: 200000
+        l1Ttl: 1h
+        l2MaxSize: 3000000
+        l2Ttl: 24h
+        timeout: 100ms
 
-    negative:
-      ttl: 24h
+    cooldown-metadata:
+      ttl: 1h
+      maxSize: 100000
+      valkey:
+        enabled: true
+        l1MaxSize: 100000
+        l1Ttl: 1h
+        l2MaxSize: 500000
+        l2Ttl: 12h
+        timeout: 200ms
+
+    artifact-index-positive:
+      ttl: 1h
+      maxSize: 500000
+      valkey:
+        enabled: true
+        l1MaxSize: 500000
+        l1Ttl: 1h
+        l2MaxSize: 5000000
+        l2Ttl: 2h
+        timeout: 100ms
+
+    artifact-index-negative:
+      ttl: 10m
+      maxSize: 300000
+      valkey:
+        enabled: true
+        l1MaxSize: 300000
+        l1Ttl: 10m
+        l2MaxSize: 1000000
+        l2Ttl: 1h
+        timeout: 100ms
+
+    auth:
+      ttl: 10m
+      maxSize: 20000
+      valkey:
+        enabled: true
+        l1MaxSize: 20000
+        l1Ttl: 10m
+        l2MaxSize: 200000
+        l2Ttl: 2h
+
+    policy-perms:
+      ttl: 5m
+      maxSize: 5000
+    policy-users:
+      ttl: 5m
+      maxSize: 30000
+    policy-roles:
+      ttl: 5m
+      maxSize: 2000
+
+    filters:
+      ttl: 5m
+      maxSize: 2000
+
+    npm-search:
+      ttl: 6h
       maxSize: 5000
       valkey:
         enabled: true
-        l1MaxSize: 5000
-        l1Ttl: 24h
-        l2MaxSize: 5000000
-        l2Ttl: 7d
-
-    # Negative cache for group fanout 404s (confirmed-miss after proxy-only fanout).
-    # Sharing via Valkey avoids per-node duplicate fanouts in multi-node clusters.
-    # Absence of this section preserves legacy in-memory defaults (5m TTL, 10K entries).
-    group-negative:
-      ttl: 5m
-      maxSize: 10000
-      valkey:
-        enabled: true
-        l1MaxSize: 10000
-        l1Ttl: 5m
-        l2MaxSize: 1000000
-        l2Ttl: 30m
-    auth:
-      ttl: 5m
-      maxSize: 1000
-      valkey:
-        enabled: true
-        l1MaxSize: 1000
-        l1Ttl: 5m
-        l2MaxSize: 100000
-        l2Ttl: 5m
-    maven-metadata:
-      ttl: 24h
-      maxSize: 1000
-      valkey:
-        enabled: true
-        l1MaxSize: 0
-        l1Ttl: 24h
-        l2MaxSize: 1000000
-        l2Ttl: 72h
-
-    npm-search:
-      ttl: 24h
-      maxSize: 1000
-      valkey:
-        enabled: true
-        l1MaxSize: 1000
-        l1Ttl: 24h
-        l2MaxSize: 1000000
-        l2Ttl: 72h
-
-    cooldown-metadata:
-      ttl: 30d
-      maxSize: 1000
-      valkey:
-        enabled: true
-        l1MaxSize: 0
-        l1Ttl: 30d
-        l2MaxSize: 500000
-        l2Ttl: 30d
-
-    # ArtifactIndexCache positive tier — maps artifactName -> repos that
-    # serve it. Surgical updates (recordUpload / recordDelete) keep entries
-    # accurate without dropping the whole list on upload, so a TTL longer
-    # than uploads-are-frequent windows is safe. L2 + pub/sub make uploads
-    # on one node visible on peer nodes within the pub/sub round-trip.
-    artifact-index-positive:
-      ttl: 10m
-      maxSize: 50000
-      valkey:
-        enabled: true
-        l1MaxSize: 50000
-        l1Ttl: 10m
-        l2MaxSize: 500000
-        l2Ttl: 1h
-
-    # ArtifactIndexCache negative tier — short-lived "no repo has this"
-    # entries to spare the DB on repeated misses during a single resolve.
-    # Surgical recordUpload immediately drops the corresponding negative
-    # entry on every node via pub/sub, so a longer TTL would only matter
-    # if pub/sub is unavailable. Kept short for defence in depth.
-    artifact-index-negative:
-      ttl: 30s
-      maxSize: 50000
-      valkey:
-        enabled: true
-        l1MaxSize: 50000
-        l1Ttl: 30s
-        l2MaxSize: 500000
-        l2Ttl: 5m
+        l1MaxSize: 2000
+        l1Ttl: 1h
+        l2MaxSize: 30000
+        l2Ttl: 12h

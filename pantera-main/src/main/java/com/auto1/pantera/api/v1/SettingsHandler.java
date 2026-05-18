@@ -399,6 +399,13 @@ public final class SettingsHandler {
         }
         final String actor = ctx.user() != null
             ? ctx.user().principal().getString("sub", "system") : "system";
+        final String sectionIp = SettingsHandler.clientIp(ctx);
+        // Capture the pre-mutation row so audit_log.old_value answers
+        // "what was there before". Runs on the event loop, before the
+        // worker-thread write — small synchronous JDBC read; acceptable
+        // for an admin path that's already not on the hot critical path.
+        final String oldValueJson = this.readSettingsValueAsJson(section);
+        final String newValueJson = body.encode();
         CompletableFuture.runAsync(() -> {
             // Convert vertx JsonObject to javax.json.JsonObject
             final javax.json.JsonObject jobj = Json.createReader(
@@ -409,11 +416,13 @@ public final class SettingsHandler {
             // T-S04 audit log: every settings mutation lands a row in
             // audit_log so SOC2 review can answer "who changed cooldown
             // duration on 2026-05-15 at 14:32 and to what". The value
-            // payload is preserved verbatim in the details column.
+            // diff lives in old_value / new_value; "details" is empty so
+            // the same fact isn't stored twice.
             SettingsHandler.audit(
                 actor, "SETTINGS_SECTION_UPDATE", section,
-                java.util.Map.of("value", body.encode()),
-                err == null
+                java.util.Map.of(),
+                err == null, sectionIp,
+                oldValueJson, err == null ? newValueJson : null
             );
             if (err != null) {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
@@ -789,6 +798,9 @@ public final class SettingsHandler {
         final String actor = ctx.user() != null
             ? ctx.user().principal().getString("sub", "unknown")
             : "unknown";
+        final String patchIp = SettingsHandler.clientIp(ctx);
+        final String oldRuntimeJson = this.readSettingsValueAsJson(key);
+        final String newRuntimeJson = body.encode();
         CompletableFuture.runAsync(() -> {
             final javax.json.JsonObject jakarta = Json.createReader(
                 new StringReader(body.encode())
@@ -798,13 +810,14 @@ public final class SettingsHandler {
             .whenComplete((ignored, err) -> {
                 // T-S04 audit log: per-key runtime tunable mutations
                 // are SOC2-significant (cooldown duration, http_client
-                // protocol, etc.). Land an audit_log row with the new
-                // value verbatim — a config-induced production change
-                // is traceable to the operator who made it.
+                // protocol, etc.). The before/after value diff lives in
+                // old_value / new_value; "details" stays empty so the
+                // same fact isn't stored twice.
                 SettingsHandler.audit(
                     actor, "SETTINGS_RUNTIME_UPDATE", key,
-                    java.util.Map.of("value", body.getValue("value")),
-                    err == null
+                    java.util.Map.of(),
+                    err == null, patchIp,
+                    oldRuntimeJson, err == null ? newRuntimeJson : null
                 );
                 if (err != null) {
                     ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
@@ -848,6 +861,11 @@ public final class SettingsHandler {
         final String deleteActor = ctx.user() != null
             ? ctx.user().principal().getString("sub", "unknown")
             : "unknown";
+        final String deleteIp = SettingsHandler.clientIp(ctx);
+        // Capture the row being deleted so audit_log.old_value preserves
+        // the prior state. new_value is null — deletion has no post-image
+        // beyond "fell back to spec default".
+        final String oldDeleteJson = this.readSettingsValueAsJson(key);
         CompletableFuture.runAsync(() -> this.settingsDao.delete(key),
             HandlerExecutor.get())
             .whenComplete((ignored, err) -> {
@@ -858,7 +876,8 @@ public final class SettingsHandler {
                 SettingsHandler.audit(
                     deleteActor, "SETTINGS_RUNTIME_DELETE", key,
                     java.util.Map.of(),
-                    err == null
+                    err == null, deleteIp,
+                    oldDeleteJson, null
                 );
                 if (err != null) {
                     ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
@@ -880,17 +899,103 @@ public final class SettingsHandler {
      */
     private static void audit(final String actor,
         final String action, final String target,
-        final java.util.Map<String, Object> details, final boolean success) {
-        final String clientIp = org.slf4j.MDC.get(
-            com.auto1.pantera.http.log.EcsMdc.CLIENT_IP
-        );
+        final java.util.Map<String, Object> details, final boolean success,
+        final String clientIp) {
+        SettingsHandler.audit(actor, action, target, details, success,
+            clientIp, null, null);
+    }
+
+    /**
+     * Same as {@link #audit(String, String, String, java.util.Map, boolean, String)}
+     * with explicit before / after snapshots written to the V100
+     * {@code old_value} / {@code new_value} JSONB columns. Used by every
+     * runtime-tunable PATCH / DELETE so reviewers can answer "what was
+     * the value before".
+     *
+     * @param actor Authenticated principal
+     * @param action Action verb
+     * @param target Target identifier
+     * @param details Free-form structured payload
+     * @param success {@code true} on completed mutation
+     * @param clientIp Client IP extracted from the request (may be null)
+     * @param oldValueJson JSON literal of the prior state (may be null)
+     * @param newValueJson JSON literal of the new state (may be null)
+     */
+    private static void audit(final String actor,
+        final String action, final String target,
+        final java.util.Map<String, Object> details, final boolean success,
+        final String clientIp,
+        final String oldValueJson, final String newValueJson) {
+        // Prefer the explicit IP extracted by the caller on the routing
+        // thread. HandlerExecutor-dispatched continuations can run on a
+        // worker whose MDC was not yet inherited, leaving the legacy
+        // MDC-only read with a null IP. Falling back to MDC keeps the
+        // contract loose for paths that still rely on it.
+        final String effectiveIp;
+        if (clientIp != null && !clientIp.isBlank()) {
+            effectiveIp = clientIp;
+        } else {
+            effectiveIp = org.slf4j.MDC.get(
+                com.auto1.pantera.http.log.EcsMdc.CLIENT_IP
+            );
+        }
         final com.auto1.pantera.audit.AuditEvent event =
             new com.auto1.pantera.audit.AuditEvent(
                 java.time.Instant.now(), actor, action, target,
-                details, success, clientIp
+                details, success, effectiveIp, oldValueJson, newValueJson
             );
         com.auto1.pantera.audit.AuditServiceRegistry.instance()
             .sharedService().record(event);
+    }
+
+    /**
+     * Read the current row for {@code key} from the {@code settings} table
+     * as a compact JSON literal. Used by the audit pipeline to populate
+     * {@code old_value} BEFORE a PATCH / DELETE mutates the row. Returns
+     * {@code null} when no DB is configured, no row exists, or the read
+     * fails — audit must never break the user-facing mutation.
+     *
+     * @param key Settings key
+     * @return JSON literal of the prior value, or {@code null}
+     */
+    private String readSettingsValueAsJson(final String key) {
+        if (this.settingsDao == null) {
+            return null;
+        }
+        try {
+            final java.util.Optional<javax.json.JsonObject> row =
+                this.settingsDao.get(key);
+            return row.map(javax.json.JsonObject::toString).orElse(null);
+        } catch (final RuntimeException ex) {
+            return null;
+        }
+    }
+
+    /**
+     * Extract the per-request client IP from the routing context, in the
+     * same order the early {@code /api/v1/*} trace handler uses:
+     * {@code X-Forwarded-For} (first entry) → {@code X-Real-IP} → the
+     * TCP remote address.
+     *
+     * @param ctx Vert.x routing context (never null)
+     * @return Client IP, or {@code null} when no address can be determined
+     */
+    private static String clientIp(final RoutingContext ctx) {
+        final io.vertx.core.http.HttpServerRequest req = ctx.request();
+        String hint = req.getHeader("X-Forwarded-For");
+        if (hint != null && hint.contains(",")) {
+            hint = hint.substring(0, hint.indexOf(',')).trim();
+        }
+        if (hint == null || hint.isBlank()) {
+            hint = req.getHeader("X-Real-IP");
+        }
+        if (hint == null || hint.isBlank()) {
+            final io.vertx.core.net.SocketAddress remote = req.remoteAddress();
+            if (remote != null) {
+                hint = remote.host();
+            }
+        }
+        return hint != null && !hint.isBlank() ? hint : null;
     }
 
     /**
@@ -935,8 +1040,39 @@ public final class SettingsHandler {
                 isIntInRange(value, 1, 8);
             case "http_client.http2_multiplexing_limit" ->
                 isIntInRange(value, 1, 1000);
+            case "http_client.bulkhead.adaptive" ->
+                value instanceof Boolean;
+            case "http_client.bulkhead.min_permits" ->
+                isIntInRange(value, 1, 1000);
+            case "http_client.bulkhead.max_permits" ->
+                isIntInRange(value, 1, 5000);
+            case "http_client.bulkhead.initial_permits" ->
+                isIntInRange(value, 1, 5000);
+            case "http_client.bulkhead.target_p99_ms" ->
+                isIntInRange(value, 1, 60_000);
+            case "http_client.bulkhead.window_seconds" ->
+                isIntInRange(value, 1, 600);
+            case "http_client.bulkhead.ramp_up_step" ->
+                isIntInRange(value, 1, 100);
+            case "http_client.bulkhead.ramp_down_factor" ->
+                isDoubleInRange(value, 0.05d, 0.95d);
             default -> false;
         };
+    }
+
+    /**
+     * Returns true iff {@code value} is a {@link Number} representable as
+     * a finite double in {@code [min, max]} (inclusive).
+     */
+    private static boolean isDoubleInRange(final Object value, final double min, final double max) {
+        if (!(value instanceof Number n)) {
+            return false;
+        }
+        final double d = n.doubleValue();
+        if (Double.isNaN(d) || Double.isInfinite(d)) {
+            return false;
+        }
+        return d >= min && d <= max;
     }
 
     /**

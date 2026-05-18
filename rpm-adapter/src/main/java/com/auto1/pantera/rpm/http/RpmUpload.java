@@ -132,6 +132,12 @@ public final class RpmUpload implements Slice {
                                             );
                                             this.events.ifPresent(queue -> queue.add(event));
                                             syncs.add(this.syncIndex.recordSync(event));
+                                            com.auto1.pantera.http.cache.NegativeCacheRegistry
+                                                .instance()
+                                                .invalidateAfterUpload("rpm", info.name());
+                                            com.auto1.pantera.cooldown.metadata
+                                                .FilteredMetadataCacheRegistry.instance()
+                                                .invalidateAfterUpload("rpm", info.name());
                                         });
                                         return CompletableFuture.allOf(
                                             syncs.toArray(CompletableFuture[]::new)

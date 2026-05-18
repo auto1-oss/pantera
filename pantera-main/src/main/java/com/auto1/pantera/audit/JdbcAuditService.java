@@ -51,8 +51,8 @@ public final class JdbcAuditService implements AuditService {
      */
     private static final String INSERT = "INSERT INTO audit_log ("
         + "created_at, actor, action, resource_type, resource_name,"
-        + " details, success, ip_address"
-        + ") VALUES (?, ?, ?, ?, ?, ?::jsonb, ?, ?)";
+        + " details, success, ip_address, old_value, new_value"
+        + ") VALUES (?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?::jsonb, ?::jsonb)";
 
     /** Pool used to write through. */
     private final DataSource source;
@@ -119,6 +119,20 @@ public final class JdbcAuditService implements AuditService {
                 stmt.setNull(8, Types.VARCHAR);
             } else {
                 stmt.setString(8, event.ipAddress());
+            }
+            // old_value / new_value JSONB columns from V100 — populated
+            // for diff-style mutations so reviewers can answer "what was
+            // there before". Null when the action has no meaningful
+            // pre/post snapshot (unblock, cache clear).
+            if (event.oldValueJson() == null) {
+                stmt.setNull(9, Types.VARCHAR);
+            } else {
+                stmt.setString(9, event.oldValueJson());
+            }
+            if (event.newValueJson() == null) {
+                stmt.setNull(10, Types.VARCHAR);
+            } else {
+                stmt.setString(10, event.newValueJson());
             }
             stmt.executeUpdate();
         } catch (final SQLException ex) {

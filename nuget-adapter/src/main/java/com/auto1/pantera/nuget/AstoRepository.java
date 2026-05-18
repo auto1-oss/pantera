@@ -100,9 +100,18 @@ public final class AstoRepository implements Repository {
                                             nothing -> this.storage.metadata(id.nuspecKey())
                                                 .thenApply(meta -> meta.read(Meta.OP_SIZE).get())
                                         ).thenApply(
-                                            size -> new PackageInfo(
-                                                nuspec.id(), nuspec.version(), size
-                                            )
+                                            size -> {
+                                                final String pkgId = nuspec.id().normalized();
+                                                com.auto1.pantera.http.cache.NegativeCacheRegistry
+                                                    .instance()
+                                                    .invalidateAfterUpload("nuget", pkgId);
+                                                com.auto1.pantera.cooldown.metadata
+                                                    .FilteredMetadataCacheRegistry.instance()
+                                                    .invalidateAfterUpload("nuget", pkgId);
+                                                return new PackageInfo(
+                                                    nuspec.id(), nuspec.version(), size
+                                                );
+                                            }
                                         )
                                 );
                             }

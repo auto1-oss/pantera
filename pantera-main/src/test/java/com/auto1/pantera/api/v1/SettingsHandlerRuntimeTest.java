@@ -231,13 +231,13 @@ final class SettingsHandlerRuntimeTest {
                     );
                 }
                 // Lock the value-as-JSON-literal-string contract: protocol
-                // is the quoted JSON string "\"h2\"", not the bare string "h2".
+                // is the quoted JSON string "\"auto\"", not the bare string "auto".
                 final JsonObject protoEntry =
                     body.getJsonObject("http_client.protocol");
                 MatcherAssert.assertThat(protoEntry.getString("value"),
-                    Matchers.is("\"h2\""));
+                    Matchers.is("\"auto\""));
                 MatcherAssert.assertThat(protoEntry.getString("default"),
-                    Matchers.is("\"h2\""));
+                    Matchers.is("\"auto\""));
                 MatcherAssert.assertThat(protoEntry.getString("source"),
                     Matchers.is("default"));
                 // For an integer key, the value is the JSON literal "4",

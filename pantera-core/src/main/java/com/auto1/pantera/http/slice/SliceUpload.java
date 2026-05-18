@@ -99,6 +99,11 @@ public final class SliceUpload implements Slice {
                     )
             );
         }
+        // Generic upload — used by files-adapter and several other
+        // adapters' delegated save paths. Use the storage key as the
+        // canonical artifact name; the negative cache key is built
+        // from the URL path by BaseCachedProxySlice / GroupResolver so
+        // they share the same string shape.
         return res.thenCompose(
             nothing -> this.storage.metadata(key)
                 .thenApply(meta -> {
@@ -106,6 +111,10 @@ public final class SliceUpload implements Slice {
                     final java.util.List<String> parts = key.parts();
                     final String filename = parts.isEmpty() ? key.string() : parts.get(parts.size() - 1);
                     AuditLogger.upload(filename, size);
+                    com.auto1.pantera.http.cache.NegativeCacheRegistry.instance()
+                        .invalidateAfterUpload("file", key.string());
+                    com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry.instance()
+                        .invalidateAfterUpload("file", key.string());
                     return ResponseBuilder.created().build();
                 })
         );

@@ -121,6 +121,11 @@ final class PushChartSlice implements Slice {
                                         chart.name(), chart.version(), tgz.size()
                                     );
                                     this.events.ifPresent(queue -> queue.add(event));
+                                    com.auto1.pantera.http.cache.NegativeCacheRegistry.instance()
+                                        .invalidateAfterUpload("helm", chart.name());
+                                    com.auto1.pantera.cooldown.metadata
+                                        .FilteredMetadataCacheRegistry.instance()
+                                        .invalidateAfterUpload("helm", chart.name());
                                     res = new IndexYaml(this.storage).update(tgz)
                                         .andThen(Completable.create(emitter ->
                                             this.syncIndex.recordSync(event)

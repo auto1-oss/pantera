@@ -251,7 +251,8 @@ final class JdbcAuditServiceTest {
     private record CapturedCall(
         Timestamp timestamp, String actor, String action,
         String resourceType, String target,
-        String detailsJson, boolean success, String ipAddress
+        String detailsJson, boolean success, String ipAddress,
+        String oldValueJson, String newValueJson
     ) {
     }
 
@@ -310,7 +311,7 @@ final class JdbcAuditServiceTest {
     private static final class CapturingPreparedStatement
         extends NotImplementedPreparedStatement {
         private final List<CapturedCall> captured;
-        private final Object[] args = new Object[9];
+        private final Object[] args = new Object[11];
 
         CapturingPreparedStatement(final List<CapturedCall> captured) {
             this.captured = captured;
@@ -346,7 +347,9 @@ final class JdbcAuditServiceTest {
                 (String) this.args[5],
                 (String) this.args[6],
                 (Boolean) this.args[7],
-                (String) this.args[8]
+                (String) this.args[8],
+                (String) this.args[9],
+                (String) this.args[10]
             ));
             return 1;
         }

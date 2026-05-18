@@ -406,7 +406,19 @@ public final class CooldownCache implements Cleanable<String> {
     }
 
     /**
-     * Clear all caches.
+     * Clear all caches — local L1 (Caffeine) AND distributed L2 (Valkey).
+     *
+     * <p>L2 clear is async cursor-based SCAN+DEL across the {@code cooldown:*}
+     * prefix; the call returns once the local L1 is wiped, the L2 sweep
+     * proceeds in the background. {@code clear()} is rare (admin policy
+     * change), so the cost is acceptable. Without the L2 sweep, admin
+     * mutations that delete DB rows directly (e.g.
+     * {@code CooldownHandler.updateConfig} calling
+     * {@code archiveAndDeleteAll} on disable, then this method to wipe
+     * the cache) would leave L2 entries pointing at blocks that no
+     * longer exist — the next request hits L2, gets {@code blocked=true},
+     * queries the DB and finds nothing, and the
+     * {@code "Cache said blocked but no DB record found"} WARN fires.
      */
     public void clear() {
         this.decisions.invalidateAll();
@@ -414,6 +426,9 @@ public final class CooldownCache implements Cleanable<String> {
         this.hits = 0;
         this.misses = 0;
         this.deduplications = 0;
+        if (this.twoTier) {
+            this.scanAndUpdate("cooldown:*");
+        }
     }
 
     /**

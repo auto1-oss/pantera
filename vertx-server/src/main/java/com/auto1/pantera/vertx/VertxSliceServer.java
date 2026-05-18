@@ -1538,14 +1538,33 @@ public final class VertxSliceServer implements Closeable {
                     try {
                         // Only set error status if headers haven't been sent yet
                         if (!this.response.headWritten()) {
-                            final String errorMsg = String.format(
-                                "Internal Server Error: %s: %s",
-                                error.getClass().getSimpleName(),
-                                error.getMessage()
-                            );
+                            // Classify the failure for correct HTTP status:
+                            //  - Upstream transient errors (RST_STREAM mid-body,
+                            //    raw EOF, IOException class) → 502 Bad Gateway
+                            //    with a Retry-After hint so clients (Go,
+                            //    Maven, Docker) retry idempotently.
+                            //  - Everything else → 500 Internal Server Error.
+                            final boolean upstreamTransient = isUpstreamTransient(error);
+                            final int status = upstreamTransient
+                                ? HttpURLConnection.HTTP_BAD_GATEWAY
+                                : HttpURLConnection.HTTP_INTERNAL_ERROR;
+                            final String errorMsg;
+                            if (upstreamTransient) {
+                                errorMsg = String.format(
+                                    "Bad Gateway: upstream stream closed prematurely (%s)",
+                                    error.getClass().getSimpleName()
+                                );
+                                this.response.putHeader("Retry-After", "2");
+                            } else {
+                                errorMsg = String.format(
+                                    "Internal Server Error: %s: %s",
+                                    error.getClass().getSimpleName(),
+                                    error.getMessage()
+                                );
+                            }
                             this.guardedResponse.safeSendError(
                                 "ResponseTerminator.fail",
-                                HttpURLConnection.HTTP_INTERNAL_ERROR,
+                                status,
                                 errorMsg
                             );
                         } else {
@@ -1583,6 +1602,52 @@ public final class VertxSliceServer implements Closeable {
             super(String.format("Timed out after %d ms", timeout.toMillis()));
             this.timeout = timeout;
         }
+    }
+
+    /**
+     * Classify a failure as an upstream-transient error that should
+     * map to a 502 Bad Gateway (rather than a 500 Internal Server
+     * Error). Recognised shapes (matched on the exception chain, up to
+     * 8 levels deep):
+     *
+     * <ul>
+     *   <li>{@link java.io.EOFException} — Jetty's H2 receiver
+     *       (or its bridge {@code JettyContentSourcePublisher} via
+     *       {@code UpstreamStreamResetException extends IOException})
+     *       saw RST_STREAM mid-body.</li>
+     *   <li>Any {@link java.io.IOException} on a body-streaming path —
+     *       upstream connection closed / timed-out while we were
+     *       relaying bytes.</li>
+     * </ul>
+     *
+     * <p>Causes are unwrapped because Reactive Streams + CompletableFuture
+     * commonly wrap failures in
+     * {@link java.util.concurrent.CompletionException}.
+     *
+     * <p>The aim: clients (Go's {@code cmd/go}, Maven, Docker daemon)
+     * see 502 and apply their built-in idempotent retry, instead of
+     * 500 which they treat as fatal.
+     *
+     * <p>Implementation note: we deliberately don't import the
+     * {@code UpstreamStreamResetException} type from {@code http-client}
+     * to avoid a cross-module dependency from the {@code vertx-server}
+     * adapter. It extends {@link java.io.IOException} so the IOException
+     * branch matches it.
+     *
+     * @param error Failure throwable (may have nested causes).
+     * @return {@code true} iff the failure is upstream-transient.
+     */
+    private static boolean isUpstreamTransient(final Throwable error) {
+        Throwable cursor = error;
+        int hops = 0;
+        while (cursor != null && hops < 8) {
+            if (cursor instanceof java.io.IOException) {
+                return true;
+            }
+            cursor = cursor.getCause();
+            hops += 1;
+        }
+        return false;
     }
 
     /**

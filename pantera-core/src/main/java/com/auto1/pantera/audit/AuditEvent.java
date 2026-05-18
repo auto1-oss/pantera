@@ -45,6 +45,15 @@ import java.util.Objects;
  * @param ipAddress Source IP from {@code X-Forwarded-For} / {@code X-Real-IP}
  *                  / remote address. May be {@code null} for system-initiated
  *                  actions.
+ * @param oldValueJson Snapshot of the affected resource <em>before</em> the
+ *                     mutation, encoded as a JSON literal. {@code null} when
+ *                     the action has no meaningful pre-image (e.g. unblock,
+ *                     cache clear) or the prior value could not be read.
+ *                     Persisted into the V100 {@code old_value} JSONB column.
+ * @param newValueJson Snapshot of the affected resource <em>after</em> the
+ *                     mutation, encoded as a JSON literal. {@code null} for
+ *                     delete-style actions or when no post-image is captured.
+ *                     Persisted into the V100 {@code new_value} JSONB column.
  *
  * @since 2.2.0
  */
@@ -55,7 +64,9 @@ public record AuditEvent(
     String target,
     Map<String, Object> details,
     boolean success,
-    String ipAddress
+    String ipAddress,
+    String oldValueJson,
+    String newValueJson
 ) {
 
     /**
@@ -72,6 +83,31 @@ public record AuditEvent(
             throw new IllegalArgumentException("action must not be empty");
         }
         details = defensiveCopy(details);
+    }
+
+    /**
+     * Back-compat constructor (no diff). Most callers that have not yet
+     * been migrated to capture old/new value snapshots continue to use
+     * this seven-arg shape; both diff fields default to {@code null}.
+     *
+     * @param timestamp See record javadoc
+     * @param actor See record javadoc
+     * @param action See record javadoc
+     * @param target See record javadoc
+     * @param details See record javadoc
+     * @param success See record javadoc
+     * @param ipAddress See record javadoc
+     */
+    public AuditEvent(
+        final Instant timestamp,
+        final String actor,
+        final String action,
+        final String target,
+        final Map<String, Object> details,
+        final boolean success,
+        final String ipAddress
+    ) {
+        this(timestamp, actor, action, target, details, success, ipAddress, null, null);
     }
 
     /**
@@ -102,7 +138,7 @@ public record AuditEvent(
         final String actor, final String action, final String target
     ) {
         return new AuditEvent(
-            Instant.now(), actor, action, target, Map.of(), true, null
+            Instant.now(), actor, action, target, Map.of(), true, null, null, null
         );
     }
 
@@ -122,7 +158,7 @@ public record AuditEvent(
         return new AuditEvent(
             Instant.now(), actor, action, target,
             Map.of("reason", reason == null ? "unknown" : reason),
-            false, null
+            false, null, null, null
         );
     }
 
@@ -138,7 +174,26 @@ public record AuditEvent(
     public AuditEvent withIpAddress(final String ipAddress) {
         return new AuditEvent(
             this.timestamp, this.actor, this.action, this.target,
-            this.details, this.success, ipAddress
+            this.details, this.success, ipAddress, this.oldValueJson, this.newValueJson
+        );
+    }
+
+    /**
+     * Return a new event carrying the before/after diff of the affected
+     * resource. The strings must be JSON literals — they are inserted into
+     * the {@code old_value} / {@code new_value} JSONB columns via a
+     * {@code ?::jsonb} cast and must therefore parse as valid JSON.
+     *
+     * @param oldValueJson JSON literal of the pre-mutation state, or {@code null}
+     * @param newValueJson JSON literal of the post-mutation state, or {@code null}
+     * @return New event with the diff fields populated
+     */
+    public AuditEvent withChange(
+        final String oldValueJson, final String newValueJson
+    ) {
+        return new AuditEvent(
+            this.timestamp, this.actor, this.action, this.target,
+            this.details, this.success, this.ipAddress, oldValueJson, newValueJson
         );
     }
 }

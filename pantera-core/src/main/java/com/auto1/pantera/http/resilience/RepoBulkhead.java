@@ -18,7 +18,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
 import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -34,25 +33,32 @@ import java.util.function.Supplier;
  * repository gets exactly one {@code RepoBulkhead} at start-up; saturation
  * in one repository does not starve another.
  *
- * <p>When the semaphore is full, {@link #run(Supplier)} returns
+ * <p>The permit ceiling is driven by an {@link AdaptivePermitController}.
+ * When {@link AdaptiveBulkheadLimits#adaptive()} is {@code true}, the
+ * controller AIMD-tunes permits based on per-operation latency and error
+ * rate; when {@code false}, the controller behaves as a fixed-size gate
+ * preserving the original {@link BulkheadLimits} semantics for callers
+ * that have not yet migrated.
+ *
+ * <p>When the gate is saturated, {@link #run(Supplier)} returns
  * {@link Result#err(Fault)} with a {@link Fault.Overload} carrying the
- * repo name and suggested retry-after duration.
+ * repo name and the suggested retry-after duration.
  *
  * @since 2.2.0
  */
 public final class RepoBulkhead {
 
     private final String repo;
-    private final Semaphore inFlight;
-    private final BulkheadLimits limits;
+    private final AdaptiveBulkheadLimits limits;
+    private final AdaptivePermitController controller;
     private final Executor drainExecutor;
     private final AtomicLong drainDropCount;
 
     /**
-     * Construct a per-repo bulkhead.
+     * Construct a per-repo bulkhead with adaptive limits.
      *
      * @param repo           Repository name (used in {@link Fault.Overload} and metrics).
-     * @param limits         Concurrency limits for this repository.
+     * @param limits         Adaptive concurrency limits.
      * @param ctxWorkerPool  A {@link com.auto1.pantera.http.context.ContextualExecutor}-wrapped
      *                       executor used as the base for the per-repo drain pool. Currently
      *                       unused directly; the drain pool is constructed internally with its
@@ -60,41 +66,66 @@ public final class RepoBulkhead {
      */
     public RepoBulkhead(
         final String repo,
-        final BulkheadLimits limits,
+        final AdaptiveBulkheadLimits limits,
         final Executor ctxWorkerPool
     ) {
         this.repo = Objects.requireNonNull(repo, "repo");
         this.limits = Objects.requireNonNull(limits, "limits");
         Objects.requireNonNull(ctxWorkerPool, "ctxWorkerPool");
-        this.inFlight = new Semaphore(limits.maxConcurrent());
+        this.controller = new AdaptivePermitController(repo, limits);
         this.drainDropCount = new AtomicLong();
-        final int drainThreads = Math.max(2, limits.maxConcurrent() / 50);
+        final int drainThreads = Math.max(2, limits.maxPermits() / 50);
         this.drainExecutor = buildDrainExecutor(repo, limits.maxQueueDepth(), drainThreads);
+    }
+
+    /**
+     * Construct a per-repo bulkhead from legacy fixed {@link BulkheadLimits}.
+     * Retained for source compatibility with call sites that have not yet
+     * migrated to the adaptive shape.
+     *
+     * @param repo           Repository name.
+     * @param legacy         Legacy fixed limits.
+     * @param ctxWorkerPool  See adaptive ctor.
+     */
+    public RepoBulkhead(
+        final String repo,
+        final BulkheadLimits legacy,
+        final Executor ctxWorkerPool
+    ) {
+        this(repo, AdaptiveBulkheadLimits.fromLegacy(legacy), ctxWorkerPool);
     }
 
     /**
      * Execute an operation within this bulkhead's concurrency limit.
      *
-     * <p>If the semaphore cannot be acquired immediately, returns a
-     * completed future with {@link Result#err(Fault)} containing
-     * {@link Fault.Overload}. Otherwise, the operation is invoked and
-     * the semaphore is released when the returned stage completes
-     * (whether normally or exceptionally).
+     * <p>If the gate cannot be acquired immediately, returns a completed
+     * future with {@link Result#err(Fault)} containing {@link Fault.Overload}.
+     * Otherwise, the operation is invoked and the gate is released when
+     * the returned stage completes (normally or exceptionally). The
+     * outcome (success vs error) and wall-clock latency are reported to
+     * the adaptive controller for AIMD tuning.
      *
      * @param op  Supplier producing the async operation to protect.
      * @param <T> Result value type.
      * @return A completion stage with the operation's result or an overload fault.
      */
     public <T> CompletionStage<Result<T>> run(final Supplier<CompletionStage<Result<T>>> op) {
-        if (!this.inFlight.tryAcquire()) {
+        if (!this.controller.tryAcquire()) {
             return CompletableFuture.completedFuture(
                 Result.err(new Fault.Overload(this.repo, this.limits.retryAfter()))
             );
         }
+        final long startNanos = System.nanoTime();
         try {
-            return op.get().whenComplete((r, e) -> this.inFlight.release());
+            return op.get().whenComplete((result, error) -> {
+                this.controller.release();
+                final long latencyMs = elapsedMillis(startNanos);
+                final boolean ok = error == null && result instanceof Result.Ok<?>;
+                this.controller.observe(latencyMs, ok);
+            });
         } catch (final RuntimeException ex) {
-            this.inFlight.release();
+            this.controller.release();
+            this.controller.observe(elapsedMillis(startNanos), false);
             return CompletableFuture.failedFuture(ex);
         }
     }
@@ -111,10 +142,22 @@ public final class RepoBulkhead {
     /**
      * Number of permits currently held (in-flight requests).
      *
-     * @return Active request count, between 0 and {@link BulkheadLimits#maxConcurrent()}.
+     * @return Active request count, between 0 and {@link #currentPermits()}.
      */
     public int activeCount() {
-        return this.limits.maxConcurrent() - this.inFlight.availablePermits();
+        return this.controller.inFlightCount();
+    }
+
+    /**
+     * Current permit ceiling — the maximum number of in-flight requests
+     * the gate will admit right now. Constant under fixed mode; AIMD-tuned
+     * between {@link AdaptiveBulkheadLimits#minPermits()} and
+     * {@link AdaptiveBulkheadLimits#maxPermits()} under adaptive mode.
+     *
+     * @return Current permit cap.
+     */
+    public int currentPermits() {
+        return this.controller.currentPermits();
     }
 
     /**
@@ -145,8 +188,30 @@ public final class RepoBulkhead {
      *
      * @return Non-null limits record.
      */
-    public BulkheadLimits limits() {
+    public AdaptiveBulkheadLimits limits() {
         return this.limits;
+    }
+
+    /**
+     * The AIMD controller. Exposed for metrics + tests; production callers
+     * should prefer the bulkhead's own delegating methods.
+     *
+     * @return Non-null adaptive controller.
+     */
+    public AdaptivePermitController controller() {
+        return this.controller;
+    }
+
+    /**
+     * Shut down the AIMD scheduler tick. Safe to call multiple times.
+     * In-flight requests are unaffected and will release normally.
+     */
+    public void close() {
+        this.controller.close();
+    }
+
+    private static long elapsedMillis(final long startNanos) {
+        return (System.nanoTime() - startNanos) / 1_000_000L;
     }
 
     private Executor buildDrainExecutor(

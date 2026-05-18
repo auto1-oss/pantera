@@ -100,8 +100,52 @@ public final class BearerAuthenticator implements Authenticator {
             .response(new RequestLine(RqMethod.GET, "?" + query), Headers.EMPTY, Content.EMPTY)
             .thenCompose(response -> response.body().asBytesFuture())
             .thenApply(bytes -> {
-                String token = this.format.token(bytes);
-                return new Authorization.Bearer(token);
+                try {
+                    String token = this.format.token(bytes);
+                    return new Authorization.Bearer(token);
+                } catch (final UpstreamAuthDeniedException denied) {
+                    // Expected outcome: the upstream replied with an OAuth
+                    // Registry V2 error envelope (e.g. anonymous access
+                    // denied on GCR / DHI). Logging at INFO so SREs can
+                    // still see which upstream denied us when triaging,
+                    // but without flagging it as a surprising parse
+                    // failure — the group resolver handles the denial
+                    // by falling through to the next member.
+                    com.auto1.pantera.http.log.EcsLogger
+                        .info("com.auto1.pantera.http.client.auth")
+                        .message("Upstream denied bearer-token request; realm="
+                            + realm + " " + denied.getMessage())
+                        .eventCategory("authentication")
+                        .eventAction("bearer_token_denied")
+                        .eventOutcome("failure")
+                        .field("log.source", "application")
+                        .log();
+                    throw denied;
+                } catch (final RuntimeException ex) {
+                    // DIAG: dump what the auth endpoint actually returned so
+                    // we can tell why the JSON parse fails. The "Unexpected
+                    // char 85" symptom (body starts with 'U') means it was
+                    // probably the circuit breaker's synthetic 502; other
+                    // weird shapes — gzip-encoded body, HTML Cloudflare
+                    // block page, etc. — surface here too. Keep the dump
+                    // short (256 bytes) to stay under the ECS 16 KB log
+                    // line cap.
+                    final int n = Math.min(bytes == null ? 0 : bytes.length, 256);
+                    final String preview = bytes == null ? "<null>"
+                        : new String(bytes, 0, n, java.nio.charset.StandardCharsets.UTF_8);
+                    com.auto1.pantera.http.log.EcsLogger
+                        .warn("com.auto1.pantera.http.client.auth")
+                        .message("Bearer token response parse failed; realm="
+                            + realm + " body[0.." + n + "]=" + preview
+                            + " totalBytes=" + (bytes == null ? -1 : bytes.length))
+                        .eventCategory("authentication")
+                        .eventAction("bearer_token_parse")
+                        .eventOutcome("failure")
+                        .field("log.source", "application")
+                        .error(ex)
+                        .log();
+                    throw ex;
+                }
             });
     }
 }

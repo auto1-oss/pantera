@@ -127,6 +127,19 @@ public final class UploadSlice implements Slice {
                 ).orElseGet(() -> this.npm.publish(new Key.From(pkg), uploaded))
             )
             .thenCompose(ignored -> this.storage.delete(uploaded))
+            .whenComplete((ignored, error) -> {
+                // Drop any cached 404 for this package so a request
+                // that 404'd before publish (e.g. group fanout miss)
+                // does not keep returning 404. npm uses the package
+                // name verbatim — same form the negative cache stores.
+                if (error == null) {
+                    com.auto1.pantera.http.cache.NegativeCacheRegistry.instance()
+                        .invalidateAfterUpload("npm", pkg);
+                    com.auto1.pantera.cooldown.metadata
+                        .FilteredMetadataCacheRegistry.instance()
+                        .invalidateAfterUpload("npm", pkg);
+                }
+            })
             .thenApply(ignored -> ResponseBuilder.ok().build())
             .toCompletableFuture();
     }

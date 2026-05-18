@@ -417,6 +417,51 @@ public class FilteredMetadataCache implements Cleanable<String> {
     }
 
     /**
+     * Invalidate every cached envelope whose package name matches
+     * {@code packageName}, across every {@code (repoType, repoName)}
+     * combination currently in cache.
+     *
+     * <p>Called by adapter upload paths after a successful publish so
+     * any envelope cached for a group that contains the uploaded-to
+     * local repo (or any other place this package's metadata is
+     * filtered) is dropped — without this, the next metadata request
+     * keeps serving the pre-upload version list for up to the static
+     * cache TTL (default 30 days when no blocks are active).
+     *
+     * <p>Match shape: the cache key is
+     * {@code metadata:{repoType}:{repoName}:{packageName}}, so we
+     * check {@code key.endsWith(":" + packageName)} — exact suffix
+     * match on the package-name segment. Package names that don't
+     * contain colons (the universal case in Pantera-supported
+     * registries) round-trip cleanly.
+     *
+     * @param packageName Canonical package name as the cache stores it.
+     * @return number of L1 entries invalidated (0 if disabled / nothing matched).
+     */
+    public int invalidateByPackageName(final String packageName) {
+        if (packageName == null || packageName.isEmpty()) {
+            return 0;
+        }
+        final String suffix = ":" + packageName;
+        final java.util.List<String> matched = new java.util.ArrayList<>();
+        if (this.l1Cache != null) {
+            for (final String key : this.l1Cache.asMap().keySet()) {
+                if (key.endsWith(suffix)) {
+                    matched.add(key);
+                }
+            }
+            for (final String key : matched) {
+                this.l1Cache.invalidate(key);
+                this.inflight.remove(key);
+            }
+        }
+        if (this.l2Connection != null && !matched.isEmpty()) {
+            this.l2Connection.async().del(matched.toArray(new String[0]));
+        }
+        return matched.size();
+    }
+
+    /**
      * Clear all caches.
      */
     public void clear() {

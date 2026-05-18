@@ -30,7 +30,7 @@ final class SettingsKeyTest {
     @Test
     void httpTuningHasSpecDefaults() {
         final HttpTuning t = HttpTuning.defaults();
-        assertEquals(Protocol.H2, t.protocol(), "default protocol must be H2");
+        assertEquals(Protocol.AUTO, t.protocol(), "default protocol must be AUTO");
         assertEquals(4, t.h2MaxPoolSize(), "default h2 pool size must be 4");
         assertEquals(100, t.h2MultiplexingLimit(),
             "default h2 multiplexing limit must be 100");

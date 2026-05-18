@@ -146,22 +146,37 @@ final class UpstreamCircuitBreakerTest {
     }
 
     @Test
-    void status401Trips() {
+    void status401DoesNotTrip() {
         final UpstreamCircuitBreaker breaker = newBreaker(new TestClock(T0));
         breaker.recordFailure(401);
         MatcherAssert.assertThat(
-            "401 must trip per the canonical Nexus-aligned predicate",
-            breaker.isOpen(), new IsEqual<>(true)
+            "401 must NOT trip — Docker Registry V2 returns 401 with a Bearer "
+                + "challenge as part of normal auth flow; counting it as a "
+                + "failure trips the gate during every cold pull and cascades "
+                + "into total upstream failure",
+            breaker.isOpen(), new IsEqual<>(false)
         );
     }
 
     @Test
-    void status407Trips() {
+    void status407DoesNotTrip() {
         final UpstreamCircuitBreaker breaker = newBreaker(new TestClock(T0));
         breaker.recordFailure(407);
         MatcherAssert.assertThat(
-            "407 must trip per the canonical Nexus-aligned predicate",
-            breaker.isOpen(), new IsEqual<>(true)
+            "407 must NOT trip — same shape as 401 (upstream HTTP proxy "
+                + "auth challenge); client provides credentials and retries",
+            breaker.isOpen(), new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void status403DoesNotTrip() {
+        final UpstreamCircuitBreaker breaker = newBreaker(new TestClock(T0));
+        breaker.recordFailure(403);
+        MatcherAssert.assertThat(
+            "403 must NOT trip — permission denial is upstream working "
+                + "correctly, not malfunctioning",
+            breaker.isOpen(), new IsEqual<>(false)
         );
     }
 

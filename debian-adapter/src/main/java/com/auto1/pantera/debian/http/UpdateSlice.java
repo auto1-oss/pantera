@@ -204,6 +204,12 @@ public final class UpdateSlice implements Slice {
                     this.events.ifPresent(queue -> queue.add(event));
                     syncs.add(this.syncIndex.recordSync(event));
                 });
+                // One invalidation per package name regardless of arch
+                // count — both caches are keyed by package name.
+                com.auto1.pantera.http.cache.NegativeCacheRegistry.instance()
+                    .invalidateAfterUpload("debian", name);
+                com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry.instance()
+                    .invalidateAfterUpload("debian", name);
                 return CompletableFuture.allOf(syncs.toArray(CompletableFuture[]::new));
             });
     }

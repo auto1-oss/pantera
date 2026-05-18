@@ -102,8 +102,29 @@ At minimum: (a) cache hit returns the value, (b) cache miss falls through to del
 
 ---
 
+---
+
+## Internal caches (not admin-configurable)
+
+These caches exist in production but their tuning is fixed at compile-time or driven by a constructor / static factory. They are NOT documented in the admin guide because operators have no knob to turn -- changing any of these requires a code change. Listed here so engineers know where each one lives.
+
+| Class | Where | Sizing / TTL | Notes |
+|---|---|---|---|
+| `CooldownCache` | `pantera-core/cooldown/cache/CooldownCache.java` | L1 ~100K entries, dynamic per-entry TTL from `blockedUntil` | Constructed via no-arg ctor in `JdbcCooldownService.java:132,140`. L2 (Valkey) optional, driven by the global Valkey config. Per-version block decisions. |
+| `RepositorySlices.slices` | `pantera-main/RepositorySlices.java` | Guava LoadingCache, `maxSize=500`, `expireAfterAccess=30m` | Holds `SliceValue` (proxy client + slice). Hardcoded in the builder; tied to the slice-construction cost. |
+| `StoragesCache` | `pantera-core/cache/StoragesCache.java` | TTL 180s, maxSize 1000 | TTL overridable via `PANTERA_STORAGE_TIMEOUT` (ms) at startup only. Single-tier Caffeine. |
+| `StorageMetaCache` | `pantera-main/api/v1/StorageMetaCache.java` | TTL 30m, maxSize 10000 | Hardcoded. Tree-handler fallback when DB name column does not match path (Go, npm, PyPI, Docker, Helm, Debian). |
+| `GroupMetadataCache` (primary tier) | `pantera-main/group/GroupMetadataCache.java` | L1 TTL 12h, maxSize 1000 | Hardcoded primary; the SECONDARY "stale fallback" tier IS configurable via `meta.caches.group-metadata-stale.*`. |
+| `SwrMetadataCache` (per-adapter) | `pantera-core/http/cache/SwrMetadataCache.java` | Constructor-parameterized (`softTtl`, `hardTtl`) | One instance per metadata type (Maven POM, Composer packages.json, npm packument...). TTLs come from per-repo `cache.metadata.{soft_ttl,hard_ttl}` -- so it IS configurable, but per-repo, not globally. |
+| `FiltersCache` impls (`GuavaFiltersCache`, `PublishingFiltersCache`) | `pantera-main/settings/cache/` | Reads `meta.caches.filters` via generic `CacheConfig.from()` | The class is internal but the config is admin-tunable -- see the admin doc's `filters` entry. |
+| `CachedYamlPolicy` permission / user / role caches | `pantera-core/security/policy/CachedYamlPolicy.java` | Reads `meta.caches.policy-{perms,users,roles}` via generic `CacheConfig.from()` | Same shape -- internal class, admin-tunable knobs documented in the admin doc. |
+| `ArtifactIndexCache` internal L1 caches | `pantera-main/index/ArtifactIndexCache.java` | Configured from `meta.caches.artifact-index-{positive,negative}` | Caffeine L1 + optional Valkey L2; surgical invalidation by artifact name. Both tiers admin-tunable. |
+| `RuntimeSettingsCache` | `pantera-main/settings/runtime/RuntimeSettingsCache.java` | Caffeine; reads from the `settings` table | DB-backed runtime tunables (HTTP/2 pool size, bulkhead AIMD, etc.). No YAML knob; managed via the settings UI. |
+
+---
+
 ## Related Pages
 
-- [Admin: Cache Configuration](../admin-guide/cache-configuration.md) -- Operator-facing reference.
+- [Admin: Cache Configuration](../admin-guide/cache-configuration.md) -- Operator-facing reference: configurable knobs only.
 - [Admin: Valkey Setup](../admin-guide/valkey-setup.md) -- L2 server-side requirements.
 - [Fault Model](fault-model.md) -- How cache failures map to faults (they don't, by construction).

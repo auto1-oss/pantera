@@ -51,19 +51,25 @@ public record HttpTuning(
     }
 
     public static HttpTuning defaults() {
-        // h2MaxPoolSize=4 (Phase 7 perf bench, 2026-05): a single TCP
-        // connection per upstream multiplexed h2 streams via Vert.x, but
-        // RTT-bound per-stream serialisation throttled real parallelism on
-        // a cold Maven-Central walk. Bumping the default to 4 enables true
-        // upstream parallelism without overwhelming origins. Operators on
-        // low-latency networks can still lower it via the runtime settings UI.
-        return new HttpTuning(Protocol.H2, 4, 100);
+        // Protocol = AUTO: ALPN negotiates h2 with capable peers and
+        // gracefully falls back to h1.1 for the rest. The earlier H2-only
+        // default was fragile against upstreams that mid-stream RST_STREAM
+        // (proxy.golang.org, some Cloudflare-fronted registries) and
+        // against legacy proxies that don't speak h2c. AUTO + the
+        // backpressured response-body bridge (JettyContentSourcePublisher)
+        // is the safest production-stable default.
+        //
+        // h2MaxPoolSize=4 (Phase 7 perf bench, 2026-05): enables true
+        // upstream parallelism over multiplexed h2 streams without
+        // overwhelming origins. h2MultiplexingLimit=100 matches what
+        // most modern CDNs advertise via SETTINGS.
+        return new HttpTuning(Protocol.AUTO, 4, 100);
     }
 
     public static HttpTuning fromMap(final Map<String, JsonObject> rows) {
         return new HttpTuning(
             JsonReads.valueOr(rows, "http_client.protocol",
-                v -> Protocol.fromString(v.getString("value")), Protocol.H2),
+                v -> Protocol.fromString(v.getString("value")), Protocol.AUTO),
             JsonReads.valueOr(rows, "http_client.http2_max_pool_size",
                 v -> v.getInt("value"), 4),
             JsonReads.valueOr(rows, "http_client.http2_multiplexing_limit",

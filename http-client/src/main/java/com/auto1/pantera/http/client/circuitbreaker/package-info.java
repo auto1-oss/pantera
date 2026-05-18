@@ -10,7 +10,7 @@
  */
 /**
  * Per-host upstream circuit breaker. Trips on the first qualifying
- * failure (5xx / IO / 401 / 407) and fast-fails subsequent outbound
+ * failure (5xx / IO) and fast-fails subsequent outbound
  * calls for a Fibonacci-spaced cooldown, with a daemon HEAD probe at
  * each block-expiry instant (wired by the upstream client decorator).
  *
