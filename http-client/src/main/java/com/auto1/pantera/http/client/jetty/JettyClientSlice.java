@@ -24,7 +24,6 @@ import com.auto1.pantera.http.trace.TraceHeaders;
 import com.auto1.pantera.metrics.MicrometerMetrics;
 import org.apache.logging.log4j.ThreadContext;
 import io.reactivex.Flowable;
-import org.apache.hc.core5.net.URIBuilder;
 import org.eclipse.jetty.client.AsyncRequestContent;
 import org.eclipse.jetty.client.HttpClient;
 import org.eclipse.jetty.client.Request;
@@ -405,15 +404,34 @@ final class JettyClientSlice implements Slice {
     private Request buildRequest(Headers headers, RequestLine req) {
         final String scheme = this.secure ? "https" : "http";
         final URI uri = req.uri();
-        final Request request = this.client.newRequest(
-            new URIBuilder()
-                .setScheme(scheme)
-                .setHost(this.host)
-                .setPort(this.port)
-                .setPath(uri.getPath())
-                .setCustomQuery(uri.getQuery())
-                .toString()
-        ).method(req.method().value());
+        // Build the upstream URL by concatenating the raw (already-encoded)
+        // path and query straight off the inbound URI. We deliberately do
+        // NOT pass through {@code org.apache.hc.core5.net.URIBuilder} —
+        // its setter/getter round-trip percent-encodes characters that
+        // RFC 3986 §3.3 lists as valid {@code pchar}, most notably
+        // {@code @} (sub-delim) and {@code :}. {@code proxy.golang.org}'s
+        // HTTP/2 implementation reacts to the over-encoded form
+        // {@code /<module>/%40v/<version>.zip} with a mid-body
+        // {@code RST_STREAM} on the {@code .zip} fetch (observed
+        // 2026-05-18 on {@code go.uber.org/multierr@v1.10.0}); GOPROXY
+        // clients see this as a 502 / EOF and surface as a fatal "module
+        // download failed". Preserving the raw path keeps {@code @v} in
+        // the URL exactly as the Go client emitted it.
+        final StringBuilder url = new StringBuilder()
+            .append(scheme).append("://").append(this.host);
+        if (this.port > 0) {
+            url.append(':').append(this.port);
+        }
+        if (uri.getRawPath() != null && !uri.getRawPath().isEmpty()) {
+            url.append(uri.getRawPath());
+        } else {
+            url.append('/');
+        }
+        if (uri.getRawQuery() != null) {
+            url.append('?').append(uri.getRawQuery());
+        }
+        final Request request = this.client.newRequest(url.toString())
+            .method(req.method().value());
         if (this.acquireTimeoutMillis > 0) {
             request.timeout(this.acquireTimeoutMillis, TimeUnit.MILLISECONDS);
         }
