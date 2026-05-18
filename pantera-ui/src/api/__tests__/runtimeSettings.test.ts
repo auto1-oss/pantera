@@ -29,7 +29,7 @@ describe('runtimeSettings API wrappers', () => {
 
   describe('decodeRuntimeValue', () => {
     it('decodes JSON-literal strings to native JS types', () => {
-      expect(decodeRuntimeValue('"h2"')).toBe('h2')
+      expect(decodeRuntimeValue('"adaptive"')).toBe('adaptive')
       expect(decodeRuntimeValue('100')).toBe(100)
       expect(decodeRuntimeValue('true')).toBe(true)
       expect(decodeRuntimeValue('false')).toBe(false)
@@ -45,19 +45,19 @@ describe('runtimeSettings API wrappers', () => {
     it('GETs /settings/runtime, decodes literals, sorts by key', async () => {
       get.mockResolvedValueOnce({
         data: {
-          'http_client.protocol': {
-            value: '"h2"',
-            default: '"h2"',
+          'http_client.bulkhead.adaptive': {
+            value: 'true',
+            default: 'true',
             source: 'default',
           },
-          'http_client.http2_multiplexing_limit': {
+          'http_client.bulkhead.max_permits': {
             value: '200',
             default: '100',
             source: 'db',
           },
-          'http_client.http2_max_pool_size': {
-            value: '4',
-            default: '1',
+          'http_client.bulkhead.min_permits': {
+            value: '7',
+            default: '5',
             source: 'db',
           },
         },
@@ -67,16 +67,16 @@ describe('runtimeSettings API wrappers', () => {
       expect(result.length).toBe(3)
       // Sorted alphabetically by key
       expect(result.map(r => r.key)).toEqual([
-        'http_client.http2_max_pool_size',
-        'http_client.http2_multiplexing_limit',
-        'http_client.protocol',
+        'http_client.bulkhead.adaptive',
+        'http_client.bulkhead.max_permits',
+        'http_client.bulkhead.min_permits',
       ])
       // Decoded
-      expect(result[0].value).toBe(4)
-      expect(result[0].default).toBe(1)
-      expect(result[0].source).toBe('db')
+      expect(result[0].value).toBe(true)
+      expect(result[0].default).toBe(true)
+      expect(result[0].source).toBe('default')
       expect(result[1].value).toBe(200)
-      expect(result[2].value).toBe('h2')
+      expect(result[2].value).toBe(7)
     })
   })
 
@@ -84,48 +84,48 @@ describe('runtimeSettings API wrappers', () => {
     it('PATCHes /settings/runtime/:key with {value} and decodes the response', async () => {
       patch.mockResolvedValueOnce({
         data: {
-          key: 'http_client.protocol',
-          value: '"h1"',
+          key: 'http_client.bulkhead.adaptive',
+          value: 'false',
           source: 'db',
         },
       })
-      const updated = await patchRuntimeSetting('http_client.protocol', 'h1')
+      const updated = await patchRuntimeSetting('http_client.bulkhead.adaptive', false)
       expect(patch).toHaveBeenCalledWith(
-        '/settings/runtime/http_client.protocol',
-        { value: 'h1' },
+        '/settings/runtime/http_client.bulkhead.adaptive',
+        { value: false },
       )
-      expect(updated.value).toBe('h1')
+      expect(updated.value).toBe(false)
       expect(updated.source).toBe('db')
       // Default is filled in from the catalog since the server PATCH
       // response omits it
-      expect(updated.default).toBe(SPEC_DEFAULTS['http_client.protocol'])
+      expect(updated.default).toBe(SPEC_DEFAULTS['http_client.bulkhead.adaptive'])
     })
 
     it('rounds-trips integer keys', async () => {
       patch.mockResolvedValueOnce({
         data: {
-          key: 'http_client.http2_max_pool_size',
-          value: '4',
+          key: 'http_client.bulkhead.max_permits',
+          value: '250',
           source: 'db',
         },
       })
       const updated = await patchRuntimeSetting(
-        'http_client.http2_max_pool_size', 4,
+        'http_client.bulkhead.max_permits', 250,
       )
       expect(patch).toHaveBeenCalledWith(
-        '/settings/runtime/http_client.http2_max_pool_size',
-        { value: 4 },
+        '/settings/runtime/http_client.bulkhead.max_permits',
+        { value: 250 },
       )
-      expect(updated.value).toBe(4)
+      expect(updated.value).toBe(250)
     })
   })
 
   describe('resetRuntimeSetting', () => {
     it('DELETEs /settings/runtime/:key', async () => {
       del.mockResolvedValueOnce({ data: undefined })
-      await resetRuntimeSetting('http_client.http2_multiplexing_limit')
+      await resetRuntimeSetting('http_client.bulkhead.min_permits')
       expect(del).toHaveBeenCalledWith(
-        '/settings/runtime/http_client.http2_multiplexing_limit',
+        '/settings/runtime/http_client.bulkhead.min_permits',
       )
     })
   })
@@ -133,11 +133,8 @@ describe('runtimeSettings API wrappers', () => {
   describe('SPEC_DEFAULTS', () => {
     it('catalogues all server-side keys', () => {
       const keys = Object.keys(SPEC_DEFAULTS)
-      expect(keys.length).toBe(11)
+      expect(keys.length).toBe(8)
       // Must include every documented key from SettingsKey.java
-      expect(keys).toContain('http_client.protocol')
-      expect(keys).toContain('http_client.http2_max_pool_size')
-      expect(keys).toContain('http_client.http2_multiplexing_limit')
       expect(keys).toContain('http_client.bulkhead.adaptive')
       expect(keys).toContain('http_client.bulkhead.min_permits')
       expect(keys).toContain('http_client.bulkhead.max_permits')

@@ -11,7 +11,6 @@
 package com.auto1.pantera.http.client.jetty;
 
 import com.auto1.pantera.http.log.EcsLogger;
-import java.io.EOFException;
 import java.nio.ByteBuffer;
 import java.util.Objects;
 import java.util.Queue;
@@ -29,9 +28,8 @@ import org.reactivestreams.Subscription;
 
 /**
  * Reactive-Streams {@link Publisher} that bridges Jetty's pull-based,
- * refcounted {@link Content.Source} (the HTTP/2 / HTTP/1.1 response body
- * coming from upstream) into Pantera's {@code Publisher<ByteBuffer>}
- * contract.
+ * refcounted {@link Content.Source} (the HTTP/1.1 response body coming
+ * from upstream) into Pantera's {@code Publisher<ByteBuffer>} contract.
  *
  * <h2>Design</h2>
  *
@@ -44,17 +42,11 @@ import org.reactivestreams.Subscription;
  *       chunk into a heap {@link ByteBuffer}</b>, releases the pooled
  *       Jetty buffer back to the {@code ArrayByteBufferPool}, and parks
  *       the heap copy in {@link #staged}.</li>
- *   <li>Releasing the pooled buffer immediately serves two crucial
- *       purposes for HTTP/1.1 keep-alive and HTTP/2 flow control:
- *       <ol>
- *         <li>The connection is freed for reuse as soon as the body
- *             is fully read — without this, downstream code that ignores
- *             the body forces the HttpClient pool to open a fresh
- *             connection on every request (the leak-test pathology).</li>
- *         <li>{@code WINDOW_UPDATE} flows back to the H2 peer once the
- *             pooled buffer is released, keeping the receive window
- *             open.</li>
- *       </ol></li>
+ *   <li>Releasing the pooled buffer immediately matters for HTTP/1.1
+ *       keep-alive: the connection is freed for reuse as soon as the
+ *       body is fully read — without this, downstream code that ignores
+ *       the body forces the HttpClient pool to open a fresh connection
+ *       on every request (the leak-test pathology).</li>
  *   <li>Staging is capped at {@link #MAX_STAGED} chunks. When the cap is
  *       reached the bridge stops calling {@link Content.Source#read()}
  *       and waits for the subscriber to drain the queue — this is the
@@ -72,12 +64,12 @@ import org.reactivestreams.Subscription;
  *       arrives later fails fast with {@link IllegalStateException}.</li>
  *   <li>{@link Subscription#cancel} propagates back to
  *       {@link Content.Source#fail} and {@link Response#abort} so the
- *       upstream stream terminates cleanly with
- *       {@code RST_STREAM(CANCEL)}.</li>
- *   <li>{@link EOFException} from {@link Content.Source#read()} — the
- *       Jetty-internal signal for an upstream mid-body RST — is re-wrapped
- *       as {@link UpstreamStreamResetException} so the response layer
- *       can render it as 502 rather than 500.</li>
+ *       upstream request terminates cleanly.</li>
+ *   <li>Failures from {@link Content.Source#read()} (mid-body upstream
+ *       errors, connection drops) propagate as-is. They typically arrive
+ *       as {@link java.io.IOException} subtypes; {@code VertxSliceServer
+ *       .isUpstreamTransient} walks the cause chain and renders any
+ *       IOException-rooted body-streaming failure as 502.</li>
  * </ul>
  *
  * <h2>Concurrency</h2>
@@ -258,14 +250,7 @@ final class JettyContentSourcePublisher implements Publisher<ByteBuffer> {
             try {
                 chunk = this.source.read();
             } catch (final RuntimeException ex) {
-                final EOFException eof = unwrapEof(ex);
-                if (eof != null) {
-                    this.failure = new UpstreamStreamResetException(
-                        this.upstreamUrl(), eof
-                    );
-                } else {
-                    this.failure = ex;
-                }
+                this.failure = ex;
                 this.done = true;
                 this.deliverToSubscriber();
                 return;
@@ -283,14 +268,7 @@ final class JettyContentSourcePublisher implements Publisher<ByteBuffer> {
                     // best-effort; chunk lifecycle is Jetty's
                 }
                 if (last) {
-                    final EOFException eof = unwrapEof(cause);
-                    if (eof != null) {
-                        this.failure = new UpstreamStreamResetException(
-                            this.upstreamUrl(), eof
-                        );
-                    } else {
-                        this.failure = cause;
-                    }
+                    this.failure = cause;
                     this.done = true;
                     this.deliverToSubscriber();
                     return;
@@ -425,14 +403,6 @@ final class JettyContentSourcePublisher implements Publisher<ByteBuffer> {
             .log();
     }
 
-    private String upstreamUrl() {
-        try {
-            return this.response.getRequest().getURI().toString();
-        } catch (final RuntimeException ex) {
-            return null;
-        }
-    }
-
     /**
      * Per-subscriber {@link Subscription}. Just a thin façade over the
      * publisher's demand counter and cancellation flag — all of the
@@ -484,30 +454,9 @@ final class JettyContentSourcePublisher implements Publisher<ByteBuffer> {
     }
 
     /**
-     * Walk the cause chain looking for an {@link EOFException}.
-     * Jetty wraps the H2 RST_STREAM signal in different unchecked
-     * exception types depending on context, so we identify by the
-     * presence of {@link EOFException} anywhere in the chain.
-     * Returns the first {@link EOFException} found, or {@code null}.
-     */
-    private static EOFException unwrapEof(final Throwable error) {
-        Throwable cursor = error;
-        int hops = 0;
-        while (cursor != null && hops < 8) {
-            if (cursor instanceof EOFException eof) {
-                return eof;
-            }
-            cursor = cursor.getCause();
-            hops += 1;
-        }
-        return null;
-    }
-
-    /**
      * Copy a Jetty pooled chunk into a heap {@link ByteBuffer}. The
      * pooled chunk is released by the caller immediately after this
-     * returns so the connection becomes reusable and the H2 layer can
-     * send {@code WINDOW_UPDATE}.
+     * returns so the HTTP/1.1 keep-alive pool can reuse the connection.
      */
     private static ByteBuffer copyToHeap(final Content.Chunk chunk) {
         final int len = chunk.remaining();

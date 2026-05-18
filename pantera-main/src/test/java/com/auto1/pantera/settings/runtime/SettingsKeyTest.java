@@ -11,45 +11,17 @@
 package com.auto1.pantera.settings.runtime;
 
 import java.io.StringReader;
-import java.util.Map;
 import javax.json.Json;
-import javax.json.JsonObject;
 import javax.json.JsonReader;
 import javax.json.JsonValue;
-import com.auto1.pantera.settings.runtime.HttpTuning.Protocol;
 import org.junit.jupiter.api.Test;
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 /**
- * Tests for v2.2.0 typed settings snapshot records and the {@link SettingsKey}
- * catalog. These are pure value-object tests; no DB or Vertx required.
+ * Tests for the {@link SettingsKey} catalog. Pure value-object tests; no DB
+ * or Vertx required.
  */
 final class SettingsKeyTest {
-
-    @Test
-    void httpTuningHasSpecDefaults() {
-        final HttpTuning t = HttpTuning.defaults();
-        assertEquals(Protocol.AUTO, t.protocol(), "default protocol must be AUTO");
-        assertEquals(4, t.h2MaxPoolSize(), "default h2 pool size must be 4");
-        assertEquals(100, t.h2MultiplexingLimit(),
-            "default h2 multiplexing limit must be 100");
-    }
-
-    @Test
-    void httpTuningParsesProtocolFromJson() {
-        final JsonObject protoRow = Json.createObjectBuilder().add("value", "h1").build();
-        final JsonObject poolRow = Json.createObjectBuilder().add("value", 4).build();
-        final Map<String, JsonObject> rows = Map.of(
-            "http_client.protocol", protoRow,
-            "http_client.http2_max_pool_size", poolRow
-        );
-        final HttpTuning t = HttpTuning.fromMap(rows);
-        assertEquals(Protocol.H1, t.protocol(), "protocol must parse from JSON value");
-        assertEquals(4, t.h2MaxPoolSize(), "pool size must parse from JSON value");
-        assertEquals(100, t.h2MultiplexingLimit(),
-            "multiplexing limit absent from input → keep default 100");
-    }
 
     @Test
     void allDefaultReprsParseAsJsonValues() {

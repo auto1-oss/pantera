@@ -119,7 +119,7 @@ These caches exist in production but their tuning is fixed at compile-time or dr
 | `FiltersCache` impls (`GuavaFiltersCache`, `PublishingFiltersCache`) | `pantera-main/settings/cache/` | Reads `meta.caches.filters` via generic `CacheConfig.from()` | The class is internal but the config is admin-tunable -- see the admin doc's `filters` entry. |
 | `CachedYamlPolicy` permission / user / role caches | `pantera-core/security/policy/CachedYamlPolicy.java` | Reads `meta.caches.policy-{perms,users,roles}` via generic `CacheConfig.from()` | Same shape -- internal class, admin-tunable knobs documented in the admin doc. |
 | `ArtifactIndexCache` internal L1 caches | `pantera-main/index/ArtifactIndexCache.java` | Configured from `meta.caches.artifact-index-{positive,negative}` | Caffeine L1 + optional Valkey L2; surgical invalidation by artifact name. Both tiers admin-tunable. |
-| `RuntimeSettingsCache` | `pantera-main/settings/runtime/RuntimeSettingsCache.java` | Caffeine; reads from the `settings` table | DB-backed runtime tunables (HTTP/2 pool size, bulkhead AIMD, etc.). No YAML knob; managed via the settings UI. |
+| `RuntimeSettingsCache` | `pantera-main/settings/runtime/RuntimeSettingsCache.java` | Caffeine; reads from the `settings` table | DB-backed runtime tunables (per-repo bulkhead AIMD, etc.). No YAML knob; managed via the settings UI. |
 
 ---
 

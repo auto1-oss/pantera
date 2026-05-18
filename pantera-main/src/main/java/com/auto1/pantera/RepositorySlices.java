@@ -81,7 +81,6 @@ import com.auto1.pantera.security.AnonymousAccessSlice;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.Settings;
 import com.auto1.pantera.settings.repo.RepoConfig;
-import com.auto1.pantera.settings.runtime.HttpTuning;
 import com.auto1.pantera.security.perms.Action;
 import com.auto1.pantera.security.perms.AdapterBasicPermission;
 import com.auto1.pantera.settings.repo.Repositories;
@@ -111,7 +110,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Supplier;
 import java.util.function.ToIntFunction;
 import java.util.stream.Collectors;
 import java.util.regex.Pattern;
@@ -236,26 +234,6 @@ public class RepositorySlices {
     > circuitBreakerSettings;
 
     /**
-     * Supplier of upstream HTTP-client tuning sourced from the v2.2
-     * {@code RuntimeSettingsCache}. Each call to
-     * {@link SharedJettyClients#acquire(HttpClientSettings)} reads the current
-     * snapshot to construct the underlying {@link JettyClientSlices} with the
-     * negotiated protocol, h2 pool size, and h2 multiplexing limit.
-     *
-     * <p>When {@code http_client.*} settings change, the boot wiring in
-     * {@code VertxMain} subscribes a listener that calls
-     * {@link #invalidateUpstreamClients()} so subsequent acquires miss the
-     * cache and rebuild with the new tuning.</p>
-     *
-     * <p>Defaults to {@link HttpTuning#defaults()} for tests and legacy boot
-     * paths that don't provide a runtime cache.</p>
-     *
-     * <p>Used only inside the constructor to wire {@code SharedJettyClients};
-     * not stored as a field because the supplier is captured by the inner
-     * cache and never re-read from this instance.</p>
-     */
-
-    /**
      * @param settings Pantera settings
      * @param repos Repositories
      * @param tokens Tokens: authentication and generation
@@ -288,74 +266,6 @@ public class RepositorySlices {
             com.auto1.pantera.http.timeout.AutoBlockSettings
         > circuitBreakerSettings
     ) {
-        // Legacy 4-arg ctor: route SharedClient construction through the
-        // legacy 1-arg JettyClientSlices(HttpClientSettings) ctor so the
-        // YAML-driven settings.maxConnectionsPerDestination() (typically
-        // 20-50) is preserved. Without this flag the supplier fallback
-        // would silently apply HttpTuning.defaults().h2MaxPoolSize() == 1.
-        this(settings, repos, tokens, circuitBreakerSettings, HttpTuning::defaults, true);
-    }
-
-    /**
-     * @param settings Pantera settings
-     * @param repos Repositories
-     * @param tokens Tokens: authentication and generation
-     * @param circuitBreakerSettings Supplier returning the current circuit-
-     *                               breaker settings; used by
-     *                               {@link AutoBlockRegistry} on every
-     *                               record to pick up admin-time updates
-     * @param httpTuningSupplier Supplier returning the current HTTP-client
-     *                           tuning snapshot from the runtime settings
-     *                           cache. Read on every
-     *                           {@link SharedJettyClients#acquire(HttpClientSettings)}
-     *                           so cache misses rebuild with the latest values.
-     */
-    public RepositorySlices(
-        final Settings settings,
-        final Repositories repos,
-        final Tokens tokens,
-        final java.util.function.Supplier<
-            com.auto1.pantera.http.timeout.AutoBlockSettings
-        > circuitBreakerSettings,
-        final Supplier<HttpTuning> httpTuningSupplier
-    ) {
-        // 5-arg ctor (current production path used by VertxMain): the caller
-        // supplied a real HttpTuning supplier, so we want SharedClient
-        // construction to use the 4-arg JettyClientSlices ctor and pull
-        // h2MaxPoolSize/h2MultiplexingLimit/protocol from the supplier on
-        // every cache miss. useLegacyHttpClientCtor=false.
-        this(settings, repos, tokens, circuitBreakerSettings, httpTuningSupplier, false);
-    }
-
-    /**
-     * Internal canonical constructor — all public ctors funnel here. The
-     * {@code useLegacyHttpClientCtor} flag selects between the legacy 1-arg
-     * {@link JettyClientSlices} ctor (preserves YAML
-     * {@code maxConnectionsPerDestination}) and the 4-arg ctor (uses
-     * {@link HttpTuning} from the supplier). Kept package-private so tests
-     * can force either path explicitly.
-     *
-     * @param settings Pantera settings
-     * @param repos Repositories
-     * @param tokens Tokens: authentication and generation
-     * @param circuitBreakerSettings Supplier returning the current circuit-
-     *                               breaker settings
-     * @param httpTuningSupplier Supplier returning the current HTTP-client
-     *                           tuning snapshot
-     * @param useLegacyHttpClientCtor When true, route through the legacy
-     *                                {@code JettyClientSlices(HttpClientSettings)}
-     *                                ctor; otherwise use the 4-arg ctor.
-     */
-    RepositorySlices(
-        final Settings settings,
-        final Repositories repos,
-        final Tokens tokens,
-        final java.util.function.Supplier<
-            com.auto1.pantera.http.timeout.AutoBlockSettings
-        > circuitBreakerSettings,
-        final Supplier<HttpTuning> httpTuningSupplier,
-        final boolean useLegacyHttpClientCtor
-    ) {
         this.circuitBreakerSettings = circuitBreakerSettings;
         this.settings = settings;
         this.repos = repos;
@@ -370,7 +280,7 @@ public class RepositorySlices {
                 );
             }
         }
-        this.sharedClients = new SharedJettyClients(httpTuningSupplier, useLegacyHttpClientCtor);
+        this.sharedClients = new SharedJettyClients();
         // Load negative cache config once at construction time.
         // Reads repo-negative first; falls back to group-negative with deprecation WARN.
         this.negativeCacheConfig = loadNegativeCacheConfig(settings);
@@ -519,16 +429,13 @@ public class RepositorySlices {
     /**
      * Drop every cached upstream Jetty client so subsequent
      * {@link SharedJettyClients#acquire(HttpClientSettings)} calls miss
-     * the cache and rebuild with the latest {@link HttpTuning} snapshot.
+     * the cache and rebuild with the latest static settings snapshot.
      *
      * <p>Active leases keep using their existing client until released —
      * the eviction marks each {@code SharedClient} so the per-lease
      * {@code release()} path stops the client when its last lease closes.
      * Subsequent acquires after this method returns will see new clients
-     * built with the current tuning.</p>
-     *
-     * <p>Called from the boot wiring's {@code RuntimeSettingsCache}
-     * listener on every {@code http_client.*} change.</p>
+     * built fresh.</p>
      *
      * <p><b>Slow-drain semantics (intentional).</b> The slice
      * {@link com.google.common.cache.LoadingCache} held in this class
@@ -538,10 +445,7 @@ public class RepositorySlices {
      * {@code .expireAfterAccess(30, MINUTES)} in the slice-cache builder)
      * or a settings change triggers a slice rebuild. We deliberately do
      * not force-evict warm slices here: doing so would interrupt in-flight
-     * upstream requests on those leases. The trade-off is that a
-     * {@code http_client.*} setting flip can take up to 30 minutes to
-     * propagate to a long-warm slice. See CONCERN-task9-slice-cache-lag in
-     * the v2.2.0 perf-pack audit doc.</p>
+     * upstream requests on those leases.</p>
      */
     public void invalidateUpstreamClients() {
         this.sharedClients.invalidateAll();
@@ -594,22 +498,6 @@ public class RepositorySlices {
             .log();
     }
 
-    /**
-     * Maps the runtime-settings {@link HttpTuning.Protocol} enum onto the
-     * http-client module's {@link JettyClientSlices.HttpProtocol}. The two
-     * mirror each other deliberately — http-client cannot depend on the
-     * pantera-main settings.runtime package without creating a cycle.
-     *
-     * @param protocol Protocol selector from the runtime tuning snapshot.
-     * @return Equivalent http-client primitive.
-     */
-    static JettyClientSlices.HttpProtocol mapProtocol(final HttpTuning.Protocol protocol) {
-        return switch (protocol) {
-            case H1 -> JettyClientSlices.HttpProtocol.H1;
-            case H2 -> JettyClientSlices.HttpProtocol.H2;
-            case AUTO -> JettyClientSlices.HttpProtocol.AUTO;
-        };
-    }
 
     /**
      * Pre-build slices for every configured repository so their shared Jetty
@@ -1563,26 +1451,10 @@ public class RepositorySlices {
 
         private final ConcurrentMap<HttpClientSettingsKey, SharedClient> clients = new ConcurrentHashMap<>();
         private final AtomicReference<MeterRegistry> metrics = new AtomicReference<>();
-        private final Supplier<HttpTuning> httpTuningSupplier;
-        /**
-         * When true, build {@link SharedClient}s via the legacy
-         * {@link JettyClientSlices#JettyClientSlices(HttpClientSettings)} ctor
-         * so the YAML {@code maxConnectionsPerDestination} is preserved
-         * (pre-Task-9 behaviour). Set by the legacy 3-/4-arg
-         * {@link RepositorySlices} constructors.
-         */
-        private final boolean useLegacyHttpClientCtor;
 
-        SharedJettyClients(final Supplier<HttpTuning> httpTuningSupplier) {
-            this(httpTuningSupplier, false);
-        }
-
-        SharedJettyClients(
-            final Supplier<HttpTuning> httpTuningSupplier,
-            final boolean useLegacyHttpClientCtor
-        ) {
-            this.httpTuningSupplier = httpTuningSupplier;
-            this.useLegacyHttpClientCtor = useLegacyHttpClientCtor;
+        SharedJettyClients() {
+            // No supplier needed — the per-destination keep-alive pool cap is
+            // sourced from the static HttpClientSettings each acquire builds with.
         }
 
         /**
@@ -1600,10 +1472,7 @@ public class RepositorySlices {
                 key,
                 (ignored, existing) -> {
                     if (existing == null) {
-                        final HttpTuning tuning = this.httpTuningSupplier.get();
-                        final SharedClient created = new SharedClient(
-                            key, tuning, this.useLegacyHttpClientCtor
-                        );
+                        final SharedClient created = new SharedClient(key);
                         created.retain();
                         return created;
                     }
@@ -1620,9 +1489,9 @@ public class RepositorySlices {
 
         /**
          * Drop every cached client so the next {@link #acquire} miss
-         * rebuilds with the latest {@link HttpTuning}. Active leases
-         * keep their reference; the per-lease {@code release()} path
-         * stops the client once refs hit zero.
+         * builds a fresh one. Active leases keep their reference; the
+         * per-lease {@code release()} path stops the client once refs
+         * hit zero.
          */
         void invalidateAll() {
             // Snapshot keys to avoid concurrent-modification surprises while
@@ -1777,32 +1646,11 @@ public class RepositorySlices {
              */
             private final AtomicBoolean evicted = new AtomicBoolean(false);
 
-            SharedClient(final HttpClientSettingsKey key, final HttpTuning tuning) {
-                this(key, tuning, false);
-            }
-
-            SharedClient(
-                final HttpClientSettingsKey key,
-                final HttpTuning tuning,
-                final boolean useLegacyHttpClientCtor
-            ) {
+            SharedClient(final HttpClientSettingsKey key) {
                 this.key = key;
-                if (useLegacyHttpClientCtor) {
-                    // Legacy path (3-/4-arg RepositorySlices ctors): use the
-                    // 1-arg JettyClientSlices ctor so the connection-pool cap
-                    // continues to come from settings.maxConnectionsPerDestination()
-                    // (the YAML override) rather than the supplier-provided
-                    // HttpTuning.h2MaxPoolSize() (which falls back to 1 when
-                    // no runtime cache is wired).
-                    this.client = new JettyClientSlices(key.toSettings());
-                } else {
-                    this.client = new JettyClientSlices(
-                        key.toSettings(),
-                        mapProtocol(tuning.protocol()),
-                        tuning.h2MaxPoolSize(),
-                        tuning.h2MultiplexingLimit()
-                    );
-                }
+                // HTTP/1.1 client with the keep-alive pool sized by the static
+                // YAML settings.maxConnectionsPerDestination() (typical 20-50).
+                this.client = new JettyClientSlices(key.toSettings());
                 // Start the Jetty client on the dedicated resolve executor to avoid
                 // blocking the Vert.x event loop. The start() call can take 100ms+
                 // due to SSL context initialization and socket setup.

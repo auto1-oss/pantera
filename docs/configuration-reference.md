@@ -358,9 +358,6 @@ The following keys live in the `settings` table and are editable from the admin 
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `http_client.protocol` | string | `auto` | One of `auto`, `h2`, `h1`. `auto` lets ALPN negotiate (HTTP/2 with HTTP/1.1 fallback) and is the recommended default; `h2` forces HTTP/2-only; `h1` forces HTTP/1.1. |
-| `http_client.http2_max_pool_size` | int | `4` | Max pooled HTTP/2 connections per upstream destination. |
-| `http_client.http2_multiplexing_limit` | int | `100` | Max concurrent streams per HTTP/2 connection. |
 | `http_client.bulkhead.adaptive` | boolean | `true` | When `true` the per-repo bulkhead permit count grows/shrinks based on observed p99 latency; when `false` the bulkhead is fixed at `initial_permits`. |
 | `http_client.bulkhead.min_permits` | int | `5` | Floor for the adaptive permit count — the controller will never shrink below this. |
 | `http_client.bulkhead.max_permits` | int | `100` | Ceiling for the adaptive permit count. |
@@ -369,8 +366,6 @@ The following keys live in the `settings` table and are editable from the admin 
 | `http_client.bulkhead.window_seconds` | int | `5` | Length of the rolling latency window the controller samples. |
 | `http_client.bulkhead.ramp_up_step` | int | `1` | Permits added per up-step. |
 | `http_client.bulkhead.ramp_down_factor` | float | `0.5` | Fraction the controller multiplies the current permit count by on a down-step (e.g. `0.5` halves). |
-
-> **Migration note (v2.2.0):** the v2.2.0 perf-pack default was `http_client.protocol = "h2"`. The 2.2.0 final default is `"auto"` after upstream interop issues (`go mod` over `h2://...` returning `EOFException: Stream has been reset` on slow Maven Central walks) showed that ALPN-negotiated HTTP/1.1 fallback was the more reliable choice. Operators who pinned `h2` for raw throughput can still set it explicitly in the UI; the recommended baseline is `auto`.
 
 ---
 

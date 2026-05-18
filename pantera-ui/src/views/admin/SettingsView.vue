@@ -19,7 +19,6 @@ import InputText from 'primevue/inputtext'
 import InputNumber from 'primevue/inputnumber'
 import InputSwitch from 'primevue/inputswitch'
 import AutoComplete from 'primevue/autocomplete'
-import Select from 'primevue/select'
 import Tag from 'primevue/tag'
 import type { Settings, CooldownConfig } from '@/types'
 
@@ -88,21 +87,12 @@ function searchProxyTypes(event: { query: string }) {
 const grafanaUrl = ref('')
 const registryUrl = ref('')
 
-// Runtime tunables (HTTP/2 client). Loaded into the same view so admins
-// have one place for everything that lives in the settings DB.
+// Runtime tunables (per-repo bulkhead). Loaded into the same view so
+// admins have one place for everything that lives in the settings DB.
 const runtime = useRuntimeSettings()
-
-const PROTOCOL_OPTIONS = [
-  { label: 'HTTP/2', value: 'h2' },
-  { label: 'HTTP/1.1', value: 'h1' },
-  { label: 'Auto', value: 'auto' },
-]
 
 interface IntRange { min: number; max: number }
 const RUNTIME_INT_RANGES: Record<RuntimeSettingKey, IntRange | null> = {
-  'http_client.protocol': null,
-  'http_client.http2_max_pool_size': { min: 1, max: 8 },
-  'http_client.http2_multiplexing_limit': { min: 1, max: 1000 },
   'http_client.bulkhead.adaptive': null,
   'http_client.bulkhead.min_permits': { min: 1, max: 1000 },
   'http_client.bulkhead.max_permits': { min: 1, max: 5000 },
@@ -118,12 +108,6 @@ const RUNTIME_DOUBLE_RANGES: Partial<Record<RuntimeSettingKey, DoubleRange>> = {
   'http_client.bulkhead.ramp_down_factor': { min: 0.05, max: 0.95, step: 0.05 },
 }
 
-const HTTP_RUNTIME_KEYS: RuntimeSettingKey[] = [
-  'http_client.protocol',
-  'http_client.http2_max_pool_size',
-  'http_client.http2_multiplexing_limit',
-]
-
 const BULKHEAD_RUNTIME_KEYS: RuntimeSettingKey[] = [
   'http_client.bulkhead.adaptive',
   'http_client.bulkhead.min_permits',
@@ -136,9 +120,6 @@ const BULKHEAD_RUNTIME_KEYS: RuntimeSettingKey[] = [
 ]
 
 const RUNTIME_LABELS: Record<RuntimeSettingKey, string> = {
-  'http_client.protocol': 'Protocol',
-  'http_client.http2_max_pool_size': 'HTTP/2 max pool size',
-  'http_client.http2_multiplexing_limit': 'HTTP/2 multiplexing limit',
   'http_client.bulkhead.adaptive': 'Adaptive (AIMD)',
   'http_client.bulkhead.min_permits': 'Minimum permits',
   'http_client.bulkhead.max_permits': 'Maximum permits',
@@ -150,15 +131,6 @@ const RUNTIME_LABELS: Record<RuntimeSettingKey, string> = {
 }
 
 const RUNTIME_HELP: Partial<Record<RuntimeSettingKey, string>> = {
-  'http_client.protocol':
-    'Default upstream HTTP protocol. h2 multiplexes many requests over one '
-    + 'connection. h1 forces classic HTTP/1.1. auto negotiates per upstream.',
-  'http_client.http2_max_pool_size':
-    'Max concurrent HTTP/2 connections per destination. Most upstreams '
-    + 'multiplex thousands of streams over one connection — leave at 1 '
-    + 'unless you have a specific need to fan out.',
-  'http_client.http2_multiplexing_limit':
-    'Max concurrent streams per HTTP/2 connection.',
   'http_client.bulkhead.adaptive':
     'When on, each per-repo bulkhead AIMD-tunes its in-flight permit ceiling '
     + 'on every evaluation window. When off, the ceiling stays at "Initial permits".',
@@ -809,90 +781,6 @@ async function saveExternalLinks() {
               :loading="saving === 'http_client'"
               @click="saveHttpClient"
             />
-          </div>
-        </template>
-      </Card>
-
-      <!-- HTTP/2 Upstream Tuning (live runtime knobs) -->
-      <Card class="shadow-sm">
-        <template #title>HTTP/2 Upstream Tuning</template>
-        <template #subtitle>
-          Live runtime knobs for the upstream HTTP client — protocol selection
-          and HTTP/2 pool/multiplexing limits. Changes apply within a few
-          hundred milliseconds; no restart required.
-        </template>
-        <template #content>
-          <div v-if="runtime.loading.value" class="text-sm text-gray-500">Loading…</div>
-          <div
-            v-else-if="runtime.loadError.value"
-            class="text-sm text-red-700 dark:text-red-300"
-          >
-            Failed to load runtime tunables: {{ runtime.loadError.value }}
-          </div>
-          <div v-else class="space-y-5">
-            <div
-              v-for="key in HTTP_RUNTIME_KEYS"
-              :key="key"
-              class="flex flex-col gap-1"
-              :data-testid="`runtime-row-${key}`"
-            >
-              <label
-                :for="`field-${key}`"
-                class="text-sm font-medium text-gray-700 dark:text-gray-200"
-              >
-                {{ RUNTIME_LABELS[key] }}
-              </label>
-              <Select
-                v-if="key === 'http_client.protocol'"
-                :id="`field-${key}`"
-                v-model="runtime.edited[key]"
-                :options="PROTOCOL_OPTIONS"
-                option-label="label"
-                option-value="value"
-                class="w-full max-w-xs"
-                :data-testid="`runtime-input-${key}`"
-              />
-              <InputNumber
-                v-else
-                :id="`field-${key}`"
-                v-model="runtime.edited[key] as number"
-                :min="RUNTIME_INT_RANGES[key]?.min"
-                :max="RUNTIME_INT_RANGES[key]?.max"
-                show-buttons
-                class="w-48"
-                :input-props="{ 'data-testid': `runtime-input-${key}` }"
-              />
-              <div v-if="RUNTIME_HELP[key]" class="text-xs text-gray-500">
-                {{ RUNTIME_HELP[key] }}
-                <template v-if="RUNTIME_INT_RANGES[key]">
-                  Allowed range:
-                  {{ RUNTIME_INT_RANGES[key]?.min }}–{{ RUNTIME_INT_RANGES[key]?.max }}.
-                </template>
-                Default: {{ runtime.rows[key]?.default }}.
-              </div>
-              <div class="flex gap-2 mt-1">
-                <Button
-                  label="Save"
-                  icon="pi pi-save"
-                  size="small"
-                  :loading="runtime.saving[key]"
-                  :disabled="!runtime.isDirty(key) || runtime.saving[key]"
-                  :data-testid="`runtime-save-${key}`"
-                  @click="runtime.saveOne(key)"
-                />
-                <Button
-                  v-if="runtime.isOverridden(key)"
-                  label="Reset to default"
-                  icon="pi pi-undo"
-                  size="small"
-                  severity="secondary"
-                  text
-                  :loading="runtime.saving[key]"
-                  :data-testid="`runtime-reset-${key}`"
-                  @click="runtime.resetOne(key)"
-                />
-              </div>
-            </div>
           </div>
         </template>
       </Card>

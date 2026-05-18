@@ -29,14 +29,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import com.google.common.base.Strings;
 import org.eclipse.jetty.client.BasicAuthentication;
 import org.eclipse.jetty.client.HttpClient;
-import org.eclipse.jetty.client.HttpClientTransport;
 import org.eclipse.jetty.client.HttpProxy;
 import org.eclipse.jetty.client.Origin;
-import org.eclipse.jetty.client.transport.HttpClientConnectionFactory;
-import org.eclipse.jetty.client.transport.HttpClientTransportDynamic;
 import org.eclipse.jetty.client.transport.HttpClientTransportOverHTTP;
-import org.eclipse.jetty.http2.client.HTTP2Client;
-import org.eclipse.jetty.http2.client.transport.ClientConnectionFactoryOverHTTP2;
 import org.eclipse.jetty.io.ArrayByteBufferPool;
 import org.eclipse.jetty.io.ClientConnector;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
@@ -49,37 +44,19 @@ import com.auto1.pantera.http.misc.ConfigDefaults;
  * underlying client. <code>stop()</code> methods should be used to release resources
  * and stop requests in progress.
  *
+ * <p>The outbound transport is pure HTTP/1.1 with a keep-alive connection pool
+ * (the Nexus / JFrog Artifactory pattern). HTTP/2 was briefly the default in the
+ * v2.2.0 perf-pack but Jetty issue
+ * <a href="https://github.com/jetty/jetty.project/issues/12776">#12776</a>
+ * corrupts the shared {@code ByteBufferPool} when any in-flight H2 stream is
+ * cancelled, causing siblings on the same connection to fail with
+ * {@code EOFException: Stream has been reset}. Every artifact registry Pantera
+ * proxies accepts HTTP/1.1 with keep-alive, so HTTP/2 is unnecessary and
+ * actively unsafe for this workload.
+ *
  * @since 0.1
  */
 public final class JettyClientSlices implements ClientSlices, AutoCloseable {
-
-    /**
-     * HTTP protocol selection for upstream connections.
-     *
-     * <p>This is a primitive mirror of the runtime
-     * {@code com.auto1.pantera.settings.runtime.HttpTuning.Protocol} enum.
-     * It lives in {@code http-client} (rather than {@code pantera-main}
-     * where {@code HttpTuning} resides) so that the http-client module
-     * stays self-contained — pantera-main → http-client is the dependency
-     * direction; the reverse would be circular.</p>
-     *
-     * <ul>
-     *   <li>{@code H1} — pure HTTP/1.1 transport
-     *       ({@link HttpClientTransportOverHTTP}).</li>
-     *   <li>{@code H2} — ALPN-negotiated HTTP/2 with HTTP/1.1 fallback
-     *       ({@link HttpClientTransportDynamic} preferring h2).</li>
-     *   <li>{@code AUTO} — same dynamic transport as {@code H2}; ALPN
-     *       picks h2 when the upstream supports it, h1.1 otherwise.</li>
-     * </ul>
-     */
-    public enum HttpProtocol {
-        /** HTTP/1.1 only. */
-        H1,
-        /** HTTP/2 with HTTP/1.1 fallback via ALPN. */
-        H2,
-        /** Negotiated, currently identical to {@link #H2}. */
-        AUTO
-    }
 
     /**
      * Default HTTP port.
@@ -151,67 +128,36 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
     }
 
     /**
-     * Legacy ctor — the runtime tuning (protocol + h2 pool size + h2
-     * multiplexing limit) is sourced from {@link HttpClientSettings}
-     * itself rather than the v2.2 RuntimeSettingsCache.
+     * Build a Jetty client from static YAML-driven settings only.
      *
-     * <p>Specifically, the per-destination cap continues to come from
-     * {@code settings.maxConnectionsPerDestination()}, preserving any
-     * YAML overrides users had in v2.1. The protocol is upgraded to
-     * ALPN-negotiated h2/h1.1 (matching {@code HttpTuning.defaults()}'s
-     * Protocol = H2), but the connection pool size is left untouched
-     * so existing YAML config keeps working.</p>
-     *
-     * <p>Task 9 will introduce the runtime-cache-driven path that prefers
-     * DB tuning over YAML; until then, callers wanting the new behaviour
-     * use the 4-arg ctor explicitly.</p>
+     * <p>The per-destination keep-alive connection cap comes from
+     * {@code settings.maxConnectionsPerDestination()}. No HTTP/2,
+     * no ALPN-negotiated dynamic transport — the wire protocol is
+     * HTTP/1.1 only.
      *
      * @param settings Settings.
      */
     public JettyClientSlices(final HttpClientSettings settings) {
-        // TODO(perf-pack-changelog): the legacy 1-arg constructor used to
-        // produce pure HTTP/1.1 clients. As of v2.2.0 perf-pack it produces
-        // an ALPN-negotiated dynamic transport (h2 over TLS, h1.1 fallback).
-        // Production traffic to all upstream registries (Maven/npm/PyPI/Docker
-        // proxies via RepositorySlices) will collapse from many h1.1
-        // connections per destination to one multiplexed h2 connection per
-        // destination after deploy. Operators should re-baseline
-        // connection-count alerting and watch for any upstream that misbehaves
-        // on h2. CHANGELOG entry will land in Task 26 (Phase 8) under
-        // "BEHAVIOR CHANGE".
-        this(settings, HttpProtocol.H2, settings.maxConnectionsPerDestination(), 100);
+        this(settings, settings.maxConnectionsPerDestination());
     }
 
     /**
-     * Ctor with explicit HTTP/2 tunables sourced from the runtime
-     * settings cache (see {@code com.auto1.pantera.settings.runtime.HttpTuning}).
+     * Build a Jetty client with an explicit per-destination connection cap.
      *
-     * <p>These primitives are wired by pantera-main when constructing a
-     * client. The http-client module deliberately accepts plain values
-     * rather than depending on the {@code HttpTuning} record — pantera-main
-     * already depends on http-client, so the inverse would be circular.</p>
+     * <p>{@code maxConnectionsPerDestination} is the size of the HTTP/1.1
+     * keep-alive pool per upstream destination. The runtime cache uses this
+     * overload so DB-backed tuning can override the YAML cap without a
+     * restart; production callers reach it via the 3-arg overload, which
+     * also injects the shared rate limiter.
      *
      * @param settings Static YAML-driven settings (TLS, proxies, timeouts, …).
-     * @param protocol Wire-protocol selection ({@link HttpProtocol}).
-     * @param h2MaxPoolSize Maps to Jetty's
-     *     {@code HttpClient.setMaxConnectionsPerDestination}. With HTTP/2
-     *     a single TCP connection multiplexes many concurrent streams, so
-     *     a value of {@code 1} is the recommended deployment; raise only
-     *     if a single connection becomes a throughput bottleneck. Also
-     *     applied to the H1 transport for symmetry.
-     * @param h2MultiplexingLimit Maps to
-     *     {@code HTTP2Client.setMaxConcurrentPushedStreams=0} and
-     *     {@code setMaxLocalStreams(...)} — the per-connection cap on
-     *     concurrent client-initiated streams. Ignored when protocol
-     *     is {@link HttpProtocol#H1}.
+     * @param maxConnectionsPerDestination Per-destination keep-alive pool cap.
      */
     public JettyClientSlices(
         final HttpClientSettings settings,
-        final HttpProtocol protocol,
-        final int h2MaxPoolSize,
-        final int h2MultiplexingLimit
+        final int maxConnectionsPerDestination
     ) {
-        this(settings, protocol, h2MaxPoolSize, h2MultiplexingLimit,
+        this(settings, maxConnectionsPerDestination,
             new UpstreamRateLimiter.Default(RateLimitConfig.defaults(), Clock.systemUTC()));
     }
 
@@ -220,16 +166,18 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
      * Defaults the circuit breaker registry to a JVM-default with
      * production-tuned trip predicates ({@link CircuitBreakerConfig#defaults()})
      * and a fresh daemon probe executor.
+     *
+     * @param settings Static settings.
+     * @param maxConnectionsPerDestination Per-destination keep-alive pool cap.
+     * @param rateLimiter Per-host reactive 429/503 gate.
      */
     public JettyClientSlices(
         final HttpClientSettings settings,
-        final HttpProtocol protocol,
-        final int h2MaxPoolSize,
-        final int h2MultiplexingLimit,
+        final int maxConnectionsPerDestination,
         final UpstreamRateLimiter rateLimiter
     ) {
         this(
-            settings, protocol, h2MaxPoolSize, h2MultiplexingLimit,
+            settings, maxConnectionsPerDestination,
             rateLimiter, CircuitBreakerConfig.defaults(), Clock.systemUTC()
         );
     }
@@ -238,26 +186,22 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
      * Full constructor with explicit rate limiter and circuit-breaker
      * config. Used by the perf harness + integration tests to inject a
      * test-friendly clock / trip predicates; production callers use the
-     * 5-arg overload which builds JVM defaults.
+     * 3-arg overload which builds JVM defaults.
      *
-     * @param settings           Static settings.
-     * @param protocol           Wire protocol.
-     * @param h2MaxPoolSize      Per-destination connection cap.
-     * @param h2MultiplexingLimit Per-connection stream cap.
-     * @param rateLimiter        Per-host reactive 429/503 gate.
-     * @param breakerConfig      Circuit-breaker trip predicates + backoff.
-     * @param clock              Clock for breaker scheduling.
+     * @param settings                     Static settings.
+     * @param maxConnectionsPerDestination Per-destination keep-alive pool cap.
+     * @param rateLimiter                  Per-host reactive 429/503 gate.
+     * @param breakerConfig                Circuit-breaker trip predicates + backoff.
+     * @param clock                        Clock for breaker scheduling.
      */
     public JettyClientSlices(
         final HttpClientSettings settings,
-        final HttpProtocol protocol,
-        final int h2MaxPoolSize,
-        final int h2MultiplexingLimit,
+        final int maxConnectionsPerDestination,
         final UpstreamRateLimiter rateLimiter,
         final CircuitBreakerConfig breakerConfig,
         final Clock clock
     ) {
-        this.clnt = create(settings, protocol, h2MaxPoolSize, h2MultiplexingLimit);
+        this.clnt = create(settings, maxConnectionsPerDestination);
         this.acquireTimeoutMillis = settings.connectionAcquireTimeout();
         this.rateLimiter = rateLimiter;
         this.circuitBreakerConfig = breakerConfig;
@@ -540,36 +484,18 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
     }
 
     /**
-     * Creates {@link HttpClient} from {@link HttpClientSettings} with
-     * runtime-tuned protocol + HTTP/2 pooling parameters.
+     * Creates the underlying Jetty {@link HttpClient} from
+     * {@link HttpClientSettings} with the given per-destination
+     * keep-alive pool cap.
      *
      * @param settings Static YAML-sourced settings.
-     * @param protocol Wire-protocol selection.
-     * @param h2MaxPoolSize Per-destination connection cap (Jetty's
-     *     {@code maxConnectionsPerDestination}). With HTTP/2 multiplexing
-     *     1 is normal; raised values create extra parallel TCP connections.
-     * @param h2MultiplexingLimit Per-connection cap on concurrent
-     *     client-initiated HTTP/2 streams. Ignored for {@link HttpProtocol#H1}.
+     * @param maxConnectionsPerDestination Per-destination keep-alive pool cap.
      * @return HTTP client built from settings.
      */
     private static HttpClient create(
         final HttpClientSettings settings,
-        final HttpProtocol protocol,
-        final int h2MaxPoolSize,
-        final int h2MultiplexingLimit
+        final int maxConnectionsPerDestination
     ) {
-        // NOTE: HTTP/3 support temporarily disabled in Jetty 12.1+ due to significant API changes
-        // The HTTP3Client and related classes require extensive refactoring
-        // This is acceptable as HTTP/3 is rarely used and the critical fix is the ArrayByteBufferPool
-        if (settings.http3()) {
-            EcsLogger.warn("com.auto1.pantera.http.client")
-                .message("HTTP/3 transport requested but not supported in Jetty 12.1+")
-                .eventCategory("web")
-                .eventAction("http_client_init")
-                .field("log.source", "application")
-                .log();
-        }
-
         // ByteBufferPool configuration for high-traffic production workloads
         //
         // CRITICAL: Jetty 12.x has O(n) eviction that causes 100% CPU spikes
@@ -635,17 +561,15 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
             factory.setKeyStorePassword(settings.jksPwd());
         }
 
-        // Shared ClientConnector — both H1 and H2 transports plug into the
-        // same selector / SSL / buffer pool. ClientConnector is owned by
-        // the HttpClientTransport, which is owned by HttpClient — so its
-        // lifecycle is managed transitively by the client's start/stop.
+        // HTTP/1.1-only transport over a shared ClientConnector that owns
+        // the selector / SSL / buffer pool. ClientConnector is owned by
+        // HttpClientTransportOverHTTP, which is owned by HttpClient — so
+        // its lifecycle is managed transitively by the client's start/stop.
         final ClientConnector connector = new ClientConnector();
         connector.setSslContextFactory(factory);
         connector.setByteBufferPool(bufferPool);
 
-        final HttpClientTransport transport = buildTransport(
-            connector, protocol, h2MultiplexingLimit, bufferPool
-        );
+        final HttpClientTransportOverHTTP transport = new HttpClientTransportOverHTTP(connector);
 
         final HttpClient result = new HttpClient(transport);
         result.setByteBufferPool(bufferPool);
@@ -656,9 +580,9 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
 
         EcsLogger.info("com.auto1.pantera.http.client")
             .message(String.format(
-                "Configured Jetty client: protocol=%s, h2MaxPoolSize=%d, h2MultiplexingLimit=%d, "
+                "Configured Jetty client: protocol=HTTP/1.1, maxConnectionsPerDestination=%d, "
                     + "bufferPool maxBucketSize=%d, maxHeapMB=%d, maxDirectMB=%d",
-                protocol, h2MaxPoolSize, h2MultiplexingLimit,
+                maxConnectionsPerDestination,
                 maxBucketSize, maxHeapMemory / (1024 * 1024), maxDirectMemory / (1024 * 1024)))
             .eventCategory("web")
             .eventAction("http_client_init")
@@ -693,18 +617,16 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
         if (connectTimeout > 0) {
             result.setConnectTimeout(connectTimeout);
         }
-        
+
         // Idle timeout can safely be 0 (infinite)
         result.setIdleTimeout(settings.idleTimeout());
         result.setAddressResolutionTimeout(5_000L);
-        
-        // Connection pool limits to prevent resource exhaustion.
-        // The per-destination cap is sourced from the runtime tuning
-        // (h2MaxPoolSize) rather than HttpClientSettings — the legacy
-        // ctor passes settings.maxConnectionsPerDestination() so YAML
-        // users keep their numbers; the new 4-arg ctor lets the DB
-        // RuntimeSettingsCache override.
-        result.setMaxConnectionsPerDestination(h2MaxPoolSize);
+
+        // Connection pool limits to prevent resource exhaustion. The
+        // per-destination cap is the HTTP/1.1 keep-alive pool size —
+        // production deployments typically run 20–50 here; runtime
+        // overrides come from RuntimeSettingsCache via the 2-arg ctor.
+        result.setMaxConnectionsPerDestination(maxConnectionsPerDestination);
         result.setMaxRequestsQueuedPerDestination(settings.maxRequestsQueuedPerDestination());
 
         // No client-wide User-Agent: per-request UA is set by upper-layer
@@ -714,76 +636,6 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
         // Suppress Jetty's default "Jetty/<version>" header as well.
         result.setUserAgentField(null);
 
-        return result;
-    }
-
-    /**
-     * Builds the {@link HttpClientTransport} matching {@code protocol}.
-     *
-     * <ul>
-     *   <li>{@link HttpProtocol#H1}: {@link HttpClientTransportOverHTTP}
-     *       — plain HTTP/1.1 over the supplied {@link ClientConnector}.
-     *       No ALPN, no TLS-h2 handshake overhead.</li>
-     *   <li>{@link HttpProtocol#H2} / {@link HttpProtocol#AUTO}:
-     *       {@link HttpClientTransportDynamic} listing
-     *       {@link HttpClientConnectionFactory.HTTP11} first (the
-     *       cleartext default; h2c is rare among artifact registries
-     *       and can confuse legacy HTTP proxies) and
-     *       {@link ClientConnectionFactoryOverHTTP2.HTTP2} second.
-     *       For TLS connections Jetty offers both protocols to ALPN,
-     *       and h2 wins when the upstream supports it.</li>
-     * </ul>
-     *
-     * <p>The {@code h2MultiplexingLimit} is applied to the underlying
-     * {@link HTTP2Client} via {@code setMaxLocalStreams} — Jetty 12 caps
-     * concurrent client-initiated streams there. Server push is disabled
-     * unconditionally (registries don't push, and push amplification
-     * would only waste pool entries).</p>
-     */
-    private static HttpClientTransport buildTransport(
-        final ClientConnector connector,
-        final HttpProtocol protocol,
-        final int h2MultiplexingLimit,
-        final ArrayByteBufferPool bufferPool
-    ) {
-        final HttpClientTransport result;
-        if (protocol == HttpProtocol.H1) {
-            result = new HttpClientTransportOverHTTP(connector);
-        } else {
-            final HTTP2Client h2Client = new HTTP2Client(connector); // NOPMD CloseResource - lifecycle managed by parent HttpClient via wrapped HttpClientTransport
-            // Disable server push: registries don't push, and push streams
-            // would just consume pool slots.
-            h2Client.setMaxConcurrentPushedStreams(0);
-            // Per-connection cap on concurrent client-initiated streams.
-            // h2MultiplexingLimit comes from RuntimeSettingsCache.HttpTuning.
-            if (h2MultiplexingLimit > 0) {
-                h2Client.setMaxLocalStreams(h2MultiplexingLimit);
-            }
-            // Share the same buffer pool so h2 frames hit the same bounded
-            // bucket allocator as h1.1 — keeps direct-memory accounting honest.
-            h2Client.setByteBufferPool(bufferPool);
-            final ClientConnectionFactoryOverHTTP2.HTTP2 h2Factory =
-                new ClientConnectionFactoryOverHTTP2.HTTP2(h2Client);
-            // IMPORTANT: do NOT pass the static singleton
-            // HttpClientConnectionFactory.HTTP11. Jetty 12 will register
-            // it as a managed bean of HttpClientTransportDynamic and call
-            // destroy() on it when the transport (and thus client) stops.
-            // The next client built in the same JVM (e.g. test reruns,
-            // hot-reload) would then fail with "Destroyed container
-            // cannot be restarted". Use a fresh per-client instance.
-            final HttpClientConnectionFactory.HTTP11 h11Factory =
-                new HttpClientConnectionFactory.HTTP11();
-            // Order matters: the FIRST factory is the default for plain
-            // (cleartext) HTTP connections, where there's no ALPN. We put
-            // HTTP/1.1 first so plain `http://` upstreams (and HTTP-only
-            // proxies) keep speaking h1.1 — h2c (cleartext HTTP/2) is rare
-            // among artifact registries and would lock up legacy proxies.
-            // For TLS connections, both factories are offered to ALPN and
-            // h2 is negotiated when supported.
-            result = new HttpClientTransportDynamic(
-                connector, h11Factory, h2Factory
-            );
-        }
         return result;
     }
 }

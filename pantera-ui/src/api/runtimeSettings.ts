@@ -7,9 +7,6 @@ import { getApiClient } from './client'
  * introduced when a new key is added on the server.
  */
 export type RuntimeSettingKey =
-  | 'http_client.protocol'
-  | 'http_client.http2_max_pool_size'
-  | 'http_client.http2_multiplexing_limit'
   | 'http_client.bulkhead.adaptive'
   | 'http_client.bulkhead.min_permits'
   | 'http_client.bulkhead.max_permits'
@@ -59,7 +56,7 @@ export type RuntimeSettingsList = Record<string, RuntimeSettingRaw>
 /**
  * Decode a JSON-literal string (as the server emits) into a native
  * value. The server uses Vert.x {@code Json.encode}/{@code defaultRepr}
- * so {@code "\"h2\""} -> "h2", {@code "100"} -> 100, {@code "true"} -> true.
+ * so {@code "100"} -> 100, {@code "true"} -> true, {@code "\"foo\""} -> "foo".
  *
  * If the literal is malformed (shouldn't happen in normal operation),
  * we return the raw string so the UI can still display it without
@@ -140,9 +137,6 @@ export async function resetRuntimeSetting(key: RuntimeSettingKey): Promise<void>
  * default field. Kept in sync with the documented v2.2.0 catalog.
  */
 export const SPEC_DEFAULTS: Record<RuntimeSettingKey, RuntimeValue> = {
-  'http_client.protocol': 'auto',
-  'http_client.http2_max_pool_size': 1,
-  'http_client.http2_multiplexing_limit': 100,
   'http_client.bulkhead.adaptive': true,
   'http_client.bulkhead.min_permits': 5,
   'http_client.bulkhead.max_permits': 100,

@@ -22,8 +22,9 @@ import javax.json.JsonObject;
  * hands the resulting record to {@code RepositorySlices} on every
  * bulkhead (re)creation.
  *
- * <p>Mirrors the {@link HttpTuning} pattern so admins can edit every
- * upstream-facing concurrency parameter from one place in the settings UI.
+ * <p>Admins edit every upstream-facing concurrency parameter from one
+ * place in the settings UI; changes flow into existing bulkheads on the
+ * next acquire via {@code RuntimeSettingsCache}'s NOTIFY listener.
  *
  * @param adaptive         {@code true} to enable AIMD tuning; {@code false} for fixed permits
  * @param minPermits       Lower bound on the dynamic permit count

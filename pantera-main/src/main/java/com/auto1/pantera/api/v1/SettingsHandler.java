@@ -659,10 +659,10 @@ public final class SettingsHandler {
      * {@code "default"}).
      *
      * <p><b>Value format:</b> the {@code value} field is the JSON literal repr
-     * of the stored value (e.g. {@code "\"h2\""} for the protocol string,
-     * {@code "100"} for an integer, {@code "true"} for a boolean), matching the
-     * {@code defaultRepr} format used by {@link SettingsKey}. Consumers may
-     * round-trip via {@code Json.createReader(new StringReader(value)).readValue()}.
+     * of the stored value (e.g. {@code "100"} for an integer, {@code "true"}
+     * for a boolean), matching the {@code defaultRepr} format used by
+     * {@link SettingsKey}. Consumers may round-trip via
+     * {@code Json.createReader(new StringReader(value)).readValue()}.
      *
      * @param ctx Routing context
      */
@@ -705,10 +705,10 @@ public final class SettingsHandler {
      * GET /api/v1/settings/runtime/:key — single runtime-tunable key.
      *
      * <p><b>Value format:</b> the {@code value} field is the JSON literal repr
-     * of the stored value (e.g. {@code "\"h2\""} for the protocol string,
-     * {@code "100"} for an integer, {@code "true"} for a boolean), matching the
-     * {@code defaultRepr} format used by {@link SettingsKey}. Consumers may
-     * round-trip via {@code Json.createReader(new StringReader(value)).readValue()}.
+     * of the stored value (e.g. {@code "100"} for an integer, {@code "true"}
+     * for a boolean), matching the {@code defaultRepr} format used by
+     * {@link SettingsKey}. Consumers may round-trip via
+     * {@code Json.createReader(new StringReader(value)).readValue()}.
      *
      * @param ctx Routing context
      */
@@ -756,9 +756,9 @@ public final class SettingsHandler {
      * {@code {key, value, source: "db"}} envelope that
      * {@link #handleRuntimeGet} returns, so a UI can re-render directly
      * from the response without a follow-up GET. The {@code value} field
-     * is the JSON literal repr (e.g. {@code "\"h2\""} for strings,
-     * {@code "100"} for ints, {@code "true"} for booleans), matching the
-     * {@code defaultRepr} format used by {@link SettingsKey}.
+     * is the JSON literal repr (e.g. {@code "100"} for ints, {@code "true"}
+     * for booleans), matching the {@code defaultRepr} format used by
+     * {@link SettingsKey}.
      *
      * <p><b>Eventual consistency:</b> persists the new value to the
      * {@code settings} table immediately, then returns 200. The in-process
@@ -809,10 +809,10 @@ public final class SettingsHandler {
         }, HandlerExecutor.get())
             .whenComplete((ignored, err) -> {
                 // T-S04 audit log: per-key runtime tunable mutations
-                // are SOC2-significant (cooldown duration, http_client
-                // protocol, etc.). The before/after value diff lives in
-                // old_value / new_value; "details" stays empty so the
-                // same fact isn't stored twice.
+                // are SOC2-significant (cooldown duration, bulkhead
+                // controller knobs, etc.). The before/after value diff
+                // lives in old_value / new_value; "details" stays empty
+                // so the same fact isn't stored twice.
                 SettingsHandler.audit(
                     actor, "SETTINGS_RUNTIME_UPDATE", key,
                     java.util.Map.of(),
@@ -1002,8 +1002,8 @@ public final class SettingsHandler {
      * Extract the {@code value} field from a stored settings row as the
      * JSON literal repr. The row is shaped {@code {"value": <typed>}}.
      * Returns the JSON literal so it round-trips with {@link SettingsKey}'s
-     * {@code defaultRepr} (e.g. {@code "\"h2\""} for strings,
-     * {@code "1"} for numbers).
+     * {@code defaultRepr} (e.g. {@code "1"} for numbers, {@code "true"} for
+     * booleans).
      */
     private static String extractValueRepr(final javax.json.JsonObject row) {
         final javax.json.JsonValue v = row.get("value");
@@ -1033,13 +1033,6 @@ public final class SettingsHandler {
      */
     private static boolean validateRuntime(final String key, final Object value) {
         return switch (key) {
-            case "http_client.protocol" ->
-                value instanceof String s
-                    && ("h2".equals(s) || "h1".equals(s) || "auto".equals(s));
-            case "http_client.http2_max_pool_size" ->
-                isIntInRange(value, 1, 8);
-            case "http_client.http2_multiplexing_limit" ->
-                isIntInRange(value, 1, 1000);
             case "http_client.bulkhead.adaptive" ->
                 value instanceof Boolean;
             case "http_client.bulkhead.min_permits" ->

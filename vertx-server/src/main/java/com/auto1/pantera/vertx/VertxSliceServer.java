@@ -1607,18 +1607,10 @@ public final class VertxSliceServer implements Closeable {
     /**
      * Classify a failure as an upstream-transient error that should
      * map to a 502 Bad Gateway (rather than a 500 Internal Server
-     * Error). Recognised shapes (matched on the exception chain, up to
-     * 8 levels deep):
-     *
-     * <ul>
-     *   <li>{@link java.io.EOFException} — Jetty's H2 receiver
-     *       (or its bridge {@code JettyContentSourcePublisher} via
-     *       {@code UpstreamStreamResetException extends IOException})
-     *       saw RST_STREAM mid-body.</li>
-     *   <li>Any {@link java.io.IOException} on a body-streaming path —
-     *       upstream connection closed / timed-out while we were
-     *       relaying bytes.</li>
-     * </ul>
+     * Error). Any {@link java.io.IOException} on a body-streaming path
+     * (upstream connection closed / timed-out while we were relaying
+     * bytes) is treated as transient — matched on the exception chain
+     * up to 8 levels deep.
      *
      * <p>Causes are unwrapped because Reactive Streams + CompletableFuture
      * commonly wrap failures in
@@ -1627,12 +1619,6 @@ public final class VertxSliceServer implements Closeable {
      * <p>The aim: clients (Go's {@code cmd/go}, Maven, Docker daemon)
      * see 502 and apply their built-in idempotent retry, instead of
      * 500 which they treat as fatal.
-     *
-     * <p>Implementation note: we deliberately don't import the
-     * {@code UpstreamStreamResetException} type from {@code http-client}
-     * to avoid a cross-module dependency from the {@code vertx-server}
-     * adapter. It extends {@link java.io.IOException} so the IOException
-     * branch matches it.
      *
      * @param error Failure throwable (may have nested causes).
      * @return {@code true} iff the failure is upstream-transient.

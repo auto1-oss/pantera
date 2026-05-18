@@ -91,16 +91,18 @@ final class SettingsBootstrapTest {
     @Test
     void doesNotOverwriteExistingValues() {
         this.dao.put(
-            "http_client.protocol",
-            Json.createObjectBuilder().add("value", "h1").build(),
+            "http_client.bulkhead.min_permits",
+            Json.createObjectBuilder().add("value", 9).build(),
             "test"
         );
         new SettingsBootstrap(this.dao).seedIfMissing();
-        final JsonObject row = this.dao.get("http_client.protocol").orElseThrow();
+        final JsonObject row = this.dao.get(
+            "http_client.bulkhead.min_permits"
+        ).orElseThrow();
         assertThat(
-            "existing value must be preserved (not overwritten with default h2)",
-            row.getString("value"),
-            is(equalTo("h1"))
+            "existing value must be preserved (not overwritten with default)",
+            row.getInt("value"),
+            is(equalTo(9))
         );
     }
 }

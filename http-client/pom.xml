@@ -61,10 +61,9 @@ SOFTWARE.
       <version>${jetty.version}</version>
     </dependency>
     <!--
-      HTTP/2 client dependencies. Used by JettyClientSlices to build a
-      HttpClientTransportDynamic with ALPN-negotiated h2/h1.1 fallback
-      when the runtime HttpTuning protocol is H2 or AUTO. See task 8 of
-      docs/superpowers/plans/2026-05-04-pantera-http2-prefetch.md.
+      HTTP/2 client dependencies retained for transitive Jetty plumbing only;
+      Pantera's outbound transport is pure HTTP/1.1. The HTTP/2 deps may be
+      pruned once Jetty's HTTP module tree is fully decoupled.
     -->
     <dependency>
       <groupId>org.eclipse.jetty.http2</groupId>

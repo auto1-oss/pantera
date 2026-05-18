@@ -56,13 +56,11 @@ public final class RuntimeSettingsCache {
     private volatile Instant lastReadAt = Instant.EPOCH;
 
     private record Snapshot(
-        HttpTuning http,
         BulkheadTuning bulkhead,
         Map<String, JsonObject> raw
     ) {
         static Snapshot defaults() {
             return new Snapshot(
-                HttpTuning.defaults(),
                 BulkheadTuning.defaults(),
                 Map.of()
             );
@@ -104,10 +102,6 @@ public final class RuntimeSettingsCache {
             Thread.currentThread().interrupt();
         }
         this.listener.stop();
-    }
-
-    public HttpTuning httpTuning() {
-        return this.snapshot.http();
     }
 
     public BulkheadTuning bulkheadTuning() {
@@ -165,7 +159,6 @@ public final class RuntimeSettingsCache {
         final Instant now = Instant.now();
         final Map<String, JsonObject> rows = this.dao.listAll();
         this.snapshot = new Snapshot(
-            HttpTuning.fromMap(rows),
             BulkheadTuning.fromMap(rows),
             Map.copyOf(rows)
         );

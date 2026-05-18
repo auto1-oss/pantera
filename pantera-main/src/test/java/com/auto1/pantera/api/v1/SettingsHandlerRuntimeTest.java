@@ -230,24 +230,17 @@ final class SettingsHandlerRuntimeTest {
                         Matchers.is(k.defaultRepr())
                     );
                 }
-                // Lock the value-as-JSON-literal-string contract: protocol
-                // is the quoted JSON string "\"auto\"", not the bare string "auto".
-                final JsonObject protoEntry =
-                    body.getJsonObject("http_client.protocol");
-                MatcherAssert.assertThat(protoEntry.getString("value"),
-                    Matchers.is("\"auto\""));
-                MatcherAssert.assertThat(protoEntry.getString("default"),
-                    Matchers.is("\"auto\""));
-                MatcherAssert.assertThat(protoEntry.getString("source"),
-                    Matchers.is("default"));
-                // For an integer key, the value is the JSON literal "4",
-                // not the integer 4. (Default raised from 1 → 4 in the
-                // v2.2.0 perf bench, 2026-05, to enable real upstream
-                // parallelism through the H2 client.)
-                final JsonObject poolEntry =
-                    body.getJsonObject("http_client.http2_max_pool_size");
-                MatcherAssert.assertThat(poolEntry.getString("value"),
-                    Matchers.is("4"));
+                // Lock the value-as-JSON-literal-string contract: an integer
+                // key surfaces as the JSON literal "10", not the integer 10.
+                final JsonObject initialEntry =
+                    body.getJsonObject("http_client.bulkhead.initial_permits");
+                MatcherAssert.assertThat(initialEntry.getString("value"),
+                    Matchers.is("10"));
+                // Boolean-typed keys surface as the JSON literal "true".
+                final JsonObject adaptiveEntry =
+                    body.getJsonObject("http_client.bulkhead.adaptive");
+                MatcherAssert.assertThat(adaptiveEntry.getString("value"),
+                    Matchers.is("true"));
             }
         );
     }
@@ -257,16 +250,16 @@ final class SettingsHandlerRuntimeTest {
         final Vertx vertx, final VertxTestContext ctx) throws Exception {
         adminGranted = true;
         this.request(vertx, ctx, HttpMethod.PATCH,
-            "/api/v1/settings/runtime/http_client.protocol",
-            new JsonObject().put("value", "h1"),
+            "/api/v1/settings/runtime/http_client.bulkhead.min_permits",
+            new JsonObject().put("value", 7),
             res -> {
                 Assertions.assertEquals(200, res.statusCode(),
                     "Expected 200, got body: " + res.bodyAsString());
                 final JsonObject body = res.bodyAsJsonObject();
                 MatcherAssert.assertThat(body.getString("key"),
-                    Matchers.is("http_client.protocol"));
+                    Matchers.is("http_client.bulkhead.min_permits"));
                 MatcherAssert.assertThat(body.getString("value"),
-                    Matchers.is("\"h1\""));
+                    Matchers.is("7"));
                 MatcherAssert.assertThat(body.getString("source"),
                     Matchers.is("db"));
             }
@@ -277,12 +270,12 @@ final class SettingsHandlerRuntimeTest {
     void getKeyReturnsSingleKeyWithValueAndSource(
         final Vertx vertx, final VertxTestContext ctx) throws Exception {
         this.request(vertx, ctx, HttpMethod.GET,
-            "/api/v1/settings/runtime/http_client.protocol", null,
+            "/api/v1/settings/runtime/http_client.bulkhead.adaptive", null,
             res -> {
                 Assertions.assertEquals(200, res.statusCode());
                 final JsonObject body = res.bodyAsJsonObject();
                 MatcherAssert.assertThat(body.getString("key"),
-                    Matchers.is("http_client.protocol"));
+                    Matchers.is("http_client.bulkhead.adaptive"));
                 MatcherAssert.assertThat(body.fieldNames(),
                     Matchers.hasItems("value", "source"));
                 MatcherAssert.assertThat(body.getString("source"),
@@ -305,21 +298,21 @@ final class SettingsHandlerRuntimeTest {
         final Vertx vertx, final VertxTestContext ctx) throws Exception {
         adminGranted = true;
         this.request(vertx, ctx, HttpMethod.PATCH,
-            "/api/v1/settings/runtime/http_client.protocol",
-            new JsonObject().put("value", "h1"),
+            "/api/v1/settings/runtime/http_client.bulkhead.min_permits",
+            new JsonObject().put("value", 9),
             res -> {
                 Assertions.assertEquals(200, res.statusCode(),
                     "Expected 200, got body: " + res.bodyAsString());
                 // Verify the row was actually written to the DB.
                 final SettingsDao dao = new SettingsDao(sharedDs);
                 final javax.json.JsonObject saved = dao
-                    .get("http_client.protocol")
+                    .get("http_client.bulkhead.min_permits")
                     .orElseThrow(
                         () -> new AssertionError("row not persisted")
                     );
                 MatcherAssert.assertThat(
-                    saved.getString("value"),
-                    Matchers.is("h1")
+                    saved.getInt("value"),
+                    Matchers.is(9)
                 );
             }
         );
@@ -330,8 +323,8 @@ final class SettingsHandlerRuntimeTest {
         final Vertx vertx, final VertxTestContext ctx) throws Exception {
         adminGranted = false;
         this.request(vertx, ctx, HttpMethod.PATCH,
-            "/api/v1/settings/runtime/http_client.protocol",
-            new JsonObject().put("value", "h1"),
+            "/api/v1/settings/runtime/http_client.bulkhead.min_permits",
+            new JsonObject().put("value", 9),
             res -> Assertions.assertEquals(403, res.statusCode(),
                 "non-admin must be rejected; got body: " + res.bodyAsString())
         );
@@ -353,7 +346,7 @@ final class SettingsHandlerRuntimeTest {
         final Vertx vertx, final VertxTestContext ctx) throws Exception {
         adminGranted = true;
         this.request(vertx, ctx, HttpMethod.PATCH,
-            "/api/v1/settings/runtime/http_client.http2_max_pool_size",
+            "/api/v1/settings/runtime/http_client.bulkhead.min_permits",
             new JsonObject().put("value", 99_999),
             res -> {
                 Assertions.assertEquals(400, res.statusCode(),
@@ -373,15 +366,15 @@ final class SettingsHandlerRuntimeTest {
         // Seed a row so DELETE has something to remove.
         final SettingsDao dao = new SettingsDao(sharedDs);
         dao.put(
-            "http_client.protocol",
-            javax.json.Json.createObjectBuilder().add("value", "h1").build(),
+            "http_client.bulkhead.min_permits",
+            javax.json.Json.createObjectBuilder().add("value", 9).build(),
             "test"
         );
         adminGranted = true;
         // First, DELETE.
         final HttpRequest<Buffer> delReq = WebClient.create(vertx)
             .request(HttpMethod.DELETE, this.port, HOST,
-                "/api/v1/settings/runtime/http_client.protocol")
+                "/api/v1/settings/runtime/http_client.bulkhead.min_permits")
             .bearerTokenAuthentication(this.token);
         final HttpResponse<Buffer> delRes = delReq.send()
             .toCompletionStage().toCompletableFuture()
@@ -390,12 +383,12 @@ final class SettingsHandlerRuntimeTest {
             "DELETE must return 204; got body: " + delRes.bodyAsString());
         MatcherAssert.assertThat(
             "row must be physically removed",
-            dao.get("http_client.protocol").isPresent(),
+            dao.get("http_client.bulkhead.min_permits").isPresent(),
             Matchers.is(false)
         );
         // Then, GET — should now reflect the default.
         this.request(vertx, ctx, HttpMethod.GET,
-            "/api/v1/settings/runtime/http_client.protocol", null,
+            "/api/v1/settings/runtime/http_client.bulkhead.min_permits", null,
             res -> {
                 Assertions.assertEquals(200, res.statusCode());
                 final JsonObject body = res.bodyAsJsonObject();
@@ -410,7 +403,7 @@ final class SettingsHandlerRuntimeTest {
         final Vertx vertx, final VertxTestContext ctx) throws Exception {
         adminGranted = false;
         this.request(vertx, ctx, HttpMethod.DELETE,
-            "/api/v1/settings/runtime/http_client.protocol", null,
+            "/api/v1/settings/runtime/http_client.bulkhead.min_permits", null,
             res -> Assertions.assertEquals(403, res.statusCode())
         );
     }

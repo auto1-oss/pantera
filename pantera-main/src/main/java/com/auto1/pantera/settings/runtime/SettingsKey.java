@@ -16,20 +16,16 @@ import java.util.stream.Collectors;
 
 /**
  * Canonical catalog of all settings keys used by the runtime cache.
- * Each entry documents its default; the {@code SettingsHandler} (Task 6)
- * validates PATCH bodies against this list.
+ * Each entry documents its default; the {@code SettingsHandler} validates
+ * PATCH bodies against this list.
  *
  * <p>{@code defaultRepr} is the JSON literal as it would be stored in the
- * {@code settings.value -> 'value'} field. The protocol default is
- * {@code "\"auto\""} — a quoted JSON string — so
- * {@code Json.createReader(new StringReader(repr)).readValue()} parses it
- * to a JSON string in Task 5's {@code SettingsBootstrap}. Numbers and
- * booleans are JSON literals already ({@code "1"}, {@code "true"}).
+ * {@code settings.value -> 'value'} field — numbers and booleans are JSON
+ * literals already ({@code "1"}, {@code "true"}); strings would be quoted
+ * JSON ({@code "\"value\""}). {@code Json.createReader(new StringReader(repr))
+ * .readValue()} round-trips every default.
  */
 public enum SettingsKey {
-    HTTP_CLIENT_PROTOCOL("http_client.protocol", "\"auto\""),
-    HTTP_CLIENT_H2_MAX_POOL_SIZE("http_client.http2_max_pool_size", "4"),
-    HTTP_CLIENT_H2_MULTIPLEXING_LIMIT("http_client.http2_multiplexing_limit", "100"),
     BULKHEAD_ADAPTIVE("http_client.bulkhead.adaptive", "true"),
     BULKHEAD_MIN_PERMITS("http_client.bulkhead.min_permits", "5"),
     BULKHEAD_MAX_PERMITS("http_client.bulkhead.max_permits", "100"),

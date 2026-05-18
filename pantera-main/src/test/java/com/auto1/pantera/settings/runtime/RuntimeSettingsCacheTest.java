@@ -88,7 +88,7 @@ final class RuntimeSettingsCacheTest {
     void initialSnapshotUsesDefaultsWhenTableIsEmpty() {
         this.cache = new RuntimeSettingsCache(this.dao, ds);
         this.cache.start();
-        assertThat(this.cache.httpTuning(), equalTo(HttpTuning.defaults()));
+        assertThat(this.cache.bulkheadTuning(), equalTo(BulkheadTuning.defaults()));
     }
 
     @Test
@@ -100,10 +100,10 @@ final class RuntimeSettingsCacheTest {
             "listener did not register LISTEN within 2 seconds"
         );
         final CountDownLatch latch = new CountDownLatch(1);
-        this.cache.addListener("http_client.protocol", k -> latch.countDown());
+        this.cache.addListener("http_client.bulkhead.min_permits", k -> latch.countDown());
         this.dao.put(
-            "http_client.protocol",
-            Json.createObjectBuilder().add("value", "h1").build(),
+            "http_client.bulkhead.min_permits",
+            Json.createObjectBuilder().add("value", 7).build(),
             "test"
         );
         final boolean fired = latch.await(3, TimeUnit.SECONDS);
@@ -113,8 +113,8 @@ final class RuntimeSettingsCacheTest {
         // count-down is observed by the asserting thread on a different core.
         Thread.sleep(100);
         assertThat(
-            this.cache.httpTuning().protocol(),
-            equalTo(HttpTuning.Protocol.H1)
+            this.cache.bulkheadTuning().minPermits(),
+            equalTo(7)
         );
     }
 }

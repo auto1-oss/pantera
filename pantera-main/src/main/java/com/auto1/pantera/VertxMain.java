@@ -476,39 +476,23 @@ public final class VertxMain {
             registry.register("composer", lastModified);
             registry.register("gem", lastModified);
         });
-        // Wire RepositorySlices with the runtime HTTP tuning supplier so
-        // every new SharedClient picks up the latest http_client.* values.
-        // When no DB-backed cache is configured (legacy YAML-only boot),
-        // fall back to HttpTuning.defaults() so behaviour matches v2.1.
-        final java.util.function.Supplier<
-            com.auto1.pantera.settings.runtime.HttpTuning
-        > httpTuningSupplier = this.settingsCache != null
-            ? this.settingsCache::httpTuning
-            : com.auto1.pantera.settings.runtime.HttpTuning::defaults;
         final RepositorySlices slices = new RepositorySlices(
             settings, repos, jwtTokens,
-            com.auto1.pantera.circuit.CircuitBreakerSettingsLoader.activeSupplier(),
-            httpTuningSupplier
+            com.auto1.pantera.circuit.CircuitBreakerSettingsLoader.activeSupplier()
         );
-        // Hot-reload: any http_client.* settings change drops every cached
-        // upstream Jetty client so the next acquire rebuilds with the new
-        // protocol / pool size / multiplexing limit. Active leases keep
-        // their existing client until release; this is the v2.2 mechanism
-        // that RuntimeSettingsCache was designed to enable.
+        // Hot-reload bulkhead tuning: any http_client.bulkhead.* settings
+        // change drops the per-repo bulkheads so the next acquire rebuilds
+        // with the new permit count / target latency / etc.
         if (this.settingsCache != null) {
             slices.setBulkheadTuningSupplier(this.settingsCache::bulkheadTuning);
-            this.settingsCache.addListener("http_client.", changedKey -> {
+            this.settingsCache.addListener("http_client.bulkhead.", changedKey -> {
                 EcsLogger.info("com.auto1.pantera")
-                    .message("http_client.* setting changed; invalidating upstream client pool key=" + changedKey)
+                    .message("http_client.bulkhead.* setting changed; invalidating per-repo bulkheads key=" + changedKey)
                     .eventCategory("configuration")
                     .eventAction("http_client_settings_change")
                     .field("log.source", "application")
                     .log();
-                if (changedKey != null && changedKey.startsWith("http_client.bulkhead.")) {
-                    slices.invalidateBulkheads();
-                } else {
-                    slices.invalidateUpstreamClients();
-                }
+                slices.invalidateBulkheads();
             });
         }
         // M2 (analysis/plan/v1/PLAN.md): the prefetch subsystem boot wiring
