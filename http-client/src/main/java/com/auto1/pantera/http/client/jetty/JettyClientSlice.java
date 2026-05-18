@@ -405,18 +405,28 @@ final class JettyClientSlice implements Slice {
         final String scheme = this.secure ? "https" : "http";
         final URI uri = req.uri();
         // Build the upstream URL by concatenating the raw (already-encoded)
-        // path and query straight off the inbound URI. We deliberately do
-        // NOT pass through {@code org.apache.hc.core5.net.URIBuilder} —
-        // its setter/getter round-trip percent-encodes characters that
-        // RFC 3986 §3.3 lists as valid {@code pchar}, most notably
-        // {@code @} (sub-delim) and {@code :}. {@code proxy.golang.org}'s
-        // HTTP/2 implementation reacts to the over-encoded form
-        // {@code /<module>/%40v/<version>.zip} with a mid-body
-        // {@code RST_STREAM} on the {@code .zip} fetch (observed
-        // 2026-05-18 on {@code go.uber.org/multierr@v1.10.0}); GOPROXY
-        // clients see this as a 502 / EOF and surface as a fatal "module
-        // download failed". Preserving the raw path keeps {@code @v} in
-        // the URL exactly as the Go client emitted it.
+        // path and query straight off the inbound URI and handing the
+        // result to Jetty as a {@link URI}, not a {@link String}.
+        //
+        // Two over-encoding traps avoided here:
+        //
+        // 1. Apache {@code org.apache.hc.core5.net.URIBuilder} percent-
+        //    encodes every sub-delim (including {@code @}, {@code :},
+        //    {@code $}, {@code +}, {@code ,}, {@code ;}, {@code =},
+        //    {@code !}, {@code *}, {@code (}, {@code )}, {@code '}) that
+        //    RFC 3986 §3.3 lists as valid {@code pchar}. The over-encoded
+        //    {@code /<module>/%40v/<version>.zip} caused
+        //    {@code proxy.golang.org} to RST_STREAM mid-body on the
+        //    {@code .zip} fetch (observed 2026-05-18 on
+        //    {@code go.uber.org/multierr@v1.10.0}), which GOPROXY clients
+        //    surface as a fatal "module download failed".
+        //
+        // 2. Jetty's own {@link HttpClient#newRequest(String)} re-parses
+        //    the URL and re-encodes some sub-delims (notably {@code $},
+        //    breaking Packagist v2 sha-pinned URLs). The
+        //    {@link HttpClient#newRequest(URI)} overload trusts the URI
+        //    as already canonical — building it via {@link URI#create}
+        //    on a string we control keeps the raw form intact.
         final StringBuilder url = new StringBuilder()
             .append(scheme).append("://").append(this.host);
         if (this.port > 0) {
@@ -430,7 +440,7 @@ final class JettyClientSlice implements Slice {
         if (uri.getRawQuery() != null) {
             url.append('?').append(uri.getRawQuery());
         }
-        final Request request = this.client.newRequest(url.toString())
+        final Request request = this.client.newRequest(URI.create(url.toString()))
             .method(req.method().value());
         if (this.acquireTimeoutMillis > 0) {
             request.timeout(this.acquireTimeoutMillis, TimeUnit.MILLISECONDS);
