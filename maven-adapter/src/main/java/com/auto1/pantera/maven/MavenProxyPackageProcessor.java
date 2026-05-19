@@ -43,9 +43,15 @@ import org.quartz.JobExecutionContext;
 public final class MavenProxyPackageProcessor extends QuartzJob {
 
     /**
-     * Repository type.
+     * Fallback repo_type used when a {@link ProxyArtifactEvent} arrives
+     * without an explicit {@code repoType} (legacy callers, fixtures
+     * predating the 2.2.0 plumbing fix). Maven and Gradle proxies share this
+     * processor; {@code maven-proxy} preserves the pre-2.2.0 behaviour for
+     * any code path that has not yet been migrated.
+     *
+     * @since 2.2.0
      */
-    private static final String REPO_TYPE = "maven-proxy";
+    private static final String FALLBACK_REPO_TYPE = "maven-proxy";
 
     /**
      * Maximum number of retry attempts for failed package processing.
@@ -172,6 +178,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
      * @return CompletableFuture that completes when processing is done
      */
     private CompletableFuture<Void> processPackageAsync(final ProxyArtifactEvent event) {
+        final String repoType = resolveRepoType(event);
         return this.asto.list(event.artifactKey())
             .thenCompose(keys -> {
                 try {
@@ -180,7 +187,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                     final List<Key> filtered = keys.stream()
                         .filter(key -> !key.string().endsWith(".tmp"))
                         .collect(Collectors.toList());
-                    
+
                     if (filtered.isEmpty()) {
                         EcsLogger.debug("com.auto1.pantera.maven")
                             .message("Maven package has only temporary files, skipping (will retry later)")
@@ -188,13 +195,13 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                             .eventAction("proxy_package_process")
                             .eventOutcome("unknown")
                             .field("event.reason", "skipped")
-                            .field("repository.type", REPO_TYPE)
+                            .field("repository.type", repoType)
                             .field("package.name", event.artifactKey().string())
                             .field("log.source", "application")
                             .log();
                         return CompletableFuture.completedFuture(null);
                     }
-                    
+
                     final Key archive = MavenSlice.EVENT_INFO.artifactPackage(filtered);
                     return this.asto.metadata(archive)
                         .thenApply(meta -> meta.read(Meta.OP_SIZE).get())
@@ -206,10 +213,10 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                                 event.artifactKey().parent().get()
                             );
                             final String version = new KeyLastPart(event.artifactKey()).get();
-                            
+
                             this.events.add(
                                 new ArtifactEvent(
-                                    MavenProxyPackageProcessor.REPO_TYPE,
+                                    repoType,
                                     event.repoName(),
                                     owner == null || owner.isBlank()
                                         ? ArtifactEvent.DEF_OWNER
@@ -231,7 +238,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                                 .eventCategory("web")
                                 .eventAction("proxy_artifact_record")
                                 .eventOutcome("success")
-                                .field("repository.type", REPO_TYPE)
+                                .field("repository.type", repoType)
                                 .field("package.name", artifactName)
                                 .field("package.version", version)
                                 .field("file.size", size)
@@ -248,7 +255,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                         .eventCategory("web")
                         .eventAction("proxy_package_process")
                         .eventOutcome("failure")
-                        .field("repository.type", REPO_TYPE)
+                        .field("repository.type", repoType)
                         .error(err)
                         .field("log.source", "application")
                         .log();
@@ -261,7 +268,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                     .eventCategory("web")
                     .eventAction("proxy_package_process")
                     .eventOutcome("failure")
-                    .field("repository.type", REPO_TYPE)
+                    .field("repository.type", repoType)
                     .field("package.name", event.artifactKey().string())
                     .error(err)
                     .field("log.source", "application")
@@ -340,6 +347,25 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
     }
 
     /**
+     * Resolve the effective repo_type for an inbound event. Uses the explicit
+     * {@code repoType} field when present (Maven/Gradle proxy slice plumbs it
+     * in via {@code buildArtifactEvent} as of 2.2.0). Falls back to
+     * {@link #FALLBACK_REPO_TYPE} for legacy events that predate the
+     * propagation fix so behaviour matches pre-2.2.0 for those code paths.
+     *
+     * @param event Inbound proxy event
+     * @return Effective repo_type for the downstream ArtifactEvent / log fields
+     * @since 2.2.0
+     */
+    private static String resolveRepoType(final ProxyArtifactEvent event) {
+        final String declared = event.repoType();
+        if (declared == null || declared.isBlank()) {
+            return FALLBACK_REPO_TYPE;
+        }
+        return declared;
+    }
+
+    /**
      * Handle processing error with retry logic.
      * Implements retry limits to prevent infinite retry loops for permanently failing packages.
      *
@@ -348,6 +374,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
      * @since 1.19.2
      */
     private void handleProcessingError(final ProxyArtifactEvent event, final Throwable err) {
+        final String repoType = resolveRepoType(event);
         // If ValueNotFoundException, the file might still be in transit
         // This can happen if file was just moved after listing
         if (err.getCause() instanceof com.auto1.pantera.asto.ValueNotFoundException) {
@@ -365,7 +392,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                     .eventAction("proxy_package_retry")
                     .eventOutcome("failure")
                     .field("event.reason", "retry_exhausted")
-                    .field("repository.type", REPO_TYPE)
+                    .field("repository.type", repoType)
                     .field("package.name", event.artifactKey().string())
                     .error(err)
                     .field("log.source", "application")
@@ -380,7 +407,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                     .eventAction("proxy_package_retry")
                     .eventOutcome("failure")
                     .field("event.reason", "request_abandoned")
-                    .field("repository.type", REPO_TYPE)
+                    .field("repository.type", repoType)
                     .field("package.name", event.artifactKey().string())
                     .error(err)
                     .field("log.source", "application")
@@ -392,7 +419,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                 .eventCategory("web")
                 .eventAction("proxy_package_process")
                 .eventOutcome("failure")
-                .field("repository.type", REPO_TYPE)
+                .field("repository.type", repoType)
                 .field("package.name", event.artifactKey().string())
                 .error(err)
                 .field("log.source", "application")

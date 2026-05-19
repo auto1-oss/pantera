@@ -405,6 +405,7 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
             new ProxyArtifactEvent(
                 new Key.From(matcher.group("pkg")),
                 this.repoName(),
+                this.repoType(),
                 owner,
                 lastModified
             )

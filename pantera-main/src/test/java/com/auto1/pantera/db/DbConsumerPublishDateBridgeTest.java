@@ -134,6 +134,58 @@ class DbConsumerPublishDateBridgeTest {
     }
 
     @Test
+    void preservesGradleProxyRepoTypeInBridge() throws InterruptedException {
+        // 2.2.0 forward-fix verification: an event from a gradle-proxy repo
+        // must land in artifact_publish_dates with repo_type='gradle-proxy',
+        // not 'maven-proxy'. Pre-2.2.0 the Maven package processor hardcoded
+        // 'maven-proxy' so cooldown lookups for gradle-proxy missed every
+        // row and fell through to upstream HEAD.
+        final DbConsumer consumer = new DbConsumer(this.source);
+        Thread.sleep(500);
+        final long created = System.currentTimeMillis();
+        final long releaseMillis = created - 24L * 60L * 60L * 1000L;
+        final ArtifactEvent event = new ArtifactEvent(
+            "gradle-proxy", "central", "Alice",
+            "com.google.guava.guava", "33.6.0-jre", 4096L, created, releaseMillis
+        );
+        consumer.accept(event);
+        Awaitility.await().atMost(15, TimeUnit.SECONDS).until(() -> {
+            try (
+                Connection conn = this.source.getConnection();
+                Statement stat = conn.createStatement()
+            ) {
+                stat.execute(
+                    "SELECT COUNT(*) FROM artifact_publish_dates "
+                        + "WHERE repo_type = 'gradle-proxy' "
+                        + "AND name = 'com.google.guava.guava' "
+                        + "AND version = '33.6.0-jre'"
+                );
+                final ResultSet rs = stat.getResultSet();
+                rs.next();
+                return rs.getInt(1) == 1;
+            }
+        });
+        try (
+            Connection conn = this.source.getConnection();
+            Statement stat = conn.createStatement()
+        ) {
+            stat.execute(
+                "SELECT COUNT(*) FROM artifact_publish_dates "
+                    + "WHERE repo_type = 'maven-proxy' "
+                    + "AND name = 'com.google.guava.guava' "
+                    + "AND version = '33.6.0-jre'"
+            );
+            final ResultSet rs = stat.getResultSet();
+            rs.next();
+            MatcherAssert.assertThat(
+                rs.getInt(1), new IsEqual<>(0)
+            );
+        } catch (final SQLException ex) {
+            throw new IllegalStateException(ex);
+        }
+    }
+
+    @Test
     void skipsBridgeWhenReleaseDateAbsent() throws InterruptedException {
         final DbConsumer consumer = new DbConsumer(this.source);
         Thread.sleep(500);

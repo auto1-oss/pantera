@@ -123,6 +123,22 @@ public final class DbPublishDateRegistry implements PublishDateRegistry {
                     recordOutcome(repoType, "l2_hit", startNanos);
                     return CompletableFuture.completedFuture(dbHit);
                 }
+                // 2.2.0 cleanup: gradle-proxy and maven-proxy share the same
+                // Maven slice in RepositorySlices, and pre-2.2.0 every event
+                // landed under repo_type='maven-proxy' due to the hardcoded
+                // constant in MavenProxyPackageProcessor. The forward fix
+                // makes new rows arrive under the correct repo_type, but
+                // existing rows still need to be reachable — otherwise the
+                // cooldown evaluator queries with repo_type='gradle-proxy'
+                // and falls back to an upstream HEAD even though the row
+                // exists under the sibling key. Alias lookup is bounded
+                // (single retry under the sibling key) and only fires
+                // AFTER the primary readDb miss, so the happy path is
+                // unaffected.
+                final Optional<Instant> aliasHit = lookupAlias(key, repoType, startNanos);
+                if (aliasHit.isPresent()) {
+                    return CompletableFuture.completedFuture(aliasHit);
+                }
                 // Track 5 Phase 2A: CACHE_ONLY callers explicitly forbid the
                 // upstream-source step. Return empty without firing any
                 // network I/O. Used by cache-hit hot paths so the registry
@@ -138,6 +154,65 @@ public final class DbPublishDateRegistry implements PublishDateRegistry {
                 }
                 return coalescedFetch(key, src, name, version, repoType, startNanos);
             });
+    }
+
+    /**
+     * Cleanup mechanism for historical rows written under the wrong repo_type
+     * due to the pre-2.2.0 hardcoded constant in MavenProxyPackageProcessor.
+     * For {@code gradle-proxy} / {@code gradle} lookups that missed under
+     * their own key, retry under the {@code maven-proxy} / {@code maven}
+     * sibling. Successful alias hits are written through L1 under the
+     * <em>original</em> repo_type so the next call short-circuits without
+     * touching L2 again — the alias path becomes dead code over time as new
+     * rows land correctly and stale rows roll off.
+     *
+     * @param key Primary cache key for the lookup (with original repo_type)
+     * @param repoType Original repo_type requested by the caller
+     * @param startNanos Lookup start time for outcome metric
+     * @return Aliased L1/L2 hit, or {@link Optional#empty()} if no alias applies
+     * @since 2.2.0
+     */
+    private Optional<Instant> lookupAlias(
+        final CacheKey key, final String repoType, final long startNanos
+    ) {
+        final String aliased = aliasFor(repoType);
+        if (aliased == null) {
+            return Optional.empty();
+        }
+        final CacheKey aliasKey = new CacheKey(aliased, key.name, key.version);
+        final Instant aliasL1 = this.l1.getIfPresent(aliasKey);
+        if (aliasL1 != null) {
+            this.l1.put(key, aliasL1);
+            recordOutcome(repoType, "l1_alias_hit", startNanos);
+            return Optional.of(aliasL1);
+        }
+        final Optional<Instant> aliasDb = readDb(aliasKey);
+        if (aliasDb.isPresent()) {
+            this.l1.put(key, aliasDb.get());
+            recordOutcome(repoType, "l2_alias_hit", startNanos);
+            return aliasDb;
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Map a repo_type to its alias for the cleanup lookup. Currently only the
+     * {@code gradle} <-> {@code maven} pair is aliased; callers requesting any
+     * other repo_type receive {@code null} (no alias) so unrelated lookups do
+     * not drift across ecosystems.
+     *
+     * @param repoType Caller-provided repo_type
+     * @return Aliased repo_type, or {@code null} when no alias applies
+     * @since 2.2.0
+     */
+    private static String aliasFor(final String repoType) {
+        if ("gradle-proxy".equals(repoType)) {
+            return "maven-proxy";
+        }
+        if ("gradle".equals(repoType)) {
+            return "maven";
+        }
+        return null;
     }
 
     /**
