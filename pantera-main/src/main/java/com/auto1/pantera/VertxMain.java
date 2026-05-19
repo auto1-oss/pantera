@@ -454,11 +454,21 @@ public final class VertxMain {
             final com.auto1.pantera.publishdate.PublishDateExtractors registry =
                 com.auto1.pantera.publishdate.PublishDateExtractors.instance();
             registry.register("maven", lastModified);
+            registry.register("maven-proxy", lastModified);
+            registry.register("gradle", lastModified);
+            registry.register("gradle-proxy", lastModified);
             registry.register("npm", lastModified);
+            registry.register("npm-proxy", lastModified);
             registry.register("pypi", lastModified);
+            registry.register("pypi-proxy", lastModified);
             registry.register("go", lastModified);
+            registry.register("go-proxy", lastModified);
             registry.register("composer", lastModified);
+            registry.register("composer-proxy", lastModified);
+            registry.register("php", lastModified);
+            registry.register("php-proxy", lastModified);
             registry.register("gem", lastModified);
+            registry.register("gem-proxy", lastModified);
         });
         final RepositorySlices slices = new RepositorySlices(
             settings, repos, jwtTokens,

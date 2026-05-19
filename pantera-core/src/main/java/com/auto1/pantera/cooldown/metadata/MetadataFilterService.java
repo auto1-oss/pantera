@@ -391,13 +391,16 @@ public final class MetadataFilterService implements CooldownMetadataService {
                 // Step 7: Filter metadata
                 T filtered = ctx.filter.filter(ctx.parsed, blockedVersions);
 
-                // Step 8: Update latest if needed
+                // Step 8: Recompute latest/release whenever anything is blocked.
+                // Pre-Phase-D the rewrite only fired when <latest> itself was
+                // blocked — leaving <release> pointing at a blocked stable
+                // version even though <latest> was a surviving SNAPSHOT, so
+                // Gradle's latest.release resolution would pick a version it
+                // could not subsequently download. findLatestByReleaseDate
+                // returns the latest non-blocked version regardless of
+                // whether currentLatest itself was blocked.
                 final Optional<String> currentLatest = ctx.parser.getLatestVersion(ctx.parsed);
-                if (currentLatest.isPresent() && blockedVersions.contains(currentLatest.get())) {
-                    // Find new latest by RELEASE DATE (most recent unblocked version)
-                    // This respects the package author's intent - if they set a lower version as latest,
-                    // we should fallback to the next most recently released version, not the highest semver
-                    // Pass sortedVersions (sorted by semver desc) for fallback when no release dates
+                if (!blockedVersions.isEmpty()) {
                     final Optional<String> newLatest = this.findLatestByReleaseDate(
                         ctx.parser, ctx.parsed, ctx.sortedVersions, blockedVersions
                     );
@@ -405,8 +408,8 @@ public final class MetadataFilterService implements CooldownMetadataService {
                         filtered = ctx.filter.updateLatest(filtered, newLatest.get());
                         EcsLogger.debug("com.auto1.pantera.cooldown.metadata")
                             .message(String.format(
-                                "Updated latest version (by release date): %s -> %s",
-                                currentLatest.get(), newLatest.get()))
+                                "Recomputed latest/release version: %s -> %s",
+                                currentLatest.orElse("(none)"), newLatest.get()))
                             .eventCategory("database")
                             .eventAction("metadata_filter")
                             .field("package.name", ctx.packageName)

@@ -46,8 +46,14 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.EnumMap;
 import java.util.List;
@@ -59,6 +65,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Supplier;
 import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.reactivestreams.Publisher;
 
@@ -134,6 +141,15 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      * same behaviour as before the metadata filter was wired.
      */
     private final CooldownMetadataService cooldownMetadata;
+
+    /**
+     * Per-input materialised filter cache: a stable upstream payload sha256
+     * inside a 1 h bucket yields the same filtered bytes without re-running
+     * the parser/filter/rewriter chain on every request. Sits ahead of
+     * {@link CooldownMetadataService}'s version-keyed cache.
+     */
+    private final PerInputFilteredMetadataCache materialisedCache =
+        new PerInputFilteredMetadataCache();
 
     /**
      * Constructor with full configuration (no metadata filtering).
@@ -268,7 +284,7 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
     ) {
         // maven-metadata.xml uses dedicated MetadataCache with stale-while-revalidate
         if (path.contains("maven-metadata.xml") && this.metadataCache != null) {
-            return Optional.of(this.handleMetadata(line, key));
+            return Optional.of(this.handleMetadata(line, headers, key));
         }
         // WI-07 §9.5 — integrity-verified atomic primary+sidecar write on
         // cache-miss. cacheWriter is non-null by construction (constructor
@@ -303,10 +319,17 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         if (idx < 0 || idx == pkg.length() - 1) {
             return Optional.empty();
         }
-        final String version = pkg.substring(idx + 1);
+        final String dirVersion = pkg.substring(idx + 1);
         final String artifact = MavenSlice.EVENT_INFO.formatArtifactName(
             pkg.substring(0, idx)
         );
+        // SNAPSHOT timestamped artifacts (e.g. lib-1.0-20260519.090000-1.jar)
+        // live under a SNAPSHOT directory but each upload has a distinct
+        // version stamp. Use the timestamp form as the cooldown version so
+        // admission gates and DB rows differentiate uploads — falling back to
+        // the directory name for release artifacts and non-timestamped
+        // SNAPSHOTs (lib-1.0-SNAPSHOT.jar).
+        final String version = extractSnapshotVersion(keyPath).orElse(dirVersion);
         final String user = new Login(headers).getValue();
         return Optional.of(
             new CooldownRequest(
@@ -318,6 +341,38 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 Instant.now()
             )
         );
+    }
+
+    /**
+     * Maven SNAPSHOT timestamp pattern: matches an artifact basename of the
+     * form {@code <artifactId>-<base>-<yyyyMMdd.HHmmss>-<buildNumber>[-<classifier>].<ext>}.
+     * Capture group 1 isolates the {@code <base>} stem (e.g. {@code 1.0}),
+     * group 2 isolates the timestamped portion. The two groups are joined to
+     * form the canonical timestamped version used by Maven Resolver.
+     * Released artifacts and non-timestamped SNAPSHOTs do not match.
+     */
+    private static final Pattern SNAPSHOT_TIMESTAMP = Pattern.compile(
+        "^[^/]+?-([^/]+)-(\\d{8}\\.\\d{6}-\\d+)(?:-[^.]+)?\\.[^.]+$"
+    );
+
+    /**
+     * Extract the timestamped SNAPSHOT version from a Maven artifact path.
+     * Combines the base version stem with the {@code yyyyMMdd.HHmmss-N}
+     * suffix from the basename — e.g. {@code lib-1.0-20260519.090000-1.jar}
+     * yields {@code 1.0-20260519.090000-1}. Classifier suffixes (
+     * {@code -sources}, {@code -javadoc}, {@code -tests}) are accommodated.
+     *
+     * @param path Request path (no leading slash)
+     * @return Combined {@code base-timestamp-build} cooldown version, or empty
+     */
+    static Optional<String> extractSnapshotVersion(final String path) {
+        final int slash = path.lastIndexOf('/');
+        final String basename = slash >= 0 ? path.substring(slash + 1) : path;
+        final Matcher m = SNAPSHOT_TIMESTAMP.matcher(basename);
+        if (m.matches()) {
+            return Optional.of(m.group(1) + "-" + m.group(2));
+        }
+        return Optional.empty();
     }
 
     @Override
@@ -401,7 +456,7 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      * @return Response future
      */
     private CompletableFuture<Response> handleMetadata(
-        final RequestLine line, final Key key
+        final RequestLine line, final Headers inboundHeaders, final Key key
     ) {
         final CompletableFuture<Optional<Content>> loaded = this.metadataCache.load(
             key,
@@ -414,14 +469,11 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 );
             }
             if (this.cooldownMetadata == null) {
-                return CompletableFuture.completedFuture(
-                    ResponseBuilder.ok()
-                        .header("Content-Type", "text/xml")
-                        .body(opt.get())
-                        .build()
+                return opt.get().asBytesFuture().thenApply(
+                    bytes -> buildMetadataResponse(inboundHeaders, bytes)
                 );
             }
-            return this.applyMetadataCooldown(line, opt.get());
+            return this.applyMetadataCooldown(line, inboundHeaders, opt.get());
         });
     }
 
@@ -493,16 +545,14 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      * failure so upstream quirks do not turn metadata requests into 5xx.
      */
     private CompletableFuture<Response> applyMetadataCooldown(
-        final RequestLine line, final Content content
+        final RequestLine line, final Headers inboundHeaders, final Content content
     ) {
+        final String path = line.uri().getPath();
         final Optional<String> pkgOpt = new MavenMetadataRequestDetector()
-            .extractPackageName(line.uri().getPath());
+            .extractPackageName(path);
         if (pkgOpt.isEmpty()) {
-            return CompletableFuture.completedFuture(
-                ResponseBuilder.ok()
-                    .header("Content-Type", "text/xml")
-                    .body(content)
-                    .build()
+            return content.asBytesFuture().thenApply(
+                bytes -> buildMetadataResponse(inboundHeaders, bytes)
             );
         }
         // extractPackageName returns SLASHED format (com/google/guava/guava)
@@ -512,22 +562,61 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         // even when the version is well past its publish-date window). Convert
         // to dotted before handing it to the metadata service. Mirrors the
         // same conversion applied in MavenGroupSlice.applyCooldownFilter.
+        final boolean snapshot = isSnapshotMetadataPath(path);
         final String packageName = pkgOpt.get().replace('/', '.');
-        return content.asBytesFuture().thenCompose(
-            bytes -> this.cooldownMetadata.filterMetadata(
+        final com.auto1.pantera.cooldown.metadata.MetadataParser<org.w3c.dom.Document> parser;
+        final com.auto1.pantera.cooldown.metadata.MetadataFilter<org.w3c.dom.Document> filter;
+        final com.auto1.pantera.cooldown.metadata.MetadataRewriter<org.w3c.dom.Document> rewriter;
+        if (snapshot) {
+            // Resolve the SNAPSHOT bundle via the global registry so the
+            // CooldownWiring registrations are the single source of truth.
+            // Falls back to direct instantiation if the bundle is absent
+            // (e.g. an embedded test that skipped CooldownWiring boot).
+            final java.util.Optional<com.auto1.pantera.cooldown.config.CooldownAdapterBundle<?>>
+                snapBundle = com.auto1.pantera.cooldown.config.CooldownAdapterRegistry
+                    .instance().get(this.repoType() + "-snapshot");
+            if (snapBundle.isPresent()) {
+                @SuppressWarnings("unchecked")
+                final com.auto1.pantera.cooldown.config.CooldownAdapterBundle<org.w3c.dom.Document>
+                    typed = (com.auto1.pantera.cooldown.config.CooldownAdapterBundle<org.w3c.dom.Document>)
+                        snapBundle.get();
+                parser = typed.parser();
+                filter = typed.filter();
+                rewriter = typed.rewriter();
+            } else {
+                parser = new com.auto1.pantera.maven.cooldown.MavenSnapshotMetadataParser();
+                filter = new com.auto1.pantera.maven.cooldown.MavenSnapshotMetadataFilter();
+                rewriter = new com.auto1.pantera.maven.cooldown.MavenSnapshotMetadataRewriter();
+            }
+        } else {
+            parser = new MavenMetadataParser();
+            filter = new MavenMetadataFilter();
+            rewriter = new MavenMetadataRewriter();
+        }
+        return content.asBytesFuture().thenCompose(bytes -> {
+            final String sha = PerInputFilteredMetadataCache.sha256(bytes);
+            final Optional<byte[]> cached = this.materialisedCache.get(
+                this.repoType(), this.repoName(), packageName, sha
+            );
+            if (cached.isPresent()) {
+                return CompletableFuture.completedFuture(
+                    buildMetadataResponse(inboundHeaders, cached.get())
+                );
+            }
+            return this.cooldownMetadata.filterMetadata(
                 this.repoType(),
                 this.repoName(),
                 packageName,
                 bytes,
-                new MavenMetadataParser(),
-                new MavenMetadataFilter(),
-                new MavenMetadataRewriter()
+                parser,
+                filter,
+                rewriter
             ).handle((filtered, ex) -> {
                 if (ex == null) {
-                    return ResponseBuilder.ok()
-                        .header("Content-Type", "text/xml")
-                        .body(filtered)
-                        .build();
+                    this.materialisedCache.put(
+                        this.repoType(), this.repoName(), packageName, sha, filtered
+                    );
+                    return buildMetadataResponse(inboundHeaders, filtered);
                 }
                 Throwable cause = ex;
                 while (cause != null) {
@@ -559,12 +648,84 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                     .error(ex)
                     .field("log.source", "application")
                     .log();
-                return ResponseBuilder.ok()
-                    .header("Content-Type", "text/xml")
-                    .body(bytes)
-                    .build();
-            })
+                return buildMetadataResponse(inboundHeaders, bytes);
+            });
+        });
+    }
+
+    /**
+     * Distinguish artifact-level metadata ({@code .../my-lib/maven-metadata.xml})
+     * from snapshot-level metadata ({@code .../my-lib/1.0-SNAPSHOT/maven-metadata.xml}).
+     * Snapshot-level path has a {@code -SNAPSHOT} segment immediately before
+     * the filename.
+     */
+    private static boolean isSnapshotMetadataPath(final String path) {
+        if (path == null) {
+            return false;
+        }
+        final int suffix = path.lastIndexOf("/maven-metadata.xml");
+        if (suffix <= 0) {
+            return false;
+        }
+        final String parent = path.substring(0, suffix);
+        final int lastSlash = parent.lastIndexOf('/');
+        final String dir = lastSlash >= 0 ? parent.substring(lastSlash + 1) : parent;
+        return dir.endsWith("-SNAPSHOT");
+    }
+
+    /**
+     * Build the canonical Pantera-owned metadata response: explicit
+     * Content-Type, Pantera-computed ETag (SHA-256 of the served bytes), and
+     * a current Last-Modified. Strips all upstream validators (CF-Cache-Status,
+     * X-Amz-*, X-Checksum-*, Age, etc.) so the response advertises only what
+     * Pantera vouches for. If the inbound request carries a matching
+     * {@code If-None-Match}, return 304 with no body.
+     *
+     * @param inboundHeaders Client request headers (for conditional GET match)
+     * @param bytes Filtered (or unfiltered) response body
+     * @return 200 OK with body OR 304 Not Modified
+     */
+    static Response buildMetadataResponse(
+        final Headers inboundHeaders, final byte[] bytes
+    ) {
+        final String etag = weakEtag(bytes);
+        final String lastModified = httpDate(Instant.now());
+        if (etag.equals(firstHeader(inboundHeaders, "If-None-Match"))) {
+            return ResponseBuilder.from(com.auto1.pantera.http.RsStatus.NOT_MODIFIED)
+                .header("ETag", etag)
+                .header("Last-Modified", lastModified)
+                .build();
+        }
+        return ResponseBuilder.ok()
+            .header("Content-Type", "application/xml; charset=utf-8")
+            .header("ETag", etag)
+            .header("Last-Modified", lastModified)
+            .body(bytes)
+            .build();
+    }
+
+    private static String weakEtag(final byte[] bytes) {
+        try {
+            final MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            final byte[] hash = digest.digest(bytes);
+            return "W/\"" + Base64.getEncoder().encodeToString(hash) + "\"";
+        } catch (final NoSuchAlgorithmException ex) {
+            throw new IllegalStateException("SHA-256 unavailable", ex);
+        }
+    }
+
+    private static String httpDate(final Instant when) {
+        return DateTimeFormatter.RFC_1123_DATE_TIME.format(
+            ZonedDateTime.ofInstant(when, ZoneOffset.UTC)
         );
+    }
+
+    private static String firstHeader(final Headers headers, final String name) {
+        if (headers == null) {
+            return null;
+        }
+        final List<String> values = headers.values(name);
+        return values.isEmpty() ? null : values.get(0);
     }
 
     /**

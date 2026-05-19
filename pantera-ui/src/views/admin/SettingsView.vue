@@ -63,6 +63,10 @@ const cooldownAge = ref('7d')
 const cooldownHistoryRetentionDays = ref(90)
 const cooldownCleanupBatchLimit = ref(10000)
 const newRepoType = ref('')
+// SNAPSHOT-only cooldown — applies a stricter window to Maven/Gradle SNAPSHOT
+// timestamped artifacts. Empty fields fall through to the global cooldown.
+const cooldownSnapshotEnabled = ref<boolean | null>(null)
+const cooldownSnapshotAge = ref('')
 
 // Proxy repo types for autocomplete
 const allProxyTypes = [
@@ -184,6 +188,8 @@ onMounted(async () => {
       cooldownAge.value = cd.minimum_allowed_age
       cooldownHistoryRetentionDays.value = cd.history_retention_days ?? 90
       cooldownCleanupBatchLimit.value = cd.cleanup_batch_limit ?? 10000
+      cooldownSnapshotEnabled.value = cd.snapshots?.enabled ?? null
+      cooldownSnapshotAge.value = cd.snapshots?.minimum_allowed_age ?? ''
     }
     getAuthSettings().then(s => {
       authAccessTtl.value = parseInt(s.access_token_ttl_seconds ?? '3600')
@@ -350,6 +356,19 @@ async function saveCooldown() {
     }
     if (cooldownConfig.value?.repo_types) {
       payload.repo_types = { ...cooldownConfig.value.repo_types }
+    }
+    const snapAge = cooldownSnapshotAge.value.trim()
+    const snapEnabled = cooldownSnapshotEnabled.value
+    if (snapEnabled !== null || snapAge.length > 0) {
+      payload.snapshots = {}
+      if (snapEnabled !== null) payload.snapshots.enabled = snapEnabled
+      if (snapAge.length > 0) payload.snapshots.minimum_allowed_age = snapAge
+    } else {
+      // Send empty {} so the backend resets any prior override to inherit.
+      payload.snapshots = {}
+    }
+    if (cooldownConfig.value?.repo_name_snapshots) {
+      payload.repo_name_snapshots = { ...cooldownConfig.value.repo_name_snapshots }
     }
     await updateCooldownConfig(payload)
     cooldownConfig.value = payload
@@ -635,6 +654,43 @@ async function saveExternalLinks() {
                 placeholder="7d"
               />
               <span class="text-xs text-gray-400">e.g. 7d, 24h, 30m</span>
+            </div>
+
+            <!-- SNAPSHOT cooldown -->
+            <div
+              class="border-l-4 border-blue-200 dark:border-blue-800 pl-3 space-y-3"
+              data-testid="snapshot-cooldown-section"
+            >
+              <div>
+                <div class="font-medium text-sm">SNAPSHOT cooldown</div>
+                <div class="text-xs text-gray-500">
+                  Stricter cooldown for SNAPSHOT artifacts (Maven/Gradle). Overrides the
+                  global minimum_allowed_age for any cache-write whose version matches
+                  a SNAPSHOT timestamp pattern. Leave blank to inherit from the global.
+                </div>
+              </div>
+              <div class="flex items-center gap-3">
+                <label class="text-sm text-gray-500 w-44">Enabled (override)</label>
+                <select
+                  v-model="cooldownSnapshotEnabled"
+                  class="px-2 py-1 border rounded text-sm dark:bg-gray-800"
+                  data-testid="snapshot-enabled-select"
+                >
+                  <option :value="null">inherit</option>
+                  <option :value="true">true</option>
+                  <option :value="false">false</option>
+                </select>
+              </div>
+              <div class="flex items-center gap-3">
+                <label class="text-sm text-gray-500 w-44">SNAPSHOT minimum age</label>
+                <InputText
+                  v-model="cooldownSnapshotAge"
+                  class="w-32"
+                  placeholder="(inherit)"
+                  data-testid="snapshot-age-input"
+                />
+                <span class="text-xs text-gray-400">e.g. 14d, 30d</span>
+              </div>
             </div>
 
             <!-- History retention -->

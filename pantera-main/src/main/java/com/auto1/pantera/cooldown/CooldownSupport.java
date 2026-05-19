@@ -292,6 +292,13 @@ public final class CooldownSupport {
                 enabled, minAge, overrides,
                 historyRetentionDays, cleanupBatchLimit
             );
+            // Rehydrate SNAPSHOT-policy state. Without these three branches,
+            // values written via the PUT endpoint survive in-memory until the
+            // next restart and then silently disappear. update() above wipes
+            // and rebuilds the maps, so the SNAPSHOT branches must run AFTER.
+            applyDbSnapshotPolicy(csettings, cfg);
+            applyDbRepoNames(csettings, cfg);
+            applyDbLegacyRepoNameSnapshots(csettings, cfg);
             EcsLogger.info("com.auto1.pantera.cooldown")
                 .message("Loaded cooldown settings from database (enabled: "
                     + enabled + ", overrides: " + overrides.size()
@@ -312,6 +319,107 @@ public final class CooldownSupport {
                 .field("log.source", "application")
                 .log();
         }
+    }
+
+    /**
+     * Rehydrate the global SNAPSHOT policy from the DB blob's top-level
+     * {@code snapshots} object. Each sub-field is optional — missing fields
+     * propagate as "inherit" so the per-tier defaults apply.
+     */
+    private static void applyDbSnapshotPolicy(
+        final CooldownSettings csettings, final JsonObject cfg
+    ) {
+        if (!cfg.containsKey("snapshots")) {
+            return;
+        }
+        final JsonObject snap = cfg.getJsonObject("snapshots");
+        if (snap == null) {
+            return;
+        }
+        csettings.setSnapshotPolicy(decodeSnapshotPolicy(snap));
+    }
+
+    /**
+     * Rehydrate the unified per-repo block. Each entry may carry a cooldown
+     * override (enabled/age), a SNAPSHOT override (snapshots), or both. The
+     * shape mirrors the wire format used by {@code GET/PUT /api/v1/cooldown/config}.
+     */
+    private static void applyDbRepoNames(
+        final CooldownSettings csettings, final JsonObject cfg
+    ) {
+        if (!cfg.containsKey("repo_names")) {
+            return;
+        }
+        final JsonObject repoNames = cfg.getJsonObject("repo_names");
+        if (repoNames == null) {
+            return;
+        }
+        for (final String repoName : repoNames.keySet()) {
+            final JsonObject body = repoNames.getJsonObject(repoName);
+            if (body == null) {
+                continue;
+            }
+            if (body.containsKey("enabled") || body.containsKey("minimum_allowed_age")) {
+                final boolean repoEnabled = body.getBoolean(
+                    "enabled", csettings.enabled()
+                );
+                final Duration repoAge = body.containsKey("minimum_allowed_age")
+                    ? parseDuration(body.getString("minimum_allowed_age"))
+                    : csettings.minimumAllowedAge();
+                csettings.setRepoNameOverride(repoName, repoEnabled, repoAge);
+            }
+            if (body.containsKey("snapshots")) {
+                csettings.setRepoNameSnapshotOverride(
+                    repoName, decodeSnapshotPolicy(body.getJsonObject("snapshots"))
+                );
+            }
+        }
+    }
+
+    /**
+     * Back-compat path: older PUT blobs may have written a separate
+     * top-level {@code repo_name_snapshots} map. Parse that too so a
+     * pre-upgrade blob still rehydrates correctly.
+     */
+    private static void applyDbLegacyRepoNameSnapshots(
+        final CooldownSettings csettings, final JsonObject cfg
+    ) {
+        if (!cfg.containsKey("repo_name_snapshots")) {
+            return;
+        }
+        final JsonObject legacy = cfg.getJsonObject("repo_name_snapshots");
+        if (legacy == null) {
+            return;
+        }
+        for (final String repoName : legacy.keySet()) {
+            final JsonObject snap = legacy.getJsonObject(repoName);
+            if (snap == null) {
+                continue;
+            }
+            csettings.setRepoNameSnapshotOverride(repoName, decodeSnapshotPolicy(snap));
+        }
+    }
+
+    /**
+     * Decode a SNAPSHOT policy JSON sub-document. Missing fields propagate as
+     * "inherit" so per-tier defaults apply. Mirrors
+     * {@code CooldownHandler#decodeSnapshotPolicy} — kept duplicated here so
+     * the cooldown module does not pull a compile-time dependency on the
+     * pantera-main API layer.
+     */
+    private static CooldownSettings.SnapshotPolicy decodeSnapshotPolicy(final JsonObject json) {
+        if (json == null) {
+            return CooldownSettings.SnapshotPolicy.inherit();
+        }
+        final Boolean snapEnabled;
+        if (json.containsKey("enabled")) {
+            snapEnabled = Boolean.valueOf(json.getBoolean("enabled"));
+        } else {
+            snapEnabled = null;
+        }
+        final Duration snapAge = json.containsKey("minimum_allowed_age")
+            ? parseDuration(json.getString("minimum_allowed_age")) : null;
+        return CooldownSettings.SnapshotPolicy.of(snapEnabled, snapAge);
     }
 
     /**

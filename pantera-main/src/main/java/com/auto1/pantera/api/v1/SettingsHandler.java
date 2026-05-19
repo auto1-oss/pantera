@@ -294,6 +294,15 @@ public final class SettingsHandler {
         final JsonObject cooldownJson = new JsonObject()
             .put("enabled", cd.enabled())
             .put("minimum_allowed_age", cd.minimumAllowedAge().toString());
+        final CooldownSettings.SnapshotPolicy snap = cd.snapshotPolicy();
+        if (!snap.isInherit()) {
+            final JsonObject snapJson = new JsonObject();
+            snap.enabled().ifPresent(v -> snapJson.put("enabled", v));
+            snap.minimumAllowedAge().ifPresent(
+                v -> snapJson.put("minimum_allowed_age", v.toString())
+            );
+            cooldownJson.put("snapshots", snapJson);
+        }
         response.put("cooldown", cooldownJson);
         // Credentials / auth providers
         if (this.authProviderDao != null) {

@@ -23,6 +23,7 @@ import javax.json.JsonObject;
 import javax.sql.DataSource;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
@@ -165,6 +166,103 @@ final class CooldownSettingsDbRoundTripTest {
         Assertions.assertThrows(IllegalArgumentException.class, () -> csettings.update(
             true, Duration.ofHours(72), new HashMap<>(), 90, 100_001
         ));
+    }
+
+    @Test
+    void reloadsTopLevelSnapshotPolicy() {
+        final JsonObject blob = Json.createObjectBuilder()
+            .add("enabled", true)
+            .add("minimum_allowed_age", "72h")
+            .add("snapshots", Json.createObjectBuilder()
+                .add("enabled", false)
+                .add("minimum_allowed_age", "6h"))
+            .build();
+        this.settingsDao.put("cooldown", blob, "tester");
+        final CooldownSettings csettings = new CooldownSettings(
+            true, Duration.ofHours(CooldownSettings.DEFAULT_HOURS)
+        );
+        CooldownSupport.loadDbCooldownSettings(csettings, this.dataSource);
+        final CooldownSettings.SnapshotPolicy policy = csettings.snapshotPolicy();
+        MatcherAssert.assertThat(
+            "snapshots.enabled must be false",
+            policy.enabled().orElse(true), new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "snapshots.minimum_allowed_age must be 6h",
+            policy.minimumAllowedAge().orElse(null),
+            new IsEqual<>(Duration.ofHours(6))
+        );
+    }
+
+    @Test
+    void reloadsRepoNamesUnifiedBlock() {
+        final JsonObject blob = Json.createObjectBuilder()
+            .add("enabled", true)
+            .add("minimum_allowed_age", "24h")
+            .add("repo_names", Json.createObjectBuilder()
+                .add("maven-prod", Json.createObjectBuilder()
+                    .add("enabled", true)
+                    .add("minimum_allowed_age", "12h")
+                    .add("snapshots", Json.createObjectBuilder()
+                        .add("enabled", false)
+                        .add("minimum_allowed_age", "1h"))))
+            .build();
+        this.settingsDao.put("cooldown", blob, "tester");
+        final CooldownSettings csettings = new CooldownSettings(
+            true, Duration.ofHours(CooldownSettings.DEFAULT_HOURS)
+        );
+        CooldownSupport.loadDbCooldownSettings(csettings, this.dataSource);
+        MatcherAssert.assertThat(
+            "repo_names cooldown override must be present",
+            csettings.repoNameOverrides().containsKey("maven-prod"),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "repo_names.maven-prod cooldown age must be 12h",
+            csettings.repoNameOverrides().get("maven-prod").minimumAllowedAge(),
+            new IsEqual<>(Duration.ofHours(12))
+        );
+        final CooldownSettings.SnapshotPolicy policy =
+            csettings.repoNameSnapshotOverrides().get("maven-prod");
+        MatcherAssert.assertThat(
+            "repo_names.maven-prod.snapshots must hydrate",
+            policy != null, new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "repo_names.maven-prod.snapshots.enabled must be false",
+            policy.enabled().orElse(true), new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void reloadsLegacyRepoNameSnapshots() {
+        // Older PUT blobs may have written the legacy top-level
+        // repo_name_snapshots map; the loader must still parse it for
+        // back-compat with pre-upgrade state.
+        final JsonObject blob = Json.createObjectBuilder()
+            .add("enabled", true)
+            .add("minimum_allowed_age", "72h")
+            .add("repo_name_snapshots", Json.createObjectBuilder()
+                .add("gradle-stage", Json.createObjectBuilder()
+                    .add("enabled", false)
+                    .add("minimum_allowed_age", "30m")))
+            .build();
+        this.settingsDao.put("cooldown", blob, "tester");
+        final CooldownSettings csettings = new CooldownSettings(
+            true, Duration.ofHours(CooldownSettings.DEFAULT_HOURS)
+        );
+        CooldownSupport.loadDbCooldownSettings(csettings, this.dataSource);
+        final CooldownSettings.SnapshotPolicy policy =
+            csettings.repoNameSnapshotOverrides().get("gradle-stage");
+        MatcherAssert.assertThat(
+            "legacy repo_name_snapshots must hydrate",
+            policy != null, new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "legacy gradle-stage snapshot age must be 30m",
+            policy.minimumAllowedAge().orElse(null),
+            new IsEqual<>(Duration.ofMinutes(30))
+        );
     }
 
     private YamlMapping settings() {

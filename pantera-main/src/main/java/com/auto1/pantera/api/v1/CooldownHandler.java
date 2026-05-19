@@ -219,10 +219,86 @@ public final class CooldownHandler {
                     CooldownHandler.formatDuration(entry.getValue().minimumAllowedAge())));
         }
         response.put("repo_types", overrides);
+        encodeSnapshotPolicy(this.csettings.snapshotPolicy())
+            .ifPresent(json -> response.put("snapshots", json));
+        final JsonObject repoNameSnap = new JsonObject();
+        for (final Map.Entry<String, CooldownSettings.SnapshotPolicy> entry
+            : this.csettings.repoNameSnapshotOverrides().entrySet()) {
+            encodeSnapshotPolicy(entry.getValue())
+                .ifPresent(json -> repoNameSnap.put(entry.getKey(), json));
+        }
+        if (!repoNameSnap.isEmpty()) {
+            response.put("repo_name_snapshots", repoNameSnap);
+        }
+        // Unified per-repo-name block: each entry carries the optional
+        // cooldown enabled/age fields plus an optional snapshots policy.
+        // The UI consumes this single block; the legacy
+        // {@code repo_name_snapshots} key above is kept for back-compat.
+        final JsonObject repoNames = new JsonObject();
+        for (final Map.Entry<String, CooldownSettings.RepoTypeConfig> entry
+            : this.csettings.repoNameOverrides().entrySet()) {
+            final JsonObject body = new JsonObject()
+                .put("enabled", entry.getValue().enabled())
+                .put("minimum_allowed_age",
+                    CooldownHandler.formatDuration(entry.getValue().minimumAllowedAge()));
+            final CooldownSettings.SnapshotPolicy snap =
+                this.csettings.repoNameSnapshotOverrides().get(entry.getKey());
+            encodeSnapshotPolicy(snap).ifPresent(json -> body.put("snapshots", json));
+            repoNames.put(entry.getKey(), body);
+        }
+        // Also surface repos that only have a SNAPSHOT override (no
+        // cooldown enable/age override) so the UI sees a single source of
+        // truth in {@code repo_names}.
+        for (final Map.Entry<String, CooldownSettings.SnapshotPolicy> entry
+            : this.csettings.repoNameSnapshotOverrides().entrySet()) {
+            if (repoNames.containsKey(entry.getKey())) {
+                continue;
+            }
+            encodeSnapshotPolicy(entry.getValue()).ifPresent(snapJson ->
+                repoNames.put(entry.getKey(), new JsonObject().put("snapshots", snapJson))
+            );
+        }
+        if (!repoNames.isEmpty()) {
+            response.put("repo_names", repoNames);
+        }
         ctx.response()
             .setStatusCode(200)
             .putHeader("Content-Type", "application/json")
             .end(response.encode());
+    }
+
+    /**
+     * Encode a SNAPSHOT policy as a JSON sub-document. Returns empty when the
+     * policy inherits everything so the response stays terse.
+     */
+    private static java.util.Optional<JsonObject> encodeSnapshotPolicy(
+        final CooldownSettings.SnapshotPolicy policy
+    ) {
+        if (policy == null || policy.isInherit()) {
+            return java.util.Optional.empty();
+        }
+        final JsonObject json = new JsonObject();
+        policy.enabled().ifPresent(v -> json.put("enabled", v));
+        policy.minimumAllowedAge().ifPresent(
+            v -> json.put("minimum_allowed_age", CooldownHandler.formatDuration(v))
+        );
+        return java.util.Optional.of(json);
+    }
+
+    /**
+     * Decode a SNAPSHOT policy JSON sub-document. Missing fields propagate as
+     * "inherit" so per-tier defaults apply.
+     */
+    private static CooldownSettings.SnapshotPolicy decodeSnapshotPolicy(final JsonObject json) {
+        if (json == null) {
+            return CooldownSettings.SnapshotPolicy.inherit();
+        }
+        final Boolean enabled = json.containsKey("enabled")
+            ? json.getBoolean("enabled") : null;
+        final Duration age = json.containsKey("minimum_allowed_age")
+            ? CooldownHandler.parseDuration(json.getString("minimum_allowed_age"))
+            : null;
+        return CooldownSettings.SnapshotPolicy.of(enabled, age);
     }
 
     /**
@@ -340,6 +416,90 @@ public final class CooldownHandler {
             if (cleanupBatchLimit != null) {
                 jb.add("cleanup_batch_limit", (int) cleanupBatchLimit);
             }
+            // Mirror the top-level SNAPSHOT policy into the persisted blob.
+            // Without this branch the in-memory setSnapshotPolicy(...) call
+            // below would be lost on restart — loadDbCooldownSettings has
+            // nothing to rehydrate from.
+            if (body.containsKey("snapshots")) {
+                final JsonObject snap = body.getJsonObject("snapshots");
+                if (snap != null) {
+                    final javax.json.JsonObjectBuilder sb = Json.createObjectBuilder();
+                    if (snap.containsKey("enabled")) {
+                        sb.add("enabled", snap.getBoolean("enabled"));
+                    }
+                    if (snap.containsKey("minimum_allowed_age")) {
+                        sb.add("minimum_allowed_age",
+                            snap.getString("minimum_allowed_age"));
+                    }
+                    jb.add("snapshots", sb);
+                }
+            }
+            // Mirror the legacy top-level repo_name_snapshots map (kept for
+            // back-compat with older API consumers) so rehydration of
+            // SNAPSHOT-only overrides survives a restart even when the
+            // caller uses the legacy shape rather than the unified repo_names.
+            if (body.containsKey("repo_name_snapshots")) {
+                final JsonObject legacy = body.getJsonObject("repo_name_snapshots");
+                if (legacy != null && !legacy.isEmpty()) {
+                    final javax.json.JsonObjectBuilder lb = Json.createObjectBuilder();
+                    for (final String rn : legacy.fieldNames()) {
+                        final JsonObject snapJson = legacy.getJsonObject(rn);
+                        final javax.json.JsonObjectBuilder sb =
+                            Json.createObjectBuilder();
+                        if (snapJson != null) {
+                            if (snapJson.containsKey("enabled")) {
+                                sb.add("enabled", snapJson.getBoolean("enabled"));
+                            }
+                            if (snapJson.containsKey("minimum_allowed_age")) {
+                                sb.add("minimum_allowed_age",
+                                    snapJson.getString("minimum_allowed_age"));
+                            }
+                        }
+                        lb.add(rn, sb);
+                    }
+                    jb.add("repo_name_snapshots", lb);
+                }
+            }
+            // Mirror the per-repo block into the persisted blob so it
+            // survives a restart. Same shape as the wire (enabled,
+            // minimum_allowed_age, optional snapshots sub-object).
+            if (body.containsKey("repo_names")) {
+                final JsonObject reqRepoNames = body.getJsonObject("repo_names");
+                if (reqRepoNames != null && !reqRepoNames.isEmpty()) {
+                    final javax.json.JsonObjectBuilder rnb = Json.createObjectBuilder();
+                    for (final String rn : reqRepoNames.fieldNames()) {
+                        final JsonObject entry = reqRepoNames.getJsonObject(rn);
+                        if (entry == null) {
+                            continue;
+                        }
+                        final javax.json.JsonObjectBuilder eb = Json.createObjectBuilder();
+                        if (entry.containsKey("enabled")) {
+                            eb.add("enabled", entry.getBoolean("enabled"));
+                        }
+                        if (entry.containsKey("minimum_allowed_age")) {
+                            eb.add("minimum_allowed_age",
+                                entry.getString("minimum_allowed_age"));
+                        }
+                        if (entry.containsKey("snapshots")) {
+                            final JsonObject snapJson = entry.getJsonObject("snapshots");
+                            final javax.json.JsonObjectBuilder sb =
+                                Json.createObjectBuilder();
+                            if (snapJson != null) {
+                                if (snapJson.containsKey("enabled")) {
+                                    sb.add("enabled", snapJson.getBoolean("enabled"));
+                                }
+                                if (snapJson.containsKey("minimum_allowed_age")) {
+                                    sb.add("minimum_allowed_age",
+                                        snapJson.getString("minimum_allowed_age"));
+                                }
+                            }
+                            eb.add("snapshots", sb);
+                        }
+                        rnb.add(rn, eb);
+                    }
+                    jb.add("repo_names", rnb);
+                }
+            }
             this.settingsDao.put("cooldown", jb.build(), actor2);
         }
         // DB write succeeded (or no DAO) — now apply in-memory.
@@ -347,6 +507,75 @@ public final class CooldownHandler {
             newEnabled, newAge, overrides,
             effectiveRetentionDays, effectiveBatchLimit
         );
+        // Apply SNAPSHOT-policy mutations after the base update so the new
+        // policy survives the in-memory map rebuild inside update(). When the
+        // caller omits the snapshots block we leave the existing policy
+        // untouched — explicit "{}" or null is treated as "inherit
+        // everything". Same convention for repo_name_snapshots.
+        if (body.containsKey("snapshots")) {
+            this.csettings.setSnapshotPolicy(
+                decodeSnapshotPolicy(body.getJsonObject("snapshots"))
+            );
+        }
+        final JsonObject snapNames = body.getJsonObject("repo_name_snapshots");
+        if (snapNames != null) {
+            for (final String repoName : snapNames.fieldNames()) {
+                this.csettings.setRepoNameSnapshotOverride(
+                    repoName, decodeSnapshotPolicy(snapNames.getJsonObject(repoName))
+                );
+            }
+        }
+        // Unified per-repo-name block: when the caller PUTs a {@code repo_names}
+        // object, each entry replaces both the cooldown-enable/age override and
+        // (optionally) the SNAPSHOT policy for that repo. Repos that were
+        // previously overridden but are absent from the new block fall back to
+        // their type-level / global tier (the UI saves the WHOLE config, so
+        // omission == remove). Same convention as {@code repo_types}.
+        if (body.containsKey("repo_names")) {
+            final JsonObject repoNamesBlock = body.getJsonObject("repo_names");
+            final java.util.Set<String> seen = new java.util.HashSet<>();
+            if (repoNamesBlock != null) {
+                for (final String repoName : repoNamesBlock.fieldNames()) {
+                    final JsonObject entry = repoNamesBlock.getJsonObject(repoName);
+                    if (entry == null) {
+                        continue;
+                    }
+                    seen.add(repoName);
+                    if (entry.containsKey("enabled")
+                        || entry.containsKey("minimum_allowed_age")) {
+                        final boolean repoEnabled = entry.getBoolean("enabled", newEnabled);
+                        final Duration repoAge = entry.containsKey("minimum_allowed_age")
+                            ? CooldownHandler.parseDuration(entry.getString("minimum_allowed_age"))
+                            : newAge;
+                        this.csettings.setRepoNameOverride(repoName, repoEnabled, repoAge);
+                    } else {
+                        // Entry only carries a SNAPSHOT policy — drop any prior
+                        // cooldown override so the repo falls back to type/global.
+                        this.csettings.removeRepoNameOverride(repoName);
+                    }
+                    if (entry.containsKey("snapshots")) {
+                        this.csettings.setRepoNameSnapshotOverride(repoName,
+                            decodeSnapshotPolicy(entry.getJsonObject("snapshots")));
+                    } else {
+                        this.csettings.setRepoNameSnapshotOverride(repoName, null);
+                    }
+                }
+            }
+            // Anything previously overridden but omitted from this PUT must
+            // revert — UI ships the full block, omission is removal. Union
+            // the prior cooldown-override and snapshot-override key sets so
+            // a SNAPSHOT-only override is also dropped on omission.
+            final java.util.Set<String> priorKeys = new java.util.HashSet<>(
+                this.csettings.repoNameOverrides().keySet()
+            );
+            priorKeys.addAll(this.csettings.repoNameSnapshotOverrides().keySet());
+            for (final String prior : priorKeys) {
+                if (!seen.contains(prior)) {
+                    this.csettings.removeRepoNameOverride(prior);
+                    this.csettings.setRepoNameSnapshotOverride(prior, null);
+                }
+            }
+        }
         // Invalidate ALL caches: a policy change (e.g. 30d→7d) can shift
         // which versions are in/out of the cooldown window, so every cached
         // decision and every cached filtered-metadata response may be stale.
@@ -992,6 +1221,41 @@ public final class CooldownHandler {
                     CooldownHandler.formatDuration(entry.getValue().minimumAllowedAge())));
         }
         snap.put("repo_types", overrides);
+        encodeSnapshotPolicy(this.csettings.snapshotPolicy())
+            .ifPresent(j -> snap.put("snapshots", j));
+        final JsonObject repoNameSnap = new JsonObject();
+        for (final Map.Entry<String, CooldownSettings.SnapshotPolicy> entry
+            : this.csettings.repoNameSnapshotOverrides().entrySet()) {
+            encodeSnapshotPolicy(entry.getValue())
+                .ifPresent(j -> repoNameSnap.put(entry.getKey(), j));
+        }
+        if (!repoNameSnap.isEmpty()) {
+            snap.put("repo_name_snapshots", repoNameSnap);
+        }
+        final JsonObject repoNames = new JsonObject();
+        for (final Map.Entry<String, CooldownSettings.RepoTypeConfig> entry
+            : this.csettings.repoNameOverrides().entrySet()) {
+            final JsonObject body = new JsonObject()
+                .put("enabled", entry.getValue().enabled())
+                .put("minimum_allowed_age",
+                    CooldownHandler.formatDuration(entry.getValue().minimumAllowedAge()));
+            final CooldownSettings.SnapshotPolicy snapPol =
+                this.csettings.repoNameSnapshotOverrides().get(entry.getKey());
+            encodeSnapshotPolicy(snapPol).ifPresent(j -> body.put("snapshots", j));
+            repoNames.put(entry.getKey(), body);
+        }
+        for (final Map.Entry<String, CooldownSettings.SnapshotPolicy> entry
+            : this.csettings.repoNameSnapshotOverrides().entrySet()) {
+            if (repoNames.containsKey(entry.getKey())) {
+                continue;
+            }
+            encodeSnapshotPolicy(entry.getValue()).ifPresent(j ->
+                repoNames.put(entry.getKey(), new JsonObject().put("snapshots", j))
+            );
+        }
+        if (!repoNames.isEmpty()) {
+            snap.put("repo_names", repoNames);
+        }
         return snap;
     }
 

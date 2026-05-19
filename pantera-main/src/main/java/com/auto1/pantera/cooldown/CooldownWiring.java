@@ -34,6 +34,9 @@ import com.auto1.pantera.maven.cooldown.MavenMetadataFilter;
 import com.auto1.pantera.maven.cooldown.MavenMetadataParser;
 import com.auto1.pantera.maven.cooldown.MavenMetadataRequestDetector;
 import com.auto1.pantera.maven.cooldown.MavenMetadataRewriter;
+import com.auto1.pantera.maven.cooldown.MavenSnapshotMetadataFilter;
+import com.auto1.pantera.maven.cooldown.MavenSnapshotMetadataParser;
+import com.auto1.pantera.maven.cooldown.MavenSnapshotMetadataRewriter;
 import com.auto1.pantera.npm.cooldown.NpmCooldownResponseFactory;
 import com.auto1.pantera.npm.cooldown.NpmMetadataFilter;
 import com.auto1.pantera.npm.cooldown.NpmMetadataParser;
@@ -95,6 +98,23 @@ public final class CooldownWiring {
         adapters.register("gradle", mavenBundle);
         adapters.register("gradle-proxy", mavenBundle);
         responses.register(new MavenCooldownResponseFactory(), "gradle", "gradle-proxy", "maven-proxy");
+
+        // --- Maven/Gradle SNAPSHOT-level metadata ---
+        // Bundle for the per-SNAPSHOT-directory maven-metadata.xml that lists
+        // individual <snapshotVersion> entries (timestamped builds). Same
+        // detector as artifact-level — the dispatch picks the bundle by path
+        // shape — but the parser/filter/rewriter triple is SNAPSHOT-aware.
+        final var mavenSnapshotBundle = new CooldownAdapterBundle<>(
+            new MavenSnapshotMetadataParser(),
+            new MavenSnapshotMetadataFilter(),
+            new MavenSnapshotMetadataRewriter(),
+            new MavenMetadataRequestDetector(),
+            new MavenCooldownResponseFactory()
+        );
+        adapters.register("maven-snapshot", mavenSnapshotBundle);
+        adapters.register("maven-proxy-snapshot", mavenSnapshotBundle);
+        adapters.register("gradle-snapshot", mavenSnapshotBundle);
+        adapters.register("gradle-proxy-snapshot", mavenSnapshotBundle);
 
         // --- npm ---
         // npm has its own metadata filtering path in DownloadPackageSlice,

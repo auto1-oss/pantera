@@ -68,11 +68,53 @@ pipeline entirely and go directly through the timestamp-based gate.
 
 ### Maven / Gradle
 
-- **Parser:** DOM-parses `maven-metadata.xml`; extracts `<version>` elements from `<versions>`.
-- **Filter:** Removes `<version>X</version>` nodes where X is blocked; updates `<latest>` and `<lastUpdated>`.
+Two metadata code paths are supported, with separate SPI implementations.
+
+**Artifact-level `maven-metadata.xml`** (under `{group}/{artifact}/`):
+
+- **Parser:** DOM-parses; `extractVersions` reads `<version>` elements from `<versions>`. `extractReleaseDates` returns an empty map — the format does not carry per-version timestamps.
+- **Filter:** Removes blocked `<version>` nodes; updates `<lastUpdated>` to current UTC.
+- **`<latest>` / `<release>` rewriting**: when any version is blocked, `<latest>` is rewritten to the most recent non-blocked entry and `<release>` is recomputed from the filtered list as the latest non-SNAPSHOT survivor. Both are rewritten unconditionally on a non-empty block set — covers the case where upstream `<latest>` itself wasn't blocked but `<release>` pointed at a blocked stable.
 - **Rewriter:** Serializes DOM back to XML bytes.
-- **Detector:** Path ends with `maven-metadata.xml`.
-- Gradle reuses Maven components (same metadata format).
+- **Detector:** Path ends with `maven-metadata.xml` and the immediate parent is NOT a version directory.
+- Cooldown enforcement requires per-version dates, which are sourced from `artifact_publish_dates` (populated at cache-write time from upstream `Last-Modified`). Without this, every version's lookup returns empty and the filter no-ops.
+
+**Snapshot-level `maven-metadata.xml`** (under `{group}/{artifact}/{version}-SNAPSHOT/`):
+
+- **Parser:** DOM-parses; `extractVersions` reads `<snapshotVersion><value>` (the timestamped form, e.g. `1.0-20260519.090000-1`). `extractReleaseDates` reads the sibling `<updated>` element (`yyyyMMddHHmmss`) — SNAPSHOT-level metadata IS self-dated, no out-of-band lookup needed.
+- **Filter:** Removes blocked `<snapshotVersion>` entries; rewrites `<snapshot><timestamp>` and `<snapshot><buildNumber>` to match the surviving newest entry; updates `<lastUpdated>`.
+- **Rewriter:** Serializes DOM back to XML bytes.
+- **Detector:** Path ends with `maven-metadata.xml` and the immediate parent ends with `-SNAPSHOT`.
+
+**Direct artifact admission (`*.jar`, `*.pom`, `*.module`, `*.aar`, …):**
+
+- `CachedProxySlice.preProcess` routes primary artifacts through `verifyAndServePrimary`, which runs `cooldown.evaluate(...)` on the cache-miss path. Versions still within cooldown never enter cache; cache-hit serves are not re-evaluated (admission-gate model). Manual blocks of already-cached versions require cache eviction by an admin — `JdbcCooldownService.invalidateEnvelope` handles the metadata side; the storage side is the admin's tool.
+- For SNAPSHOT artifacts, `buildCooldownRequest` extracts the timestamped form from the filename so each timestamped binary gets its own admission decision (not one shared decision per base SNAPSHOT coordinate).
+
+**ETag / Last-Modified contract.** Responses emit a Pantera-computed weak ETag (`W/"<sha256-base64-of-filtered-body>"`) and a fresh `Last-Modified` (HTTP-date now). Upstream `X-Checksum-*`, `CF-*`, `Age`, `X-Amz-*` are stripped — they would advertise checksums of the unfiltered upstream bytes that Pantera does not serve. Inbound `If-None-Match` matching the computed ETag returns `304` with empty body.
+
+**Filtered-output cache.** Materialised in `PerInputFilteredMetadataCache`, keyed by `(repoType, repoName, packageName, upstreamSha256)` plus a 1-hour `computedAtBucket`. When upstream metadata changes (new version landed), the cache key changes and the next request refilters. When the cooldown cutoff advances (versions age out of the window), the bucket rolls and the next request refilters. 50 K entries, in-memory only in v2.2.0; disk persistence deferred. Gradle uses the same components; Gradle Module Metadata (`.module`) files are admission-gated like any other primary artifact — they carry no version list of their own, so no filter rewriting applies.
+
+### SNAPSHOT classifier knob
+
+A `snapshots:` block under `cooldown:` (global) and under any `cooldown.repo_names:` entry (per-repo) lets operators set a stricter (or laxer) cooldown for SNAPSHOT artifacts specifically. Both sub-knobs are optional:
+
+```yaml
+cooldown:
+  enabled: true
+  minimum_allowed_age: 7d
+  snapshots:
+    enabled: true
+    minimum_allowed_age: 14d        # SNAPSHOTs gated for 14d, releases for 7d
+  repo_names:
+    my-internal-mvn:
+      enabled: true
+      minimum_allowed_age: 21d
+      snapshots:
+        minimum_allowed_age: 30d    # this repo's SNAPSHOTs gated for 30d
+```
+
+Precedence (highest first): per-repo-name SNAPSHOT → per-repo-name (non-SNAPSHOT) → global SNAPSHOT → per-type → global default. Applies only when the request's version matches the SNAPSHOT timestamp pattern (e.g. `1.0-20260519.090000-1`). Configurable from the admin UI on both the global Settings page (SNAPSHOT cooldown card) and the per-repo Edit page (Cooldown card with master toggle).
 
 ### npm
 

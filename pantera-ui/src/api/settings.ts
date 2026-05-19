@@ -119,3 +119,8 @@ export async function createAuthProvider(payload: {
 export async function deleteAuthProvider(id: number): Promise<void> {
   await getApiClient().delete(`/auth-providers/${id}`)
 }
+
+// Friendlier short aliases for the cooldown GET/PUT pair — same wire
+// endpoints. Useful for callers that already have a `getX/putX` shape
+// (e.g. the per-repo cooldown card on RepoEditView).
+export { getCooldownConfig as getCooldown, updateCooldownConfig as putCooldown }

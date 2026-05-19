@@ -32,6 +32,8 @@ public final class YamlCooldownSettings {
     private static final String KEY_FRESH_AGE = "fresh_release_age";
     // Per-repo-type configuration
     private static final String KEY_REPO_TYPES = "repo_types";
+    private static final String KEY_REPO_NAMES = "repo_names";
+    private static final String KEY_SNAPSHOTS = "snapshots";
 
 
     private YamlCooldownSettings() {
@@ -87,7 +89,79 @@ public final class YamlCooldownSettings {
             }
         }
 
-        return new CooldownSettings(enabled, minAge, repoTypeOverrides);
+        // Parse per-repo-name overrides (highest priority).
+        final Map<String, RepoTypeConfig> repoNameOverrides = new HashMap<>();
+        final Map<String, CooldownSettings.SnapshotPolicy> repoNameSnapshots = new HashMap<>();
+        final YamlMapping repoNames = node.yamlMapping(KEY_REPO_NAMES);
+        if (repoNames != null) {
+            for (final var entry : repoNames.keys()) {
+                final String repoName = entry.asScalar().value();
+                final YamlMapping repoConfig = repoNames.yamlMapping(repoName);
+                if (repoConfig == null) {
+                    continue;
+                }
+                final boolean repoEnabled = parseBool(
+                    repoConfig.string(KEY_ENABLED), enabled
+                );
+                final Duration repoMinAge = parseDurationOrDefault(
+                    repoConfig.string(KEY_MIN_AGE), minAge
+                );
+                repoNameOverrides.put(repoName, new RepoTypeConfig(repoEnabled, repoMinAge));
+                final CooldownSettings.SnapshotPolicy snap = parseSnapshotPolicy(
+                    repoConfig.yamlMapping(KEY_SNAPSHOTS)
+                );
+                if (!snap.isInherit()) {
+                    repoNameSnapshots.put(repoName, snap);
+                }
+            }
+        }
+
+        final CooldownSettings settings = new CooldownSettings(
+            enabled, minAge, repoTypeOverrides, repoNameOverrides
+        );
+        settings.setSnapshotPolicy(parseSnapshotPolicy(node.yamlMapping(KEY_SNAPSHOTS)));
+        for (final var entry : repoNameSnapshots.entrySet()) {
+            settings.setRepoNameSnapshotOverride(entry.getKey(), entry.getValue());
+        }
+        return settings;
+    }
+
+    /**
+     * Parse a {@code snapshots:} sub-mapping into a SNAPSHOT policy. Either
+     * key may be absent — absence means "inherit from the next-higher tier".
+     *
+     * @param mapping YAML sub-mapping (may be null)
+     * @return Policy (never null; defaults to {@link CooldownSettings.SnapshotPolicy#inherit()})
+     */
+    private static CooldownSettings.SnapshotPolicy parseSnapshotPolicy(final YamlMapping mapping) {
+        if (mapping == null) {
+            return CooldownSettings.SnapshotPolicy.inherit();
+        }
+        final String enabledStr = mapping.string(KEY_ENABLED);
+        final Boolean enabled;
+        if (enabledStr == null) {
+            enabled = null;
+        } else {
+            // parseBool returns the fallback when the value is unparseable; we
+            // explicitly want null in that case so the next tier wins, hence
+            // the two-step check.
+            enabled = parseBool(enabledStr, true);
+        }
+        final Duration minAge = parseDurationOrNull(mapping.string(KEY_MIN_AGE));
+        return CooldownSettings.SnapshotPolicy.of(enabled, minAge);
+    }
+
+    /**
+     * Parse a duration string, returning null (not a fallback) when absent
+     * or unparseable. Used by SNAPSHOT-policy parsing where absence must
+     * propagate as "inherit" rather than be flattened into a default.
+     */
+    private static Duration parseDurationOrNull(final String value) {
+        if (value == null) {
+            return null;
+        }
+        final Duration parsed = parseDurationOrDefault(value, null);
+        return parsed;
     }
 
     private static boolean parseBool(final String value, final boolean fallback) {

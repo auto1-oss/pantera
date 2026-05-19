@@ -435,6 +435,35 @@ final class MetadataFilterServiceTest {
     }
 
     @Test
+    void updateLatestFiresWhenLatestSurvivesButOtherVersionIsBlocked()
+        throws ExecutionException, InterruptedException {
+        // Phase D: pre-change, updateLatest only ran when <latest> itself was
+        // blocked — leaving <release> stale. Post-change, the rewriter must
+        // fire on ANY block so <release> gets recomputed to the newest
+        // surviving stable. Here <latest>=X-SNAPSHOT survives, 9.1.0 (stable)
+        // is blocked, and we assert updateLatest still ran.
+        this.cooldownService.blockVersion("test-pkg", "9.1.0");
+        final TestMetadataParser parser = new TestMetadataParser(
+            Arrays.asList("8.0.0", "9.0.0", "9.1.0", "X-SNAPSHOT"),
+            "X-SNAPSHOT"
+        );
+        final TestMetadataFilter filter = new TestMetadataFilter();
+        final TestMetadataRewriter rewriter = new TestMetadataRewriter();
+        this.service.filterMetadata(
+            "maven", "test-repo", "test-pkg",
+            "raw".getBytes(StandardCharsets.UTF_8),
+            parser, filter, rewriter
+        ).get();
+        assertThat(
+            "9.1.0 blocked", filter.lastBlockedVersions.contains("9.1.0"), equalTo(true)
+        );
+        assertThat(
+            "updateLatest must fire whenever any version is blocked",
+            filter.lastNewLatest != null, equalTo(true)
+        );
+    }
+
+    @Test
     void isPrereleaseRecognisesStandardQualifiers() {
         assertThat(MetadataFilterService.isPrerelease("1.0.0-alpha"), is(true));
         assertThat(MetadataFilterService.isPrerelease("1.0.0-beta.2"), is(true));

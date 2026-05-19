@@ -218,6 +218,11 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                     "created_date = EXCLUDED.created_date, release_date = EXCLUDED.release_date, " +
                     "owner = EXCLUDED.owner, path_prefix = COALESCE(EXCLUDED.path_prefix, artifacts.path_prefix)"
                 );
+                PreparedStatement publishDate = conn.prepareStatement(
+                    "INSERT INTO artifact_publish_dates (repo_type, name, version, published_at, source) "
+                    + "VALUES (?,?,?,?,'cache_write_event') "
+                    + "ON CONFLICT (repo_type, name, version) DO NOTHING"
+                );
                 PreparedStatement deletev = conn.prepareStatement(
                     "DELETE FROM artifacts WHERE repo_name = ? AND name = ? AND version = ?;"
                 );
@@ -247,6 +252,22 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                             upsert.setString(8, record.owner());
                             upsert.setString(9, record.pathPrefix());
                             upsert.execute();
+                            // Bridge: when the event carries an authoritative release_date,
+                            // mirror it into the canonical artifact_publish_dates lookup so the
+                            // cooldown subsystem has a date for newly-cached artifacts without
+                            // a second upstream HEAD. ON CONFLICT preserves registry-sourced
+                            // rows. Same transaction — artifacts UPSERT rollback also rolls
+                            // back the bridge insert.
+                            if (record.releaseDate().isPresent()) {
+                                publishDate.setString(1, record.repoType());
+                                publishDate.setString(2, record.artifactName());
+                                publishDate.setString(3, record.artifactVersion());
+                                publishDate.setTimestamp(
+                                    4,
+                                    new java.sql.Timestamp(record.releaseDate().get())
+                                );
+                                publishDate.execute();
+                            }
                             conn.releaseSavepoint(sp);
                             logArtifactPublish(record);
                         } else if (record.eventType() == ArtifactEvent.Type.DELETE_VERSION) {

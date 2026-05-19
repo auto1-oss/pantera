@@ -15,6 +15,7 @@ import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * Global and per-repo-type cooldown configuration.
@@ -72,6 +73,20 @@ public final class CooldownSettings {
      * {@link #update(boolean, Duration, Map)} from the DB-settings blob.
      */
     private volatile int cleanupBatchLimit = 10_000;
+
+    /**
+     * Optional stricter cooldown policy applied to Maven/Gradle SNAPSHOT
+     * timestamped artifacts. Either sub-field may be empty, in which case
+     * the global value is used.
+     */
+    private volatile SnapshotPolicy snapshotPolicy = SnapshotPolicy.inherit();
+
+    /**
+     * Per-repo-name SNAPSHOT policy overrides. Highest-priority lookup for
+     * timestamped SNAPSHOT versions; falls through to {@link #snapshotPolicy}
+     * then per-type/global.
+     */
+    private volatile Map<String, SnapshotPolicy> repoNameSnapshotOverrides = new HashMap<>();
 
     /**
      * Ctor with global settings only.
@@ -209,6 +224,33 @@ public final class CooldownSettings {
     }
 
     /**
+     * Remove a per-repo-name cooldown override so the repo falls back to
+     * its type-level / global tier. No-op when no override was registered.
+     * Thread-safe: replaces the internal map atomically.
+     *
+     * @param repoName Repository name (never null)
+     */
+    public void removeRepoNameOverride(final String repoName) {
+        Objects.requireNonNull(repoName, "repoName");
+        if (!this.repoNameOverrides.containsKey(repoName)) {
+            return;
+        }
+        final Map<String, RepoTypeConfig> copy = new HashMap<>(this.repoNameOverrides);
+        copy.remove(repoName);
+        this.repoNameOverrides = copy;
+    }
+
+    /**
+     * Per-repo-name cooldown overrides accessor. Returns a defensive copy so
+     * callers cannot mutate the internal map.
+     *
+     * @return Map of repository name to cooldown config
+     */
+    public Map<String, RepoTypeConfig> repoNameOverrides() {
+        return new HashMap<>(this.repoNameOverrides);
+    }
+
+    /**
      * Get a copy of per-repo-type overrides.
      *
      * @return Map of repo type to config
@@ -302,6 +344,52 @@ public final class CooldownSettings {
     }
 
     /**
+     * Global SNAPSHOT policy accessor.
+     *
+     * @return Current global SNAPSHOT policy (never null; defaults to inherit)
+     */
+    public SnapshotPolicy snapshotPolicy() {
+        return this.snapshotPolicy;
+    }
+
+    /**
+     * Replace the global SNAPSHOT policy. Thread-safe (volatile field swap).
+     *
+     * @param policy New policy; null is treated as "inherit"
+     */
+    public void setSnapshotPolicy(final SnapshotPolicy policy) {
+        this.snapshotPolicy = policy == null ? SnapshotPolicy.inherit() : policy;
+    }
+
+    /**
+     * Per-repo-name SNAPSHOT overrides accessor. Returns a defensive copy so
+     * callers cannot mutate the internal map.
+     *
+     * @return Map of repository name to SNAPSHOT policy
+     */
+    public Map<String, SnapshotPolicy> repoNameSnapshotOverrides() {
+        return new HashMap<>(this.repoNameSnapshotOverrides);
+    }
+
+    /**
+     * Replace the SNAPSHOT policy for a single repository name. Atomic swap of
+     * the volatile map field so concurrent readers observe a consistent view.
+     *
+     * @param repoName Repository name (never null)
+     * @param policy SNAPSHOT policy; null removes any existing override
+     */
+    public void setRepoNameSnapshotOverride(final String repoName, final SnapshotPolicy policy) {
+        Objects.requireNonNull(repoName, "repoName");
+        final Map<String, SnapshotPolicy> copy = new HashMap<>(this.repoNameSnapshotOverrides);
+        if (policy == null) {
+            copy.remove(repoName);
+        } else {
+            copy.put(repoName, policy);
+        }
+        this.repoNameSnapshotOverrides = copy;
+    }
+
+    /**
      * Per-repository-type configuration.
      */
     public static final class RepoTypeConfig {
@@ -325,6 +413,71 @@ public final class CooldownSettings {
 
         public Duration minimumAllowedAge() {
             return this.minimumAllowedAge;
+        }
+    }
+
+    /**
+     * SNAPSHOT-only override sub-knobs. Each field is optional: an empty
+     * Optional inherits from the next-higher tier in the precedence ladder
+     * (per-repo override → global SNAPSHOT policy → per-type override → global
+     * default). Use {@link #inherit()} to indicate "no override".
+     */
+    public static final class SnapshotPolicy {
+
+        /**
+         * Singleton "inherit everything" instance.
+         */
+        private static final SnapshotPolicy INHERIT = new SnapshotPolicy(null, null);
+
+        private final Boolean enabled;
+        private final Duration minimumAllowedAge;
+
+        private SnapshotPolicy(final Boolean enabled, final Duration minimumAllowedAge) {
+            this.enabled = enabled;
+            this.minimumAllowedAge = minimumAllowedAge;
+        }
+
+        /**
+         * @return Singleton policy that inherits both fields
+         */
+        public static SnapshotPolicy inherit() {
+            return INHERIT;
+        }
+
+        /**
+         * Build a policy. Either argument may be null to inherit just that
+         * field from the next-higher tier.
+         *
+         * @param enabled Whether cooldown is enabled for SNAPSHOTs
+         * @param minimumAllowedAge Cooldown duration for SNAPSHOTs
+         * @return New policy
+         */
+        public static SnapshotPolicy of(final Boolean enabled, final Duration minimumAllowedAge) {
+            if (enabled == null && minimumAllowedAge == null) {
+                return INHERIT;
+            }
+            return new SnapshotPolicy(enabled, minimumAllowedAge);
+        }
+
+        /**
+         * @return Optional enabled flag — present means this tier sets it
+         */
+        public Optional<Boolean> enabled() {
+            return Optional.ofNullable(this.enabled);
+        }
+
+        /**
+         * @return Optional minimum allowed age — present means this tier sets it
+         */
+        public Optional<Duration> minimumAllowedAge() {
+            return Optional.ofNullable(this.minimumAllowedAge);
+        }
+
+        /**
+         * @return true if both fields are unset (inherit everything)
+         */
+        public boolean isInherit() {
+            return this.enabled == null && this.minimumAllowedAge == null;
         }
     }
 }

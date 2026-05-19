@@ -1111,10 +1111,36 @@ final class JdbcCooldownService implements CooldownService {
     }
 
     /**
-     * Whether cooldown enforcement is active for this request.
-     * Per-repo-name override (highest priority) → per-type → global.
+     * Maven SNAPSHOT timestamp pattern used to recognise versions that should
+     * honour the SNAPSHOT-specific knob. Matches the canonical form
+     * {@code <base>-yyyyMMdd.HHmmss-N} (e.g. {@code 1.0-20260519.090000-1})
+     * which is what {@code CachedProxySlice.extractSnapshotVersion} emits.
      */
-    private boolean effectiveEnabled(final CooldownRequest request) {
+    private static final java.util.regex.Pattern SNAPSHOT_TIMESTAMP =
+        java.util.regex.Pattern.compile(".+-\\d{8}\\.\\d{6}-\\d+$");
+
+    /**
+     * Whether cooldown enforcement is active for this request.
+     * SNAPSHOT precedence: per-repo SNAPSHOT override → per-repo override →
+     * global SNAPSHOT policy → per-type override → global. Non-SNAPSHOT
+     * versions skip the SNAPSHOT tiers.
+     */
+    boolean effectiveEnabled(final CooldownRequest request) {
+        if (isSnapshotVersion(request.version())) {
+            final CooldownSettings.SnapshotPolicy perRepo =
+                this.settings.repoNameSnapshotOverrides().get(request.repoName());
+            if (perRepo != null && perRepo.enabled().isPresent()) {
+                return perRepo.enabled().get();
+            }
+            if (this.settings.isRepoNameOverridePresent(request.repoName())) {
+                return this.settings.enabledForRepoName(request.repoName());
+            }
+            final Optional<Boolean> globalSnap = this.settings.snapshotPolicy().enabled();
+            if (globalSnap.isPresent()) {
+                return globalSnap.get();
+            }
+            return this.settings.enabledFor(request.repoType());
+        }
         if (this.settings.isRepoNameOverridePresent(request.repoName())) {
             return this.settings.enabledForRepoName(request.repoName());
         }
@@ -1122,14 +1148,38 @@ final class JdbcCooldownService implements CooldownService {
     }
 
     /**
-     * Effective minimum allowed age for this request.
-     * Per-repo-name override (highest priority) → per-type → global.
+     * Effective minimum allowed age for this request. Same precedence ladder
+     * as {@link #effectiveEnabled} — SNAPSHOT versions consult the SNAPSHOT
+     * tiers first.
      */
-    private Duration effectiveDuration(final CooldownRequest request) {
+    Duration effectiveDuration(final CooldownRequest request) {
+        if (isSnapshotVersion(request.version())) {
+            final CooldownSettings.SnapshotPolicy perRepo =
+                this.settings.repoNameSnapshotOverrides().get(request.repoName());
+            if (perRepo != null && perRepo.minimumAllowedAge().isPresent()) {
+                return perRepo.minimumAllowedAge().get();
+            }
+            if (this.settings.isRepoNameOverridePresent(request.repoName())) {
+                return this.settings.minimumAllowedAgeForRepoName(request.repoName());
+            }
+            final Optional<Duration> globalSnap = this.settings.snapshotPolicy().minimumAllowedAge();
+            if (globalSnap.isPresent()) {
+                return globalSnap.get();
+            }
+            return this.settings.minimumAllowedAgeFor(request.repoType());
+        }
         if (this.settings.isRepoNameOverridePresent(request.repoName())) {
             return this.settings.minimumAllowedAgeForRepoName(request.repoName());
         }
         return this.settings.minimumAllowedAgeFor(request.repoType());
+    }
+
+    /**
+     * @param version Cooldown request version
+     * @return true if this is a Maven SNAPSHOT timestamp version
+     */
+    private static boolean isSnapshotVersion(final String version) {
+        return version != null && SNAPSHOT_TIMESTAMP.matcher(version).matches();
     }
 
     private void expire(final DbBlockRecord record, final Instant when) {
