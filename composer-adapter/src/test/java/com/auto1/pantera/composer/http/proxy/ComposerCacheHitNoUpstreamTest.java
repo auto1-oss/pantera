@@ -47,8 +47,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  * for either metadata JSON or a primary dist archive MUST NOT touch the
  * upstream client OR the cooldown inspector. Pre-Track-5 the metadata
  * cache-hit branch called {@code evaluateMetadataCooldown}, which went
- * through {@code RegistryBackedInspector} → {@code PackagistSource} on
- * L1+L2 miss — same shape as the maven {@code MavenHeadSource} flaw.
+ * through {@code RegistryBackedInspector} into an upstream
+ * packagist.org fetch on L1+L2 miss — same shape as the maven
+ * {@code MavenHeadSource} flaw.
  *
  * @since 2.2.0
  */
@@ -153,7 +154,7 @@ final class ComposerCacheHitNoUpstreamTest {
             new IsEqual<>(0)
         );
         MatcherAssert.assertThat(
-            "inspector MUST NOT be called on cache hit (no PackagistSource fallback)",
+            "inspector MUST NOT be called on cache hit (no upstream fallback)",
             inspectorCalls.get(),
             new IsEqual<>(0)
         );

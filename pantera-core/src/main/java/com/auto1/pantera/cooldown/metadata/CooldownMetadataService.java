@@ -10,9 +10,6 @@
  */
 package com.auto1.pantera.cooldown.metadata;
 
-import com.auto1.pantera.cooldown.api.CooldownInspector;
-
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -44,7 +41,6 @@ public interface CooldownMetadataService {
      * @param parser Parser for this metadata format
      * @param filter Filter for this metadata format
      * @param rewriter Rewriter for this metadata format
-     * @param inspector Optional cooldown inspector for release date lookups
      * @param <T> Type of parsed metadata
      * @return CompletableFuture with filtered metadata bytes
      * @throws AllVersionsBlockedException If all versions are blocked
@@ -56,8 +52,7 @@ public interface CooldownMetadataService {
         byte[] rawMetadata,
         MetadataParser<T> parser,
         MetadataFilter<T> filter,
-        MetadataRewriter<T> rewriter,
-        Optional<CooldownInspector> inspector
+        MetadataRewriter<T> rewriter
     );
 
     /**

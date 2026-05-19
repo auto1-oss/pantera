@@ -33,9 +33,6 @@ import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.npm.cooldown.NpmMetadataParser;
 import com.auto1.pantera.npm.cooldown.NpmMetadataFilter;
 import com.auto1.pantera.npm.cooldown.NpmMetadataRewriter;
-import com.auto1.pantera.cooldown.api.CooldownInspector;
-import com.auto1.pantera.publishdate.PublishDateRegistries;
-import com.auto1.pantera.publishdate.RegistryBackedInspector;
 import com.auto1.pantera.asto.rx.RxFuture;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
@@ -348,9 +345,6 @@ public final class DownloadPackageSlice implements Slice {
         final Headers headers,
         final Optional<String> clientETag
     ) {
-        // Create inspector for cooldown evaluation - dates are preloaded from metadata
-        final CooldownInspector inspector =
-            new RegistryBackedInspector("npm", PublishDateRegistries.instance());
         final CompletableFuture<Response> filterFuture = this.cooldownMetadata.filterMetadata(
             this.repoType,
             this.repoName,
@@ -358,8 +352,7 @@ public final class DownloadPackageSlice implements Slice {
             fullBytes,
             new NpmMetadataParser(),
             new NpmMetadataFilter(),
-            new NpmMetadataRewriter(),
-            Optional.of(inspector)
+            new NpmMetadataRewriter()
         ).handle((filtered, ex) -> {
             if (ex != null) {
                 Throwable cause = ex;
@@ -410,9 +403,6 @@ public final class DownloadPackageSlice implements Slice {
         final Headers headers,
         final Optional<String> clientETag
     ) {
-        // Create inspector for cooldown evaluation - dates are preloaded from metadata
-        final CooldownInspector inspector =
-            new RegistryBackedInspector("npm", PublishDateRegistries.instance());
         return this.cooldownMetadata.filterMetadata(
             this.repoType,
             this.repoName,
@@ -420,8 +410,7 @@ public final class DownloadPackageSlice implements Slice {
             abbreviatedBytes,
             new NpmMetadataParser(),
             new NpmMetadataFilter(),
-            new NpmMetadataRewriter(),
-            Optional.of(inspector)
+            new NpmMetadataRewriter()
         ).handle((filtered, ex) -> {
                 if (ex != null) {
                     Throwable cause = ex;
@@ -493,11 +482,8 @@ public final class DownloadPackageSlice implements Slice {
                         .toMaybe()
                         .flatMap(rawBytes -> {
                             // Apply cooldown filtering if available
-                            // Create inspector for cooldown evaluation - dates are preloaded from metadata
                             if (this.cooldownMetadata != null && this.repoType != null) {
-                                final CooldownInspector inspector =
-            new RegistryBackedInspector("npm", PublishDateRegistries.instance());
-                                final CompletableFuture<Response> filterFuture = 
+                                final CompletableFuture<Response> filterFuture =
                                     this.cooldownMetadata.filterMetadata(
                                         this.repoType,
                                         this.repoName,
@@ -505,8 +491,7 @@ public final class DownloadPackageSlice implements Slice {
                                         rawBytes,
                                         new NpmMetadataParser(),
                                         new NpmMetadataFilter(),
-                                        new NpmMetadataRewriter(),
-                                        Optional.of(inspector)
+                                        new NpmMetadataRewriter()
                                     ).handle((filtered, ex) -> {
                                         if (ex != null) {
                                             Throwable cause = ex;
@@ -611,8 +596,6 @@ public final class DownloadPackageSlice implements Slice {
                             .build()
                     );
                 }
-                final CooldownInspector inspector =
-            new RegistryBackedInspector("npm", PublishDateRegistries.instance());
                 return this.cooldownMetadata.filterMetadata(
                     this.repoType,
                     this.repoName,
@@ -620,8 +603,7 @@ public final class DownloadPackageSlice implements Slice {
                     rawBytes,
                     new NpmMetadataParser(),
                     new NpmMetadataFilter(),
-                    new NpmMetadataRewriter(),
-                    Optional.of(inspector)
+                    new NpmMetadataRewriter()
                 ).handle((filteredBytes, ex) -> {
                     if (ex != null) {
                         Throwable cause = ex;

@@ -113,7 +113,7 @@ final class UpstreamPublishReEvalTest {
         final byte[] resultT1 = this.service.filterMetadata(
             "npm", "test-repo", PKG,
             "raw-T1".getBytes(StandardCharsets.UTF_8),
-            parser, filter, rewriter, Optional.of(inspector)
+            parser, filter, rewriter
         ).get();
 
         final String bodyT1 = new String(resultT1, StandardCharsets.UTF_8);
@@ -149,7 +149,7 @@ final class UpstreamPublishReEvalTest {
         final byte[] stale = this.service.filterMetadata(
             "npm", "test-repo", PKG,
             "raw-T1".getBytes(StandardCharsets.UTF_8),
-            parser, filter, rewriter, Optional.of(inspector)
+            parser, filter, rewriter
         ).get();
         assertThat(
             "without invalidation, cache returns stale T1 bytes (no 1.2.0)",
@@ -167,7 +167,7 @@ final class UpstreamPublishReEvalTest {
         final byte[] resultT2 = this.service.filterMetadata(
             "npm", "test-repo", PKG,
             "raw-T2".getBytes(StandardCharsets.UTF_8),
-            parser, filter, rewriter, Optional.of(inspector)
+            parser, filter, rewriter
         ).get();
 
         assertThat(

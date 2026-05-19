@@ -10,7 +10,9 @@
  */
 package com.auto1.pantera.cooldown.api;
 
+import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -26,6 +28,23 @@ public interface CooldownService {
      * @return Evaluation result
      */
     CompletableFuture<CooldownResult> evaluate(CooldownRequest request, CooldownInspector inspector);
+
+    /**
+     * Evaluate request with a known release date. Skips the inspector
+     * release_date fetch entirely (no network I/O). Used by the metadata
+     * filter path where the release date is already in the parsed packument.
+     *
+     * @param request Request details
+     * @param knownReleaseDate Release date from the upstream packument's inline metadata
+     *                         (e.g. npm packument.time[version], pypi info.releases). Empty
+     *                         => behave as "release date unknown" (allow).
+     * @return Evaluation result
+     */
+    default CompletableFuture<CooldownResult> evaluateWithKnownDate(
+        final CooldownRequest request, final Optional<Instant> knownReleaseDate
+    ) {
+        return CompletableFuture.completedFuture(CooldownResult.allowed());
+    }
 
     /**
      * Manually unblock specific artifact version.

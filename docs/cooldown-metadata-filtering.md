@@ -182,9 +182,9 @@ same way a top-level dependency is.
 
 When metadata is fetched and parsed, release dates embedded in the metadata (e.g., npm's `time` field) are extracted and used to pre-warm the `CooldownCache` L1. Versions older than the cooldown period are guaranteed allowed, so the L1 cache is populated with `false` (allowed) immediately -- avoiding a DB/Valkey round-trip on the hot path for the majority of versions.
 
-### H2: Parallel Bounded Version Evaluation
+### H2: Inline Known-Date Version Evaluation
 
-Version cooldown evaluation runs in parallel on a dedicated 4-thread executor pool, bounded to a maximum of 50 versions per request. Versions are dispatched via `CompletableFuture.allOf()` for concurrent evaluation, reducing end-to-end latency for metadata with many recent versions.
+Version cooldown evaluation is pure-CPU on the calling thread — Caffeine L1 lookup, then on miss a synchronous `checkExistingBlockWithTimestamp` DB read via the existing executor, then `shouldBlockNewArtifact` against the release date already parsed out of the upstream packument. There is no per-version network I/O on the filter path: dates come from the in-memory `releaseDates` map populated by `MetadataParser.extractReleaseDates`. The previous dedicated 4-thread `cooldown-eval` executor was removed in v2.2.0 when the timeout-wall fix landed (see CHANGELOG); the per-request fan-out cost is now dominated by the bounded number of versions inside the cooldown window (`maxVersionsToEvaluate`, default 50), not by thread-pool dispatch.
 
 ### H3: Stale-While-Revalidate (SWR) on FilteredMetadataCache
 

@@ -11,7 +11,6 @@
 package com.auto1.pantera.cooldown.metadata;
 
 import com.auto1.pantera.cooldown.cache.CooldownCache;
-import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.config.CooldownSettings;
@@ -34,8 +33,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.ForkJoinPool;
 import java.util.stream.Collectors;
 
@@ -92,12 +89,6 @@ public final class MetadataFilterService implements CooldownMetadataService {
     private final Executor executor;
 
     /**
-     * Dedicated bounded executor for parallel version evaluation (H2).
-     * 4 threads, context-propagating, used only for evaluateVersion() dispatch.
-     */
-    private final ExecutorService evaluationExecutor;
-
-    /**
      * Maximum versions to evaluate.
      */
     private final int maxVersionsToEvaluate;
@@ -130,8 +121,7 @@ public final class MetadataFilterService implements CooldownMetadataService {
             cooldownCache,
             new FilteredMetadataCache(),
             ForkJoinPool.commonPool(),
-            DEFAULT_MAX_VERSIONS,
-            null
+            DEFAULT_MAX_VERSIONS
         );
     }
 
@@ -153,43 +143,12 @@ public final class MetadataFilterService implements CooldownMetadataService {
         final Executor executor,
         final int maxVersionsToEvaluate
     ) {
-        this(cooldown, settings, cooldownCache, metadataCache, executor, maxVersionsToEvaluate, null);
-    }
-
-    /**
-     * Full constructor with optional dedicated evaluation executor.
-     *
-     * @param cooldown Cooldown service
-     * @param settings Cooldown settings
-     * @param cooldownCache Per-version cooldown cache
-     * @param metadataCache Filtered metadata cache
-     * @param executor Executor for async operations
-     * @param maxVersionsToEvaluate Maximum versions to evaluate
-     * @param evalExecutor Dedicated executor for parallel version evaluation (null = create default)
-     */
-    public MetadataFilterService(
-        final CooldownService cooldown,
-        final CooldownSettings settings,
-        final CooldownCache cooldownCache,
-        final FilteredMetadataCache metadataCache,
-        final Executor executor,
-        final int maxVersionsToEvaluate,
-        final ExecutorService evalExecutor
-    ) {
         this.cooldown = Objects.requireNonNull(cooldown);
         this.settings = Objects.requireNonNull(settings);
         this.cooldownCache = Objects.requireNonNull(cooldownCache);
         this.metadataCache = Objects.requireNonNull(metadataCache);
         this.executor = com.auto1.pantera.http.context.ContextualExecutor
             .contextualize(Objects.requireNonNull(executor));
-        this.evaluationExecutor = evalExecutor != null
-            ? evalExecutor
-            : com.auto1.pantera.http.context.ContextualExecutorService.wrap(
-                Executors.newFixedThreadPool(4, r -> {
-                    final Thread t = new Thread(r, "cooldown-eval");
-                    t.setDaemon(true);
-                    return t;
-                }));
         this.maxVersionsToEvaluate = maxVersionsToEvaluate;
         this.versionComparators = Map.of(
             "npm", VersionComparators.semver(),
@@ -210,8 +169,7 @@ public final class MetadataFilterService implements CooldownMetadataService {
         final byte[] rawMetadata,
         final MetadataParser<T> parser,
         final MetadataFilter<T> filter,
-        final MetadataRewriter<T> rewriter,
-        final Optional<CooldownInspector> inspectorOpt
+        final MetadataRewriter<T> rewriter
     ) {
         // Check if cooldown is enabled for this repo type
         if (!this.settings.enabledFor(repoType)) {
@@ -235,7 +193,7 @@ public final class MetadataFilterService implements CooldownMetadataService {
             packageName,
             () -> this.computeFilteredMetadata(
                 repoType, repoName, packageName, rawMetadata,
-                parser, filter, rewriter, inspectorOpt, startTime
+                parser, filter, rewriter, startTime
             )
         );
     }
@@ -252,7 +210,6 @@ public final class MetadataFilterService implements CooldownMetadataService {
         final MetadataParser<T> parser,
         final MetadataFilter<T> filter,
         final MetadataRewriter<T> rewriter,
-        final Optional<CooldownInspector> inspectorOpt,
         final long startTime
     ) {
         return CompletableFuture.supplyAsync(() -> {
@@ -366,7 +323,7 @@ public final class MetadataFilterService implements CooldownMetadataService {
             return new FilterContext<>(
                 repoType, repoName, packageName, parsed,
                 allVersions, sortedVersions, versionsToEvaluate,
-                parser, filter, rewriter, inspectorOpt, startTime
+                parser, filter, rewriter, releaseDates, startTime
             );
         }, this.executor).thenCompose(ctx -> {
             if (ctx instanceof FilteredMetadataCache.CacheEntry) {
@@ -381,18 +338,17 @@ public final class MetadataFilterService implements CooldownMetadataService {
     /**
      * Evaluate cooldown for versions and filter metadata.
      * Returns CacheEntry with TTL based on earliest blockedUntil.
-     * Versions are evaluated in parallel on a dedicated bounded executor (H2).
+     * Versions are evaluated via the cooldown service with the
+     * inline release dates from the upstream packument — no inspector
+     * network fetch on the hot path.
      */
     private <T> CompletableFuture<FilteredMetadataCache.CacheEntry> evaluateAndFilter(final FilterContext<T> ctx) {
-        // Step 4: Evaluate cooldown for each version in parallel on dedicated pool
+        // Step 4: Evaluate cooldown for each version with known release date (no I/O)
         final List<CompletableFuture<VersionBlockResult>> futures = ctx.versionsToEvaluate.stream()
             .limit(this.maxVersionsToEvaluate)
-            .map(version -> CompletableFuture.supplyAsync(
-                () -> this.evaluateVersion(
-                    ctx.repoType, ctx.repoName, ctx.packageName, version, ctx.inspectorOpt
-                ),
-                this.evaluationExecutor
-            ).thenCompose(f -> f))
+            .map(version -> this.evaluateVersion(
+                ctx.repoType, ctx.repoName, ctx.packageName, version, ctx.releaseDates
+            ))
             .collect(Collectors.toList());
 
         return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
@@ -496,21 +452,18 @@ public final class MetadataFilterService implements CooldownMetadataService {
     }
 
     /**
-     * Evaluate cooldown for a single version.
-     * Returns block status and blockedUntil timestamp for cache TTL calculation.
+     * Evaluate cooldown for a single version using the release date already
+     * extracted from the upstream packument. Skips the inspector network
+     * fetch entirely; the cooldown service decides from cache + DB plus
+     * the supplied date.
      */
     private CompletableFuture<VersionBlockResult> evaluateVersion(
         final String repoType,
         final String repoName,
         final String packageName,
         final String version,
-        final Optional<CooldownInspector> inspectorOpt
+        final Map<String, Instant> releaseDates
     ) {
-        // On cache miss, evaluate via cooldown service
-        if (inspectorOpt.isEmpty()) {
-            // No inspector - can't evaluate, allow by default
-            return CompletableFuture.completedFuture(new VersionBlockResult(version, false, null));
-        }
         // Get real user from MDC (set by auth middleware), fallback to "metadata-filter"
         String requester = MDC.get("user.name");
         if (requester == null || requester.isEmpty()) {
@@ -524,10 +477,10 @@ public final class MetadataFilterService implements CooldownMetadataService {
             requester,
             Instant.now()
         );
-        return this.cooldown.evaluate(request, inspectorOpt.get())
+        final Optional<Instant> knownDate = Optional.ofNullable(releaseDates.get(version));
+        return this.cooldown.evaluateWithKnownDate(request, knownDate)
             .thenApply(result -> {
                 if (result.blocked()) {
-                    // Extract blockedUntil from the block info
                     final Instant blockedUntil = result.block()
                         .map(block -> block.blockedUntil())
                         .orElse(null);
@@ -785,7 +738,7 @@ public final class MetadataFilterService implements CooldownMetadataService {
         final MetadataParser<T> parser;
         final MetadataFilter<T> filter;
         final MetadataRewriter<T> rewriter;
-        final Optional<CooldownInspector> inspectorOpt;
+        final Map<String, Instant> releaseDates;
         final long startTime;
 
         FilterContext(
@@ -799,7 +752,7 @@ public final class MetadataFilterService implements CooldownMetadataService {
             final MetadataParser<T> parser,
             final MetadataFilter<T> filter,
             final MetadataRewriter<T> rewriter,
-            final Optional<CooldownInspector> inspectorOpt,
+            final Map<String, Instant> releaseDates,
             final long startTime
         ) {
             this.repoType = repoType;
@@ -812,7 +765,7 @@ public final class MetadataFilterService implements CooldownMetadataService {
             this.parser = parser;
             this.filter = filter;
             this.rewriter = rewriter;
-            this.inspectorOpt = inspectorOpt;
+            this.releaseDates = releaseDates;
             this.startTime = startTime;
         }
     }

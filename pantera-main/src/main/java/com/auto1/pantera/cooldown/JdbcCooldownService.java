@@ -558,6 +558,73 @@ final class JdbcCooldownService implements CooldownService {
         );
     }
 
+    @Override
+    public CompletableFuture<CooldownResult> evaluateWithKnownDate(
+        final CooldownRequest request,
+        final Optional<Instant> knownReleaseDate
+    ) {
+        if (!this.effectiveEnabled(request)) {
+            return CompletableFuture.completedFuture(CooldownResult.allowed());
+        }
+        if (!this.circuitBreaker.shouldEvaluate()) {
+            return CompletableFuture.completedFuture(CooldownResult.allowed());
+        }
+        return this.evaluateSingleFlight.load(
+            CooldownKey.of(request),
+            () -> this.evaluateCoalescedKnownDate(request, knownReleaseDate)
+        );
+    }
+
+    /**
+     * Coalesced evaluation that bypasses the inspector network fetch.
+     * The release date is supplied by the caller (extracted from the
+     * already-parsed upstream packument) so the {@code orTimeout(1.7s)}
+     * inspector path is avoided entirely on metadata-filter hot paths.
+     */
+    private CompletableFuture<CooldownResult> evaluateCoalescedKnownDate(
+        final CooldownRequest request,
+        final Optional<Instant> knownReleaseDate
+    ) {
+        return this.cache.isBlocked(
+            request.repoName(),
+            request.artifact(),
+            request.version(),
+            () -> CompletableFuture.supplyAsync(
+                () -> this.checkExistingBlockWithTimestamp(request), this.executor
+            ).thenCompose(existing -> {
+                if (existing.isPresent()) {
+                    final BlockCacheEntry entry = existing.get();
+                    if (entry.blocked && entry.blockedUntil != null) {
+                        this.cache.putBlocked(
+                            request.repoName(), request.artifact(),
+                            request.version(), entry.blockedUntil
+                        );
+                    } else {
+                        this.cache.put(
+                            request.repoName(), request.artifact(),
+                            request.version(), entry.blocked
+                        );
+                    }
+                    return CompletableFuture.completedFuture(entry.blocked);
+                }
+                return this.shouldBlockNewArtifact(request, knownReleaseDate);
+            })
+        ).thenCompose(blocked -> {
+            if (blocked) {
+                this.recordVersionBlockedMetric(request.repoType(), request.repoName());
+                return this.getBlockResult(request);
+            }
+            this.recordVersionAllowedMetric(request.repoType(), request.repoName());
+            return CompletableFuture.completedFuture(CooldownResult.allowed());
+        }).whenComplete((result, error) -> {
+            if (error != null) {
+                this.circuitBreaker.recordFailure();
+            } else {
+                this.circuitBreaker.recordSuccess();
+            }
+        });
+    }
+
     /**
      * Coalesced evaluation body — runs at most once per concurrent
      * burst sharing the same {@link CooldownKey}. The 3-tier

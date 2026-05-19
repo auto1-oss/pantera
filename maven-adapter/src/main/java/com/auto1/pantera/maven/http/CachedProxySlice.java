@@ -39,8 +39,6 @@ import com.auto1.pantera.maven.cooldown.MavenMetadataFilter;
 import com.auto1.pantera.maven.cooldown.MavenMetadataParser;
 import com.auto1.pantera.maven.cooldown.MavenMetadataRequestDetector;
 import com.auto1.pantera.maven.cooldown.MavenMetadataRewriter;
-import com.auto1.pantera.publishdate.PublishDateRegistries;
-import com.auto1.pantera.publishdate.RegistryBackedInspector;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 
@@ -138,13 +136,6 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
     private final CooldownMetadataService cooldownMetadata;
 
     /**
-     * Inspector used by the metadata filter to resolve per-version release
-     * dates. Holding one instance avoids re-wrapping the remote slice on
-     * every request.
-     */
-    private final CooldownInspector metadataInspector;
-
-    /**
      * Constructor with full configuration (no metadata filtering).
      * Delegates to the overload below with {@code cooldownMetadata=null}; used
      * by legacy callers and tests that do not need filter behaviour.
@@ -233,9 +224,6 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
             repoName
         );
         this.cooldownMetadata = cooldownMetadata;
-        this.metadataInspector = cooldownMetadata == null
-            ? null
-            : new RegistryBackedInspector("maven", PublishDateRegistries.instance());
     }
 
     /**
@@ -533,8 +521,7 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 bytes,
                 new MavenMetadataParser(),
                 new MavenMetadataFilter(),
-                new MavenMetadataRewriter(),
-                Optional.ofNullable(this.metadataInspector)
+                new MavenMetadataRewriter()
             ).handle((filtered, ex) -> {
                 if (ex == null) {
                     return ResponseBuilder.ok()

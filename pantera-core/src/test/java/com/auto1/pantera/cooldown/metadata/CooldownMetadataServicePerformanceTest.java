@@ -106,7 +106,7 @@ final class CooldownMetadataServicePerformanceTest {
             this.service.filterMetadata(
                 "npm", "perf-repo", "perf-pkg",
                 "raw".getBytes(StandardCharsets.UTF_8),
-                parser, filter, rewriter, Optional.empty()
+                parser, filter, rewriter
             ).get();
         }
 
@@ -118,7 +118,7 @@ final class CooldownMetadataServicePerformanceTest {
             this.service.filterMetadata(
                 "npm", "perf-repo", "perf-pkg",
                 "raw".getBytes(StandardCharsets.UTF_8),
-                parser, filter, rewriter, Optional.empty()
+                parser, filter, rewriter
             ).get();
             final long durationMs = (System.nanoTime() - start) / 1_000_000;
             latencies.add(durationMs);
@@ -150,7 +150,7 @@ final class CooldownMetadataServicePerformanceTest {
             this.service.filterMetadata(
                 "npm", "perf-repo", "perf-pkg",
                 "raw".getBytes(StandardCharsets.UTF_8),
-                parser, filter, rewriter, Optional.empty()
+                parser, filter, rewriter
             ).get();
         }
 
@@ -162,7 +162,7 @@ final class CooldownMetadataServicePerformanceTest {
             this.service.filterMetadata(
                 "npm", "perf-repo", "perf-pkg",
                 "raw".getBytes(StandardCharsets.UTF_8),
-                parser, filter, rewriter, Optional.empty()
+                parser, filter, rewriter
             ).get();
             final long durationMs = (System.nanoTime() - start) / 1_000_000;
             latencies.add(durationMs);
@@ -194,7 +194,7 @@ final class CooldownMetadataServicePerformanceTest {
             this.service.filterMetadata(
                 "npm", "perf-repo", "perf-pkg",
                 "raw".getBytes(StandardCharsets.UTF_8),
-                parser, filter, rewriter, Optional.empty()
+                parser, filter, rewriter
             ).get();
         }
 
@@ -206,7 +206,7 @@ final class CooldownMetadataServicePerformanceTest {
             this.service.filterMetadata(
                 "npm", "perf-repo", "perf-pkg",
                 "raw".getBytes(StandardCharsets.UTF_8),
-                parser, filter, rewriter, Optional.empty()
+                parser, filter, rewriter
             ).get();
             final long durationMs = (System.nanoTime() - start) / 1_000_000;
             latencies.add(durationMs);
@@ -231,7 +231,7 @@ final class CooldownMetadataServicePerformanceTest {
         this.service.filterMetadata(
             "npm", "perf-repo", "perf-pkg",
             "raw".getBytes(StandardCharsets.UTF_8),
-            parser, filter, rewriter, Optional.empty()
+            parser, filter, rewriter
         ).get();
 
         // Measure cache hits
@@ -241,7 +241,7 @@ final class CooldownMetadataServicePerformanceTest {
             this.service.filterMetadata(
                 "npm", "perf-repo", "perf-pkg",
                 "raw".getBytes(StandardCharsets.UTF_8),
-                parser, filter, rewriter, Optional.empty()
+                parser, filter, rewriter
             ).get();
             final long durationMs = (System.nanoTime() - start) / 1_000_000;
             latencies.add(durationMs);
@@ -293,6 +293,14 @@ final class CooldownMetadataServicePerformanceTest {
                 );
             }
             return CompletableFuture.completedFuture(CooldownResult.allowed());
+        }
+
+        @Override
+        public CompletableFuture<CooldownResult> evaluateWithKnownDate(
+            final CooldownRequest request,
+            final Optional<Instant> knownReleaseDate
+        ) {
+            return this.evaluate(request, null);
         }
 
         @Override

@@ -96,8 +96,7 @@ final class MetadataFilterServiceIntegrationTest {
         final byte[] result = this.service.filterMetadata(
             "go", "go-repo", "test-pkg",
             GO_METADATA.getBytes(StandardCharsets.UTF_8),
-            parser, filter, rewriter,
-            Optional.of(new NoopInspector())
+            parser, filter, rewriter
         ).get();
 
         final String output = new String(result, StandardCharsets.UTF_8);
@@ -121,7 +120,7 @@ final class MetadataFilterServiceIntegrationTest {
         this.service.filterMetadata(
             "go", "go-repo", "test-pkg",
             GO_METADATA.getBytes(StandardCharsets.UTF_8),
-            parser, filter, rewriter, Optional.of(inspector)
+            parser, filter, rewriter
         ).get();
 
         final int firstParseCount = parser.parseCount;
@@ -131,7 +130,7 @@ final class MetadataFilterServiceIntegrationTest {
         this.service.filterMetadata(
             "go", "go-repo", "test-pkg",
             GO_METADATA.getBytes(StandardCharsets.UTF_8),
-            parser, filter, rewriter, Optional.of(inspector)
+            parser, filter, rewriter
         ).get();
 
         assertThat("Second call must hit cache (no re-parse)",
@@ -164,7 +163,7 @@ final class MetadataFilterServiceIntegrationTest {
         final byte[] result1 = swrService.filterMetadata(
             "go", "go-repo", "test-pkg",
             GO_METADATA.getBytes(StandardCharsets.UTF_8),
-            parser, filter, rewriter, Optional.of(inspector)
+            parser, filter, rewriter
         ).get();
 
         final String output1 = new String(result1, StandardCharsets.UTF_8);
@@ -181,7 +180,7 @@ final class MetadataFilterServiceIntegrationTest {
         final byte[] result2 = swrService.filterMetadata(
             "go", "go-repo", "test-pkg",
             GO_METADATA.getBytes(StandardCharsets.UTF_8),
-            parser, filter, rewriter, Optional.of(inspector)
+            parser, filter, rewriter
         ).get();
 
         // Stale response is served immediately (may still have v1.0.0 filtered)
@@ -194,7 +193,7 @@ final class MetadataFilterServiceIntegrationTest {
         swrService.filterMetadata(
             "go", "go-repo", "test-pkg",
             GO_METADATA.getBytes(StandardCharsets.UTF_8),
-            parser, filter, rewriter, Optional.of(inspector)
+            parser, filter, rewriter
         ).get();
 
         // Parser should have been called again by background revalidation
@@ -213,7 +212,7 @@ final class MetadataFilterServiceIntegrationTest {
         this.service.filterMetadata(
             "go", "go-repo", "test-pkg",
             GO_METADATA.getBytes(StandardCharsets.UTF_8),
-            parser, filter, rewriter, Optional.of(inspector)
+            parser, filter, rewriter
         ).get();
         final int count1 = parser.parseCount;
 
@@ -224,7 +223,7 @@ final class MetadataFilterServiceIntegrationTest {
         this.service.filterMetadata(
             "go", "go-repo", "test-pkg",
             GO_METADATA.getBytes(StandardCharsets.UTF_8),
-            parser, filter, rewriter, Optional.of(inspector)
+            parser, filter, rewriter
         ).get();
 
         assertThat("Post-invalidation must re-parse",
@@ -242,8 +241,7 @@ final class MetadataFilterServiceIntegrationTest {
         final byte[] raw = GO_METADATA.getBytes(StandardCharsets.UTF_8);
         final byte[] result = disabledService.filterMetadata(
             "go", "go-repo", "test-pkg", raw,
-            new GoParser(), new GoFilter(), new GoRewriter(),
-            Optional.empty()
+            new GoParser(), new GoFilter(), new GoRewriter()
         ).get();
 
         assertThat("Disabled cooldown returns raw bytes", result, equalTo(raw));
@@ -356,6 +354,13 @@ final class MetadataFilterServiceIntegrationTest {
         }
 
         @Override
+        public CompletableFuture<CooldownResult> evaluateWithKnownDate(
+            final CooldownRequest request, final Optional<Instant> knownReleaseDate
+        ) {
+            return this.evaluate(request, null);
+        }
+
+        @Override
         public CompletableFuture<Void> unblock(
             String rt, String rn, String a, String v, String actor
         ) {
@@ -403,6 +408,13 @@ final class MetadataFilterServiceIntegrationTest {
                 );
             }
             return CompletableFuture.completedFuture(CooldownResult.allowed());
+        }
+
+        @Override
+        public CompletableFuture<CooldownResult> evaluateWithKnownDate(
+            final CooldownRequest request, final Optional<Instant> knownReleaseDate
+        ) {
+            return this.evaluate(request, null);
         }
 
         @Override

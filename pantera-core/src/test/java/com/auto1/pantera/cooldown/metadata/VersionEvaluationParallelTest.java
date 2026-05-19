@@ -76,7 +76,7 @@ final class VersionEvaluationParallelTest {
         service.filterMetadata(
             "npm", "test-repo", "warmup-pkg",
             "raw".getBytes(StandardCharsets.UTF_8),
-            parser, filter, rewriter, Optional.of(inspector)
+            parser, filter, rewriter
         ).get();
 
         // Invalidate the warmup entry
@@ -87,7 +87,7 @@ final class VersionEvaluationParallelTest {
         service.filterMetadata(
             "npm", "test-repo", "test-pkg",
             "raw".getBytes(StandardCharsets.UTF_8),
-            parser, filter, rewriter, Optional.of(inspector)
+            parser, filter, rewriter
         ).get();
         final long elapsedMs = (System.nanoTime() - start) / 1_000_000;
 

@@ -17,7 +17,6 @@ import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
-import com.auto1.pantera.http.cache.CachedArtifactMetadataStore;
 import com.auto1.pantera.http.cache.FetchSignal;
 import com.auto1.pantera.http.cache.NegativeCache;
 import com.auto1.pantera.http.cache.NegativeCacheRegistry;
@@ -73,11 +72,6 @@ public final class CachedNpmProxySlice implements Slice {
     private final NegativeCache negativeCache;
 
     /**
-     * Metadata store for cached responses.
-     */
-    private final Optional<CachedArtifactMetadataStore> metadata;
-
-    /**
      * Repository name.
      */
     private final String repoName;
@@ -123,7 +117,7 @@ public final class CachedNpmProxySlice implements Slice {
      */
     public CachedNpmProxySlice(
         final Slice origin,
-        final Optional<Storage> storage,
+        final Optional<Storage> storage, //NOPMD UnusedFormalParameter - kept for source compatibility; the metadata-cache short-circuit was removed (body-less response bug) but callers still pass storage handle.
         final String repoName,
         final String upstreamUrl,
         final String repoType
@@ -133,7 +127,6 @@ public final class CachedNpmProxySlice implements Slice {
         this.upstreamUrl = upstreamUrl;
         this.repoType = repoType;
         this.negativeCache = NegativeCacheRegistry.instance().sharedCache();
-        this.metadata = storage.map(CachedArtifactMetadataStore::new);
         // 5-minute zombie TTL (PANTERA_DEDUP_MAX_AGE_MS = 300 000 ms).
         // 10K max entries bounds memory.
         this.deduplicator = new SingleFlight<>(
@@ -161,11 +154,11 @@ public final class CachedNpmProxySlice implements Slice {
                 ResponseBuilder.notFound().build()
             );
         }
-        // Check metadata cache for tarballs and package.json
-        if (this.metadata.isPresent() && isCacheable(path)) {
-            return this.serveCached(line, headers, body, key);
-        }
-        // Fetch from origin with request deduplication
+        // Tarball / package.json reads always traverse dedup → origin; the
+        // origin slice serves from NpmProxy's storage cache on a hit. The
+        // metadata store only tracks response headers (not bodies), so a
+        // hit there cannot produce a complete 200 — short-circuiting on it
+        // would return Content-Length pointing at bytes we don't have.
         return this.fetchWithDedup(line, headers, body, key);
     }
 
@@ -180,38 +173,6 @@ public final class CachedNpmProxySlice implements Slice {
             || path.startsWith("/-/v1/search")
             || path.startsWith("/-/user/")
             || path.contains("/auth");
-    }
-
-    /**
-     * Checks if path represents cacheable content.
-     * @param path Request path
-     * @return True if path is a tarball or package.json
-     */
-    private static boolean isCacheable(final String path) {
-        return path.endsWith(".tgz")
-            || path.endsWith("/-/package.json")
-            || (path.contains("/-/") && path.endsWith(".json"));
-    }
-
-    /**
-     * Serves from metadata cache or fetches if not cached.
-     */
-    private CompletableFuture<Response> serveCached(
-        final RequestLine line,
-        final Headers headers,
-        final Content body,
-        final Key key
-    ) {
-        return this.metadata.orElseThrow().load(key).thenCompose(meta -> {
-            if (meta.isPresent()) {
-                return CompletableFuture.completedFuture(
-                    ResponseBuilder.ok()
-                        .headers(meta.get().headers())
-                        .build()
-                );
-            }
-            return this.fetchWithDedup(line, headers, body, key);
-        });
     }
 
     /**

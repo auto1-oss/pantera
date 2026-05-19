@@ -332,7 +332,7 @@ final class CachedProxySlice implements Slice {
      * <p>Track 5 Phase 1A: cooldown re-evaluation removed from the cache-hit
      * path. Pre-Track 5, this method called {@link #evaluateMetadataCooldown}
      * which goes through {@code RegistryBackedInspector} and can fall
-     * through to {@code PackagistSource} (network) when L1+L2 miss. That
+     * through to an upstream packagist.org fetch when L1+L2 miss. That
      * made every cached metadata read dependent on packagist.org being
      * reachable AND inside its rate-limit budget. Cooldown still gates the
      * cache-miss / write-time refresh path inside

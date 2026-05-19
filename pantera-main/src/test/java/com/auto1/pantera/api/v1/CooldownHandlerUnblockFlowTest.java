@@ -214,8 +214,7 @@ final class CooldownHandlerUnblockFlowTest {
         public <T> CompletableFuture<byte[]> filterMetadata(
             final String repoType, final String repoName, final String packageName,
             final byte[] rawMetadata, final MetadataParser<T> parser,
-            final MetadataFilter<T> filter, final MetadataRewriter<T> rewriter,
-            final Optional<com.auto1.pantera.cooldown.api.CooldownInspector> inspector) {
+            final MetadataFilter<T> filter, final MetadataRewriter<T> rewriter) {
             return CompletableFuture.completedFuture(rawMetadata);
         }
         @Override

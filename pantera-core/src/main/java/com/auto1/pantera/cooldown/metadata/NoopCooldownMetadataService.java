@@ -10,9 +10,6 @@
  */
 package com.auto1.pantera.cooldown.metadata;
 
-import com.auto1.pantera.cooldown.api.CooldownInspector;
-
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -42,8 +39,7 @@ public final class NoopCooldownMetadataService implements CooldownMetadataServic
         final byte[] rawMetadata,
         final MetadataParser<T> parser,
         final MetadataFilter<T> filter,
-        final MetadataRewriter<T> rewriter,
-        final Optional<CooldownInspector> inspector
+        final MetadataRewriter<T> rewriter
     ) {
         // Return raw metadata unchanged
         return CompletableFuture.completedFuture(rawMetadata);

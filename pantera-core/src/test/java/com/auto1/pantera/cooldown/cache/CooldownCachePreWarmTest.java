@@ -92,8 +92,7 @@ final class CooldownCachePreWarmTest {
         this.service.filterMetadata(
             "npm", "test-repo", "test-pkg",
             "raw".getBytes(StandardCharsets.UTF_8),
-            parser, filter, rewriter,
-            Optional.of(new NoopInspector())
+            parser, filter, rewriter
         ).get();
 
         // Now check: looking up 1.0.0 in CooldownCache should be an L1 hit (pre-warmed)
@@ -121,8 +120,7 @@ final class CooldownCachePreWarmTest {
         this.service.filterMetadata(
             "npm", "test-repo", "fresh-pkg",
             "raw".getBytes(StandardCharsets.UTF_8),
-            parser, new SimpleFilter(), new SimpleRewriter(),
-            Optional.of(new NoopInspector())
+            parser, new SimpleFilter(), new SimpleRewriter()
         ).get();
 
         // Looking up 1.0.0 should trigger a DB query (not pre-warmed)

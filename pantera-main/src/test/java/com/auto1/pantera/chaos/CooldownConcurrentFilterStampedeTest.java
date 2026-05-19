@@ -116,8 +116,7 @@ final class CooldownConcurrentFilterStampedeTest {
                     startGate.await(5, TimeUnit.SECONDS);
                     final byte[] result = service.filterMetadata(
                         "go", "go-repo", "test-pkg",
-                        rawBytes, parser, filter, rewriter,
-                        Optional.of(inspector)
+                        rawBytes, parser, filter, rewriter
                     ).get(10, TimeUnit.SECONDS);
                     future.complete(result);
                 } catch (final Exception ex) {
@@ -192,7 +191,7 @@ final class CooldownConcurrentFilterStampedeTest {
                     startGate.await(5, TimeUnit.SECONDS);
                     final byte[] result = service.filterMetadata(
                         "go", "go-repo", "pkg2", rawBytes,
-                        parser, filter, rewriter, Optional.of(inspector)
+                        parser, filter, rewriter
                     ).get(10, TimeUnit.SECONDS);
                     future.complete(result);
                 } catch (final Exception ex) {
@@ -317,6 +316,13 @@ final class CooldownConcurrentFilterStampedeTest {
                 );
             }
             return CompletableFuture.completedFuture(CooldownResult.allowed());
+        }
+
+        @Override
+        public CompletableFuture<CooldownResult> evaluateWithKnownDate(
+            final CooldownRequest request, final Optional<Instant> knownReleaseDate
+        ) {
+            return this.evaluate(request, null);
         }
 
         @Override

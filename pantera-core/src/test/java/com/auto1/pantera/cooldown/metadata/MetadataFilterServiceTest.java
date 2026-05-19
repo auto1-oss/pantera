@@ -88,8 +88,7 @@ final class MetadataFilterServiceTest {
             "raw-metadata".getBytes(StandardCharsets.UTF_8),
             parser,
             filter,
-            rewriter,
-            Optional.of(inspector)
+            rewriter
         ).get();
 
         // Verify blocked version was filtered
@@ -116,8 +115,7 @@ final class MetadataFilterServiceTest {
             "raw-metadata".getBytes(StandardCharsets.UTF_8),
             parser,
             filter,
-            rewriter,
-            Optional.of(inspector)
+            rewriter
         ).get();
 
         // No versions should be blocked
@@ -150,8 +148,7 @@ final class MetadataFilterServiceTest {
                 "raw-metadata".getBytes(StandardCharsets.UTF_8),
                 parser,
                 filter,
-                rewriter,
-                Optional.of(inspector)
+                rewriter
             ).get()
         );
 
@@ -187,8 +184,7 @@ final class MetadataFilterServiceTest {
             rawMetadata,
             parser,
             new TestMetadataFilter(),
-            new TestMetadataRewriter(),
-            Optional.empty()
+            new TestMetadataRewriter()
         ).get();
 
         // Should return raw metadata unchanged
@@ -209,7 +205,7 @@ final class MetadataFilterServiceTest {
         this.service.filterMetadata(
             "npm", "test-repo", "test-pkg",
             "raw".getBytes(StandardCharsets.UTF_8),
-            parser, filter, rewriter, Optional.of(inspector)
+            parser, filter, rewriter
         ).get();
 
         final int firstParseCount = parser.parseCount;
@@ -218,7 +214,7 @@ final class MetadataFilterServiceTest {
         this.service.filterMetadata(
             "npm", "test-repo", "test-pkg",
             "raw".getBytes(StandardCharsets.UTF_8),
-            parser, filter, rewriter, Optional.of(inspector)
+            parser, filter, rewriter
         ).get();
 
         // Parse count should not increase (cache hit)
@@ -239,7 +235,7 @@ final class MetadataFilterServiceTest {
         this.service.filterMetadata(
             "npm", "test-repo", "test-pkg",
             "raw".getBytes(StandardCharsets.UTF_8),
-            parser, filter, rewriter, Optional.of(inspector)
+            parser, filter, rewriter
         ).get();
 
         final int firstParseCount = parser.parseCount;
@@ -251,7 +247,7 @@ final class MetadataFilterServiceTest {
         this.service.filterMetadata(
             "npm", "test-repo", "test-pkg",
             "raw".getBytes(StandardCharsets.UTF_8),
-            parser, filter, rewriter, Optional.of(inspector)
+            parser, filter, rewriter
         ).get();
 
         // Parse count should increase (cache miss after invalidation)
@@ -281,7 +277,7 @@ final class MetadataFilterServiceTest {
         final byte[] result1 = this.service.filterMetadata(
             "npm", "test-repo", "test-pkg",
             "raw-metadata".getBytes(StandardCharsets.UTF_8),
-            parser, filter, rewriter, Optional.of(inspector)
+            parser, filter, rewriter
         ).get();
 
         assertThat("3.0.0 should be blocked", filter.lastBlockedVersions.contains("3.0.0"), equalTo(true));
@@ -298,7 +294,7 @@ final class MetadataFilterServiceTest {
         final byte[] result2 = this.service.filterMetadata(
             "npm", "test-repo", "test-pkg",
             "raw-metadata".getBytes(StandardCharsets.UTF_8),
-            parser, filter, rewriter, Optional.of(inspector)
+            parser, filter, rewriter
         ).get();
 
         // Should have re-parsed (cache was invalidated)
@@ -331,13 +327,13 @@ final class MetadataFilterServiceTest {
         this.service.filterMetadata(
             "npm", "test-repo", "pkg1",
             "raw".getBytes(StandardCharsets.UTF_8),
-            parser1, filter, rewriter, Optional.of(inspector)
+            parser1, filter, rewriter
         ).get();
 
         this.service.filterMetadata(
             "npm", "test-repo", "pkg2",
             "raw".getBytes(StandardCharsets.UTF_8),
-            parser2, filter, rewriter, Optional.of(inspector)
+            parser2, filter, rewriter
         ).get();
 
         final int parseCount1 = parser1.parseCount;
@@ -351,13 +347,13 @@ final class MetadataFilterServiceTest {
         this.service.filterMetadata(
             "npm", "test-repo", "pkg1",
             "raw".getBytes(StandardCharsets.UTF_8),
-            parser1, filter, rewriter, Optional.of(inspector)
+            parser1, filter, rewriter
         ).get();
 
         this.service.filterMetadata(
             "npm", "test-repo", "pkg2",
             "raw".getBytes(StandardCharsets.UTF_8),
-            parser2, filter, rewriter, Optional.of(inspector)
+            parser2, filter, rewriter
         ).get();
 
         assertThat("pkg1 should re-parse after invalidateAll", 
@@ -397,7 +393,7 @@ final class MetadataFilterServiceTest {
         shortExpiryMetadataService.filterMetadata(
             "npm", "test-repo", "test-pkg",
             "raw".getBytes(StandardCharsets.UTF_8),
-            parser, filter, rewriter, Optional.of(inspector)
+            parser, filter, rewriter
         ).get();
 
         assertThat("3.0.0 should be blocked initially",
@@ -417,7 +413,7 @@ final class MetadataFilterServiceTest {
         shortExpiryMetadataService.filterMetadata(
             "npm", "test-repo", "test-pkg",
             "raw".getBytes(StandardCharsets.UTF_8),
-            parser, filter, rewriter, Optional.of(inspector)
+            parser, filter, rewriter
         ).get();
 
         // Wait for background revalidation to complete
@@ -427,7 +423,7 @@ final class MetadataFilterServiceTest {
         shortExpiryMetadataService.filterMetadata(
             "npm", "test-repo", "test-pkg",
             "raw".getBytes(StandardCharsets.UTF_8),
-            parser, filter, rewriter, Optional.of(inspector)
+            parser, filter, rewriter
         ).get();
 
         // Background revalidation should have re-parsed
@@ -531,6 +527,14 @@ final class MetadataFilterServiceTest {
         }
 
         @Override
+        public CompletableFuture<CooldownResult> evaluateWithKnownDate(
+            final CooldownRequest request,
+            final Optional<Instant> knownReleaseDate
+        ) {
+            return this.evaluate(request, null);
+        }
+
+        @Override
         public CompletableFuture<Void> unblock(
             String repoType, String repoName, String artifact, String version, String actor
         ) {
@@ -580,6 +584,14 @@ final class MetadataFilterServiceTest {
                 );
             }
             return CompletableFuture.completedFuture(CooldownResult.allowed());
+        }
+
+        @Override
+        public CompletableFuture<CooldownResult> evaluateWithKnownDate(
+            final CooldownRequest request,
+            final Optional<Instant> knownReleaseDate
+        ) {
+            return this.evaluate(request, null);
         }
 
         @Override

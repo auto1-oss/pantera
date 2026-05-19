@@ -627,17 +627,6 @@ public final class MavenGroupSlice implements Slice {
         final String baseType = this.repoType.endsWith("-group")
             ? this.repoType.substring(0, this.repoType.length() - "-group".length())
             : this.repoType;
-        // Inspector wired to the global publish-date registry so the filter
-        // can resolve "is this version too fresh?" without requiring a
-        // pre-existing per-member block in the cooldown DB. At the group
-        // layer there's no canonical "member repo" to look up blocks
-        // under — every member's blocks are independent — so we evaluate
-        // by publish date directly.
-        final com.auto1.pantera.cooldown.api.CooldownInspector inspector =
-            new com.auto1.pantera.publishdate.RegistryBackedInspector(
-                baseType,
-                com.auto1.pantera.publishdate.PublishDateRegistries.instance()
-            );
         return this.cooldownMetadata.filterMetadata(
             baseType,
             this.group,
@@ -645,8 +634,7 @@ public final class MavenGroupSlice implements Slice {
             mergedBytes,
             new com.auto1.pantera.maven.cooldown.MavenMetadataParser(),
             new com.auto1.pantera.maven.cooldown.MavenMetadataFilter(),
-            new com.auto1.pantera.maven.cooldown.MavenMetadataRewriter(),
-            Optional.of(inspector)
+            new com.auto1.pantera.maven.cooldown.MavenMetadataRewriter()
         ).exceptionally(err -> {
             EcsLogger.warn("com.auto1.pantera.group")
                 .message("Cooldown filter on merged group metadata failed; "

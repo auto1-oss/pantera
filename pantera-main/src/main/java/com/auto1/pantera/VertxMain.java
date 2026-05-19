@@ -402,24 +402,8 @@ public final class VertxMain {
                 publishSources.put("gradle", mavenSource);
             }
             publishSources.put(
-                "npm",
-                new com.auto1.pantera.publishdate.sources.NpmRegistrySource(publishDateClient)
-            );
-            publishSources.put(
-                "pypi",
-                new com.auto1.pantera.publishdate.sources.PyPiSource(publishDateClient)
-            );
-            publishSources.put(
                 "go",
                 new com.auto1.pantera.publishdate.sources.GoProxySource(publishDateClient)
-            );
-            publishSources.put(
-                "composer",
-                new com.auto1.pantera.publishdate.sources.PackagistSource(publishDateClient)
-            );
-            publishSources.put(
-                "gem",
-                new com.auto1.pantera.publishdate.sources.RubyGemsSource(publishDateClient)
             );
             EcsLogger.info("com.auto1.pantera.publishdate")
                 .message("Publish-date sources configured head_fallback_enabled=" + headFallbackEnabled

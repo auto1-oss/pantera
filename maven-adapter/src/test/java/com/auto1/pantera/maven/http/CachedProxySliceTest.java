@@ -602,8 +602,7 @@ final class CachedProxySliceTest {
             public <T> CompletableFuture<byte[]> filterMetadata(
                 final String repoType, final String repoName, final String packageName,
                 final byte[] rawMetadata, final MetadataParser<T> parser,
-                final MetadataFilter<T> filter, final MetadataRewriter<T> rewriter,
-                final Optional<CooldownInspector> inspector
+                final MetadataFilter<T> filter, final MetadataRewriter<T> rewriter
             ) {
                 capturedPackage.set(packageName);
                 capturedBytes.set(rawMetadata);

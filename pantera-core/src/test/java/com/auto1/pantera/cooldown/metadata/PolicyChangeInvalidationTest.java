@@ -117,7 +117,7 @@ final class PolicyChangeInvalidationTest {
         final byte[] resultT1 = this.service.filterMetadata(
             "npm", "test-repo", PKG,
             "raw".getBytes(StandardCharsets.UTF_8),
-            parser, filter, rewriter, Optional.of(inspector)
+            parser, filter, rewriter
         ).get();
 
         assertThat(
@@ -139,7 +139,7 @@ final class PolicyChangeInvalidationTest {
         this.service.filterMetadata(
             "npm", "test-repo", PKG,
             "raw".getBytes(StandardCharsets.UTF_8),
-            parser, filter, rewriter, Optional.of(inspector)
+            parser, filter, rewriter
         ).get();
         assertThat(
             "second query under same policy must hit the cache (no re-parse)",
@@ -154,7 +154,7 @@ final class PolicyChangeInvalidationTest {
         final byte[] resultT2 = this.service.filterMetadata(
             "npm", "test-repo", PKG,
             "raw".getBytes(StandardCharsets.UTF_8),
-            parser, filter, rewriter, Optional.of(inspector)
+            parser, filter, rewriter
         ).get();
 
         assertThat(
@@ -207,7 +207,7 @@ final class PolicyChangeInvalidationTest {
         final byte[] resultT1 = this.service.filterMetadata(
             "npm", "test-repo", PKG,
             "raw".getBytes(StandardCharsets.UTF_8),
-            parser, filter, rewriter, Optional.of(inspector)
+            parser, filter, rewriter
         ).get();
         assertThat(
             "under 5d policy, 1.1.0 (10d old) is allowed",
@@ -227,7 +227,7 @@ final class PolicyChangeInvalidationTest {
         final byte[] resultT2 = this.service.filterMetadata(
             "npm", "test-repo", PKG,
             "raw".getBytes(StandardCharsets.UTF_8),
-            parser, filter, rewriter, Optional.of(inspector)
+            parser, filter, rewriter
         ).get();
 
         assertThat(
@@ -267,28 +267,39 @@ final class PolicyChangeInvalidationTest {
             final CooldownInspector inspector
         ) {
             return inspector.releaseDate(request.artifact(), request.version())
-                .thenApply(maybeDate -> {
-                    if (maybeDate.isEmpty()) {
-                        return CooldownResult.allowed();
-                    }
-                    final Duration window = this.bound.minimumAllowedAgeFor(request.repoType());
-                    final Instant cutoff = Instant.now().minus(window);
-                    if (maybeDate.get().isAfter(cutoff)) {
-                        // Released within the cooldown window → blocked.
-                        final Instant blockedUntil = maybeDate.get().plus(window);
-                        return CooldownResult.blocked(new CooldownBlock(
-                            request.repoType(),
-                            request.repoName(),
-                            request.artifact(),
-                            request.version(),
-                            CooldownReason.FRESH_RELEASE,
-                            Instant.now(),
-                            blockedUntil,
-                            Collections.emptyList()
-                        ));
-                    }
-                    return CooldownResult.allowed();
-                });
+                .thenApply(maybeDate -> this.decide(request, maybeDate));
+        }
+
+        @Override
+        public CompletableFuture<CooldownResult> evaluateWithKnownDate(
+            final CooldownRequest request,
+            final Optional<Instant> knownReleaseDate
+        ) {
+            return CompletableFuture.completedFuture(this.decide(request, knownReleaseDate));
+        }
+
+        private CooldownResult decide(
+            final CooldownRequest request, final Optional<Instant> maybeDate
+        ) {
+            if (maybeDate.isEmpty()) {
+                return CooldownResult.allowed();
+            }
+            final Duration window = this.bound.minimumAllowedAgeFor(request.repoType());
+            final Instant cutoff = Instant.now().minus(window);
+            if (maybeDate.get().isAfter(cutoff)) {
+                final Instant blockedUntil = maybeDate.get().plus(window);
+                return CooldownResult.blocked(new CooldownBlock(
+                    request.repoType(),
+                    request.repoName(),
+                    request.artifact(),
+                    request.version(),
+                    CooldownReason.FRESH_RELEASE,
+                    Instant.now(),
+                    blockedUntil,
+                    Collections.emptyList()
+                ));
+            }
+            return CooldownResult.allowed();
         }
 
         @Override
