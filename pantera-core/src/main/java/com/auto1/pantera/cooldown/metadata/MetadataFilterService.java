@@ -171,8 +171,13 @@ public final class MetadataFilterService implements CooldownMetadataService {
         final MetadataFilter<T> filter,
         final MetadataRewriter<T> rewriter
     ) {
-        // Check if cooldown is enabled for this repo type
-        if (!this.settings.enabledFor(repoType)) {
+        // Check if cooldown is enabled for this repo identity.
+        // Precedence: per-repo-name override → per-repo-type override → global.
+        // Mirrors JdbcCooldownService.effectiveEnabled so the metadata-filter
+        // pre-selection cannot disagree with the request-time evaluator —
+        // otherwise versions aged between the global cutoff and a laxer
+        // per-type cutoff would silently pass through.
+        if (!this.settings.effectiveEnabled(repoType, repoName)) {
             EcsLogger.debug("com.auto1.pantera.cooldown.metadata")
                 .message("Cooldown disabled for repo type, returning raw metadata")
                 .eventCategory("database")
@@ -247,12 +252,19 @@ public final class MetadataFilterService implements CooldownMetadataService {
             // Step 2c: Pre-warm CooldownCache L1 with release dates from metadata.
             // Versions older than the cooldown period are guaranteed allowed (false).
             if (!releaseDates.isEmpty()) {
-                this.preWarmCooldownCache(repoName, packageName, releaseDates);
+                this.preWarmCooldownCache(repoType, repoName, packageName, releaseDates);
             }
 
             // Step 3: Select versions to evaluate based on RELEASE DATE, not semver
-            // Only versions released within the cooldown period could possibly be blocked
-            final Duration cooldownPeriod = this.settings.minimumAllowedAge();
+            // Only versions released within the cooldown period could possibly be blocked.
+            // Use the per-repo-identity effective duration so a per-name or per-type
+            // override that loosens (or tightens) the window is honoured by the
+            // pre-selection cutoff. SNAPSHOT-stricter knobs are applied
+            // per-version downstream by evaluateWithKnownDate; here we want the
+            // release-mode cutoff which is the laxer of the two for SNAPSHOTs
+            // and the only cutoff for releases.
+            final Duration cooldownPeriod =
+                this.settings.effectiveMinimumAllowedAge(repoType, repoName);
             final Instant cutoffTime = Instant.now().minus(cooldownPeriod);
             
             final List<String> versionsToEvaluate;
@@ -628,16 +640,26 @@ public final class MetadataFilterService implements CooldownMetadataService {
      * This avoids a DB/Valkey round-trip on the hot path for the majority
      * of versions that are well past the cooldown window.
      *
+     * <p>Uses {@link CooldownSettings#effectiveMinimumAllowedAge(String, String)}
+     * so the per-repo-name / per-repo-type precedence chain is honoured: a
+     * laxer override must NOT pre-mark in-window versions as allowed, and a
+     * stricter override must NOT pre-mark borderline versions as allowed
+     * before the request-time evaluator gets to see them.
+     *
+     * @param repoType Repository type (for precedence lookup)
      * @param repoName Repository name
      * @param packageName Package name
      * @param releaseDates Map of version to release timestamp
      */
     private void preWarmCooldownCache(
+        final String repoType,
         final String repoName,
         final String packageName,
         final Map<String, Instant> releaseDates
     ) {
-        final Instant cutoff = Instant.now().minus(this.settings.minimumAllowedAge());
+        final Instant cutoff = Instant.now().minus(
+            this.settings.effectiveMinimumAllowedAge(repoType, repoName)
+        );
         int warmed = 0;
         for (final Map.Entry<String, Instant> entry : releaseDates.entrySet()) {
             if (entry.getValue().isBefore(cutoff)) {

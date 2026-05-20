@@ -210,6 +210,40 @@ public final class CooldownSettings {
     }
 
     /**
+     * Effective enabled flag for the given repo identity. Precedence:
+     * per-repo-name override → per-repo-type override → global default.
+     * Mirrors the chain used by {@code JdbcCooldownService.effectiveEnabled}
+     * so request-time evaluation and metadata-filter pre-selection see the
+     * same answer.
+     *
+     * @param repoType repository type (e.g. "maven-proxy")
+     * @param repoName repository name (e.g. "gradle_proxy"); may be {@code null}
+     *                 when the caller has no name context
+     * @return effective enabled state
+     */
+    public boolean effectiveEnabled(final String repoType, final String repoName) {
+        if (repoName != null && this.isRepoNameOverridePresent(repoName)) {
+            return this.enabledForRepoName(repoName);
+        }
+        return this.enabledFor(repoType);
+    }
+
+    /**
+     * Effective minimum allowed age for the given repo identity. Same
+     * precedence as {@link #effectiveEnabled(String, String)}.
+     *
+     * @param repoType repository type
+     * @param repoName repository name; may be {@code null}
+     * @return effective minimum allowed age
+     */
+    public Duration effectiveMinimumAllowedAge(final String repoType, final String repoName) {
+        if (repoName != null && this.isRepoNameOverridePresent(repoName)) {
+            return this.minimumAllowedAgeForRepoName(repoName);
+        }
+        return this.minimumAllowedAgeFor(repoType);
+    }
+
+    /**
      * Register or update a per-repo-name cooldown override.
      * Thread-safe: replaces the internal map atomically.
      *

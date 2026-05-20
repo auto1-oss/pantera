@@ -527,6 +527,98 @@ final class MetadataFilterServiceTest {
     }
 
     @Test
+    void perTypeLaxerOverrideExtendsMetadataFilterCutoff() throws Exception {
+        // Bug regression: global=30d, per-type=60d (laxer per-type), one
+        // version aged 40d (between the two cutoffs). Pre-fix, the metadata
+        // filter used the global 30d cutoff for pre-selection, so the 40d
+        // version was treated as "old enough — skip" and never reached the
+        // request-time evaluator — silently allowed even though the per-type
+        // 60d rule says it's too fresh.
+        // Post-fix, the filter uses CooldownSettings.effectiveMinimumAllowedAge
+        // which honours the per-type override; the 40d version is included in
+        // versionsToEvaluate and the DateAwareCooldownService (configured with
+        // 60d) blocks it.
+        final CooldownSettings perTypeLaxer = new CooldownSettings(
+            true,
+            Duration.ofDays(30),
+            Map.of("maven", new CooldownSettings.RepoTypeConfig(true, Duration.ofDays(60)))
+        );
+        final java.time.Instant fortyDaysAgo = java.time.Instant.now()
+            .minus(java.time.Duration.ofDays(40));
+        final java.time.Instant oneYearAgo = java.time.Instant.now()
+            .minus(java.time.Duration.ofDays(365));
+        final java.util.Map<String, java.time.Instant> registryDates = new java.util.HashMap<>();
+        registryDates.put("1.2.0", fortyDaysAgo);
+        registryDates.put("1.1.0", oneYearAgo);
+        PublishDateRegistries.installDefault(new FakePublishDateRegistry(registryDates));
+        final DateAwareCooldownService dateAware = new DateAwareCooldownService(
+            Duration.ofDays(60)
+        );
+        final MetadataFilterService perTypeService = new MetadataFilterService(
+            dateAware,
+            perTypeLaxer,
+            new CooldownCache(),
+            new FilteredMetadataCache(),
+            ForkJoinPool.commonPool(),
+            50
+        );
+        final List<String> versions = Arrays.asList("1.1.0", "1.2.0");
+        final TestMetadataParser parser = new TestMetadataParser(versions, "1.2.0");
+        final TestMetadataFilter filter = new TestMetadataFilter();
+        final TestMetadataRewriter rewriter = new TestMetadataRewriter();
+        perTypeService.filterMetadata(
+            "maven", "test-repo", "com.example.lib",
+            "raw".getBytes(StandardCharsets.UTF_8),
+            parser, filter, rewriter
+        ).get();
+        assertThat(
+            "40d version must be blocked under the per-type 60d rule",
+            filter.lastBlockedVersions.contains("1.2.0"), equalTo(true)
+        );
+        assertThat(
+            "1-year-old version stays allowed",
+            filter.lastBlockedVersions.contains("1.1.0"), equalTo(false)
+        );
+    }
+
+    @Test
+    void perNameOverrideBeatsPerTypeInMetadataFilter() throws Exception {
+        // Same precedence chain seen by JdbcCooldownService: per-name disables
+        // cooldown for a single repo even when its repo-type override would
+        // enable it. Verifies effectiveEnabled wiring through Site A.
+        final CooldownSettings settings = new CooldownSettings(
+            true,
+            Duration.ofDays(30),
+            Map.of("maven", new CooldownSettings.RepoTypeConfig(true, Duration.ofDays(60)))
+        );
+        settings.setRepoNameOverride("test-repo", false, Duration.ofDays(60));
+        final MetadataFilterService perNameService = new MetadataFilterService(
+            this.cooldownService,
+            settings,
+            new CooldownCache(),
+            new FilteredMetadataCache(),
+            ForkJoinPool.commonPool(),
+            50
+        );
+        this.cooldownService.blockVersion("test-pkg", "3.0.0");
+        final TestMetadataParser parser = new TestMetadataParser(
+            Arrays.asList("1.0.0", "2.0.0", "3.0.0"),
+            "3.0.0"
+        );
+        final TestMetadataFilter filter = new TestMetadataFilter();
+        final TestMetadataRewriter rewriter = new TestMetadataRewriter();
+        final byte[] raw = "raw".getBytes(StandardCharsets.UTF_8);
+        final byte[] result = perNameService.filterMetadata(
+            "maven", "test-repo", "test-pkg",
+            raw, parser, filter, rewriter
+        ).get();
+        assertThat(
+            "per-name override disabled — filter must return raw metadata unchanged",
+            result, equalTo(raw)
+        );
+    }
+
+    @Test
     void mavenMetadataBlocksVersionsViaPublishDateRegistry() throws Exception {
         // Regression: MavenMetadataParser.extractReleaseDates returns an empty
         // map (no per-version timestamps in artifact-level maven-metadata.xml).

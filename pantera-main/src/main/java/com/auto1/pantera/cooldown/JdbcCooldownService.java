@@ -1123,7 +1123,9 @@ final class JdbcCooldownService implements CooldownService {
      * Whether cooldown enforcement is active for this request.
      * SNAPSHOT precedence: per-repo SNAPSHOT override → per-repo override →
      * global SNAPSHOT policy → per-type override → global. Non-SNAPSHOT
-     * versions skip the SNAPSHOT tiers.
+     * versions delegate to {@link CooldownSettings#effectiveEnabled(String, String)}
+     * — the single source of truth for the per-name → per-type → global
+     * chain shared with {@link com.auto1.pantera.cooldown.metadata.MetadataFilterService}.
      */
     boolean effectiveEnabled(final CooldownRequest request) {
         if (isSnapshotVersion(request.version())) {
@@ -1141,16 +1143,16 @@ final class JdbcCooldownService implements CooldownService {
             }
             return this.settings.enabledFor(request.repoType());
         }
-        if (this.settings.isRepoNameOverridePresent(request.repoName())) {
-            return this.settings.enabledForRepoName(request.repoName());
-        }
-        return this.settings.enabledFor(request.repoType());
+        return this.settings.effectiveEnabled(request.repoType(), request.repoName());
     }
 
     /**
      * Effective minimum allowed age for this request. Same precedence ladder
      * as {@link #effectiveEnabled} — SNAPSHOT versions consult the SNAPSHOT
-     * tiers first.
+     * tiers first; the non-SNAPSHOT path delegates to
+     * {@link CooldownSettings#effectiveMinimumAllowedAge(String, String)} so
+     * request-time evaluation and metadata-filter pre-selection share a
+     * single source of truth.
      */
     Duration effectiveDuration(final CooldownRequest request) {
         if (isSnapshotVersion(request.version())) {
@@ -1168,10 +1170,7 @@ final class JdbcCooldownService implements CooldownService {
             }
             return this.settings.minimumAllowedAgeFor(request.repoType());
         }
-        if (this.settings.isRepoNameOverridePresent(request.repoName())) {
-            return this.settings.minimumAllowedAgeForRepoName(request.repoName());
-        }
-        return this.settings.minimumAllowedAgeFor(request.repoType());
+        return this.settings.effectiveMinimumAllowedAge(request.repoType(), request.repoName());
     }
 
     /**
