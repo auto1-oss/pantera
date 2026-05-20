@@ -246,10 +246,16 @@ public final class CooldownSupport {
     /**
      * Load cooldown settings from DB and apply to in-memory CooldownSettings.
      * DB settings (saved via the UI) take precedence over YAML defaults.
+     *
+     * <p>Public so the boot wiring's {@code RuntimeSettingsCache} listener can
+     * re-run the full reload on every {@code cooldown} settings write — the
+     * generic {@code PUT /api/v1/settings/cooldown} path only persists to the
+     * DB and never touches the in-memory snapshot.
+     *
      * @param csettings In-memory cooldown settings to update
      * @param ds Database data source
      */
-    static void loadDbCooldownSettings(
+    public static void loadDbCooldownSettings(
         final CooldownSettings csettings,
         final javax.sql.DataSource ds
     ) {

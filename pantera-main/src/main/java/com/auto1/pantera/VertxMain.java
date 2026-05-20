@@ -364,25 +364,19 @@ public final class VertxMain {
                         .setProtocolVersion(io.vertx.core.http.HttpVersion.HTTP_2)
                         .setUseAlpn(true)
                 );
-            // M5 / W5b (analysis/plan/v1/PLAN.md): MavenHeadSource fires
-            // a HEAD against Maven Central whenever the publish-date L1+L2
-            // cache misses for an (artifact, version) pair. With Track 5
-            // Phase 1B in place, every successful cache write enqueues a
-            // publish_date row sourced from the response Last-Modified —
-            // so steady-state the head-fallback never fires. The remaining
-            // window is the very first fetch of a brand-new (artifact,
-            // version) pair: a HEAD per first-asker. At cold-walk scale
-            // (~50 new versions in a single resolve) that is 50 extra
-            // HEADs to the same upstream we are about to hit anyway, and
-            // each is subject to the same per-IP throttling as the GET.
-            // Default behaviour in 2.2.0 is therefore "skip the HEAD";
-            // operators who explicitly need first-fetch cooldown
-            // enforcement can re-enable via the env var. The trade-off:
-            // the first asker of a freshly-published blocked version
-            // downloads the bytes before the cooldown evaluator catches
-            // it on the next request (publish_date now cached).
+            // MavenHeadSource fires a HEAD against Maven Central whenever the
+            // publish-date L1+L2 cache misses for an (artifact, version)
+            // pair. Every successful cache write enqueues a publish_date row
+            // sourced from the response Last-Modified — so steady-state the
+            // head-fallback rarely fires. The remaining window is the very
+            // first fetch of a brand-new (artifact, version) pair: a HEAD
+            // per first-asker. Without it the first asker of a
+            // freshly-published version downloads the bytes before the
+            // cooldown evaluator catches it on the next request — so the
+            // default is ON. Operators with extreme cold-walk concerns can
+            // disable via PANTERA_PUBLISH_DATE_HEAD_FALLBACK_ENABLED=false.
             final boolean headFallbackEnabled = com.auto1.pantera.http.misc.ConfigDefaults
-                .getBoolean("PANTERA_PUBLISH_DATE_HEAD_FALLBACK_ENABLED", false);
+                .getBoolean("PANTERA_PUBLISH_DATE_HEAD_FALLBACK_ENABLED", true);
             final java.util.Map<String, com.auto1.pantera.publishdate.PublishDateSource>
                 publishSources = new java.util.HashMap<>();
             if (headFallbackEnabled) {
@@ -399,12 +393,14 @@ public final class VertxMain {
                         mavenHead, jfrogFallback
                     );
                 publishSources.put("maven", mavenSource);
+                publishSources.put("maven-proxy", mavenSource);
                 publishSources.put("gradle", mavenSource);
+                publishSources.put("gradle-proxy", mavenSource);
             }
-            publishSources.put(
-                "go",
-                new com.auto1.pantera.publishdate.sources.GoProxySource(publishDateClient)
-            );
+            final com.auto1.pantera.publishdate.sources.GoProxySource goSource =
+                new com.auto1.pantera.publishdate.sources.GoProxySource(publishDateClient);
+            publishSources.put("go", goSource);
+            publishSources.put("go-proxy", goSource);
             EcsLogger.info("com.auto1.pantera.publishdate")
                 .message("Publish-date sources configured head_fallback_enabled=" + headFallbackEnabled
                     + " registered=" + String.join(",", publishSources.keySet()))
@@ -496,14 +492,23 @@ public final class VertxMain {
             // stale — for up to the L2 12 h TTL across a restart, because
             // L1 re-hydrates from L2. Drop both layers on every cooldown
             // settings write so the next metadata fetch re-runs the filter
-            // with the new policy.
+            // with the new policy. PUT /api/v1/settings/cooldown only
+            // persists to the DB and never touches the in-memory
+            // CooldownSettings snapshot, so re-run the full DB→memory
+            // reload first — otherwise the cleared cache re-hydrates
+            // against the boot-time policy and the new settings stay
+            // invisible until the next process start.
             this.settingsCache.addListener("cooldown", changedKey -> {
                 EcsLogger.info("com.auto1.pantera.cooldown")
-                    .message("cooldown setting changed; clearing filtered-metadata envelopes (L1+L2) key=" + changedKey)
+                    .message("cooldown setting changed; reloading CooldownSettings from DB + clearing filtered-metadata envelopes (L1+L2) key=" + changedKey)
                     .eventCategory("configuration")
                     .eventAction("cooldown_settings_change")
                     .field("log.source", "application")
                     .log();
+                sharedDs.ifPresent(ds ->
+                    com.auto1.pantera.cooldown.CooldownSupport
+                        .loadDbCooldownSettings(settings.cooldown(), ds)
+                );
                 slices.cooldownMetadataService().clearAll();
                 settings.cacheInvalidationPubSub().ifPresent(bus ->
                     bus.publishAll("cooldown-envelope")
