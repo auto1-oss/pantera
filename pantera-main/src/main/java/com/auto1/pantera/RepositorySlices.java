@@ -498,6 +498,17 @@ public class RepositorySlices {
             .log();
     }
 
+    /**
+     * Shared cooldown metadata filtering service. Exposed so the boot wiring
+     * can flush filter envelopes (L1 and L2) when cooldown settings change.
+     *
+     * @return the live {@link com.auto1.pantera.cooldown.metadata.CooldownMetadataService}
+     *     instance, or a no-op when cooldown is disabled
+     */
+    public com.auto1.pantera.cooldown.metadata.CooldownMetadataService cooldownMetadataService() {
+        return this.cooldownMetadata;
+    }
+
 
     /**
      * Pre-build slices for every configured repository so their shared Jetty

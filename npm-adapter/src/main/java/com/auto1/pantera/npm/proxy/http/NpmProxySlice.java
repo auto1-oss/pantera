@@ -84,7 +84,7 @@ public final class NpmProxySlice implements Slice {
         final PackagePath ppath = new PackagePath(path);
         final AssetPath apath = new AssetPath(path);
         final CooldownInspector inspector =
-            new RegistryBackedInspector("npm", PublishDateRegistries.instance());
+            new RegistryBackedInspector(repoType, PublishDateRegistries.instance());
         this.route = new SliceRoute(
             new RtRulePath(
                 new RtRule.All(

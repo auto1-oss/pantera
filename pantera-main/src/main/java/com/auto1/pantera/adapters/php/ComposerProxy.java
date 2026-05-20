@@ -81,7 +81,7 @@ public final class ComposerProxy implements Slice {
                             cfg.type(),
                             cooldown,
                             new com.auto1.pantera.publishdate.RegistryBackedInspector(
-                                "composer",
+                                cfg.type(),
                                 com.auto1.pantera.publishdate.PublishDateRegistries.instance()
                             ),
                             baseUrl,
@@ -99,7 +99,7 @@ public final class ComposerProxy implements Slice {
                             cfg.type(),
                             cooldown,
                             new com.auto1.pantera.publishdate.RegistryBackedInspector(
-                                "composer",
+                                cfg.type(),
                                 com.auto1.pantera.publishdate.PublishDateRegistries.instance()
                             ),
                             baseUrl,

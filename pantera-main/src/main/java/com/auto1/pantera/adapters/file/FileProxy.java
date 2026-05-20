@@ -63,10 +63,12 @@ public final class FileProxy implements Slice {
                         GenericAuthenticator.create(client, remote.username(), remote.pwd())
                     ),
                     asto.<Cache>map(FromStorageCache::new).orElse(Cache.NOP),
-                    asto.flatMap(ignored -> events),
+                    asto.<Queue<ArtifactEvent>>flatMap(ignored -> events),
                     cfg.name(),
+                    cfg.type(),
                     cooldown,
-                    remote.uri().toString()
+                    remote.uri().toString(),
+                    Optional.<Storage>empty()
                 )
             ).collect(Collectors.toList())
         );

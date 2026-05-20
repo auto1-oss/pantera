@@ -99,7 +99,7 @@ public final class PyProxySlice extends Slice.Wrap {
             rname,
             rtype,
             cooldown,
-            new RegistryBackedInspector("pypi", PublishDateRegistries.instance())
+            new RegistryBackedInspector(rtype, PublishDateRegistries.instance())
         );
     }
 

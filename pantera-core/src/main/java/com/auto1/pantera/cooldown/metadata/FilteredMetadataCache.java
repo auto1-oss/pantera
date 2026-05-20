@@ -462,7 +462,11 @@ public class FilteredMetadataCache implements Cleanable<String> {
     }
 
     /**
-     * Clear all caches.
+     * Clear all caches (L1 and L2). Used on global policy changes such as
+     * cooldown settings updates — without the L2 wipe, peer L1 caches and
+     * the local L1 after restart re-hydrate from stale L2 entries that
+     * predate the policy change. The L2 pattern delete is expensive but
+     * runs at most once per settings update.
      */
     public void clear() {
         if (this.l1Cache != null) {
@@ -472,6 +476,14 @@ public class FilteredMetadataCache implements Cleanable<String> {
         this.l1Hits = 0;
         this.l2Hits = 0;
         this.misses = 0;
+        if (this.l2Connection != null) {
+            this.l2Connection.async().keys("metadata:*")
+                .thenAccept(keys -> {
+                    if (keys != null && !keys.isEmpty()) {
+                        this.l2Connection.async().del(keys.toArray(new String[0]));
+                    }
+                });
+        }
     }
 
     /**

@@ -97,6 +97,10 @@
   ([@aydasraf](https://github.com/aydasraf))
 - **Circuit breaker no longer trips on `401` / `407` / `429`.** The breaker exists to protect upstreams from a thundering herd against a genuinely-broken backend; `401` and `407` are credential problems (operator misconfig, not upstream health), and `429` is the rate limiter's job. Only `5xx` and non-rejection exceptions trip the breaker now; `401` / `407` surface to the caller and are recorded in metrics, but the breaker stays closed and the next request reaches the upstream unimpeded.
   ([@aydasraf](https://github.com/aydasraf))
+- **Cooldown admission inspector keyed against the actual `repo_type`** in every adapter (maven, npm, PyPI, Go, Composer, files). Previously these slices built their `RegistryBackedInspector` with hardcoded literals that didn't match the suffixed `repo_type` that `DbConsumer` writes to `artifact_publish_dates` (e.g. `gradle-proxy`, `maven-proxy`), so the registry lookup missed and the gate fell through to the no-date path even when a date was on file. Each constructor now flows the slice's `repoType` parameter into the inspector.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Filtered-metadata envelope cache wipes L2 on cooldown policy changes.** `FilteredMetadataCache.clear()` now deletes both the in-memory L1 (Caffeine) and the Valkey L2 `metadata:*` keys. A new boot-time listener on the `cooldown` settings prefix invokes `MetadataFilterService.clearAll()` and broadcasts an `invalidateAll` envelope over `CacheInvalidationPubSub` whenever an admin toggles `enabled`, changes `minimum_allowed_age`, edits a repo-type / repo-name override, or updates the SNAPSHOT knob — so the next metadata fetch re-runs the filter against the new policy instead of serving up to 12 h of stale envelope bytes.
+  ([@aydasraf](https://github.com/aydasraf))
 
 ### 🔒 Security
 

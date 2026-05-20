@@ -206,12 +206,37 @@ public final class FileProxySlice implements Slice {
         final CooldownService cooldown, final String upstreamUrl,
         final Optional<Storage> storage
     ) {
+        this(remote, cache, events, rname, "file-proxy", cooldown, upstreamUrl, storage);
+    }
+
+    /**
+     * Full constructor honouring the slice's configured repository type
+     * for cooldown lookups. Other ctors default {@code rtype} to
+     * {@code "file-proxy"} since that is the only repository type
+     * {@code RepositorySlices} routes through this slice.
+     *
+     * @param remote Remote slice
+     * @param cache Cache
+     * @param events Artifact events
+     * @param rname Repository name
+     * @param rtype Repository type (matches {@code cfg.type()})
+     * @param cooldown Cooldown service
+     * @param upstreamUrl Upstream URL for metrics
+     * @param storage Optional storage for cache-first lookup
+     */
+    public FileProxySlice(
+        final Slice remote, final Cache cache,
+        final Optional<Queue<ArtifactEvent>> events, final String rname,
+        final String rtype,
+        final CooldownService cooldown, final String upstreamUrl,
+        final Optional<Storage> storage
+    ) {
         this.remote = remote;
         this.cache = cache;
         this.events = events;
         this.rname = rname;
         this.cooldown = cooldown;
-        this.inspector = new RegistryBackedInspector("file", PublishDateRegistries.instance());
+        this.inspector = new RegistryBackedInspector(rtype, PublishDateRegistries.instance());
         this.upstreamUrl = upstreamUrl;
         this.storage = storage;
     }

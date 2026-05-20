@@ -488,6 +488,27 @@ public final class VertxMain {
                     .log();
                 slices.invalidateBulkheads();
             });
+            // Filtered-metadata envelopes are keyed by (repoType, repoName,
+            // packageName) and have no built-in dependency on the active
+            // cooldown policy. When admins toggle enabled / change
+            // minimum_allowed_age / add a repo override, the cached
+            // envelopes keep serving versions whose block decisions are
+            // stale — for up to the L2 12 h TTL across a restart, because
+            // L1 re-hydrates from L2. Drop both layers on every cooldown
+            // settings write so the next metadata fetch re-runs the filter
+            // with the new policy.
+            this.settingsCache.addListener("cooldown", changedKey -> {
+                EcsLogger.info("com.auto1.pantera.cooldown")
+                    .message("cooldown setting changed; clearing filtered-metadata envelopes (L1+L2) key=" + changedKey)
+                    .eventCategory("configuration")
+                    .eventAction("cooldown_settings_change")
+                    .field("log.source", "application")
+                    .log();
+                slices.cooldownMetadataService().clearAll();
+                settings.cacheInvalidationPubSub().ifPresent(bus ->
+                    bus.publishAll("cooldown-envelope")
+                );
+            });
         }
         // M2 (analysis/plan/v1/PLAN.md): the prefetch subsystem boot wiring
         // is removed. The PrefetchMetrics / PrefetchCircuitBreaker /

@@ -139,7 +139,7 @@ public final class GoProxySlice extends Slice.Wrap {
     ) {
         this(
             remote, cache, events, storage, rname, rtype, cooldown,
-            new RegistryBackedInspector("go", PublishDateRegistries.instance())
+            new RegistryBackedInspector(rtype, PublishDateRegistries.instance())
         );
     }
 

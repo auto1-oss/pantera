@@ -191,7 +191,7 @@ public final class MavenProxySlice extends Slice.Wrap {
         super(
             buildRoute(remote, cache, events, rname, upstreamUrl, rtype,
                 cooldown,
-                new RegistryBackedInspector("maven", PublishDateRegistries.instance()),
+                new RegistryBackedInspector(rtype, PublishDateRegistries.instance()),
                 storage, metadataTtl,
                 cooldownMetadata)
         );
