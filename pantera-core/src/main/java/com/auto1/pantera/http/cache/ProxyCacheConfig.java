@@ -180,14 +180,6 @@ public final class ProxyCacheConfig {
     }
 
     /**
-     * Check if cooldown is enabled for this adapter.
-     * @return True if enabled (default: false)
-     */
-    public boolean cooldownEnabled() {
-        return this.boolValue("cache", "cooldown", "enabled").orElse(false);
-    }
-
-    /**
      * Check if conditional requests (ETag/If-None-Match) are enabled.
      * @return True if enabled (default: true)
      */

@@ -232,18 +232,17 @@ public final class MetadataFilterService implements CooldownMetadataService {
 
             // Step 2: Get release dates from metadata (if available)
             // Prefer the new MetadataParser.extractReleaseDates() SPI; fall back
-            // to the older ReleaseDateProvider interface for backward compat.
+            // to the older ReleaseDateProvider interface for backward compat;
+            // then backfill any still-missing versions from the publish-date
+            // registry. The registry-backfill is what restores the Maven /
+            // Gradle cooldown filter — artifact-level maven-metadata.xml has
+            // no per-version timestamps, so extracted is structurally empty
+            // for those formats and shouldBlockNewArtifact(req, empty) would
+            // otherwise fail-open ("no release date — allowing").
             final Map<String, Instant> extracted = parser.extractReleaseDates(parsed);
-            final Map<String, Instant> releaseDates;
-            if (!extracted.isEmpty()) {
-                releaseDates = extracted;
-            } else if (parser instanceof ReleaseDateProvider) {
-                @SuppressWarnings("unchecked")
-                final ReleaseDateProvider<T> provider = (ReleaseDateProvider<T>) parser;
-                releaseDates = provider.releaseDates(parsed);
-            } else {
-                releaseDates = Collections.emptyMap();
-            }
+            final Map<String, Instant> releaseDates = this.resolveReleaseDates(
+                repoType, packageName, parser, parsed, extracted, allVersions
+            );
 
             // Step 2c: Pre-warm CooldownCache L1 with release dates from metadata.
             // Versions older than the cooldown period are guaranteed allowed (false).
@@ -333,6 +332,134 @@ public final class MetadataFilterService implements CooldownMetadataService {
             final FilterContext<T> context = (FilterContext<T>) ctx;
             return this.evaluateAndFilter(context);
         });
+    }
+
+    /**
+     * Build the effective {@code releaseDates} map for the version-evaluation
+     * loop. Sources are consulted in this order, each filling in dates not
+     * already known by an earlier source:
+     * <ol>
+     *   <li>Inline dates extracted by the parser ({@code extracted}).</li>
+     *   <li>Legacy {@link ReleaseDateProvider} SPI, when the parser implements it.</li>
+     *   <li>{@link com.auto1.pantera.publishdate.PublishDateRegistry} — L1+L2
+     *       lookup for versions still without a date. This is what restores
+     *       Maven/Gradle cooldown semantics; their artifact-level metadata
+     *       carries no per-version timestamps so {@code extracted} is empty.</li>
+     * </ol>
+     * The whole-batch registry phase is gated by a 2-second {@code allOf}
+     * timeout (NOT a per-version wall) so a slow registry can't reintroduce
+     * the 1.7-second-per-version perf bug that {@code dbdde1736} fixed.
+     * Versions whose date is still unknown after all three sources fail-open
+     * (evaluated with {@code Optional.empty()}, allowed).
+     *
+     * @param repoType Repository type
+     * @param packageName Package / artifact name
+     * @param parser Metadata parser (may also implement {@link ReleaseDateProvider})
+     * @param parsed Parsed metadata
+     * @param extracted Inline release dates from the parser
+     * @param allVersions Every version in the parsed metadata
+     * @param <T> Parsed metadata type
+     * @return Effective release-date map for evaluation
+     */
+    private <T> Map<String, Instant> resolveReleaseDates(
+        final String repoType,
+        final String packageName,
+        final MetadataParser<T> parser,
+        final T parsed,
+        final Map<String, Instant> extracted,
+        final List<String> allVersions
+    ) {
+        final java.util.Map<String, java.time.Instant> mutable;
+        if (extracted.isEmpty()) {
+            mutable = new java.util.concurrent.ConcurrentHashMap<>();
+        } else {
+            mutable = new java.util.concurrent.ConcurrentHashMap<>(extracted);
+        }
+        if (extracted.isEmpty() && parser instanceof ReleaseDateProvider) {
+            @SuppressWarnings("unchecked")
+            final ReleaseDateProvider<T> provider = (ReleaseDateProvider<T>) parser;
+            for (final Map.Entry<String, Instant> entry : provider.releaseDates(parsed).entrySet()) {
+                if (entry.getValue() != null) {
+                    mutable.put(entry.getKey(), entry.getValue());
+                }
+            }
+        }
+        this.backfillFromRegistry(repoType, packageName, allVersions, mutable);
+        return java.util.Collections.unmodifiableMap(mutable);
+    }
+
+    /**
+     * Fill {@code mutable} with publish dates resolved through
+     * {@link com.auto1.pantera.publishdate.PublishDateRegistry} for every
+     * version that doesn't already have a date. Bounded by
+     * {@link #maxVersionsToEvaluate} (older versions can't be inside any
+     * realistic cooldown window so a date for them is wasted I/O) and capped
+     * by a 2-second whole-batch {@code allOf} timeout. Lookup uses
+     * {@link com.auto1.pantera.publishdate.PublishDateRegistry.Mode#NETWORK_FALLBACK}
+     * because the registry's L1/L2 caches plus the gradle-proxy → maven-proxy
+     * alias fallback keep steady-state cost negligible; the timeout is the
+     * cold-cache safety net.
+     */
+    private void backfillFromRegistry(
+        final String repoType,
+        final String packageName,
+        final List<String> allVersions,
+        final Map<String, Instant> mutable
+    ) {
+        final com.auto1.pantera.publishdate.PublishDateRegistry registry =
+            com.auto1.pantera.publishdate.PublishDateRegistries.instance();
+        if (registry == null) {
+            return;
+        }
+        final List<String> missing = new ArrayList<>();
+        for (final String version : allVersions) {
+            if (!mutable.containsKey(version)) {
+                missing.add(version);
+            }
+        }
+        if (missing.isEmpty()) {
+            return;
+        }
+        final int cap = Math.min(missing.size(), this.maxVersionsToEvaluate);
+        final List<CompletableFuture<Void>> lookups = new ArrayList<>(cap);
+        for (int idx = 0; idx < cap; idx++) {
+            final String version = missing.get(idx);
+            lookups.add(
+                registry.publishDate(
+                    repoType, packageName, version,
+                    com.auto1.pantera.publishdate.PublishDateRegistry.Mode.NETWORK_FALLBACK
+                )
+                .thenAccept(opt -> opt.ifPresent(instant -> mutable.put(version, instant)))
+                .exceptionally(err -> null)
+            );
+        }
+        try {
+            CompletableFuture.allOf(
+                lookups.toArray(new CompletableFuture[0])
+            ).get(2, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (final java.util.concurrent.TimeoutException ex) {
+            EcsLogger.debug("com.auto1.pantera.cooldown.metadata")
+                .message("Publish-date registry backfill timed out; proceeding with partial dates")
+                .eventCategory("database")
+                .eventAction("metadata_filter")
+                .field("repository.type", repoType)
+                .field("package.name", packageName)
+                .field("log.source", "application")
+                .log();
+        } catch (final InterruptedException ex) {
+            Thread.currentThread().interrupt();
+        } catch (final java.util.concurrent.ExecutionException ex) {
+            // Individual lookups already swallow errors via .exceptionally; this
+            // path is unreachable in practice but kept for completeness.
+            EcsLogger.debug("com.auto1.pantera.cooldown.metadata")
+                .message("Publish-date registry backfill failed: " + ex.getMessage())
+                .eventCategory("database")
+                .eventAction("metadata_filter")
+                .field("repository.type", repoType)
+                .field("package.name", packageName)
+                .field("log.source", "application")
+                .log();
+        }
     }
 
     /**

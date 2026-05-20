@@ -17,6 +17,9 @@ import com.auto1.pantera.cooldown.api.CooldownResult;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.config.CooldownSettings;
 import com.auto1.pantera.cooldown.impl.NoopCooldownService;
+import com.auto1.pantera.publishdate.PublishDateRegistries;
+import com.auto1.pantera.publishdate.PublishDateRegistry;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -51,6 +54,7 @@ final class MetadataFilterServiceTest {
     private CooldownSettings settings;
     private CooldownCache cooldownCache;
     private FilteredMetadataCache metadataCache;
+    private PublishDateRegistry previousRegistry;
 
     @BeforeEach
     void setUp() {
@@ -66,6 +70,17 @@ final class MetadataFilterServiceTest {
             ForkJoinPool.commonPool(),
             50
         );
+        this.previousRegistry = PublishDateRegistries.instance();
+    }
+
+    @AfterEach
+    void tearDown() {
+        // Restore the previous registry so subsequent tests in this class — and
+        // anywhere else in the JVM that shares the static PublishDateRegistries
+        // singleton — see the original instance, not a per-test fake.
+        if (this.previousRegistry != null) {
+            PublishDateRegistries.installDefault(this.previousRegistry);
+        }
     }
 
     @Test
@@ -511,6 +526,57 @@ final class MetadataFilterServiceTest {
         assertThat(MetadataFilterService.isPrerelease(null), is(false));
     }
 
+    @Test
+    void mavenMetadataBlocksVersionsViaPublishDateRegistry() throws Exception {
+        // Regression: MavenMetadataParser.extractReleaseDates returns an empty
+        // map (no per-version timestamps in artifact-level maven-metadata.xml).
+        // Without registry backfill, the cooldown filter receives empty dates
+        // for every version and shouldBlockNewArtifact fail-opens. The
+        // PublishDateRegistries-backed backfill is what makes the Maven /
+        // Gradle filter actually block.
+        final java.time.Instant fresh = java.time.Instant.now()
+            .minus(java.time.Duration.ofDays(2));
+        final java.util.Map<String, java.time.Instant> registryDates = new java.util.HashMap<>();
+        registryDates.put("33.6.0-jre", fresh);
+        PublishDateRegistries.installDefault(new FakePublishDateRegistry(registryDates));
+        final DateAwareCooldownService dateAware = new DateAwareCooldownService(
+            this.settings.minimumAllowedAge()
+        );
+        final MetadataFilterService dateAwareService = new MetadataFilterService(
+            dateAware,
+            this.settings,
+            new CooldownCache(),
+            new FilteredMetadataCache(),
+            ForkJoinPool.commonPool(),
+            50
+        );
+        final java.util.List<String> versions = java.util.Arrays.asList(
+            "33.2.0-jre", "33.3.0-jre", "33.4.0-jre", "33.5.0-jre", "33.6.0-jre"
+        );
+        // Parser deliberately returns an empty inline date map — mirrors the
+        // structural emptiness of MavenMetadataParser.extractReleaseDates.
+        final TestMetadataParser parser = new TestMetadataParser(versions, "33.6.0-jre");
+        final TestMetadataFilter filter = new TestMetadataFilter();
+        final TestMetadataRewriter rewriter = new TestMetadataRewriter();
+        dateAwareService.filterMetadata(
+            "maven", "test-repo", "com.google.guava.guava",
+            "raw".getBytes(StandardCharsets.UTF_8),
+            parser, filter, rewriter
+        ).get();
+        assertThat(
+            "33.6.0-jre must be blocked via registry-resolved date",
+            filter.lastBlockedVersions.contains("33.6.0-jre"), equalTo(true)
+        );
+        assertThat(
+            "Older versions without registry dates must not be blocked",
+            filter.lastBlockedVersions.contains("33.5.0-jre"), equalTo(false)
+        );
+        assertThat(
+            "Older versions without registry dates must not be blocked",
+            filter.lastBlockedVersions.size(), equalTo(1)
+        );
+    }
+
     // Test implementations
 
     /**
@@ -739,6 +805,98 @@ final class MetadataFilterServiceTest {
             final String artifact, final String version
         ) {
             return CompletableFuture.completedFuture(java.util.Collections.emptyList());
+        }
+    }
+
+    /**
+     * Cooldown service that blocks a version iff the {@code knownReleaseDate}
+     * supplied by the caller is newer than {@code now - cooldownDuration}.
+     * Mirrors what JdbcCooldownService.shouldBlockNewArtifact actually does:
+     * the block decision is a function of the date, not a static blocked-set.
+     */
+    private static final class DateAwareCooldownService implements CooldownService {
+
+        private final Duration cooldownDuration;
+
+        DateAwareCooldownService(final Duration cooldownDuration) {
+            this.cooldownDuration = cooldownDuration;
+        }
+
+        @Override
+        public CompletableFuture<CooldownResult> evaluate(
+            final CooldownRequest request, final CooldownInspector inspector
+        ) {
+            return CompletableFuture.completedFuture(CooldownResult.allowed());
+        }
+
+        @Override
+        public CompletableFuture<CooldownResult> evaluateWithKnownDate(
+            final CooldownRequest request, final Optional<Instant> knownReleaseDate
+        ) {
+            if (knownReleaseDate.isEmpty()) {
+                return CompletableFuture.completedFuture(CooldownResult.allowed());
+            }
+            final Instant cutoff = Instant.now().minus(this.cooldownDuration);
+            if (knownReleaseDate.get().isAfter(cutoff)) {
+                return CompletableFuture.completedFuture(
+                    CooldownResult.blocked(new com.auto1.pantera.cooldown.api.CooldownBlock(
+                        request.repoType(),
+                        request.repoName(),
+                        request.artifact(),
+                        request.version(),
+                        com.auto1.pantera.cooldown.api.CooldownReason.FRESH_RELEASE,
+                        Instant.now(),
+                        knownReleaseDate.get().plus(this.cooldownDuration),
+                        java.util.Collections.emptyList()
+                    ))
+                );
+            }
+            return CompletableFuture.completedFuture(CooldownResult.allowed());
+        }
+
+        @Override
+        public CompletableFuture<Void> unblock(
+            final String repoType, final String repoName, final String artifact,
+            final String version, final String actor
+        ) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletableFuture<Void> unblockAll(
+            final String repoType, final String repoName, final String actor
+        ) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletableFuture<java.util.List<com.auto1.pantera.cooldown.api.CooldownBlock>> activeBlocks(
+            final String repoType, final String repoName
+        ) {
+            return CompletableFuture.completedFuture(java.util.Collections.emptyList());
+        }
+    }
+
+    /**
+     * Fake PublishDateRegistry that returns canned dates from a map. Stands in
+     * for {@code DbPublishDateRegistry} during unit tests so the filter
+     * exercises the backfill path without a real database.
+     */
+    private static final class FakePublishDateRegistry implements PublishDateRegistry {
+
+        private final Map<String, Instant> dates;
+
+        FakePublishDateRegistry(final Map<String, Instant> dates) {
+            this.dates = new java.util.HashMap<>(dates);
+        }
+
+        @Override
+        public CompletableFuture<Optional<Instant>> publishDate(
+            final String repoType, final String name, final String version
+        ) {
+            return CompletableFuture.completedFuture(
+                Optional.ofNullable(this.dates.get(version))
+            );
         }
     }
 }

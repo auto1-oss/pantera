@@ -733,8 +733,7 @@ public abstract class BaseCachedProxySlice implements Slice {
         final String path,
         final CachedArtifactMetadataStore store
     ) {
-        if (this.config.cooldownEnabled()
-            && this.cooldownService != null
+        if (this.cooldownService != null
             && this.cooldownInspector != null) {
             final Optional<CooldownRequest> request =
                 this.buildCooldownRequest(path, headers);
@@ -779,8 +778,7 @@ public abstract class BaseCachedProxySlice implements Slice {
         final String path,
         final Supplier<CompletableFuture<Response>> onAllow
     ) {
-        if (this.config.cooldownEnabled()
-            && this.cooldownService != null
+        if (this.cooldownService != null
             && this.cooldownInspector != null) {
             final Optional<CooldownRequest> request =
                 this.buildCooldownRequest(path, headers);
