@@ -669,6 +669,60 @@ final class MetadataFilterServiceTest {
         );
     }
 
+    @Test
+    void registryBackfillTargetsNewestVersionsBeyondCap() throws Exception {
+        // Regression: pre-fix, backfill iterated allVersions in document order
+        // and capped at maxVersionsToEvaluate. For Maven, document order is
+        // ASCENDING, so the cap selected the OLDEST 50 versions to query the
+        // publish-date registry; the newest versions — the only ones plausibly
+        // inside the cooldown window — never got a date and silently passed
+        // through. Fixture: 100 ascending versions, only the LAST one ("9.9.9")
+        // has a recent date in the registry. With cap = 50 and ascending
+        // document order, a naive backfill queries versions [0..49] and never
+        // reaches index 99. The fix sorts {@code missing} newest-first by
+        // semver comparator before truncating, so the cap selects the top 50
+        // and 9.9.9 lands at index 0.
+        final java.util.List<String> versions = new java.util.ArrayList<>();
+        for (int i = 0; i < 99; i++) {
+            versions.add("1.0." + i);
+        }
+        versions.add("9.9.9");
+        final java.time.Instant fresh = java.time.Instant.now()
+            .minus(java.time.Duration.ofDays(2));
+        final java.util.Map<String, java.time.Instant> registryDates = new java.util.HashMap<>();
+        registryDates.put("9.9.9", fresh);
+        PublishDateRegistries.installDefault(new FakePublishDateRegistry(registryDates));
+        final DateAwareCooldownService dateAware = new DateAwareCooldownService(
+            this.settings.minimumAllowedAge()
+        );
+        final MetadataFilterService capService = new MetadataFilterService(
+            dateAware,
+            this.settings,
+            new CooldownCache(),
+            new FilteredMetadataCache(),
+            ForkJoinPool.commonPool(),
+            50
+        );
+        final TestMetadataParser parser = new TestMetadataParser(versions, "9.9.9");
+        final TestMetadataFilter filter = new TestMetadataFilter();
+        final TestMetadataRewriter rewriter = new TestMetadataRewriter();
+        capService.filterMetadata(
+            "maven", "test-repo", "com.example.lib",
+            "raw".getBytes(StandardCharsets.UTF_8),
+            parser, filter, rewriter
+        ).get();
+        assertThat(
+            "9.9.9 sits at index 99 (beyond cap=50); newest-first sort must "
+                + "still pick it up for the registry backfill and the resulting "
+                + "fresh date must trigger a cooldown block",
+            filter.lastBlockedVersions.contains("9.9.9"), equalTo(true)
+        );
+        assertThat(
+            "Only the one version with a registry-resolved date should block",
+            filter.lastBlockedVersions.size(), equalTo(1)
+        );
+    }
+
     // Test implementations
 
     /**

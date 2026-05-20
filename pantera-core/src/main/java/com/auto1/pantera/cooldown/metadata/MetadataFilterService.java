@@ -432,6 +432,19 @@ public final class MetadataFilterService implements CooldownMetadataService {
         if (missing.isEmpty()) {
             return;
         }
+        // Sort newest-first by version comparator before truncating to the
+        // top-N. The {@code allVersions} list reflects document order, which
+        // for Maven's maven-metadata.xml is ASCENDING (oldest first). Without
+        // this reversal the cap fetches dates for the OLDEST 50 versions —
+        // the opposite of what cooldown needs, since the newest releases are
+        // the only ones plausibly inside the cooldown window. Comparator is
+        // keyed by repo type; unknown types fall back to semver ordering.
+        final Comparator<String> versionCmp = this.versionComparators
+            .getOrDefault(
+                repoType.toLowerCase(Locale.ROOT),
+                VersionComparators.semver()
+            );
+        missing.sort(versionCmp.reversed());
         final int cap = Math.min(missing.size(), this.maxVersionsToEvaluate);
         final List<CompletableFuture<Void>> lookups = new ArrayList<>(cap);
         for (int idx = 0; idx < cap; idx++) {
