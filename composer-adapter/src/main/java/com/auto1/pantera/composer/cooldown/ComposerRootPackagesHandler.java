@@ -12,7 +12,6 @@ package com.auto1.pantera.composer.cooldown;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Remaining;
-import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.metadata.MetadataParseException;
@@ -36,6 +35,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
@@ -105,11 +105,6 @@ public final class ComposerRootPackagesHandler {
     private final CooldownService cooldown;
 
     /**
-     * Cooldown inspector.
-     */
-    private final CooldownInspector inspector;
-
-    /**
      * Repository type.
      */
     private final String repoType;
@@ -134,20 +129,17 @@ public final class ComposerRootPackagesHandler {
      *
      * @param upstream Upstream Composer proxy slice
      * @param cooldown Cooldown evaluation service
-     * @param inspector Cooldown inspector
      * @param repoType Repository type (e.g. {@code "php"})
      * @param repoName Repository name
      */
     public ComposerRootPackagesHandler(
         final Slice upstream,
         final CooldownService cooldown,
-        final CooldownInspector inspector,
         final String repoType,
         final String repoName
     ) {
         this.upstream = upstream;
         this.cooldown = cooldown;
-        this.inspector = inspector;
         this.repoType = repoType;
         this.repoName = repoName;
         this.detector = new ComposerRootPackagesRequestDetector();
@@ -319,7 +311,7 @@ public final class ComposerRootPackagesHandler {
         final List<CompletableFuture<Boolean>> futures =
             new ArrayList<>(candidates.size());
         for (final ComposerRootPackagesFilter.PackageVersion pv : candidates) {
-            futures.add(this.isBlocked(pv.pkg(), pv.version(), user));
+            futures.add(this.isBlocked(pv.pkg(), pv.version(), pv.releaseDate(), user));
         }
         return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
             .thenApply(ignored -> {
@@ -338,7 +330,8 @@ public final class ComposerRootPackagesHandler {
     }
 
     private CompletableFuture<Boolean> isBlocked(
-        final String pkg, final String version, final String user
+        final String pkg, final String version,
+        final Optional<Instant> releaseDate, final String user
     ) {
         final CooldownRequest req = new CooldownRequest(
             this.repoType,
@@ -348,7 +341,7 @@ public final class ComposerRootPackagesHandler {
             user == null ? "composer-root" : user,
             Instant.now()
         );
-        return this.cooldown.evaluate(req, this.inspector)
+        return this.cooldown.evaluateWithKnownDate(req, releaseDate)
             .thenApply(result -> result.blocked())
             .exceptionally(err -> {
                 EcsLogger.warn("com.auto1.pantera.composer")

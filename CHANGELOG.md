@@ -2,6 +2,137 @@
 
 ## Version 2.2.0
 
+- **PyPI uv compatibility — PEP 691 content negotiation, neg-cache key
+  disambiguation, hosted-PEP 658 HEAD support.** The first wave of pypi
+  cooldown fixes (RCA-pypi-A / B above) made cooldown blocks work for
+  `pip install`, but the user's `uv` test suite then surfaced three
+  follow-ups, all rooted in code paths the earlier fix had touched or
+  put under load.
+
+  **uv regression — JSON Accept returned `Content-Type: text/html`.**
+  `PypiSimpleHandler.processUpstream` always serialised via the HTML
+  rewriter after RCA-pypi-A, so a uv client sending
+  `Accept: application/vnd.pypi.simple.v1+json` got HTML bytes under
+  the wrong content type and fell back to "no upload-time" mode (which
+  in turn silently disables `exclude-newer`). Fix: the handler now
+  honours the client's Accept — it still fetches PEP 691 JSON upstream
+  (the only shape that carries `upload-time`), then serialises back in
+  the format the caller asked for. JSON output filters blocked entries
+  in-place via Jackson, preserving upstream `meta` / `name` / `versions`
+  fields verbatim. Verbatim pass-through kicks in when the upstream
+  shape already matches the client's — no extra parse on the happy
+  path. `ProxySlice` was updated to thread `SimpleApiFormat.fromHeaders`
+  into the handler so JSON cache keys stay separate from HTML.
+
+  Files: `pypi-adapter/.../cooldown/PypiSimpleHandler.java`
+  (new `handle(line, clientWantsJson, user)` signature; new
+  `allowedResponse` / `serialize` / `filterJson` / `emptyResponse`
+  helpers), `pypi-adapter/.../http/ProxySlice.java` (`fromHeaders`
+  + threading), `pypi-adapter/.../cooldown/PypiSimpleHandlerTest.java`
+  (signature update).
+
+  **Negative-cache key collision — index 404 poisoned every `.whl`
+  for the same package.** `NegativeCacheKey.PYPI_FILE` matched the
+  upstream `/packages/<hash>/<file>` layout only; the Pantera-hosted
+  `/simple/<pkg>/<version>/<file>` layout that the hosted `SliceIndex`
+  emits as relative hrefs fell through to the empty-version fallback,
+  so `/simple/hello/` (index path, name="hello", version="") and
+  `/simple/hello/0.2.0/hello-0.2.0-py3-none-any.whl` (file path,
+  name="hello", version="") collapsed to the same key
+  `hello:`. A 404 on the index — or on a *different* version's `.whl` —
+  poisoned the cache for every hello variant for the dedup TTL. Fix:
+  widen the regex prefix from `(?:packages/(?:[a-f0-9/]+)?)?` to
+  `(?:.*/)?` so both layouts now resolve to their own
+  `(name, version)` tuple. Hosted-only test packages, JFrog-style
+  paths, and any future PEP 740-attestation files share the broadened
+  prefix matcher.
+
+  File: `pantera-core/.../http/cache/NegativeCacheKey.java`.
+
+  **Hosted `PySlice` returned 404 on HEAD.** `uv lock` probes every
+  `.whl` with HEAD before deciding to stream (Range-request capability
+  check, size pre-flight). `PySlice` only registered GET / POST /
+  DELETE routes — HEAD requests fell through to the
+  `RtRule.FALLBACK` `notFound()` SliceSimple, so uv aborted with
+  `Failed to fetch: <whl> 404 Not Found` even though the file
+  existed on disk. Fix: add HEAD routes mirroring the file + index
+  GET routes, backed by `HeadAsGetSlice` — a small adapter that
+  rewrites HEAD → GET against the wrapped slice and drains the body
+  before returning (RFC 9110 §9.3.2). The single GET handler stays
+  the source of truth for "does this file exist and what are its
+  headers"; HEAD callers get Content-Length and Content-Type without
+  the bytes.
+
+  File: `pypi-adapter/.../http/PySlice.java`.
+
+  Verification: `pantera-main/docker-compose/pantera/artifacts/python-uv/test.sh`
+  now passes 7/7 (`test_hosted_json_index_structure`,
+  `test_proxied_json_index_structure`,
+  `test_proxied_json_has_upload_time`,
+  `test_exclude_newer_pins_proxied_package_version`,
+  `test_exclude_newer_rejects_future_proxied_version`,
+  `test_exclude_newer_rejects_recent_hosted_package`,
+  `test_exclude_newer_accepts_hosted_with_future_cutoff`).
+
+- **PyPI cooldown silently let fresh versions through; two RCAs fixed.**
+  User reproduced `pip install requests openai mcp claude cocode` and
+  got `openai-2.38.0` (1 day old), `mcp-1.27.1` (14 d), `requests-2.34.2`
+  (8 d) — every one inside the configured 30-day minimum. Trace through
+  real container logs showed **zero `simple_filter` events** for these
+  packages even though `artifact_publish_dates` already had the rows
+  populated by the cache-write pipeline.
+
+  **RCA-pypi-A — PyPI's `/simple/<pkg>/` HTML omits
+  `data-upload-time`.** `PypiMetadataParser` extracted release dates
+  exclusively from the PEP 700 `data-upload-time` attribute, but
+  pypi.org doesn't emit it on the HTML variant (verified directly: 0/722
+  links carry it for `openai`). `PypiMetadataParser.extractReleaseDates`
+  returned an empty map → `evaluateWithKnownDate(req, Optional.empty())`
+  for every version → fail-open. The PEP 691 JSON variant of the same
+  endpoint *does* carry `upload-time` on every file (722/722 for
+  `openai`).
+
+  Fix: `PypiSimpleHandler.handle` now sends
+  `Accept: application/vnd.pypi.simple.v1+json` to its upstream — the
+  proxy's existing `SimpleApiFormat` negotiation routes that into a
+  separate JSON cache key, `ProxySlice` rewrites each file's `url` to
+  the local `/pypi_proxy/packages/...` path before caching (existing
+  `JSON_PACKAGES` regex), and `PypiMetadataParser` now detects
+  JSON-vs-HTML by first non-whitespace byte and parses either shape
+  into the same `PypiSimpleIndex`. `processUpstream` was also updated
+  to always serialise via the rewriter (HTML) — the
+  "serve-upstream-bytes-verbatim" fast paths would have handed JSON
+  bytes to pip under `Content-Type: text/html` and broken it.
+
+  Files: `pypi-adapter/.../cooldown/PypiMetadataParser.java`
+  (`parse` dispatches by content shape; new `parseJson` builds links
+  from PEP 691 files, including `core-metadata` and `requires-python`),
+  `pypi-adapter/.../cooldown/PypiSimpleHandler.java` (Accept header on
+  upstream call; always-rewrite contract; `rewriteOrFallback` /
+  `emptyHtmlResponse` helpers).
+
+  **RCA-pypi-B — `evaluateWithKnownDate(Optional.empty())` silently
+  allowed.** `JdbcCooldownService.shouldBlockNewArtifact` line 984
+  treated empty inline release date as "no date → allow". But the
+  cache-write pipeline had already written `artifact_publish_dates`
+  rows for every cached version — the DB had the answer; the cooldown
+  service just didn't look. Any handler that hands
+  `evaluateWithKnownDate` an empty `Optional` (including any future
+  ecosystem the JSON shortcut doesn't cover) hits this fail-open.
+
+  Fix: before the silent-allow branch, look up
+  `PublishDateRegistries.instance().publishDate(repoType, name,
+  version, Mode.CACHE_ONLY)`. `CACHE_ONLY` skips the upstream HEAD
+  fallback to keep the metadata-filter zero-extra-RTT contract from
+  Track 5. If the registry has a date (DB hit), recurse with that date
+  and run the normal freshness check. If truly unknown, fall through
+  to the existing allow. Exceptions on the lookup degrade to
+  `Optional.empty()` (existing fail-open behaviour preserved on
+  registry hiccup).
+
+  File: `pantera-main/.../cooldown/JdbcCooldownService.java`
+  (`shouldBlockNewArtifact` empty-release branch).
+
 ### ⚠️ Breaking changes
 
 - **Sequential-only group resolution.** Members are tried in declared order; the first 2xx response wins, and remaining members are consulted only on 404. Parallel fanout has been removed — sequential is now the **only** mode (Nexus / JFrog style). The legacy `members_strategy` YAML key is silently ignored regardless of value (a one-time WARN per group is emitted at boot, naming the deprecated key, then the key is dropped from the effective config). Order `members:` lists with the most-likely-to-have-the-artifact entry first (typically hosted before proxy).

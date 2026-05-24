@@ -10,10 +10,14 @@
  */
 package com.auto1.pantera.pypi.http;
 
+import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.http.auth.BasicAuthzSlice;
 import com.auto1.pantera.http.auth.CombinedAuthzSliceWrap;
@@ -35,6 +39,7 @@ import com.auto1.pantera.security.policy.Policy;
 
 import java.util.Optional;
 import java.util.Queue;
+import java.util.concurrent.CompletableFuture;
 import java.util.regex.Pattern;
 
 /**
@@ -184,12 +189,88 @@ public final class PySlice extends Slice.Wrap {
                         )
                     )
                 ),
+                // HEAD support for hosted artifacts + index pages. uv (and other
+                // resolvers) probe `.whl` URLs with HEAD before deciding to
+                // stream — without these routes the request fell through to
+                // the FALLBACK and returned 404 even though the file existed.
+                // Both HEAD routes delegate to the same handlers as their GET
+                // counterparts via {@link HeadAsGetSlice}, which drains the
+                // body and returns the response headers.
+                new RtRulePath(
+                    new RtRule.All(
+                        MethodRule.HEAD,
+                        new RtRule.ByPath(
+                            ".*\\.(whl|tar\\.gz|zip|tar\\.bz2|tar\\.Z|tar|egg)"
+                        )
+                    ),
+                    PySlice.createAuthSlice(
+                        new HeadAsGetSlice(
+                            new SliceWithHeaders(
+                                new StorageArtifactSlice(storage),
+                                Headers.from(ContentType.mime("application/octet-stream"))
+                            )
+                        ),
+                        basicAuth,
+                        tokenAuth,
+                        new OperationControl(
+                            policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                        )
+                    )
+                ),
+                new RtRulePath(
+                    new RtRule.All(
+                        MethodRule.HEAD,
+                        new RtRule.ByPath("(^\\/)|(.*(\\/[a-z0-9\\-]+?\\/?$))")
+                    ),
+                    new BasicAuthzSlice(
+                        new HeadAsGetSlice(new SliceIndex(storage)),
+                        basicAuth,
+                        new OperationControl(
+                            policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                        )
+                    )
+                ),
                 new RtRulePath(
                     RtRule.FALLBACK,
                     new SliceSimple(ResponseBuilder.notFound().build())
                 )
             )
         );
+    }
+
+    /**
+     * Adapter that turns a HEAD request into a GET against the wrapped
+     * slice, then drops the body before returning. RFC 9110 §9.3.2 lets
+     * a server respond to HEAD by computing the GET response and omitting
+     * the body — this is the minimum-effort implementation: the underlying
+     * GET path stays the single source of truth for "does this file exist
+     * and what are its headers".
+     *
+     * <p>The drained body is discarded; status and headers are forwarded
+     * to the caller. The Content-Length header (if present in the GET
+     * response) lets HEAD callers size-check without downloading.</p>
+     */
+    private static final class HeadAsGetSlice implements Slice {
+
+        private final Slice origin;
+
+        HeadAsGetSlice(final Slice origin) {
+            this.origin = origin;
+        }
+
+        @Override
+        public CompletableFuture<Response> response(
+            final RequestLine line, final Headers headers, final Content body
+        ) {
+            final RequestLine asGet = new RequestLine(
+                RqMethod.GET, line.uri(), line.version()
+            );
+            return this.origin.response(asGet, headers, body).thenCompose(resp ->
+                resp.body().asBytesFuture().thenApply(ignored ->
+                    new Response(resp.status(), resp.headers(), Content.EMPTY)
+                )
+            );
+        }
     }
 
     /**

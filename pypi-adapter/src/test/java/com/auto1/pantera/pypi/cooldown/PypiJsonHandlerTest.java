@@ -12,7 +12,6 @@ package com.auto1.pantera.pypi.cooldown;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.cooldown.api.CooldownBlock;
-import com.auto1.pantera.cooldown.api.CooldownDependency;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownReason;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
@@ -63,8 +62,7 @@ final class PypiJsonHandlerTest {
         this.upstream = new ScriptedSlice();
         this.cooldown = new ScriptedCooldown();
         this.handler = new PypiJsonHandler(
-            this.upstream, this.cooldown, new NullInspector(),
-            "pypi-proxy", "pypi-test"
+            this.upstream, this.cooldown, "pypi-proxy", "pypi-test"
         );
     }
 
@@ -261,6 +259,17 @@ final class PypiJsonHandlerTest {
         public CompletableFuture<CooldownResult> evaluate(
             final CooldownRequest request, final CooldownInspector inspector
         ) {
+            return this.decide(request);
+        }
+
+        @Override
+        public CompletableFuture<CooldownResult> evaluateWithKnownDate(
+            final CooldownRequest request, final Optional<Instant> knownReleaseDate
+        ) {
+            return this.decide(request);
+        }
+
+        private CompletableFuture<CooldownResult> decide(final CooldownRequest request) {
             this.lastArtifact = request.artifact();
             if (!this.blocked.contains(request.version())) {
                 return CompletableFuture.completedFuture(CooldownResult.allowed());
@@ -301,20 +310,4 @@ final class PypiJsonHandlerTest {
         }
     }
 
-    /** Inspector stub — returns no data. */
-    private static final class NullInspector implements CooldownInspector {
-        @Override
-        public CompletableFuture<Optional<Instant>> releaseDate(
-            final String artifact, final String version
-        ) {
-            return CompletableFuture.completedFuture(Optional.empty());
-        }
-
-        @Override
-        public CompletableFuture<List<CooldownDependency>> dependencies(
-            final String artifact, final String version
-        ) {
-            return CompletableFuture.completedFuture(List.of());
-        }
-    }
 }

@@ -284,11 +284,17 @@ final class ProxySlice implements Slice {
         final Slice simpleUpstream = (simpleLine, simpleHeaders, simpleBody) ->
             this.serveNonArtifact(simpleLine, simpleHeaders, simpleBody,
                 new Login(simpleHeaders).getValue());
+        // Handlers use evaluateWithKnownDate with the per-link
+        // data-upload-time / releases[ver][].upload_time_iso_8601
+        // extracted by their parsers — no inspector is threaded in.
+        // Same packument-inline shortcut npm and composer take. Stops
+        // the silent fail-open we hit when no PublishDateSource is
+        // registered for pypi in DbPublishDateRegistry.
         this.simpleHandler = new PypiSimpleHandler(
-            simpleUpstream, cooldown, inspector, rtype, rname
+            simpleUpstream, cooldown, rtype, rname
         );
         this.jsonHandler = new PypiJsonHandler(
-            jsonApiUpstream, cooldown, inspector, rtype, rname
+            jsonApiUpstream, cooldown, rtype, rname
         );
     }
 
@@ -316,15 +322,18 @@ final class ProxySlice implements Slice {
             return this.jsonHandler.handle(line, user);
         }
         if (coords.isEmpty() && this.simpleHandler.matches(path)) {
+            final boolean clientWantsJson =
+                SimpleApiFormat.fromHeaders(rqheaders) == SimpleApiFormat.JSON;
             EcsLogger.debug("com.auto1.pantera.pypi")
                 .message("Dispatching /simple/<pkg>/ to cooldown Simple handler")
                 .eventCategory("web")
                 .eventAction("proxy_request")
                 .field("url.path", path)
                 .field("repository.name", this.rname)
+                .field("simple.format", clientWantsJson ? "json" : "html")
                 .field("log.source", "application")
                 .log();
-            return this.simpleHandler.handle(line, user);
+            return this.simpleHandler.handle(line, clientWantsJson, user);
         }
 
         // For artifacts: CRITICAL FIX - Check cache FIRST before any network calls

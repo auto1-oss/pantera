@@ -12,7 +12,6 @@ package com.auto1.pantera.composer.cooldown;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.cooldown.api.CooldownBlock;
-import com.auto1.pantera.cooldown.api.CooldownDependency;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownReason;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
@@ -69,8 +68,7 @@ final class ComposerPackageMetadataHandlerTest {
         this.upstream = new ScriptedSlice();
         this.cooldown = new ScriptedCooldown();
         this.handler = new ComposerPackageMetadataHandler(
-            this.upstream, this.cooldown, new NullInspector(),
-            "php", "composer-test"
+            this.upstream, this.cooldown, "php", "composer-test"
         );
     }
 
@@ -261,6 +259,43 @@ final class ComposerPackageMetadataHandlerTest {
     }
 
     @Test
+    void releaseDateFromPackumentIsForwardedToCooldown() throws Exception {
+        final String body = """
+            {
+              "packages": {
+                "acme/foo": {
+                  "1.0.0": {"version": "1.0.0", "time": "2024-01-01T00:00:00+00:00"},
+                  "2.0.0": {"version": "2.0.0", "time": "2025-06-15T12:30:00+00:00"}
+                }
+              }
+            }
+            """;
+        this.upstream.put("/p2/acme/foo.json", body);
+        this.handler.handle(
+            new RequestLine(RqMethod.GET, "/p2/acme/foo.json"),
+            "alice"
+        ).get();
+        assertThat(
+            "evaluateWithKnownDate must be invoked per version",
+            this.cooldown.knownDateCalls(),
+            equalTo(2)
+        );
+        assertThat(
+            "evaluate (inspector path) must not be invoked",
+            this.cooldown.evaluateCalls(),
+            equalTo(0)
+        );
+        assertThat(
+            this.cooldown.knownDateFor("1.0.0"),
+            equalTo(Optional.of(Instant.parse("2024-01-01T00:00:00Z")))
+        );
+        assertThat(
+            this.cooldown.knownDateFor("2.0.0"),
+            equalTo(Optional.of(Instant.parse("2025-06-15T12:30:00Z")))
+        );
+    }
+
+    @Test
     void nestedPathsAreRejected() {
         assertThat(
             this.handler.matches("/packages/vendor/package/extra.json"),
@@ -351,6 +386,9 @@ final class ComposerPackageMetadataHandlerTest {
     /** Scripted cooldown service: flags listed versions as blocked. */
     private static final class ScriptedCooldown implements CooldownService {
         private final Set<String> blocked = new HashSet<>();
+        private final Map<String, Optional<Instant>> knownDates = new HashMap<>();
+        private int evaluateCalls;
+        private int knownDateCalls;
 
         void block(final String... versions) {
             for (final String v : versions) {
@@ -358,10 +396,36 @@ final class ComposerPackageMetadataHandlerTest {
             }
         }
 
+        int evaluateCalls() {
+            return this.evaluateCalls;
+        }
+
+        int knownDateCalls() {
+            return this.knownDateCalls;
+        }
+
+        Optional<Instant> knownDateFor(final String version) {
+            return this.knownDates.getOrDefault(version, Optional.empty());
+        }
+
         @Override
         public CompletableFuture<CooldownResult> evaluate(
             final CooldownRequest request, final CooldownInspector inspector
         ) {
+            this.evaluateCalls++;
+            return this.decide(request);
+        }
+
+        @Override
+        public CompletableFuture<CooldownResult> evaluateWithKnownDate(
+            final CooldownRequest request, final Optional<Instant> knownReleaseDate
+        ) {
+            this.knownDateCalls++;
+            this.knownDates.put(request.version(), knownReleaseDate);
+            return this.decide(request);
+        }
+
+        private CompletableFuture<CooldownResult> decide(final CooldownRequest request) {
             if (!this.blocked.contains(request.version())) {
                 return CompletableFuture.completedFuture(CooldownResult.allowed());
             }
@@ -401,19 +465,4 @@ final class ComposerPackageMetadataHandlerTest {
         }
     }
 
-    private static final class NullInspector implements CooldownInspector {
-        @Override
-        public CompletableFuture<Optional<Instant>> releaseDate(
-            final String artifact, final String version
-        ) {
-            return CompletableFuture.completedFuture(Optional.empty());
-        }
-
-        @Override
-        public CompletableFuture<List<CooldownDependency>> dependencies(
-            final String artifact, final String version
-        ) {
-            return CompletableFuture.completedFuture(List.of());
-        }
-    }
 }

@@ -24,6 +24,8 @@ import com.auto1.pantera.cooldown.metadata.FilteredMetadataCache;
 import com.auto1.pantera.cooldown.metrics.CooldownMetrics;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.resilience.SingleFlight;
+import com.auto1.pantera.publishdate.PublishDateRegistries;
+import com.auto1.pantera.publishdate.PublishDateRegistry;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -979,23 +981,45 @@ final class JdbcCooldownService implements CooldownService {
         final CooldownRequest request,
         final Optional<Instant> release
     ) {
-        final Instant now = request.requestedAt();
-        
         if (release.isEmpty()) {
-            EcsLogger.debug("com.auto1.pantera.cooldown")
-                .message("No release date found - allowing")
-                .eventCategory("database")
-                .eventAction("allowed")
-                .eventOutcome("success")
-                .field("repository.type", request.repoType())
-                .field("repository.name", request.repoName())
-                .field("package.name", request.artifact())
-                .field("package.version", request.version())
-                .field("log.source", "application")
-                .log();
-            this.cache.put(request.repoName(), request.artifact(), request.version(), false);
-            return CompletableFuture.completedFuture(false);
+            // RCA-pypi-B (v2.2.0): when the caller couldn't supply an inline
+            // release date — e.g. PypiSimpleHandler when upstream's PEP 503
+            // HTML omits data-upload-time, or any future adapter handing us
+            // Optional.empty() — consult the canonical artifact_publish_dates
+            // row before silently allowing. The row is already populated by
+            // the cache-write event pipeline (see PublishDateExtractors), so
+            // this is a pure-local lookup. CACHE_ONLY mode prevents a
+            // fallback upstream HEAD even if the registry has a network
+            // source registered for this repo type — keeps the contract that
+            // metadata-filter is zero-extra-RTT.
+            return PublishDateRegistries.instance()
+                .publishDate(
+                    request.repoType(),
+                    request.artifact(),
+                    request.version(),
+                    PublishDateRegistry.Mode.CACHE_ONLY
+                )
+                .exceptionally(ex -> Optional.empty())
+                .thenCompose(dbDate -> {
+                    if (dbDate.isPresent()) {
+                        return this.shouldBlockNewArtifact(request, dbDate);
+                    }
+                    EcsLogger.debug("com.auto1.pantera.cooldown")
+                        .message("No release date found - allowing")
+                        .eventCategory("database")
+                        .eventAction("allowed")
+                        .eventOutcome("success")
+                        .field("repository.type", request.repoType())
+                        .field("repository.name", request.repoName())
+                        .field("package.name", request.artifact())
+                        .field("package.version", request.version())
+                        .field("log.source", "application")
+                        .log();
+                    this.cache.put(request.repoName(), request.artifact(), request.version(), false);
+                    return CompletableFuture.completedFuture(false);
+                });
         }
+        final Instant now = request.requestedAt();
 
         // Use per-repo-name duration if configured, otherwise per-type, otherwise global
         final Duration fresh = this.effectiveDuration(request);

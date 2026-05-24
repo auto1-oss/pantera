@@ -129,12 +129,29 @@ Precedence (highest first): per-repo-name SNAPSHOT → per-repo-name (non-SNAPSH
 
 ### PyPI
 
-- **Simple index (`/simple/{pkg}/`):** Parses HTML; removes `<a>` tags for blocked versions.
+- **Simple index (`/simple/{pkg}/`):** Always fetches PEP 691 JSON
+  (`application/vnd.pypi.simple.v1+json`) from upstream — that's the only
+  shape that carries `upload-time` (PEP 700) per file, which the cooldown
+  filter needs to evaluate freshness. The handler then honours the
+  client's `Accept` header: a uv client sending JSON gets JSON back
+  (Jackson-filtered in place, preserving upstream `meta` / `name` /
+  `versions`); a pip client gets PEP 503 HTML rebuilt from the same
+  parsed index. When upstream omits `upload-time` (some private mirrors,
+  or PyPI itself on the HTML route), the cooldown service falls back
+  to `PublishDateRegistries` (`CACHE_ONLY`) so the canonical
+  `artifact_publish_dates` row populated by the cache-write pipeline
+  drives the decision.
 - **JSON API (`/pypi/{pkg}/json`):** Filters `releases` by version; rewrites
   `info.version` and the top-level `urls` array to reflect the highest
   non-blocked version using PEP 440 ordering.
 - Both endpoints are covered because package managers and browsers resolve
   unbounded `pip install foo` through different paths.
+- **HEAD support:** Hosted PySlice handles `HEAD` on both the file path
+  (`.whl` / `.tar.gz` / `.zip` / …) and the index path. `uv lock` probes
+  every artifact URL with HEAD before deciding to stream — without the
+  HEAD route the request fell through to the 404 fallback and uv
+  aborted with "Failed to fetch". The HEAD handler reuses the GET path
+  (RFC 9110 §9.3.2) and drains the body before returning.
 
 ### Docker
 

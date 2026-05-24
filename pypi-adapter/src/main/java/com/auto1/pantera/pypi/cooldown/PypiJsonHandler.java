@@ -12,7 +12,6 @@ package com.auto1.pantera.pypi.cooldown;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Remaining;
-import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.Headers;
@@ -30,10 +29,15 @@ import java.io.ByteArrayOutputStream;
 import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
@@ -89,11 +93,6 @@ public final class PypiJsonHandler {
     private final CooldownService cooldown;
 
     /**
-     * Cooldown inspector.
-     */
-    private final CooldownInspector inspector;
-
-    /**
      * Repository type.
      */
     private final String repoType;
@@ -123,20 +122,17 @@ public final class PypiJsonHandler {
      *
      * @param upstream Upstream PyPI proxy slice
      * @param cooldown Cooldown evaluation service
-     * @param inspector Cooldown inspector
      * @param repoType Repository type
      * @param repoName Repository name
      */
     public PypiJsonHandler(
         final Slice upstream,
         final CooldownService cooldown,
-        final CooldownInspector inspector,
         final String repoType,
         final String repoName
     ) {
         this.upstream = upstream;
         this.cooldown = cooldown;
-        this.inspector = inspector;
         this.repoType = repoType;
         this.repoName = repoName;
         this.detector = new PypiJsonMetadataRequestDetector();
@@ -198,9 +194,12 @@ public final class PypiJsonHandler {
     private CompletableFuture<Response> processUpstream(
         final byte[] upstreamBytes, final String pkg, final String user
     ) {
-        final List<String> versions = extractReleaseKeys(this.mapper, upstreamBytes);
-        if (versions.isEmpty()) {
-            // Either malformed JSON or no releases — pass through.
+        final JsonNode root;
+        try {
+            root = this.mapper.readTree(upstreamBytes);
+        } catch (final java.io.IOException ex) {
+            // Malformed upstream JSON — pass through verbatim; clients
+            // see exactly what upstream sent (no surprise transforms).
             return CompletableFuture.completedFuture(
                 ResponseBuilder.ok()
                     .header("Content-Type", CONTENT_TYPE)
@@ -208,7 +207,18 @@ public final class PypiJsonHandler {
                     .build()
             );
         }
-        return this.blockedVersions(pkg, versions, user).thenApply(blocked -> {
+        final List<String> versions = extractReleaseKeys(root);
+        if (versions.isEmpty()) {
+            // No releases — pass through.
+            return CompletableFuture.completedFuture(
+                ResponseBuilder.ok()
+                    .header("Content-Type", CONTENT_TYPE)
+                    .body(upstreamBytes)
+                    .build()
+            );
+        }
+        final Map<String, Instant> releaseDates = extractReleaseDates(root);
+        return this.blockedVersions(pkg, versions, releaseDates, user).thenApply(blocked -> {
             final PypiJsonMetadataFilter.Result result =
                 this.filter.filter(upstreamBytes, blocked);
             if (result instanceof PypiJsonMetadataFilter.Result.AllBlocked) {
@@ -271,49 +281,130 @@ public final class PypiJsonHandler {
     }
 
     /**
-     * Extract version keys from {@code releases} without fully parsing.
-     * Empty list on malformed input signals "pass upstream through".
+     * Extract version keys from {@code releases}. Empty list when the
+     * upstream document lacks a parseable releases object — the caller
+     * then passes the bytes through unchanged.
      */
-    private static List<String> extractReleaseKeys(
-        final ObjectMapper mapper, final byte[] bytes
-    ) {
-        if (bytes == null || bytes.length == 0) {
+    private static List<String> extractReleaseKeys(final JsonNode root) {
+        if (root == null || !root.has("releases")) {
             return List.of();
         }
-        try {
-            final JsonNode root = mapper.readTree(bytes);
-            if (root == null || !root.has("releases")) {
-                return List.of();
-            }
-            final JsonNode releases = root.get("releases");
-            if (releases == null || !releases.isObject()) {
-                return List.of();
-            }
-            final List<String> out = new ArrayList<>();
-            final Iterator<String> it = releases.fieldNames();
-            while (it.hasNext()) {
-                out.add(it.next());
-            }
-            return out;
-        } catch ( final Exception ex) {
-            // EXPECTED: a malformed upstream JSON response just yields
-            // an empty release list — the cooldown gate downgrades to
-            // "no candidates" rather than 500.
+        final JsonNode releases = root.get("releases");
+        if (releases == null || !releases.isObject()) {
             return List.of();
+        }
+        final List<String> out = new ArrayList<>();
+        final Iterator<String> it = releases.fieldNames();
+        while (it.hasNext()) {
+            out.add(it.next());
+        }
+        return out;
+    }
+
+    /**
+     * Extract a {@code version -> earliest upload time} map from the
+     * PyPI JSON API document. Each {@code releases[version]} is an
+     * array of file objects; each file carries either
+     * {@code upload_time_iso_8601} (preferred — explicit UTC offset)
+     * or {@code upload_time} (no offset, treated as UTC). The earliest
+     * upload across all files for a version is "when this version first
+     * appeared" — exactly what the cooldown gate evaluates.
+     *
+     * <p>Versions whose entries have no parseable timestamp are omitted;
+     * the cooldown filter then treats them as release-date-unknown and
+     * allows. Matches the npm/composer packument-inline semantics from
+     * {@code dbdde1736}.</p>
+     *
+     * @param root Parsed PyPI JSON document
+     * @return Immutable {@code version -> Instant} map (may be empty)
+     */
+    private static Map<String, Instant> extractReleaseDates(final JsonNode root) {
+        if (root == null || !root.has("releases")) {
+            return Map.of();
+        }
+        final JsonNode releases = root.get("releases");
+        if (releases == null || !releases.isObject()) {
+            return Map.of();
+        }
+        final Map<String, Instant> result = new HashMap<>();
+        final Iterator<Map.Entry<String, JsonNode>> entries = releases.fields();
+        while (entries.hasNext()) {
+            final Map.Entry<String, JsonNode> entry = entries.next();
+            final JsonNode files = entry.getValue();
+            if (files == null || !files.isArray()) {
+                continue;
+            }
+            Instant earliest = null;
+            for (final JsonNode file : files) {
+                final Instant uploaded = parseUploadTime(file);
+                if (uploaded == null) {
+                    continue;
+                }
+                if (earliest == null || uploaded.isBefore(earliest)) {
+                    earliest = uploaded;
+                }
+            }
+            if (earliest != null) {
+                result.put(entry.getKey(), earliest);
+            }
+        }
+        return Map.copyOf(result);
+    }
+
+    /**
+     * Parse a single file entry's upload time. Prefers
+     * {@code upload_time_iso_8601} (ISO 8601 with offset); falls back
+     * to {@code upload_time} (no offset — treated as UTC).
+     */
+    private static Instant parseUploadTime(final JsonNode file) {
+        if (file == null || !file.isObject()) {
+            return null;
+        }
+        final JsonNode iso = file.get("upload_time_iso_8601");
+        if (iso != null && iso.isTextual()) {
+            final Instant parsed = tryParseInstant(iso.asText());
+            if (parsed != null) {
+                return parsed;
+            }
+        }
+        final JsonNode plain = file.get("upload_time");
+        if (plain != null && plain.isTextual()) {
+            final String raw = plain.asText();
+            // upload_time is documented without offset — treat as UTC.
+            final Instant asUtc = tryParseInstant(raw + "Z");
+            if (asUtc != null) {
+                return asUtc;
+            }
+            return tryParseInstant(raw);
+        }
+        return null;
+    }
+
+    private static Instant tryParseInstant(final String value) {
+        try {
+            return OffsetDateTime.parse(value).toInstant();
+        } catch (final DateTimeParseException ex) {
+            return null;
         }
     }
 
     /**
      * Evaluate each candidate for cooldown in parallel; collect blocked
-     * set. Per-version evaluation errors → "allowed".
+     * set. Uses {@code evaluateWithKnownDate} with release dates
+     * extracted from {@code releases[ver][].upload_time_iso_8601} —
+     * skips the inspector entirely (no DB or upstream lookup needed).
+     * Per-version evaluation errors → "allowed".
      */
     private CompletableFuture<Set<String>> blockedVersions(
-        final String pkg, final List<String> candidates, final String user
+        final String pkg, final List<String> candidates,
+        final Map<String, Instant> releaseDates, final String user
     ) {
         final List<CompletableFuture<Boolean>> futures =
             new ArrayList<>(candidates.size());
         for (final String version : candidates) {
-            futures.add(this.isBlocked(pkg, version, user));
+            futures.add(
+                this.isBlocked(pkg, version, releaseDates.get(version), user)
+            );
         }
         return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
             .thenApply(ignored -> {
@@ -328,7 +419,8 @@ public final class PypiJsonHandler {
     }
 
     private CompletableFuture<Boolean> isBlocked(
-        final String pkg, final String version, final String user
+        final String pkg, final String version,
+        final Instant releaseDate, final String user
     ) {
         final CooldownRequest req = new CooldownRequest(
             this.repoType,
@@ -338,7 +430,7 @@ public final class PypiJsonHandler {
             user == null ? "pypi-json" : user,
             Instant.now()
         );
-        return this.cooldown.evaluate(req, this.inspector)
+        return this.cooldown.evaluateWithKnownDate(req, Optional.ofNullable(releaseDate))
             .thenApply(result -> result.blocked())
             .exceptionally(err -> {
                 EcsLogger.warn("com.auto1.pantera.pypi")

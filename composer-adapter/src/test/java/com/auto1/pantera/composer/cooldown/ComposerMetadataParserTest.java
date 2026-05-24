@@ -18,7 +18,9 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -212,6 +214,115 @@ final class ComposerMetadataParserTest {
             MetadataParseException.class,
             () -> this.parser.parse(new byte[0])
         );
+    }
+
+    @Test
+    void extractsVersionsFromV2ArrayShape() throws Exception {
+        final String json = """
+            {
+                "packages": {
+                    "openai-php/client": [
+                        {"name": "openai-php/client", "version": "v0.17.1"},
+                        {"name": "openai-php/client", "version": "v0.17.0"},
+                        {"name": "openai-php/client", "version": "v0.16.0"}
+                    ]
+                }
+            }
+            """;
+        final JsonNode metadata = this.parser.parse(json.getBytes(StandardCharsets.UTF_8));
+        final List<String> versions = this.parser.extractVersions(metadata);
+        assertThat(versions, hasSize(3));
+        assertThat(versions, containsInAnyOrder("v0.17.1", "v0.17.0", "v0.16.0"));
+    }
+
+    @Test
+    void extractReleaseDatesV1ObjectShape() throws Exception {
+        final String json = """
+            {
+                "packages": {
+                    "vendor/pkg": {
+                        "1.0.0": {"version": "1.0.0", "time": "2024-01-01T00:00:00+00:00"},
+                        "2.0.0": {"version": "2.0.0", "time": "2025-06-15T12:30:00+00:00"}
+                    }
+                }
+            }
+            """;
+        final JsonNode metadata = this.parser.parse(json.getBytes(StandardCharsets.UTF_8));
+        final Map<String, Instant> times = this.parser.extractReleaseDates(metadata);
+        assertThat(times.size(), equalTo(2));
+        assertThat(
+            times.get("1.0.0"),
+            equalTo(Instant.parse("2024-01-01T00:00:00Z"))
+        );
+        assertThat(
+            times.get("2.0.0"),
+            equalTo(Instant.parse("2025-06-15T12:30:00Z"))
+        );
+    }
+
+    @Test
+    void extractReleaseDatesV2ArrayShape() throws Exception {
+        final String json = """
+            {
+                "packages": {
+                    "openai-php/client": [
+                        {"version": "v0.17.1", "time": "2025-09-10T08:00:00+00:00"},
+                        {"version": "v0.17.0", "time": "2024-12-01T10:00:00+00:00"}
+                    ]
+                }
+            }
+            """;
+        final JsonNode metadata = this.parser.parse(json.getBytes(StandardCharsets.UTF_8));
+        final Map<String, Instant> times = this.parser.extractReleaseDates(metadata);
+        assertThat(times.size(), equalTo(2));
+        assertThat(
+            times.get("v0.17.1"),
+            equalTo(Instant.parse("2025-09-10T08:00:00Z"))
+        );
+        assertThat(
+            times.get("v0.17.0"),
+            equalTo(Instant.parse("2024-12-01T10:00:00Z"))
+        );
+    }
+
+    @Test
+    void extractReleaseDatesSkipsMissingOrUnparseableTime() throws Exception {
+        final String json = """
+            {
+                "packages": {
+                    "vendor/pkg": [
+                        {"version": "1.0.0", "time": "2024-01-01T00:00:00+00:00"},
+                        {"version": "2.0.0"},
+                        {"version": "3.0.0", "time": "not-a-date"}
+                    ]
+                }
+            }
+            """;
+        final JsonNode metadata = this.parser.parse(json.getBytes(StandardCharsets.UTF_8));
+        final Map<String, Instant> times = this.parser.extractReleaseDates(metadata);
+        assertThat(times.size(), equalTo(1));
+        assertThat(times.containsKey("1.0.0"), is(true));
+        assertThat(times.containsKey("2.0.0"), is(false));
+        assertThat(times.containsKey("3.0.0"), is(false));
+    }
+
+    @Test
+    void v2ArrayEntriesWithoutVersionAreSkipped() throws Exception {
+        final String json = """
+            {
+                "packages": {
+                    "vendor/pkg": [
+                        {"name": "vendor/pkg", "version": "1.0.0"},
+                        {"name": "vendor/pkg"},
+                        {"name": "vendor/pkg", "version": "2.0.0"}
+                    ]
+                }
+            }
+            """;
+        final JsonNode metadata = this.parser.parse(json.getBytes(StandardCharsets.UTF_8));
+        final List<String> versions = this.parser.extractVersions(metadata);
+        assertThat(versions, hasSize(2));
+        assertThat(versions, containsInAnyOrder("1.0.0", "2.0.0"));
     }
 
     /**

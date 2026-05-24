@@ -45,7 +45,18 @@ final class PypiMetadataRequestDetectorTest {
         "/simple/my_package/",
         "/simple/my.package/",
         "/pypi-proxy/simple/requests/",
-        "/repo/pypi/simple/flask/"
+        "/repo/pypi/simple/flask/",
+        // JFrog Artifactory-compatible form — pip with
+        // --index-url <base>/api/pypi/<repo> (no /simple suffix) ends
+        // up sending a bare /<pkg>/ to the proxy slice after the
+        // ApiRoutingSlice + repo-prefix strip. The detector must
+        // intercept it; otherwise the cooldown handler is bypassed
+        // and blocked versions leak through.
+        "/requests/",
+        "/Django/",
+        "/my-package/",
+        "/my_package/",
+        "/zope.interface/"
     })
     void detectsMetadataRequests(final String path) {
         assertThat(
@@ -149,5 +160,31 @@ final class PypiMetadataRequestDetectorTest {
         );
         assertThat(name.isPresent(), is(true));
         assertThat(name.get(), equalTo("zope.interface"));
+    }
+
+    @Test
+    void extractsPackageNameFromJFrogStylePath() {
+        final Optional<String> name = this.detector.extractPackageName("/requests/");
+        assertThat(name.isPresent(), is(true));
+        assertThat(name.get(), equalTo("requests"));
+    }
+
+    @Test
+    void extractsHyphenatedFromJFrogStylePath() {
+        final Optional<String> name = this.detector.extractPackageName("/my-cool-package/");
+        assertThat(name.isPresent(), is(true));
+        assertThat(name.get(), equalTo("my-cool-package"));
+    }
+
+    @Test
+    void jFrogStyleRequiresTrailingSlashToAvoidFileFalsePositives() {
+        // Without the trailing slash these would look identical to a
+        // file-segment match, e.g. /packages/foo.tar.gz. Strictly
+        // requiring the trailing slash keeps the JFrog branch safe.
+        assertThat(this.detector.isMetadataRequest("/requests"), is(false));
+        assertThat(
+            this.detector.extractPackageName("/requests").isPresent(),
+            is(false)
+        );
     }
 }

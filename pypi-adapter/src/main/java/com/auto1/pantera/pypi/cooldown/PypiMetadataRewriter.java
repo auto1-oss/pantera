@@ -55,6 +55,11 @@ public final class PypiMetadataRewriter implements MetadataRewriter<PypiSimpleIn
                     html.append(escapeHtml(link.distInfoMetadata()));
                     html.append('"');
                 }
+                if (link.uploadTime() != null && !link.uploadTime().isEmpty()) {
+                    html.append(" data-upload-time=\"");
+                    html.append(escapeHtml(link.uploadTime()));
+                    html.append('"');
+                }
                 html.append('>');
                 html.append(escapeHtml(link.filename()));
                 html.append("</a>\n");

@@ -212,6 +212,49 @@ final class ComposerMetadataFilterTest {
         assertThat(filtered.has("other"), is(true));
     }
 
+    @Test
+    void filtersBlockedVersionsFromV2ArrayShape() throws Exception {
+        final String json = """
+            {
+                "packages": {
+                    "openai-php/client": [
+                        {"name": "openai-php/client", "version": "v0.17.1"},
+                        {"name": "openai-php/client", "version": "v0.17.0"},
+                        {"name": "openai-php/client", "version": "v0.16.0"}
+                    ]
+                }
+            }
+            """;
+        final JsonNode metadata = this.parser.parse(json.getBytes(StandardCharsets.UTF_8));
+        final JsonNode filtered = this.filter.filter(
+            metadata, Set.of("v0.17.1", "v0.16.0")
+        );
+        final List<String> remaining = this.parser.extractVersions(filtered);
+        assertThat(remaining, hasSize(1));
+        assertThat(remaining, containsInAnyOrder("v0.17.0"));
+    }
+
+    @Test
+    void v2ArrayBlockAllProducesEmptyArray() throws Exception {
+        final String json = """
+            {
+                "packages": {
+                    "vendor/pkg": [
+                        {"version": "1.0.0"},
+                        {"version": "2.0.0"}
+                    ]
+                }
+            }
+            """;
+        final JsonNode metadata = this.parser.parse(json.getBytes(StandardCharsets.UTF_8));
+        final JsonNode filtered = this.filter.filter(
+            metadata, Set.of("1.0.0", "2.0.0")
+        );
+        assertThat(this.parser.extractVersions(filtered), hasSize(0));
+        assertThat(filtered.get("packages").get("vendor/pkg").isArray(), is(true));
+        assertThat(filtered.get("packages").get("vendor/pkg").size(), equalTo(0));
+    }
+
     /**
      * Load a test fixture from classpath.
      *

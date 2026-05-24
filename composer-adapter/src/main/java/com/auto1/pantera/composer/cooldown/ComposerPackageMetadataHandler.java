@@ -12,7 +12,6 @@ package com.auto1.pantera.composer.cooldown;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Remaining;
-import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.metadata.MetadataParseException;
@@ -35,6 +34,8 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
@@ -106,11 +107,6 @@ public final class ComposerPackageMetadataHandler {
     private final CooldownService cooldown;
 
     /**
-     * Cooldown inspector (release-date lookups).
-     */
-    private final CooldownInspector inspector;
-
-    /**
      * Repository type (e.g. {@code "php"}, {@code "php-proxy"}).
      */
     private final String repoType;
@@ -140,20 +136,17 @@ public final class ComposerPackageMetadataHandler {
      *
      * @param upstream Upstream Composer proxy slice
      * @param cooldown Cooldown evaluation service
-     * @param inspector Cooldown inspector
      * @param repoType Repository type (e.g. {@code "php"})
      * @param repoName Repository name
      */
     public ComposerPackageMetadataHandler(
         final Slice upstream,
         final CooldownService cooldown,
-        final CooldownInspector inspector,
         final String repoType,
         final String repoName
     ) {
         this.upstream = upstream;
         this.cooldown = cooldown;
-        this.inspector = inspector;
         this.repoType = repoType;
         this.repoName = repoName;
         this.detector = new ComposerMetadataRequestDetector();
@@ -242,7 +235,8 @@ public final class ComposerPackageMetadataHandler {
                     .build()
             );
         }
-        return this.blockedVersions(pkg, versions, user).thenApply(blocked -> {
+        final Map<String, Instant> releaseDates = this.parser.extractReleaseDates(parsed);
+        return this.blockedVersions(pkg, versions, releaseDates, user).thenApply(blocked -> {
             if (blocked.isEmpty()) {
                 // Fast path: forward upstream bytes verbatim.
                 return ResponseBuilder.ok()
@@ -319,16 +313,26 @@ public final class ComposerPackageMetadataHandler {
 
     /**
      * Evaluate every candidate against cooldown in parallel; collect
-     * the blocked set. Swallows per-version errors to "allowed" so a
-     * transient inspector failure never denies an entire response.
+     * the blocked set. Uses {@code evaluateWithKnownDate} with the
+     * release dates extracted from the upstream packument so the
+     * cooldown service never has to round-trip through the
+     * {@code CooldownInspector} (which would otherwise fall through to
+     * a {@code DbPublishDateRegistry} lookup with no source registered
+     * for {@code composer}/{@code php} repo types and fail open).
+     * Mirrors the npm/PyPI packument-inline shortcut introduced in
+     * {@code dbdde1736}. Swallows per-version errors to "allowed" so a
+     * transient cooldown-service hiccup never denies an entire response.
      */
     private CompletableFuture<Set<String>> blockedVersions(
-        final String pkg, final List<String> candidates, final String user
+        final String pkg, final List<String> candidates,
+        final Map<String, Instant> releaseDates, final String user
     ) {
         final List<CompletableFuture<Boolean>> futures =
             new ArrayList<>(candidates.size());
         for (final String version : candidates) {
-            futures.add(this.isBlocked(pkg, version, user));
+            futures.add(
+                this.isBlocked(pkg, version, releaseDates.get(version), user)
+            );
         }
         return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
             .thenApply(ignored -> {
@@ -343,7 +347,8 @@ public final class ComposerPackageMetadataHandler {
     }
 
     private CompletableFuture<Boolean> isBlocked(
-        final String pkg, final String version, final String user
+        final String pkg, final String version,
+        final Instant releaseDate, final String user
     ) {
         final CooldownRequest req = new CooldownRequest(
             this.repoType,
@@ -353,7 +358,7 @@ public final class ComposerPackageMetadataHandler {
             user == null ? "composer-metadata" : user,
             Instant.now()
         );
-        return this.cooldown.evaluate(req, this.inspector)
+        return this.cooldown.evaluateWithKnownDate(req, Optional.ofNullable(releaseDate))
             .thenApply(result -> result.blocked())
             .exceptionally(err -> {
                 EcsLogger.warn("com.auto1.pantera.composer")

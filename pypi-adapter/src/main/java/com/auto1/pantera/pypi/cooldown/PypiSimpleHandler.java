@@ -12,7 +12,6 @@ package com.auto1.pantera.pypi.cooldown;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Remaining;
-import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.metadata.MetadataParseException;
@@ -21,8 +20,13 @@ import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
 
@@ -33,6 +37,8 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
@@ -87,11 +93,6 @@ public final class PypiSimpleHandler {
     private final CooldownService cooldown;
 
     /**
-     * Cooldown inspector (release-date lookups).
-     */
-    private final CooldownInspector inspector;
-
-    /**
      * Repository type (e.g. {@code "pypi"}, {@code "pypi-proxy"}).
      */
     private final String repoType;
@@ -126,20 +127,17 @@ public final class PypiSimpleHandler {
      *
      * @param upstream Upstream PyPI proxy slice
      * @param cooldown Cooldown evaluation service
-     * @param inspector Cooldown inspector
      * @param repoType Repository type (e.g. {@code "pypi-proxy"})
      * @param repoName Repository name
      */
     public PypiSimpleHandler(
         final Slice upstream,
         final CooldownService cooldown,
-        final CooldownInspector inspector,
         final String repoType,
         final String repoName
     ) {
         this.upstream = upstream;
         this.cooldown = cooldown;
-        this.inspector = inspector;
         this.repoType = repoType;
         this.repoName = repoName;
         this.detector = new PypiMetadataRequestDetector();
@@ -163,11 +161,23 @@ public final class PypiSimpleHandler {
     /**
      * Handle a Simple Index request with cooldown filtering.
      *
+     * <p>The {@code clientWantsJson} flag honours the caller's PEP 691
+     * content negotiation: we ALWAYS fetch JSON from upstream (the only
+     * shape that carries {@code upload-time}), but we serialize back in
+     * the format the original caller asked for. Without this round-trip,
+     * a uv client (or any client sending {@code Accept:
+     * application/vnd.pypi.simple.v1+json}) would receive HTML under a
+     * JSON content-type negotiation and fall back to "no upload date".</p>
+     *
      * @param line Request line (must be {@code /simple/<name>/})
+     * @param clientWantsJson true if the original client requested PEP 691
+     *                        JSON; false for legacy PEP 503 HTML
      * @param user Authenticated user (for cooldown bookkeeping)
      * @return Future response
      */
-    public CompletableFuture<Response> handle(final RequestLine line, final String user) {
+    public CompletableFuture<Response> handle(
+        final RequestLine line, final boolean clientWantsJson, final String user
+    ) {
         final String path = line.uri().getPath();
         // PEP 503 normalization (lowercase + collapse runs of [-_.] to single
         // '-'): the artifact-publish path stores release dates under the
@@ -181,7 +191,18 @@ public final class PypiSimpleHandler {
                 () -> new IllegalArgumentException("Not a /simple/ path: " + path)
             )
         ).value();
-        return this.upstream.response(line, Headers.EMPTY, Content.EMPTY)
+        // RCA-pypi-A (v2.2.0): ask upstream for PEP 691 JSON instead of PEP 503
+        // HTML. pypi.org's HTML response omits the data-upload-time attribute
+        // we rely on; the JSON response carries upload-time on every file. The
+        // proxy's content negotiation routes the upstream fetch (and the cache
+        // key) through {@code SimpleApiFormat.JSON}, and ProxySlice rewrites
+        // each file's url to the local /packages/ path before caching. The
+        // parser detects the JSON shape and produces the same PypiSimpleIndex
+        // the rewriter emits to pip as HTML.
+        final Headers acceptJson = Headers.from(new Header(
+            "Accept", "application/vnd.pypi.simple.v1+json"
+        ));
+        return this.upstream.response(line, acceptJson, Content.EMPTY)
             .thenCompose(resp -> {
                 if (!resp.status().success()) {
                     return bodyBytes(resp.body()).thenApply(bytes ->
@@ -192,24 +213,29 @@ public final class PypiSimpleHandler {
                     );
                 }
                 return bodyBytes(resp.body()).thenCompose(bytes ->
-                    this.processUpstream(bytes, pkg, user)
+                    this.processUpstream(bytes, pkg, clientWantsJson, user)
                 );
             });
     }
 
     /**
-     * Parse → evaluate → filter → serialise. Pass-through on parse
-     * failure; 404 when every version is blocked.
+     * Parse → evaluate → filter → serialise in the caller's format.
+     *
+     * <p>RCA-pypi-A (v2.2.0): we always fetch PEP 691 JSON upstream so we
+     * have {@code upload-time} per file. The serialisation step honours
+     * {@code clientWantsJson} so a uv client gets JSON back (with the
+     * blocked entries filtered) and a pip client gets PEP 503 HTML.</p>
      */
     private CompletableFuture<Response> processUpstream(
-        final byte[] upstreamBytes, final String pkg, final String user
+        final byte[] upstreamBytes, final String pkg,
+        final boolean clientWantsJson, final String user
     ) {
         final PypiSimpleIndex parsed;
         try {
             parsed = this.parser.parse(upstreamBytes);
         } catch (final MetadataParseException ex) {
             EcsLogger.warn("com.auto1.pantera.pypi")
-                .message("Failed to parse /simple/ HTML — passing upstream bytes through")
+                .message("Failed to parse upstream Simple Index — returning empty index")
                 .eventCategory("web")
                 .eventAction("simple_filter")
                 .eventOutcome("success")
@@ -219,73 +245,194 @@ public final class PypiSimpleHandler {
                 .error(ex)
                 .field("log.source", "application")
                 .log();
-            return CompletableFuture.completedFuture(
-                ResponseBuilder.ok()
-                    .header("Content-Type", this.rewriter.contentType())
-                    .body(upstreamBytes)
-                    .build()
-            );
+            return CompletableFuture.completedFuture(emptyResponse(clientWantsJson, pkg));
         }
         final List<String> versions = this.parser.extractVersions(parsed);
         if (versions.isEmpty()) {
-            // Empty index — nothing to filter. Serve upstream verbatim
-            // so PEP 691 JSON / PEP 503 HTML quirks round-trip exactly.
             return CompletableFuture.completedFuture(
-                ResponseBuilder.ok()
-                    .header("Content-Type", this.rewriter.contentType())
-                    .body(upstreamBytes)
-                    .build()
+                allowedResponse(parsed, upstreamBytes, java.util.Set.of(), clientWantsJson, pkg)
             );
         }
-        return this.blockedVersions(pkg, versions, user).thenApply(blocked -> {
+        final Map<String, Instant> releaseDates = this.parser.extractReleaseDates(parsed);
+        return this.blockedVersions(pkg, versions, releaseDates, user).thenApply(blocked -> {
             if (blocked.isEmpty()) {
-                // Fast path: forward the upstream bytes verbatim so any
-                // formatting / ordering quirks round-trip.
-                return ResponseBuilder.ok()
-                    .header("Content-Type", this.rewriter.contentType())
-                    .body(upstreamBytes)
-                    .build();
+                return allowedResponse(parsed, upstreamBytes, blocked, clientWantsJson, pkg);
             }
             final PypiSimpleIndex filtered = this.filter.filter(parsed, blocked);
             if (filtered.links().isEmpty()) {
                 return this.allBlockedResponse(pkg);
             }
-            try {
-                final byte[] body = this.rewriter.rewrite(filtered);
-                EcsLogger.info("com.auto1.pantera.pypi")
-                    .message("/simple/ filtered: removed cooldown-blocked versions"
-                        + " (total=" + versions.size()
-                        + ", blocked=" + blocked.size()
-                        + ", served_links=" + filtered.links().size() + ")")
-                    .eventCategory("web")
-                    .eventAction("simple_filter")
-                    .eventOutcome("success")
-                    .field("repository.name", this.repoName)
-                    .field("package.name", pkg)
-                    .field("log.source", "application")
-                    .log();
-                return ResponseBuilder.ok()
-                    .header("Content-Type", this.rewriter.contentType())
-                    .body(body)
-                    .build();
-            } catch (final MetadataRewriteException ex) {
-                EcsLogger.warn("com.auto1.pantera.pypi")
-                    .message("/simple/ rewrite failed — falling back to upstream body")
-                    .eventCategory("web")
-                    .eventAction("simple_filter")
-                    .eventOutcome("failure")
-                    .field("repository.name", this.repoName)
-                    .field("package.name", pkg)
-                    .error(ex)
-                    .field("log.source", "application")
-                    .log();
-                return ResponseBuilder.ok()
-                    .header("Content-Type", this.rewriter.contentType())
-                    .body(upstreamBytes)
-                    .build();
-            }
+            EcsLogger.info("com.auto1.pantera.pypi")
+                .message("/simple/ filtered: removed cooldown-blocked versions"
+                    + " (total=" + versions.size()
+                    + ", blocked=" + blocked.size()
+                    + ", served_links=" + filtered.links().size() + ")")
+                .eventCategory("web")
+                .eventAction("simple_filter")
+                .eventOutcome("success")
+                .field("repository.name", this.repoName)
+                .field("package.name", pkg)
+                .field("log.source", "application")
+                .log();
+            return serialize(filtered, upstreamBytes, blocked, clientWantsJson, pkg);
         });
     }
+
+    /**
+     * Serve when no cooldown blocks apply. If the upstream shape matches
+     * the client's requested shape we can forward bytes verbatim
+     * (preserving any field ordering / formatting the upstream emitted);
+     * otherwise we rewrite via {@link #serialize}. In production this
+     * almost always hits the JSON-in-JSON-out branch (we always request
+     * JSON upstream); the HTML-in-HTML-out branch matters for tests and
+     * for any future hosted-pypi index where bytes are already PEP 503.
+     */
+    private Response allowedResponse(
+        final PypiSimpleIndex parsed, final byte[] upstreamBytes,
+        final java.util.Set<String> blocked, final boolean clientWantsJson, final String pkg
+    ) {
+        final boolean upstreamIsJson = looksLikeJson(upstreamBytes);
+        if (clientWantsJson && upstreamIsJson) {
+            return ResponseBuilder.ok()
+                .header("Content-Type", JSON_CONTENT_TYPE)
+                .body(upstreamBytes)
+                .build();
+        }
+        if (!clientWantsJson && !upstreamIsJson) {
+            return ResponseBuilder.ok()
+                .header("Content-Type", this.rewriter.contentType())
+                .body(upstreamBytes)
+                .build();
+        }
+        return serialize(parsed, upstreamBytes, blocked, clientWantsJson, pkg);
+    }
+
+    private static boolean looksLikeJson(final byte[] bytes) {
+        byte first = 0;
+        boolean found = false;
+        for (final byte b : bytes) {
+            if (b != ' ' && b != '\t' && b != '\n' && b != '\r') {
+                first = b;
+                found = true;
+                break;
+            }
+        }
+        return found && first == '{';
+    }
+
+    /**
+     * Emit either PEP 691 JSON (filtered) or PEP 503 HTML for the given
+     * (filtered) index. On rewriter failure, fall back to an empty index
+     * so the client still receives a valid response.
+     */
+    private Response serialize(
+        final PypiSimpleIndex idx, final byte[] upstreamBytes,
+        final java.util.Set<String> blocked, final boolean clientWantsJson, final String pkg
+    ) {
+        if (clientWantsJson) {
+            final java.util.Optional<byte[]> body = filterJson(upstreamBytes, blocked, pkg);
+            if (body.isEmpty()) {
+                return emptyResponse(true, pkg);
+            }
+            return ResponseBuilder.ok()
+                .header("Content-Type", JSON_CONTENT_TYPE)
+                .body(body.get())
+                .build();
+        }
+        try {
+            return ResponseBuilder.ok()
+                .header("Content-Type", this.rewriter.contentType())
+                .body(this.rewriter.rewrite(idx))
+                .build();
+        } catch (final MetadataRewriteException ex) {
+            EcsLogger.warn("com.auto1.pantera.pypi")
+                .message("/simple/ HTML rewrite failed — falling back to empty index")
+                .eventCategory("web")
+                .eventAction("simple_filter")
+                .eventOutcome("failure")
+                .field("repository.name", this.repoName)
+                .field("package.name", pkg)
+                .error(ex)
+                .field("log.source", "application")
+                .log();
+            return emptyResponse(false, pkg);
+        }
+    }
+
+    /**
+     * Remove blocked-version entries from a PEP 691 JSON body. Keeps the
+     * upstream {@code meta}, {@code name}, and any other top-level
+     * fields verbatim. Returns {@link java.util.Optional#empty()} on
+     * parse failure so the caller can choose an empty-index fallback.
+     */
+    private java.util.Optional<byte[]> filterJson(
+        final byte[] upstreamBytes, final java.util.Set<String> blocked, final String pkg
+    ) {
+        if (blocked.isEmpty()) {
+            return java.util.Optional.of(upstreamBytes);
+        }
+        try {
+            final JsonNode root = JSON_MAPPER.readTree(upstreamBytes);
+            if (!(root instanceof ObjectNode obj)) {
+                return java.util.Optional.of(upstreamBytes);
+            }
+            final JsonNode files = obj.path("files");
+            if (files instanceof ArrayNode filesArr) {
+                final ArrayNode kept = JSON_MAPPER.createArrayNode();
+                for (final JsonNode file : filesArr) {
+                    final String filename = file.path("filename").asText("");
+                    final String version = PypiMetadataParser.extractVersionFromFilename(filename);
+                    if (version == null || !blocked.contains(version)) {
+                        kept.add(file);
+                    }
+                }
+                obj.set("files", kept);
+            }
+            final JsonNode versionsNode = obj.path("versions");
+            if (versionsNode instanceof ArrayNode versionsArr) {
+                final ArrayNode kept = JSON_MAPPER.createArrayNode();
+                for (final JsonNode v : versionsArr) {
+                    if (!blocked.contains(v.asText(""))) {
+                        kept.add(v);
+                    }
+                }
+                obj.set("versions", kept);
+            }
+            return java.util.Optional.of(JSON_MAPPER.writeValueAsBytes(obj));
+        } catch (final Exception ex) {
+            EcsLogger.warn("com.auto1.pantera.pypi")
+                .message("/simple/ JSON rewrite failed — returning empty index")
+                .eventCategory("web")
+                .eventAction("simple_filter")
+                .eventOutcome("failure")
+                .field("repository.name", this.repoName)
+                .field("package.name", pkg)
+                .error(ex)
+                .field("log.source", "application")
+                .log();
+            return java.util.Optional.empty();
+        }
+    }
+
+    private Response emptyResponse(final boolean clientWantsJson, final String pkg) {
+        if (clientWantsJson) {
+            return ResponseBuilder.ok()
+                .header("Content-Type", JSON_CONTENT_TYPE)
+                .body(("{\"meta\":{\"api-version\":\"1.1\"},\"name\":\""
+                    + pkg + "\",\"files\":[]}")
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                .build();
+        }
+        return ResponseBuilder.ok()
+            .header("Content-Type", this.rewriter.contentType())
+            .body("<!DOCTYPE html><html><body></body></html>"
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8))
+            .build();
+    }
+
+    private static final String JSON_CONTENT_TYPE = "application/vnd.pypi.simple.v1+json";
+
+    private static final ObjectMapper JSON_MAPPER = new ObjectMapper();
 
     /**
      * Every version blocked — 404. pip handles 404 on {@code /simple/}
@@ -315,16 +462,27 @@ public final class PypiSimpleHandler {
 
     /**
      * Evaluate every candidate against cooldown in parallel; collect
-     * the blocked set. Swallows per-version errors to "allowed" so a
-     * transient inspector failure never denies an entire index.
+     * the blocked set. Uses {@code evaluateWithKnownDate} with the
+     * per-link {@code data-upload-time} extracted by the parser so the
+     * filter never has to round-trip through the {@code CooldownInspector}
+     * (which would otherwise fall through to
+     * {@code DbPublishDateRegistry} where no upstream
+     * {@code PublishDateSource} is registered for {@code pypi}/{@code
+     * pypi-proxy} and silently fail open). Mirrors the npm/composer
+     * packument-inline shortcut from commit {@code dbdde1736}. Per-version
+     * errors swallowed to "allowed" so a transient cooldown-service
+     * hiccup never denies an entire index.
      */
     private CompletableFuture<Set<String>> blockedVersions(
-        final String pkg, final List<String> candidates, final String user
+        final String pkg, final List<String> candidates,
+        final Map<String, Instant> releaseDates, final String user
     ) {
         final List<CompletableFuture<Boolean>> futures =
             new ArrayList<>(candidates.size());
         for (final String version : candidates) {
-            futures.add(this.isBlocked(pkg, version, user));
+            futures.add(
+                this.isBlocked(pkg, version, releaseDates.get(version), user)
+            );
         }
         return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
             .thenApply(ignored -> {
@@ -339,7 +497,8 @@ public final class PypiSimpleHandler {
     }
 
     private CompletableFuture<Boolean> isBlocked(
-        final String pkg, final String version, final String user
+        final String pkg, final String version,
+        final Instant releaseDate, final String user
     ) {
         final CooldownRequest req = new CooldownRequest(
             this.repoType,
@@ -349,7 +508,7 @@ public final class PypiSimpleHandler {
             user == null ? "pypi-simple" : user,
             Instant.now()
         );
-        return this.cooldown.evaluate(req, this.inspector)
+        return this.cooldown.evaluateWithKnownDate(req, Optional.ofNullable(releaseDate))
             .thenApply(result -> result.blocked())
             .exceptionally(err -> {
                 EcsLogger.warn("com.auto1.pantera.pypi")

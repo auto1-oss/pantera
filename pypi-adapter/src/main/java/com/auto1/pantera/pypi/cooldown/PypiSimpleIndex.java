@@ -44,13 +44,21 @@ public record PypiSimpleIndex(String originalHtml, List<Link> links) {
      * @param version Extracted version from filename, or null if unparseable
      * @param requiresPython The data-requires-python attribute, or null
      * @param distInfoMetadata The data-dist-info-metadata attribute, or null
+     * @param uploadTime The {@code data-upload-time} attribute (PEP 700,
+     *                   ISO 8601 — e.g. {@code 2024-09-09T15:12:34.567890Z}),
+     *                   or null when the upstream index doesn't emit it.
+     *                   Used by the cooldown filter to skip the
+     *                   {@code inspector.releaseDate} fetch — same shortcut
+     *                   the npm/composer adapters take with packument-inline
+     *                   timestamps (commit {@code dbdde1736}).
      */
     public record Link(
         String href,
         String filename,
         String version,
         String requiresPython,
-        String distInfoMetadata
+        String distInfoMetadata,
+        String uploadTime
     ) {
         /**
          * Constructor.
@@ -60,6 +68,7 @@ public record PypiSimpleIndex(String originalHtml, List<Link> links) {
          * @param version Extracted version
          * @param requiresPython data-requires-python value
          * @param distInfoMetadata data-dist-info-metadata value
+         * @param uploadTime data-upload-time value (PEP 700)
          */
         public Link {
             Objects.requireNonNull(href, "href must not be null");

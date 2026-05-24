@@ -13,10 +13,14 @@ package com.auto1.pantera.composer.cooldown;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.function.BiPredicate;
 
@@ -167,22 +171,46 @@ public final class ComposerRootPackagesFilter {
             final String pkgName = pkgEntry.getKey();
             final JsonNode pkgNode = pkgEntry.getValue();
             if (pkgNode instanceof ObjectNode versionsObj) {
-                final Iterator<String> verNames = versionsObj.fieldNames();
-                while (verNames.hasNext()) {
-                    result.add(new PackageVersion(pkgName, verNames.next()));
+                final Iterator<Map.Entry<String, JsonNode>> verIter = versionsObj.fields();
+                while (verIter.hasNext()) {
+                    final Map.Entry<String, JsonNode> ver = verIter.next();
+                    result.add(new PackageVersion(
+                        pkgName, ver.getKey(), parseTime(ver.getValue())
+                    ));
                 }
             } else if (pkgNode != null && pkgNode.isArray()) {
                 for (final JsonNode entry : pkgNode) {
                     if (entry != null && entry.has("version")) {
                         final String version = entry.get("version").asText(null);
                         if (version != null) {
-                            result.add(new PackageVersion(pkgName, version));
+                            result.add(new PackageVersion(pkgName, version, parseTime(entry)));
                         }
                     }
                 }
             }
         }
         return result;
+    }
+
+    /**
+     * Parse the {@code time} field off a Composer version entry —
+     * either a v1 version-map value or a v2 array element. Returns
+     * empty when missing or unparseable (cooldown then treats the
+     * version as release-date-unknown and allows).
+     */
+    private static Optional<Instant> parseTime(final JsonNode versionObj) {
+        if (versionObj == null || !versionObj.isObject()) {
+            return Optional.empty();
+        }
+        final JsonNode timeNode = versionObj.get("time");
+        if (timeNode == null || !timeNode.isTextual()) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(OffsetDateTime.parse(timeNode.asText()).toInstant());
+        } catch (final DateTimeParseException ex) {
+            return Optional.empty();
+        }
     }
 
     /**
@@ -227,16 +255,23 @@ public final class ComposerRootPackagesFilter {
     }
 
     /**
-     * Simple (package, version) pair used by the handler when batching
-     * blocked-check queries against the cooldown service.
+     * (package, version, release-date) triple used by the handler when
+     * batching blocked-check queries against the cooldown service. The
+     * release date is taken from the version entry's {@code time} field
+     * — present iff the upstream packument inlines it (Composer always
+     * does, for both v1 and v2 endpoints).
      */
     public static final class PackageVersion {
         private final String pkg;
         private final String version;
+        private final Optional<Instant> releaseDate;
 
-        public PackageVersion(final String pkg, final String version) {
+        public PackageVersion(
+            final String pkg, final String version, final Optional<Instant> releaseDate
+        ) {
             this.pkg = pkg;
             this.version = version;
+            this.releaseDate = releaseDate;
         }
 
         public String pkg() {
@@ -245,6 +280,10 @@ public final class ComposerRootPackagesFilter {
 
         public String version() {
             return this.version;
+        }
+
+        public Optional<Instant> releaseDate() {
+            return this.releaseDate;
         }
     }
 }

@@ -12,7 +12,6 @@ package com.auto1.pantera.composer.cooldown;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.cooldown.api.CooldownBlock;
-import com.auto1.pantera.cooldown.api.CooldownDependency;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownReason;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
@@ -63,8 +62,7 @@ final class ComposerRootPackagesHandlerTest {
         this.upstream = new ScriptedSlice();
         this.cooldown = new ScriptedCooldown();
         this.handler = new ComposerRootPackagesHandler(
-            this.upstream, this.cooldown, new NullInspector(),
-            "php", "composer-test"
+            this.upstream, this.cooldown, "php", "composer-test"
         );
     }
 
@@ -353,6 +351,17 @@ final class ComposerRootPackagesHandlerTest {
         public CompletableFuture<CooldownResult> evaluate(
             final CooldownRequest request, final CooldownInspector inspector
         ) {
+            return this.decide(request);
+        }
+
+        @Override
+        public CompletableFuture<CooldownResult> evaluateWithKnownDate(
+            final CooldownRequest request, final Optional<Instant> knownReleaseDate
+        ) {
+            return this.decide(request);
+        }
+
+        private CompletableFuture<CooldownResult> decide(final CooldownRequest request) {
             final Map.Entry<String, String> key = new AbstractMap.SimpleEntry<>(
                 request.artifact(), request.version()
             );
@@ -395,19 +404,4 @@ final class ComposerRootPackagesHandlerTest {
         }
     }
 
-    private static final class NullInspector implements CooldownInspector {
-        @Override
-        public CompletableFuture<Optional<Instant>> releaseDate(
-            final String artifact, final String version
-        ) {
-            return CompletableFuture.completedFuture(Optional.empty());
-        }
-
-        @Override
-        public CompletableFuture<List<CooldownDependency>> dependencies(
-            final String artifact, final String version
-        ) {
-            return CompletableFuture.completedFuture(List.of());
-        }
-    }
 }

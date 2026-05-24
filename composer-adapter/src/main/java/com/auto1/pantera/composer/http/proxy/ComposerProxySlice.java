@@ -194,6 +194,25 @@ public class ComposerProxySlice implements Slice {
         final String baseUrl,
         final String upstreamUrl
     ) {
+        // Build the cache+rewrite slice once and share it between the
+        // fallback SliceRoute (cooldown-off path) and the cooldown
+        // handlers (cooldown-on path). The previous wiring built a
+        // raw-remote slice for the handlers, which bypassed the metadata
+        // cache AND the dist.url rewriter — so on the cooldown-enabled
+        // path, /p2/<vendor>/<pkg>.json responses still pointed Composer
+        // at the upstream (api.github.com / packagist) for archive
+        // downloads, breaking the proxy. Sharing the slice keeps cache
+        // + URL rewriting + primary-artifact integrity intact on both
+        // paths, with per-version cooldown filtering layered on top.
+        final CachedProxySlice cachedProxy = new CachedProxySlice(
+            remote(clients, remote, auth),
+            repository,
+            cache,
+            events,
+            rname,
+            baseUrl,
+            upstreamUrl
+        );
         this.fallback = new SliceRoute(
             new RtRulePath(
                 new RtRule.All(
@@ -216,18 +235,7 @@ public class ComposerProxySlice implements Slice {
                     new RtRule.ByPath(PackageMetadataSlice.PACKAGE),
                     MethodRule.GET
                 ),
-                new CachedProxySlice(
-                    remote(clients, remote, auth),
-                    repository,
-                    cache,
-                    events,
-                    rname,
-                    rtype,
-                    cooldown,
-                    inspector,
-                    baseUrl,
-                    upstreamUrl
-                )
+                cachedProxy
             ),
             new RtRulePath(
                 RtRule.FALLBACK,
@@ -245,21 +253,25 @@ public class ComposerProxySlice implements Slice {
                 )
             )
         );
-        // Build the cooldown upstream slice lazily — the handler fetch
-        // goes directly to the remote (with auth) rather than through
-        // the fallback SliceRoute, so we avoid re-entering our own
-        // dispatcher. This mirrors PypiSimpleHandler's
-        // `simpleUpstream = serveNonArtifact(...)` pattern and
-        // DockerTagsListHandler's direct upstream slice.
-        final Slice cooldownUpstream = remote(clients, remote, auth);
         this.cooldownEnabled = !(cooldown
             instanceof com.auto1.pantera.cooldown.impl.NoopCooldownService);
         if (this.cooldownEnabled) {
+            // Handlers fetch through the shared cache+rewrite slice
+            // (rather than re-entering this dispatcher) — so metadata
+            // is served from cache with dist.url already rewritten,
+            // and the handler just layers per-version filtering on top.
+            // Per-version release dates come from the packument's inline
+            // {@code time} field (Composer always inlines them); the
+            // CooldownInspector is therefore not threaded through the
+            // handler path — the evaluator uses {@code
+            // evaluateWithKnownDate} which skips inspector lookup
+            // entirely. Mirrors the npm/PyPI packument-inline pattern
+            // landed in {@code dbdde1736}.
             this.rootHandler = new ComposerRootPackagesHandler(
-                cooldownUpstream, cooldown, inspector, rtype, rname
+                cachedProxy, cooldown, rtype, rname
             );
             this.packageHandler = new ComposerPackageMetadataHandler(
-                cooldownUpstream, cooldown, inspector, rtype, rname
+                cachedProxy, cooldown, rtype, rname
             );
         } else {
             this.rootHandler = null;

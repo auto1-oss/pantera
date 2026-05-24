@@ -12,7 +12,6 @@ package com.auto1.pantera.pypi.cooldown;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.cooldown.api.CooldownBlock;
-import com.auto1.pantera.cooldown.api.CooldownDependency;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownReason;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
@@ -59,8 +58,7 @@ final class PypiSimpleHandlerTest {
         this.upstream = new ScriptedSlice();
         this.cooldown = new ScriptedCooldown();
         this.handler = new PypiSimpleHandler(
-            this.upstream, this.cooldown, new NullInspector(),
-            "pypi-proxy", "pypi-test"
+            this.upstream, this.cooldown, "pypi-proxy", "pypi-test"
         );
     }
 
@@ -80,7 +78,7 @@ final class PypiSimpleHandlerTest {
         );
         this.cooldown.block("1.2.0");
         final Response resp = this.handler.handle(
-            new RequestLine(RqMethod.GET, "/simple/foo/"), "alice"
+            new RequestLine(RqMethod.GET, "/simple/foo/"), false, "alice"
         ).get();
         assertThat(resp.status().success(), is(true));
         final String body = new String(bodyBytes(resp), StandardCharsets.UTF_8);
@@ -97,7 +95,7 @@ final class PypiSimpleHandlerTest {
         );
         this.cooldown.block("1.0.0", "1.1.0");
         final Response resp = this.handler.handle(
-            new RequestLine(RqMethod.GET, "/simple/foo/"), "alice"
+            new RequestLine(RqMethod.GET, "/simple/foo/"), false, "alice"
         ).get();
         assertThat(resp.status().code(), equalTo(404));
     }
@@ -107,7 +105,7 @@ final class PypiSimpleHandlerTest {
         final String body = simpleHtml("foo", "1.0.0", "1.1.0");
         this.upstream.put("/simple/foo/", body);
         final Response resp = this.handler.handle(
-            new RequestLine(RqMethod.GET, "/simple/foo/"), "alice"
+            new RequestLine(RqMethod.GET, "/simple/foo/"), false, "alice"
         ).get();
         assertThat(resp.status().success(), is(true));
         assertThat(
@@ -128,7 +126,7 @@ final class PypiSimpleHandlerTest {
             simpleHtml("foo-bar", "1.0.0")
         );
         this.handler.handle(
-            new RequestLine(RqMethod.GET, "/simple/Foo_Bar/"), "alice"
+            new RequestLine(RqMethod.GET, "/simple/Foo_Bar/"), false, "alice"
         ).get();
         assertThat(this.cooldown.lastArtifact(), equalTo("foo-bar"));
     }
@@ -136,7 +134,7 @@ final class PypiSimpleHandlerTest {
     @Test
     void upstream404ForwardedUnchanged() throws Exception {
         final Response resp = this.handler.handle(
-            new RequestLine(RqMethod.GET, "/simple/missing/"), "alice"
+            new RequestLine(RqMethod.GET, "/simple/missing/"), false, "alice"
         ).get();
         assertThat(resp.status().code(), equalTo(404));
     }
@@ -207,6 +205,17 @@ final class PypiSimpleHandlerTest {
         public CompletableFuture<CooldownResult> evaluate(
             final CooldownRequest request, final CooldownInspector inspector
         ) {
+            return this.decide(request);
+        }
+
+        @Override
+        public CompletableFuture<CooldownResult> evaluateWithKnownDate(
+            final CooldownRequest request, final Optional<Instant> knownReleaseDate
+        ) {
+            return this.decide(request);
+        }
+
+        private CompletableFuture<CooldownResult> decide(final CooldownRequest request) {
             this.lastArtifact = request.artifact();
             if (!this.blocked.contains(request.version())) {
                 return CompletableFuture.completedFuture(CooldownResult.allowed());
@@ -247,20 +256,4 @@ final class PypiSimpleHandlerTest {
         }
     }
 
-    /** No-op inspector. */
-    private static final class NullInspector implements CooldownInspector {
-        @Override
-        public CompletableFuture<Optional<Instant>> releaseDate(
-            final String artifact, final String version
-        ) {
-            return CompletableFuture.completedFuture(Optional.empty());
-        }
-
-        @Override
-        public CompletableFuture<List<CooldownDependency>> dependencies(
-            final String artifact, final String version
-        ) {
-            return CompletableFuture.completedFuture(List.of());
-        }
-    }
 }

@@ -106,8 +106,18 @@ public record NegativeCacheKey(
     /**
      * PyPI wheel/sdist path: {@code packages/<pkg>-<version>(-<rest>)?\\.(whl|tar\\.gz)}.
      */
+    /**
+     * Matches PyPI distribution filenames preceded by ANY directory
+     * prefix — both the upstream {@code packages/<hash>/<file>} layout
+     * and the Pantera-hosted {@code simple/<pkg>/<version>/<file>}
+     * layout that the hosted SliceIndex emits as relative hrefs. Without
+     * the broader prefix, the regex bailed to the empty-version fallback
+     * for hosted files and the resulting key collided with the
+     * matching {@code /simple/&lt;pkg&gt;/} index entry — a 404 on the
+     * index poisoned every {@code .whl} for the same package.
+     */
     private static final Pattern PYPI_FILE = Pattern.compile(
-        "^(?:packages/(?:[a-f0-9/]+)?)?([^/]+?)-([^-/]+?)(?:-[^/]+)?\\.(?:whl|tar\\.gz)$"
+        "^(?:.*/)?([^/]+?)-([^-/]+?)(?:-[^/]+)?\\.(?:whl|tar\\.gz)$"
     );
 
     /**

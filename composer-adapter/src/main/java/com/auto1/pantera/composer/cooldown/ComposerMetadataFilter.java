@@ -12,8 +12,10 @@ package com.auto1.pantera.composer.cooldown;
 
 import com.auto1.pantera.cooldown.metadata.MetadataFilter;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import java.util.Iterator;
 import java.util.Set;
 
 /**
@@ -42,10 +44,24 @@ public final class ComposerMetadataFilter implements MetadataFilter<JsonNode> {
         }
         final String name = packages.fieldNames().next();
         final JsonNode pkgNode = packages.get(name);
-        if (pkgNode != null && pkgNode.isObject()) {
+        if (pkgNode == null) {
+            return metadata;
+        }
+        if (pkgNode.isObject()) {
             final ObjectNode versionsObj = (ObjectNode) pkgNode;
             for (final String blocked : blockedVersions) {
                 versionsObj.remove(blocked);
+            }
+        } else if (pkgNode.isArray()) {
+            final ArrayNode versionsArr = (ArrayNode) pkgNode;
+            final Iterator<JsonNode> iter = versionsArr.iterator();
+            while (iter.hasNext()) {
+                final JsonNode entry = iter.next();
+                final JsonNode versionNode = entry.get("version");
+                if (versionNode != null && versionNode.isTextual()
+                    && blockedVersions.contains(versionNode.asText())) {
+                    iter.remove();
+                }
             }
         }
         return metadata;
