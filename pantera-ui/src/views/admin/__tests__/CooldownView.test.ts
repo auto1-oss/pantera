@@ -679,3 +679,71 @@ describe('CooldownView global filter bar', () => {
     expect(wrapper.text()).not.toContain('Search blocked artifacts')
   })
 })
+
+describe('CooldownView refresh button', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    getCooldownOverviewMock.mockReset()
+    getCooldownBlockedMock.mockReset()
+    getCooldownHistoryMock.mockReset()
+    getCooldownOverviewMock.mockResolvedValue([])
+    getCooldownBlockedMock.mockResolvedValue({
+      items: [], page: 0, size: 50, total: 0, hasMore: false,
+    })
+    getCooldownHistoryMock.mockResolvedValue({
+      items: [], page: 0, size: 50, total: 0, hasMore: false,
+    })
+  })
+
+  it('re-fetches both overview and blocked endpoints on click', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    // Initial mount fires both endpoints once.
+    expect(getCooldownOverviewMock).toHaveBeenCalledTimes(1)
+    expect(getCooldownBlockedMock).toHaveBeenCalledTimes(1)
+
+    // The refresh button sits next to the page title — locate it by its
+    // accessible label so the test survives icon/markup changes.
+    const refreshBtn = wrapper.find(
+      '[aria-label="Reload cooldown data without refreshing the page"]'
+    )
+    expect(refreshBtn.exists()).toBe(true)
+    await refreshBtn.trigger('click')
+    await flushPromises()
+
+    expect(getCooldownOverviewMock).toHaveBeenCalledTimes(2)
+    expect(getCooldownBlockedMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('preserves current filters on refresh', async () => {
+    // Filter changes reset pagination to 0 by design (covered separately);
+    // refresh must NOT reset the filters themselves. Set filters first
+    // so the page-reset watcher has already fired, then refresh and
+    // confirm the params on the most recent loadBlocked call.
+    const wrapper = mountView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      repoFilter: string | null
+      typeFilter: string | null
+    }
+    vm.repoFilter = 'npm-proxy'
+    vm.typeFilter = 'npm'
+    await flushPromises()
+
+    getCooldownBlockedMock.mockClear()
+    const refreshBtn = wrapper.find(
+      '[aria-label="Reload cooldown data without refreshing the page"]'
+    )
+    await refreshBtn.trigger('click')
+    await flushPromises()
+
+    const params = getCooldownBlockedMock.mock.calls.at(-1)![0] as {
+      repo?: string
+      repo_type?: string
+    }
+    expect(params.repo).toBe('npm-proxy')
+    expect(params.repo_type).toBe('npm')
+  })
+})

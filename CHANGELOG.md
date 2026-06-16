@@ -2,6 +2,51 @@
 
 ## Version 2.2.0
 
+- **Group-layer request coalescing: concurrent same-path bursts no
+  longer race on stream-through commits.** A user's `gradle build`
+  reproducing as 8/8 → HTTP 500 on the same kotlin-stdlib JAR through
+  `gradle_group` exposed an old hazard: under N-way parallel resolves
+  (typical of `mvn dependency:resolve`, `gradle build`, `uv lock`), each
+  request entered the per-member `coalesceUpstream` independently. Each
+  member's stream-through atomic-rename clobbered the same final path,
+  and concurrent readers raced with `NoSuchFileException` at
+  `FileStorage.metadata` / `FileChannel.open` mid-rename. Cache writes
+  succeeded but readers got 500 because their lazily-opened file
+  channels found the path missing.
+
+  Fix: `GroupResolver.response` now coalesces concurrent same-path
+  read requests at the group entrypoint via
+  `SingleFlight<String, BufferedResponse>` keyed by `method + ' ' + path`.
+  Exactly one resolve runs upstream per (method, path) burst; the
+  leader buffers its response body into a byte[] snapshot; followers
+  rebuild fresh `Response`s from that snapshot without touching the
+  filesystem. Memory pressure is bounded by the 2-minute in-flight TTL
+  on `SingleFlight` — a function of concurrent-burst × body size, not
+  steady state. POST (npm-audit) bypasses dedup since request bodies
+  matter per-caller.
+
+  Verification: 10-way parallel curl burst on the failing URL
+  `http://localhost:8081/test_prefix/api/gradle_group/org/jetbrains/kotlin/kotlin-stdlib-jdk7/2.0.21/kotlin-stdlib-jdk7-2.0.21.jar`
+  with `gradle_proxy` disk + Valkey + `artifacts` DB purged: pre-fix
+  10/10 → 500; post-fix 10/10 → 200, 946 bytes each, with 2 upstream
+  cache_write events (one per member) instead of 10+.
+
+  File: `pantera-main/.../group/GroupResolver.java`.
+
+- **Cooldown admin view: in-page refresh.** Adds a "Refresh" button
+  next to the page title that re-pulls the overview tiles and
+  blocked-artifacts table in parallel without a page reload. Preserves
+  current search / repo / type filters and pagination state. The
+  button spins while in flight and is wired to the existing `loading`
+  ref so accidental double-clicks coalesce. Especially useful after a
+  dynamic cooldown-duration change — existing blocks are re-evaluated
+  against the new `minimumAllowedAge` on the very next request (see
+  `JdbcCooldownService.checkExistingBlockWithTimestamp`), but until
+  now the only way to see the new state was a full browser reload.
+
+  Files: `pantera-ui/src/views/admin/CooldownView.vue`,
+  `pantera-ui/src/views/admin/__tests__/CooldownView.test.ts`.
+
 - **PyPI uv compatibility — PEP 691 content negotiation, neg-cache key
   disambiguation, hosted-PEP 658 HEAD support.** The first wave of pypi
   cooldown fixes (RCA-pypi-A / B above) made cooldown blocks work for

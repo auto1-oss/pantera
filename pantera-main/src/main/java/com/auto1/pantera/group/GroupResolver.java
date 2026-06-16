@@ -119,7 +119,32 @@ public final class GroupResolver implements Slice {
     private final String repoType;
     private final NegativeCache negativeCache;
     private final SingleFlight<String, Void> inFlightFanouts;
+    /**
+     * Request-level coalescer keyed by {@code method + ' ' + path}. Pre-fix
+     * (2026-06-16): a concurrent burst of same-path GETs against a group
+     * with cold members raced past each other inside the per-member
+     * {@code coalesceUpstream}: each request independently fanned out,
+     * each member's stream-through committed the same file, and the
+     * resulting atomic-rename overlap left readers with NoSuchFileException
+     * at {@code FileStorage.metadata}/{@code FileChannel.open}. 8-way Gradle
+     * classpath bursts produced 8/8 502s on a fresh cache. Coalescing at
+     * the group entrypoint — before any member fanout — means exactly one
+     * resolve runs upstream per (method, path) burst; followers receive
+     * a fresh {@link Response} built from a byte[] snapshot of the leader's
+     * body. Memory pressure is a function of concurrent-burst size ×
+     * body size, bounded by the 2-minute in-flight TTL on {@link SingleFlight}.
+     */
+    private final SingleFlight<String, BufferedResponse> requestDedup;
     private final java.util.concurrent.Executor drainExecutor;
+
+    /**
+     * Snapshot of a resolved group response, safe to fan out to N
+     * followers. Holds the response status, headers, and the fully
+     * buffered body bytes so each follower can build its own
+     * {@link Response} without re-running the resolve or sharing the
+     * leader's single-subscriber publisher.
+     */
+    private record BufferedResponse(RsStatus status, Headers headers, byte[] body) { }
     /**
      * Per-coordinate sibling-member pin. When a request for artifact {@code X}
      * is served successfully by member {@code M}, subsequent requests for any
@@ -169,6 +194,11 @@ public final class GroupResolver implements Slice {
         this.inFlightFanouts = new SingleFlight<>(
             Duration.ofMinutes(5),
             10_000,
+            ContextualExecutor.contextualize(ForkJoinPool.commonPool())
+        );
+        this.requestDedup = new SingleFlight<>(
+            Duration.ofMinutes(2),
+            4_096,
             ContextualExecutor.contextualize(ForkJoinPool.commonPool())
         );
         this.memberPin = Caffeine.newBuilder()
@@ -296,8 +326,36 @@ public final class GroupResolver implements Slice {
         recordRequestStart();
         final long requestStartTime = System.currentTimeMillis();
 
-        return resolve(line, headers, body, path)
-            .whenComplete((resp, err) -> recordMetrics(resp, err, requestStartTime));
+        // Coalesce concurrent same-path read requests at the group entrypoint.
+        // Without this, an N-way mvn/gradle/uv parallel resolve all hit the
+        // per-member coalesceUpstream independently, multiple stream-throughs
+        // atomic-rename the same file, and readers race with NoSuchFileException
+        // at FileStorage.metadata / FileChannel.open (RCA-1, 2026-06-16). POST
+        // (npm-audit) bypasses dedup — request bodies matter per-caller.
+        if (!isReadOperation) {
+            return resolve(line, headers, body, path)
+                .whenComplete((resp, err) -> recordMetrics(resp, err, requestStartTime));
+        }
+        final String dedupKey = method + " " + path;
+        return this.requestDedup.load(
+            dedupKey,
+            () -> resolve(line, headers, body, path).thenCompose(this::bufferResponse)
+        ).thenApply(buf -> ResponseBuilder.from(buf.status())
+            .headers(buf.headers())
+            .body(buf.body())
+            .build()
+        ).whenComplete((resp, err) -> recordMetrics(resp, err, requestStartTime));
+    }
+
+    /**
+     * Drain the leader's response body into a byte[] snapshot followers
+     * can rebuild fresh {@link Response}s from. The leader's body is a
+     * single-subscriber publisher; only one subscriber can consume it, so
+     * the leader buffers once and shares the bytes.
+     */
+    private CompletableFuture<BufferedResponse> bufferResponse(final Response resp) {
+        return resp.body().asBytesFuture()
+            .thenApply(bytes -> new BufferedResponse(resp.status(), resp.headers(), bytes));
     }
 
     /**

@@ -162,6 +162,20 @@ async function loadOverview() {
   }
 }
 
+/**
+ * Manual refresh: re-pull both the per-repo overview tiles AND the
+ * blocked-artifacts table without rerouting the page. The button is
+ * exposed in the header next to the title; useful when an admin
+ * unblocks an artifact server-side, lowers the global / per-type
+ * cooldown duration (which triggers DYNAMIC re-evaluation on the very
+ * next request — see JdbcCooldownService.checkExistingBlockWithTimestamp),
+ * or is otherwise waiting for new blocks to appear without losing
+ * the current filter / pagination state.
+ */
+async function refresh() {
+  await Promise.all([loadOverview(), loadBlocked()])
+}
+
 async function loadBlocked() {
   if (blockedAbortCtrl) blockedAbortCtrl.abort()
   blockedAbortCtrl = new AbortController()
@@ -273,6 +287,16 @@ onMounted(() => {
     <div class="space-y-6">
       <div class="flex items-center justify-between">
         <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Cooldown</h1>
+        <Button
+          icon="pi pi-refresh"
+          label="Refresh"
+          severity="secondary"
+          outlined
+          size="small"
+          :loading="loading"
+          aria-label="Reload cooldown data without refreshing the page"
+          @click="refresh"
+        />
       </div>
 
       <!--
