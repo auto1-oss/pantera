@@ -326,13 +326,29 @@ public final class GroupResolver implements Slice {
         recordRequestStart();
         final long requestStartTime = System.currentTimeMillis();
 
-        // Coalesce concurrent same-path read requests at the group entrypoint.
+        // Coalesce concurrent same-path GET requests at the group entrypoint.
         // Without this, an N-way mvn/gradle/uv parallel resolve all hit the
         // per-member coalesceUpstream independently, multiple stream-throughs
         // atomic-rename the same file, and readers race with NoSuchFileException
-        // at FileStorage.metadata / FileChannel.open (RCA-1, 2026-06-16). POST
-        // (npm-audit) bypasses dedup — request bodies matter per-caller.
-        if (!isReadOperation) {
+        // at FileStorage.metadata / FileChannel.open (RCA-1, 2026-06-16).
+        //
+        // HEAD is intentionally NOT deduped:
+        //   * HEAD does not trigger storage.save, so there is no body-race
+        //     to coalesce.
+        //   * HEAD responses must carry the same Content-Length the matching
+        //     GET would have set (RFC 7231), with an EMPTY body. Our
+        //     bufferResponse drains resp.body() into a byte[] and rebuilds
+        //     the response via ResponseBuilder.body(byte[]), which
+        //     unconditionally overwrites Content-Length with bytes.length.
+        //     For HEAD that means Content-Length: 0 — Docker's daemon then
+        //     errors out with "unable to fetch descriptor (sha256:…) which
+        //     reports content size of zero: invalid argument" when probing
+        //     a manifest by digest. Skipping dedup keeps the upstream-set
+        //     Content-Length intact.
+        // POST (npm-audit) also bypasses dedup — request bodies matter
+        // per-caller.
+        final boolean coalesce = "GET".equals(method);
+        if (!coalesce) {
             return resolve(line, headers, body, path)
                 .whenComplete((resp, err) -> recordMetrics(resp, err, requestStartTime));
         }
