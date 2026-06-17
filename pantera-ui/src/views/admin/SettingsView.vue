@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, h, onMounted, ref } from 'vue'
 import {
   getSettings, updatePrefixes, updateSettingsSection,
   getCooldownConfig, updateCooldownConfig,
@@ -29,6 +29,86 @@ const uiVersion = __APP_VERSION__
 const settings = ref<Settings | null>(null)
 const loading = ref(true)
 const saving = ref<string | null>(null)
+
+/**
+ * Section identifier used by the unified save bar to track per-section
+ * dirty state and tell admins which parts of the page took effect
+ * immediately vs require a restart. The id keys into {@link SECTION_META}.
+ */
+type SectionId =
+  | 'prefixes' | 'jwt' | 'auth' | 'circuit_breaker'
+  | 'cooldown' | 'http_client' | 'bulkhead' | 'http_server'
+  | 'external_links'
+
+interface SectionMeta {
+  /** Human-readable name shown in toasts and the dirty list. */
+  label: string
+  /**
+   * True when a server-side listener applies the value to live state
+   * (e.g. {@code cooldown} + {@code http_client.bulkhead.*} have explicit
+   * {@code addListener} hooks in {@code VertxMain.java}), OR the value
+   * is read through a supplier on the request path. False when the
+   * value is consumed once at startup and the new value is dormant
+   * until the next process boot.
+   */
+  hotReload: boolean
+  /**
+   * Short reason shown in the inline restart pill + the post-save
+   * summary. Only meaningful when {@code hotReload} is false.
+   */
+  restartReason?: string
+}
+
+/**
+ * Source-of-truth for hot-reload vs restart-required behaviour per
+ * settings section. Driven by the actual server-side listener wiring
+ * in {@code VertxMain.java} ({@code settingsCache.addListener}) and
+ * the supplier patterns in {@code RepositorySlices} /
+ * {@code CooldownSupport} / {@code JwtTokens}. When you wire a new
+ * hot-reload listener on the server, flip {@code hotReload} here
+ * and drop the {@code restartReason}.
+ */
+const SECTION_META: Record<SectionId, SectionMeta> = {
+  prefixes: {
+    label: 'Global Path Prefixes',
+    hotReload: true,
+  },
+  jwt: {
+    label: 'JWT / Session',
+    hotReload: true,
+  },
+  auth: {
+    label: 'Authentication Policy',
+    hotReload: true,
+  },
+  circuit_breaker: {
+    label: 'Upstream Failure Circuit Breaker',
+    hotReload: true,
+  },
+  cooldown: {
+    label: 'Cooldown Configuration',
+    hotReload: true,
+  },
+  http_client: {
+    label: 'HTTP Client (Proxy)',
+    hotReload: true,
+  },
+  bulkhead: {
+    label: 'Bulkhead (Adaptive Concurrency)',
+    hotReload: true,
+  },
+  http_server: {
+    label: 'HTTP Server',
+    hotReload: false,
+    restartReason:
+      'request_timeout is read once at startup via VertxMain.listenOn; '
+      + 'the server must be restarted for the new value to bind.',
+  },
+  external_links: {
+    label: 'External Links',
+    hotReload: true,
+  },
+}
 
 // Editable state
 const prefixes = ref('')
@@ -191,26 +271,34 @@ onMounted(async () => {
       cooldownSnapshotEnabled.value = cd.snapshots?.enabled ?? null
       cooldownSnapshotAge.value = cd.snapshots?.minimum_allowed_age ?? ''
     }
-    getAuthSettings().then(s => {
-      authAccessTtl.value = parseInt(s.access_token_ttl_seconds ?? '3600')
-      authRefreshTtl.value = parseInt(s.refresh_token_ttl_seconds ?? '604800')
-      authApiMaxTtl.value = parseInt(s.api_token_max_ttl_seconds ?? '7776000')
-      authAllowPermanent.value = s.api_token_allow_permanent === 'true'
-    }).catch(() => {})
-    getCircuitBreakerSettings().then(s => {
-      cbFailureRatePercent.value = Math.round(
-        parseFloat(s.circuit_breaker_failure_rate_threshold ?? '0.5') * 100,
-      )
-      cbMinCalls.value = parseInt(s.circuit_breaker_minimum_number_of_calls ?? '20')
-      cbWindowSeconds.value = parseInt(s.circuit_breaker_sliding_window_seconds ?? '30')
-      cbInitialBlockSeconds.value = parseInt(s.circuit_breaker_initial_block_seconds ?? '20')
-      cbMaxBlockSeconds.value = parseInt(s.circuit_breaker_max_block_seconds ?? '300')
-    }).catch(() => {})
-    runtime.load().catch(() => {})
+    // Run the secondary loaders together and AWAIT them before
+    // snapshotting the baseline; otherwise the baseline captures
+    // un-filled defaults and the dirty bar flashes on every mount.
+    await Promise.allSettled([
+      getAuthSettings().then(s => {
+        authAccessTtl.value = parseInt(s.access_token_ttl_seconds ?? '3600')
+        authRefreshTtl.value = parseInt(s.refresh_token_ttl_seconds ?? '604800')
+        authApiMaxTtl.value = parseInt(s.api_token_max_ttl_seconds ?? '7776000')
+        authAllowPermanent.value = s.api_token_allow_permanent === 'true'
+      }),
+      getCircuitBreakerSettings().then(s => {
+        cbFailureRatePercent.value = Math.round(
+          parseFloat(s.circuit_breaker_failure_rate_threshold ?? '0.5') * 100,
+        )
+        cbMinCalls.value = parseInt(s.circuit_breaker_minimum_number_of_calls ?? '20')
+        cbWindowSeconds.value = parseInt(s.circuit_breaker_sliding_window_seconds ?? '30')
+        cbInitialBlockSeconds.value = parseInt(s.circuit_breaker_initial_block_seconds ?? '20')
+        cbMaxBlockSeconds.value = parseInt(s.circuit_breaker_max_block_seconds ?? '300')
+      }),
+      runtime.load(),
+    ])
   } catch {
     notify.error('Failed to load settings')
   } finally {
     loading.value = false
+    // Once every field has its loaded value, snapshot the baseline so
+    // the unified save bar starts with dirtyCount=0.
+    baseline.value = snapshot()
   }
 })
 
@@ -446,6 +534,290 @@ async function saveExternalLinks() {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Unified save infrastructure: one Save Changes bar at the bottom
+// drives every editable section. Each section snapshots its
+// "last-saved" values in {@link baseline} on load + after a successful
+// save; the section's dirty bit compares the live ref against that
+// baseline. The sticky bar reads {@link dirtySections} so the admin
+// sees the changed-section count + restart-required pills before
+// committing.
+// ─────────────────────────────────────────────────────────────────────
+
+interface Baseline {
+  prefixes: string
+  jwtExpires: boolean
+  jwtExpirySeconds: number
+  authAccessTtl: number
+  authRefreshTtl: number
+  authApiMaxTtl: number
+  authAllowPermanent: boolean
+  cbFailureRatePercent: number
+  cbMinCalls: number
+  cbWindowSeconds: number
+  cbInitialBlockSeconds: number
+  cbMaxBlockSeconds: number
+  cooldownEnabled: boolean
+  cooldownAge: string
+  cooldownHistoryRetentionDays: number
+  cooldownCleanupBatchLimit: number
+  cooldownSnapshotEnabled: boolean | null
+  cooldownSnapshotAge: string
+  cooldownRepoTypesJson: string
+  httpProxyTimeout: number
+  httpConnTimeout: number
+  httpIdleTimeout: number
+  httpFollowRedirects: boolean
+  httpAcquireTimeout: number
+  httpMaxConns: number
+  httpMaxQueued: number
+  httpServerTimeout: string
+  grafanaUrl: string
+  registryUrl: string
+}
+
+const baseline = ref<Baseline | null>(null)
+
+function snapshot(): Baseline {
+  return {
+    prefixes: prefixes.value,
+    jwtExpires: jwtExpires.value,
+    jwtExpirySeconds: jwtExpirySeconds.value,
+    authAccessTtl: authAccessTtl.value,
+    authRefreshTtl: authRefreshTtl.value,
+    authApiMaxTtl: authApiMaxTtl.value,
+    authAllowPermanent: authAllowPermanent.value,
+    cbFailureRatePercent: cbFailureRatePercent.value,
+    cbMinCalls: cbMinCalls.value,
+    cbWindowSeconds: cbWindowSeconds.value,
+    cbInitialBlockSeconds: cbInitialBlockSeconds.value,
+    cbMaxBlockSeconds: cbMaxBlockSeconds.value,
+    cooldownEnabled: cooldownEnabled.value,
+    cooldownAge: cooldownAge.value,
+    cooldownHistoryRetentionDays: cooldownHistoryRetentionDays.value,
+    cooldownCleanupBatchLimit: cooldownCleanupBatchLimit.value,
+    cooldownSnapshotEnabled: cooldownSnapshotEnabled.value,
+    cooldownSnapshotAge: cooldownSnapshotAge.value,
+    // The Cooldown repo_types override map is tracked via JSON so
+    // any edit to the rows (add/remove/toggle/age) flips the dirty
+    // bit without per-field watchers.
+    cooldownRepoTypesJson: JSON.stringify(cooldownConfig.value?.repo_types ?? {}),
+    httpProxyTimeout: httpProxyTimeout.value,
+    httpConnTimeout: httpConnTimeout.value,
+    httpIdleTimeout: httpIdleTimeout.value,
+    httpFollowRedirects: httpFollowRedirects.value,
+    httpAcquireTimeout: httpAcquireTimeout.value,
+    httpMaxConns: httpMaxConns.value,
+    httpMaxQueued: httpMaxQueued.value,
+    httpServerTimeout: httpServerTimeout.value,
+    grafanaUrl: grafanaUrl.value,
+    registryUrl: registryUrl.value,
+  }
+}
+
+const isDirtyPrefixes = computed(() =>
+  !!baseline.value && baseline.value.prefixes !== prefixes.value)
+const isDirtyJwt = computed(() =>
+  !!baseline.value
+    && (baseline.value.jwtExpires !== jwtExpires.value
+      || baseline.value.jwtExpirySeconds !== jwtExpirySeconds.value))
+const isDirtyAuth = computed(() =>
+  !!baseline.value
+    && (baseline.value.authAccessTtl !== authAccessTtl.value
+      || baseline.value.authRefreshTtl !== authRefreshTtl.value
+      || baseline.value.authApiMaxTtl !== authApiMaxTtl.value
+      || baseline.value.authAllowPermanent !== authAllowPermanent.value))
+const isDirtyCircuitBreaker = computed(() =>
+  !!baseline.value
+    && (baseline.value.cbFailureRatePercent !== cbFailureRatePercent.value
+      || baseline.value.cbMinCalls !== cbMinCalls.value
+      || baseline.value.cbWindowSeconds !== cbWindowSeconds.value
+      || baseline.value.cbInitialBlockSeconds !== cbInitialBlockSeconds.value
+      || baseline.value.cbMaxBlockSeconds !== cbMaxBlockSeconds.value))
+const isDirtyCooldown = computed(() =>
+  !!baseline.value
+    && (baseline.value.cooldownEnabled !== cooldownEnabled.value
+      || baseline.value.cooldownAge !== cooldownAge.value
+      || baseline.value.cooldownHistoryRetentionDays !== cooldownHistoryRetentionDays.value
+      || baseline.value.cooldownCleanupBatchLimit !== cooldownCleanupBatchLimit.value
+      || baseline.value.cooldownSnapshotEnabled !== cooldownSnapshotEnabled.value
+      || baseline.value.cooldownSnapshotAge !== cooldownSnapshotAge.value
+      || baseline.value.cooldownRepoTypesJson
+        !== JSON.stringify(cooldownConfig.value?.repo_types ?? {})))
+const isDirtyHttpClient = computed(() =>
+  !!baseline.value
+    && (baseline.value.httpProxyTimeout !== httpProxyTimeout.value
+      || baseline.value.httpConnTimeout !== httpConnTimeout.value
+      || baseline.value.httpIdleTimeout !== httpIdleTimeout.value
+      || baseline.value.httpFollowRedirects !== httpFollowRedirects.value
+      || baseline.value.httpAcquireTimeout !== httpAcquireTimeout.value
+      || baseline.value.httpMaxConns !== httpMaxConns.value
+      || baseline.value.httpMaxQueued !== httpMaxQueued.value))
+const isDirtyHttpServer = computed(() =>
+  !!baseline.value && baseline.value.httpServerTimeout !== httpServerTimeout.value)
+const isDirtyExternalLinks = computed(() =>
+  !!baseline.value
+    && (baseline.value.grafanaUrl !== grafanaUrl.value
+      || baseline.value.registryUrl !== registryUrl.value))
+
+/**
+ * Bulkhead dirty bit comes from the existing {@code useRuntimeSettings}
+ * composable's per-key tracking. We treat the whole bulkhead block as
+ * one section in the summary so the dirty list stays readable.
+ */
+const isDirtyBulkhead = computed(() => Boolean(runtime.anyDirty?.value))
+
+const DIRTY_PER_SECTION: Record<SectionId, { value: boolean }> = {
+  prefixes: isDirtyPrefixes,
+  jwt: isDirtyJwt,
+  auth: isDirtyAuth,
+  circuit_breaker: isDirtyCircuitBreaker,
+  cooldown: isDirtyCooldown,
+  http_client: isDirtyHttpClient,
+  bulkhead: isDirtyBulkhead,
+  http_server: isDirtyHttpServer,
+  external_links: isDirtyExternalLinks,
+}
+
+const dirtySections = computed<SectionId[]>(() =>
+  (Object.keys(DIRTY_PER_SECTION) as SectionId[])
+    .filter(id => DIRTY_PER_SECTION[id].value))
+
+const dirtyCount = computed(() => dirtySections.value.length)
+
+/**
+ * Per-section save dispatch. Reuses the existing per-section save
+ * functions so behaviour matches what the old individual Save buttons
+ * did — only the trigger is unified.
+ */
+async function saveSectionById(id: SectionId): Promise<void> {
+  switch (id) {
+    case 'prefixes': await savePrefixes(); break
+    case 'jwt': await Promise.resolve(saveJwt()); break
+    case 'auth': await saveAuthSettings(); break
+    case 'circuit_breaker': await saveCircuitBreakerSettings(); break
+    case 'cooldown': await saveCooldown(); break
+    case 'http_client': await Promise.resolve(saveHttpClient()); break
+    case 'bulkhead': await runtime.saveAllDirty(); break
+    case 'http_server': await Promise.resolve(saveHttpServer()); break
+    case 'external_links': await saveExternalLinks(); break
+  }
+}
+
+const savingAll = ref(false)
+
+/**
+ * Submit every dirty section in parallel, refresh the baseline so the
+ * dirty bar clears, and emit one consolidated toast. Hot-reload
+ * sections take effect immediately; restart-required ones are flagged
+ * with their reason from {@link SECTION_META} so the admin knows the
+ * old value is still live until the next process boot.
+ */
+async function saveAll() {
+  const ids = dirtySections.value.slice()
+  if (ids.length === 0) return
+  savingAll.value = true
+  const restartRequired = ids.filter(id => !SECTION_META[id].hotReload)
+  try {
+    // saveSectionById delegates to the existing per-section funcs,
+    // each of which already manages its own try/catch + per-toast.
+    // The unified toasts below summarise the batch outcome.
+    await Promise.all(ids.map(saveSectionById))
+    baseline.value = snapshot()
+    if (restartRequired.length > 0) {
+      notify.warn(
+        'Some changes need a restart',
+        restartRequired
+          .map(id => `${SECTION_META[id].label}: ${SECTION_META[id].restartReason ?? 'requires restart'}`)
+          .join(' • '),
+      )
+    } else {
+      notify.success(
+        `Saved ${ids.length} section${ids.length === 1 ? '' : 's'}`,
+        'All changes took effect immediately (hot reload).',
+      )
+    }
+  } finally {
+    savingAll.value = false
+  }
+}
+
+function discardAll() {
+  if (!baseline.value) return
+  const b = baseline.value
+  prefixes.value = b.prefixes
+  jwtExpires.value = b.jwtExpires
+  jwtExpirySeconds.value = b.jwtExpirySeconds
+  authAccessTtl.value = b.authAccessTtl
+  authRefreshTtl.value = b.authRefreshTtl
+  authApiMaxTtl.value = b.authApiMaxTtl
+  authAllowPermanent.value = b.authAllowPermanent
+  cbFailureRatePercent.value = b.cbFailureRatePercent
+  cbMinCalls.value = b.cbMinCalls
+  cbWindowSeconds.value = b.cbWindowSeconds
+  cbInitialBlockSeconds.value = b.cbInitialBlockSeconds
+  cbMaxBlockSeconds.value = b.cbMaxBlockSeconds
+  cooldownEnabled.value = b.cooldownEnabled
+  cooldownAge.value = b.cooldownAge
+  cooldownHistoryRetentionDays.value = b.cooldownHistoryRetentionDays
+  cooldownCleanupBatchLimit.value = b.cooldownCleanupBatchLimit
+  cooldownSnapshotEnabled.value = b.cooldownSnapshotEnabled
+  cooldownSnapshotAge.value = b.cooldownSnapshotAge
+  if (cooldownConfig.value) {
+    cooldownConfig.value = {
+      ...cooldownConfig.value,
+      repo_types: JSON.parse(b.cooldownRepoTypesJson),
+    }
+  }
+  httpProxyTimeout.value = b.httpProxyTimeout
+  httpConnTimeout.value = b.httpConnTimeout
+  httpIdleTimeout.value = b.httpIdleTimeout
+  httpFollowRedirects.value = b.httpFollowRedirects
+  httpAcquireTimeout.value = b.httpAcquireTimeout
+  httpMaxConns.value = b.httpMaxConns
+  httpMaxQueued.value = b.httpMaxQueued
+  httpServerTimeout.value = b.httpServerTimeout
+  grafanaUrl.value = b.grafanaUrl
+  registryUrl.value = b.registryUrl
+  // Bulkhead reset uses its own discard path: revert each per-key
+  // edit back to the loaded row value so the composable's anyDirty
+  // flag clears.
+  for (const key of Object.keys(runtime.rows) as RuntimeSettingKey[]) {
+    runtime.edited[key] = runtime.rows[key].value
+  }
+}
+
+/**
+ * Functional component used inside every Card title row. Renders the
+ * section's display label plus (when dirty) a pill telling the admin
+ * whether the unified save will hot-reload the change or only persist
+ * it. Co-located in this script so it can read the SECTION_META map
+ * directly without prop-drilling.
+ */
+const SectionHeader = (props: { id: SectionId; dirty: boolean }) => {
+  const meta = SECTION_META[props.id]
+  const children: Array<ReturnType<typeof h> | string> = [meta.label]
+  if (props.dirty) {
+    children.push(
+      h(
+        'span',
+        {
+          class: meta.hotReload
+            ? 'ml-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[0.7rem] font-semibold bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-200'
+            : 'ml-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[0.7rem] font-semibold bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200',
+          title: meta.restartReason ?? 'Applies immediately on save',
+          'data-testid': `section-pill-${props.id}`,
+        },
+        [
+          h('i', { class: meta.hotReload ? 'pi pi-bolt' : 'pi pi-refresh' }),
+          meta.hotReload ? 'Hot reload' : 'Restart required',
+        ],
+      ),
+    )
+  }
+  return h('span', { class: 'inline-flex items-center' }, children)
+}
+
 </script>
 
 <template>
@@ -482,26 +854,22 @@ async function saveExternalLinks() {
 
       <!-- Prefixes -->
       <Card class="shadow-sm">
-        <template #title>Global Path Prefixes</template>
+        <template #title>
+          <SectionHeader id="prefixes" :dirty="isDirtyPrefixes" />
+        </template>
         <template #content>
           <p class="text-sm text-gray-500 mb-3">
             Comma-separated list of path prefixes for repository routing
           </p>
-          <div class="flex gap-3">
-            <InputText v-model="prefixes" class="flex-1" placeholder="e.g. maven, docker, npm" />
-            <Button
-              label="Save"
-              icon="pi pi-save"
-              :loading="saving === 'prefixes'"
-              @click="savePrefixes"
-            />
-          </div>
+          <InputText v-model="prefixes" class="w-full" placeholder="e.g. maven, docker, npm" />
         </template>
       </Card>
 
       <!-- JWT -->
       <Card class="shadow-sm">
-        <template #title>JWT / Session</template>
+        <template #title>
+          <SectionHeader id="jwt" :dirty="isDirtyJwt" />
+        </template>
         <template #content>
           <div class="space-y-4">
             <div class="flex items-center gap-3">
@@ -513,20 +881,15 @@ async function saveExternalLinks() {
               <InputNumber v-model="jwtExpirySeconds" :min="60" :max="2592000" class="flex-1" />
               <Tag :value="jwtExpiryHours" severity="info" />
             </div>
-            <Button
-              label="Save JWT"
-              icon="pi pi-save"
-              size="small"
-              :loading="saving === 'jwt'"
-              @click="saveJwt"
-            />
           </div>
         </template>
       </Card>
 
       <!-- Authentication Policy -->
       <Card class="shadow-sm">
-        <template #title>Authentication Policy</template>
+        <template #title>
+          <SectionHeader id="auth" :dirty="isDirtyAuth" />
+        </template>
         <template #content>
           <div class="space-y-4">
             <div class="grid grid-cols-2 gap-4">
@@ -550,20 +913,15 @@ async function saveExternalLinks() {
               <InputSwitch v-model="authAllowPermanent" />
               <span class="text-sm">Allow permanent API tokens (no expiry)</span>
             </div>
-            <Button
-              label="Save Auth Settings"
-              icon="pi pi-save"
-              size="small"
-              :loading="saving === 'auth'"
-              @click="saveAuthSettings"
-            />
           </div>
         </template>
       </Card>
 
       <!-- Upstream Failure Circuit Breaker (rate-over-sliding-window) -->
       <Card class="shadow-sm">
-        <template #title>Upstream Failure Circuit Breaker</template>
+        <template #title>
+          <SectionHeader id="circuit_breaker" :dirty="isDirtyCircuitBreaker" />
+        </template>
         <template #subtitle>
           Rate-over-sliding-window breaker for proxy upstream calls. Opens when
           the failure rate inside the window exceeds the threshold AND the window
@@ -616,23 +974,17 @@ async function saveExternalLinks() {
               a low minimum-calls value makes the breaker trip-happy under cold-start
               bursts; the defaults are tuned to avoid that.
             </div>
-            <Button
-              label="Save Circuit Breaker Settings"
-              icon="pi pi-save"
-              size="small"
-              :loading="saving === 'circuit-breaker'"
-              @click="saveCircuitBreakerSettings"
-            />
           </div>
         </template>
       </Card>
 
       <!-- Cooldown Configuration -->
       <Card class="shadow-sm">
-        <template #title>Cooldown Configuration</template>
+        <template #title>
+          <SectionHeader id="cooldown" :dirty="isDirtyCooldown" />
+        </template>
         <template #subtitle>
           Controls artifact freshness enforcement for proxy repositories.
-          Changes apply immediately (hot reload).
         </template>
         <template #content>
           <div class="space-y-5">
@@ -784,20 +1136,15 @@ async function saveExternalLinks() {
                 />
               </div>
             </div>
-
-            <Button
-              label="Save Cooldown"
-              icon="pi pi-save"
-              :loading="saving === 'cooldown'"
-              @click="saveCooldown"
-            />
           </div>
         </template>
       </Card>
 
       <!-- HTTP Client -->
       <Card class="shadow-sm">
-        <template #title>HTTP Client (Proxy)</template>
+        <template #title>
+          <SectionHeader id="http_client" :dirty="isDirtyHttpClient" />
+        </template>
         <template #content>
           <div class="space-y-3">
             <div class="grid grid-cols-2 gap-4">
@@ -830,20 +1177,15 @@ async function saveExternalLinks() {
               <InputSwitch v-model="httpFollowRedirects" />
               <span class="text-sm">Follow redirects</span>
             </div>
-            <Button
-              label="Save HTTP Client"
-              icon="pi pi-save"
-              size="small"
-              :loading="saving === 'http_client'"
-              @click="saveHttpClient"
-            />
           </div>
         </template>
       </Card>
 
       <!-- Bulkhead (Adaptive Concurrency) -->
       <Card class="shadow-sm">
-        <template #title>Bulkhead (Adaptive Concurrency)</template>
+        <template #title>
+          <SectionHeader id="bulkhead" :dirty="isDirtyBulkhead" />
+        </template>
         <template #subtitle>
           Per-repository in-flight concurrency budget. When adaptive mode is on
           an AIMD controller grows the ceiling on healthy windows and halves it
@@ -913,16 +1255,20 @@ async function saveExternalLinks() {
                 </template>
                 Default: {{ runtime.rows[key]?.default }}.
               </div>
-              <div class="flex gap-2 mt-1">
-                <Button
-                  label="Save"
-                  icon="pi pi-save"
-                  size="small"
-                  :loading="runtime.saving[key]"
-                  :disabled="!runtime.isDirty(key) || runtime.saving[key]"
-                  :data-testid="`runtime-save-${key}`"
-                  @click="runtime.saveOne(key)"
-                />
+              <div class="flex items-center gap-3 mt-1">
+                <!-- Dirty marker so admins can see at-a-glance which
+                     per-row changes are part of the unified save. The
+                     "Reset to default" button is per-row because the
+                     server-side default lives on the row itself and a
+                     reset is a distinct action from saving an edit. -->
+                <span
+                  v-if="runtime.isDirty(key)"
+                  class="text-xs text-blue-500 dark:text-blue-400 flex items-center gap-1"
+                  :data-testid="`runtime-dirty-${key}`"
+                >
+                  <span class="inline-block w-1.5 h-1.5 rounded-full bg-blue-500" />
+                  Unsaved
+                </span>
                 <Button
                   v-if="runtime.isOverridden(key)"
                   label="Reset to default"
@@ -942,7 +1288,9 @@ async function saveExternalLinks() {
 
       <!-- HTTP Server -->
       <Card class="shadow-sm">
-        <template #title>HTTP Server</template>
+        <template #title>
+          <SectionHeader id="http_server" :dirty="isDirtyHttpServer" />
+        </template>
         <template #content>
           <div class="space-y-3">
             <div>
@@ -951,13 +1299,6 @@ async function saveExternalLinks() {
               </label>
               <InputText v-model="httpServerTimeout" class="w-full" placeholder="PT2M" />
             </div>
-            <Button
-              label="Save HTTP Server"
-              icon="pi pi-save"
-              size="small"
-              :loading="saving === 'http_server'"
-              @click="saveHttpServer"
-            />
           </div>
         </template>
       </Card>
@@ -991,7 +1332,9 @@ async function saveExternalLinks() {
 
       <!-- External Links -->
       <Card class="shadow-sm">
-        <template #title>External Links</template>
+        <template #title>
+          <SectionHeader id="external_links" :dirty="isDirtyExternalLinks" />
+        </template>
         <template #content>
           <div class="space-y-3">
             <div>
@@ -1012,15 +1355,94 @@ async function saveExternalLinks() {
                 {{ config.apiBaseUrl }}/health
               </a>
             </div>
-            <Button
-              label="Save Links"
-              icon="pi pi-save"
-              size="small"
-              @click="saveExternalLinks"
-            />
           </div>
         </template>
       </Card>
+
+      <!--
+        Bottom padding so the sticky save bar never covers the last
+        card's content when scrolled to the end. 4rem matches the bar
+        height + breathing room.
+      -->
+      <div class="h-16" aria-hidden="true" />
     </div>
+
+    <!--
+      Sticky unified Save bar. Pinned to the bottom of the viewport so
+      admins see the dirty count + Save / Discard wherever they scroll.
+      Hidden when nothing is dirty so it never obscures content during
+      a read-only review of settings.
+    -->
+    <Transition
+      enter-from-class="translate-y-full opacity-0"
+      enter-active-class="transition-all duration-200"
+      leave-to-class="translate-y-full opacity-0"
+      leave-active-class="transition-all duration-200"
+    >
+      <div
+        v-if="dirtyCount > 0"
+        class="fixed bottom-0 left-0 right-0 z-30 border-t border-gray-200 dark:border-gray-700 bg-white/95 dark:bg-gray-900/95 backdrop-blur shadow-lg"
+        role="region"
+        aria-label="Unsaved settings changes"
+        data-testid="settings-save-bar"
+      >
+        <div class="max-w-5xl mx-auto px-6 py-3 flex items-center gap-4">
+          <div class="flex flex-col gap-1 flex-1 min-w-0">
+            <div class="flex items-center gap-2 text-sm font-medium">
+              <i class="pi pi-pencil text-blue-500" />
+              {{ dirtyCount }}
+              unsaved
+              {{ dirtyCount === 1 ? 'change' : 'changes' }}
+            </div>
+            <div class="flex flex-wrap items-center gap-2 text-xs text-gray-500">
+              <span
+                v-for="id in dirtySections"
+                :key="id"
+                v-tooltip.top="SECTION_META[id].hotReload
+                  ? 'Applies immediately on save (hot reload)'
+                  : SECTION_META[id].restartReason"
+                class="inline-flex items-center gap-1 px-2 py-0.5 rounded"
+                :class="SECTION_META[id].hotReload
+                  ? 'bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300'
+                  : 'bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300'"
+                :data-testid="`save-bar-chip-${id}`"
+              >
+                <i
+                  :class="SECTION_META[id].hotReload
+                    ? 'pi pi-bolt text-[0.7rem]'
+                    : 'pi pi-refresh text-[0.7rem]'"
+                />
+                {{ SECTION_META[id].label }}
+                <span
+                  v-if="!SECTION_META[id].hotReload"
+                  class="ml-1 text-[0.65rem] uppercase tracking-wide font-semibold"
+                >
+                  restart
+                </span>
+              </span>
+            </div>
+          </div>
+          <Button
+            label="Discard"
+            severity="secondary"
+            text
+            :disabled="savingAll"
+            data-testid="settings-discard"
+            @click="discardAll"
+          />
+          <Button
+            :label="savingAll
+              ? 'Saving…'
+              : `Save changes${dirtyCount > 1 ? ` (${dirtyCount})` : ''}`"
+            icon="pi pi-check"
+            severity="primary"
+            :loading="savingAll"
+            :disabled="savingAll"
+            data-testid="settings-save-all"
+            @click="saveAll"
+          />
+        </div>
+      </div>
+    </Transition>
   </AppLayout>
 </template>

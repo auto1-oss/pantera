@@ -703,8 +703,10 @@ describe('CooldownView refresh button', () => {
     expect(getCooldownOverviewMock).toHaveBeenCalledTimes(1)
     expect(getCooldownBlockedMock).toHaveBeenCalledTimes(1)
 
-    // The refresh button sits next to the page title — locate it by its
-    // accessible label so the test survives icon/markup changes.
+    // The refresh button moved into the filter bar (right edge,
+    // aligned with the input row) so it is visually close to what it
+    // controls. Locate by its accessible label so the test stays
+    // resilient to markup tweaks.
     const refreshBtn = wrapper.find(
       '[aria-label="Reload cooldown data without refreshing the page"]'
     )
@@ -714,6 +716,24 @@ describe('CooldownView refresh button', () => {
 
     expect(getCooldownOverviewMock).toHaveBeenCalledTimes(2)
     expect(getCooldownBlockedMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('lives inside the filter bar (right of the search inputs)', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    // The filter bar is the only flex-wrap row hosting the search /
+    // repo / type controls. The Refresh button must be a child of
+    // that container — not floating in the page header next to the
+    // title — so the eye can reach it from the input row.
+    const filterBar = wrapper.find('#cooldown-filter-search')
+      .element.closest('.flex.flex-wrap')
+    expect(filterBar).not.toBeNull()
+    const refreshBtn = wrapper.find(
+      '[aria-label="Reload cooldown data without refreshing the page"]'
+    )
+    expect(refreshBtn.exists()).toBe(true)
+    expect(filterBar?.contains(refreshBtn.element)).toBe(true)
   })
 
   it('preserves current filters on refresh', async () => {

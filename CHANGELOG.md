@@ -2,6 +2,69 @@
 
 ## Version 2.2.0
 
+- **Admin UI: unified save bar replaces nine per-section Save
+  buttons.** The System Settings page exposed a separate save button
+  per card (`Save`, `Save JWT`, `Save Auth Settings`, `Save Circuit
+  Breaker Settings`, `Save Cooldown`, `Save HTTP Client`, per-key
+  `Save` × 8 in Bulkhead, `Save HTTP Server`, `Save Links`). Each one
+  worked but the flow forced admins to mentally batch their edits
+  per-card and click save many times for one logical configuration
+  change. Replaced with a sticky **Save changes (N)** bar at the
+  bottom of the page that:
+
+  - Hides itself when nothing is dirty (zero visual noise during
+    read-only review).
+  - Lists the changed sections as colored chips so the user sees
+    *what* will be saved before they click. Hot-reload sections are
+    blue with a `bolt` icon and tooltip "Applies immediately on save
+    (hot reload)"; restart-required sections are amber with a
+    `refresh` icon and a tooltip carrying the specific reason
+    (`http_server.request_timeout is read once at startup via
+    VertxMain.listenOn`).
+  - One click submits every dirty section in parallel via the
+    existing per-section save endpoints, then refreshes the
+    baseline so the bar disappears.
+  - A `Discard` button restores every field to the last-loaded
+    value (including the bulkhead composable's per-key edits) so
+    admins can experiment without committing.
+
+  Per-card titles carry the same hot-reload / restart-required pill
+  while editing, so the dynamic-vs-static signal is visible during
+  the edit, not just at submit time. The `Reset to default` per-row
+  Bulkhead button is kept because a reset is conceptually different
+  from saving an edit (it deletes the per-row override).
+
+  The hot-reload map is driven by the actual server-side wiring in
+  `VertxMain` — `settingsCache.addListener('cooldown', …)` and
+  `settingsCache.addListener('http_client.bulkhead.', …)`, plus the
+  supplier patterns in `RepositorySlices` / `CooldownSupport` /
+  `JwtTokens`. When a new hot-reload listener lands, flip the
+  section's `hotReload` flag in `SECTION_META`.
+
+  Files: `pantera-ui/src/views/admin/SettingsView.vue` (new
+  `SECTION_META` constant, baseline-snapshot dirty tracking, sticky
+  Save Changes bar, inline `SectionHeader` functional component
+  with the hot-reload / restart-required pill, all 9 per-section
+  Save buttons removed),
+  `pantera-ui/src/views/admin/__tests__/SettingsView.snapshot.test.ts`
+  (4 new tests pinning the save-bar hidden/visible behaviour and
+  the restart-required signal).
+
+- **Cooldown admin view: refresh button relocated + styled.** The
+  previous refresh control sat in the page header next to the title
+  as a small secondary-outlined button — low-contrast, low-visibility,
+  and visually disconnected from the inputs it controls. Moved into
+  the filter bar at the right edge, vertically aligned with the
+  search / repo / type inputs via an invisible label spacer, styled
+  as a primary outlined button. Added a tooltip showing "Updated N s
+  ago" that ticks every 5 s so admins get passive staleness feedback
+  without a per-second timer. The aria-label is unchanged so
+  existing tests keep working.
+
+  Files: `pantera-ui/src/views/admin/CooldownView.vue`,
+  `pantera-ui/src/views/admin/__tests__/CooldownView.test.ts`
+  (new test pinning the filter-bar placement).
+
 - **Group-layer request coalescing: concurrent same-path bursts no
   longer race on stream-through commits.** A user's `gradle build`
   reproducing as 8/8 → HTTP 500 on the same kotlin-stdlib JAR through

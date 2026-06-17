@@ -49,6 +49,25 @@ const sortOrder = ref<number>(-1) // -1=desc (default: newest first)
 let searchTimeout: ReturnType<typeof setTimeout> | null = null
 let blockedAbortCtrl: AbortController | null = null
 
+/**
+ * Wall-clock of the last successful (or attempted) refresh. Drives the
+ * tiny "Updated N s ago" annotation under the Refresh control so users
+ * can tell at a glance whether the table is fresh or stale.
+ */
+const lastRefreshAt = ref<number>(Date.now())
+const nowTick = ref(Date.now())
+let nowTickInterval: ReturnType<typeof setInterval> | null = null
+
+const lastRefreshLabel = computed(() => {
+  const secs = Math.max(0, Math.floor((nowTick.value - lastRefreshAt.value) / 1000))
+  if (secs < 5) return 'Updated just now'
+  if (secs < 60) return `Updated ${secs}s ago`
+  const mins = Math.floor(secs / 60)
+  if (mins < 60) return `Updated ${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  return `Updated ${hrs}h ago`
+})
+
 // Client-side pagination for the cooldown-enabled repositories tile grid.
 // 10 tiles = 2 rows × 5 cols on xl, which matches the compact card layout.
 const repoPage = ref(0)
@@ -152,6 +171,7 @@ watch(mode, () => {
 onBeforeUnmount(() => {
   if (searchTimeout) clearTimeout(searchTimeout)
   if (blockedAbortCtrl) blockedAbortCtrl.abort()
+  if (nowTickInterval) clearInterval(nowTickInterval)
 })
 
 async function loadOverview() {
@@ -165,15 +185,18 @@ async function loadOverview() {
 /**
  * Manual refresh: re-pull both the per-repo overview tiles AND the
  * blocked-artifacts table without rerouting the page. The button is
- * exposed in the header next to the title; useful when an admin
- * unblocks an artifact server-side, lowers the global / per-type
- * cooldown duration (which triggers DYNAMIC re-evaluation on the very
- * next request — see JdbcCooldownService.checkExistingBlockWithTimestamp),
- * or is otherwise waiting for new blocks to appear without losing
- * the current filter / pagination state.
+ * exposed in the filter bar (right edge, aligned with the input row);
+ * useful when an admin unblocks an artifact server-side, lowers the
+ * global / per-type cooldown duration (which triggers DYNAMIC
+ * re-evaluation on the very next request — see
+ * JdbcCooldownService.checkExistingBlockWithTimestamp), or is otherwise
+ * waiting for new blocks to appear without losing the current filter /
+ * pagination state. The "Updated N s ago" annotation gives passive
+ * staleness feedback so the user knows when a manual refresh is worth it.
  */
 async function refresh() {
   await Promise.all([loadOverview(), loadBlocked()])
+  lastRefreshAt.value = Date.now()
 }
 
 async function loadBlocked() {
@@ -279,6 +302,12 @@ async function confirmUnblockAll(repo: CooldownRepo) {
 onMounted(() => {
   loadOverview()
   loadBlocked()
+  // 5-second tick keeps the "Updated N s ago" label live without
+  // running per-second renders. The label is the only consumer of
+  // nowTick, so this is a single cheap reactive update.
+  nowTickInterval = setInterval(() => {
+    nowTick.value = Date.now()
+  }, 5_000)
 })
 </script>
 
@@ -287,16 +316,6 @@ onMounted(() => {
     <div class="space-y-6">
       <div class="flex items-center justify-between">
         <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Cooldown</h1>
-        <Button
-          icon="pi pi-refresh"
-          label="Refresh"
-          severity="secondary"
-          outlined
-          size="small"
-          :loading="loading"
-          aria-label="Reload cooldown data without refreshing the page"
-          @click="refresh"
-        />
       </div>
 
       <!--
@@ -354,6 +373,30 @@ onMounted(() => {
           :allow-empty="false"
           aria-label="Toggle active vs. history view"
         />
+        <!--
+          Refresh control. Sits at the right edge of the filter bar,
+          vertically aligned with the input row via an invisible label
+          spacer so the icon button stops floating above the dropdowns.
+          Primary outlined for visibility (the old secondary-outlined
+          variant in the page header was too low-contrast); the freshness
+          annotation under the button doubles as passive staleness
+          feedback so users know when a manual click is worth it.
+        -->
+        <div class="flex flex-col gap-1 ml-auto">
+          <label class="text-sm text-gray-500 select-none invisible" aria-hidden="true">
+            &nbsp;
+          </label>
+          <Button
+            v-tooltip.left="lastRefreshLabel"
+            icon="pi pi-refresh"
+            label="Refresh"
+            outlined
+            :loading="loading"
+            :pt="{ root: { class: '!py-2' } }"
+            aria-label="Reload cooldown data without refreshing the page"
+            @click="refresh"
+          />
+        </div>
       </div>
 
       <Card class="shadow-sm">
