@@ -2,6 +2,66 @@
 
 ## Version 2.2.0
 
+- **Audit log: `package.size` is now an integer (was scientific
+  notation), and `client.ip` + `trace.id` are populated.** The
+  `artifact.audit` logger's `artifact_publish` record had two
+  long-standing data-quality issues:
+
+  - `AuditLogger.publish(...)` took `double size`. Bytes are an
+    integer count, but the ECS JSON layout emitted them with `D` →
+    scientific-notation values like `3.64270308E8` for a ~364 MB
+    Docker layer. Both unfriendly for humans and lossy / hostile to
+    any downstream tool that runs numeric range queries on the
+    field. Changed to `long` — values now log as plain integers
+    (`248621366`).
+
+  - `trace.id` and `client.ip` were missing from every
+    `artifact_publish` record. MDC is per-thread; the EcsLoggingSlice
+    values that populate the request-thread MDC do not survive the
+    Vert.x worker-thread hops in the slice chain, and each downstream
+    slice only re-published `user.name` (via `MDC.put("user.name",
+    login)` on the worker), leaving `trace.id` / `client.ip` empty
+    when the audit record fired from `DbConsumer` on
+    `RxComputationThreadPool-1`.
+
+  Fix: thread the two correlation fields via Pantera-internal request
+  headers — `X-Pantera-Ctx-Trace-Id` and `X-Pantera-Ctx-Client-Ip`,
+  added to inbound headers by `EcsLoggingSlice` before forwarding —
+  and provide a small `RequestContextHeaders.bindToMdc(headers)`
+  helper that downstream slices call inside their `.thenCompose` /
+  `.thenApply` callbacks to restore MDC on the worker thread right
+  before the code that consumes it. Headers are explicit `Slice`
+  method arguments, so they propagate through every async hop
+  regardless of which executor is wired. Wired into the Docker
+  manifest get/head slices and the Maven cached-proxy event-enqueue
+  path; future adapters get coverage by calling `bindToMdc` from
+  their async boundary.
+
+  `ProxyArtifactEvent` and `ArtifactEvent` now also auto-capture
+  `traceId` / `clientIp` from MDC at construction time, and
+  `ArtifactEvent.withContext(...)` lets a package processor thread
+  the fields explicitly when needed. `DbConsumer.logArtifactPublish`
+  restores both onto the consumer thread's MDC before calling
+  `AuditLogger.publish` so the audit record carries them.
+
+  Files: `pantera-core/.../audit/AuditLogger.java` (long size +
+  client.ip), `pantera-core/.../scheduling/ArtifactEvent.java`
+  (clientIp field + withContext copy method),
+  `pantera-core/.../scheduling/ProxyArtifactEvent.java` (traceId +
+  clientIp auto-capture),
+  `pantera-core/.../http/slice/EcsLoggingSlice.java` (internal
+  X-Pantera-Ctx-* headers),
+  `pantera-core/.../http/log/RequestContextHeaders.java` (new
+  helper), `pantera-main/.../db/DbConsumer.java` (restore client.ip
+  alongside trace.id),
+  `docker-adapter/.../http/manifest/GetManifestSlice.java` +
+  `HeadManifestSlice.java` +
+  `docker-adapter/.../cache/CacheManifests.java` (bindToMdc on
+  worker thread), `maven-adapter/.../http/CachedProxySlice.java`
+  (bindToMdc on enqueue),
+  `maven-adapter/.../MavenProxyPackageProcessor.java` (`.withContext`
+  forwarding).
+
 - **Admin UI: unified save bar replaces nine per-section Save
   buttons.** The System Settings page exposed a separate save button
   per card (`Save`, `Save JWT`, `Save Auth Settings`, `Save Circuit

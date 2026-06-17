@@ -214,6 +214,11 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                             );
                             final String version = new KeyLastPart(event.artifactKey()).get();
 
+                            // Forward request-context (trace.id, client.ip)
+                            // captured by ProxyArtifactEvent on the request
+                            // thread — ArtifactEvent's own MDC.get capture
+                            // sees nothing here because we run on the
+                            // package-processor worker thread.
                             this.events.add(
                                 new ArtifactEvent(
                                     repoType,
@@ -227,7 +232,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                                     created,
                                     release,
                                     event.artifactKey().string()
-                                )
+                                ).withContext(event.traceId(), event.clientIp())
                             );
 
                             // Clear retry count on successful processing

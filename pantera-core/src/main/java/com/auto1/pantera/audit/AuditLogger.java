@@ -98,6 +98,21 @@ public final class AuditLogger {
 
     /**
      * Log a successful artifact publish (DB index record written).
+     *
+     * <p>{@code size} is a byte count and is logged as an integer.
+     * Earlier signatures took {@code double} which made the ECS JSON
+     * layout emit scientific notation ({@code 3.64270308E8} for a
+     * ~364 MB Docker layer) — unfriendly for both humans and any
+     * downstream tooling that does numeric range queries on the field.
+     * Pass the raw long byte count from {@code ArtifactEvent.size()}.
+     *
+     * <p>{@code client.ip} is read from the MDC slot {@link EcsMdc#CLIENT_IP}
+     * (populated by {@code DbConsumer.logArtifactPublish} from
+     * {@link com.auto1.pantera.scheduling.ArtifactEvent#clientIp()}, the
+     * same way {@code trace.id} is propagated across the request →
+     * consumer-thread boundary). The field is omitted when MDC has no
+     * value — the audit logger never invents one.
+     *
      * @param repoName Repository name
      * @param repoType Repository type
      * @param artifactName Artifact/package name
@@ -109,7 +124,7 @@ public final class AuditLogger {
      */
     public static void publish(final String repoName, final String repoType,
         final String artifactName, final String version,
-        final double size, final String owner, final Long releaseDate,
+        final long size, final String owner, final Long releaseDate,
         final String checksum) {
         final EcsLogger logger = EcsLogger.info(LOGGER)
             .message(releaseDate != null
@@ -128,6 +143,7 @@ public final class AuditLogger {
         if (checksum != null && !checksum.isEmpty()) {
             logger.field("package.checksum", checksum);
         }
+        mdcField(logger, "client.ip", EcsMdc.CLIENT_IP);
         logger.log();
     }
 

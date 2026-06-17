@@ -127,6 +127,14 @@ public final class CacheManifests implements Manifests {
     public CompletableFuture<Optional<Manifest>> get(final ManifestReference ref) {
         final long startTime = System.currentTimeMillis();
         final String requestOwner = MDC.get("user.name");
+        // Capture trace.id + client.ip from the request-thread MDC at the
+        // entrypoint so the audit log emitted later (from the worker that
+        // commits the manifest) carries them. Without this both fields are
+        // missing on the artifact_publish audit record because the chain
+        // hops through .thenCompose callbacks on a worker pool that doesn't
+        // inherit MDC.
+        final String requestTraceId = MDC.get(com.auto1.pantera.http.log.EcsMdc.TRACE_ID);
+        final String requestClientIp = MDC.get(com.auto1.pantera.http.log.EcsMdc.CLIENT_IP);
         return this.origin.manifests().get(ref).handle(
             (original, throwable) -> {
                 final long duration = System.currentTimeMillis() - startTime;
@@ -151,7 +159,7 @@ public final class CacheManifests implements Manifests {
                             Manifest.MANIFEST_OCI_V1.equals(manifest.mediaType()) ||
                             Manifest.MANIFEST_LIST_SCHEMA2.equals(manifest.mediaType()) ||
                             Manifest.MANIFEST_OCI_INDEX.equals(manifest.mediaType())) {
-                            this.copy(ref, requestOwner);
+                            this.copy(ref, requestOwner, requestTraceId, requestClientIp);
                             result = CompletableFuture.completedFuture(original);
                         } else {
                             EcsLogger.warn("com.auto1.pantera.docker")
@@ -218,12 +226,22 @@ public final class CacheManifests implements Manifests {
      *
      * @param ref Manifest reference.
      * @param owner Authenticated user login captured from request thread.
+     * @param traceId Request {@code trace.id} captured from MDC on the
+     *                request thread; threaded through to the downstream
+     *                ArtifactEvent for audit-log propagation. Nullable.
+     * @param clientIp Request {@code client.ip} captured from MDC on the
+     *                 request thread; same propagation purpose as
+     *                 {@code traceId}. Nullable.
      * @return Copy completion.
      */
-    private CompletionStage<Void> copy(final ManifestReference ref, final String owner) {
+    private CompletionStage<Void> copy(
+        final ManifestReference ref, final String owner,
+        final String traceId, final String clientIp
+    ) {
         return this.origin.manifests().get(ref)
             .thenApply(Optional::get)
-            .thenCompose(manifest -> this.copySequentially(ref, manifest, owner))
+            .thenCompose(manifest ->
+                this.copySequentially(ref, manifest, owner, traceId, clientIp))
             .handle(
                 (ignored, ex) -> {
                     if (ex != null) {
@@ -256,7 +274,9 @@ public final class CacheManifests implements Manifests {
     private CompletionStage<Void> copySequentially(
         final ManifestReference ref,
         final Manifest manifest,
-        final String owner
+        final String owner,
+        final String traceId,
+        final String clientIp
     ) {
         final boolean needRelease = this.events.isPresent() || this.inspector.isPresent();
         final CompletionStage<Optional<Long>> release = needRelease
@@ -277,7 +297,7 @@ public final class CacheManifests implements Manifests {
                 })
             : CompletableFuture.completedFuture(Optional.empty());
         return release.thenCompose(
-            rel -> this.finalizeManifestCache(ref, manifest, rel, owner)
+            rel -> this.finalizeManifestCache(ref, manifest, rel, owner, traceId, clientIp)
         );
     }
 
@@ -295,7 +315,9 @@ public final class CacheManifests implements Manifests {
         final ManifestReference ref,
         final Manifest manifest,
         final Optional<Long> rel,
-        final String owner
+        final String owner,
+        final String traceId,
+        final String clientIp
     ) {
         // Get inspector release date asynchronously (FIX: removed blocking .join())
         final CompletionStage<Optional<Long>> inspectorReleaseFuture = this.inspector
@@ -335,6 +357,9 @@ public final class CacheManifests implements Manifests {
                             effectiveOwner = ArtifactEvent.DEF_OWNER;
                         }
                     }
+                    // Bind request-thread context onto the event so the
+                    // audit log written from DbConsumer (on a worker
+                    // thread with empty MDC) carries trace.id + client.ip.
                     queue.add( // ok: unbounded ConcurrentLinkedDeque (ArtifactEvent queue)
                         new ArtifactEvent(
                             CacheManifests.REPO_TYPE,
@@ -345,7 +370,7 @@ public final class CacheManifests implements Manifests {
                             size,
                             created,
                             effectiveRelease.orElse(null)
-                        )
+                        ).withContext(traceId, clientIp)
                     );
                 });
                 return this.cache.manifests().putUnchecked(ref, manifest.content())

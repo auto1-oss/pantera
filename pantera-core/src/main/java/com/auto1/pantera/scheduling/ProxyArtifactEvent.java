@@ -11,8 +11,10 @@
 package com.auto1.pantera.scheduling;
 
 import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.http.log.EcsMdc;
 import java.util.Optional;
 import java.util.Objects;
+import org.slf4j.MDC;
 
 /**
  * Proxy artifact event contains artifact key in storage,
@@ -55,6 +57,25 @@ public final class ProxyArtifactEvent {
      * Optional release timestamp in milliseconds since epoch.
      */
     private final Optional<Long> release;
+
+    /**
+     * Originating request's {@code trace.id} — captured from MDC at
+     * construction time so the downstream {@code ArtifactEvent} (built
+     * later on the package-processor worker thread, where MDC is empty)
+     * can carry the request's trace id forward to the audit log.
+     * Nullable.
+     */
+    private final String traceId;
+
+    /**
+     * Originating client IP — captured from MDC at construction time so
+     * the audit log entry written from the consumer thread carries the
+     * IP of the HTTP caller that triggered the publish. Without this,
+     * the chain is: request thread (MDC populated) → ProxyArtifactEvent
+     * queue → package processor (worker, no MDC) → ArtifactEvent
+     * (MDC.get returns null) → audit log loses client.ip. Nullable.
+     */
+    private final String clientIp;
 
     /**
      * Ctor.
@@ -103,6 +124,32 @@ public final class ProxyArtifactEvent {
         this.rtype = rtype;
         this.owner = owner;
         this.release = release == null ? Optional.empty() : release;
+        // Auto-capture request-thread context. ProxyArtifactEvent is built
+        // synchronously by the proxy slice's response handler, which runs
+        // on the request thread with MDC populated by EcsLoggingSlice.
+        // These fields are forwarded to the downstream ArtifactEvent
+        // (see PackageProcessor.toArtifactEvent) so the audit log written
+        // from the consumer thread carries trace.id + client.ip.
+        this.traceId = MDC.get(EcsMdc.TRACE_ID);
+        this.clientIp = MDC.get(EcsMdc.CLIENT_IP);
+    }
+
+    /**
+     * Originating request {@code trace.id}, captured from MDC at
+     * construction time. {@code null} when the event was built outside a
+     * request scope (rare — pretty much only scheduler-driven recovery).
+     */
+    public String traceId() {
+        return this.traceId;
+    }
+
+    /**
+     * Originating client IP, captured from MDC at construction time.
+     * {@code null} when EcsLoggingSlice could not resolve a client IP for
+     * the request (e.g. an internal-routing call with no source header).
+     */
+    public String clientIp() {
+        return this.clientIp;
     }
 
     /**

@@ -37,15 +37,20 @@ public class GetManifestSlice extends DockerActionSlice {
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
         ManifestRequest request = ManifestRequest.from(line);
-        // Capture the authenticated login before crossing the async boundary.
-        // AuthzSlice adds pantera_login to headers; body.asBytesFuture() may complete
-        // on a different thread (Vert.x event loop) where MDC.user.name is not set.
-        // Re-setting MDC inside the thenCompose ensures CacheManifests.get() sees
-        // the correct owner when it calls MDC.get("user.name").
+        // Capture the authenticated login before crossing the async
+        // boundary. AuthzSlice adds pantera_login to headers;
+        // body.asBytesFuture() may complete on a different thread
+        // (Vert.x event loop / worker) where MDC is not set.
         final String login = new Login(headers).getValue();
         // Consume request body to prevent Vert.x resource leak
         return body.asBytesFuture().thenCompose(ignored -> {
             MDC.put("user.name", login);
+            // EcsLoggingSlice MDC is per-thread and was dropped at the
+            // last async hop. The request-context internal headers
+            // ALWAYS propagate (they're explicit Slice args), so bind
+            // them back onto the consuming thread before the cache
+            // chain captures MDC for downstream audit-log correlation.
+            com.auto1.pantera.http.log.RequestContextHeaders.bindToMdc(headers);
             return this.docker.repo(request.name())
                 .manifests()
                 .get(request.reference())

@@ -983,6 +983,15 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 // every cooldown evaluation on a freshly-cached version
                 // resolve to "just published" and triggering an upstream
                 // HEAD via MavenHeadSource on the very next request.
+                // Bind the request-context internal headers (set by
+                // EcsLoggingSlice on entry) into MDC for THIS worker
+                // thread so the ProxyArtifactEvent constructed inside
+                // enqueueEventForWriter auto-captures trace.id +
+                // client.ip and threads them down to the audit log.
+                // Without this, the MDC the .thenApply runs under is
+                // empty (MDC is per-thread and was dropped at the
+                // earlier async hop).
+                com.auto1.pantera.http.log.RequestContextHeaders.bindToMdc(inboundHeaders);
                 this.enqueueEventForWriter(
                     key, body.headers(), artifact.body().size().orElse(0L),
                     new com.auto1.pantera.http.headers.Login(inboundHeaders).getValue()

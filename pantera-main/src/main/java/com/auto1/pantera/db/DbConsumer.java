@@ -145,9 +145,18 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
      */
     private static void logArtifactPublish(final ArtifactEvent record) {
         final String priorTraceId = MDC.get(EcsMdc.TRACE_ID);
+        final String priorClientIp = MDC.get(EcsMdc.CLIENT_IP);
         final String eventTraceId = record.traceId();
+        final String eventClientIp = record.clientIp();
         if (eventTraceId != null) {
             MDC.put(EcsMdc.TRACE_ID, eventTraceId);
+        }
+        if (eventClientIp != null) {
+            // Bound here so AuditLogger.publish() picks it up via its
+            // mdcField hook. Stored on the event at construction time
+            // because the consumer runs on RxComputationThreadPool and
+            // inherits no MDC from the request that produced the event.
+            MDC.put(EcsMdc.CLIENT_IP, eventClientIp);
         }
         try {
             AuditLogger.publish(
@@ -165,6 +174,11 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                 MDC.put(EcsMdc.TRACE_ID, priorTraceId);
             } else if (eventTraceId != null) {
                 MDC.remove(EcsMdc.TRACE_ID);
+            }
+            if (priorClientIp != null) {
+                MDC.put(EcsMdc.CLIENT_IP, priorClientIp);
+            } else if (eventClientIp != null) {
+                MDC.remove(EcsMdc.CLIENT_IP);
             }
         }
     }

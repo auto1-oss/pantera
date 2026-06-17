@@ -60,6 +60,28 @@ public final class EcsLoggingSlice implements Slice {
     public static final String INTERNAL_ROUTING_HEADER = "X-Pantera-Internal";
 
     /**
+     * Internal header carrying the request's {@code trace.id} forward
+     * across async slice boundaries. MDC is per-thread and is dropped on
+     * every Vert.x / RxJava worker-thread hop in the slice pipeline;
+     * passing the value through the {@link Headers} object (which is an
+     * explicit method argument on every Slice call) is the only carrier
+     * that survives those hops without an MDC-propagating executor on
+     * every downstream slice. Consumed by downstream slices via
+     * {@link com.auto1.pantera.http.log.RequestContextHeaders#bindToMdc(Headers)}
+     * to restore MDC on the consuming thread right before constructing
+     * {@code ProxyArtifactEvent} / {@code ArtifactEvent} or emitting an
+     * audit-log record. Read-only — downstream code MUST NOT overwrite.
+     */
+    public static final String CTX_TRACE_ID_HEADER = "X-Pantera-Ctx-Trace-Id";
+
+    /**
+     * Internal header carrying the request's {@code client.ip} forward
+     * across async slice boundaries. Same propagation contract as
+     * {@link #CTX_TRACE_ID_HEADER}; see that field for the rationale.
+     */
+    public static final String CTX_CLIENT_IP_HEADER = "X-Pantera-Ctx-Client-Ip";
+
+    /**
      * Origin slice.
      */
     private final Slice origin;
@@ -162,7 +184,26 @@ public final class EcsLoggingSlice implements Slice {
         // repeated iteration in the hot path.
         final boolean internalRouting = !headers.find(INTERNAL_ROUTING_HEADER).isEmpty();
 
-        return this.origin.response(line, headers, body)
+        // Thread trace.id + client.ip forward as internal headers so
+        // downstream slices and async package-processors that build
+        // ArtifactEvents can read them WITHOUT relying on per-thread MDC,
+        // which is dropped on every Vert.x worker hop. Skipped for internal
+        // GroupResolver → member dispatches (the headers are already on the
+        // chain). Skipped when clientIp / span.traceId is unset.
+        final Headers downstreamHeaders;
+        if (internalRouting) {
+            downstreamHeaders = headers;
+        } else {
+            final Headers copy = headers.copy();
+            if (span.traceId() != null && !span.traceId().isEmpty()) {
+                copy.add(new Header(CTX_TRACE_ID_HEADER, span.traceId()));
+            }
+            if (clientIp != null && !clientIp.isEmpty() && !"unknown".equals(clientIp)) {
+                copy.add(new Header(CTX_CLIENT_IP_HEADER, clientIp));
+            }
+            downstreamHeaders = copy;
+        }
+        return this.origin.response(line, downstreamHeaders, body)
             .thenApply(response -> {
                 final long duration = System.currentTimeMillis() - startTime;
 
