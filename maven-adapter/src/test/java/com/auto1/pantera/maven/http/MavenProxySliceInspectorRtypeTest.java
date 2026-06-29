@@ -11,7 +11,6 @@
 package com.auto1.pantera.maven.http;
 
 import com.auto1.pantera.asto.Content;
-import com.auto1.pantera.asto.cache.Cache;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.cooldown.api.CooldownBlock;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
@@ -19,98 +18,107 @@ import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.api.CooldownResult;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.Headers;
-import com.auto1.pantera.http.client.auth.Authenticator;
-import com.auto1.pantera.http.client.jetty.JettyClientSlices;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.cache.ProxyCacheConfig;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
-import com.auto1.pantera.publishdate.PublishDateRegistries;
-import com.auto1.pantera.publishdate.PublishDateRegistry;
+import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Collections;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Verifies that {@code MavenProxySlice} wires its admission-gate
- * {@link com.auto1.pantera.publishdate.RegistryBackedInspector} with the
- * slice's configured {@code rtype}, not a hardcoded literal.
+ * Verifies that the maven-proxy / gradle-proxy admission gate threads the
+ * slice's configured suffixed {@code rtype} ({@code maven-proxy} or
+ * {@code gradle-proxy}) — not a hardcoded literal — into the
+ * {@link CooldownRequest} handed to the {@link CooldownService}.
  *
  * <p>Both {@code maven-proxy} and {@code gradle-proxy} repositories route
- * through {@code MavenProxy} → {@code MavenProxySlice}. The publish-date
- * registry and {@code artifact_publish_dates} table key rows by the
- * suffixed repository type ({@code "maven-proxy"} or {@code "gradle-proxy"}),
- * but the slice historically constructed its inspector with the bare
- * literal {@code "maven"}. That mismatch caused every admission-gate
- * release-date lookup to miss its own data, fail-open to "no release date
- * — allowing", and poison the {@code CooldownCache} for every subsequent
- * code path that consulted the same {@code (repoName, artifact, version)}
- * key — including the metadata filter that had the right data.
+ * through {@code MavenProxy} → {@code MavenProxySlice} → {@code CachedProxySlice}.
+ * The publish-date registry and {@code artifact_publish_dates} table key rows
+ * by the suffixed repository type, but {@code MavenProxy} historically
+ * constructed its cooldown inspector with the bare literal {@code "maven"}.
+ * That mismatch caused release-date lookups to miss their own data,
+ * fail-open to "no release date — allowing", and poison the
+ * {@code CooldownCache} for every subsequent code path that consulted
+ * the same {@code (repoName, artifact, version)} key.
  *
- * <p>This test installs a tracking {@link PublishDateRegistry} as the
- * process-wide default, constructs a {@code MavenProxySlice} configured
- * for {@code rtype="gradle-proxy"}, issues a cache-miss primary-artifact
- * request, and asserts the tracker observed a lookup keyed by
- * {@code "gradle-proxy"} — never bare {@code "maven"}.
+ * <p>v2.2.0 (header-time admission gate): cooldown evaluation moved from
+ * a pre-fetch {@code RegistryBackedInspector} probe to a post-headers
+ * {@code evaluateWithKnownDate} call that reads {@code Last-Modified}
+ * straight from the upstream GET response. {@code RegistryBackedInspector}
+ * is no longer wired on the cache-miss happy path. The invariant the
+ * test pins is now narrower: the {@link CooldownRequest} fed into
+ * {@code evaluateWithKnownDate} MUST carry the slice's suffixed
+ * {@code rtype}. {@code JdbcCooldownService.shouldBlockNewArtifact}'s
+ * fallback to {@code PublishDateRegistries.instance().publishDate(...)}
+ * keys on the same field, so a wrong rtype there would re-introduce the
+ * original cache-poisoning failure.
+ *
+ * <p>The test exercises {@code CachedProxySlice} directly with a mock
+ * upstream that returns 200 + {@code Last-Modified}, captures the
+ * {@code CooldownRequest} the slice constructs for the admission gate,
+ * and asserts {@code request.repoType()} matches the suffixed rtype
+ * configured on the slice. Driving the test through HTTP (the prior
+ * version's {@code JettyClientSlices} against {@code localhost.invalid})
+ * is unnecessary — the rtype invariant lives in
+ * {@code buildCooldownRequest}, which is path-agnostic.
  *
  * @since 2.2.0
  */
 final class MavenProxySliceInspectorRtypeTest {
 
-    private PublishDateRegistry previousRegistry;
-
-    @BeforeEach
-    void capturePreviousRegistry() {
-        this.previousRegistry = PublishDateRegistries.instance();
-    }
-
-    @AfterEach
-    void restorePreviousRegistry() {
-        PublishDateRegistries.installDefault(this.previousRegistry);
+    @Test
+    void gradleProxyAdmissionGateRequestCarriesSliceRtype()
+        throws InterruptedException {
+        assertCooldownRequestRtypeMatchesSliceRtype("gradle_proxy", "gradle-proxy");
     }
 
     @Test
-    void gradleProxyAdmissionGateInspectorQueriesRegistryWithSliceRtype()
+    void mavenProxyAdmissionGateRequestCarriesSliceRtype()
         throws InterruptedException {
-        assertInspectorRtypeMatchesSliceRtype("gradle_proxy", "gradle-proxy");
+        assertCooldownRequestRtypeMatchesSliceRtype("maven_proxy", "maven-proxy");
     }
 
-    @Test
-    void mavenProxyAdmissionGateInspectorQueriesRegistryWithSliceRtype()
-        throws InterruptedException {
-        assertInspectorRtypeMatchesSliceRtype("maven_proxy", "maven-proxy");
-    }
-
-    private void assertInspectorRtypeMatchesSliceRtype(
+    private void assertCooldownRequestRtypeMatchesSliceRtype(
         final String rname, final String rtype
     ) throws InterruptedException {
         final AtomicReference<String> capturedRepoType = new AtomicReference<>();
         final CountDownLatch latch = new CountDownLatch(1);
-        PublishDateRegistries.installDefault((rt, name, version) -> {
-            capturedRepoType.set(rt);
-            latch.countDown();
-            return CompletableFuture.completedFuture(Optional.empty());
-        });
-        final MavenProxySlice slice = new MavenProxySlice(
-            new JettyClientSlices(),
-            URI.create("http://localhost.invalid/"),
-            Authenticator.ANONYMOUS,
-            Cache.NOP,
-            Optional.empty(),
+        final CapturingCooldownService cooldown = new CapturingCooldownService(
+            capturedRepoType, latch
+        );
+        final byte[] bytes = "test-artifact".getBytes(StandardCharsets.UTF_8);
+        final Queue<ProxyArtifactEvent> events = new LinkedList<>();
+        final CachedProxySlice slice = new CachedProxySlice(
+            (line, headers, body) -> CompletableFuture.completedFuture(
+                ResponseBuilder.ok()
+                    .header("Last-Modified", "Wed, 21 Oct 2015 07:28:00 GMT")
+                    .body(bytes)
+                    .build()
+            ),
+            (cacheKey, supplier, control) -> supplier.get(),
+            Optional.of(events),
             rname,
+            "https://repo.maven.apache.org/maven2",
             rtype,
-            new InspectingCooldownService(),
-            Optional.of(new InMemoryStorage())
+            cooldown,
+            new NoopInspector(),
+            Optional.of(new InMemoryStorage()),
+            ProxyCacheConfig.withCooldown(),
+            null
         );
         slice.response(
             new RequestLine(
@@ -122,29 +130,57 @@ final class MavenProxySliceInspectorRtypeTest {
         );
         final boolean called = latch.await(5, TimeUnit.SECONDS);
         MatcherAssert.assertThat(
-            "inspector must be invoked during admission gate for rtype=" + rtype,
+            "cooldown must be invoked during admission gate for rtype=" + rtype,
             called, new IsEqual<>(true)
         );
         MatcherAssert.assertThat(
-            "inspector must query registry with slice's rtype, not bare 'maven'",
+            "CooldownRequest must carry the slice's rtype, not bare 'maven'",
             capturedRepoType.get(), new IsEqual<>(rtype)
         );
     }
 
-    private static final class InspectingCooldownService implements CooldownService {
+    private static final class NoopInspector implements CooldownInspector {
+
+        @Override
+        public CompletableFuture<Optional<Instant>> releaseDate(
+            final String artifact, final String version
+        ) {
+            return CompletableFuture.completedFuture(Optional.empty());
+        }
+
+        @Override
+        public CompletableFuture<List<com.auto1.pantera.cooldown.api.CooldownDependency>> dependencies(
+            final String artifact, final String version
+        ) {
+            return CompletableFuture.completedFuture(Collections.emptyList());
+        }
+    }
+
+    private static final class CapturingCooldownService implements CooldownService {
+
+        private final AtomicReference<String> captured;
+        private final CountDownLatch latch;
+
+        CapturingCooldownService(
+            final AtomicReference<String> captured, final CountDownLatch latch
+        ) {
+            this.captured = captured;
+            this.latch = latch;
+        }
 
         @Override
         public CompletableFuture<CooldownResult> evaluate(
             final CooldownRequest request, final CooldownInspector inspector
         ) {
-            return inspector.releaseDate(request.artifact(), request.version())
-                .thenApply(opt -> CooldownResult.allowed());
+            return CompletableFuture.completedFuture(CooldownResult.allowed());
         }
 
         @Override
         public CompletableFuture<CooldownResult> evaluateWithKnownDate(
             final CooldownRequest request, final Optional<Instant> knownReleaseDate
         ) {
+            this.captured.set(request.repoType());
+            this.latch.countDown();
             return CompletableFuture.completedFuture(CooldownResult.allowed());
         }
 

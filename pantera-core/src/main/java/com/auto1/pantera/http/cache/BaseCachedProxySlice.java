@@ -158,7 +158,7 @@ public abstract class BaseCachedProxySlice implements Slice {
     /**
      * Cooldown service (null if cooldown disabled).
      */
-    private final CooldownService cooldownService;
+    protected final CooldownService cooldownService;
 
     /**
      * Cooldown inspector (null if cooldown disabled).
@@ -831,7 +831,7 @@ public abstract class BaseCachedProxySlice implements Slice {
      * @throws IllegalStateException if no factory is registered for the
      *     given repo type in either registry
      */
-    private static Response buildForbiddenResponse(
+    protected static Response buildForbiddenResponse(
         final CooldownBlock block,
         final String repoType
     ) {

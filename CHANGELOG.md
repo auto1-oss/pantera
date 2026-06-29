@@ -2,6 +2,117 @@
 
 ## Version 2.2.0
 
+- **Maven cooldown moves to a header-time admission gate; cold
+  `mvn dependency:resolve` through `maven_group` recovers 56 s of 77 s
+  measured overhead vs. direct Maven Central (123 s → 67 s on a 1,577-
+  coord workload, while direct stays at 46 s).** The pre-fetch
+  cooldown evaluator (`evaluateCooldownOrProceed` in
+  `verifyAndServePrimary`) was issuing a HEAD against Maven Central
+  via `MavenHeadSource` to read `Last-Modified`, then the cache-miss
+  path issued a GET against the same URL milliseconds later — two
+  upstream RTTs per cold artifact. A diagnostic phase-timer pass over
+  the cold bench attributed **53.4 s of the 77 s gap to 526 of these
+  HEADs** (avg 101.6 ms each, with two 1.7 s timeouts).
+
+  Fix: remove the pre-fetch HEAD probe. In maven `CachedProxySlice`,
+  `verifyAndServePrimary` now goes directly to the cache-load + single-
+  flight upstream fetch on a cache miss. Inside `fetchVerifyAndCache`,
+  once `fetchPrimaryBody` returns the upstream response headers, a new
+  `cooldownAtHeaders(...)` helper parses `Last-Modified` via
+  `BaseCachedProxySlice.extractLastModified`, calls
+  `cooldownService.evaluateWithKnownDate(request, parsedDate)` (the
+  same path the metadata-filter already uses for inline-date evaluation),
+  and either:
+
+  - **block**: drains the upstream body via `drainUpstreamBody(Publisher)`
+    (one-shot subscriber, discards every chunk), completes the single-
+    flight leader gate so followers re-enter through the cooldown cache
+    + DB hit, and returns the existing 403 `buildForbiddenResponse`. The
+    body never reaches `streamThroughAndCommit` — blocked artifacts still
+    never land in storage.
+
+  - **allow**: proceeds with `streamThroughAndCommit` unchanged
+    (Track 3 stream-through + Track 4 atomic commit semantics
+    preserved). The verdict is settled before any body byte is
+    subscribed, so streaming is single-subscription, header-time, and
+    zero-buffering — no memory pressure under concurrent cold-burst
+    load.
+
+  Scale invariants under header-time eval (vs. pre-fetch HEAD):
+
+  - Upstream RPS per cold artifact halves: 2 calls (HEAD + GET) → 1
+    call (GET only). Cold-burst connection / bulkhead pressure halves
+    in the same direction; eases pressure on Maven Central's per-IP
+    throttle (the 429 history that motivated the original HEAD).
+  - Cache invalidation, stale-while-revalidate, conditional GET for
+    `maven-metadata.xml`, `RequestDeduplicator` / single-flight, the
+    `artifact_publish_dates` DB row population — all unaffected. The
+    cache-hit path remains zero-upstream.
+  - Verdict for *allowed* artifacts: no body buffering — `cooldownAtHeaders`
+    resolves before the body publisher is ever subscribed.
+  - Verdict for *blocked* artifacts: one upstream GET body downloaded
+    and discarded. Bounded — cooldown blocks newly-released artifacts
+    only; volume is tiny in any cold resolve.
+  - Fail-open on cooldown-evaluator errors matches the pre-fix
+    `evaluateCooldownOrProceed` posture: availability > strictness.
+
+  When `Last-Modified` is missing or unparseable,
+  `evaluateWithKnownDate` is called with `Optional.empty()` and falls
+  through to `JdbcCooldownService.shouldBlockNewArtifact`'s
+  `PublishDateRegistries.publishDate(..., CACHE_ONLY)` lookup — keyed
+  by `CooldownRequest.repoType()`, which still carries the slice's
+  suffixed `rtype` (`maven-proxy` / `gradle-proxy`). The
+  rtype-mismatch hazard the old `MavenProxySliceInspectorRtypeTest`
+  guarded against remains closed; the test is rewritten to verify the
+  modern invariant directly on `CooldownRequest`.
+
+  Files: `pantera-core/.../http/cache/BaseCachedProxySlice.java`
+  (relax `cooldownService` field + `buildForbiddenResponse` to
+  `protected`);
+  `maven-adapter/.../http/CachedProxySlice.java` (drop pre-fetch
+  gate; add `cooldownAtHeaders` + `drainUpstreamBody`);
+  `maven-adapter/.../http/CachedProxySliceTest.java` (cooldown-block
+  test asserts upstream IS called once, body drained, still 403,
+  storage still empty);
+  `maven-adapter/.../http/MavenProxySliceInspectorRtypeTest.java`
+  (rewritten to assert `CooldownRequest.repoType()` carries the
+  slice's suffixed rtype, no DNS / `JettyClientSlices` needed).
+
+- **Per-phase ECS log emissions for group-resolution diagnostics.**
+  Added four additive `INFO`-level ECS log lines auto-tagged with
+  `trace.id` via MDC so a single cold request can be reconstructed
+  end-to-end with `jq 'select(.["trace.id"] == "...")'`:
+
+  - `group_member_rtt` — per-sequential-member RTT in
+    `GroupResolver.tryNextSequentialMember`, carrying `member.name`,
+    `http.response.status_code`, `phase.duration_ms`. Pins
+    dead-member-walk cost (which the synthesis hypothesis suggested
+    was the dominant 18 s contributor — refuted by measurement: only
+    1 dead-walk in a 1,579-coord bench, 1 ms total; the artifact_index
+    routes 1,578 / 1,579 requests around the hosted member).
+  - `cooldown_releasedate_rtt` — wall-time of
+    `inspector.releaseDate()` HEAD in `JdbcCooldownService`, with
+    `phase.timeout_hit` (capped at the 1.7 s budget) and
+    `phase.has_date` flags. Now zero on the cache-miss happy path
+    after the header-time-gate fix above.
+  - `maven_metadata_rtt` — wall-time of the dedicated
+    `maven-metadata.xml` fetch (separate cache path from binary
+    artifacts) in maven `CachedProxySlice.preProcess`.
+  - `group_request_summary` — one line per group request in
+    `GroupResolver.recordMetrics` with total `phase.duration_ms` +
+    outcome. Complements the existing Micrometer histogram
+    (`pantera_group_resolution_duration_seconds`) with per-trace
+    attribution rather than aggregated percentiles.
+
+  Each phase remains zero-overhead when its ECS logger is configured
+  off; structured fields avoid string interpolation. Used as the
+  attribution basis for the cooldown-at-headers fix above.
+
+  Files: `pantera-main/.../group/GroupResolver.java` (member RTT +
+  summary); `pantera-main/.../cooldown/JdbcCooldownService.java`
+  (releaseDate RTT); `maven-adapter/.../http/CachedProxySlice.java`
+  (metadata RTT).
+
 - **Audit log: `package.size` is now an integer (was scientific
   notation), and `client.ip` + `trace.id` are populated.** The
   `artifact.audit` logger's `artifact_publish` record had two

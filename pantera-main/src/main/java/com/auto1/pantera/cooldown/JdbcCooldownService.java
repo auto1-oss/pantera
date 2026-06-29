@@ -950,8 +950,33 @@ final class JdbcCooldownService implements CooldownService {
         // Budget is slightly larger than the per-source HTTP timeout so the
         // source's own timeout fires (populating its negative cache) rather
         // than the parent cancelling first and leaving the source dangling.
+        final long releaseDateStartNs = System.nanoTime();
         return inspector.releaseDate(request.artifact(), request.version())
             .orTimeout(1_700, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .whenComplete((release, ignored) -> {
+                // Phase diagnostic (v2.2.0): cooldown HEAD wall-time, auto-
+                // tagged with trace.id via MDC. Bench to confirm or refute
+                // the hypothesis that the 1.7s timeout stacks on every cold
+                // miss and dominates the cold-start gap.
+                final long releaseDateMs =
+                    (System.nanoTime() - releaseDateStartNs) / 1_000_000L;
+                EcsLogger.info("com.auto1.pantera.cooldown")
+                    .message("releaseDate HEAD complete")
+                    .eventCategory("network")
+                    .eventAction("cooldown_releasedate_rtt")
+                    .field("repository.type", request.repoType())
+                    .field("repository.name", request.repoName())
+                    .field("package.name", request.artifact())
+                    .field("package.version", request.version())
+                    .field("phase.duration_ms", releaseDateMs)
+                    .field("phase.timeout_hit", releaseDateMs >= 1_700)
+                    .field(
+                        "phase.has_date",
+                        release != null && release.isPresent()
+                    )
+                    .field("log.source", "application")
+                    .log();
+            })
             .exceptionally(error -> {
                 EcsLogger.warn("com.auto1.pantera.cooldown")
                     .message("Failed to fetch release date (allowing)")

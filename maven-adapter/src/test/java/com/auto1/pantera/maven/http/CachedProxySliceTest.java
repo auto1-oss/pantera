@@ -353,13 +353,23 @@ final class CachedProxySliceTest {
     /**
      * Regression: the ProxyCacheWriter path (preProcess → verifyAndServePrimary)
      * MUST gate through cooldown evaluation. A blocked version inside the
-     * cooldown window must return 403; upstream must NOT be contacted and
-     * storage must remain empty.
+     * cooldown window must return 403 and must NOT be persisted to storage.
      *
-     * <p>Before the fix, preProcess short-circuited directly to
+     * <p>v2.2.0 (header-time admission gate): cooldown is now evaluated
+     * AFTER the upstream GET response headers arrive, using the upstream
+     * {@code Last-Modified} timestamp as the publish date. This halves
+     * upstream RPS per cold artifact (no separate HEAD probe via
+     * MavenHeadSource). The trade-off is that for blocked artifacts we
+     * issue one upstream GET, read the headers, then drain the body
+     * without committing — the block decision still fires before any
+     * cache write, so blocked versions never land in storage.</p>
+     *
+     * <p>Before the original fix, preProcess short-circuited directly to
      * verifyAndServePrimary → fetchVerifyAndCache without ever calling
-     * evaluateCooldownAndFetch, so a freshly-released or admin-blocked version
-     * was fetched from upstream and cached with no 403 ever firing.</p>
+     * the cooldown evaluator, so a freshly-released or admin-blocked
+     * version was fetched from upstream and cached with no 403 ever
+     * firing. This regression test pins both invariants:
+     * {@code response.status() == 403} and storage remains empty.</p>
      */
     @Test
     void verifyAndServePrimaryBlocksCooldownedVersion() {
@@ -377,6 +387,12 @@ final class CachedProxySliceTest {
             @Override
             public CompletableFuture<CooldownResult> evaluate(
                 final CooldownRequest request, final CooldownInspector inspector
+            ) {
+                return CompletableFuture.completedFuture(CooldownResult.blocked(block));
+            }
+            @Override
+            public CompletableFuture<CooldownResult> evaluateWithKnownDate(
+                final CooldownRequest request, final Optional<Instant> knownReleaseDate
             ) {
                 return CompletableFuture.completedFuture(CooldownResult.blocked(block));
             }
@@ -400,11 +416,19 @@ final class CachedProxySliceTest {
                 return CompletableFuture.completedFuture(List.of());
             }
         };
+        // Header-time gate: upstream IS called once (the GET), we read
+        // Last-Modified, then cooldown blocks and the body is drained.
+        // The mock returns a 200 with a body + Last-Modified so the new
+        // post-headers path can run end-to-end.
+        final byte[] bytes = "blocked-artifact".getBytes(StandardCharsets.UTF_8);
         final CachedProxySlice slice = new CachedProxySlice(
             (line, headers, body) -> {
                 upstreamCalled.set(true);
-                return CompletableFuture.failedFuture(
-                    new AssertionError("Upstream must not be called for a blocked version")
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.ok()
+                        .header("Last-Modified", "Wed, 21 Oct 2015 07:28:00 GMT")
+                        .body(bytes)
+                        .build()
                 );
             },
             (cacheKey, supplier, control) -> supplier.get(),
@@ -424,19 +448,19 @@ final class CachedProxySliceTest {
             Content.EMPTY
         ).join();
         MatcherAssert.assertThat(
-            "Blocked version must return 403 — regression for WI-07 cooldown bypass",
+            "Blocked version must return 403 — header-time admission gate",
             response.status(),
             Matchers.is(RsStatus.FORBIDDEN)
         );
         MatcherAssert.assertThat(
-            "Upstream must NOT be contacted for a blocked version",
+            "Upstream IS called once (header-time gate); body is then drained",
             upstreamCalled.get(),
-            Matchers.is(false)
+            Matchers.is(true)
         );
         final Key key = new Key.From(path.substring(1));
         final boolean cached = storage.exists(key).join();
         MatcherAssert.assertThat(
-            "Storage must be empty — blocked version must not be cached",
+            "Storage must be empty — blocked version must not be cached even when fetched",
             cached,
             Matchers.is(false)
         );

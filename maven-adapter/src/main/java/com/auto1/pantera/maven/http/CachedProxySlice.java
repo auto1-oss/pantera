@@ -284,7 +284,27 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
     ) {
         // maven-metadata.xml uses dedicated MetadataCache with stale-while-revalidate
         if (path.contains("maven-metadata.xml") && this.metadataCache != null) {
-            return Optional.of(this.handleMetadata(line, headers, key));
+            // Phase diagnostic (v2.2.0): isolate maven-metadata.xml RTT from
+            // primary+sidecar fetch. Auto-tagged with trace.id via MDC.
+            final long metaStartNs = System.nanoTime();
+            return Optional.of(this.handleMetadata(line, headers, key)
+                .whenComplete((resp, err) -> {
+                    final long metaMs =
+                        (System.nanoTime() - metaStartNs) / 1_000_000L;
+                    EcsLogger.info("com.auto1.pantera.maven")
+                        .message("maven-metadata.xml fetch complete")
+                        .eventCategory("network")
+                        .eventAction("maven_metadata_rtt")
+                        .field("repository.name", this.repoName())
+                        .field("url.path", line.uri().getPath())
+                        .field(
+                            "http.response.status_code",
+                            err != null ? -1 : resp.status().code()
+                        )
+                        .field("phase.duration_ms", metaMs)
+                        .field("log.source", "application")
+                        .log();
+                }));
         }
         // WI-07 §9.5 — integrity-verified atomic primary+sidecar write on
         // cache-miss. cacheWriter is non-null by construction (constructor
@@ -824,35 +844,40 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
             if (presentInStorage) {
                 return this.serveFromCache(storage, key);
             }
-            return this.evaluateCooldownOrProceed(headers, path, () ->
-                this.cache().load(
-                    key,
-                    com.auto1.pantera.asto.cache.Remote.EMPTY,
-                    com.auto1.pantera.asto.cache.CacheControl.Standard.ALWAYS
-                ).thenCompose(opt -> {
-                    if (opt.isPresent()) {
-                        return CompletableFuture.completedFuture(
-                            ResponseBuilder.ok().body(opt.get()).build()
-                        );
-                    }
-                    // M4 (analysis/plan/v1/PLAN.md): concurrent clients for the
-                    // same uncached primary must collapse to one upstream call.
-                    // Pre-M4 each request fired its own fetchVerifyAndCache,
-                    // multiplying outbound by N for a burst of N — the
-                    // dominant cold-walk amplifier after M2's prefetch deletion.
-                    // The follower path re-runs verifyAndServePrimary which
-                    // hits the warm cache the leader wrote — but only AFTER
-                    // the leader's verificationOutcome fires (cache commit
-                    // complete), not when the leader's response future
-                    // resolves (which happens before the body is drained
-                    // through the stream-through tee).
-                    return this.coalesceUpstream(
-                        key,
-                        leaderGate -> this.fetchVerifyAndCache(line, headers, key, path, leaderGate),
-                        () -> this.verifyAndServePrimary(line, headers, key, path)
+            // Cooldown gate moved into fetchVerifyAndCache (post-headers).
+            // The pre-fetch HEAD probe via MavenHeadSource was the dominant
+            // cold-start cost (53s / 77s gap on a 1579-coord cold bench,
+            // 2026-06-29). We now read Last-Modified from the upstream GET
+            // response itself, halving upstream RPS per cold artifact and
+            // recovering the gap; the verdict still fires before any cache
+            // commit, so blocked artifacts never land in storage.
+            return this.cache().load(
+                key,
+                com.auto1.pantera.asto.cache.Remote.EMPTY,
+                com.auto1.pantera.asto.cache.CacheControl.Standard.ALWAYS
+            ).thenCompose(opt -> {
+                if (opt.isPresent()) {
+                    return CompletableFuture.completedFuture(
+                        ResponseBuilder.ok().body(opt.get()).build()
                     );
-                }).toCompletableFuture()
-            );
+                }
+                // M4 (analysis/plan/v1/PLAN.md): concurrent clients for the
+                // same uncached primary must collapse to one upstream call.
+                // Pre-M4 each request fired its own fetchVerifyAndCache,
+                // multiplying outbound by N for a burst of N — the
+                // dominant cold-walk amplifier after M2's prefetch deletion.
+                // The follower path re-runs verifyAndServePrimary which
+                // hits the warm cache the leader wrote — but only AFTER
+                // the leader's verificationOutcome fires (cache commit
+                // complete), not when the leader's response future
+                // resolves (which happens before the body is drained
+                // through the stream-through tee).
+                return this.coalesceUpstream(
+                    key,
+                    leaderGate -> this.fetchVerifyAndCache(line, headers, key, path, leaderGate),
+                    () -> this.verifyAndServePrimary(line, headers, key, path)
+                );
+            }).toCompletableFuture();
         }).exceptionally(err -> {
             // RCA-NC1 (v2.2.0): MUST surface as bad-gateway, never 404. The
             // GroupResolver writes the response status into the shared
@@ -946,10 +971,22 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
             new EnumMap<>(ChecksumAlgo.class);
         sidecars.put(ChecksumAlgo.SHA1, () -> sha1Inflight);
         return this.fetchPrimaryBody(line, inboundHeaders).toCompletableFuture().thenCompose(body ->
-            this.cacheWriter.streamThroughAndCommit(
-                key, upstreamUri, body.size(), body.publisher(),
-                sidecars, null, ctx
-            ).toCompletableFuture().thenApply(result -> {
+            this.cooldownAtHeaders(inboundHeaders, path, body).thenCompose(blockResp -> {
+                if (blockResp.isPresent()) {
+                    // Block decided at header time. Drain the upstream body so
+                    // the connection is released, complete the leader gate so
+                    // followers re-enter through cooldown cache + DB hit, and
+                    // return the cooldown 403 without ever subscribing the
+                    // body publisher to storage. Upstream RPS / wall-time
+                    // saved vs the legacy HEAD-then-GET path.
+                    drainUpstreamBody(body.publisher());
+                    singleFlightGate.complete(null);
+                    return CompletableFuture.completedFuture(blockResp.get());
+                }
+                return this.cacheWriter.streamThroughAndCommit(
+                    key, upstreamUri, body.size(), body.publisher(),
+                    sidecars, null, ctx
+                ).toCompletableFuture().thenApply(result -> {
                 if (result instanceof Result.Err<ProxyCacheWriter.StreamedArtifact> err) {
                     // streamThroughAndCommit returns Err only for the narrow
                     // case where temp file / channel creation fails BEFORE
@@ -997,6 +1034,7 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                     new com.auto1.pantera.http.headers.Login(inboundHeaders).getValue()
                 );
                 return ResponseBuilder.ok().body(artifact.body()).build();
+            });
             })
         ).exceptionally(err -> {
             final Throwable cause = unwrap(err);
@@ -1007,6 +1045,94 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
             return ResponseBuilder.badGateway()
                 .textBody("Upstream temporarily unavailable")
                 .build();
+        });
+    }
+
+    /**
+     * Evaluate cooldown using the publish-date carried by the upstream
+     * GET response's {@code Last-Modified} header, instead of issuing a
+     * separate HEAD probe via {@link com.auto1.pantera.publishdate.RegistryBackedInspector}.
+     *
+     * <p>Returns {@code Optional.of(403)} when the artifact must be
+     * blocked; {@code Optional.empty()} when the artifact is allowed
+     * (or cooldown is not configured, the request is not cooldown-
+     * eligible, or the header is missing/unparseable — fail-open for
+     * availability, matching {@code evaluateCooldownOrProceed}).
+     */
+    private CompletableFuture<Optional<Response>> cooldownAtHeaders(
+        final Headers inboundHeaders,
+        final String path,
+        final UpstreamBody body
+    ) {
+        if (this.cooldownService == null) {
+            return CompletableFuture.completedFuture(Optional.empty());
+        }
+        final Optional<com.auto1.pantera.cooldown.api.CooldownRequest> request =
+            this.buildCooldownRequest(path, inboundHeaders);
+        if (request.isEmpty()) {
+            return CompletableFuture.completedFuture(Optional.empty());
+        }
+        final Optional<java.time.Instant> publishDate =
+            BaseCachedProxySlice.extractLastModified(body.headers())
+                .map(java.time.Instant::ofEpochMilli);
+        return this.cooldownService
+            .evaluateWithKnownDate(request.get(), publishDate)
+            .thenApply(result -> {
+                if (result.blocked()) {
+                    return Optional.of(
+                        BaseCachedProxySlice.buildForbiddenResponse(
+                            result.block().orElseThrow(), this.repoType()
+                        )
+                    );
+                }
+                return Optional.<Response>empty();
+            })
+            .exceptionally(err -> {
+                // Fail-open on evaluator errors (same posture as
+                // BaseCachedProxySlice.evaluateCooldownOrProceed): availability
+                // wins over strictness — a broken cooldown service must not
+                // block legitimate artifact serving.
+                EcsLogger.warn("com.auto1.pantera.maven.http")
+                    .message("Header-time cooldown evaluate failed; proceeding without block")
+                    .eventCategory("database")
+                    .eventAction("cooldown_evaluate_failure")
+                    .eventOutcome("failure")
+                    .field("repository.type", this.repoType())
+                    .field("repository.name", this.repoName())
+                    .field("url.path", path)
+                    .error(err)
+                    .field("log.source", "application")
+                    .log();
+                return Optional.empty();
+            });
+    }
+
+    /**
+     * Drain an unsubscribed upstream body Publisher so the underlying
+     * HTTP connection is released. Mirrors {@code GroupResolver.drainBody}
+     * — discard every chunk, ignore errors. Must be called on the block
+     * path because {@code Publisher<ByteBuffer>} accepts exactly one
+     * subscriber and Pantera's contract (CLAUDE.md) is that bodies are
+     * always consumed, even when discarded.
+     */
+    private static void drainUpstreamBody(final Publisher<ByteBuffer> publisher) {
+        publisher.subscribe(new org.reactivestreams.Subscriber<>() {
+            @Override
+            public void onSubscribe(final org.reactivestreams.Subscription sub) {
+                sub.request(Long.MAX_VALUE);
+            }
+            @Override
+            public void onNext(final ByteBuffer item) {
+                // discard
+            }
+            @Override
+            public void onError(final Throwable err) {
+                // drain failures are not actionable
+            }
+            @Override
+            public void onComplete() {
+                // body fully consumed
+            }
         });
     }
 
