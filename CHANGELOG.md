@@ -87,8 +87,8 @@
   `verifyAndServePrimary`) was issuing a HEAD against Maven Central
   via `MavenHeadSource` to read `Last-Modified`, then the cache-miss
   path issued a GET against the same URL milliseconds later — two
-  upstream RTTs per cold artifact. A diagnostic phase-timer pass over
-  the cold bench attributed **53.4 s of the 77 s gap to 526 of these
+  upstream RTTs per cold artifact. A phase-timer measurement on the
+  cold bench attributed **53.4 s of the 77 s gap to 526 of these
   HEADs** (avg 101.6 ms each, with two 1.7 s timeouts).
 
   Fix: remove the pre-fetch HEAD probe. In maven `CachedProxySlice`,
@@ -155,40 +155,6 @@
   (rewritten to assert `CooldownRequest.repoType()` carries the
   slice's suffixed rtype, no DNS / `JettyClientSlices` needed).
 
-- **Per-phase ECS log emissions for group-resolution diagnostics.**
-  Added four additive `INFO`-level ECS log lines auto-tagged with
-  `trace.id` via MDC so a single cold request can be reconstructed
-  end-to-end with `jq 'select(.["trace.id"] == "...")'`:
-
-  - `group_member_rtt` — per-sequential-member RTT in
-    `GroupResolver.tryNextSequentialMember`, carrying `member.name`,
-    `http.response.status_code`, `phase.duration_ms`. Pins
-    dead-member-walk cost (which the synthesis hypothesis suggested
-    was the dominant 18 s contributor — refuted by measurement: only
-    1 dead-walk in a 1,579-coord bench, 1 ms total; the artifact_index
-    routes 1,578 / 1,579 requests around the hosted member).
-  - `cooldown_releasedate_rtt` — wall-time of
-    `inspector.releaseDate()` HEAD in `JdbcCooldownService`, with
-    `phase.timeout_hit` (capped at the 1.7 s budget) and
-    `phase.has_date` flags. Now zero on the cache-miss happy path
-    after the header-time-gate fix above.
-  - `maven_metadata_rtt` — wall-time of the dedicated
-    `maven-metadata.xml` fetch (separate cache path from binary
-    artifacts) in maven `CachedProxySlice.preProcess`.
-  - `group_request_summary` — one line per group request in
-    `GroupResolver.recordMetrics` with total `phase.duration_ms` +
-    outcome. Complements the existing Micrometer histogram
-    (`pantera_group_resolution_duration_seconds`) with per-trace
-    attribution rather than aggregated percentiles.
-
-  Each phase remains zero-overhead when its ECS logger is configured
-  off; structured fields avoid string interpolation. Used as the
-  attribution basis for the cooldown-at-headers fix above.
-
-  Files: `pantera-main/.../group/GroupResolver.java` (member RTT +
-  summary); `pantera-main/.../cooldown/JdbcCooldownService.java`
-  (releaseDate RTT); `maven-adapter/.../http/CachedProxySlice.java`
-  (metadata RTT).
 
 - **Audit log: `package.size` is now an integer (was scientific
   notation), and `client.ip` + `trace.id` are populated.** The

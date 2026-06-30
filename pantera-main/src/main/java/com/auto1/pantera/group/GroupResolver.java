@@ -889,23 +889,7 @@ public final class GroupResolver implements Slice {
                 isTargetedLocalRead, anyServerError, result, pinArtifactName);
             return;
         }
-        final long memberStartNs = System.nanoTime();
         queryMemberDirect(member, line, headers, requestBytes).whenComplete((resp, err) -> {
-            // Phase diagnostic (v2.2.0): per-member RTT, auto-tagged with
-            // trace.id via MDC. Attribute the cold-start dead-walk cost across
-            // the sequential members. one line per member per request.
-            final long memberMs = (System.nanoTime() - memberStartNs) / 1_000_000L;
-            EcsLogger.info("com.auto1.pantera.group")
-                .message("Sequential member RTT")
-                .eventCategory("network")
-                .eventAction("group_member_rtt")
-                .field("repository.name", this.group)
-                .field("member.name", member.name())
-                .field("http.response.status_code", err != null ? -1 : resp.status().code())
-                .field("phase.duration_ms", memberMs)
-                .field("url.path", line.uri().getPath())
-                .field("log.source", "application")
-                .log();
             if (err != null) {
                 if (!(err instanceof java.util.concurrent.CancellationException)) {
                     member.recordFailure();
@@ -1067,20 +1051,6 @@ public final class GroupResolver implements Slice {
             result = "not_found";
         }
         recordGroupRequest(result, duration);
-        // Phase diagnostic (v2.2.0): single per-request summary, auto-tagged
-        // with trace.id via MDC. Pairs with group_member_rtt /
-        // cooldown_releasedate_rtt / maven_metadata_rtt so a cold trace can be
-        // reconstructed end-to-end with `jq 'select(.trace.id == "...")'`.
-        EcsLogger.info("com.auto1.pantera.group")
-            .message("Request phase summary")
-            .eventCategory("web")
-            .eventAction("group_request_summary")
-            .field("repository.name", this.group)
-            .field("http.response.status_code", resp == null ? -1 : resp.status().code())
-            .field("phase.duration_ms", duration)
-            .field("phase.outcome", result)
-            .field("log.source", "application")
-            .log();
     }
 
     private void recordGroupRequest(final String result, final long duration) {

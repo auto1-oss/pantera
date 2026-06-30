@@ -284,27 +284,7 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
     ) {
         // maven-metadata.xml uses dedicated MetadataCache with stale-while-revalidate
         if (path.contains("maven-metadata.xml") && this.metadataCache != null) {
-            // Phase diagnostic (v2.2.0): isolate maven-metadata.xml RTT from
-            // primary+sidecar fetch. Auto-tagged with trace.id via MDC.
-            final long metaStartNs = System.nanoTime();
-            return Optional.of(this.handleMetadata(line, headers, key)
-                .whenComplete((resp, err) -> {
-                    final long metaMs =
-                        (System.nanoTime() - metaStartNs) / 1_000_000L;
-                    EcsLogger.info("com.auto1.pantera.maven")
-                        .message("maven-metadata.xml fetch complete")
-                        .eventCategory("network")
-                        .eventAction("maven_metadata_rtt")
-                        .field("repository.name", this.repoName())
-                        .field("url.path", line.uri().getPath())
-                        .field(
-                            "http.response.status_code",
-                            err != null ? -1 : resp.status().code()
-                        )
-                        .field("phase.duration_ms", metaMs)
-                        .field("log.source", "application")
-                        .log();
-                }));
+            return Optional.of(this.handleMetadata(line, headers, key));
         }
         // WI-07 §9.5 — integrity-verified atomic primary+sidecar write on
         // cache-miss. cacheWriter is non-null by construction (constructor
