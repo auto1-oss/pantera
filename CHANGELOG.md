@@ -2,6 +2,41 @@
 
 ## Version 2.2.0
 
+- **HTTP client safety-net timer raised 5 ms → 30 s to unblock the
+  cooldown-at-headers admission gate.** `JettyClientSlice` schedules
+  `publisher::discardIfUnsubscribed` as a safety net for callers that
+  never subscribe to the response body publisher. The original 5 ms
+  delay was tuned for synchronous subscribers (test patterns that do
+  `.get().body().asBytes()` in microseconds). The 2026-06-29 maven
+  cooldown-at-headers change introduced an async path — extract
+  `Last-Modified` from the GET response headers, then call
+  `JdbcCooldownService.evaluateWithKnownDate(...)` which does an async
+  DB / Valkey lookup, then subscribe the body to
+  `streamThroughAndCommit`. Typical wall-time for that lookup is
+  10–50 ms, with tail-latency several hundred ms under load — well
+  past the 5 ms timer. When the timer fired first, the publisher's
+  `AtomicReference<Subscriber>` got the `DISCARDED_SENTINEL`; the real
+  subscribe then lost the CAS with `IllegalStateException:
+  JettyContentSourcePublisher is single-subscriber`, the
+  stream-through cache write failed, the maven slice returned a 502
+  from its outer `.exceptionally`, and the group surfaced as a 500 to
+  Maven / Gradle clients. Reported on the first install attempt after
+  enabling cooldown.
+
+  Fix: raise the discard timer to 30 s. The timer's job is to clean
+  up bodies that callers genuinely abandon; 30 s is longer than any
+  reasonable subscriber-attach window and shorter than the upstream
+  connection's idle-close, so the safety-net behaviour is preserved
+  for the abandoned-body case (just on a longer cadence) while
+  legitimate async subscribers no longer lose the race.
+
+  Verified post-fix: 0 single-subscriber failures across the cold
+  bench (vs 6 / 7 cooldown-evaluated requests pre-fix), 1577 cold
+  requests resolved with cooldown ON in 65.7 s (within 1 s of the
+  cooldown-OFF run — cooldown overhead negligible end-to-end).
+
+  Files: `http-client/.../JettyClientSlice.java` (5 ms → 30 s).
+
 - **Maven cooldown moves to a header-time admission gate; cold
   `mvn dependency:resolve` through `maven_group` recovers 56 s of 77 s
   measured overhead vs. direct Maven Central (123 s → 67 s on a 1,577-

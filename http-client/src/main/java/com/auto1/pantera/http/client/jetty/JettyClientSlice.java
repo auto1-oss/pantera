@@ -188,15 +188,30 @@ final class JettyClientSlice implements Slice {
                     // body publisher. Pool buffers are already released
                     // by {@link #primeOnIoThread} — this just frees the
                     // staged heap copies and prevents a late subscriber
-                    // from racing against the discard. 5 ms is much
-                    // longer than the typical synchronous-subscriber
-                    // turnaround (microseconds), so blocking consumers
-                    // (test patterns that do {@code .get().body().asBytes()})
-                    // win the CAS first; only abandoned bodies fall
-                    // through to the discard.
+                    // from racing against the discard.
+                    //
+                    // Timer sizing: must accommodate any well-behaved
+                    // subscriber's worst-case attach delay. Pre-2026-06-30
+                    // this was 5 ms tuned for synchronous subscribers
+                    // (test patterns like
+                    // {@code .get().body().asBytes()}). The cooldown-at-
+                    // headers admission gate (maven CachedProxySlice
+                    // post-headers verdict) extracts Last-Modified and
+                    // calls JdbcCooldownService.evaluateWithKnownDate,
+                    // which runs an async DB / Valkey lookup before the
+                    // subscriber attaches — typical wall-time 10–50 ms
+                    // and tail-latency several hundred ms under load.
+                    // 5 ms was too tight: the discard fired first, the
+                    // sentinel filled the subscriber slot, and the real
+                    // subscribe lost the CAS with a "single-subscriber"
+                    // exception (cache_write failure → 500). 30 s is
+                    // longer than any reasonable subscriber-attach window
+                    // and shorter than the connection's idle-close so
+                    // genuinely-abandoned bodies still get cleaned up
+                    // before the connection is reclaimed.
                     JettyClientSlice.this.client.getScheduler().schedule(
                         publisher::discardIfUnsubscribed,
-                        5, TimeUnit.MILLISECONDS
+                        30, TimeUnit.SECONDS
                     );
                 }
         );
