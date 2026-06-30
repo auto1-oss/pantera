@@ -2,6 +2,48 @@
 
 ## Version 2.2.0
 
+- **Adaptive bulkhead burst-friendly defaults: initial 10→40, ramp-up
+  step 1→4.** Phase-timer diagnostics on a 1,557-coord cold
+  `maven_group` resolve (post cooldown-at-headers fix, cooldown ON 90 d)
+  showed the bulkhead climbed only 10→24 permits over the 65 s bench
+  window, capping throughput at ~20 RPS vs direct Maven Central's
+  ~34 RPS. AIMD step=1/window=5 s would have needed 7.5 min to reach
+  the configured `maxPermits=100` ceiling — far too slow for cold-burst
+  workloads (cold `mvn install`, `mvn dependency:resolve`, daily CI
+  warm-ups, Renovate update sweeps). The new initial=40 absorbs the
+  cold-burst fan-out from a 5-worker Maven client without throttling;
+  step=4 reaches max=100 inside 75 s of sustained load.
+
+  AIMD safety properties unchanged: `maxPermits=100` cap preserved,
+  `rampDownFactor=0.5` still halves on any bad window, `minPermits=5`
+  still the floor. HikariCP and Jetty `maxConnectionsPerDestination=
+  512` absorb the higher initial concurrency without close-to-cap risk.
+
+  Files: `pantera-core/.../resilience/AdaptiveBulkheadLimits.java`
+  (defaults `initialPermits 10→40, rampUpStep 1→4`);
+  `pantera-main/.../runtime/BulkheadTuning.java` (mirror change);
+  `pantera-main/.../db/migration/V135__bulkhead_burst_defaults.sql`
+  (new — UPDATEs already-seeded `http_client.bulkhead.initial_permits`
+  and `ramp_up_step` rows whose values are still the V132 seeds;
+  manual admin overrides preserved).
+
+  Bench (1,557-coord cold maven_group resolve through Pantera,
+  cooldown ON 90 d, fresh `-Dmaven.repo.local`):
+
+                              wall    bulkhead final permits
+    pre-tune (initial=10)     65.7 s  24
+    post-tune (initial=40)    63.1 s  80+
+    direct → Maven Central    46.2 s  n/a
+
+  The tune saved ~2.5 s — the rest of the gap-to-direct (~17 s) is
+  per-request overhead (auth + index + cache check + Vert.x routing
+  + Jetty client TLS to upstream) at ~14 ms/req, multiplied across
+  1,577 requests with Maven's 5-worker pool and dependency-tree
+  serialisation. Not the bulkhead. The residual is the architectural
+  floor under the current per-request pipeline; further reduction
+  requires structural changes (per-request fast-paths, connection
+  multiplexing) outside the scope of this commit.
+
 - **HTTP client safety-net timer raised 5 ms → 30 s to unblock the
   cooldown-at-headers admission gate.** `JettyClientSlice` schedules
   `publisher::discardIfUnsubscribed` as a safety net for callers that

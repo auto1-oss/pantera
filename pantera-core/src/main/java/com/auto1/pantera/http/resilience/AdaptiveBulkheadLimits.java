@@ -113,11 +113,24 @@ public record AdaptiveBulkheadLimits(
     /**
      * Default adaptive limits suitable for a typical proxy upstream.
      *
-     * <p>Initial=10 lets a single user fan out 10 concurrent fetches; the
-     * AIMD step grows toward {@code maxPermits=100} as long as upstream
-     * stays healthy (no errors, peak latency &le; 500&nbsp;ms). The first
-     * sign of trouble halves the permits, immediately preserving fairness
-     * for other repos.
+     * <p>Initial=40 absorbs a cold-burst fan-out (e.g. a 1,500-coord
+     * {@code mvn dependency:resolve} firing through a 5-worker artifact
+     * pool that drains via Pantera) without throttling the upstream
+     * connection during the first AIMD windows. The AIMD step grows
+     * by 4 per healthy 5&nbsp;s window toward {@code maxPermits=100} —
+     * fast enough to clear a sustained burst inside the first 30&nbsp;s
+     * but still bounded so a misbehaving upstream cannot saturate the
+     * pool unboundedly. The first sign of trouble halves the permits,
+     * immediately preserving fairness for other repos.
+     *
+     * <p>Pre-2026-06-30 defaults were {@code initial=10, rampUpStep=1}
+     * tuned for the slow-and-steady warm-cache pattern. Phase-timer
+     * diagnostics on a 1,557-coord cold bench showed the bulkhead
+     * climbed only 10 → 24 permits over 65&nbsp;s, capping throughput
+     * at ~20 RPS vs direct Maven Central's ~34 RPS — 40 % throughput
+     * cap, ~20&nbsp;s wall-time penalty. The new defaults preserve the
+     * AIMD safety properties while sizing the initial window for the
+     * cold-burst case that dominates the perf-sensitive workloads.
      *
      * @return Adaptive defaults.
      */
@@ -126,10 +139,10 @@ public record AdaptiveBulkheadLimits(
             true,
             5,
             100,
-            10,
+            40,
             500L,
             5,
-            1,
+            4,
             0.5,
             1000,
             Duration.ofSeconds(1)

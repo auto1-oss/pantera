@@ -63,10 +63,10 @@ public record BulkheadTuning(
             true,
             5,
             100,
-            10,
+            40,
             500L,
             5,
-            1,
+            4,
             0.5
         );
     }
