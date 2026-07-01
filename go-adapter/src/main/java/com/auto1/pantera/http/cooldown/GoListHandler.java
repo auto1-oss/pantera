@@ -12,6 +12,8 @@ package com.auto1.pantera.http.cooldown;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Remaining;
+import com.auto1.pantera.audit.AuditContext;
+import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.api.CooldownService;
@@ -21,7 +23,10 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsMdc;
+import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.rq.RequestLine;
+import org.slf4j.MDC;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
 
@@ -161,10 +166,18 @@ public final class GoListHandler {
      * Handle a {@code /@v/list} request with cooldown-aware filtering.
      *
      * @param line Request line (must be an {@code /@v/list} path)
+     * @param headers Inbound request headers, used to bind trace/client-ip
+     *                context onto this thread's MDC before any async hop
      * @param user Authenticated user (for cooldown bookkeeping)
      * @return Future response
      */
-    public CompletableFuture<Response> handle(final RequestLine line, final String user) {
+    public CompletableFuture<Response> handle(
+        final RequestLine line, final Headers headers, final String user
+    ) {
+        RequestContextHeaders.bindToMdc(headers);
+        final AuditContext ctx = new AuditContext(
+            MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP)
+        );
         final String path = line.uri().getPath();
         final String module = this.detector.extractPackageName(path).orElseThrow(
             () -> new IllegalArgumentException("Not a @v/list path: " + path)
@@ -181,7 +194,7 @@ public final class GoListHandler {
                     );
                 }
                 return bodyBytes(resp.body()).thenCompose(bytes ->
-                    this.processUpstream(bytes, resp.headers(), module, user)
+                    this.processUpstream(bytes, resp.headers(), module, user, ctx)
                 );
             });
     }
@@ -195,7 +208,8 @@ public final class GoListHandler {
         final byte[] upstreamBytes,
         final Headers upstreamHeaders,
         final String module,
-        final String user
+        final String user,
+        final AuditContext ctx
     ) {
         final List<String> versions;
         try {
@@ -233,6 +247,7 @@ public final class GoListHandler {
             if (blocked.isEmpty()) {
                 // Fast path: nothing blocked, hand the upstream bytes back
                 // unchanged so any trailing newline / ordering is preserved.
+                AuditLogger.resolution(ctx, this.repoType, this.repoName, module, user, null);
                 return ResponseBuilder.ok()
                     .headers(upstreamHeaders)
                     .body(upstreamBytes)
@@ -254,6 +269,9 @@ public final class GoListHandler {
                 .field("package.name", module)
                 .field("log.source", "application")
                 .log();
+            AuditLogger.resolution(
+                ctx, this.repoType, this.repoName, module, user, List.copyOf(blocked)
+            );
             final byte[] body = serialise(kept, endsWithNewline(upstreamBytes));
             return ResponseBuilder.ok()
                 .header("Content-Type", CONTENT_TYPE)

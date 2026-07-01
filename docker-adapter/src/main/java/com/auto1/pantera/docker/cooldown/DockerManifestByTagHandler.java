@@ -12,6 +12,8 @@ package com.auto1.pantera.docker.cooldown;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Remaining;
+import com.auto1.pantera.audit.AuditContext;
+import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.api.CooldownService;
@@ -21,9 +23,12 @@ import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsMdc;
+import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.rq.RequestLine;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
+import org.slf4j.MDC;
 
 import java.io.ByteArrayOutputStream;
 import java.io.UncheckedIOException;
@@ -170,6 +175,10 @@ public final class DockerManifestByTagHandler {
         final Content body,
         final String user
     ) {
+        RequestContextHeaders.bindToMdc(headers);
+        final AuditContext ctx = new AuditContext(
+            MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP)
+        );
         final String path = line.uri().getPath();
         final String image = this.detector.extractPackageName(path).orElseThrow(
             () -> new IllegalArgumentException("Not a manifest-by-tag path: " + path)
@@ -190,7 +199,7 @@ public final class DockerManifestByTagHandler {
                 }
                 // Buffer the manifest body — it is small JSON (<50 KB).
                 return bodyBytes(resp.body()).thenCompose(bytes ->
-                    this.evaluateAndRespond(resp.headers(), bytes, image, tag, user)
+                    this.evaluateAndRespond(resp.headers(), bytes, image, tag, user, ctx)
                 );
             });
     }
@@ -207,7 +216,8 @@ public final class DockerManifestByTagHandler {
         final byte[] manifestBytes,
         final String image,
         final String tag,
-        final String user
+        final String user,
+        final AuditContext ctx
     ) {
         final Optional<String> digest = digestHeader(upstreamHeaders);
         final CompletableFuture<Boolean> tagCheck = this.isBlocked(image, tag, user);
@@ -229,8 +239,16 @@ public final class DockerManifestByTagHandler {
                     .field("container.image.hash.all", digest.map(java.util.List::of).orElse(java.util.List.of()))
                     .field("log.source", "application")
                     .log();
+                AuditLogger.access(
+                    ctx, this.repoType, this.repoName, image, tag, 0L, user,
+                    AuditLogger.OUTCOME_FAILURE, AuditLogger.REASON_COOLDOWN_ACTIVE
+                );
                 return manifestUnknown(tag);
             }
+            AuditLogger.access(
+                ctx, this.repoType, this.repoName, image, tag, manifestBytes.length, user,
+                AuditLogger.OUTCOME_SUCCESS, null
+            );
             return ResponseBuilder.ok()
                 .headers(upstreamHeaders)
                 .body(manifestBytes)

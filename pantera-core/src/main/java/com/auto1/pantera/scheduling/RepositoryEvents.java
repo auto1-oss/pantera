@@ -24,7 +24,7 @@ public final class RepositoryEvents {
     /**
      * Fallback version when none can be inferred.
      */
-    private static final String VERSION = "UNKNOWN";
+    public static final String VERSION = "UNKNOWN";
 
     /**
      * Repository type.
@@ -53,6 +53,35 @@ public final class RepositoryEvents {
         this.rtype = rtype;
         this.rname = rname;
         this.queue = queue;
+    }
+
+    /**
+     * Repository type this instance was constructed with.
+     * @return Repository type
+     */
+    public String repoType() {
+        return this.rtype;
+    }
+
+    /**
+     * Repository name this instance was constructed with.
+     * @return Repository name
+     */
+    public String repoName() {
+        return this.rname;
+    }
+
+    /**
+     * Format an artifact name from a storage key, using the same rule
+     * {@link #addUploadEventByKey} and {@link #addDeleteEventByKey} use
+     * internally. Exposed so callers (e.g. {@code SliceUpload}, {@code
+     * SliceDelete}) can build an audit-log call with the exact same {@code
+     * package.name} that will end up in the queued {@link ArtifactEvent}.
+     * @param key Storage key
+     * @return Formatted artifact name
+     */
+    public String artifactName(final Key key) {
+        return this.formatArtifactName(key);
     }
 
     /**

@@ -90,7 +90,7 @@ final class ComposerRootPackagesHandlerTest {
         this.cooldown.blockPair("acme/foo", "1.0.0");
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/packages.json"),
-            "alice"
+            "alice", com.auto1.pantera.audit.AuditContext.NONE
         ).get();
         assertThat(resp.status().success(), is(true));
         final JsonNode node = MAPPER.readTree(bodyToBytes(resp));
@@ -119,7 +119,7 @@ final class ComposerRootPackagesHandlerTest {
         this.cooldown.blockPair("acme/foo", "2.0.0");
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/packages.json"),
-            "alice"
+            "alice", com.auto1.pantera.audit.AuditContext.NONE
         ).get();
         final JsonNode node = MAPPER.readTree(bodyToBytes(resp));
         final JsonNode foo = node.get("packages").get("acme/foo");
@@ -153,7 +153,7 @@ final class ComposerRootPackagesHandlerTest {
         this.cooldown.blockPair("acme/foo", "2.0.0");
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/packages.json"),
-            "alice"
+            "alice", com.auto1.pantera.audit.AuditContext.NONE
         ).get();
         final JsonNode node = MAPPER.readTree(bodyToBytes(resp));
         assertThat(node.get("packages").has("acme/foo"), is(false));
@@ -173,7 +173,7 @@ final class ComposerRootPackagesHandlerTest {
         this.cooldown.blockPair("acme/foo", "2.0.0");
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/repo.json"),
-            "alice"
+            "alice", com.auto1.pantera.audit.AuditContext.NONE
         ).get();
         final JsonNode node = MAPPER.readTree(bodyToBytes(resp));
         assertThat(
@@ -196,7 +196,7 @@ final class ComposerRootPackagesHandlerTest {
         this.upstream.put("/packages.json", body);
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/packages.json"),
-            "alice"
+            "alice", com.auto1.pantera.audit.AuditContext.NONE
         ).get();
         final JsonNode node = MAPPER.readTree(bodyToBytes(resp));
         assertThat(
@@ -212,7 +212,7 @@ final class ComposerRootPackagesHandlerTest {
         // Nothing scripted → 404.
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/packages.json"),
-            "alice"
+            "alice", com.auto1.pantera.audit.AuditContext.NONE
         ).get();
         assertThat(resp.status().code(), equalTo(404));
     }
@@ -222,7 +222,7 @@ final class ComposerRootPackagesHandlerTest {
         this.upstream.put500("/packages.json");
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/packages.json"),
-            "alice"
+            "alice", com.auto1.pantera.audit.AuditContext.NONE
         ).get();
         assertThat(resp.status().code(), equalTo(500));
     }
@@ -232,7 +232,7 @@ final class ComposerRootPackagesHandlerTest {
         this.upstream.put("/packages.json", "garbled{invalid");
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/packages.json"),
-            "alice"
+            "alice", com.auto1.pantera.audit.AuditContext.NONE
         ).get();
         assertThat(resp.status().success(), is(true));
         assertThat(
@@ -249,7 +249,7 @@ final class ComposerRootPackagesHandlerTest {
         this.upstream.put("/packages.json", body);
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/packages.json"),
-            "alice"
+            "alice", com.auto1.pantera.audit.AuditContext.NONE
         ).get();
         assertThat(
             contentType(resp).toLowerCase(),
@@ -276,7 +276,7 @@ final class ComposerRootPackagesHandlerTest {
         this.cooldown.blockPair("acme/foo", "1.0.0");
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/packages.json"),
-            "alice"
+            "alice", com.auto1.pantera.audit.AuditContext.NONE
         ).get();
         assertThat(resp.status().code(), equalTo(200));
         final JsonNode node = MAPPER.readTree(bodyToBytes(resp));

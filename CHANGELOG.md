@@ -2,6 +2,133 @@
 
 ## Version 2.2.0
 
+- **Structural rewrite of artifact audit logging: four consistent
+  events (publish/access/delete/resolution) wired across all 15
+  format adapters, `client.ip`/`trace.id` made compulsory
+  compile-time parameters instead of fragile MDC lookups, and
+  cooldown-blocked requests are now audited for the first time.**
+
+  Before this change, `com.auto1.pantera.audit.AuditLogger` had five
+  methods (`upload`, `download`, `delete`, `resolution`, `publish`)
+  that each read `client.ip` and other identity fields from MDC —
+  silently emitting nothing whenever the calling thread never had
+  MDC bound (Quartz workers, RxJava continuations, any adapter that
+  forgot to call `RequestContextHeaders.bindToMdc`). A full trace
+  across every format's upload/publish/delete/proxy-fetch path found:
+
+  - `download()` was dead code — `SliceDownload` was imported by nine
+    format adapters but never instantiated in production anywhere.
+    Deleted, along with its test.
+  - The generic `SliceUpload` class called `AuditLogger.upload()`
+    directly *and* queued an `ArtifactEvent` that separately produced
+    `AuditLogger.publish()` via `DbConsumer` — a double audit line
+    for the same physical upload, for every format that reused this
+    class (conan, the generic files format). The other 13 formats'
+    bespoke upload slices only did the second thing, so they were
+    accidentally correct.
+  - Cooldown-blocked requests had **zero** audit trail. The DB-backed
+    `audit_log` table only ever recorded admin actions
+    (`COOLDOWN_POLICY_UPDATE`, `COOLDOWN_UNBLOCK`,
+    `COOLDOWN_UNBLOCK_ALL`); `AuditLogger`'s five methods all
+    hardcoded `event.outcome=success` with no way to express a
+    denial. A blocked fetch returned a correct `403`, visible only in
+    the generic, undifferentiated HTTP access log.
+  - A cache-hit proxy serve (the common case for a warm cache) was
+    never audited at all — only a cache-miss-then-upstream-fetch
+    reached `AuditLogger.publish()` via the async `DbConsumer` queue.
+  - Range-based dependency resolution (npm `^2.0.0`, unpinned
+    `pip install`) has a silent blind spot: when cooldown filters the
+    newest matching version out of a metadata listing (npm packument,
+    PyPI simple-index, `maven-metadata.xml`, Go's `@v/list`/`@latest`,
+    Composer's package/root listings, Docker's `tags/list`), the
+    resolver just picks the next-allowed version with no record a
+    newer one existed. Six formats had their own metadata-filter
+    class with this exact gap, none of them auditing it.
+
+  **New taxonomy — four events, one shared `AuditContext` carrying
+  `traceId`/`clientIp` as compulsory constructor parameters instead
+  of an MDC read:**
+
+  | Event | Scope | `event.outcome` | `event.reason` (failure) |
+  |---|---|---|---|
+  | `artifact_publish` | Local/hosted repo, actual artifact upload | `success`/`failure` | `checksum_mismatch`, `storage_unavailable` |
+  | `artifact_access` | Proxy fetch + local reads, actual artifact, any outcome (cache hit, cache-miss fetch, or cooldown block) | `success`/`failure` | `cooldown_active`, `not_found`, `upstream_unavailable` |
+  | `artifact_delete` | Any repo mode | `success`/`failure` | `not_found`, `forbidden` |
+  | `artifact_resolution` | Proxy/group metadata listing view | `success` (always) | n/a — `event.type` is `["allowed"]`/`["change"]`, filtered-version count/list embedded in `message` (not custom fields — those are not ECS and would be dropped by a strict ingest pipeline) |
+
+  Deliberately out of scope for `publish`/`access`: pure metadata
+  requests carrying no binary artifact bytes — a `maven-metadata.xml`
+  GET, a PyPI simple-index render, Composer's JSON-only package
+  registration (`AddSlice`, distinct from the real `.zip` upload path
+  `AddArchiveSlice`) are never audited under these two events; only
+  `resolution` covers metadata, and only for the narrow
+  cooldown-visibility case above.
+
+  `EcsLogger.field()` already has MDC-wins deduplication built in (a
+  field value is dropped only when `ThreadContext` already carries
+  that key, kept otherwise) — so passing `client.ip`/`trace.id`
+  explicitly via `AuditContext` and calling `.field(...)` with them
+  is safe with zero duplicate-key risk either way.
+
+  **Per-format fixes landed as part of this taxonomy:**
+
+  - Docker: `DockerProxyCooldownSlice`'s three near-identical
+    cooldown-block branches consolidated into one audited helper;
+    `DockerManifestByTagHandler` (single-manifest-by-tag block) now
+    audits `access`; `DockerTagsListHandler` (`/tags/list`) now
+    audits `resolution`.
+  - PyPI + Debian: their bespoke `DeleteSlice` classes never queued a
+    DB-index-removal event at all — a functional bug beyond the
+    audit gap (the `artifacts` table row was never deleted). Both now
+    route through `RepositoryEvents.addDeleteEventByKey` and audit
+    `delete`.
+  - Maven + npm: share one metadata-filter choke point
+    (`MetadataFilterService.evaluateAndFilter`) — fixed once for
+    both. `CooldownMetadataService.filterMetadata` gained a new
+    9-arg overload (`AuditContext ctx, String owner`) as a default
+    method delegating from the untouched 7-arg original, so
+    `NoopCooldownMetadataService` and every test double kept
+    compiling without modification.
+  - PyPI (`PypiSimpleHandler` + `PypiJsonHandler`), Go
+    (`GoListHandler` + `GoLatestHandler` — the latter is Go's real
+    `@latest` HTTP entry point; `GoLatestMetadataFilter` is a pure SPI
+    filter with no HTTP awareness), Composer
+    (`ComposerPackageMetadataHandler` + `ComposerRootPackagesHandler`,
+    the latter auditing once per distinct package found in a root
+    `packages.json`/`repo.json` aggregation), Docker
+    (`DockerTagsListHandler`) — all now audit `resolution`
+    unconditionally (both the filtered and unfiltered branch, per
+    explicit requirement: the audit trail should show who requested
+    metadata for what package and which versions they did or did not
+    see, not just the anomalous cases).
+  - `RepositoryEvents` gained `repoType()`/`repoName()`/
+    `artifactName(Key)` accessors and its `VERSION` constant became
+    `public` so `SliceUpload`/`SliceDelete` can build an audit call
+    with the exact same identity the queued `ArtifactEvent` uses.
+
+  Verified with a genuinely clean `mvn clean install -U -T8` (not
+  `mvn compile`/`mvn test-compile` against a stale `target/` —
+  Maven's default incremental compiler skips recompiling an unchanged
+  test file even when a method it calls changed shape elsewhere,
+  which silently hid four broken test files during this change until
+  a `clean` build surfaced them).
+
+  Files: `pantera-core/.../audit/AuditContext.java` (new),
+  `pantera-core/.../audit/AuditLogger.java` (rewritten),
+  `pantera-core/.../http/cache/BaseCachedProxySlice.java`,
+  `pantera-core/.../http/slice/SliceUpload.java` +
+  `SliceDelete.java` (`SliceDownload.java` deleted),
+  `pantera-core/.../scheduling/RepositoryEvents.java`,
+  `pantera-core/.../cooldown/metadata/CooldownMetadataService.java` +
+  `MetadataFilterService.java`,
+  `pantera-main/.../db/DbConsumer.java`,
+  `pantera-main/.../group/MavenGroupSlice.java`,
+  `pantera-main/.../adapters/docker/DockerProxyCooldownSlice.java`,
+  and per-format files across composer-adapter, conan-adapter,
+  conda-adapter, debian-adapter, docker-adapter, files-adapter,
+  gem-adapter, go-adapter, helm-adapter, maven-adapter, npm-adapter,
+  pypi-adapter, rpm-adapter.
+
 - **Adaptive bulkhead burst-friendly defaults: initial 10→40, ramp-up
   step 1→4.** Phase-timer diagnostics on a 1,557-coord cold
   `maven_group` resolve (post cooldown-at-headers fix, cooldown ON 90 d)

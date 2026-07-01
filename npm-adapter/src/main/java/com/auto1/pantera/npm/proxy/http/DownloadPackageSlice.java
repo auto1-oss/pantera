@@ -143,6 +143,17 @@ public final class DownloadPackageSlice implements Slice {
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
         // Phase 10.5 profiler — total npm packument wall time per request.
         final long entryNs = System.nanoTime();
+        // Captured synchronously (before the body.asBytesFuture() async hop
+        // below) so the artifact.audit resolution record threaded into
+        // CooldownMetadataService reflects THIS request's correlation
+        // context rather than whatever (or nothing) the continuation's
+        // worker thread has bound.
+        com.auto1.pantera.http.log.RequestContextHeaders.bindToMdc(headers);
+        final com.auto1.pantera.audit.AuditContext auditCtx = new com.auto1.pantera.audit.AuditContext(
+            org.slf4j.MDC.get(com.auto1.pantera.http.log.EcsMdc.TRACE_ID),
+            org.slf4j.MDC.get(com.auto1.pantera.http.log.EcsMdc.CLIENT_IP)
+        );
+        final String owner = new com.auto1.pantera.http.headers.Login(headers).getValue();
         // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
         return body.asBytesFuture().thenCompose(ignored -> {
             // P0.1: Check if client requests abbreviated format
@@ -165,17 +176,17 @@ public final class DownloadPackageSlice implements Slice {
                 final String packageName = rawPackageName.substring(
                     0, rawPackageName.length() - LATEST_SUFFIX.length()
                 );
-                return this.serveLatestManifest(packageName);
+                return this.serveLatestManifest(packageName, auditCtx, owner);
             }
 
             // MEMORY OPTIMIZATION: Use different paths for abbreviated vs full requests
             if (abbreviated) {
                 // FAST PATH: Serve pre-computed abbreviated metadata directly
                 // This avoids loading/parsing full metadata (38MB → 3MB, no JSON parsing)
-                return this.serveAbbreviated(rawPackageName, headers, clientETag);
+                return this.serveAbbreviated(rawPackageName, headers, clientETag, auditCtx, owner);
             } else {
                 // FULL PATH: Load and process full metadata
-                return this.serveFull(rawPackageName, headers, clientETag);
+                return this.serveFull(rawPackageName, headers, clientETag, auditCtx, owner);
             }
         }).whenComplete((r, e) -> recordPhase("packument_total", entryNs))
         .exceptionally(error -> {
@@ -238,7 +249,9 @@ public final class DownloadPackageSlice implements Slice {
     private CompletableFuture<Response> serveAbbreviated(
         final String packageName,
         final Headers headers,
-        final Optional<String> clientETag
+        final Optional<String> clientETag,
+        final com.auto1.pantera.audit.AuditContext auditCtx,
+        final String owner
     ) {
         // Phase 10.5: time the metadata-only fetch (drives upstream when cache miss).
         final long metaNs = System.nanoTime();
@@ -272,7 +285,8 @@ public final class DownloadPackageSlice implements Slice {
                                 // COOLDOWN: Apply filtering if enabled
                                 if (this.cooldownMetadata != null && this.repoType != null) {
                                     return this.applyAbbreviatedCooldown(
-                                        abbreviatedBytes, packageName, metadata, headers, clientETag
+                                        abbreviatedBytes, packageName, metadata, headers, clientETag,
+                                        auditCtx, owner
                                     );
                                 }
                                 // No cooldown - serve directly
@@ -295,7 +309,8 @@ public final class DownloadPackageSlice implements Slice {
                                     // Apply cooldown filtering to full metadata too
                                     if (this.cooldownMetadata != null && this.repoType != null) {
                                         return this.applyFullMetadataCooldown(
-                                            rawBytes, packageName, metadata, headers, clientETag
+                                            rawBytes, packageName, metadata, headers, clientETag,
+                                            auditCtx, owner
                                         );
                                     }
                                     return io.reactivex.Maybe.just(
@@ -324,12 +339,14 @@ public final class DownloadPackageSlice implements Slice {
         final String packageName,
         final com.auto1.pantera.npm.proxy.model.NpmPackage.Metadata metadata,
         final Headers headers,
-        final Optional<String> clientETag
+        final Optional<String> clientETag,
+        final com.auto1.pantera.audit.AuditContext auditCtx,
+        final String owner
     ) {
         // filterMetadata() parses JSON once and extracts release dates via ReleaseDateProvider
         // No need to pre-parse - that would double the parsing overhead
         final CompletableFuture<Response> filterFuture = this.applyFilterAndBuildResponse(
-            abbreviatedBytes, packageName, metadata, headers, clientETag
+            abbreviatedBytes, packageName, metadata, headers, clientETag, auditCtx, owner
         );
         return RxFuture.maybe(filterFuture);
     }
@@ -343,7 +360,9 @@ public final class DownloadPackageSlice implements Slice {
         final String packageName,
         final com.auto1.pantera.npm.proxy.model.NpmPackage.Metadata metadata,
         final Headers headers,
-        final Optional<String> clientETag
+        final Optional<String> clientETag,
+        final com.auto1.pantera.audit.AuditContext auditCtx,
+        final String owner
     ) {
         final CompletableFuture<Response> filterFuture = this.cooldownMetadata.filterMetadata(
             this.repoType,
@@ -352,7 +371,9 @@ public final class DownloadPackageSlice implements Slice {
             fullBytes,
             new NpmMetadataParser(),
             new NpmMetadataFilter(),
-            new NpmMetadataRewriter()
+            new NpmMetadataRewriter(),
+            auditCtx,
+            owner
         ).handle((filtered, ex) -> {
             if (ex != null) {
                 Throwable cause = ex;
@@ -401,7 +422,9 @@ public final class DownloadPackageSlice implements Slice {
         final String packageName,
         final com.auto1.pantera.npm.proxy.model.NpmPackage.Metadata metadata,
         final Headers headers,
-        final Optional<String> clientETag
+        final Optional<String> clientETag,
+        final com.auto1.pantera.audit.AuditContext auditCtx,
+        final String owner
     ) {
         return this.cooldownMetadata.filterMetadata(
             this.repoType,
@@ -410,7 +433,9 @@ public final class DownloadPackageSlice implements Slice {
             abbreviatedBytes,
             new NpmMetadataParser(),
             new NpmMetadataFilter(),
-            new NpmMetadataRewriter()
+            new NpmMetadataRewriter(),
+            auditCtx,
+            owner
         ).handle((filtered, ex) -> {
                 if (ex != null) {
                     Throwable cause = ex;
@@ -454,7 +479,9 @@ public final class DownloadPackageSlice implements Slice {
     private CompletableFuture<Response> serveFull(
         final String packageName,
         final Headers headers,
-        final Optional<String> clientETag
+        final Optional<String> clientETag,
+        final com.auto1.pantera.audit.AuditContext auditCtx,
+        final String owner
     ) {
         return this.npm.getPackageMetadataOnly(packageName)
             .flatMap(metadata -> {
@@ -491,7 +518,9 @@ public final class DownloadPackageSlice implements Slice {
                                         rawBytes,
                                         new NpmMetadataParser(),
                                         new NpmMetadataFilter(),
-                                        new NpmMetadataRewriter()
+                                        new NpmMetadataRewriter(),
+                                        auditCtx,
+                                        owner
                                     ).handle((filtered, ex) -> {
                                         if (ex != null) {
                                             Throwable cause = ex;
@@ -563,7 +592,9 @@ public final class DownloadPackageSlice implements Slice {
      * behaviour of the upstream npm registry for this endpoint.</p>
      */
     private CompletableFuture<Response> serveLatestManifest(
-        final String packageName
+        final String packageName,
+        final com.auto1.pantera.audit.AuditContext auditCtx,
+        final String owner
     ) {
         if (this.cooldownMetadata == null || this.repoType == null) {
             // Cooldown disabled: pass-through by fetching packument and
@@ -603,7 +634,9 @@ public final class DownloadPackageSlice implements Slice {
                     rawBytes,
                     new NpmMetadataParser(),
                     new NpmMetadataFilter(),
-                    new NpmMetadataRewriter()
+                    new NpmMetadataRewriter(),
+                    auditCtx,
+                    owner
                 ).handle((filteredBytes, ex) -> {
                     if (ex != null) {
                         Throwable cause = ex;

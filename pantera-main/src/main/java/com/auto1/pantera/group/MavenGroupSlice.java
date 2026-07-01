@@ -463,7 +463,7 @@ public final class MavenGroupSlice implements Slice {
                     return readResponseBody(resp.body())
                         .thenCompose(rawBytes -> {
                             this.recordMemberBodySize(rawBytes.length);
-                            return applyCooldownFilter(path, rawBytes)
+                            return applyCooldownFilter(path, rawBytes, headers)
                                 .thenApply(filteredBytes -> {
                                     final long fetchDuration =
                                         System.currentTimeMillis() - fetchStartTime;
@@ -601,7 +601,7 @@ public final class MavenGroupSlice implements Slice {
      * group response).
      */
     private CompletableFuture<byte[]> applyCooldownFilter(
-        final String path, final byte[] mergedBytes
+        final String path, final byte[] mergedBytes, final Headers headers
     ) {
         if (this.cooldownMetadata
             instanceof com.auto1.pantera.cooldown.metadata.NoopCooldownMetadataService) {
@@ -627,6 +627,15 @@ public final class MavenGroupSlice implements Slice {
         final String baseType = this.repoType.endsWith("-group")
             ? this.repoType.substring(0, this.repoType.length() - "-group".length())
             : this.repoType;
+        // Captured before the async filterMetadata hop so the audit record
+        // reflects this request's correlation context rather than whatever
+        // (or nothing) the continuation's worker thread has bound.
+        com.auto1.pantera.http.log.RequestContextHeaders.bindToMdc(headers);
+        final com.auto1.pantera.audit.AuditContext auditCtx = new com.auto1.pantera.audit.AuditContext(
+            org.slf4j.MDC.get(com.auto1.pantera.http.log.EcsMdc.TRACE_ID),
+            org.slf4j.MDC.get(com.auto1.pantera.http.log.EcsMdc.CLIENT_IP)
+        );
+        final String owner = new com.auto1.pantera.http.headers.Login(headers).getValue();
         return this.cooldownMetadata.filterMetadata(
             baseType,
             this.group,
@@ -634,7 +643,9 @@ public final class MavenGroupSlice implements Slice {
             mergedBytes,
             new com.auto1.pantera.maven.cooldown.MavenMetadataParser(),
             new com.auto1.pantera.maven.cooldown.MavenMetadataFilter(),
-            new com.auto1.pantera.maven.cooldown.MavenMetadataRewriter()
+            new com.auto1.pantera.maven.cooldown.MavenMetadataRewriter(),
+            auditCtx,
+            owner
         ).exceptionally(err -> {
             EcsLogger.warn("com.auto1.pantera.group")
                 .message("Cooldown filter on merged group metadata failed; "

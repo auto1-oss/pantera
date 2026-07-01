@@ -319,7 +319,7 @@ final class ProxySlice implements Slice {
                 .field("repository.name", this.rname)
                 .field("log.source", "application")
                 .log();
-            return this.jsonHandler.handle(line, user);
+            return this.jsonHandler.handle(line, user, rqheaders);
         }
         if (coords.isEmpty() && this.simpleHandler.matches(path)) {
             final boolean clientWantsJson =
@@ -333,7 +333,7 @@ final class ProxySlice implements Slice {
                 .field("simple.format", clientWantsJson ? "json" : "html")
                 .field("log.source", "application")
                 .log();
-            return this.simpleHandler.handle(line, clientWantsJson, user);
+            return this.simpleHandler.handle(line, clientWantsJson, user, rqheaders);
         }
 
         // For artifacts: CRITICAL FIX - Check cache FIRST before any network calls

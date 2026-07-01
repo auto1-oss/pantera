@@ -25,7 +25,6 @@ import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
 import com.auto1.pantera.http.slice.LoggingSlice;
-import com.auto1.pantera.http.slice.SliceDownload;
 import com.auto1.pantera.http.slice.StorageArtifactSlice;
 import com.auto1.pantera.http.slice.SliceSimple;
 import com.auto1.pantera.http.slice.SliceWithHeaders;

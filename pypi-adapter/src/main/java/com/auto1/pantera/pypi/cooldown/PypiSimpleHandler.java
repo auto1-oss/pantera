@@ -12,6 +12,8 @@ package com.auto1.pantera.pypi.cooldown;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Remaining;
+import com.auto1.pantera.audit.AuditContext;
+import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.metadata.MetadataParseException;
@@ -22,6 +24,8 @@ import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsMdc;
+import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -29,6 +33,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
+import org.slf4j.MDC;
 
 import java.io.ByteArrayOutputStream;
 import java.io.UncheckedIOException;
@@ -173,11 +178,22 @@ public final class PypiSimpleHandler {
      * @param clientWantsJson true if the original client requested PEP 691
      *                        JSON; false for legacy PEP 503 HTML
      * @param user Authenticated user (for cooldown bookkeeping)
+     * @param headers Inbound request headers, used to capture the audit
+     *                correlation context before any async hop
      * @return Future response
      */
     public CompletableFuture<Response> handle(
-        final RequestLine line, final boolean clientWantsJson, final String user
+        final RequestLine line, final boolean clientWantsJson, final String user,
+        final Headers headers
     ) {
+        // Captured on the calling thread (same thread as EcsLoggingSlice) —
+        // must not be re-read from MDC inside the thenCompose/thenApply
+        // continuations below, which may run on a worker thread that never
+        // had MDC bound.
+        RequestContextHeaders.bindToMdc(headers);
+        final AuditContext ctx = new AuditContext(
+            MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP)
+        );
         final String path = line.uri().getPath();
         // PEP 503 normalization (lowercase + collapse runs of [-_.] to single
         // '-'): the artifact-publish path stores release dates under the
@@ -213,7 +229,7 @@ public final class PypiSimpleHandler {
                     );
                 }
                 return bodyBytes(resp.body()).thenCompose(bytes ->
-                    this.processUpstream(bytes, pkg, clientWantsJson, user)
+                    this.processUpstream(bytes, pkg, clientWantsJson, user, ctx)
                 );
             });
     }
@@ -228,7 +244,7 @@ public final class PypiSimpleHandler {
      */
     private CompletableFuture<Response> processUpstream(
         final byte[] upstreamBytes, final String pkg,
-        final boolean clientWantsJson, final String user
+        final boolean clientWantsJson, final String user, final AuditContext ctx
     ) {
         final PypiSimpleIndex parsed;
         try {
@@ -245,10 +261,16 @@ public final class PypiSimpleHandler {
                 .error(ex)
                 .field("log.source", "application")
                 .log();
+            AuditLogger.resolution(
+                ctx, this.repoType, this.repoName, pkg, user, List.of()
+            );
             return CompletableFuture.completedFuture(emptyResponse(clientWantsJson, pkg));
         }
         final List<String> versions = this.parser.extractVersions(parsed);
         if (versions.isEmpty()) {
+            AuditLogger.resolution(
+                ctx, this.repoType, this.repoName, pkg, user, List.of()
+            );
             return CompletableFuture.completedFuture(
                 allowedResponse(parsed, upstreamBytes, java.util.Set.of(), clientWantsJson, pkg)
             );
@@ -256,10 +278,16 @@ public final class PypiSimpleHandler {
         final Map<String, Instant> releaseDates = this.parser.extractReleaseDates(parsed);
         return this.blockedVersions(pkg, versions, releaseDates, user).thenApply(blocked -> {
             if (blocked.isEmpty()) {
+                AuditLogger.resolution(
+                    ctx, this.repoType, this.repoName, pkg, user, List.of()
+                );
                 return allowedResponse(parsed, upstreamBytes, blocked, clientWantsJson, pkg);
             }
             final PypiSimpleIndex filtered = this.filter.filter(parsed, blocked);
             if (filtered.links().isEmpty()) {
+                AuditLogger.resolution(
+                    ctx, this.repoType, this.repoName, pkg, user, List.copyOf(blocked)
+                );
                 return this.allBlockedResponse(pkg);
             }
             EcsLogger.info("com.auto1.pantera.pypi")
@@ -274,6 +302,9 @@ public final class PypiSimpleHandler {
                 .field("package.name", pkg)
                 .field("log.source", "application")
                 .log();
+            AuditLogger.resolution(
+                ctx, this.repoType, this.repoName, pkg, user, List.copyOf(blocked)
+            );
             return serialize(filtered, upstreamBytes, blocked, clientWantsJson, pkg);
         });
     }

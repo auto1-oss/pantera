@@ -16,6 +16,8 @@ import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.cache.Cache;
 import com.auto1.pantera.asto.cache.CacheControl;
 import com.auto1.pantera.asto.cache.Remote;
+import com.auto1.pantera.audit.AuditContext;
+import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.cooldown.api.CooldownBlock;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
@@ -33,12 +35,15 @@ import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsMdc;
+import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.misc.ConfigDefaults;
 import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.security.PathTraversalGuard;
 import com.auto1.pantera.http.slice.KeyFromPath;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
+import org.slf4j.MDC;
 import java.io.IOException;
 import java.net.ConnectException;
 import java.nio.ByteBuffer;
@@ -686,6 +691,12 @@ public abstract class BaseCachedProxySlice implements Slice {
 
     /**
      * Cache-first flow: check cache, then evaluate cooldown, then fetch.
+     *
+     * <p>Every exit from this method that serves (or denies) an actual
+     * artifact — cache hit, cooldown block, or a cache-miss upstream fetch —
+     * emits exactly one {@link AuditLogger#access} event via {@link
+     * #auditAccessResult}. Checksum sidecars are not "the artifact" (see
+     * class-level scope note on {@link AuditLogger}) and are excluded.
      */
     private CompletableFuture<Response> cacheFirstFlow(
         final RequestLine line,
@@ -699,6 +710,8 @@ public abstract class BaseCachedProxySlice implements Slice {
             return this.serveChecksumFromStorage(line, key, headers, new Login(headers).getValue())
                 .whenComplete((r, e) -> recordProxyPhase("serve_checksum_sidecar", sidecarStartNs));
         }
+        final AuditContext ctx = this.captureAuditContext(headers);
+        final String owner = new Login(headers).getValue();
         final CachedArtifactMetadataStore store = this.metadataStore.orElseThrow();
         final long cacheLoadStartNs = System.nanoTime();
         return this.cache.load(key, Remote.EMPTY, CacheControl.Standard.ALWAYS)
@@ -713,25 +726,34 @@ public abstract class BaseCachedProxySlice implements Slice {
                         final ResponseBuilder builder = ResponseBuilder.ok()
                             .body(cached.get());
                         meta.ifPresent(m -> builder.headers(stripContentEncoding(m.headers())));
-                        return this.postProcess(builder.build(), line);
+                        final Response resp = this.postProcess(builder.build(), line);
+                        this.auditAccessResult(ctx, path, headers, owner, resp);
+                        return resp;
                     });
                 }
                 // Cache miss: evaluate cooldown then fetch
                 final long missStartNs = System.nanoTime();
-                return this.evaluateCooldownAndFetch(line, headers, key, path, store)
+                return this.evaluateCooldownAndFetch(line, headers, key, path, store, ctx, owner)
                     .whenComplete((r, e) -> recordProxyPhase("cooldown_and_fetch_miss", missStartNs));
             }).toCompletableFuture();
     }
 
     /**
-     * Evaluate cooldown, then fetch from upstream if allowed.
+     * Evaluate cooldown, then fetch from upstream if allowed. Emits the
+     * {@link AuditLogger#access} event on both the block branch and the
+     * eventual fetch outcome — {@link #fetchAndCache}'s result is audited
+     * here rather than inside it because only this call site knows whether
+     * cooldown ran at all (adapters with no {@link CooldownRequest} for the
+     * path skip straight to {@link #fetchAndCache}).
      */
     private CompletableFuture<Response> evaluateCooldownAndFetch(
         final RequestLine line,
         final Headers headers,
         final Key key,
         final String path,
-        final CachedArtifactMetadataStore store
+        final CachedArtifactMetadataStore store,
+        final AuditContext ctx,
+        final String owner
     ) {
         if (this.cooldownService != null
             && this.cooldownInspector != null) {
@@ -742,15 +764,97 @@ public abstract class BaseCachedProxySlice implements Slice {
                     .thenCompose(result -> {
                         if (result.blocked()) {
                             final CooldownBlock block = result.block().orElseThrow();
-                            return CompletableFuture.completedFuture(
-                                buildForbiddenResponse(block, this.repoType)
+                            final Response resp = buildForbiddenResponse(block, this.repoType);
+                            AuditLogger.access(
+                                ctx, this.repoType, this.repoName,
+                                request.get().artifact(), request.get().version(), 0L, owner,
+                                AuditLogger.OUTCOME_FAILURE, AuditLogger.REASON_COOLDOWN_ACTIVE
                             );
+                            return CompletableFuture.completedFuture(resp);
                         }
-                        return this.fetchAndCache(line, key, headers, store);
+                        return this.fetchAndCache(line, key, headers, store)
+                            .thenApply(resp -> {
+                                this.auditAccessResult(ctx, path, headers, owner, resp);
+                                return resp;
+                            });
                     });
             }
         }
-        return this.fetchAndCache(line, key, headers, store);
+        return this.fetchAndCache(line, key, headers, store)
+            .thenApply(resp -> {
+                this.auditAccessResult(ctx, path, headers, owner, resp);
+                return resp;
+            });
+    }
+
+    /**
+     * Build an {@link AuditContext} for the current request. Reads the
+     * internal {@code X-Pantera-Ctx-*} headers into MDC first (a no-op if
+     * this call is already on the request thread with MDC populated by
+     * {@code EcsLoggingSlice}; a real restore on a worker thread that never
+     * had it) so both the request-thread and worker-thread cases end up with
+     * the correct value.
+     *
+     * @param headers Inbound request headers
+     * @return Context carrying whatever trace id / client IP could be resolved
+     */
+    protected final AuditContext captureAuditContext(final Headers headers) {
+        RequestContextHeaders.bindToMdc(headers);
+        return new AuditContext(MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP));
+    }
+
+    /**
+     * Emit {@link AuditLogger#access} for a final {@link Response}, deriving
+     * outcome/reason from its status. Artifact name/version come from {@link
+     * #buildCooldownRequest} (the same per-adapter path parser cooldown
+     * already uses) when available; falls back to the raw storage key so an
+     * access event still fires (with a less precise identity) when a format
+     * has no cooldown wiring for this path at all.
+     */
+    private void auditAccessResult(
+        final AuditContext ctx, final String path, final Headers headers,
+        final String owner, final Response resp
+    ) {
+        final Optional<CooldownRequest> parsed = this.buildCooldownRequest(path, headers);
+        final String artifactName = parsed.map(CooldownRequest::artifact)
+            .orElseGet(() -> new KeyFromPath(path).string());
+        final String version = parsed.map(CooldownRequest::version).orElse(null);
+        final RsStatus status = resp.status();
+        if (status.success() || status == RsStatus.NOT_MODIFIED) {
+            AuditLogger.access(
+                ctx, this.repoType, this.repoName, artifactName, version,
+                contentLengthOf(resp), owner, AuditLogger.OUTCOME_SUCCESS, null
+            );
+        } else if (status == RsStatus.NOT_FOUND) {
+            AuditLogger.access(
+                ctx, this.repoType, this.repoName, artifactName, version,
+                0L, owner, AuditLogger.OUTCOME_FAILURE, AuditLogger.REASON_NOT_FOUND
+            );
+        } else if (status.serverError() || status == RsStatus.BAD_GATEWAY) {
+            AuditLogger.access(
+                ctx, this.repoType, this.repoName, artifactName, version,
+                0L, owner, AuditLogger.OUTCOME_FAILURE, AuditLogger.REASON_UPSTREAM_UNAVAILABLE
+            );
+        }
+        // Other 4xx (403 already audited at the cooldown-block call site,
+        // auth failures audited by the security layer) are intentionally
+        // not re-audited here.
+    }
+
+    /**
+     * Best-effort {@code Content-Length} from a response's headers, for the
+     * {@code package.size} field on an access audit event. Returns 0 when
+     * absent or unparseable rather than throwing.
+     */
+    private static long contentLengthOf(final Response resp) {
+        return resp.headers().find("Content-Length").stream().findFirst()
+            .map(h -> {
+                try {
+                    return Long.parseLong(h.getValue());
+                } catch (final NumberFormatException ex) {
+                    return 0L;
+                }
+            }).orElse(0L);
     }
 
     /**
@@ -783,9 +887,16 @@ public abstract class BaseCachedProxySlice implements Slice {
             final Optional<CooldownRequest> request =
                 this.buildCooldownRequest(path, headers);
             if (request.isPresent()) {
+                final AuditContext ctx = this.captureAuditContext(headers);
+                final String owner = new Login(headers).getValue();
                 return this.cooldownService.evaluate(request.get(), this.cooldownInspector)
                     .thenCompose(result -> {
                         if (result.blocked()) {
+                            AuditLogger.access(
+                                ctx, this.repoType, this.repoName,
+                                request.get().artifact(), request.get().version(), 0L, owner,
+                                AuditLogger.OUTCOME_FAILURE, AuditLogger.REASON_COOLDOWN_ACTIVE
+                            );
                             return CompletableFuture.completedFuture(
                                 buildForbiddenResponse(result.block().orElseThrow(), this.repoType)
                             );

@@ -12,6 +12,7 @@ package com.auto1.pantera.composer.http.proxy;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.cache.Cache;
+import com.auto1.pantera.audit.AuditContext;
 import com.auto1.pantera.composer.Repository;
 import com.auto1.pantera.composer.cooldown.ComposerPackageMetadataHandler;
 import com.auto1.pantera.composer.cooldown.ComposerRootPackagesHandler;
@@ -28,6 +29,8 @@ import com.auto1.pantera.http.client.auth.AuthClientSlice;
 import com.auto1.pantera.http.client.auth.Authenticator;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsMdc;
+import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rt.MethodRule;
 import com.auto1.pantera.http.rt.RtRule;
@@ -288,6 +291,15 @@ public class ComposerProxySlice implements Slice {
         }
         final String path = line.uri().getPath();
         final String user = new Login(headers).getValue();
+        // Bound as early as possible — before any async hop — so the
+        // AuditLogger.resolution() call downstream in the cooldown
+        // handlers gets real trace.id / client.ip instead of nulls from
+        // a worker thread that never had EcsLoggingSlice's MDC bound.
+        RequestContextHeaders.bindToMdc(headers);
+        final AuditContext auditCtx = new AuditContext(
+            org.slf4j.MDC.get(EcsMdc.TRACE_ID),
+            org.slf4j.MDC.get(EcsMdc.CLIENT_IP)
+        );
         // Cooldown handlers run ahead of the legacy route so blocked
         // versions cannot leak through the root / per-package
         // metadata surfaces. Mirrors the Go / PyPI / Docker
@@ -301,7 +313,7 @@ public class ComposerProxySlice implements Slice {
                 .field("log.source", "application")
                 .log();
             return body.asBytesFuture()
-                .thenCompose(ignored -> this.rootHandler.handle(line, user));
+                .thenCompose(ignored -> this.rootHandler.handle(line, user, auditCtx));
         }
         if (this.packageHandler != null && this.packageHandler.matches(path)) {
             EcsLogger.debug("com.auto1.pantera.composer")
@@ -312,7 +324,7 @@ public class ComposerProxySlice implements Slice {
                 .field("log.source", "application")
                 .log();
             return body.asBytesFuture()
-                .thenCompose(ignored -> this.packageHandler.handle(line, user));
+                .thenCompose(ignored -> this.packageHandler.handle(line, user, auditCtx));
         }
         return this.fallback.response(line, headers, body);
     }

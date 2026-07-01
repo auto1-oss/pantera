@@ -28,11 +28,11 @@ import com.auto1.pantera.http.rt.MethodRule;
 import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
-import com.auto1.pantera.http.slice.SliceDownload;
 import com.auto1.pantera.http.slice.StorageArtifactSlice;
 import com.auto1.pantera.http.slice.SliceSimple;
 import com.auto1.pantera.http.slice.SliceWithHeaders;
 import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.scheduling.RepositoryEvents;
 import com.auto1.pantera.security.perms.Action;
 import com.auto1.pantera.security.perms.AdapterBasicPermission;
 import com.auto1.pantera.security.policy.Policy;
@@ -46,6 +46,11 @@ import java.util.regex.Pattern;
  * PyPi HTTP entry point.
  */
 public final class PySlice extends Slice.Wrap {
+
+    /**
+     * Repository type name.
+     */
+    private static final String REPO_TYPE = "pypi";
 
     /**
      * Primary ctor.
@@ -180,7 +185,12 @@ public final class PySlice extends Slice.Wrap {
                 new RtRulePath(
                     MethodRule.DELETE,
                     PySlice.createAuthSlice(
-                        new DeleteSlice(storage),
+                        new DeleteSlice(
+                            storage,
+                            queue.map(
+                                item -> new RepositoryEvents(PySlice.REPO_TYPE, name, item)
+                            )
+                        ),
                         basicAuth,
                         tokenAuth,
                         new OperationControl(

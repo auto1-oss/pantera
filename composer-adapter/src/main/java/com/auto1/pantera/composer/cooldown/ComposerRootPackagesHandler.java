@@ -12,6 +12,8 @@ package com.auto1.pantera.composer.cooldown;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Remaining;
+import com.auto1.pantera.audit.AuditContext;
+import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.metadata.MetadataParseException;
@@ -33,6 +35,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -161,9 +164,12 @@ public final class ComposerRootPackagesHandler {
      *
      * @param line Request line
      * @param user Authenticated user (for cooldown bookkeeping)
+     * @param auditCtx Request correlation context for the audit trail
      * @return Future response
      */
-    public CompletableFuture<Response> handle(final RequestLine line, final String user) {
+    public CompletableFuture<Response> handle(
+        final RequestLine line, final String user, final AuditContext auditCtx
+    ) {
         return this.upstream.response(line, Headers.EMPTY, Content.EMPTY)
             .thenCompose(resp -> {
                 if (!resp.status().success()) {
@@ -175,7 +181,7 @@ public final class ComposerRootPackagesHandler {
                     );
                 }
                 return bodyBytes(resp.body()).thenCompose(bytes ->
-                    this.processUpstream(bytes, user)
+                    this.processUpstream(bytes, user, auditCtx)
                 );
             });
     }
@@ -185,7 +191,7 @@ public final class ComposerRootPackagesHandler {
      * → evaluate cooldown → filter → serialise.
      */
     private CompletableFuture<Response> processUpstream(
-        final byte[] upstreamBytes, final String user
+        final byte[] upstreamBytes, final String user, final AuditContext auditCtx
     ) {
         final JsonNode parsed;
         try {
@@ -254,6 +260,7 @@ public final class ComposerRootPackagesHandler {
         return this.blockedVersions(entries, user).thenApply(blocked -> {
             if (blocked.isEmpty()) {
                 // Nothing blocked; forward upstream bytes verbatim.
+                this.auditResolutions(entries, blocked, user, auditCtx);
                 return ResponseBuilder.ok()
                     .header("Content-Type", CONTENT_TYPE)
                     .body(upstreamBytes)
@@ -278,6 +285,7 @@ public final class ComposerRootPackagesHandler {
                     .field("repository.name", this.repoName)
                     .field("log.source", "application")
                     .log();
+                this.auditResolutions(entries, blocked, user, auditCtx);
                 return ResponseBuilder.ok()
                     .header("Content-Type", CONTENT_TYPE)
                     .body(body)
@@ -292,6 +300,7 @@ public final class ComposerRootPackagesHandler {
                     .error(ex)
                     .field("log.source", "application")
                     .log();
+                this.auditResolutions(entries, blocked, user, auditCtx);
                 return ResponseBuilder.ok()
                     .header("Content-Type", CONTENT_TYPE)
                     .body(upstreamBytes)
@@ -327,6 +336,32 @@ public final class ComposerRootPackagesHandler {
                 }
                 return blocked;
             });
+    }
+
+    /**
+     * Root aggregation covers many distinct packages in one response, unlike
+     * the per-package endpoint, so {@link AuditLogger#resolution} fires once
+     * per package named in the root — not once per response — passing that
+     * package's own filtered-version list (empty when nothing was blocked
+     * for it).
+     */
+    private void auditResolutions(
+        final List<ComposerRootPackagesFilter.PackageVersion> entries,
+        final Map<String, Set<String>> blocked,
+        final String user,
+        final AuditContext auditCtx
+    ) {
+        final Set<String> pkgNames = new LinkedHashSet<>();
+        for (final ComposerRootPackagesFilter.PackageVersion pv : entries) {
+            pkgNames.add(pv.pkg());
+        }
+        for (final String pkg : pkgNames) {
+            final Set<String> blockedForPkg = blocked.get(pkg);
+            AuditLogger.resolution(
+                auditCtx, this.repoType, this.repoName, pkg, user,
+                blockedForPkg == null ? List.of() : List.copyOf(blockedForPkg)
+            );
+        }
     }
 
     private CompletableFuture<Boolean> isBlocked(

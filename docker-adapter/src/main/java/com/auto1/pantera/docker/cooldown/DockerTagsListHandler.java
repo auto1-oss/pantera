@@ -12,6 +12,8 @@ package com.auto1.pantera.docker.cooldown;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Remaining;
+import com.auto1.pantera.audit.AuditContext;
+import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.api.CooldownService;
@@ -22,10 +24,13 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsMdc;
+import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.fasterxml.jackson.databind.JsonNode;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
+import org.slf4j.MDC;
 
 import java.io.ByteArrayOutputStream;
 import java.io.UncheckedIOException;
@@ -176,15 +181,22 @@ public final class DockerTagsListHandler {
      * Handle a tags/list request with cooldown filtering.
      *
      * @param line Request line (must be {@code /v2/<name>/tags/list})
+     * @param headers Inbound request headers, carrying the internal
+     *     {@code X-Pantera-Ctx-*} trace/client-ip fields for audit
+     *     correlation
      * @param user Authenticated user (for cooldown bookkeeping)
      * @return Future response
      */
     public CompletableFuture<Response> handle(
-        final RequestLine line, final String user
+        final RequestLine line, final Headers headers, final String user
     ) {
         final String path = line.uri().getPath();
         final String image = this.detector.extractPackageName(path).orElseThrow(
             () -> new IllegalArgumentException("Not a /tags/list path: " + path)
+        );
+        RequestContextHeaders.bindToMdc(headers);
+        final AuditContext ctx = new AuditContext(
+            MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP)
         );
         return this.upstream.response(line, Headers.EMPTY, Content.EMPTY)
             .thenCompose(resp -> {
@@ -197,7 +209,7 @@ public final class DockerTagsListHandler {
                     );
                 }
                 return bodyBytes(resp.body()).thenCompose(bytes ->
-                    this.processUpstream(bytes, image, user)
+                    this.processUpstream(bytes, image, user, ctx)
                 );
             });
     }
@@ -211,7 +223,8 @@ public final class DockerTagsListHandler {
      * 200 with {@code "tags":[]} — see class-level javadoc.</p>
      */
     private CompletableFuture<Response> processUpstream(
-        final byte[] upstreamBytes, final String image, final String user
+        final byte[] upstreamBytes, final String image, final String user,
+        final AuditContext ctx
     ) {
         final JsonNode parsed;
         try {
@@ -249,6 +262,9 @@ public final class DockerTagsListHandler {
         return this.blockedTags(image, tags, user).thenApply(blocked -> {
             if (blocked.isEmpty()) {
                 // Fast path: nothing blocked → upstream bytes verbatim.
+                AuditLogger.resolution(
+                    ctx, this.repoType, this.repoName, image, user, List.of()
+                );
                 return ResponseBuilder.ok()
                     .header("Content-Type", this.rewriter.contentType())
                     .body(upstreamBytes)
@@ -269,6 +285,9 @@ public final class DockerTagsListHandler {
                     .field("package.name", image)
                     .field("log.source", "application")
                     .log();
+                AuditLogger.resolution(
+                    ctx, this.repoType, this.repoName, image, user, List.copyOf(blocked)
+                );
                 return ResponseBuilder.ok()
                     .header("Content-Type", this.rewriter.contentType())
                     .body(body)

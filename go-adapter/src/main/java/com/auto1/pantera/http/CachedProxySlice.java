@@ -267,7 +267,7 @@ final class CachedProxySlice implements Slice {
                 .field("repository.name", this.rname)
                 .field("log.source", "application")
                 .log();
-            return this.latestHandler.handle(line, user);
+            return this.latestHandler.handle(line, headers, user);
         }
         // Cooldown-aware @v/list filter: strips blocked versions so
         // "go list -m -versions" / MVS resolution never sees them.
@@ -281,7 +281,7 @@ final class CachedProxySlice implements Slice {
                 .field("repository.name", this.rname)
                 .field("log.source", "application")
                 .log();
-            return this.listHandler.handle(line, user);
+            return this.listHandler.handle(line, headers, user);
         }
         final Key key = new KeyFromPath(path);
         final Matcher matcher = ARTIFACT.matcher(key.string());

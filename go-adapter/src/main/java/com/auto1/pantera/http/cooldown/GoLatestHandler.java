@@ -12,6 +12,8 @@ package com.auto1.pantera.http.cooldown;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Remaining;
+import com.auto1.pantera.audit.AuditContext;
+import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.api.CooldownService;
@@ -22,10 +24,13 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsMdc;
+import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
+import org.slf4j.MDC;
 
 import java.io.ByteArrayOutputStream;
 import java.io.UncheckedIOException;
@@ -170,10 +175,18 @@ public final class GoLatestHandler {
      * Handle a {@code /@latest} request with cooldown-aware fallback.
      *
      * @param line Request line (must be an {@code /@latest} path)
+     * @param headers Inbound request headers, used to bind trace/client-ip
+     *                context onto this thread's MDC before any async hop
      * @param user Authenticated user (for cooldown bookkeeping)
      * @return Future response
      */
-    public CompletableFuture<Response> handle(final RequestLine line, final String user) {
+    public CompletableFuture<Response> handle(
+        final RequestLine line, final Headers headers, final String user
+    ) {
+        RequestContextHeaders.bindToMdc(headers);
+        final AuditContext ctx = new AuditContext(
+            MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP)
+        );
         final String path = line.uri().getPath();
         final String module = this.detector.extractPackageName(path).orElseThrow(
             () -> new IllegalArgumentException("Not a @latest path: " + path)
@@ -190,7 +203,7 @@ public final class GoLatestHandler {
                     );
                 }
                 return bodyBytes(resp.body()).thenCompose(bytes ->
-                    this.processUpstream(bytes, resp.headers(), module, user)
+                    this.processUpstream(bytes, resp.headers(), module, user, ctx)
                 );
             });
     }
@@ -203,7 +216,8 @@ public final class GoLatestHandler {
         final byte[] upstreamBytes,
         final Headers upstreamHeaders,
         final String module,
-        final String user
+        final String user,
+        final AuditContext ctx
     ) {
         final GoLatestInfo info;
         try {
@@ -229,6 +243,7 @@ public final class GoLatestHandler {
         }
         return this.isBlocked(module, info.version(), user).thenCompose(blocked -> {
             if (!blocked) {
+                AuditLogger.resolution(ctx, this.repoType, this.repoName, module, user, null);
                 return CompletableFuture.completedFuture(
                     ResponseBuilder.ok()
                         .headers(upstreamHeaders)
@@ -247,7 +262,7 @@ public final class GoLatestHandler {
                 .field("package.version", info.version())
                 .field("log.source", "application")
                 .log();
-            return this.resolveFallback(info, module, user);
+            return this.resolveFallback(info, module, user, ctx);
         });
     }
 
@@ -259,7 +274,8 @@ public final class GoLatestHandler {
     private CompletableFuture<Response> resolveFallback(
         final GoLatestInfo upstreamInfo,
         final String module,
-        final String user
+        final String user,
+        final AuditContext ctx
     ) {
         final String listPath = "/" + module + "/@v/list";
         final RequestLine listLine = new RequestLine(RqMethod.GET, listPath);
@@ -280,6 +296,9 @@ public final class GoLatestHandler {
                 if (picked.equals(upstreamInfo.version())) {
                     // Shouldn't happen (we got here because upstream was blocked),
                     // but guard against a race with the block being lifted.
+                    AuditLogger.resolution(
+                        ctx, this.repoType, this.repoName, module, user, null
+                    );
                     return ResponseBuilder.ok()
                         .header("Content-Type", this.rewriter.contentType())
                         .body(this.rewriter.rewrite(upstreamInfo))
@@ -296,6 +315,10 @@ public final class GoLatestHandler {
                     .field("package.version", picked)
                     .field("log.source", "application")
                     .log();
+                AuditLogger.resolution(
+                    ctx, this.repoType, this.repoName, module, user,
+                    List.of(upstreamInfo.version())
+                );
                 return ResponseBuilder.ok()
                     .header("Content-Type", this.rewriter.contentType())
                     .body(this.rewriter.rewrite(rewritten))

@@ -105,6 +105,7 @@ final class DockerTagsListHandlerTest {
         this.upstream.put("/v2/library/nginx/tags/list", body);
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/v2/library/nginx/tags/list"),
+            Headers.EMPTY,
             "alice"
         ).get();
         assertThat(resp.status().success(), is(true));
@@ -123,6 +124,7 @@ final class DockerTagsListHandlerTest {
         this.cooldown.block("latest");
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/v2/library/nginx/tags/list"),
+            Headers.EMPTY,
             "alice"
         ).get();
         assertThat(resp.status().success(), is(true));
@@ -144,6 +146,7 @@ final class DockerTagsListHandlerTest {
         this.cooldown.block("1.24", "1.25");
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/v2/library/nginx/tags/list"),
+            Headers.EMPTY,
             "alice"
         ).get();
         assertThat(resp.status().code(), equalTo(200));
@@ -158,6 +161,7 @@ final class DockerTagsListHandlerTest {
         // No scripted body -> upstream returns 404.
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/v2/library/missing/tags/list"),
+            Headers.EMPTY,
             "alice"
         ).get();
         assertThat(resp.status().code(), equalTo(404));
@@ -170,6 +174,7 @@ final class DockerTagsListHandlerTest {
         this.cooldown.block("latest");
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/v2/library/nginx/tags/list"),
+            Headers.EMPTY,
             "alice"
         ).get();
         assertThat(contentType(resp), equalTo("application/json"));
@@ -184,6 +189,7 @@ final class DockerTagsListHandlerTest {
         this.cooldown.block("v2");
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/v2/myorg/myimage/tags/list"),
+            Headers.EMPTY,
             "alice"
         ).get();
         final JsonNode node = MAPPER.readTree(bodyToBytes(resp));
@@ -196,6 +202,7 @@ final class DockerTagsListHandlerTest {
         this.upstream.put("/v2/library/nginx/tags/list", "");
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/v2/library/nginx/tags/list"),
+            Headers.EMPTY,
             "alice"
         ).get();
         assertThat(resp.status().success(), is(true));

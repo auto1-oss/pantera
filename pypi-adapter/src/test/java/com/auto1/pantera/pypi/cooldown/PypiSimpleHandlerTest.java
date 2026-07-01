@@ -78,7 +78,7 @@ final class PypiSimpleHandlerTest {
         );
         this.cooldown.block("1.2.0");
         final Response resp = this.handler.handle(
-            new RequestLine(RqMethod.GET, "/simple/foo/"), false, "alice"
+            new RequestLine(RqMethod.GET, "/simple/foo/"), false, "alice", Headers.EMPTY
         ).get();
         assertThat(resp.status().success(), is(true));
         final String body = new String(bodyBytes(resp), StandardCharsets.UTF_8);
@@ -95,7 +95,7 @@ final class PypiSimpleHandlerTest {
         );
         this.cooldown.block("1.0.0", "1.1.0");
         final Response resp = this.handler.handle(
-            new RequestLine(RqMethod.GET, "/simple/foo/"), false, "alice"
+            new RequestLine(RqMethod.GET, "/simple/foo/"), false, "alice", Headers.EMPTY
         ).get();
         assertThat(resp.status().code(), equalTo(404));
     }
@@ -105,7 +105,7 @@ final class PypiSimpleHandlerTest {
         final String body = simpleHtml("foo", "1.0.0", "1.1.0");
         this.upstream.put("/simple/foo/", body);
         final Response resp = this.handler.handle(
-            new RequestLine(RqMethod.GET, "/simple/foo/"), false, "alice"
+            new RequestLine(RqMethod.GET, "/simple/foo/"), false, "alice", Headers.EMPTY
         ).get();
         assertThat(resp.status().success(), is(true));
         assertThat(
@@ -126,7 +126,7 @@ final class PypiSimpleHandlerTest {
             simpleHtml("foo-bar", "1.0.0")
         );
         this.handler.handle(
-            new RequestLine(RqMethod.GET, "/simple/Foo_Bar/"), false, "alice"
+            new RequestLine(RqMethod.GET, "/simple/Foo_Bar/"), false, "alice", Headers.EMPTY
         ).get();
         assertThat(this.cooldown.lastArtifact(), equalTo("foo-bar"));
     }
@@ -134,7 +134,7 @@ final class PypiSimpleHandlerTest {
     @Test
     void upstream404ForwardedUnchanged() throws Exception {
         final Response resp = this.handler.handle(
-            new RequestLine(RqMethod.GET, "/simple/missing/"), false, "alice"
+            new RequestLine(RqMethod.GET, "/simple/missing/"), false, "alice", Headers.EMPTY
         ).get();
         assertThat(resp.status().code(), equalTo(404));
     }

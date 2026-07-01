@@ -12,6 +12,8 @@ package com.auto1.pantera.pypi.cooldown;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Remaining;
+import com.auto1.pantera.audit.AuditContext;
+import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.Headers;
@@ -19,11 +21,14 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsMdc;
+import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
+import org.slf4j.MDC;
 
 import java.io.ByteArrayOutputStream;
 import java.io.UncheckedIOException;
@@ -156,9 +161,21 @@ public final class PypiJsonHandler {
      *
      * @param line Request line
      * @param user Authenticated user
+     * @param headers Inbound request headers, used to capture the audit
+     *                correlation context before any async hop
      * @return Future response
      */
-    public CompletableFuture<Response> handle(final RequestLine line, final String user) {
+    public CompletableFuture<Response> handle(
+        final RequestLine line, final String user, final Headers headers
+    ) {
+        // Captured on the calling thread (same thread as EcsLoggingSlice) —
+        // must not be re-read from MDC inside the thenCompose/thenApply
+        // continuations below, which may run on a worker thread that never
+        // had MDC bound.
+        RequestContextHeaders.bindToMdc(headers);
+        final AuditContext ctx = new AuditContext(
+            MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP)
+        );
         final String path = line.uri().getPath();
         // PEP 503 normalization (lowercase + collapse runs of [-_.] to single
         // '-'): the artifact-publish path stores release dates under the
@@ -183,7 +200,7 @@ public final class PypiJsonHandler {
                     );
                 }
                 return bodyBytes(resp.body()).thenCompose(bytes ->
-                    this.processUpstream(bytes, pkg, user)
+                    this.processUpstream(bytes, pkg, user, ctx)
                 );
             });
     }
@@ -192,7 +209,7 @@ public final class PypiJsonHandler {
      * Parse → evaluate → filter → serialise.
      */
     private CompletableFuture<Response> processUpstream(
-        final byte[] upstreamBytes, final String pkg, final String user
+        final byte[] upstreamBytes, final String pkg, final String user, final AuditContext ctx
     ) {
         final JsonNode root;
         try {
@@ -200,6 +217,9 @@ public final class PypiJsonHandler {
         } catch (final java.io.IOException ex) {
             // Malformed upstream JSON — pass through verbatim; clients
             // see exactly what upstream sent (no surprise transforms).
+            AuditLogger.resolution(
+                ctx, this.repoType, this.repoName, pkg, user, List.of()
+            );
             return CompletableFuture.completedFuture(
                 ResponseBuilder.ok()
                     .header("Content-Type", CONTENT_TYPE)
@@ -210,6 +230,9 @@ public final class PypiJsonHandler {
         final List<String> versions = extractReleaseKeys(root);
         if (versions.isEmpty()) {
             // No releases — pass through.
+            AuditLogger.resolution(
+                ctx, this.repoType, this.repoName, pkg, user, List.of()
+            );
             return CompletableFuture.completedFuture(
                 ResponseBuilder.ok()
                     .header("Content-Type", CONTENT_TYPE)
@@ -222,6 +245,9 @@ public final class PypiJsonHandler {
             final PypiJsonMetadataFilter.Result result =
                 this.filter.filter(upstreamBytes, blocked);
             if (result instanceof PypiJsonMetadataFilter.Result.AllBlocked) {
+                AuditLogger.resolution(
+                    ctx, this.repoType, this.repoName, pkg, user, List.copyOf(blocked)
+                );
                 return this.allBlockedResponse(pkg);
             }
             if (result instanceof PypiJsonMetadataFilter.Filtered filtered) {
@@ -236,6 +262,9 @@ public final class PypiJsonHandler {
                     .field("package.name", pkg)
                     .field("log.source", "application")
                     .log();
+                AuditLogger.resolution(
+                    ctx, this.repoType, this.repoName, pkg, user, List.copyOf(blocked)
+                );
                 return ResponseBuilder.ok()
                     .header("Content-Type", CONTENT_TYPE)
                     .body(filtered.bytes())
@@ -245,6 +274,9 @@ public final class PypiJsonHandler {
             // verbatim rather than break clients.
             final PypiJsonMetadataFilter.Passthrough through =
                 (PypiJsonMetadataFilter.Passthrough) result;
+            AuditLogger.resolution(
+                ctx, this.repoType, this.repoName, pkg, user, List.of()
+            );
             return ResponseBuilder.ok()
                 .header("Content-Type", CONTENT_TYPE)
                 .body(through.bytes())

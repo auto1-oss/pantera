@@ -10,6 +10,8 @@
  */
 package com.auto1.pantera.cooldown.metadata;
 
+import com.auto1.pantera.audit.AuditContext;
+import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.cooldown.cache.CooldownCache;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.api.CooldownService;
@@ -62,6 +64,14 @@ public final class MetadataFilterService implements CooldownMetadataService {
      * Since release dates don't change, we can cache for a long time.
      */
     private static final Duration DEFAULT_MAX_TTL = Duration.ofHours(24);
+
+    /**
+     * Owner label used for the {@code artifact.audit} resolution record when
+     * a caller invokes the context-less {@link #filterMetadata(String,
+     * String, String, byte[], MetadataParser, MetadataFilter, MetadataRewriter)}
+     * overload and therefore has no requester identity to attribute.
+     */
+    private static final String DEFAULT_OWNER = "metadata-filter";
 
     /**
      * Cooldown service for block decisions.
@@ -171,6 +181,24 @@ public final class MetadataFilterService implements CooldownMetadataService {
         final MetadataFilter<T> filter,
         final MetadataRewriter<T> rewriter
     ) {
+        return this.filterMetadata(
+            repoType, repoName, packageName, rawMetadata, parser, filter, rewriter,
+            AuditContext.NONE, DEFAULT_OWNER
+        );
+    }
+
+    @Override
+    public <T> CompletableFuture<byte[]> filterMetadata(
+        final String repoType,
+        final String repoName,
+        final String packageName,
+        final byte[] rawMetadata,
+        final MetadataParser<T> parser,
+        final MetadataFilter<T> filter,
+        final MetadataRewriter<T> rewriter,
+        final AuditContext auditCtx,
+        final String owner
+    ) {
         // Check if cooldown is enabled for this repo identity.
         // Precedence: per-repo-name override → per-repo-type override → global.
         // Mirrors JdbcCooldownService.effectiveEnabled so the metadata-filter
@@ -198,7 +226,7 @@ public final class MetadataFilterService implements CooldownMetadataService {
             packageName,
             () -> this.computeFilteredMetadata(
                 repoType, repoName, packageName, rawMetadata,
-                parser, filter, rewriter, startTime
+                parser, filter, rewriter, startTime, auditCtx, owner
             )
         );
     }
@@ -215,7 +243,9 @@ public final class MetadataFilterService implements CooldownMetadataService {
         final MetadataParser<T> parser,
         final MetadataFilter<T> filter,
         final MetadataRewriter<T> rewriter,
-        final long startTime
+        final long startTime,
+        final AuditContext auditCtx,
+        final String owner
     ) {
         return CompletableFuture.supplyAsync(() -> {
             // Step 1: Parse metadata
@@ -334,14 +364,14 @@ public final class MetadataFilterService implements CooldownMetadataService {
             return new FilterContext<>(
                 repoType, repoName, packageName, parsed,
                 allVersions, sortedVersions, versionsToEvaluate,
-                parser, filter, rewriter, releaseDates, startTime
+                parser, filter, rewriter, releaseDates, startTime, auditCtx, owner
             );
-        }, this.executor).thenCompose(ctx -> {
-            if (ctx instanceof FilteredMetadataCache.CacheEntry) {
-                return CompletableFuture.completedFuture((FilteredMetadataCache.CacheEntry) ctx);
+        }, this.executor).thenCompose(computed -> {
+            if (computed instanceof FilteredMetadataCache.CacheEntry) {
+                return CompletableFuture.completedFuture((FilteredMetadataCache.CacheEntry) computed);
             }
             @SuppressWarnings("unchecked")
-            final FilterContext<T> context = (FilterContext<T>) ctx;
+            final FilterContext<T> context = (FilterContext<T>) computed;
             return this.evaluateAndFilter(context);
         });
     }
@@ -539,6 +569,14 @@ public final class MetadataFilterService implements CooldownMetadataService {
                     this.cooldown.markAllBlocked(ctx.repoType, ctx.repoName, ctx.packageName);
                     throw new AllVersionsBlockedException(ctx.packageName, blockedVersions);
                 }
+
+                // artifact.audit resolution record: fires here (not on the
+                // all-blocked throw above) because that branch never reaches
+                // a served listing — callers map it to a 403/404 instead.
+                AuditLogger.resolution(
+                    ctx.auditContext, ctx.repoType, ctx.repoName, ctx.packageName,
+                    ctx.owner, new ArrayList<>(blockedVersions)
+                );
 
                 // Step 7: Filter metadata
                 T filtered = ctx.filter.filter(ctx.parsed, blockedVersions);
@@ -905,6 +943,8 @@ public final class MetadataFilterService implements CooldownMetadataService {
         final MetadataRewriter<T> rewriter;
         final Map<String, Instant> releaseDates;
         final long startTime;
+        final AuditContext auditContext;
+        final String owner;
 
         FilterContext(
             final String repoType,
@@ -918,7 +958,9 @@ public final class MetadataFilterService implements CooldownMetadataService {
             final MetadataFilter<T> filter,
             final MetadataRewriter<T> rewriter,
             final Map<String, Instant> releaseDates,
-            final long startTime
+            final long startTime,
+            final AuditContext auditContext,
+            final String owner
         ) {
             this.repoType = repoType;
             this.repoName = repoName;
@@ -932,6 +974,8 @@ public final class MetadataFilterService implements CooldownMetadataService {
             this.rewriter = rewriter;
             this.releaseDates = releaseDates;
             this.startTime = startTime;
+            this.auditContext = auditContext;
+            this.owner = owner;
         }
     }
 

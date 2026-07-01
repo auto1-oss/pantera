@@ -84,7 +84,7 @@ final class PypiJsonHandlerTest {
         );
         this.cooldown.block("1.2.0");
         final Response resp = this.handler.handle(
-            new RequestLine(RqMethod.GET, "/pypi/foo/json"), "alice"
+            new RequestLine(RqMethod.GET, "/pypi/foo/json"), "alice", Headers.EMPTY
         ).get();
         assertThat(resp.status().success(), is(true));
         final JsonNode root = MAPPER.readTree(bodyBytes(resp));
@@ -105,7 +105,7 @@ final class PypiJsonHandlerTest {
         final String body = pypiJson("2.32.0", "1.0.0", "2.32.0");
         this.upstream.put("/pypi/requests/json", body);
         final Response resp = this.handler.handle(
-            new RequestLine(RqMethod.GET, "/pypi/requests/json"), "alice"
+            new RequestLine(RqMethod.GET, "/pypi/requests/json"), "alice", Headers.EMPTY
         ).get();
         final JsonNode root = MAPPER.readTree(bodyBytes(resp));
         assertThat(root.get("info").get("version").asText(), equalTo("2.32.0"));
@@ -120,7 +120,7 @@ final class PypiJsonHandlerTest {
         );
         this.cooldown.block("1.0.0", "1.1.0");
         final Response resp = this.handler.handle(
-            new RequestLine(RqMethod.GET, "/pypi/foo/json"), "alice"
+            new RequestLine(RqMethod.GET, "/pypi/foo/json"), "alice", Headers.EMPTY
         ).get();
         assertThat(resp.status().code(), equalTo(404));
         final String body = new String(bodyBytes(resp), StandardCharsets.UTF_8);
@@ -131,7 +131,7 @@ final class PypiJsonHandlerTest {
     void upstream404ForwardedUnchanged() throws Exception {
         // No scripted body → scripted slice returns 404.
         final Response resp = this.handler.handle(
-            new RequestLine(RqMethod.GET, "/pypi/missing/json"), "alice"
+            new RequestLine(RqMethod.GET, "/pypi/missing/json"), "alice", Headers.EMPTY
         ).get();
         assertThat(resp.status().code(), equalTo(404));
     }
@@ -140,7 +140,7 @@ final class PypiJsonHandlerTest {
     void malformedUpstreamPassesThrough() throws Exception {
         this.upstream.put("/pypi/foo/json", "not-json-at-all");
         final Response resp = this.handler.handle(
-            new RequestLine(RqMethod.GET, "/pypi/foo/json"), "alice"
+            new RequestLine(RqMethod.GET, "/pypi/foo/json"), "alice", Headers.EMPTY
         ).get();
         assertThat(resp.status().success(), is(true));
         assertThat(
@@ -161,7 +161,7 @@ final class PypiJsonHandlerTest {
             pypiJson("1.0.0", "1.0.0")
         );
         this.handler.handle(
-            new RequestLine(RqMethod.GET, "/pypi/Foo_Bar/json"), "alice"
+            new RequestLine(RqMethod.GET, "/pypi/Foo_Bar/json"), "alice", Headers.EMPTY
         ).get();
         assertThat(this.cooldown.lastArtifact(), equalTo("foo-bar"));
     }
@@ -174,7 +174,7 @@ final class PypiJsonHandlerTest {
         );
         this.cooldown.block("1.5.0");
         final Response resp = this.handler.handle(
-            new RequestLine(RqMethod.GET, "/pypi/foo/json"), "alice"
+            new RequestLine(RqMethod.GET, "/pypi/foo/json"), "alice", Headers.EMPTY
         ).get();
         final JsonNode root = MAPPER.readTree(bodyBytes(resp));
         // info.version 2.0.0 was not blocked — must stay.

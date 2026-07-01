@@ -12,13 +12,17 @@ package com.auto1.pantera.http.slice;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.audit.AuditContext;
 import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.Login;
+import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.scheduling.RepositoryEvents;
+import org.slf4j.MDC;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -60,6 +64,15 @@ public final class SliceDelete implements Slice {
     public CompletableFuture<Response> response(
         RequestLine line, Headers headers, Content body
     ) {
+        // Captured synchronously, on this call's thread — MDC is correctly
+        // populated here by EcsLoggingSlice. storage.exists()/delete() may
+        // complete their continuations on a DispatchedStorage worker thread
+        // that never had MDC bound, so the values are threaded through this
+        // closure rather than re-read from MDC inside the continuation.
+        final AuditContext ctx = new AuditContext(
+            MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP)
+        );
+        final String owner = new Login(headers).getValue();
         final KeyFromPath key = new KeyFromPath(line.uri().getPath());
         return this.storage.exists(key)
             .thenCompose(
@@ -69,9 +82,15 @@ public final class SliceDelete implements Slice {
                         rsp = this.storage.delete(key).thenAccept(
                             nothing -> {
                                 this.events.ifPresent(item -> item.addDeleteEventByKey(key));
-                                final java.util.List<String> parts = key.parts();
-                                final String filename = parts.isEmpty() ? key.string() : parts.get(parts.size() - 1);
-                                AuditLogger.delete(filename);
+                                final String repoType = this.events.map(RepositoryEvents::repoType).orElse(null);
+                                final String repoName = this.events.map(RepositoryEvents::repoName).orElse(null);
+                                final String artifactName = this.events.map(item -> item.artifactName(key))
+                                    .orElseGet(key::string);
+                                AuditLogger.delete(
+                                    ctx, repoType, repoName, artifactName,
+                                    RepositoryEvents.VERSION, owner,
+                                    AuditLogger.OUTCOME_SUCCESS, null
+                                );
                             }
                         ).thenApply(none -> ResponseBuilder.noContent().build());
                     } else {

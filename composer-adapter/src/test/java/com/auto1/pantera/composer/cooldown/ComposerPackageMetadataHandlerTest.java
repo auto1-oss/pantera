@@ -102,7 +102,7 @@ final class ComposerPackageMetadataHandlerTest {
         this.upstream.put("/p2/acme/foo.json", body);
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/p2/acme/foo.json"),
-            "alice"
+            "alice", com.auto1.pantera.audit.AuditContext.NONE
         ).get();
         assertThat(resp.status().success(), is(true));
         final JsonNode node = MAPPER.readTree(bodyToBytes(resp));
@@ -123,7 +123,7 @@ final class ComposerPackageMetadataHandlerTest {
         this.cooldown.block("2.0.0");
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/p2/acme/foo.json"),
-            "alice"
+            "alice", com.auto1.pantera.audit.AuditContext.NONE
         ).get();
         assertThat(resp.status().success(), is(true));
         final JsonNode node = MAPPER.readTree(bodyToBytes(resp));
@@ -140,7 +140,7 @@ final class ComposerPackageMetadataHandlerTest {
         this.cooldown.block("1.0.0", "1.1.0", "2.0.0");
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/p2/acme/foo.json"),
-            "alice"
+            "alice", com.auto1.pantera.audit.AuditContext.NONE
         ).get();
         assertThat(resp.status().code(), equalTo(404));
     }
@@ -150,7 +150,7 @@ final class ComposerPackageMetadataHandlerTest {
         // Nothing scripted at the path → ScriptedSlice returns 404.
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/p2/acme/unknown.json"),
-            "alice"
+            "alice", com.auto1.pantera.audit.AuditContext.NONE
         ).get();
         assertThat(resp.status().code(), equalTo(404));
     }
@@ -160,7 +160,7 @@ final class ComposerPackageMetadataHandlerTest {
         this.upstream.put500("/p2/acme/foo.json");
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/p2/acme/foo.json"),
-            "alice"
+            "alice", com.auto1.pantera.audit.AuditContext.NONE
         ).get();
         assertThat(resp.status().code(), equalTo(500));
     }
@@ -170,7 +170,7 @@ final class ComposerPackageMetadataHandlerTest {
         this.upstream.put("/p2/acme/foo.json", "not-json-at-all");
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/p2/acme/foo.json"),
-            "alice"
+            "alice", com.auto1.pantera.audit.AuditContext.NONE
         ).get();
         assertThat(resp.status().success(), is(true));
         assertThat(
@@ -186,7 +186,7 @@ final class ComposerPackageMetadataHandlerTest {
         this.cooldown.block("2.0.0");
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/packages/acme/foo.json"),
-            "alice"
+            "alice", com.auto1.pantera.audit.AuditContext.NONE
         ).get();
         assertThat(resp.status().success(), is(true));
         final JsonNode node = MAPPER.readTree(bodyToBytes(resp));
@@ -202,7 +202,7 @@ final class ComposerPackageMetadataHandlerTest {
         this.upstream.put("/p2/acme/foo.json", body);
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/p2/acme/foo.json"),
-            "alice"
+            "alice", com.auto1.pantera.audit.AuditContext.NONE
         ).get();
         assertThat(
             contentType(resp).toLowerCase(),
@@ -234,7 +234,7 @@ final class ComposerPackageMetadataHandlerTest {
         this.cooldown.block("2.0.0");
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/p2/acme/foo.json"),
-            "alice"
+            "alice", com.auto1.pantera.audit.AuditContext.NONE
         ).get();
         final JsonNode node = MAPPER.readTree(bodyToBytes(resp));
         final JsonNode kept = node.get("packages").get("acme/foo").get("1.0.0");
@@ -251,7 +251,7 @@ final class ComposerPackageMetadataHandlerTest {
         this.upstream.put("/p2/acme/foo.json", body);
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/p2/acme/foo.json"),
-            "alice"
+            "alice", com.auto1.pantera.audit.AuditContext.NONE
         ).get();
         assertThat(resp.status().success(), is(true));
         final JsonNode node = MAPPER.readTree(bodyToBytes(resp));
@@ -273,7 +273,7 @@ final class ComposerPackageMetadataHandlerTest {
         this.upstream.put("/p2/acme/foo.json", body);
         this.handler.handle(
             new RequestLine(RqMethod.GET, "/p2/acme/foo.json"),
-            "alice"
+            "alice", com.auto1.pantera.audit.AuditContext.NONE
         ).get();
         assertThat(
             "evaluateWithKnownDate must be invoked per version",

@@ -12,6 +12,8 @@ package com.auto1.pantera.composer.cooldown;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Remaining;
+import com.auto1.pantera.audit.AuditContext;
+import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.metadata.MetadataParseException;
@@ -172,9 +174,12 @@ public final class ComposerPackageMetadataHandler {
      *
      * @param line Request line (must be a per-package metadata path)
      * @param user Authenticated user (for cooldown bookkeeping)
+     * @param auditCtx Request correlation context for the audit trail
      * @return Future response
      */
-    public CompletableFuture<Response> handle(final RequestLine line, final String user) {
+    public CompletableFuture<Response> handle(
+        final RequestLine line, final String user, final AuditContext auditCtx
+    ) {
         final String path = line.uri().getPath();
         final String pkg = this.detector.extractPackageName(path).orElseThrow(
             () -> new IllegalArgumentException("Not a Composer metadata path: " + path)
@@ -190,7 +195,7 @@ public final class ComposerPackageMetadataHandler {
                     );
                 }
                 return bodyBytes(resp.body()).thenCompose(bytes ->
-                    this.processUpstream(bytes, pkg, user)
+                    this.processUpstream(bytes, pkg, user, auditCtx)
                 );
             });
     }
@@ -200,7 +205,7 @@ public final class ComposerPackageMetadataHandler {
      * failure; 404 when every version is blocked.
      */
     private CompletableFuture<Response> processUpstream(
-        final byte[] upstreamBytes, final String pkg, final String user
+        final byte[] upstreamBytes, final String pkg, final String user, final AuditContext auditCtx
     ) {
         final JsonNode parsed;
         try {
@@ -228,6 +233,9 @@ public final class ComposerPackageMetadataHandler {
         if (versions.isEmpty()) {
             // Empty version map — nothing to filter. Serve upstream
             // bytes verbatim so formatting / ordering round-trip.
+            AuditLogger.resolution(
+                auditCtx, this.repoType, this.repoName, pkg, user, List.of()
+            );
             return CompletableFuture.completedFuture(
                 ResponseBuilder.ok()
                     .header("Content-Type", CONTENT_TYPE)
@@ -239,6 +247,9 @@ public final class ComposerPackageMetadataHandler {
         return this.blockedVersions(pkg, versions, releaseDates, user).thenApply(blocked -> {
             if (blocked.isEmpty()) {
                 // Fast path: forward upstream bytes verbatim.
+                AuditLogger.resolution(
+                    auditCtx, this.repoType, this.repoName, pkg, user, List.of()
+                );
                 return ResponseBuilder.ok()
                     .header("Content-Type", CONTENT_TYPE)
                     .body(upstreamBytes)
@@ -247,6 +258,9 @@ public final class ComposerPackageMetadataHandler {
             final JsonNode filtered = this.filter.filter(parsed, blocked);
             final List<String> kept = this.parser.extractVersions(filtered);
             if (kept.isEmpty()) {
+                AuditLogger.resolution(
+                    auditCtx, this.repoType, this.repoName, pkg, user, List.copyOf(blocked)
+                );
                 return this.allBlockedResponse(pkg);
             }
             try {
@@ -263,6 +277,9 @@ public final class ComposerPackageMetadataHandler {
                     .field("package.name", pkg)
                     .field("log.source", "application")
                     .log();
+                AuditLogger.resolution(
+                    auditCtx, this.repoType, this.repoName, pkg, user, List.copyOf(blocked)
+                );
                 return ResponseBuilder.ok()
                     .header("Content-Type", CONTENT_TYPE)
                     .body(body)
@@ -278,6 +295,9 @@ public final class ComposerPackageMetadataHandler {
                     .error(ex)
                     .field("log.source", "application")
                     .log();
+                AuditLogger.resolution(
+                    auditCtx, this.repoType, this.repoName, pkg, user, List.copyOf(blocked)
+                );
                 return ResponseBuilder.ok()
                     .header("Content-Type", CONTENT_TYPE)
                     .body(upstreamBytes)

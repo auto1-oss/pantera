@@ -108,6 +108,7 @@ final class GoListHandlerTest {
         this.upstream.put("/github.com/foo/bar/@v/list", body);
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/github.com/foo/bar/@v/list"),
+            com.auto1.pantera.http.Headers.EMPTY,
             "alice"
         ).get();
         assertThat(resp.status().success(), is(true));
@@ -126,6 +127,7 @@ final class GoListHandlerTest {
         this.cooldown.block("v1.1.0");
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/github.com/foo/bar/@v/list"),
+            com.auto1.pantera.http.Headers.EMPTY,
             "alice"
         ).get();
         assertThat(resp.status().success(), is(true));
@@ -144,6 +146,7 @@ final class GoListHandlerTest {
         this.cooldown.block("v1.0.0", "v1.1.0", "v1.2.0");
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/github.com/foo/bar/@v/list"),
+            com.auto1.pantera.http.Headers.EMPTY,
             "alice"
         ).get();
         assertThat(resp.status().code(), equalTo(403));
@@ -156,6 +159,7 @@ final class GoListHandlerTest {
         // No scripted body -> upstream returns 404.
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/github.com/foo/missing/@v/list"),
+            com.auto1.pantera.http.Headers.EMPTY,
             "alice"
         ).get();
         assertThat(resp.status().code(), equalTo(404));
@@ -171,6 +175,7 @@ final class GoListHandlerTest {
         this.upstream.put("/github.com/foo/bar/@v/list", body);
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/github.com/foo/bar/@v/list"),
+            com.auto1.pantera.http.Headers.EMPTY,
             "alice"
         ).get();
         assertThat(resp.status().success(), is(true));
@@ -190,6 +195,7 @@ final class GoListHandlerTest {
         this.cooldown.block("v1.0.0");
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/github.com/foo/bar/@v/list"),
+            com.auto1.pantera.http.Headers.EMPTY,
             "alice"
         ).get();
         assertThat(
@@ -207,6 +213,7 @@ final class GoListHandlerTest {
         this.cooldown.block("v1.0.0");
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/github.com/foo/bar/@v/list"),
+            com.auto1.pantera.http.Headers.EMPTY,
             "alice"
         ).get();
         final String out = new String(bodyToBytes(resp), StandardCharsets.UTF_8);
@@ -223,6 +230,7 @@ final class GoListHandlerTest {
         this.cooldown.block("v1.0.0");
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/github.com/foo/bar/@v/list"),
+            com.auto1.pantera.http.Headers.EMPTY,
             "alice"
         ).get();
         final String out = new String(bodyToBytes(resp), StandardCharsets.UTF_8);
@@ -244,6 +252,7 @@ final class GoListHandlerTest {
         this.cooldown.block("v1.1.0");
         final Response listResp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/github.com/foo/bar/@v/list"),
+            com.auto1.pantera.http.Headers.EMPTY,
             "alice"
         ).get();
         assertThat(
@@ -252,6 +261,7 @@ final class GoListHandlerTest {
         );
         final Response latestResp = this.latestHandler.handle(
             new RequestLine(RqMethod.GET, "/github.com/foo/bar/@latest"),
+            com.auto1.pantera.http.Headers.EMPTY,
             "alice"
         ).get();
         assertThat(latestResp.status().success(), is(true));

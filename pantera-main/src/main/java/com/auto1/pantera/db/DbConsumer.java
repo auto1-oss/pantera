@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.db;
 
+import com.auto1.pantera.audit.AuditContext;
 import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.trace.TraceContextExecutor;
@@ -133,13 +134,19 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
     /**
      * Emit ECS audit log for successful artifact publish operations.
      *
-     * <p>Restores the originating HTTP {@code trace.id} captured on the event
-     * (see {@link ArtifactEvent#traceId()}) into MDC for the duration of the
-     * log emission so the audit entry can be correlated to its HTTP request
-     * in Kibana — {@link co.elastic.logging.log4j2.EcsLayout} reads MDC when
-     * serialising the ECS {@code trace.id} field. The prior MDC state of the
-     * DB-consumer thread is saved and restored so pool threads are not
-     * polluted across batches.</p>
+     * <p>{@link AuditLogger} takes {@code trace.id} / {@code client.ip} as
+     * explicit {@link AuditContext} parameters — no MDC read inside
+     * {@code AuditLogger} itself. This method still binds the two fields into
+     * MDC (saved/restored around the call) for the DB-consumer thread: {@code
+     * RxComputationThreadPool} threads are pooled and reused across many
+     * unrelated batches, so a value left over from a previous call's {@code
+     * ctx} would otherwise win over this call's explicit value inside {@link
+     * EcsLogger#field}'s MDC-wins rule (it drops the field() value whenever
+     * {@code ThreadContext} already has that key — correct for the
+     * synchronous single-request case {@code EcsLoggingSlice} was designed
+     * for, but a hazard on a shared thread pool with no request-scoped MDC
+     * lifecycle). Binding this call's own value before invoking {@link
+     * AuditLogger#publish} guarantees the two sources always agree.
      *
      * @param record Artifact event that was persisted
      */
@@ -152,22 +159,21 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
             MDC.put(EcsMdc.TRACE_ID, eventTraceId);
         }
         if (eventClientIp != null) {
-            // Bound here so AuditLogger.publish() picks it up via its
-            // mdcField hook. Stored on the event at construction time
-            // because the consumer runs on RxComputationThreadPool and
-            // inherits no MDC from the request that produced the event.
             MDC.put(EcsMdc.CLIENT_IP, eventClientIp);
         }
         try {
             AuditLogger.publish(
-                normalizeRepoName(record.repoName()),
+                new AuditContext(eventTraceId, eventClientIp),
                 record.repoType(),
+                normalizeRepoName(record.repoName()),
                 record.artifactName(),
                 record.artifactVersion(),
                 record.size(),
                 record.owner(),
                 record.releaseDate().orElse(null),
-                record.checksum()
+                record.checksum(),
+                AuditLogger.OUTCOME_SUCCESS,
+                null
             );
         } finally {
             if (priorTraceId != null) {

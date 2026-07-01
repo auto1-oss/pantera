@@ -30,7 +30,6 @@ import com.auto1.pantera.http.rt.SliceRoute;
 import com.auto1.pantera.http.slice.HeadSlice;
 import com.auto1.pantera.http.slice.KeyFromPath;
 import com.auto1.pantera.http.slice.SliceDelete;
-import com.auto1.pantera.http.slice.SliceDownload;
 import com.auto1.pantera.http.slice.StorageArtifactSlice;
 import com.auto1.pantera.http.slice.SliceSimple;
 import com.auto1.pantera.http.slice.SliceUpload;

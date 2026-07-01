@@ -5,6 +5,8 @@
 package com.auto1.pantera.adapters.docker;
 
 import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.audit.AuditContext;
+import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.response.CooldownResponseRegistry;
 import com.auto1.pantera.cooldown.api.CooldownService;
@@ -27,6 +29,9 @@ import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsMdc;
+import com.auto1.pantera.http.log.RequestContextHeaders;
+import org.slf4j.MDC;
 
 import javax.json.Json;
 import javax.json.JsonException;
@@ -129,6 +134,10 @@ public final class DockerProxyCooldownSlice implements Slice {
         final Content body
     ) {
         final String path = line.uri().getPath();
+        RequestContextHeaders.bindToMdc(headers);
+        final AuditContext ctx = new AuditContext(
+            MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP)
+        );
         // GET /v2/<name>/tags/list — route through the tags-list filter
         // handler. This is where the Docker cooldown bundle registered
         // in CooldownWiring is actually consumed; without this dispatch
@@ -138,7 +147,7 @@ public final class DockerProxyCooldownSlice implements Slice {
             // Consume request body to match the invariant elsewhere that
             // nothing leaks a Vert.x stream.
             return body.asBytesFuture().thenCompose(ignored ->
-                this.tagsHandler.handle(line, new Login(headers).getValue())
+                this.tagsHandler.handle(line, headers, new Login(headers).getValue())
             );
         }
         // GET /v2/<name>/manifests/<tag> — route through the manifest-tag
@@ -203,15 +212,9 @@ public final class DockerProxyCooldownSlice implements Slice {
                             this.repoType, this.repoName,
                             artifact, version, user, Instant.now()
                         );
-                        return this.cooldown.evaluate(cooldownRequest, this.inspector)
-                            .thenApply(result -> result.blocked()
-                                ? CooldownResponseRegistry.instance()
-                                    .getOrThrow(this.repoType)
-                                    .forbidden(result.block().orElseThrow())
-                                : rebuilt
-                            );
+                        return this.evaluateAndAudit(cooldownRequest, rebuilt, ctx, user);
                     }
-                    
+
                     // No release date in headers - extract from manifest config
                     // Check if we've seen this artifact before (cached from previous request)
                     if (this.inspector.known(artifact, version)) {
@@ -220,15 +223,9 @@ public final class DockerProxyCooldownSlice implements Slice {
                             this.repoType, this.repoName,
                             artifact, version, user, Instant.now()
                         );
-                        return this.cooldown.evaluate(cooldownRequest, this.inspector)
-                            .thenApply(result -> result.blocked()
-                                ? CooldownResponseRegistry.instance()
-                                    .getOrThrow(this.repoType)
-                                    .forbidden(result.block().orElseThrow())
-                                : rebuilt
-                            );
+                        return this.evaluateAndAudit(cooldownRequest, rebuilt, ctx, user);
                     }
-                    
+
                     // First time seeing this artifact - WAIT for extraction then evaluate
                     return this.determineReleaseSync(request, response.headers(), bytes, artifact, version, digest)
                         .thenCompose(release -> {
@@ -240,13 +237,7 @@ public final class DockerProxyCooldownSlice implements Slice {
                                 this.repoType, this.repoName,
                                 artifact, version, user, Instant.now()
                             );
-                            return this.cooldown.evaluate(cooldownRequest, this.inspector)
-                                .thenApply(result -> result.blocked()
-                                    ? CooldownResponseRegistry.instance()
-                                        .getOrThrow(this.repoType)
-                                        .forbidden(result.block().orElseThrow())
-                                    : rebuilt
-                                );
+                            return this.evaluateAndAudit(cooldownRequest, rebuilt, ctx, user);
                         });
                 }).exceptionally(ex -> {
                     EcsLogger.warn("com.auto1.pantera.adapters.docker")
@@ -267,10 +258,49 @@ public final class DockerProxyCooldownSlice implements Slice {
     }
 
     /**
+     * Evaluate cooldown for a digest-addressed manifest request and audit
+     * the outcome. Shared by the three near-identical branches above (known
+     * release date via headers, cached release date, freshly-extracted
+     * release date) so the audit call site exists exactly once.
+     *
+     * @param cooldownRequest Cooldown evaluation request
+     * @param rebuilt Response to return when cooldown allows the fetch
+     * @param ctx Request correlation context
+     * @param owner Requesting user
+     * @return Forbidden response when blocked, otherwise {@code rebuilt}
+     */
+    private CompletableFuture<Response> evaluateAndAudit(
+        final CooldownRequest cooldownRequest,
+        final Response rebuilt,
+        final AuditContext ctx,
+        final String owner
+    ) {
+        return this.cooldown.evaluate(cooldownRequest, this.inspector)
+            .thenApply(result -> {
+                if (result.blocked()) {
+                    AuditLogger.access(
+                        ctx, this.repoType, this.repoName,
+                        cooldownRequest.artifact(), cooldownRequest.version(), 0L, owner,
+                        AuditLogger.OUTCOME_FAILURE, AuditLogger.REASON_COOLDOWN_ACTIVE
+                    );
+                    return CooldownResponseRegistry.instance()
+                        .getOrThrow(this.repoType)
+                        .forbidden(result.block().orElseThrow());
+                }
+                AuditLogger.access(
+                    ctx, this.repoType, this.repoName,
+                    cooldownRequest.artifact(), cooldownRequest.version(), 0L, owner,
+                    AuditLogger.OUTCOME_SUCCESS, null
+                );
+                return rebuilt;
+            });
+    }
+
+    /**
      * Extract release date from manifest config synchronously.
      * Waits for extraction to complete before returning.
      * Used on first request to properly evaluate cooldown.
-     * 
+     *
      * @param request Manifest request
      * @param headers Response headers
      * @param manifestBytes Manifest body bytes

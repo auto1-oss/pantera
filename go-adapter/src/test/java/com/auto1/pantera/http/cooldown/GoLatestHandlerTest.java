@@ -98,6 +98,7 @@ final class GoLatestHandlerTest {
         );
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/github.com/foo/bar/@latest"),
+            com.auto1.pantera.http.Headers.EMPTY,
             "alice"
         ).get();
         assertThat(resp.status().success(), is(true));
@@ -119,6 +120,7 @@ final class GoLatestHandlerTest {
         this.cooldown.block("v1.2.3");
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/github.com/foo/bar/@latest"),
+            com.auto1.pantera.http.Headers.EMPTY,
             "alice"
         ).get();
         assertThat(resp.status().success(), is(true));
@@ -144,6 +146,7 @@ final class GoLatestHandlerTest {
         this.cooldown.block("v1.2.3");
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/github.com/foo/bar/@latest"),
+            com.auto1.pantera.http.Headers.EMPTY,
             "alice"
         ).get();
         final JsonNode node = MAPPER.readTree(bodyToBytes(resp));
@@ -165,6 +168,7 @@ final class GoLatestHandlerTest {
         this.cooldown.block("v1.2.0", "v1.2.1", "v1.2.2", "v1.2.3");
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/github.com/foo/bar/@latest"),
+            com.auto1.pantera.http.Headers.EMPTY,
             "alice"
         ).get();
         assertThat(resp.status().code(), equalTo(403));
@@ -180,6 +184,7 @@ final class GoLatestHandlerTest {
         );
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/github.com/foo/bar/@latest"),
+            com.auto1.pantera.http.Headers.EMPTY,
             "alice"
         ).get();
         assertThat(resp.status().success(), is(true));
@@ -202,6 +207,7 @@ final class GoLatestHandlerTest {
         this.cooldown.block("v1.2.0");
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/github.com/foo/bar/@latest"),
+            com.auto1.pantera.http.Headers.EMPTY,
             "alice"
         ).get();
         final JsonNode node = MAPPER.readTree(bodyToBytes(resp));
@@ -219,6 +225,7 @@ final class GoLatestHandlerTest {
         this.cooldown.block("v1.2.3");
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/github.com/foo/bar/@latest"),
+            com.auto1.pantera.http.Headers.EMPTY,
             "alice"
         ).get();
         assertThat(resp.status().code(), equalTo(403));
@@ -230,6 +237,7 @@ final class GoLatestHandlerTest {
         // rewriting.
         final Response resp = this.handler.handle(
             new RequestLine(RqMethod.GET, "/github.com/foo/missing/@latest"),
+            com.auto1.pantera.http.Headers.EMPTY,
             "alice"
         ).get();
         assertThat(resp.status().code(), equalTo(404));
@@ -248,6 +256,7 @@ final class GoLatestHandlerTest {
         // v1.2.3 not blocked — list fetch must not happen.
         this.handler.handle(
             new RequestLine(RqMethod.GET, "/github.com/foo/bar/@latest"),
+            com.auto1.pantera.http.Headers.EMPTY,
             "alice"
         ).get();
         assertThat(
