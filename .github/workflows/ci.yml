@@ -34,6 +34,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
 
       - name: ECS log schema drift gate
         run: |
@@ -46,32 +48,34 @@ jobs:
       - name: nginx CVE-2026-42945 trigger-pattern guard
         run: bash scripts/check-nginx-cve-2026-42945.sh
 
+      # Plain git-diff change detection — deliberately no third-party
+      # action here: the org Actions policy allows GitHub-owned only, and
+      # for a supply-chain product the smaller trust surface is a feature.
       - name: Detect changed areas
-        uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
         id: filter
-        with:
-          filters: |
-            backend:
-              - '**/pom.xml'
-              - '*-adapter/**'
-              - 'pantera-core/**'
-              - 'pantera-main/**'
-              - 'pantera-storage*/**'
-              - 'pantera-backfill/**'
-              - 'vertx-server/**'
-              - 'http-client/**'
-              - 'asto/**'
-              - 'build-tools/**'
-              - '.github/workflows/ci.yml'
-            ui:
-              - 'pantera-ui/**'
-              - '.github/workflows/ci.yml'
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+            CHANGED=$(git diff --name-only "$BASE" HEAD)
+          else
+            CHANGED=__all__
+          fi
+          BACKEND=false; UI=false
+          if [ "$CHANGED" = "__all__" ]; then
+            BACKEND=true; UI=true
+          else
+            echo "$CHANGED" | grep -qE '^(pom\.xml|.*/pom\.xml|[^/]+-adapter/|pantera-core/|pantera-main/|pantera-storage|pantera-backfill/|vertx-server/|http-client/|asto/|build-tools/|\.github/workflows/ci\.yml)' && BACKEND=true
+            echo "$CHANGED" | grep -qE '^(pantera-ui/|\.github/workflows/ci\.yml)' && UI=true
+          fi
+          echo "backend=$BACKEND" >> "$GITHUB_OUTPUT"
+          echo "ui=$UI" >> "$GITHUB_OUTPUT"
+          echo "backend=$BACKEND ui=$UI"
 
   build-backend:
     name: Build & Test Backend
     needs: static-checks
     # Always run on pushes to master; on PRs only when backend paths changed.
-    if: github.event_name == 'push' || needs.static-checks.outputs.backend == 'true'
+    if: github.event_name != 'pull_request' || needs.static-checks.outputs.backend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -133,7 +137,7 @@ jobs:
   build-ui:
     name: Build & Test UI
     needs: static-checks
-    if: github.event_name == 'push' || needs.static-checks.outputs.ui == 'true'
+    if: github.event_name != 'pull_request' || needs.static-checks.outputs.ui == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
 

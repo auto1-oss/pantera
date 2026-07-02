@@ -222,18 +222,25 @@ jobs:
             release/pantera-${{ steps.version.outputs.VERSION }}-dist.tar.gz
             release/pantera-ui-${{ steps.version.outputs.VERSION }}.tar.gz
 
+      # gh CLI (preinstalled, GITHUB_TOKEN) instead of a third-party
+      # release action — org Actions policy allows GitHub-owned only.
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
-        with:
-          name: Pantera v${{ steps.version.outputs.VERSION }}
-          body_path: release-notes.md
-          draft: false
-          prerelease: ${{ contains(steps.version.outputs.VERSION, 'RC') || contains(steps.version.outputs.VERSION, 'beta') || contains(steps.version.outputs.VERSION, 'alpha') }}
-          files: |
-            release/pantera-${{ steps.version.outputs.VERSION }}.jar
-            release/pantera-${{ steps.version.outputs.VERSION }}-dist.tar.gz
-            release/pantera-ui-${{ steps.version.outputs.VERSION }}.tar.gz
-            release/SHA256SUMS
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          PRE_FLAG=""
+          case "$VERSION" in
+            *RC*|*beta*|*alpha*) PRE_FLAG="--prerelease" ;;
+          esac
+          gh release create "v${VERSION}" \
+            --title "Pantera v${VERSION}" \
+            --notes-file release-notes.md \
+            $PRE_FLAG \
+            "release/pantera-${VERSION}.jar" \
+            "release/pantera-${VERSION}-dist.tar.gz" \
+            "release/pantera-ui-${VERSION}.tar.gz" \
+            "release/SHA256SUMS"
 
   publish-image:
     name: Publish Docker image (GHCR)
@@ -262,43 +269,36 @@ jobs:
           tar xzf release/pantera-${VERSION}-dist.tar.gz -C pantera-main/target
           ls pantera-main/target/pantera-main-${VERSION}.jar pantera-main/target/dependency > /dev/null
 
-      - name: Set up QEMU (arm64)
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
-
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      # Raw buildx + preinstalled docker CLI instead of docker/* actions —
+      # org Actions policy allows GitHub-owned only. binfmt is a container
+      # image (not a `uses:` action), so it is not policy-gated.
+      - name: Set up QEMU + Buildx
+        run: |
+          docker run --privileged --rm tonistiigi/binfmt --install arm64
+          docker buildx create --use --name release-builder
 
       - name: Log in to GHCR
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Compute tags
-        id: tags
-        run: |
-          VERSION="${{ steps.version.outputs.VERSION }}"
-          IMAGE="ghcr.io/${{ github.repository }}"
-          TAGS="${IMAGE}:${VERSION}"
-          # :latest only for finals — pre-releases must not steal it.
-          case "$VERSION" in
-            *RC*|*beta*|*alpha*) ;;
-            *) TAGS="${TAGS},${IMAGE}:latest" ;;
-          esac
-          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
       - name: Build and push (amd64 + arm64)
         id: push
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        with:
-          context: pantera-main
-          file: pantera-main/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.tags.outputs.tags }}
-          build-args: |
-            JAR_FILE=pantera-main-${{ steps.version.outputs.VERSION }}.jar
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          IMAGE="ghcr.io/${{ github.repository }}"
+          TAG_ARGS="-t ${IMAGE}:${VERSION}"
+          # :latest only for finals — pre-releases must not steal it.
+          case "$VERSION" in
+            *RC*|*beta*|*alpha*) ;;
+            *) TAG_ARGS="${TAG_ARGS} -t ${IMAGE}:latest" ;;
+          esac
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --push ${TAG_ARGS} \
+            --build-arg JAR_FILE=pantera-main-${VERSION}.jar \
+            --metadata-file /tmp/build-metadata.json \
+            -f pantera-main/Dockerfile pantera-main
+          DIGEST=$(python3 -c "import json;print(json.load(open('/tmp/build-metadata.json'))['containerimage.digest'])")
+          echo "digest=${DIGEST}" >> $GITHUB_OUTPUT
 
       - name: Attest image provenance
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
