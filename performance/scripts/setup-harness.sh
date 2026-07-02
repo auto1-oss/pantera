@@ -46,8 +46,18 @@ if [ ! -f secrets/jwt-private.pem ]; then
 else
   echo "keypair present — skip"
 fi
+# The SUT container runs as uid 2021 and Linux bind mounts preserve host
+# ownership, so openssl's 600-perm private key is unreadable inside the
+# container (RsaKeyLoader's Files.isReadable() -> "JWT private key not
+# found"). These are throwaway bench-only keys — make them world-readable.
+# macOS Docker Desktop remaps ownership and hides this; Linux CI does not.
+chmod 644 secrets/jwt-private.pem secrets/jwt-public.pem
 
 echo "=== setup-harness: seed local-repo files ==="
 ./scripts/seed-files.sh
+# Same uid mismatch, write direction: proxy repos persist fetched artifacts
+# under /var/pantera/data, so uid 2021 must be able to create files inside
+# the host-owned seeded tree.
+chmod -R a+rwX data
 
 echo "=== setup-harness: done ==="

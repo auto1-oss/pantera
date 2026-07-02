@@ -105,20 +105,17 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
 
-      - name: Compile
-        run: mvn compile -q
-
-      - name: Run unit tests
-        run: mvn test --fail-at-end
+      # One reactor session runs unit tests + PMD + license check (both are
+      # bound to `verify` in the root pom). Do NOT split these into separate
+      # `mvn test` / `mvn pmd:check` steps: standalone pmd:check resolves the
+      # build-tools ruleset jar AND sibling-module jars (aux classpath) from
+      # the local repository, which is empty on a clean runner — only an
+      # in-session reactor build resolves them without prior `install`.
+      - name: Build, test, verify (unit tests + PMD + license)
+        run: mvn clean install -T8 --fail-at-end -ntp
         env:
           POSTGRES_USER: pantera
           POSTGRES_PASSWORD: pantera
-
-      - name: PMD check
-        run: mvn pmd:check -q
-
-      - name: License header check
-        run: mvn com.mycila:license-maven-plugin:4.3:check -q
 
       - name: Package JAR with dependencies
         run: |
