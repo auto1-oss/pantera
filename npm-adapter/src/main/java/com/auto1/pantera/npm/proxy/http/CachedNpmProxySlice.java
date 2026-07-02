@@ -177,9 +177,17 @@ public final class CachedNpmProxySlice implements Slice {
 
     /**
      * Fetches from origin with signal-based request coalescing.
-     * Uses shared {@link SingleFlight}: first request fetches from origin
-     * (which saves to NpmProxy's storage cache). Concurrent requests wait for a
-     * signal, then re-fetch from origin which serves from storage cache.
+     * Uses shared {@link SingleFlight}: the leader (the request whose loader
+     * actually runs) fetches from origin once and serves THAT response
+     * directly. Concurrent followers wait for the signal, then re-fetch from
+     * origin, which serves from NpmProxy's now-warm storage cache.
+     *
+     * <p>The leader must NOT re-fetch: origin traversal is where per-request
+     * side effects live (the {@code artifact_resolution}/{@code
+     * artifact_access} audit records, phase metrics), so a probe-then-refetch
+     * leader emitted every audit record twice for a single client request —
+     * same trace.id, milliseconds apart. It also discarded the probe
+     * response's body unconsumed. One client request = one origin traversal.</p>
      */
     private CompletableFuture<Response> fetchWithDedup(
         final RequestLine line,
@@ -187,24 +195,47 @@ public final class CachedNpmProxySlice implements Slice {
         final Content body,
         final Key key
     ) {
+        // Set only by THIS caller's loader. The loader runs for exactly one
+        // caller per concurrent burst (the leader); followers join the
+        // in-flight signal and their reference stays null.
+        final java.util.concurrent.atomic.AtomicReference<Response> leaderResponse =
+            new java.util.concurrent.atomic.AtomicReference<>();
         return this.deduplicator.load(
             key,
-            () -> this.doFetch(line, headers, body, key)
-        ).thenCompose(signal -> this.handleSignal(signal, line, headers));
+            () -> this.doFetch(line, headers, body, key, leaderResponse)
+        ).thenCompose(signal -> {
+            final Response captured = leaderResponse.get();
+            if (captured != null) {
+                if (signal == FetchSignal.SUCCESS) {
+                    // Leader: serve the response we already have — origin was
+                    // traversed exactly once for this request.
+                    return CompletableFuture.completedFuture(captured);
+                }
+                // Leader on a non-success signal: handleSignal builds the
+                // synthetic 404/503 (the raw upstream status must not leak —
+                // RaceSlice's fallback contract depends on the 404 mapping).
+                // Drain the captured body so the publisher is not leaked.
+                captured.body().asBytesFuture().whenComplete((b, e) -> { });
+            }
+            return this.handleSignal(signal, line, headers);
+        });
     }
 
     /**
-     * Perform the actual fetch from origin, returning a FetchSignal.
+     * Perform the actual fetch from origin, returning a FetchSignal and
+     * capturing the raw response for the leader's direct serve.
      */
     private CompletableFuture<FetchSignal> doFetch(
         final RequestLine line,
         final Headers headers,
         final Content body,
-        final Key key
+        final Key key,
+        final java.util.concurrent.atomic.AtomicReference<Response> capture
     ) {
         final long startTime = System.currentTimeMillis();
         return this.origin.response(line, headers, body)
             .thenApply(response -> {
+                capture.set(response);
                 final long duration = System.currentTimeMillis() - startTime;
                 if (response.status().code() == 404) {
                     this.negativeCache.cacheNotFound(this.negKey(key.string()));

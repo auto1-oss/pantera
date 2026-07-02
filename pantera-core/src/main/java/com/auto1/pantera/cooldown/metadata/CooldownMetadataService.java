@@ -68,10 +68,15 @@ public interface CooldownMetadataService {
      * Filter metadata to remove blocked versions, attributing the resulting
      * {@code artifact.audit} resolution record to the given requester.
      *
-     * <p>Default implementation delegates to the context-less overload —
-     * existing implementors (including test doubles) keep compiling
-     * unchanged and simply do not emit an attributed audit record until they
-     * override this method.
+     * <p>Default implementation delegates to the context-less overload and
+     * then emits an {@code artifact_resolution} audit record with an empty
+     * filtered-versions list on success. The taxonomy contract is that EVERY
+     * metadata listing view is audited — including deployments wired with
+     * {@link NoopCooldownMetadataService} (no cooldown infrastructure at
+     * all), where "no filtering happened" is exactly what the record should
+     * say. Implementations with real filtering (e.g. {@link
+     * MetadataFilterService}) override this method and emit their own,
+     * more detailed record instead.
      *
      * @param repoType Repository type (e.g., "npm", "maven")
      * @param repoName Repository name
@@ -99,7 +104,13 @@ public interface CooldownMetadataService {
     ) {
         return this.filterMetadata(
             repoType, repoName, packageName, rawMetadata, parser, filter, rewriter
-        );
+        ).whenComplete((bytes, error) -> {
+            if (error == null) {
+                com.auto1.pantera.audit.AuditLogger.resolution(
+                    ctx, repoType, repoName, packageName, owner, java.util.List.of()
+                );
+            }
+        });
     }
 
     /**

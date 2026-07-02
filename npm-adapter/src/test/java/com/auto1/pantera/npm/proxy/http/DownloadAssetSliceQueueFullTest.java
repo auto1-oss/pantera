@@ -56,8 +56,10 @@ import java.util.concurrent.TimeoutException;
  * <p>Pre-fills a bounded {@link LinkedBlockingQueue} to capacity (2 slots),
  * then fires 50 concurrent cache-hit GETs through a {@code DownloadAssetSlice}
  * wired to that already-full queue. Asserts every request returns HTTP 200
- * and no exception escapes the serve path. Drops are counted via
- * {@link EventsQueueMetrics#dropCount()}.</p>
+ * and no exception escapes the serve path. Also asserts the drop counter
+ * (via {@link EventsQueueMetrics#dropCount()}) does NOT advance — a cache
+ * hit is a read, not a publish, and must never touch the events queue at
+ * all, so a saturated queue is simply irrelevant to it.</p>
  */
 final class DownloadAssetSliceQueueFullTest {
 
@@ -119,13 +121,16 @@ final class DownloadAssetSliceQueueFullTest {
             server.start();
             this.fire50ConcurrentRequestsAndAssertAllOk();
         }
-        // After the burst the drop counter must have advanced — every
-        // cache-hit attempted one enqueue on a full queue.
+        // A cache hit is a read, not a publish: it must not enqueue a
+        // ProxyArtifactEvent at all (that would misreport a re-serve of
+        // already-cached content as a fresh publish). So the saturated
+        // queue is never touched and the drop counter must not advance —
+        // this is what decouples cache-hit serving from queue capacity.
         final long drops = EventsQueueMetrics.dropCount() - dropsBefore;
         MatcherAssert.assertThat(
-            "queue overflows incremented the drop counter at least once",
+            "cache hits never enqueue, so a saturated queue records no new drops",
             drops,
-            Matchers.greaterThanOrEqualTo(1L)
+            Matchers.is(0L)
         );
     }
 

@@ -152,11 +152,13 @@ class ProxySliceTest {
             new BlockingStorage(this.storage).value(new Key.From(key)),
             new IsEqual<>(body)
         );
-        final boolean expectEvent = key.matches(".*\\.(whl|tar\\.gz|zip|tar\\.bz2|tar\\.Z|tar|egg)");
+        // A cache hit is a read, not a publish — the artifact was already
+        // published to the DB the first time it was cached. No
+        // ProxyArtifactEvent should be enqueued here regardless of path type.
         MatcherAssert.assertThat(
-            "Cache fallback enqueued event when artifact path detected",
+            "Cache fallback does not enqueue a publish event",
             this.events.size(),
-            Matchers.is(expectEvent ? 1 : 0)
+            Matchers.is(0)
         );
         this.events.clear();
         Assertions.assertFalse(clients.invoked(), "Mirror client should not be used when cache hit");

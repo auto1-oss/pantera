@@ -176,7 +176,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
                         UploadSlice.REPO_TYPE, item.repoName(), item.ownerLogin(),
                         name, version, size.longValue(), created, release,
                         item.artifactKey().string()
-                    )
+                    ).withContext(item.traceId(), item.clientIp())
                 );
                 EcsLogger.debug("com.auto1.pantera.npm")
                     .message("Package event created from path")

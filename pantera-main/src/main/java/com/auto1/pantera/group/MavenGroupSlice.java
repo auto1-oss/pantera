@@ -340,6 +340,27 @@ public final class MavenGroupSlice implements Slice {
                     .field("url.path", path)
                     .field("log.source", "application")
                     .log();
+                // The merged bytes were cooldown-filtered when the leader
+                // computed them, but the filtered-version detail did not
+                // survive the byte-only cache — audit the listing view with
+                // the detail-unknown variant so cache hits are not an audit
+                // blind spot.
+                com.auto1.pantera.http.log.RequestContextHeaders.bindToMdc(headers);
+                final com.auto1.pantera.audit.AuditContext hitCtx =
+                    new com.auto1.pantera.audit.AuditContext(
+                        org.slf4j.MDC.get(com.auto1.pantera.http.log.EcsMdc.TRACE_ID),
+                        org.slf4j.MDC.get(com.auto1.pantera.http.log.EcsMdc.CLIENT_IP)
+                    );
+                final String hitPkg =
+                    new com.auto1.pantera.maven.cooldown.MavenMetadataRequestDetector()
+                        .extractPackageName(path)
+                        .map(name -> name.replace('/', '.'))
+                        .orElse(path);
+                com.auto1.pantera.audit.AuditLogger.resolutionDetailUnknown(
+                    hitCtx, this.repoType, this.group, hitPkg,
+                    new com.auto1.pantera.http.headers.Login(headers).getValue(),
+                    "group merged-metadata cache"
+                );
                 return CompletableFuture.completedFuture(
                     ResponseBuilder.ok()
                         .header("Content-Type", "application/xml")
@@ -603,14 +624,26 @@ public final class MavenGroupSlice implements Slice {
     private CompletableFuture<byte[]> applyCooldownFilter(
         final String path, final byte[] mergedBytes, final Headers headers
     ) {
-        if (this.cooldownMetadata
-            instanceof com.auto1.pantera.cooldown.metadata.NoopCooldownMetadataService) {
-            return CompletableFuture.completedFuture(mergedBytes);
-        }
+        // NOTE: no NoopCooldownMetadataService short-circuit here — the Noop
+        // implementation is a passthrough whose 9-arg default emits the
+        // artifact_resolution audit record, and the taxonomy contract is that
+        // every metadata listing view is audited even with cooldown absent.
         final Optional<String> pkgOpt =
             new com.auto1.pantera.maven.cooldown.MavenMetadataRequestDetector()
                 .extractPackageName(path);
         if (pkgOpt.isEmpty()) {
+            // Unparseable coordinate — the merged listing is still served;
+            // audit with the detail-unknown variant (no filter ran).
+            com.auto1.pantera.http.log.RequestContextHeaders.bindToMdc(headers);
+            com.auto1.pantera.audit.AuditLogger.resolutionDetailUnknown(
+                new com.auto1.pantera.audit.AuditContext(
+                    org.slf4j.MDC.get(com.auto1.pantera.http.log.EcsMdc.TRACE_ID),
+                    org.slf4j.MDC.get(com.auto1.pantera.http.log.EcsMdc.CLIENT_IP)
+                ),
+                this.repoType, this.group, path,
+                new com.auto1.pantera.http.headers.Login(headers).getValue(),
+                "unparseable metadata coordinate (unfiltered merged bytes)"
+            );
             return CompletableFuture.completedFuture(mergedBytes);
         }
         // Convert slashed groupId/artifactId path (e.g. "com/google/guava/guava")

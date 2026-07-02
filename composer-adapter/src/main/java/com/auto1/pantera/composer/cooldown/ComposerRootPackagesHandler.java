@@ -93,6 +93,12 @@ public final class ComposerRootPackagesHandler {
     private static final String CONTENT_TYPE = "application/json";
 
     /**
+     * Synthetic package.name for audit records on root-listing fallback
+     * branches where no per-package entries could be enumerated.
+     */
+    private static final String ROOT_LISTING = "(root packages listing)";
+
+    /**
      * Shared Jackson mapper.
      */
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -207,6 +213,11 @@ public final class ComposerRootPackagesHandler {
                 .error(ex)
                 .field("log.source", "application")
                 .log();
+            // A listing was still served (unfiltered fallback) — audit it.
+            AuditLogger.resolutionDetailUnknown(
+                auditCtx, this.repoType, this.repoName, ROOT_LISTING, user,
+                "root metadata parse fallback (unfiltered upstream bytes)"
+            );
             return CompletableFuture.completedFuture(
                 ResponseBuilder.ok()
                     .header("Content-Type", CONTENT_TYPE)
@@ -228,6 +239,10 @@ public final class ComposerRootPackagesHandler {
                     .field("log.source", "application")
                     .log();
             }
+            AuditLogger.resolutionDetailUnknown(
+                auditCtx, this.repoType, this.repoName, ROOT_LISTING, user,
+                "root metadata parse fallback (unfiltered upstream bytes)"
+            );
             return CompletableFuture.completedFuture(
                 ResponseBuilder.ok()
                     .header("Content-Type", CONTENT_TYPE)
@@ -250,6 +265,11 @@ public final class ComposerRootPackagesHandler {
                 .field("repository.name", this.repoName)
                 .field("log.source", "application")
                 .log();
+            // No inline packages to enumerate, but the root listing view
+            // itself is still a metadata request — one audit record.
+            AuditLogger.resolution(
+                auditCtx, this.repoType, this.repoName, ROOT_LISTING, user, List.of()
+            );
             return CompletableFuture.completedFuture(
                 ResponseBuilder.ok()
                     .header("Content-Type", CONTENT_TYPE)

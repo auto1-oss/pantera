@@ -214,13 +214,23 @@ public final class MetadataFilterService implements CooldownMetadataService {
                 .field("package.name", packageName)
                 .field("log.source", "application")
                 .log();
+            // Taxonomy: EVERY metadata listing view emits exactly one
+            // artifact_resolution record — cooldown being disabled means
+            // "nothing filtered", not "nothing to audit".
+            AuditLogger.resolution(
+                auditCtx, repoType, repoName, packageName, owner, List.of()
+            );
             return CompletableFuture.completedFuture(rawMetadata);
         }
 
         final long startTime = System.nanoTime();
 
-        // Try cache first
-        return this.metadataCache.get(
+        // The resolution audit fires HERE, at the boundary, once per request —
+        // not inside evaluateAndFilter — so cache-hit serves (L1/L2/SWR) are
+        // audited too. The CacheEntry carries the blocked-version detail from
+        // compute time (L1); entries promoted from L2 lose it (Valkey stores
+        // raw bytes only) and are audited with the detail-unknown variant.
+        return this.metadataCache.getEntry(
             repoType,
             repoName,
             packageName,
@@ -228,7 +238,43 @@ public final class MetadataFilterService implements CooldownMetadataService {
                 repoType, repoName, packageName, rawMetadata,
                 parser, filter, rewriter, startTime, auditCtx, owner
             )
-        );
+        ).whenComplete((entry, error) -> {
+            final Throwable cause = unwrapCompletion(error);
+            if (cause instanceof AllVersionsBlockedException blockedEx) {
+                // The all-blocked branch never reaches a served listing
+                // (callers map it to 403/404), but it IS a metadata request
+                // whose answer was "every version hidden" — audit it with
+                // the full blocked list.
+                AuditLogger.resolution(
+                    auditCtx, repoType, repoName, packageName, owner,
+                    new ArrayList<>(blockedEx.blockedVersions())
+                );
+            } else if (error == null && entry != null) {
+                if (entry.blockedVersions() != null) {
+                    AuditLogger.resolution(
+                        auditCtx, repoType, repoName, packageName, owner,
+                        new ArrayList<>(entry.blockedVersions())
+                    );
+                } else {
+                    AuditLogger.resolutionDetailUnknown(
+                        auditCtx, repoType, repoName, packageName, owner,
+                        "shared filtered-metadata cache"
+                    );
+                }
+            }
+        }).thenApply(FilteredMetadataCache.CacheEntry::data);
+    }
+
+    /**
+     * Unwrap {@link java.util.concurrent.CompletionException} layers to the
+     * root cause; returns {@code null} for a {@code null} input.
+     */
+    private static Throwable unwrapCompletion(final Throwable error) {
+        Throwable cause = error;
+        while (cause instanceof java.util.concurrent.CompletionException && cause.getCause() != null) {
+            cause = cause.getCause();
+        }
+        return cause;
     }
 
     /**
@@ -570,13 +616,10 @@ public final class MetadataFilterService implements CooldownMetadataService {
                     throw new AllVersionsBlockedException(ctx.packageName, blockedVersions);
                 }
 
-                // artifact.audit resolution record: fires here (not on the
-                // all-blocked throw above) because that branch never reaches
-                // a served listing — callers map it to a 403/404 instead.
-                AuditLogger.resolution(
-                    ctx.auditContext, ctx.repoType, ctx.repoName, ctx.packageName,
-                    ctx.owner, new ArrayList<>(blockedVersions)
-                );
+                // artifact.audit resolution record: fires at the filterMetadata
+                // boundary (which sees this result via the CacheEntry's
+                // blockedVersions), NOT here — firing here would skip
+                // cache-hit serves and double-fire on compute.
 
                 // Step 7: Filter metadata
                 T filtered = ctx.filter.filter(ctx.parsed, blockedVersions);
@@ -634,10 +677,12 @@ public final class MetadataFilterService implements CooldownMetadataService {
                 }
 
                 // Step 10: Create cache entry with dynamic TTL
-                // TTL = min(blockedUntil) - now, or max TTL if no blocked versions
+                // TTL = min(blockedUntil) - now, or max TTL if no blocked versions.
+                // The blocked-version set rides along so cache-hit serves can
+                // still emit an accurate artifact_resolution audit record.
                 if (earliestBlockedUntil != null) {
                     return FilteredMetadataCache.CacheEntry.withBlockedVersions(
-                        resultBytes, earliestBlockedUntil, this.maxTtl
+                        resultBytes, earliestBlockedUntil, this.maxTtl, blockedVersions
                     );
                 }
                 return FilteredMetadataCache.CacheEntry.noBlockedVersions(resultBytes, this.maxTtl);

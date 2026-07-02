@@ -222,6 +222,12 @@ public final class ComposerPackageMetadataHandler {
                 .error(ex)
                 .field("log.source", "application")
                 .log();
+            // A listing was still served (unfiltered fallback) — audit it.
+            // The filter never ran, so the filtered-version detail is unknown.
+            AuditLogger.resolutionDetailUnknown(
+                auditCtx, this.repoType, this.repoName, pkg, user,
+                "metadata parse fallback (unfiltered upstream bytes)"
+            );
             return CompletableFuture.completedFuture(
                 ResponseBuilder.ok()
                     .header("Content-Type", CONTENT_TYPE)

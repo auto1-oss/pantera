@@ -143,7 +143,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                                 created,
                                 release,
                                 event.artifactKey().string()
-                            )
+                            ).withContext(event.traceId(), event.clientIp())
                         );
 
                         EcsLogger.info("com.auto1.pantera.composer")

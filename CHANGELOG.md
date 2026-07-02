@@ -657,6 +657,14 @@
 
 ### 🔧 Bug fixes
 
+- **Proxy audit no longer records an `artifact_publish` on cache-hit re-serves.** Composer, npm, Go, and PyPI proxies emitted a publish event (and a DB index upsert) every time an already-cached artifact was re-downloaded, and dropped `client.ip`/`trace.id` on the way to the audit log. Publish now fires only on a genuine first-time fetch; cache hits, upstream fetches, and cooldown blocks emit `artifact_access` with full request correlation.
+  ([@aydasraf](https://github.com/aydasraf))
+- **npm cooldown now blocks fresh tarball downloads.** The storage probe and the upstream fetch were fused in a single call, so the cooldown gate only ran after a blocked version had already been fetched, cached, and served with `200`. Blocked versions now return `403` without contacting upstream or touching the cache.
+  ([@aydasraf](https://github.com/aydasraf))
+- **`artifact_resolution` fires on every metadata listing view.** Cache-hit serves, cooldown-disabled repos, ETag `304` revalidations, parse-failure fallbacks, and all-versions-blocked denials previously produced no audit record. Every metadata view across all proxy formats (Maven/Gradle, npm, PyPI, Go, Composer, Docker) now emits exactly one resolution record per request, and the filtered-version list is preserved across cache hits.
+  ([@aydasraf](https://github.com/aydasraf))
+- **npm proxy audit records are no longer emitted twice per request.** The request-dedup layer traversed the origin slice twice on the success path (a probe plus a re-fetch), doubling every audit record and metric. The dedup leader now serves its own response — one origin traversal per request, and one upstream round-trip saved.
+  ([@aydasraf](https://github.com/aydasraf))
 - **Upstream non-2xx responses propagate with correct status.** 429 (with `Retry-After`), 401, 403, and 503-with-`Retry-After` are no longer collapsed to 404. Transient 5xx no longer pollutes the artifact index cache, so a brief upstream outage does not produce long-lived false negatives.
   ([@aydasraf](https://github.com/aydasraf))
 - **Group resolver falls through only on genuine 404s.** Transient member errors (5xx, timeouts) retry the next member instead of stopping the walk.

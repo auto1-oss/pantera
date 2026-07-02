@@ -265,6 +265,13 @@ public final class DownloadPackageSlice implements Slice {
                         metadata.abbreviatedHash().get(), tarballPrefix
                     );
                     if (clientETag.get().equals(derivedEtag)) {
+                        // Taxonomy: a 304 revalidation is still a metadata
+                        // listing view — audit it. The filter never runs on
+                        // this path so the filtered-version detail is unknown.
+                        com.auto1.pantera.audit.AuditLogger.resolutionDetailUnknown(
+                            auditCtx, this.repoType, this.repoName, packageName,
+                            owner, "etag revalidation (304)"
+                        );
                         return io.reactivex.Maybe.just(
                             ResponseBuilder.from(RsStatus.NOT_MODIFIED)
                                 .header("ETag", derivedEtag)
@@ -289,7 +296,12 @@ public final class DownloadPackageSlice implements Slice {
                                         auditCtx, owner
                                     );
                                 }
-                                // No cooldown - serve directly
+                                // No cooldown wired - serve directly; still a
+                                // metadata listing view, audit with no filtering.
+                                com.auto1.pantera.audit.AuditLogger.resolution(
+                                    auditCtx, this.repoType, this.repoName, packageName,
+                                    owner, java.util.List.of()
+                                );
                                 return io.reactivex.Maybe.just(
                                     this.buildAbbreviatedResponse(abbreviatedBytes, metadata, headers, clientETag)
                                 );
@@ -313,6 +325,10 @@ public final class DownloadPackageSlice implements Slice {
                                             auditCtx, owner
                                         );
                                     }
+                                    com.auto1.pantera.audit.AuditLogger.resolution(
+                                        auditCtx, this.repoType, this.repoName, packageName,
+                                        owner, java.util.List.of()
+                                    );
                                     return io.reactivex.Maybe.just(
                                         this.buildResponse(rawBytes, metadata, headers, true, clientETag)
                                     );
@@ -492,6 +508,13 @@ public final class DownloadPackageSlice implements Slice {
                         metadata.contentHash().get(), tarballPrefix
                     );
                     if (clientETag.get().equals(derivedEtag)) {
+                        // Taxonomy: a 304 revalidation is still a metadata
+                        // listing view — audit it. The filter never runs on
+                        // this path so the filtered-version detail is unknown.
+                        com.auto1.pantera.audit.AuditLogger.resolutionDetailUnknown(
+                            auditCtx, this.repoType, this.repoName, packageName,
+                            owner, "etag revalidation (304)"
+                        );
                         return io.reactivex.Maybe.just(
                             ResponseBuilder.from(RsStatus.NOT_MODIFIED)
                                 .header("ETag", derivedEtag)
@@ -557,6 +580,12 @@ public final class DownloadPackageSlice implements Slice {
                                     });
                                 return RxFuture.maybe(filterFuture);
                             }
+                            // No cooldown wired - serve directly; still a
+                            // metadata listing view, audit with no filtering.
+                            com.auto1.pantera.audit.AuditLogger.resolution(
+                                auditCtx, this.repoType, this.repoName, packageName,
+                                owner, java.util.List.of()
+                            );
                             return io.reactivex.Maybe.just(
                                 this.buildResponse(rawBytes, metadata, headers, false, clientETag)
                             );
@@ -600,7 +629,7 @@ public final class DownloadPackageSlice implements Slice {
             // Cooldown disabled: pass-through by fetching packument and
             // returning its current latest manifest. This keeps behaviour
             // parity with upstream registry even without filtering.
-            return this.resolveLatestFromRaw(packageName);
+            return this.resolveLatestFromRaw(packageName, auditCtx, owner);
         }
         return this.npm.getPackageMetadataOnly(packageName)
             .flatMap(metadata -> this.npm.getPackageContentStream(packageName)
@@ -675,10 +704,13 @@ public final class DownloadPackageSlice implements Slice {
 
     /**
      * Cooldown-disabled pass-through for {@code /<pkg>/latest}: fetch the
-     * packument and extract its {@code dist-tags.latest} manifest.
+     * packument and extract its {@code dist-tags.latest} manifest. Still a
+     * metadata listing view — audited with an empty filtered list.
      */
     private CompletableFuture<Response> resolveLatestFromRaw(
-        final String packageName
+        final String packageName,
+        final com.auto1.pantera.audit.AuditContext auditCtx,
+        final String owner
     ) {
         return this.npm.getPackageMetadataOnly(packageName)
             .flatMap(metadata -> this.npm.getPackageContentStream(packageName)
@@ -690,7 +722,13 @@ public final class DownloadPackageSlice implements Slice {
                         .toMaybe();
                 })
             )
-            .map(rawBytes -> this.buildLatestManifestResponse(rawBytes, packageName))
+            .map(rawBytes -> {
+                com.auto1.pantera.audit.AuditLogger.resolution(
+                    auditCtx, this.repoType, this.repoName, packageName,
+                    owner, java.util.List.of()
+                );
+                return this.buildLatestManifestResponse(rawBytes, packageName);
+            })
             .toSingle(ResponseBuilder.notFound()
                 .jsonBody(String.format(
                     "{\"error\":\"version not found: latest\",\"package\":\"%s\"}",

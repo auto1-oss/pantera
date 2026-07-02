@@ -206,6 +206,122 @@ final class MetadataFilterServiceTest {
         assertThat(result, equalTo(rawMetadata));
     }
 
+    /**
+     * Regression: EVERY metadata listing view must emit exactly one
+     * {@code artifact_resolution} audit record — including repeat requests
+     * served from the filtered-metadata cache. Before this fix the audit
+     * fired only on the compute path, so "npm show" #2..N (cache hits)
+     * were an audit blackout.
+     */
+    @Test
+    void auditsResolutionOnEveryCallIncludingCacheHits() throws Exception {
+        final AuditCapture capture = AuditCapture.install();
+        try {
+            this.cooldownService.blockVersion("test-pkg", "3.0.0");
+            final byte[] raw = "raw-metadata".getBytes(StandardCharsets.UTF_8);
+            for (int i = 0; i < 3; i = i + 1) {
+                this.service.filterMetadata(
+                    "npm", "test-repo", "test-pkg", raw,
+                    new TestMetadataParser(Arrays.asList("1.0.0", "2.0.0", "3.0.0"), "3.0.0"),
+                    new TestMetadataFilter(), new TestMetadataRewriter(),
+                    com.auto1.pantera.audit.AuditContext.NONE, "alice"
+                ).get();
+            }
+            final List<org.apache.logging.log4j.core.LogEvent> events =
+                capture.resolutionEvents();
+            assertThat(
+                "three metadata views (1 compute + 2 cache hits) -> three resolution records",
+                events.size(), equalTo(3)
+            );
+            for (final org.apache.logging.log4j.core.LogEvent event : events) {
+                assertThat(
+                    "every record names the blocked version",
+                    AuditCapture.field(event, "message").toString(),
+                    containsString("3.0.0")
+                );
+            }
+        } finally {
+            capture.remove();
+        }
+    }
+
+    /**
+     * Regression: cooldown disabled for the repo is "nothing filtered",
+     * not "nothing to audit" — the listing view must still be recorded.
+     */
+    @Test
+    void auditsResolutionWhenCooldownDisabled() throws Exception {
+        final AuditCapture capture = AuditCapture.install();
+        try {
+            final MetadataFilterService disabledService = new MetadataFilterService(
+                this.cooldownService,
+                new CooldownSettings(false, Duration.ofDays(7)),
+                this.cooldownCache,
+                this.metadataCache,
+                ForkJoinPool.commonPool(),
+                50
+            );
+            final byte[] raw = "raw-metadata".getBytes(StandardCharsets.UTF_8);
+            for (int i = 0; i < 2; i = i + 1) {
+                disabledService.filterMetadata(
+                    "npm", "test-repo", "disabled-pkg", raw,
+                    new TestMetadataParser(Arrays.asList("1.0.0"), "1.0.0"),
+                    new TestMetadataFilter(), new TestMetadataRewriter(),
+                    com.auto1.pantera.audit.AuditContext.NONE, "alice"
+                ).get();
+            }
+            final List<org.apache.logging.log4j.core.LogEvent> events =
+                capture.resolutionEvents();
+            assertThat(
+                "cooldown-disabled metadata views are still audited, one per request",
+                events.size(), equalTo(2)
+            );
+            assertThat(
+                AuditCapture.field(events.get(0), "message").toString(),
+                containsString("no cooldown filtering applied")
+            );
+        } finally {
+            capture.remove();
+        }
+    }
+
+    /**
+     * Regression: the all-versions-blocked branch throws to the caller
+     * (mapped to 403/404) but is still a metadata request — it must be
+     * audited with the full blocked list.
+     */
+    @Test
+    void auditsResolutionWhenAllVersionsBlocked() {
+        final AuditCapture capture = AuditCapture.install();
+        try {
+            this.cooldownService.blockVersion("all-blocked-pkg", "1.0.0");
+            this.cooldownService.blockVersion("all-blocked-pkg", "2.0.0");
+            assertThrows(
+                ExecutionException.class,
+                () -> this.service.filterMetadata(
+                    "npm", "test-repo", "all-blocked-pkg",
+                    "raw-metadata".getBytes(StandardCharsets.UTF_8),
+                    new TestMetadataParser(Arrays.asList("1.0.0", "2.0.0"), "2.0.0"),
+                    new TestMetadataFilter(), new TestMetadataRewriter(),
+                    com.auto1.pantera.audit.AuditContext.NONE, "alice"
+                ).get()
+            );
+            final List<org.apache.logging.log4j.core.LogEvent> events =
+                capture.resolutionEvents();
+            assertThat(
+                "all-blocked denial still produces a resolution record",
+                events.size(), equalTo(1)
+            );
+            assertThat(
+                "record lists the hidden versions",
+                AuditCapture.field(events.get(0), "message").toString(),
+                containsString("2 version(s) filtered")
+            );
+        } finally {
+            capture.remove();
+        }
+    }
+
     @Test
     void cachesFilteredMetadata() throws Exception {
         final TestMetadataParser parser = new TestMetadataParser(
@@ -1043,6 +1159,76 @@ final class MetadataFilterServiceTest {
             return CompletableFuture.completedFuture(
                 Optional.ofNullable(this.dates.get(version))
             );
+        }
+    }
+
+    /**
+     * Captures records emitted on the {@code artifact.audit} logger so tests
+     * can assert exactly which audit events a code path produced. Install per
+     * test with {@link #install()} and detach with {@link #remove()} in a
+     * finally block.
+     */
+    private static final class AuditCapture
+        extends org.apache.logging.log4j.core.appender.AbstractAppender {
+
+        private static final String NAME = "MetadataFilterAuditCapture";
+        private static final String AUDIT_LOGGER = "artifact.audit";
+
+        private final List<org.apache.logging.log4j.core.LogEvent> events =
+            java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+
+        private AuditCapture() {
+            super(NAME, null, null, true,
+                org.apache.logging.log4j.core.config.Property.EMPTY_ARRAY);
+        }
+
+        static AuditCapture install() {
+            final AuditCapture capture = new AuditCapture();
+            capture.start();
+            final org.apache.logging.log4j.core.LoggerContext lc =
+                (org.apache.logging.log4j.core.LoggerContext)
+                    org.apache.logging.log4j.LogManager.getContext(false);
+            final org.apache.logging.log4j.core.config.Configuration cfg = lc.getConfiguration();
+            cfg.getLoggerConfig(AUDIT_LOGGER).addAppender(capture, null, null);
+            cfg.getRootLogger().addAppender(capture, null, null);
+            lc.updateLoggers();
+            return capture;
+        }
+
+        void remove() {
+            final org.apache.logging.log4j.core.LoggerContext lc =
+                (org.apache.logging.log4j.core.LoggerContext)
+                    org.apache.logging.log4j.LogManager.getContext(false);
+            final org.apache.logging.log4j.core.config.Configuration cfg = lc.getConfiguration();
+            cfg.getLoggerConfig(AUDIT_LOGGER).removeAppender(NAME);
+            cfg.getRootLogger().removeAppender(NAME);
+            this.stop();
+            lc.updateLoggers();
+        }
+
+        List<org.apache.logging.log4j.core.LogEvent> resolutionEvents() {
+            synchronized (this.events) {
+                return this.events.stream()
+                    .filter(event -> "artifact_resolution".equals(
+                        String.valueOf(field(event, "event.action"))
+                    ))
+                    .collect(java.util.stream.Collectors.toList());
+            }
+        }
+
+        static Object field(
+            final org.apache.logging.log4j.core.LogEvent event, final String key
+        ) {
+            final org.apache.logging.log4j.message.Message msg = event.getMessage();
+            if (msg instanceof org.apache.logging.log4j.message.MapMessage<?, ?> map) {
+                return map.getData().get(key);
+            }
+            return null;
+        }
+
+        @Override
+        public void append(final org.apache.logging.log4j.core.LogEvent event) {
+            this.events.add(event.toImmutable());
         }
     }
 }

@@ -257,6 +257,43 @@ public final class AuditLogger {
             .log();
     }
 
+    /**
+     * Log a metadata/version-listing view whose cooldown-filter detail is
+     * unknown for THIS serve — the listing was answered from a cache tier
+     * (shared L2, HTTP 304 revalidation) that does not carry the
+     * filtered-version list. The who/what/when of the request is still
+     * recorded; {@code event.type} is {@code ["info"]} because neither
+     * {@code allowed} nor {@code change} can be asserted.
+     *
+     * @param ctx Request correlation context (trace id / client IP)
+     * @param repoType Repository type
+     * @param repoName Repository name
+     * @param packageName Package/module name whose listing was rendered
+     * @param owner Requesting user name
+     * @param detail Short serve-path note embedded in the message
+     *               (e.g. {@code "shared cache"}, {@code "etag revalidation (304)"})
+     */
+    public static void resolutionDetailUnknown(final AuditContext ctx, final String repoType,
+        final String repoName, final String packageName, final String owner, final String detail) {
+        EcsLogger.info(LOGGER)
+            .message(String.format(
+                "Metadata listing served via %s; cooldown filter detail unavailable for this serve",
+                detail
+            ))
+            .eventCategory("file")
+            .eventAction("artifact_resolution")
+            .eventOutcome(OUTCOME_SUCCESS)
+            .field("event.type", List.of("info"))
+            .field("log.source", "audit")
+            .field("repository.type", repoType)
+            .field("repository.name", repoName)
+            .field("package.name", packageName)
+            .field("user.name", owner)
+            .field("client.ip", ctx.clientIp())
+            .field("trace.id", ctx.traceId())
+            .log();
+    }
+
     private static String publishMessage(final String outcome, final Long releaseDate, final String reason) {
         if (OUTCOME_FAILURE.equals(outcome)) {
             return "Artifact publish failed: " + reason;

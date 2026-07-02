@@ -656,6 +656,29 @@ public class NpmProxy {
     }
 
     /**
+     * Pure storage existence check — unlike {@link #getAssetAsync(String)},
+     * this never falls through to an upstream fetch on miss. Needed by
+     * callers that must know whether an asset was already cached BEFORE
+     * deciding whether to evaluate cooldown / enqueue a publish event.
+     * {@link #getAsset(String)}'s combined check-then-fetch-on-miss Maybe
+     * always resolves present for anything that exists upstream, so its
+     * result alone cannot distinguish "served from cache" from "just
+     * fetched" — the distinction this method exists to provide.
+     *
+     * @param path Asset path
+     * @return Future resolving {@code true} iff the asset is already in storage
+     */
+    public java.util.concurrent.CompletableFuture<Boolean> hasAssetInStorageAsync(
+        final String path
+    ) {
+        return this.storage.getAsset(path)
+            .map(asset -> Boolean.TRUE)
+            .toSingle(Boolean.FALSE)
+            .to(hu.akarnokd.rxjava2.interop.SingleInterop.get())
+            .toCompletableFuture();
+    }
+
+    /**
      * Close NPM Proxy adapter and underlying remote client.
      * @throws IOException when underlying remote client fails to close
      */

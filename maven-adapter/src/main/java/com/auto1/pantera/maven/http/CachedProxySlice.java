@@ -470,6 +470,18 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 );
             }
             if (this.cooldownMetadata == null) {
+                // No metadata-filter service wired — still a metadata
+                // listing view; audit with nothing filtered.
+                final com.auto1.pantera.audit.AuditContext metaCtx =
+                    this.captureAuditContext(inboundHeaders);
+                final String pkg = new MavenMetadataRequestDetector()
+                    .extractPackageName(line.uri().getPath())
+                    .map(name -> name.replace('/', '.'))
+                    .orElseGet(() -> line.uri().getPath());
+                com.auto1.pantera.audit.AuditLogger.resolution(
+                    metaCtx, this.repoType(), this.repoName(), pkg,
+                    new Login(inboundHeaders).getValue(), java.util.List.of()
+                );
                 return opt.get().asBytesFuture().thenApply(
                     bytes -> buildMetadataResponse(inboundHeaders, bytes)
                 );
@@ -562,6 +574,13 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         final Optional<String> pkgOpt = new MavenMetadataRequestDetector()
             .extractPackageName(path);
         if (pkgOpt.isEmpty()) {
+            // Path didn't parse as a package coordinate — the metadata is
+            // still served (unfiltered), so audit the view; the filter
+            // never ran, hence detail-unknown.
+            com.auto1.pantera.audit.AuditLogger.resolutionDetailUnknown(
+                auditCtx, this.repoType(), this.repoName(), path, owner,
+                "unparseable metadata coordinate (unfiltered passthrough)"
+            );
             return content.asBytesFuture().thenApply(
                 bytes -> buildMetadataResponse(inboundHeaders, bytes)
             );
@@ -610,6 +629,13 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 this.repoType(), this.repoName(), packageName, sha
             );
             if (cached.isPresent()) {
+                // Materialised filtered-output cache hit: the listing view is
+                // still served to THIS requester — audit it. The cache holds
+                // bytes only, so the filtered-version detail is unknown here.
+                com.auto1.pantera.audit.AuditLogger.resolutionDetailUnknown(
+                    auditCtx, this.repoType(), this.repoName(), packageName,
+                    owner, "materialised filtered-metadata cache"
+                );
                 return CompletableFuture.completedFuture(
                     buildMetadataResponse(inboundHeaders, cached.get())
                 );
@@ -831,10 +857,13 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
     private CompletableFuture<Response> verifyAndServePrimary(
         final RequestLine line, final Headers headers, final Key key, final String path
     ) {
+        // Captured before any async hop below so the access-audit record
+        // reflects THIS request's correlation context.
+        final com.auto1.pantera.audit.AuditContext auditCtx = this.captureAuditContext(headers);
         final Storage storage = this.rawStorage.orElseThrow();
         return storage.exists(key).thenCompose(presentInStorage -> {
             if (presentInStorage) {
-                return this.serveFromCache(storage, key);
+                return this.serveFromCache(storage, key, auditCtx, path, headers);
             }
             // Cooldown gate moved into fetchVerifyAndCache (post-headers).
             // The pre-fetch HEAD probe via MavenHeadSource was the dominant
@@ -849,6 +878,10 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 com.auto1.pantera.asto.cache.CacheControl.Standard.ALWAYS
             ).thenCompose(opt -> {
                 if (opt.isPresent()) {
+                    this.auditPrimaryAccess(
+                        auditCtx, path, headers, opt.get().size().orElse(0L),
+                        com.auto1.pantera.audit.AuditLogger.OUTCOME_SUCCESS, null
+                    );
                     return CompletableFuture.completedFuture(
                         ResponseBuilder.ok().body(opt.get()).build()
                     );
@@ -866,7 +899,7 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 // through the stream-through tee).
                 return this.coalesceUpstream(
                     key,
-                    leaderGate -> this.fetchVerifyAndCache(line, headers, key, path, leaderGate),
+                    leaderGate -> this.fetchVerifyAndCache(line, headers, key, path, leaderGate, auditCtx),
                     () -> this.verifyAndServePrimary(line, headers, key, path)
                 );
             }).toCompletableFuture();
@@ -922,7 +955,8 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
     private CompletableFuture<Response> fetchVerifyAndCache(
         final RequestLine line, final Headers inboundHeaders,
         final Key key, final String path,
-        final CompletableFuture<Void> singleFlightGate
+        final CompletableFuture<Void> singleFlightGate,
+        final com.auto1.pantera.audit.AuditContext auditCtx
     ) {
         this.rawStorage.orElseThrow(); // guard: storage must be configured
         final String upstreamUri = this.upstreamUrl() + path;
@@ -973,6 +1007,11 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                     // saved vs the legacy HEAD-then-GET path.
                     drainUpstreamBody(body.publisher());
                     singleFlightGate.complete(null);
+                    this.auditPrimaryAccess(
+                        auditCtx, path, inboundHeaders, 0L,
+                        com.auto1.pantera.audit.AuditLogger.OUTCOME_FAILURE,
+                        com.auto1.pantera.audit.AuditLogger.REASON_COOLDOWN_ACTIVE
+                    );
                     return CompletableFuture.completedFuture(blockResp.get());
                 }
                 return this.cacheWriter.streamThroughAndCommit(
@@ -988,6 +1027,11 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                     // this Err branch. Surface as 502 (storage_unavailable
                     // semantics) so RaceSlice can fall through to the next
                     // remote.
+                    this.auditPrimaryAccess(
+                        auditCtx, path, inboundHeaders, 0L,
+                        com.auto1.pantera.audit.AuditLogger.OUTCOME_FAILURE,
+                        com.auto1.pantera.audit.AuditLogger.REASON_STORAGE_UNAVAILABLE
+                    );
                     return ResponseBuilder.badGateway()
                         .textBody("Upstream temporarily unavailable")
                         .build();
@@ -1024,6 +1068,10 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 this.enqueueEventForWriter(
                     key, body.headers(), artifact.body().size().orElse(0L),
                     new com.auto1.pantera.http.headers.Login(inboundHeaders).getValue()
+                );
+                this.auditPrimaryAccess(
+                    auditCtx, path, inboundHeaders, artifact.body().size().orElse(0L),
+                    com.auto1.pantera.audit.AuditLogger.OUTCOME_SUCCESS, null
                 );
                 return ResponseBuilder.ok().body(artifact.body()).build();
             });
@@ -1311,11 +1359,42 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
     }
 
     /**
-     * Serve the primary from storage after a successful atomic write.
+     * Serve the primary from storage after a successful atomic write, or on
+     * a plain cache hit. Emits an {@code AuditLogger#access} success event —
+     * the artifact was already published the first time it was cached, so
+     * this is a read, not a publish.
      */
-    private CompletableFuture<Response> serveFromCache(final Storage storage, final Key key) {
-        return storage.value(key).thenApply(content ->
-            ResponseBuilder.ok().body(content).build()
+    private CompletableFuture<Response> serveFromCache(
+        final Storage storage, final Key key,
+        final com.auto1.pantera.audit.AuditContext auditCtx,
+        final String path, final Headers headers
+    ) {
+        return storage.value(key).thenApply(content -> {
+            this.auditPrimaryAccess(
+                auditCtx, path, headers, content.size().orElse(0L),
+                com.auto1.pantera.audit.AuditLogger.OUTCOME_SUCCESS, null
+            );
+            return ResponseBuilder.ok().body(content).build();
+        });
+    }
+
+    /**
+     * Emit an {@code AuditLogger#access} event for the primary-artifact
+     * path, deriving artifact name/version from {@link
+     * #buildCooldownRequest(String, Headers)} — the same per-adapter parser
+     * cooldown already uses — falling back to the raw request path when it
+     * doesn't resolve.
+     */
+    private void auditPrimaryAccess(
+        final com.auto1.pantera.audit.AuditContext auditCtx, final String path,
+        final Headers headers, final long size, final String outcome, final String reason
+    ) {
+        final Optional<CooldownRequest> parsed = this.buildCooldownRequest(path, headers);
+        final String artifactName = parsed.map(CooldownRequest::artifact).orElse(path);
+        final String version = parsed.map(CooldownRequest::version).orElse(null);
+        com.auto1.pantera.audit.AuditLogger.access(
+            auditCtx, this.repoType(), this.repoName(), artifactName, version, size,
+            new Login(headers).getValue(), outcome, reason
         );
     }
 

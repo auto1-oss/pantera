@@ -234,6 +234,11 @@ public final class GoLatestHandler {
                 .error(ex)
                 .field("log.source", "application")
                 .log();
+            // A listing was still served (unfiltered fallback) — audit it.
+            AuditLogger.resolutionDetailUnknown(
+                ctx, this.repoType, this.repoName, module, user,
+                "@latest parse fallback (unfiltered upstream bytes)"
+            );
             return CompletableFuture.completedFuture(
                 ResponseBuilder.ok()
                     .headers(upstreamHeaders)
@@ -290,6 +295,14 @@ public final class GoLatestHandler {
             .thenCompose(candidates -> this.pickHighestNonBlocked(candidates, module, user))
             .thenApply(pickedOpt -> {
                 if (pickedOpt.isEmpty()) {
+                    // No non-blocked fallback exists (or the list fetch
+                    // failed) — the request still asked for a version
+                    // resolution; audit the blocked upstream latest before
+                    // the 403.
+                    AuditLogger.resolution(
+                        ctx, this.repoType, this.repoName, module, user,
+                        List.of(upstreamInfo.version())
+                    );
                     return this.allBlockedResponse(module);
                 }
                 final String picked = pickedOpt.get();

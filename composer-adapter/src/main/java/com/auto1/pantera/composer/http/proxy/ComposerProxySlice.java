@@ -89,16 +89,8 @@ public class ComposerProxySlice implements Slice {
 
     /**
      * Cooldown handler for per-package metadata filtering.
-     * {@code null} when cooldown is disabled.
      */
     private final ComposerPackageMetadataHandler packageHandler;
-
-    /**
-     * Whether cooldown handlers are live. When false, the instance
-     * behaves identically to the pre-cooldown version and all
-     * requests route through {@link #fallback}.
-     */
-    private final boolean cooldownEnabled;
 
     /**
      * New Composer proxy without cache.
@@ -256,39 +248,39 @@ public class ComposerProxySlice implements Slice {
                 )
             )
         );
-        this.cooldownEnabled = !(cooldown
-            instanceof com.auto1.pantera.cooldown.impl.NoopCooldownService);
-        if (this.cooldownEnabled) {
-            // Handlers fetch through the shared cache+rewrite slice
-            // (rather than re-entering this dispatcher) — so metadata
-            // is served from cache with dist.url already rewritten,
-            // and the handler just layers per-version filtering on top.
-            // Per-version release dates come from the packument's inline
-            // {@code time} field (Composer always inlines them); the
-            // CooldownInspector is therefore not threaded through the
-            // handler path — the evaluator uses {@code
-            // evaluateWithKnownDate} which skips inspector lookup
-            // entirely. Mirrors the npm/PyPI packument-inline pattern
-            // landed in {@code dbdde1736}.
-            this.rootHandler = new ComposerRootPackagesHandler(
-                cachedProxy, cooldown, rtype, rname
-            );
-            this.packageHandler = new ComposerPackageMetadataHandler(
-                cachedProxy, cooldown, rtype, rname
-            );
-        } else {
-            this.rootHandler = null;
-            this.packageHandler = null;
-        }
+        // Handlers are constructed UNCONDITIONALLY — including when the
+        // cooldown service is the Noop instance. They are the only place
+        // the per-request artifact_resolution audit record fires for
+        // Composer metadata, and the taxonomy contract is that every
+        // metadata listing view is audited whether filtering is configured
+        // or not. With NoopCooldownService, evaluateWithKnownDate always
+        // returns "allowed", so the handlers pass metadata through
+        // unfiltered — behaviourally identical to the old
+        // skip-handlers-when-noop gate, minus the audit blackout.
+        //
+        // Handlers fetch through the shared cache+rewrite slice
+        // (rather than re-entering this dispatcher) — so metadata
+        // is served from cache with dist.url already rewritten,
+        // and the handler just layers per-version filtering on top.
+        // Per-version release dates come from the packument's inline
+        // {@code time} field (Composer always inlines them); the
+        // CooldownInspector is therefore not threaded through the
+        // handler path — the evaluator uses {@code
+        // evaluateWithKnownDate} which skips inspector lookup
+        // entirely. Mirrors the npm/PyPI packument-inline pattern
+        // landed in {@code dbdde1736}.
+        this.rootHandler = new ComposerRootPackagesHandler(
+            cachedProxy, cooldown, rtype, rname
+        );
+        this.packageHandler = new ComposerPackageMetadataHandler(
+            cachedProxy, cooldown, rtype, rname
+        );
     }
 
     @Override
     public CompletableFuture<Response> response(
         final RequestLine line, final Headers headers, final Content body
     ) {
-        if (!this.cooldownEnabled) {
-            return this.fallback.response(line, headers, body);
-        }
         final String path = line.uri().getPath();
         final String user = new Login(headers).getValue();
         // Bound as early as possible — before any async hop — so the

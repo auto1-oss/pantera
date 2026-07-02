@@ -226,6 +226,11 @@ public final class GoListHandler {
                 .error(ex)
                 .field("log.source", "application")
                 .log();
+            // A listing was still served (unfiltered fallback) — audit it.
+            AuditLogger.resolutionDetailUnknown(
+                ctx, this.repoType, this.repoName, module, user,
+                "@v/list parse fallback (unfiltered upstream bytes)"
+            );
             return CompletableFuture.completedFuture(
                 ResponseBuilder.ok()
                     .headers(upstreamHeaders)
@@ -236,6 +241,8 @@ public final class GoListHandler {
         if (versions.isEmpty()) {
             // Nothing to filter; forward the upstream bytes verbatim so
             // trailing-newline / whitespace quirks survive round-trip.
+            // Still a metadata listing view — one audit record.
+            AuditLogger.resolution(ctx, this.repoType, this.repoName, module, user, List.of());
             return CompletableFuture.completedFuture(
                 ResponseBuilder.ok()
                     .headers(upstreamHeaders)
@@ -255,6 +262,11 @@ public final class GoListHandler {
             }
             final List<String> kept = this.filter.filter(versions, blocked);
             if (kept.isEmpty()) {
+                // Every version hidden — the request still asked for the
+                // listing; audit with the full blocked list before the 403.
+                AuditLogger.resolution(
+                    ctx, this.repoType, this.repoName, module, user, List.copyOf(blocked)
+                );
                 return this.allBlockedResponse(module);
             }
             EcsLogger.info("com.auto1.pantera.http.cooldown")

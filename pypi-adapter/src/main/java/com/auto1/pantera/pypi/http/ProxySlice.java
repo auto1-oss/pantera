@@ -19,6 +19,8 @@ import com.auto1.pantera.asto.cache.CacheControl;
 import com.auto1.pantera.asto.cache.FromStorageCache;
 import com.auto1.pantera.asto.cache.Remote;
 import com.auto1.pantera.asto.ext.KeyLastPart;
+import com.auto1.pantera.audit.AuditContext;
+import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.response.CooldownResponseRegistry;
@@ -26,6 +28,8 @@ import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsMdc;
+import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
@@ -67,6 +71,7 @@ import java.util.stream.StreamSupport;
 import java.util.stream.Collectors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import org.slf4j.MDC;
 
 /**
  * Slice that proxies request with given request line and empty headers and body,
@@ -340,7 +345,12 @@ final class ProxySlice implements Slice {
         // This ensures offline mode works - serve cached content even when upstream is down
         if (coords.isPresent()) {
             final ArtifactCoordinates info = coords.get();
-            return this.checkCacheFirst(line, info, user);
+            // Captured before any async hop below so the access-audit record
+            // reflects THIS request's correlation context, not whatever (or
+            // nothing) is bound to the worker thread that eventually runs
+            // the storage/network continuations.
+            final AuditContext ctx = this.captureAuditContext(rqheaders);
+            return this.checkCacheFirst(line, info, user, ctx);
         }
 
         // Non-artifacts (index pages, metadata): serve directly from cache/upstream
@@ -360,7 +370,8 @@ final class ProxySlice implements Slice {
     private CompletableFuture<Response> checkCacheFirst(
         final RequestLine line,
         final ArtifactCoordinates info,
-        final String user
+        final String user,
+        final AuditContext ctx
     ) {
         final Key key = ProxySlice.keyFromPath(line);
 
@@ -369,7 +380,10 @@ final class ProxySlice implements Slice {
         return new FromStorageCache(this.asyncStorage).load(key, Remote.EMPTY, CacheControl.Standard.ALWAYS)
             .thenCompose(cached -> {
                 if (cached.isPresent()) {
-                    // Cache HIT - serve immediately without any network calls
+                    // Cache HIT - serve immediately without any network calls.
+                    // The artifact was already published to the DB the first
+                    // time it was cached — this is a read, not a publish. No
+                    // ProxyArtifactEvent here; audit as access instead.
                     EcsLogger.debug("com.auto1.pantera.pypi")
                         .message("Cache hit, serving cached artifact (offline-safe)")
                         .eventCategory("web")
@@ -379,24 +393,16 @@ final class ProxySlice implements Slice {
                         .field("package.version", info.version())
                         .field("log.source", "application")
                         .log();
-                    // Enqueue event for cache hit — bounded ProxyArtifactEvent queue.
-                    // offer() + drop counter so a full queue cannot cascade to 503.
-                    this.events.ifPresent(queue -> {
-                        if (!queue.offer(new ProxyArtifactEvent(
-                            key,
-                            this.rname,
-                            user,
-                            Optional.empty()
-                        ))) {
-                            com.auto1.pantera.metrics.EventsQueueMetrics
-                                .recordDropped(this.rname);
-                        }
-                    });
+                    AuditLogger.access(
+                        ctx, this.rtype, this.rname, info.artifact(), info.version(),
+                        cached.get().size().orElse(0L), user,
+                        AuditLogger.OUTCOME_SUCCESS, null
+                    );
                     // Serve cached content
                     return this.serveArtifactContent(line, cached.get(), Headers.EMPTY);
                 }
                 // Cache MISS - now we need network, evaluate cooldown first
-                return this.evaluateCooldownAndFetch(line, info, user);
+                return this.evaluateCooldownAndFetch(line, info, user, ctx);
             }).toCompletableFuture();
     }
 
@@ -413,7 +419,8 @@ final class ProxySlice implements Slice {
     private CompletableFuture<Response> evaluateCooldownAndFetch(
         final RequestLine line,
         final ArtifactCoordinates info,
-        final String user
+        final String user,
+        final AuditContext ctx
     ) {
         final CooldownRequest request = new CooldownRequest(
             this.rtype,
@@ -445,6 +452,10 @@ final class ProxySlice implements Slice {
                     .field("package.version", info.version())
                     .field("log.source", "application")
                     .log();
+                AuditLogger.access(
+                    ctx, this.rtype, this.rname, info.artifact(), info.version(), 0L,
+                    user, AuditLogger.OUTCOME_FAILURE, AuditLogger.REASON_COOLDOWN_ACTIVE
+                );
                 return CompletableFuture.completedFuture(
                     CooldownResponseRegistry.instance()
                         .getOrThrow(this.rtype)
@@ -461,7 +472,7 @@ final class ProxySlice implements Slice {
                 .field("log.source", "application")
                 .log();
             // Cooldown passed - now serve the artifact (no further cooldown checks)
-            return this.serveArtifact(line, user);
+            return this.serveArtifact(line, user, ctx);
         });
     }
     
@@ -846,7 +857,7 @@ final class ProxySlice implements Slice {
     }
 
     private CompletableFuture<Response> serveArtifact(
-        final RequestLine line, final String user
+        final RequestLine line, final String user, final AuditContext ctx
     ) {
         final AtomicReference<Headers> remote = new AtomicReference<>(Headers.EMPTY);
         final AtomicBoolean remoteSuccess = new AtomicBoolean(false);
@@ -912,8 +923,15 @@ final class ProxySlice implements Slice {
                         remote.set(response.headers());
                         if (response.status().success()) {
                             remoteSuccess.set(true);
-                            // Enqueue artifact event immediately on successful remote fetch.
-                            // Bounded ProxyArtifactEvent queue — offer() + drop counter.
+                            // Genuine cache miss + successful upstream fetch —
+                            // the only branch that should publish. Bind the
+                            // already-resolved context onto whatever thread
+                            // this runs on so the ProxyArtifactEvent ctor
+                            // below auto-captures THIS request's trace.id /
+                            // client.ip instead of null or a stale leftover
+                            // value. Bounded ProxyArtifactEvent queue —
+                            // offer() + drop counter.
+                            ProxySlice.this.bindContext(ctx);
                             ProxySlice.this.events.ifPresent(queue -> {
                                 if (!queue.offer(new ProxyArtifactEvent(
                                     key,
@@ -925,6 +943,10 @@ final class ProxySlice implements Slice {
                                         .recordDropped(ProxySlice.this.rname);
                                 }
                             });
+                            ProxySlice.this.auditArtifactAccess(
+                                ctx, line, user, response.body().size().orElse(0L),
+                                AuditLogger.OUTCOME_SUCCESS, null
+                            );
                             return Optional.of(response.body());
                         }
                         return Optional.empty();
@@ -935,22 +957,23 @@ final class ProxySlice implements Slice {
         ).handle(
             (content, throwable) -> {
                 if (throwable != null || content.isEmpty()) {
+                    if (throwable == null) {
+                        this.auditArtifactAccess(
+                            ctx, line, user, 0L,
+                            AuditLogger.OUTCOME_FAILURE, AuditLogger.REASON_NOT_FOUND
+                        );
+                    }
                     return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
                 }
-                // Enqueue event on cache hit (remote fetch already enqueued above).
-                // Bounded ProxyArtifactEvent queue — offer() + drop counter.
+                // Cache hit (remote fetch already audited+enqueued above when
+                // remoteSuccess is true). The artifact was already published
+                // to the DB the first time it was cached — this is a read,
+                // not a publish. No ProxyArtifactEvent here; audit as access.
                 if (!remoteSuccess.get()) {
-                    ProxySlice.this.events.ifPresent(queue -> {
-                        if (!queue.offer(new ProxyArtifactEvent(
-                            key,
-                            ProxySlice.this.rname,
-                            user,
-                            Optional.empty()  // No release date on cache hit
-                        ))) {
-                            com.auto1.pantera.metrics.EventsQueueMetrics
-                                .recordDropped(ProxySlice.this.rname);
-                        }
-                    });
+                    this.auditArtifactAccess(
+                        ctx, line, user, content.get().size().orElse(0L),
+                        AuditLogger.OUTCOME_SUCCESS, null
+                    );
                 }
                 // Serve artifact content (cooldown already evaluated and passed)
                 return this.serveArtifactContent(line, content.get(), remote.get());
@@ -1469,6 +1492,57 @@ final class ProxySlice implements Slice {
                     return Optional.empty();
                 }
             });
+    }
+
+    /**
+     * Build an {@link AuditContext} for the current request. Reads the
+     * internal {@code X-Pantera-Ctx-*} headers into MDC first (a no-op if
+     * already populated by {@code EcsLoggingSlice} on the request thread;
+     * a real restore on a worker thread that never had it).
+     *
+     * @param headers Inbound request headers
+     * @return Context carrying whatever trace id / client IP could be resolved
+     */
+    private AuditContext captureAuditContext(final Headers headers) {
+        RequestContextHeaders.bindToMdc(headers);
+        return new AuditContext(MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP));
+    }
+
+    /**
+     * Push an already-resolved {@link AuditContext} onto the current
+     * thread's MDC. Used at call sites several async hops removed from the
+     * request — those only have the {@code AuditContext} captured earlier
+     * on the request thread, not the original {@link Headers}, so there is
+     * nothing left to re-derive it from. Required immediately before
+     * constructing a {@link ProxyArtifactEvent}, whose constructor
+     * auto-captures trace.id/client.ip from MDC.
+     *
+     * @param ctx Context to bind
+     */
+    private void bindContext(final AuditContext ctx) {
+        if (ctx.traceId() != null) {
+            MDC.put(EcsMdc.TRACE_ID, ctx.traceId());
+        }
+        if (ctx.clientIp() != null) {
+            MDC.put(EcsMdc.CLIENT_IP, ctx.clientIp());
+        }
+    }
+
+    /**
+     * Emit an {@link AuditLogger#access} event for an artifact request,
+     * deriving name/version from {@link #extract(RequestLine)}.
+     */
+    private void auditArtifactAccess(
+        final AuditContext ctx, final RequestLine line, final String user,
+        final long size, final String outcome, final String reason
+    ) {
+        final Optional<ArtifactCoordinates> info = this.extract(line);
+        final String artifactName = info.map(ArtifactCoordinates::artifact)
+            .orElseGet(() -> line.uri().getPath());
+        final String version = info.map(ArtifactCoordinates::version).orElse(null);
+        AuditLogger.access(
+            ctx, this.rtype, this.rname, artifactName, version, size, user, outcome, reason
+        );
     }
 
     private Optional<ArtifactCoordinates> extract(final RequestLine line) {

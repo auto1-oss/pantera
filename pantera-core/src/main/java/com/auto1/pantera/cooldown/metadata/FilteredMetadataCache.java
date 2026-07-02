@@ -234,6 +234,29 @@ public class FilteredMetadataCache implements Cleanable<String> {
         final String packageName,
         final java.util.function.Supplier<CompletableFuture<CacheEntry>> loader
     ) {
+        return this.getEntry(repoType, repoName, packageName, loader)
+            .thenApply(CacheEntry::data);
+    }
+
+    /**
+     * Same lookup as {@link #get} but resolving the whole {@link CacheEntry},
+     * so the caller can read {@link CacheEntry#blockedVersions()} and emit an
+     * accurate {@code artifact_resolution} audit record for cache-hit serves
+     * — the bytes alone cannot tell "nothing was filtered" apart from
+     * "versions were filtered when this entry was computed".
+     *
+     * @param repoType Repository type
+     * @param repoName Repository name
+     * @param packageName Package name
+     * @param loader Function to compute filtered metadata on cache miss
+     * @return CompletableFuture with the cache entry (L1, promoted-L2, or computed)
+     */
+    public CompletableFuture<CacheEntry> getEntry(
+        final String repoType,
+        final String repoName,
+        final String packageName,
+        final java.util.function.Supplier<CompletableFuture<CacheEntry>> loader
+    ) {
         final String key = cacheKey(repoType, repoName, packageName);
 
         // L1 check - skip in L2-only mode
@@ -249,13 +272,13 @@ public class FilteredMetadataCache implements Cleanable<String> {
                     if (CooldownMetrics.isAvailable()) {
                         CooldownMetrics.getInstance().recordCacheHit("l1_swr");
                     }
-                    return CompletableFuture.completedFuture(l1Cached.data());
+                    return CompletableFuture.completedFuture(l1Cached);
                 }
                 this.l1Hits++;
                 if (CooldownMetrics.isAvailable()) {
                     CooldownMetrics.getInstance().recordCacheHit("l1");
                 }
-                return CompletableFuture.completedFuture(l1Cached.data());
+                return CompletableFuture.completedFuture(l1Cached);
             }
         }
 
@@ -271,13 +294,15 @@ public class FilteredMetadataCache implements Cleanable<String> {
                         if (CooldownMetrics.isAvailable()) {
                             CooldownMetrics.getInstance().recordCacheHit("l2");
                         }
-                        // Promote to L1 with remaining TTL from L2 (skip in L2-only mode)
+                        // L2 stores raw bytes only — TTL and blocked-version
+                        // detail do not survive the round trip, so the
+                        // promoted entry carries null blockedVersions
+                        // ("unknown") and L1 TTL.
+                        final CacheEntry entry = new CacheEntry(l2Bytes, Optional.empty(), this.l1Ttl);
                         if (!this.l2OnlyMode && this.l1Cache != null) {
-                            // Note: L2 doesn't store TTL info, so use L1 TTL for promoted entries
-                            final CacheEntry entry = new CacheEntry(l2Bytes, Optional.empty(), this.l1Ttl);
                             this.l1Cache.put(key, entry);
                         }
-                        return CompletableFuture.completedFuture(l2Bytes);
+                        return CompletableFuture.completedFuture(entry);
                     }
                     // Miss - load and cache
                     this.misses++;
@@ -319,14 +344,14 @@ public class FilteredMetadataCache implements Cleanable<String> {
      * Registers in inflight BEFORE attaching whenComplete to avoid the
      * same race condition fixed in CooldownCache (H5).
      */
-    private CompletableFuture<byte[]> loadAndCache(
+    private CompletableFuture<CacheEntry> loadAndCache(
         final String key,
         final java.util.function.Supplier<CompletableFuture<CacheEntry>> loader
     ) {
         // Check if already loading (stampede prevention)
         final CompletableFuture<CacheEntry> existing = this.inflight.get(key);
         if (existing != null) {
-            return existing.thenApply(CacheEntry::data);
+            return existing;
         }
 
         // Start loading -- register in inflight BEFORE whenComplete
@@ -337,11 +362,13 @@ public class FilteredMetadataCache implements Cleanable<String> {
             if (error == null && entry != null) {
                 // Cache in L1 with L1 TTL (skip in L2-only mode)
                 if (!this.l2OnlyMode && this.l1Cache != null) {
-                    // Wrap entry with L1 TTL for proper expiration
+                    // Wrap entry with L1 TTL for proper expiration, preserving
+                    // the blocked-version detail for cache-hit audit records.
                     final CacheEntry l1Entry = new CacheEntry(
                         entry.data(),
                         entry.earliestBlockedUntil(),
-                        this.l1Ttl
+                        this.l1Ttl,
+                        entry.blockedVersions()
                     );
                     this.l1Cache.put(key, l1Entry);
                 }
@@ -355,7 +382,7 @@ public class FilteredMetadataCache implements Cleanable<String> {
             }
         });
 
-        return future.thenApply(CacheEntry::data);
+        return future;
     }
 
     /**
@@ -633,7 +660,17 @@ public class FilteredMetadataCache implements Cleanable<String> {
         private final Instant createdAt;
 
         /**
-         * Constructor.
+         * Versions hidden from this listing by cooldown at compute time.
+         * Carried L1-only so a cache-hit serve can still emit an accurate
+         * {@code artifact_resolution} audit record (who saw the listing and
+         * which versions were filtered). {@code null} means "detail unknown"
+         * — the entry was promoted from L2 (Valkey stores raw bytes only)
+         * and the blocked-version list did not survive the round trip.
+         */
+        private final java.util.Set<String> blockedVersions;
+
+        /**
+         * Constructor (blocked-version detail unknown).
          *
          * @param data Filtered metadata bytes
          * @param earliestBlockedUntil Earliest blockedUntil among blocked versions (empty if none blocked)
@@ -644,10 +681,31 @@ public class FilteredMetadataCache implements Cleanable<String> {
             final Optional<Instant> earliestBlockedUntil,
             final Duration maxTtl
         ) {
+            this(data, earliestBlockedUntil, maxTtl, null);
+        }
+
+        /**
+         * Constructor.
+         *
+         * @param data Filtered metadata bytes
+         * @param earliestBlockedUntil Earliest blockedUntil among blocked versions (empty if none blocked)
+         * @param maxTtl Maximum TTL when no versions are blocked
+         * @param blockedVersions Versions hidden by cooldown at compute time;
+         *                        empty set when nothing was filtered; {@code null}
+         *                        when the detail is unknown (L2 promotion)
+         */
+        public CacheEntry(
+            final byte[] data,
+            final Optional<Instant> earliestBlockedUntil,
+            final Duration maxTtl,
+            final java.util.Set<String> blockedVersions
+        ) {
             this.data = data; // NOPMD ArrayIsStoredDirectly - immutable cache value; defensive copy of filtered metadata bytes is wasteful
             this.earliestBlockedUntil = earliestBlockedUntil;
             this.maxTtl = maxTtl;
             this.createdAt = Instant.now();
+            this.blockedVersions = blockedVersions == null
+                ? null : java.util.Set.copyOf(blockedVersions);
         }
 
         /**
@@ -666,6 +724,17 @@ public class FilteredMetadataCache implements Cleanable<String> {
          */
         public Optional<Instant> earliestBlockedUntil() {
             return this.earliestBlockedUntil;
+        }
+
+        /**
+         * Versions hidden by cooldown when this entry was computed.
+         *
+         * @return Blocked versions (empty set = nothing filtered), or
+         *         {@code null} when the detail is unknown (entry promoted
+         *         from L2, which stores raw bytes only)
+         */
+        public java.util.Set<String> blockedVersions() {
+            return this.blockedVersions;
         }
 
         /**
@@ -738,12 +807,14 @@ public class FilteredMetadataCache implements Cleanable<String> {
          * @return Cache entry
          */
         public static CacheEntry noBlockedVersions(final byte[] data, final Duration maxTtl) {
-            return new CacheEntry(data, Optional.empty(), maxTtl);
+            return new CacheEntry(data, Optional.empty(), maxTtl, java.util.Set.of());
         }
 
         /**
-         * Create entry for metadata with blocked versions.
-         * TTL is set to expire when the earliest block expires.
+         * Create entry for metadata with blocked versions, detail unknown.
+         * Back-compat variant of
+         * {@link #withBlockedVersions(byte[], Instant, Duration, java.util.Set)}
+         * for callers that do not track which versions were hidden.
          *
          * @param data Filtered metadata bytes
          * @param earliestBlockedUntil When the earliest block expires
@@ -755,7 +826,26 @@ public class FilteredMetadataCache implements Cleanable<String> {
             final Instant earliestBlockedUntil,
             final Duration maxTtl
         ) {
-            return new CacheEntry(data, Optional.of(earliestBlockedUntil), maxTtl);
+            return new CacheEntry(data, Optional.of(earliestBlockedUntil), maxTtl, null);
+        }
+
+        /**
+         * Create entry for metadata with blocked versions.
+         * TTL is set to expire when the earliest block expires.
+         *
+         * @param data Filtered metadata bytes
+         * @param earliestBlockedUntil When the earliest block expires
+         * @param maxTtl Maximum TTL (used as fallback)
+         * @param blockedVersions Versions hidden from the listing by cooldown
+         * @return Cache entry
+         */
+        public static CacheEntry withBlockedVersions(
+            final byte[] data,
+            final Instant earliestBlockedUntil,
+            final Duration maxTtl,
+            final java.util.Set<String> blockedVersions
+        ) {
+            return new CacheEntry(data, Optional.of(earliestBlockedUntil), maxTtl, blockedVersions);
         }
     }
 

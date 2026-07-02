@@ -18,11 +18,15 @@ import com.auto1.pantera.asto.cache.CacheControl;
 import com.auto1.pantera.asto.cache.DigestVerification;
 import com.auto1.pantera.asto.cache.Remote;
 import com.auto1.pantera.asto.ext.Digests;
+import com.auto1.pantera.audit.AuditContext;
+import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.response.CooldownResponseRegistry;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.http.cache.ProxyCacheWriter;
+import com.auto1.pantera.http.log.EcsMdc;
+import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.cooldown.GoLatestHandler;
 import com.auto1.pantera.http.cooldown.GoListHandler;
@@ -42,6 +46,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.reactivex.Flowable;
 import org.apache.commons.codec.DecoderException;
 import org.apache.commons.codec.binary.Hex;
+import org.slf4j.MDC;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -302,6 +307,11 @@ final class CachedProxySlice implements Slice {
         final String module = matcher.group("module");
         final String version = matcher.group("version");
         final String user = new Login(headers).getValue();
+        // Captured before any async hop below so the access-audit record
+        // reflects THIS request's correlation context, not whatever (or
+        // nothing) is bound to the worker thread that eventually runs the
+        // storage/network continuations.
+        final AuditContext ctx = this.captureAuditContext(headers);
         EcsLogger.debug("com.auto1.pantera.http")
             .message("Go artifact request")
             .eventCategory("web")
@@ -320,7 +330,10 @@ final class CachedProxySlice implements Slice {
             CacheControl.Standard.ALWAYS
         ).thenCompose(cached -> {
             if (cached.isPresent()) {
-                // Cache HIT - serve immediately without any network calls
+                // Cache HIT - serve immediately without any network calls.
+                // The artifact was already published to the DB the first
+                // time it was cached — this is a read, not a publish. No
+                // ProxyArtifactEvent here; audit as access instead.
                 EcsLogger.info("com.auto1.pantera.http")
                     .message("Cache hit, serving cached artifact (offline-safe)")
                     .eventCategory("web")
@@ -330,9 +343,18 @@ final class CachedProxySlice implements Slice {
                     .field("package.version", version)
                     .field("log.source", "application")
                     .log();
-                // Record event for .zip files (with unknown release date since we skip network)
                 if (key.string().endsWith(".zip")) {
-                    this.enqueueEvent(user, Optional.of(module + "/@v/" + version), Optional.empty());
+                    AuditLogger.access(
+                        ctx, this.rtype, this.rname, module, version,
+                        cached.get().size().orElse(0L), user,
+                        AuditLogger.OUTCOME_SUCCESS, null
+                    );
+                } else {
+                    // .info / .mod — per-version resolution metadata, not
+                    // artifact bytes: audit as resolution, not access.
+                    AuditLogger.resolution(
+                        ctx, this.rtype, this.rname, module, user, java.util.List.of()
+                    );
                 }
                 return CompletableFuture.completedFuture(
                     ResponseBuilder.ok()
@@ -374,6 +396,20 @@ final class CachedProxySlice implements Slice {
                             .field("package.version", version)
                             .field("log.source", "application")
                             .log();
+                        if (key.string().endsWith(".zip")) {
+                            AuditLogger.access(
+                                ctx, this.rtype, this.rname, module, version, 0L, user,
+                                AuditLogger.OUTCOME_FAILURE, AuditLogger.REASON_COOLDOWN_ACTIVE
+                            );
+                        } else {
+                            // Blocked .info / .mod: the client asked for
+                            // version-resolution metadata and cooldown hid
+                            // that version — resolution with it filtered.
+                            AuditLogger.resolution(
+                                ctx, this.rtype, this.rname, module, user,
+                                java.util.List.of(version)
+                            );
+                        }
                         return CompletableFuture.completedFuture(
                             CooldownResponseRegistry.instance()
                                 .getOrThrow(this.rtype)
@@ -407,7 +443,8 @@ final class CachedProxySlice implements Slice {
                                 user,
                                 Optional.of(module + "/@v/" + version),
                                 releaseDate,
-                                new AtomicReference<>(Headers.EMPTY)
+                                new AtomicReference<>(Headers.EMPTY),
+                                ctx
                             );
                         });
                 });
@@ -463,7 +500,10 @@ final class CachedProxySlice implements Slice {
                 .field("package.name", key.string())
                 .field("log.source", "application")
                 .log();
-            return this.fetchFromRemoteAndCache(line, key, owner, artifactPath, releaseDate, rshdr);
+            return this.fetchFromRemoteAndCache(
+                line, key, owner, artifactPath, releaseDate, rshdr,
+                this.captureAuditContext(request)
+            );
         }).toCompletableFuture();
     }
 
@@ -485,7 +525,8 @@ final class CachedProxySlice implements Slice {
         final String owner,
         final Optional<String> artifactPath,
         final Optional<Instant> releaseDate,
-        final AtomicReference<Headers> rshdr
+        final AtomicReference<Headers> rshdr,
+        final AuditContext ctx
     ) {
         // WI-07 §9.5 — integrity-verified atomic primary+sidecar write for
         // Go module archives. Only *.zip has an upstream .ziphash (SHA-256)
@@ -494,7 +535,7 @@ final class CachedProxySlice implements Slice {
         if (this.cacheWriter != null
             && this.storage.isPresent()
             && key.string().endsWith(".zip")) {
-            return this.verifyAndServePrimary(line, key, owner, artifactPath, releaseDate, rshdr);
+            return this.verifyAndServePrimary(line, key, owner, artifactPath, releaseDate, rshdr, ctx);
         }
         // Get checksum headers from remote HEAD for validation
         return new RepoHead(this.client)
@@ -560,7 +601,9 @@ final class CachedProxySlice implements Slice {
             )).handle(
                 (content, throwable) -> {
                     if (throwable == null && content.isPresent()) {
-                        // Record database event ONLY after successful cache load for .zip files
+                        // Record database event ONLY after successful cache load for .zip files —
+                        // genuine cache miss + successful upstream fetch, the only branch that
+                        // should publish.
                         if (key.string().endsWith(".zip") && artifactPath.isPresent()) {
                             EcsLogger.debug("com.auto1.pantera.http")
                                 .message("Attempting to enqueue Go proxy event")
@@ -571,10 +614,24 @@ final class CachedProxySlice implements Slice {
                                 .field("user.name", owner)
                                 .field("log.source", "application")
                                 .log();
+                            this.bindContext(ctx);
                             this.enqueueEvent(
                                 owner,
                                 artifactPath,
                                 releaseDate.or(() -> this.parseLastModified(rshdr.get()))
+                            );
+                            this.auditZipAccess(
+                                ctx, key, owner, content.get().size().orElse(0L),
+                                AuditLogger.OUTCOME_SUCCESS, null
+                            );
+                        } else if (artifactPath.isPresent()) {
+                            // .info / .mod fetched from upstream — per-version
+                            // resolution metadata: audit as resolution.
+                            final Matcher matched = ARTIFACT.matcher(key.string());
+                            AuditLogger.resolution(
+                                ctx, this.rtype, this.rname,
+                                matched.matches() ? matched.group("module") : key.string(),
+                                owner, java.util.List.of()
                             );
                         }
                         return ResponseBuilder.ok()
@@ -602,6 +659,15 @@ final class CachedProxySlice implements Slice {
                             .field("repository.name", this.rname)
                             .field("log.source", "application")
                             .log();
+                    }
+                    if (key.string().endsWith(".zip") && artifactPath.isPresent()) {
+                        this.auditZipAccess(
+                            ctx, key, owner, 0L,
+                            AuditLogger.OUTCOME_FAILURE,
+                            throwable != null
+                                ? AuditLogger.REASON_UPSTREAM_UNAVAILABLE
+                                : AuditLogger.REASON_NOT_FOUND
+                        );
                     }
                     return ResponseBuilder.notFound().build();
                 }
@@ -633,6 +699,56 @@ final class CachedProxySlice implements Slice {
                 .log();
             return Optional.empty();
         }
+    }
+
+    /**
+     * Build an {@link AuditContext} for the current request. Reads the
+     * internal {@code X-Pantera-Ctx-*} headers into MDC first (a no-op if
+     * already populated by {@code EcsLoggingSlice} on the request thread;
+     * a real restore on a worker thread that never had it).
+     *
+     * @param headers Inbound request headers
+     * @return Context carrying whatever trace id / client IP could be resolved
+     */
+    private AuditContext captureAuditContext(final Headers headers) {
+        RequestContextHeaders.bindToMdc(headers);
+        return new AuditContext(MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP));
+    }
+
+    /**
+     * Push an already-resolved {@link AuditContext} onto the current
+     * thread's MDC. Used instead of {@link #captureAuditContext(Headers)}
+     * at call sites several async hops removed from the request — those
+     * only have the {@code AuditContext} captured earlier on the request
+     * thread, not the original {@link Headers}, so there is nothing left
+     * to re-derive it from. Required immediately before constructing a
+     * {@link ProxyArtifactEvent}, whose constructor auto-captures
+     * trace.id/client.ip from MDC.
+     *
+     * @param ctx Context to bind
+     */
+    private static void bindContext(final AuditContext ctx) {
+        if (ctx.traceId() != null) {
+            MDC.put(EcsMdc.TRACE_ID, ctx.traceId());
+        }
+        if (ctx.clientIp() != null) {
+            MDC.put(EcsMdc.CLIENT_IP, ctx.clientIp());
+        }
+    }
+
+    /**
+     * Emit an {@link AuditLogger#access} event for a {@code *.zip} module
+     * archive, deriving module/version from {@code key} via the same
+     * {@link #ARTIFACT} pattern {@link #response} uses.
+     */
+    private void auditZipAccess(
+        final AuditContext ctx, final Key key, final String owner,
+        final long size, final String outcome, final String reason
+    ) {
+        final Matcher matcher = ARTIFACT.matcher(key.string());
+        final String name = matcher.matches() ? matcher.group("module") : key.string();
+        final String version = matcher.matches() ? matcher.group("version") : null;
+        AuditLogger.access(ctx, this.rtype, this.rname, name, version, size, owner, outcome, reason);
     }
 
     /**
@@ -799,13 +915,22 @@ final class CachedProxySlice implements Slice {
         final String owner,
         final Optional<String> artifactPath,
         final Optional<Instant> releaseDate,
-        final AtomicReference<Headers> rshdr
+        final AtomicReference<Headers> rshdr,
+        final AuditContext auditCtx
     ) {
         final Storage raw = this.storage.orElseThrow();
         return raw.exists(key).thenCompose(present -> {
             if (present) {
+                // Cache hit (either the outer check in fetchFromRemoteAndCache
+                // raced a concurrent writer, or this is a single-flight
+                // follower re-entering against the now-warm cache). The
+                // artifact was already published when it was first cached —
+                // this is a read, not a publish. No ProxyArtifactEvent here;
+                // audit as access instead.
                 if (artifactPath.isPresent()) {
-                    this.enqueueEvent(owner, artifactPath, releaseDate);
+                    this.auditZipAccess(
+                        auditCtx, key, owner, 0L, AuditLogger.OUTCOME_SUCCESS, null
+                    );
                 }
                 return this.serveFromCache(raw, key);
             }
@@ -822,11 +947,11 @@ final class CachedProxySlice implements Slice {
             );
             if (isLeader[0]) {
                 return this.streamPrimary(
-                    line, key, owner, artifactPath, releaseDate, rshdr, leaderGate
+                    line, key, owner, artifactPath, releaseDate, rshdr, leaderGate, auditCtx
                 );
             }
             return gate.exceptionally(err -> null).thenCompose(ignored ->
-                this.verifyAndServePrimary(line, key, owner, artifactPath, releaseDate, rshdr)
+                this.verifyAndServePrimary(line, key, owner, artifactPath, releaseDate, rshdr, auditCtx)
             );
         }).exceptionally(err -> {
             EcsLogger.warn("com.auto1.pantera.http")
@@ -858,7 +983,8 @@ final class CachedProxySlice implements Slice {
         final Optional<String> artifactPath,
         final Optional<Instant> releaseDate,
         final AtomicReference<Headers> rshdr,
-        final CompletableFuture<Void> leaderGate
+        final CompletableFuture<Void> leaderGate,
+        final AuditContext auditCtx
     ) {
         final RequestContext ctx = new RequestContext(
             org.apache.logging.log4j.ThreadContext.get("trace.id"),
@@ -877,6 +1003,14 @@ final class CachedProxySlice implements Slice {
                         leaderGate.complete(null);
                     }
                     final int status = resp.status().code();
+                    if (artifactPath.isPresent()) {
+                        this.auditZipAccess(
+                            auditCtx, key, owner, 0L, AuditLogger.OUTCOME_FAILURE,
+                            status >= 400 && status < 500
+                                ? AuditLogger.REASON_NOT_FOUND
+                                : AuditLogger.REASON_UPSTREAM_UNAVAILABLE
+                        );
+                    }
                     if (status >= 400 && status < 500) {
                         return CompletableFuture.completedFuture(
                             ResponseBuilder.notFound().build()
@@ -906,6 +1040,14 @@ final class CachedProxySlice implements Slice {
                         if (!leaderGate.isDone()) {
                             leaderGate.complete(null);
                         }
+                        if (artifactPath.isPresent()) {
+                            this.auditZipAccess(
+                                auditCtx, key, owner, 0L, AuditLogger.OUTCOME_FAILURE,
+                                err.fault() instanceof Fault.UpstreamIntegrity
+                                    ? AuditLogger.REASON_CHECKSUM_MISMATCH
+                                    : AuditLogger.REASON_UPSTREAM_UNAVAILABLE
+                            );
+                        }
                         if (err.fault() instanceof Fault.UpstreamIntegrity ui) {
                             return ResponseBuilder.badGateway()
                                 .header(
@@ -924,9 +1066,16 @@ final class CachedProxySlice implements Slice {
                     final ProxyCacheWriter.StreamedArtifact artifact =
                         ((Result.Ok<ProxyCacheWriter.StreamedArtifact>) result).value();
                     if (artifactPath.isPresent()) {
+                        // Genuine cache miss + successful upstream fetch —
+                        // the only branch that should publish.
+                        this.bindContext(auditCtx);
                         this.enqueueEvent(
                             owner, artifactPath,
                             releaseDate.or(() -> this.parseLastModified(rshdr.get()))
+                        );
+                        this.auditZipAccess(
+                            auditCtx, key, owner, artifact.body().size().orElse(0L),
+                            AuditLogger.OUTCOME_SUCCESS, null
                         );
                     }
                     // Release followers only after the cache write commits.

@@ -13,6 +13,8 @@ package com.auto1.pantera.composer.http.proxy;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.audit.AuditContext;
+import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
@@ -21,12 +23,15 @@ import com.auto1.pantera.http.client.ClientSlices;
 import com.auto1.pantera.http.client.UriClientSlice;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsMdc;
+import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.response.CooldownResponseRegistry;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
+import org.slf4j.MDC;
 
 import javax.json.Json;
 import javax.json.JsonObject;
@@ -154,6 +159,11 @@ public final class ProxyDownloadSlice implements Slice {
         final Headers headers,
         final Content body
     ) {
+        // Captured before any async hop below so the access-audit record
+        // reflects THIS request's correlation context, not whatever (or
+        // nothing) is bound to the worker thread that eventually runs the
+        // storage/network continuations.
+        final AuditContext ctx = this.captureAuditContext(headers);
         // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
         // GET requests should have empty body, but we must consume it to complete the request
         return body.asBytesFuture().thenCompose(ignored -> {
@@ -230,6 +240,9 @@ public final class ProxyDownloadSlice implements Slice {
                 );
             }).thenCompose(foundKey -> {
                 if (foundKey != null) {
+                    // Cache hit: artifact was already published to the DB
+                    // the first time it was cached — this is a read, not a
+                    // publish. No ProxyArtifactEvent here; audit as access.
                     EcsLogger.info("com.auto1.pantera.composer")
                         .message("Cache HIT for dist artifact")
                         .eventCategory("web")
@@ -239,13 +252,17 @@ public final class ProxyDownloadSlice implements Slice {
                         .field("package.version", version)
                         .field("log.source", "application")
                         .log();
-                    this.emitEvent(packageName, version, headers);
-                    return this.storage.value(foundKey).thenApply(content ->
-                        ResponseBuilder.ok()
+                    return this.storage.value(foundKey).thenApply(content -> {
+                        AuditLogger.access(
+                            ctx, this.rtype, this.rname, packageName, version,
+                            content.size().orElse(0L), owner,
+                            AuditLogger.OUTCOME_SUCCESS, null
+                        );
+                        return ResponseBuilder.ok()
                             .header("Content-Type", "application/zip")
                             .body(content)
-                            .build()
-                    );
+                            .build();
+                    });
                 }
                 // Cache miss — evaluate cooldown, then fetch from upstream
                 return this.cooldown.evaluate(cdreq, this.inspector).thenCompose(result -> {
@@ -260,6 +277,10 @@ public final class ProxyDownloadSlice implements Slice {
                             .field("package.version", version)
                             .field("log.source", "application")
                             .log();
+                        AuditLogger.access(
+                            ctx, this.rtype, this.rname, packageName, version, 0L,
+                            owner, AuditLogger.OUTCOME_FAILURE, AuditLogger.REASON_COOLDOWN_ACTIVE
+                        );
                         return CompletableFuture.completedFuture(
                             CooldownResponseRegistry.instance()
                                 .getOrThrow(this.rtype)
@@ -267,7 +288,7 @@ public final class ProxyDownloadSlice implements Slice {
                         );
                     }
                     return this.fetchAndCache(
-                        line, headers, packageName, version, distKey
+                        line, headers, ctx, packageName, version, distKey
                     );
                 });
             });
@@ -280,10 +301,12 @@ public final class ProxyDownloadSlice implements Slice {
     private CompletableFuture<Response> fetchAndCache(
         final RequestLine line,
         final Headers headers,
+        final AuditContext ctx,
         final String packageName,
         final String version,
         final Key distKey
     ) {
+        final String owner = new Login(headers).getValue();
         return this.findOriginalUrl(packageName, version).thenCompose(originalUrl -> {
             if (originalUrl.isEmpty()) {
                 EcsLogger.error("com.auto1.pantera.composer")
@@ -295,6 +318,10 @@ public final class ProxyDownloadSlice implements Slice {
                     .field("package.version", version)
                     .field("log.source", "application")
                     .log();
+                AuditLogger.access(
+                    ctx, this.rtype, this.rname, packageName, version, 0L,
+                    owner, AuditLogger.OUTCOME_FAILURE, AuditLogger.REASON_NOT_FOUND
+                );
                 return CompletableFuture.completedFuture(
                     ResponseBuilder.notFound().build()
                 );
@@ -331,6 +358,13 @@ public final class ProxyDownloadSlice implements Slice {
                         .field("http.response.status_code", response.status().code())
                         .field("log.source", "http")
                         .log();
+                    AuditLogger.access(
+                        ctx, this.rtype, this.rname, packageName, version, 0L, owner,
+                        AuditLogger.OUTCOME_FAILURE,
+                        response.status().code() == 404
+                            ? AuditLogger.REASON_NOT_FOUND
+                            : AuditLogger.REASON_UPSTREAM_UNAVAILABLE
+                    );
                     return CompletableFuture.completedFuture(response);
                 }
                 // Buffer content, save to storage, then return
@@ -348,7 +382,13 @@ public final class ProxyDownloadSlice implements Slice {
                     return this.storage.save(
                         distKey, new Content.From(bytes)
                     ).thenApply(unused -> {
+                        // Genuine cache miss + successful upstream fetch —
+                        // the only branch that should publish.
                         this.emitEvent(packageName, version, headers);
+                        AuditLogger.access(
+                            ctx, this.rtype, this.rname, packageName, version,
+                            bytes.length, owner, AuditLogger.OUTCOME_SUCCESS, null
+                        );
                         return ResponseBuilder.ok()
                             .header("Content-Type", "application/zip")
                             .body(new Content.From(bytes))
@@ -605,6 +645,11 @@ public final class ProxyDownloadSlice implements Slice {
                 .log();
             return;
         }
+        // Restore MDC on whatever thread this runs on (the storage-save
+        // continuation may not be the request thread) so the
+        // ProxyArtifactEvent ctor below auto-captures THIS request's
+        // trace.id/client.ip instead of null or a stale leftover value.
+        RequestContextHeaders.bindToMdc(headers);
         final String owner = new Login(headers).getValue();
         // Store key as "packageName/version" so processor knows which version was downloaded
         final Key eventKey = new Key.From(packageName, version);
@@ -626,5 +671,19 @@ public final class ProxyDownloadSlice implements Slice {
             .field("user.name", owner)
             .field("log.source", "application")
             .log();
+    }
+
+    /**
+     * Build an {@link AuditContext} for the current request. Reads the
+     * internal {@code X-Pantera-Ctx-*} headers into MDC first (a no-op if
+     * already populated by {@code EcsLoggingSlice} on the request thread;
+     * a real restore on a worker thread that never had it).
+     *
+     * @param headers Inbound request headers
+     * @return Context carrying whatever trace id / client IP could be resolved
+     */
+    private AuditContext captureAuditContext(final Headers headers) {
+        RequestContextHeaders.bindToMdc(headers);
+        return new AuditContext(MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP));
     }
 }

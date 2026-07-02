@@ -241,6 +241,11 @@ public final class DockerTagsListHandler {
                 .error(ex)
                 .field("log.source", "application")
                 .log();
+            // A listing was still served (unfiltered fallback) — audit it.
+            AuditLogger.resolutionDetailUnknown(
+                ctx, this.repoType, this.repoName, image, user,
+                "/tags/list parse fallback (unfiltered upstream bytes)"
+            );
             return CompletableFuture.completedFuture(
                 ResponseBuilder.ok()
                     .header("Content-Type", this.rewriter.contentType())
@@ -251,7 +256,11 @@ public final class DockerTagsListHandler {
         final List<String> tags = this.parser.extractVersions(parsed);
         if (tags.isEmpty()) {
             // Empty tags array already — forward upstream verbatim so
-            // any name/pagination fields round-trip exactly.
+            // any name/pagination fields round-trip exactly. Still a
+            // metadata listing view — one audit record.
+            AuditLogger.resolution(
+                ctx, this.repoType, this.repoName, image, user, List.of()
+            );
             return CompletableFuture.completedFuture(
                 ResponseBuilder.ok()
                     .header("Content-Type", this.rewriter.contentType())
@@ -303,6 +312,14 @@ public final class DockerTagsListHandler {
                     .error(ex)
                     .field("log.source", "application")
                     .log();
+                // The fallback serves UNFILTERED upstream bytes even though
+                // blocked tags exist — audit as detail-unknown (claiming the
+                // blocked list here would assert tags were hidden when they
+                // were actually leaked to the client by this fallback).
+                AuditLogger.resolutionDetailUnknown(
+                    ctx, this.repoType, this.repoName, image, user,
+                    "/tags/list rewrite fallback (unfiltered upstream bytes served)"
+                );
                 return ResponseBuilder.ok()
                     .header("Content-Type", this.rewriter.contentType())
                     .body(upstreamBytes)
