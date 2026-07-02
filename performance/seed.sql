@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS artifacts(
     created_date BIGINT       NOT NULL,
     release_date BIGINT,
     owner        VARCHAR      NOT NULL,
-    path_prefix  VARCHAR
+    path_prefix  VARCHAR,
+    UNIQUE (repo_name, name, version)
 );
 
 -- 5 repos × 20 000 artifacts × 1 version = 100 000 rows.
@@ -56,3 +57,51 @@ SELECT
 FROM generate_series(1, 100000) AS n;
 
 ANALYZE artifacts;
+
+-- ---------------------------------------------------------------------------
+-- Bench principal for the k6 load (basic auth bench/benchpass — the password
+-- half lives in AuthFromEnv via PANTERA_USER_NAME/PANTERA_USER_PASS on the
+-- pantera-sut service; this block only provides the POLICY side).
+--
+-- CachedDbPolicy resolves users → user_roles → roles.permissions from these
+-- tables. Shapes MUST match V100__create_settings_tables.sql so Flyway's
+-- CREATE TABLE IF NOT EXISTS becomes a no-op on boot.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS users (
+    id              SERIAL PRIMARY KEY,
+    username        VARCHAR(255) NOT NULL UNIQUE,
+    password_hash   VARCHAR(255),
+    email           VARCHAR(255),
+    enabled         BOOLEAN NOT NULL DEFAULT TRUE,
+    auth_provider   VARCHAR(50) NOT NULL DEFAULT 'artipie',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS roles (
+    id          SERIAL PRIMARY KEY,
+    name        VARCHAR(255) NOT NULL UNIQUE,
+    permissions JSONB NOT NULL DEFAULT '{}'::jsonb,
+    enabled     BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS user_roles (
+    user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role_id INT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, role_id)
+);
+
+INSERT INTO users (username, enabled)
+VALUES ('bench', TRUE)
+ON CONFLICT (username) DO NOTHING;
+
+INSERT INTO roles (name, permissions, enabled)
+VALUES ('bench', '{"adapter_basic_permissions": {"*": ["read", "write"]}}'::jsonb, TRUE)
+ON CONFLICT (name) DO NOTHING;
+
+INSERT INTO user_roles (user_id, role_id)
+SELECT u.id, r.id FROM users u, roles r
+WHERE u.username = 'bench' AND r.name = 'bench'
+ON CONFLICT DO NOTHING;

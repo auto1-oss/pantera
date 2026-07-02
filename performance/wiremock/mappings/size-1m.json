@@ -1,0 +1,10 @@
+{
+  "priority": 6,
+  "request": { "method": "GET", "urlPattern": "/m[1-5]/pkg-[0-9]{4}[78]/-/.*\\.tgz" },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/octet-stream" },
+    "bodyFileName": "body-1m.bin",
+    "delayDistribution": { "type": "lognormal", "median": 80, "sigma": 0.45 }
+  }
+}

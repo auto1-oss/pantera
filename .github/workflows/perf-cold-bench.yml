@@ -21,20 +21,15 @@ name: Perf cold-bench (T-P14 — 20s target)
 # clock-sensitive and benefits from running on its own runner so a
 # noisy neighbour does not poison the result.
 
+# Nightly + on-demand ONLY. Wall-clock thresholds are too noisy on
+# shared GitHub runners to block PRs — a noisy neighbour produces a
+# flaky red and erodes trust in the gate. Regressions are caught as
+# drift across consecutive nightly runs; the PR-blocking correctness
+# signal is perf-gate.yml (behavioral counters, runner-noise immune).
 on:
   workflow_dispatch:
   schedule:
     - cron: '17 3 * * *'   # 03:17 UTC nightly
-  pull_request:
-    branches: [master, 2.2.0]
-    paths:
-      - 'pantera-core/**'
-      - 'pantera-main/**'
-      - 'maven-adapter/**'
-      - 'http-client/**'
-      - 'performance/**'
-      - 'scripts/perf-gate-check.sh'
-      - '.github/workflows/perf-cold-bench.yml'
 
 jobs:
   cold-bench:
@@ -45,10 +40,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
         with:
           distribution: temurin
           java-version: 21
@@ -114,7 +109,7 @@ jobs:
 
       - name: Upload cold-bench artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: cold-bench-results
           path: |
@@ -131,7 +126,7 @@ jobs:
 
       - name: Upload failure diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: cold-bench-diagnostics
           path: |

@@ -50,7 +50,19 @@ services:
   # sees a single host `mock-upstream:8080`; nginx distributes to two backends.
   mock-upstream-a:
     image: wiremock/wiremock:3.9.1
-    command: ["--port", "8080", "--async-response-enabled=true", "--async-response-threads=200"]
+    # async-response-threads bounded at 48: WireMock buffers each in-flight
+    # body in heap, and the 10 MB tail bucket at 200 threads needs ~2 GB —
+    # the previous 1 GB container OOMed under load, then served 500s for
+    # its remaining lifetime (dead qtp threads), which is what kept
+    # tripping Pantera's circuit breaker and failing the perf gate.
+    # --no-request-journal: the journal retains EVERY request/response in
+    # heap (unbounded by default) — with 100 KB-10 MB bodies it OOMs the JVM
+    # after a few thousand requests, and a wounded WireMock then drips 500s
+    # that trip Pantera's circuit breaker. The journal only exists for
+    # verification APIs, which this harness never uses.
+    command: ["--port", "8080", "--async-response-enabled=true", "--async-response-threads=48", "--no-request-journal"]
+    environment:
+      JAVA_OPTS: "-Xmx1536m -Xms512m"
     volumes:
       - ./wiremock/mappings:/home/wiremock/mappings:ro
       - ./wiremock/__files:/home/wiremock/__files:ro
@@ -58,11 +70,23 @@ services:
       resources:
         limits:
           cpus: "1.0"
-          memory: 1G
+          memory: 2G
 
   mock-upstream-b:
     image: wiremock/wiremock:3.9.1
-    command: ["--port", "8080", "--async-response-enabled=true", "--async-response-threads=200"]
+    # async-response-threads bounded at 48: WireMock buffers each in-flight
+    # body in heap, and the 10 MB tail bucket at 200 threads needs ~2 GB —
+    # the previous 1 GB container OOMed under load, then served 500s for
+    # its remaining lifetime (dead qtp threads), which is what kept
+    # tripping Pantera's circuit breaker and failing the perf gate.
+    # --no-request-journal: the journal retains EVERY request/response in
+    # heap (unbounded by default) — with 100 KB-10 MB bodies it OOMs the JVM
+    # after a few thousand requests, and a wounded WireMock then drips 500s
+    # that trip Pantera's circuit breaker. The journal only exists for
+    # verification APIs, which this harness never uses.
+    command: ["--port", "8080", "--async-response-enabled=true", "--async-response-threads=48", "--no-request-journal"]
+    environment:
+      JAVA_OPTS: "-Xmx1536m -Xms512m"
     volumes:
       - ./wiremock/mappings:/home/wiremock/mappings:ro
       - ./wiremock/__files:/home/wiremock/__files:ro
@@ -70,7 +94,7 @@ services:
       resources:
         limits:
           cpus: "1.0"
-          memory: 1G
+          memory: 2G
 
   mock-upstream:
     image: nginx:1.27-alpine
@@ -100,10 +124,21 @@ services:
       PANTERA_COOLDOWN_ENABLED: "${SUT_COOLDOWN:-true}"
       VALKEY_HOST: valkey
       VALKEY_PORT: "6379"
-      JAVA_OPTS: "-Xmx${SUT_XMX:-5120m} -Xms${SUT_XMX:-5120m} -XX:+UseG1GC -XX:MaxGCPauseMillis=300 -XX:MaxDirectMemorySize=2G"
+      # Credentials for the k6 load (bench/benchpass basic auth) — 2.2.0 is
+      # deny-by-default for anonymous access, so unauthenticated reads 401.
+      PANTERA_USER_NAME: bench
+      PANTERA_USER_PASS: benchpass
+      # networkaddress.cache.ttl pins successful DNS lookups for 5 min so
+      # the container-DNS hiccups Docker Desktop exhibits under parallel
+      # load cannot surface as upstream failures and trip the breaker —
+      # the gate must only ever fail on Pantera regressions.
+      JAVA_OPTS: "-Xmx${SUT_XMX:-5120m} -Xms${SUT_XMX:-5120m} -XX:+UseG1GC -XX:MaxGCPauseMillis=300 -XX:MaxDirectMemorySize=2G -Dnetworkaddress.cache.ttl=300 -Dsun.net.inetaddr.ttl=300"
     ports:
-      - "8088:8080"
-      - "8089:8086"
+      # Host ports are overridable so the harness can run next to a dev
+      # stack that already binds 8087/8088 (CI uses the defaults).
+      - "${SUT_PORT_REPO:-8088}:8080"
+      - "${SUT_PORT_API:-8089}:8086"
+      - "${SUT_PORT_METRICS:-8087}:8087"
     deploy:
       resources:
         limits:
@@ -120,3 +155,18 @@ services:
       timeout: 3s
       retries: 30
       start_period: 30s
+
+  # Load generator. Not started by `up` (profile-gated); invoked explicitly:
+  #   docker compose -f docker-compose-scaling.yml run --rm k6 run /scenarios/gate.js
+  # The full-matrix scenario.js is driven the same way by scripts/run-cell.sh.
+  k6:
+    image: grafana/k6:0.54.0
+    profiles: ["load"]
+    depends_on:
+      pantera-sut: { condition: service_healthy }
+    environment:
+      BASE_URL: http://pantera-sut:8080
+      GATE_RATE: "${GATE_RATE:-30}"
+      GATE_DURATION: "${GATE_DURATION:-60s}"
+    volumes:
+      - ./k6:/scenarios:ro

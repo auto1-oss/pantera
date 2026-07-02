@@ -11,7 +11,7 @@ JAR_FILE := pantera-main-$(PANTERA_VERSION).jar
 
 help:
 	@echo "Pantera scaling benchmark — available targets:"
-	@echo "  make setup           Generate mock-upstream body files (~12 MB, uncommitted)"
+	@echo "  make setup           Bodies + rendered config + throwaway JWT keys + seeded files"
 	@echo "  make build           mvn package + docker build $(IMAGE_TAG) (~10 min first time)"
 	@echo "  make smoke           Run one cell (C2/V0) end-to-end (~15-20 min; implies build+setup)"
 	@echo "  make cell CFG=C2 VAR=V0   Run an arbitrary cell (implies build+setup)"
@@ -21,7 +21,7 @@ help:
 	@echo "  make clean           Tear down any running stack + clear results/"
 
 setup:
-	./wiremock/__files/generate.sh
+	./scripts/setup-harness.sh
 
 build:
 	@echo "=== Building Pantera SUT image $(IMAGE_TAG) ==="

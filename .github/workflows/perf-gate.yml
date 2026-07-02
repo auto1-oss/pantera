@@ -25,6 +25,10 @@ on:
       - 'scripts/perf-gate-check.sh'
       - '.github/workflows/perf-gate.yml'
 
+concurrency:
+  group: perf-gate-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   perf-gate:
     runs-on: ubuntu-latest
@@ -33,10 +37,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
         with:
           distribution: temurin
           java-version: 21
@@ -50,15 +54,18 @@ jobs:
           # production smoke tests use.
           make build
 
-      - name: Generate WireMock fixture bodies
+      - name: Prepare harness (bodies, config, keys, seeded files)
         working-directory: performance
         run: make setup
 
-      - name: Start Pantera + WireMock stack
+      - name: Start Pantera + mock-upstream stack
         working-directory: performance
         run: |
-          docker compose -f docker-compose-scaling.yml up -d pantera wiremock
-          # Wait for Pantera to expose its metrics endpoint.
+          # `pantera-sut` pulls in postgres, valkey and the WireMock pair
+          # behind nginx via depends_on. Wait on the compose healthcheck,
+          # then confirm the metrics endpoint answers (the gate's data
+          # source) or dump logs and fail loudly.
+          docker compose -f docker-compose-scaling.yml up -d pantera-sut
           for i in $(seq 1 60); do
             if curl -fsS http://localhost:8087/metrics/vertx > /dev/null 2>&1; then
               echo "Pantera metrics endpoint is up"
@@ -66,23 +73,23 @@ jobs:
             fi
             sleep 2
           done
-          # Confirm again or fail loudly.
           curl -fsS http://localhost:8087/metrics/vertx > /dev/null \
-            || (docker compose -f docker-compose-scaling.yml logs --tail=200 pantera; exit 1)
+            || (docker compose -f docker-compose-scaling.yml logs --tail=200 pantera-sut; exit 1)
 
       - name: Ramp traffic through cold-cache path
         working-directory: performance
         env:
-          K6_DURATION: 60s
-          K6_VUS: 20
+          GATE_DURATION: 60s
+          GATE_RATE: 30
         run: |
-          # The k6 scenario hits the proxy group's cold-cache path so the
-          # outbound counters increment. Use a short ramp (60 s, 20 VUs) —
-          # we are not measuring throughput here, only verifying the
-          # observability invariants. The full scaling matrix runs nightly.
+          # gate.js is the bounded gate load (constant arrival rate, reads
+          # only, biased to the proxy cold-cache path) — NOT the ~20 min
+          # scaling ramp in scenario.js, which runs nightly. No `|| true`:
+          # a silent all-401/all-503 run must fail here instead of handing
+          # the invariant check an idle instance.
           docker compose -f docker-compose-scaling.yml run --rm \
-            -e K6_DURATION=${K6_DURATION} -e K6_VUS=${K6_VUS} \
-            k6 run /scenarios/scenario.js || true
+            -e GATE_DURATION -e GATE_RATE \
+            k6 run /scenarios/gate.js
 
       - name: Run perf-gate check
         run: |
@@ -93,12 +100,12 @@ jobs:
         if: failure()
         working-directory: performance
         run: |
-          docker compose -f docker-compose-scaling.yml logs --tail=300 pantera > /tmp/pantera.log || true
-          docker compose -f docker-compose-scaling.yml logs --tail=300 wiremock > /tmp/wiremock.log || true
+          docker compose -f docker-compose-scaling.yml logs --tail=300 pantera-sut > /tmp/pantera.log || true
+          docker compose -f docker-compose-scaling.yml logs --tail=300 mock-upstream mock-upstream-a mock-upstream-b > /tmp/wiremock.log || true
 
       - name: Upload diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: perf-gate-diagnostics
           path: |

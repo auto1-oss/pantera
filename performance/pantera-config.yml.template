@@ -40,6 +40,18 @@ meta:
     connection_timeout: 10000
     follow_redirects: true
 
+  # Required by the CI perf gate: scripts/perf-gate-check.sh scrapes
+  # /metrics/vertx (published as SUT_PORT_METRICS, default 8087) and
+  # asserts the M3-M4 outbound invariants. Without this block metrics
+  # are disabled and the gate cannot observe anything.
+  metrics:
+    endpoint: /metrics/vertx
+    port: 8087
+    types:
+      - jvm
+      - storage
+      - http
+
   caches:
     valkey:
       enabled: true

@@ -1,0 +1,9 @@
+repo:
+  type: npm-group
+  url: http://pantera-sut:8080/hot-proxy-group
+  members:
+    - proxy-member-1
+    - proxy-member-2
+    - proxy-member-3
+    - proxy-member-4
+    - proxy-member-5
