@@ -99,31 +99,41 @@ final class ContextualExecutorIntegrationTest {
     @Test
     @DisplayName("Runner thread's prior ThreadContext is restored after the task")
     void runnerThreadContextRestored() throws Exception {
-        // Seed the runner thread with its own prior context.
-        this.backing.submit(() -> ThreadContext.put("pre", "runner"))
-            .get(5L, TimeUnit.SECONDS);
+        // ThreadContext is per-thread, so this test must observe ONE runner
+        // thread across all three phases. The shared 2-thread `backing` pool
+        // gives no such guarantee — seed/task/probe could each land on a
+        // different thread, and did on loaded CI runners (flaky). Use a
+        // dedicated single-thread executor for deterministic thread identity.
+        final ExecutorService single = Executors.newSingleThreadExecutor();
+        try {
+            // Seed the runner thread with its own prior context.
+            single.submit(() -> ThreadContext.put("pre", "runner"))
+                .get(5L, TimeUnit.SECONDS);
 
-        // Submit via the contextualised executor with a different caller ctx.
-        ThreadContext.clearMap();
-        ThreadContext.put("trace.id", "fresh");
-        CompletableFuture.runAsync(() -> {
-            MatcherAssert.assertThat(
-                ThreadContext.get("trace.id"), Matchers.is("fresh")
-            );
-            MatcherAssert.assertThat(
-                "runner's prior ctx must be hidden during task",
-                ThreadContext.get("pre"), Matchers.nullValue()
-            );
-        }, ContextualExecutor.contextualize(this.backing)).get(5L, TimeUnit.SECONDS);
+            // Submit via the contextualised executor with a different caller ctx.
+            ThreadContext.clearMap();
+            ThreadContext.put("trace.id", "fresh");
+            CompletableFuture.runAsync(() -> {
+                MatcherAssert.assertThat(
+                    ThreadContext.get("trace.id"), Matchers.is("fresh")
+                );
+                MatcherAssert.assertThat(
+                    "runner's prior ctx must be hidden during task",
+                    ThreadContext.get("pre"), Matchers.nullValue()
+                );
+            }, ContextualExecutor.contextualize(single)).get(5L, TimeUnit.SECONDS);
 
-        // After the task, the runner's prior ctx must be back.
-        final AtomicReference<String> restored = new AtomicReference<>();
-        this.backing.submit(() -> restored.set(ThreadContext.get("pre")))
-            .get(5L, TimeUnit.SECONDS);
-        MatcherAssert.assertThat(
-            "runner's prior ctx restored after contextualised task",
-            restored.get(), Matchers.is("runner")
-        );
+            // After the task, the runner's prior ctx must be back.
+            final AtomicReference<String> restored = new AtomicReference<>();
+            single.submit(() -> restored.set(ThreadContext.get("pre")))
+                .get(5L, TimeUnit.SECONDS);
+            MatcherAssert.assertThat(
+                "runner's prior ctx restored after contextualised task",
+                restored.get(), Matchers.is("runner")
+            );
+        } finally {
+            single.shutdownNow();
+        }
     }
 
     @Test

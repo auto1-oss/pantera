@@ -55,7 +55,7 @@ logs/.analysis/
 # out of the repo and every perf workflow failed at checkout for months.
 performance/results/*
 !performance/results/.gitkeep
-performance/wiremock/__files/*.bin
+performance/wiremock/__files/*.bin*
 performance/pantera-config.yml
 performance/secrets/*.pem
 performance/data/

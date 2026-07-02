@@ -37,20 +37,39 @@ echo "=== seed-files: hardlinking 100 000 tarballs across 5 local repos ==="
 START=$SECONDS
 
 # Use python for fast batch os.link — bash loop would fork ~300k times.
+# Links are distributed across a small pool of source copies per size
+# bucket: ext4 caps hardlinks at ~65 000 per inode and the 100 KB bucket
+# alone needs ~70 000 — linking everything to one inode fails on Linux
+# CI runners with "OSError: [Errno 31] Too many links" (worked on APFS,
+# whose limit is much higher).
 python3 - "$SRC_100K" "$SRC_1M" "$SRC_10M" "$DEST_ROOT" <<'PY'
-import os, sys
+import os, shutil, sys
 
 src_100k, src_1m, src_10m, dest_root = sys.argv[1:5]
 PKG_PER_REPO = 20000
 REPOS = [f"local-repo-{i}" for i in (1, 2, 3, 4, 5)]
+POOL = 4  # 70k/4 = 17.5k links per inode, comfortably under ext4's 65k
+
+def pool_for(src: str) -> list:
+    copies = []
+    for i in range(POOL):
+        c = f"{src}.pool{i}"
+        if not os.path.exists(c):
+            shutil.copyfile(src, c)
+        copies.append(c)
+    return copies
+
+pool_100k = pool_for(src_100k)
+pool_1m = pool_for(src_1m)
+pool_10m = pool_for(src_10m)
 
 def size_src(n: int) -> str:
     m = n % 10
     if m == 9:
-        return src_10m
+        return pool_10m[n % POOL]
     if m == 7 or m == 8:
-        return src_1m
-    return src_100k
+        return pool_1m[n % POOL]
+    return pool_100k[n % POOL]
 
 for repo in REPOS:
     for local_id in range(PKG_PER_REPO):

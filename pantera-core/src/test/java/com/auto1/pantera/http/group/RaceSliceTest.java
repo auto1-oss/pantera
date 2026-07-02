@@ -32,16 +32,21 @@ import java.util.concurrent.CompletableFuture;
 final class RaceSliceTest {
 
     @Test
-    @Timeout(1)
+    @Timeout(10)
     void returnsFirstSuccessResponseInParallel() {
-        // Parallel race strategy: fastest success wins, not first in order
-        final String expects = "ok-50";  // This is the FASTEST success (50ms)
+        // Parallel race strategy: fastest success wins, not first in order.
+        // Delay margins are deliberately huge (10ms vs 2s): on loaded shared
+        // CI runners a 100ms margin inverted often enough to flake — thread
+        // scheduling jitter alone can exceed it. The assertion is about
+        // ORDERING SEMANTICS, not timing precision, so the margin must be
+        // wide enough that no plausible scheduler hiccup can flip it.
+        final String expects = "ok-fast";
         Response response = new RaceSlice(
-            slice(RsStatus.NOT_FOUND, "not-found-250", Duration.ofMillis(250)),
-            slice(RsStatus.NOT_FOUND, "not-found-50", Duration.ofMillis(50)),
-            slice(RsStatus.OK, "ok-150", Duration.ofMillis(150)),  // Slower success
-            slice(RsStatus.NOT_FOUND, "not-found-200", Duration.ofMillis(200)),
-            slice(RsStatus.OK, expects, Duration.ofMillis(50)),  // FASTEST success - wins!
+            slice(RsStatus.NOT_FOUND, "not-found-a", Duration.ofMillis(100)),
+            slice(RsStatus.NOT_FOUND, "not-found-b", Duration.ofMillis(20)),
+            slice(RsStatus.OK, "ok-slow", Duration.ofSeconds(2)),  // Much slower success
+            slice(RsStatus.NOT_FOUND, "not-found-c", Duration.ofMillis(60)),
+            slice(RsStatus.OK, expects, Duration.ofMillis(10)),  // FASTEST success - wins!
             slice(RsStatus.OK, "ok-never", Duration.ofDays(1))
         ).response(new RequestLine(RqMethod.GET, "/"), Headers.EMPTY, Content.EMPTY).join();
 
