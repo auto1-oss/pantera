@@ -657,6 +657,10 @@
 
 ### 🔧 Bug fixes
 
+- **npm proxy: an unreadable cache entry is now treated as a miss, not a 5xx.** Under concurrent load, a request could observe a cache entry whose stream-through save was still mid-commit (the dedup gate releases followers when the leader's response resolves — before the tee finishes writing); the failed read surfaced as a 502 that fed the group's circuit breaker. The storage layer now degrades that race to a cache miss and refetches from upstream. Found by the revived CI perf gate.
+  ([@aydasraf](https://github.com/aydasraf))
+- **HTTP reason phrases added for 502/503/504.** Upstream Bad Gateway / Service Unavailable / Gateway Timeout responses were logged as `PanteraHttpException: Unknown`, which materially slowed incident diagnosis.
+  ([@aydasraf](https://github.com/aydasraf))
 - **Proxy audit no longer records an `artifact_publish` on cache-hit re-serves.** Composer, npm, Go, and PyPI proxies emitted a publish event (and a DB index upsert) every time an already-cached artifact was re-downloaded, and dropped `client.ip`/`trace.id` on the way to the audit log. Publish now fires only on a genuine first-time fetch; cache hits, upstream fetches, and cooldown blocks emit `artifact_access` with full request correlation.
   ([@aydasraf](https://github.com/aydasraf))
 - **npm cooldown now blocks fresh tarball downloads.** The storage probe and the upstream fetch were fused in a single call, so the cooldown gate only ran after a blocked version had already been fetched, cached, and served with `200`. Blocked versions now return `403` without contacting upstream or touching the cache.
@@ -693,6 +697,14 @@
   ([@aydasraf](https://github.com/aydasraf))
 - **Maven `head_fallback` publish-date source defaults to ON.** `PANTERA_PUBLISH_DATE_HEAD_FALLBACK_ENABLED` now defaults to `true` so first-fetch cooldown enforcement works out of the box for Maven and Gradle proxies — without the HEAD source, the first asker of a freshly published version downloads the bytes before any subsequent request sees the publish-date row. Operators with extreme cold-walk concerns can disable via the env var.
   ([@aydasraf](https://github.com/aydasraf))
+
+### 🧹 CI & tooling
+
+- **CI revived.** `ci.yml` targeted a larger-runner label (`ubuntu-latest-4-cores`) that was never provisioned — every run queued for 24 h and auto-cancelled; the repo had no functioning CI. Now on standard `ubuntu-latest` (free 4-core for public repos), with cheap static gates running first, path-based job skipping, and per-ref concurrency cancellation.
+- **The perf/scaling benchmark harness is now actually in the repo.** A broad `performance/*/*` gitignore had silently kept the WireMock fixtures, k6 scenarios, repo configs, and scripts out of the tree — both perf workflows had failed at checkout since their introduction. The harness is committed, boots from a fresh checkout (`make setup` renders config, generates throwaway JWT keys, seeds fixtures), and the M3-M4 invariant gate was verified locally end-to-end: 4/4 consecutive green runs. Hardening found along the way: WireMock's unbounded request journal OOM'd the mock after ~2 runs (now `--no-request-journal`), and a full circuit-breaker cascade RCA was captured for follow-up product fixes.
+- **Perf workflow rationalisation.** `perf-baseline.yml` deleted (redundant, never passed); the wall-clock cold-bench is nightly/on-demand only — absolute-time thresholds are too noisy on shared runners to block PRs; the PR-blocking signal is the behavioral invariant gate.
+- **Releases now publish a multi-arch Docker image to GHCR** (`ghcr.io/auto1-oss/pantera`, amd64+arm64, `GITHUB_TOKEN` auth), attach a `SHA256SUMS` file, and attest build provenance for both binaries and image.
+- **Supply-chain hygiene**: every third-party action pinned by commit SHA; `dependabot.yml` added (weekly, grouped, maven + npm + github-actions; docker-compose test fixtures excluded); integration tests (`-Pitcase`) now run nightly instead of only at tag time.
 
 ### 🔒 Security
 

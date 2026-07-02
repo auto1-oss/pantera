@@ -7,6 +7,9 @@ on:
 
 permissions:
   contents: write
+  packages: write
+  id-token: write
+  attestations: write
 
 jobs:
   build-backend:
@@ -31,10 +34,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
         with:
           java-version: '21'
           distribution: 'temurin'
@@ -81,7 +84,7 @@ jobs:
           cd ../..
 
       - name: Upload backend artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: backend-release
           path: release-artifacts/
@@ -98,10 +101,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Set up Node.js 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: 'npm'
@@ -132,7 +135,7 @@ jobs:
           tar czf ../../pantera-ui-${VERSION}.tar.gz .
 
       - name: Upload UI artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ui-release
           path: pantera-ui-*.tar.gz
@@ -145,20 +148,20 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Extract version from tag
         id: version
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
 
       - name: Download backend artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: backend-release
           path: release/
 
       - name: Download UI artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ui-release
           path: release/
@@ -205,8 +208,22 @@ jobs:
           - Valkey/Redis (optional, for HA)
           NOTES
 
+      - name: Generate SHA256SUMS
+        run: |
+          cd release
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Attest release binaries (build provenance)
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: |
+            release/pantera-${{ steps.version.outputs.VERSION }}.jar
+            release/pantera-${{ steps.version.outputs.VERSION }}-dist.tar.gz
+            release/pantera-ui-${{ steps.version.outputs.VERSION }}.tar.gz
+
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           name: Pantera v${{ steps.version.outputs.VERSION }}
           body_path: release-notes.md
@@ -216,3 +233,76 @@ jobs:
             release/pantera-${{ steps.version.outputs.VERSION }}.jar
             release/pantera-${{ steps.version.outputs.VERSION }}-dist.tar.gz
             release/pantera-ui-${{ steps.version.outputs.VERSION }}.tar.gz
+            release/SHA256SUMS
+
+  publish-image:
+    name: Publish Docker image (GHCR)
+    needs: [build-backend]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Download backend artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: backend-release
+          path: release/
+
+      - name: Unpack dist into Docker build context
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          mkdir -p pantera-main/target
+          tar xzf release/pantera-${VERSION}-dist.tar.gz -C pantera-main/target
+          ls pantera-main/target/pantera-main-${VERSION}.jar pantera-main/target/dependency > /dev/null
+
+      - name: Set up QEMU (arm64)
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tags
+        id: tags
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          IMAGE="ghcr.io/${{ github.repository }}"
+          TAGS="${IMAGE}:${VERSION}"
+          # :latest only for finals — pre-releases must not steal it.
+          case "$VERSION" in
+            *RC*|*beta*|*alpha*) ;;
+            *) TAGS="${TAGS},${IMAGE}:latest" ;;
+          esac
+          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+
+      - name: Build and push (amd64 + arm64)
+        id: push
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: pantera-main
+          file: pantera-main/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          build-args: |
+            JAR_FILE=pantera-main-${{ steps.version.outputs.VERSION }}.jar
+
+      - name: Attest image provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true

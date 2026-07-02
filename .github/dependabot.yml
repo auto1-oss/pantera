@@ -1,0 +1,43 @@
+version: 2
+updates:
+  # Backend (Maven multi-module — the root pom covers the reactor).
+  - package-ecosystem: maven
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      maven-minor-patch:
+        update-types: ["minor", "patch"]
+
+  # Management UI.
+  - package-ecosystem: npm
+    directory: "/pantera-ui"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      ui-dev-dependencies:
+        dependency-type: development
+        update-types: ["minor", "patch"]
+      ui-runtime-minor-patch:
+        dependency-type: production
+        update-types: ["minor", "patch"]
+
+  # Pin-following for GitHub Actions (we pin by commit SHA; Dependabot
+  # keeps the SHAs moving with the upstream tags).
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+
+# NOTE: pantera-main/docker-compose/pantera/artifacts/** are deliberately
+# NOT covered — those are local-testing fixture projects whose pinned,
+# dependency-heavy trees exist to exercise the proxy (bumping them breaks
+# their purpose and can even trip the cooldown gate on fresh versions).
+# Dependabot only scans the configured directories above, so the fixtures
+# are excluded by omission; keep it that way.

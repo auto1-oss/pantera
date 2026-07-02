@@ -9,10 +9,69 @@ on:
 permissions:
   contents: read
 
+# Superseded runs on the same ref are cancelled — force-pushes to a PR
+# don't stack 30-minute builds behind each other.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # ------------------------------------------------------------------
+  # Cheap static gates first (~seconds). The expensive build/test jobs
+  # depend on this, so a PR that trips a grep-level guard fails in
+  # under a minute instead of after a full backend build. This job
+  # also computes which areas changed so backend/UI jobs can skip
+  # when a PR doesn't touch them.
+  # ------------------------------------------------------------------
+  static-checks:
+    name: Static gates + change detection
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      ui: ${{ steps.filter.outputs.ui }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: ECS log schema drift gate
+        run: |
+          if grep -rl "JsonLayout" pantera-main/src/main/resources/ pantera-main/docker-compose/ 2>/dev/null; then
+            echo "ERROR: JsonLayout found in active log4j2 configuration. Use EcsLayout instead."
+            exit 1
+          fi
+          echo "Schema drift gate: OK (no JsonLayout in active configurations)"
+
+      - name: nginx CVE-2026-42945 trigger-pattern guard
+        run: bash scripts/check-nginx-cve-2026-42945.sh
+
+      - name: Detect changed areas
+        uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - '**/pom.xml'
+              - '*-adapter/**'
+              - 'pantera-core/**'
+              - 'pantera-main/**'
+              - 'pantera-storage*/**'
+              - 'pantera-backfill/**'
+              - 'vertx-server/**'
+              - 'http-client/**'
+              - 'asto/**'
+              - 'build-tools/**'
+              - '.github/workflows/ci.yml'
+            ui:
+              - 'pantera-ui/**'
+              - '.github/workflows/ci.yml'
+
   build-backend:
     name: Build & Test Backend
-    runs-on: ubuntu-latest-4-cores
+    needs: static-checks
+    # Always run on pushes to master; on PRs only when backend paths changed.
+    if: github.event_name == 'push' || needs.static-checks.outputs.backend == 'true'
+    runs-on: ubuntu-latest
     timeout-minutes: 45
 
     services:
@@ -32,21 +91,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: ECS log schema drift gate
-        run: |
-          if grep -rl "JsonLayout" pantera-main/src/main/resources/ pantera-main/docker-compose/ 2>/dev/null; then
-            echo "ERROR: JsonLayout found in active log4j2 configuration. Use EcsLayout instead."
-            exit 1
-          fi
-          echo "Schema drift gate: OK (no JsonLayout in active configurations)"
-
-      - name: nginx CVE-2026-42945 trigger-pattern guard
-        run: bash scripts/check-nginx-cve-2026-42945.sh
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
         with:
           java-version: '21'
           distribution: 'temurin'
@@ -66,15 +114,6 @@ jobs:
 
       - name: License header check
         run: mvn com.mycila:license-maven-plugin:4.3:check -q
-# TODO:Integration tests are disabled. Re-enable after migration is complete and all issues are fixed
-#      - name: Build test Docker images
-#        run: cd test_images && ./build.sh
-#
-#      - name: Run integration tests
-#        run: mvn verify -Pitcase -T 1C --fail-at-end
-#        env:
-#          POSTGRES_USER: pantera
-#          POSTGRES_PASSWORD: pantera
 
       - name: Package JAR with dependencies
         run: |
@@ -82,7 +121,7 @@ jobs:
           echo "JAR_FILE=$(ls pantera-main/target/pantera-main-*.jar | head -1)" >> $GITHUB_ENV
 
       - name: Upload backend artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: pantera-backend
           path: |
@@ -92,7 +131,9 @@ jobs:
 
   build-ui:
     name: Build & Test UI
-    runs-on: ubuntu-latest-4-cores
+    needs: static-checks
+    if: github.event_name == 'push' || needs.static-checks.outputs.ui == 'true'
+    runs-on: ubuntu-latest
     timeout-minutes: 15
 
     defaults:
@@ -101,10 +142,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Set up Node.js 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: 'npm'
@@ -126,7 +167,7 @@ jobs:
         run: npm run build
 
       - name: Upload UI artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: pantera-ui
           path: pantera-ui/dist/
