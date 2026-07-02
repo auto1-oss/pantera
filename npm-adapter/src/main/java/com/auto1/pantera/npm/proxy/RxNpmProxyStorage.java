@@ -370,7 +370,28 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
                 .doOnSuccess(exists -> recordPhase("npm_storage_exists", existsStartNs));
         }).flatMapMaybe(
             exists -> exists ? this.readAsset(path).toMaybe() : Maybe.empty()
-        );
+        ).onErrorResumeNext(err -> {
+            // exists() said yes but the read failed — a concurrent
+            // stream-through save is mid-commit for this key (the dedup
+            // gate releases followers when the leader's RESPONSE resolves,
+            // which is before the tee finishes writing), or the sidecar
+            // landed before the binary. A cache entry we cannot read is
+            // not a cache entry: degrade to a miss so the caller refetches
+            // from upstream, instead of surfacing a 5xx that feeds the
+            // group's circuit breaker. Found by the CI perf gate — a
+            // 60s/30rps ramp reliably produced 5xx bursts through this
+            // window and tripped the per-member breaker.
+            EcsLogger.warn("com.auto1.pantera.npm.proxy")
+                .message("Cache entry present but unreadable — treating as miss (concurrent save in flight?)")
+                .eventCategory("web")
+                .eventAction("cache_read_race")
+                .eventOutcome("failure")
+                .field("url.path", path)
+                .error(err)
+                .field("log.source", "application")
+                .log();
+            return Maybe.empty();
+        });
     }
 
     @Override

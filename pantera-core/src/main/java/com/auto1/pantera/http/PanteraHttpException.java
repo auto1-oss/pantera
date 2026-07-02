@@ -59,6 +59,9 @@ public final class PanteraHttpException extends PanteraException {
         .put("451", "Unavailable For Legal Reasons")
         .put("500", "Internal Server Error")
         .put("501", "Not Implemented")
+        .put("502", "Bad Gateway")
+        .put("503", "Service Unavailable")
+        .put("504", "Gateway Timeout")
         .build();
 
     /**
