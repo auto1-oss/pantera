@@ -34,7 +34,6 @@ import org.junit.jupiter.params.provider.ValueSource;
  * Test for {@link AstoMetadataNames}.
  * @since 1.10
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class AstoMetadataNamesTest {
 
     /**

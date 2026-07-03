@@ -13,19 +13,18 @@ package  com.auto1.pantera.conan.http;
 import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.conan.IniFile;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqParams;
 import com.google.common.base.Strings;
 import io.vavr.Tuple2;
 import org.apache.hc.core5.http.HttpHost;
 import org.apache.hc.core5.net.URIBuilder;
-import org.ini4j.Wini;
 
 import javax.json.Json;
 import javax.json.JsonArrayBuilder;
 import javax.json.JsonObjectBuilder;
 import java.io.IOException;
-import java.io.StringReader;
 import java.net.URISyntaxException;
 import java.util.Arrays;
 import java.util.Collection;
@@ -44,7 +43,7 @@ import java.util.stream.Collectors;
  * configuration (conaninfo.txt).
  * Pantera-conan storage structure for now corresponds to standard conan_server.
  */
-public final class ConansEntity {
+public final class ConansEntity { // NOPMD MissingStaticMethodInNonInstantiatableClass - namespace container for nested REST endpoint slices; intentionally non-instantiable
 
     /**
      * Protocol type for download URIs.
@@ -237,17 +236,16 @@ public final class ConansEntity {
         ) throws IOException {
             return content.asStringFuture().thenApply(
                 data -> {
-                    final Wini conaninfo;
-                    try {
-                        conaninfo = new Wini(new StringReader(data));
-                    } catch (final IOException exception) {
-                        throw new PanteraIOException(exception);
-                    }
+                    // IniFile stores a bare line (e.g. the recipe_hash value,
+                    // conaninfo's list-style entries) as a key with an empty
+                    // value — exclude those from the section objects, exactly
+                    // as the previous parser's null-value entries were.
+                    final var conaninfo = new IniFile(data).getEntries();
                     final JsonObjectBuilder pkgbuilder = Json.createObjectBuilder();
                     conaninfo.forEach(
                         (secname, section) -> {
                             final JsonObjectBuilder jsection = section.entrySet().stream()
-                                .filter(e -> e.getValue() != null).collect(
+                                .filter(e -> !Strings.isNullOrEmpty(e.getValue())).collect(
                                     Json::createObjectBuilder, (js, e) ->
                                         js.add(e.getKey(), e.getValue()),
                                     (js1, js2) -> {

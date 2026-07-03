@@ -51,7 +51,7 @@ public final class MetadataETag {
      */
     public MetadataETag(final byte[] contentBytes) {
         this.content = null;
-        this.contentBytes = contentBytes;
+        this.contentBytes = contentBytes; // NOPMD ArrayIsStoredDirectly - immutable value object; defensive copy of npm packument bytes is wasteful (multi-MB)
     }
     
     /**

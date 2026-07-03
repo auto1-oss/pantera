@@ -79,7 +79,6 @@ public final class QuartzService {
      * Ctor for RAM-based (non-clustered) scheduler.
      * Uses the default Quartz configuration with in-memory RAMJobStore.
      */
-    @SuppressWarnings("PMD.ConstructorOnlyInitializesOrCallOtherConstructors")
     public QuartzService() {
         try {
             this.scheduler = new StdSchedulerFactory().getScheduler();
@@ -100,7 +99,6 @@ public final class QuartzService {
      *
      * @param dataSource PostgreSQL data source (typically HikariCP)
      */
-    @SuppressWarnings("PMD.ConstructorOnlyInitializesOrCallOtherConstructors")
     public QuartzService(final DataSource dataSource) {
         try {
             // 1. Create QRTZ_* tables if they don't exist
@@ -128,6 +126,7 @@ public final class QuartzService {
                 .eventCategory("process")
                 .eventAction("jdbc_cluster_init")
                 .eventOutcome("success")
+                .field("log.source", "application")
                 .log();
         } catch (final SchedulerException error) {
             throw new PanteraException(error);
@@ -151,6 +150,9 @@ public final class QuartzService {
             return this.scheduler.isStarted() && !this.scheduler.isShutdown()
                 && !this.scheduler.isInStandbyMode();
         } catch (final SchedulerException ex) {
+            // EXPECTED: scheduler state probe — any access failure means
+            // "not running", which is the safe default for health
+            // checks and readiness probes.
             return false;
         }
     }
@@ -190,6 +192,10 @@ public final class QuartzService {
                 data.put("elements", queue);
                 data.put("action", Objects.requireNonNull(consumer.get(item)));
             }
+            // Stamp the scheduling thread's MDC trace context so the Quartz
+            // worker thread (possibly on another node in JDBC cluster mode)
+            // can restore trace.id / span.id when Job.execute runs.
+            TracingJobWrapper.stampMdc(data);
             this.scheduler.scheduleJob(
                 JobBuilder.newJob(EventsProcessor.class).setJobData(data).withIdentity(
                     QuartzService.jobId(id, item), EventsProcessor.class.getSimpleName()
@@ -226,6 +232,9 @@ public final class QuartzService {
             .startNow().withSchedule(SimpleScheduleBuilder.repeatSecondlyForever(seconds));
         final int count = this.parallelJobs(threads);
         final Set<JobKey> res = new HashSet<>(count);
+        // Stamp the scheduling thread's MDC trace context once for all jobs
+        // built from this shared JobDataMap; see TracingJobWrapper.
+        TracingJobWrapper.stampMdc(data);
         for (int item = 0; item < count; item = item + 1) {
             final JobKey key = new JobKey(QuartzService.jobId(id, item), clazz.getSimpleName());
             this.scheduler.scheduleJob(
@@ -252,6 +261,8 @@ public final class QuartzService {
     public <T extends Job> void schedulePeriodicJob(
         final String cronexp, final Class<T> clazz, final JobDataMap data
     ) throws SchedulerException {
+        // Stamp scheduling-thread MDC trace context; see TracingJobWrapper.
+        TracingJobWrapper.stampMdc(data);
         final JobDetail job = JobBuilder
             .newJob()
             .ofType(clazz)
@@ -284,6 +295,7 @@ public final class QuartzService {
                 .eventOutcome("failure")
                 .field("process.name", key.toString())
                 .error(err)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -330,6 +342,7 @@ public final class QuartzService {
                                 .eventAction("scheduler_shutdown")
                                 .eventOutcome("failure")
                                 .error(error)
+                                .field("log.source", "application")
                                 .log();
                         }
                     }
@@ -407,6 +420,7 @@ public final class QuartzService {
                 .message("Parallel quartz jobs amount limited to thread pool size (" + count + " threads, " + requested + " jobs requested)")
                 .eventCategory("process")
                 .eventAction("job_limit")
+                .field("log.source", "application")
                 .log();
         }
         return count;
@@ -424,6 +438,7 @@ public final class QuartzService {
             .eventCategory("process")
             .eventAction("job_schedule")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
     }
 

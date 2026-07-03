@@ -32,7 +32,6 @@ import org.junit.jupiter.api.Test;
  * Tests Download Package Slice works.
  * @since 0.6
  */
-@SuppressWarnings("PMD.AvoidUsingHardCodedIP")
 public class DownloadPackageSliceTest {
     @Test
     public void downloadMetaWorks() throws IOException, ExecutionException, InterruptedException {

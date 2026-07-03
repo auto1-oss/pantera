@@ -140,6 +140,7 @@ public final class DbRevocationBlocklist implements RevocationBlocklist {
             EcsLogger.warn("com.auto1.pantera.auth.DbRevocationBlocklist")
                 .message("Failed to poll revocation blocklist from DB")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }

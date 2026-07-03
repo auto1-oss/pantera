@@ -25,7 +25,6 @@ import org.redline_rpm.header.Header;
  *
  * @since 0.6.3
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class FilePackageHeadersTest {
 
     @Test

@@ -17,7 +17,6 @@ import org.apache.http.client.utils.URIBuilder;
 
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Predicate;
 import java.util.regex.Matcher;
@@ -56,11 +55,6 @@ public final class ApiRoutingSlice implements Slice {
      * Repository type URL mappings.
      */
     private static final Map<String, String> REPO_TYPE_MAPPING = new HashMap<>();
-
-    /**
-     * Repository types with limited support (no repo_type in URL).
-     */
-    private static final Set<String> LIMITED_SUPPORT = Set.of("gradle", "rpm", "maven");
 
     static {
         REPO_TYPE_MAPPING.put("conan", "conan");

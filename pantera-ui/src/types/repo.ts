@@ -18,6 +18,10 @@ export interface RepoConfig {
   /** Group members — array of repo name strings */
   members?: string[]
   cooldown?: RepoCooldown
+  /** Allow unauthenticated reads. Default true for proxy/group, false for hosted. */
+  anonymous_read?: boolean
+  /** Allow unauthenticated writes. Default false everywhere. */
+  anonymous_write?: boolean
 }
 
 export interface RepoConfigEnvelope {

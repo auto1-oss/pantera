@@ -18,7 +18,7 @@ import com.auto1.pantera.asto.misc.Cleanable;
 import com.auto1.pantera.db.dao.PagedResult;
 import com.auto1.pantera.db.dao.RoleDao;
 import com.auto1.pantera.http.auth.AuthUser;
-import com.auto1.pantera.http.trace.MdcPropagation;
+import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.users.CrudRoles;
 import io.vertx.core.json.JsonArray;
@@ -28,6 +28,7 @@ import java.io.StringReader;
 import java.security.PermissionCollection;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import javax.json.Json;
 import javax.json.JsonObject;
 
@@ -140,11 +141,14 @@ public final class RoleHandler {
             return;
         }
         final RoleDao dao = (RoleDao) this.roles;
-        ctx.vertx().<PagedResult<JsonObject>>executeBlocking(
-            MdcPropagation.withMdc(() -> dao.listPaged(query, sortField, ascending, size, page * size)),
-            false
-        ).onSuccess(
-            result -> {
+        CompletableFuture.supplyAsync(
+            (java.util.function.Supplier<PagedResult<JsonObject>>)
+                () -> dao.listPaged(query, sortField, ascending, size, page * size),
+            HandlerExecutor.get()
+        ).whenComplete((result, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
                 final JsonArray items = new JsonArray();
                 for (final JsonObject obj : result.items()) {
                     items.add(new io.vertx.core.json.JsonObject(obj.toString()));
@@ -154,9 +158,7 @@ public final class RoleHandler {
                     .putHeader("Content-Type", "application/json")
                     .end(ApiResponse.paginated(items, page, size, result.total()).encode());
             }
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+        });
     }
 
     /**
@@ -165,26 +167,24 @@ public final class RoleHandler {
      */
     private void getRole(final RoutingContext ctx) {
         final String rname = ctx.pathParam(RoleHandler.NAME);
-        ctx.vertx().<Optional<JsonObject>>executeBlocking(
-            MdcPropagation.withMdc(() -> this.roles.get(rname)),
-            false
-        ).onSuccess(
-            opt -> {
-                if (opt.isPresent()) {
-                    ctx.response()
-                        .setStatusCode(200)
-                        .putHeader("Content-Type", "application/json")
-                        .end(opt.get().toString());
-                } else {
-                    ApiResponse.sendError(
-                        ctx, 404, "NOT_FOUND",
-                        String.format("Role '%s' not found", rname)
-                    );
-                }
+        CompletableFuture.supplyAsync(
+            (java.util.function.Supplier<Optional<JsonObject>>) () -> this.roles.get(rname),
+            HandlerExecutor.get()
+        ).whenComplete((opt, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else if (opt.isPresent()) {
+                ctx.response()
+                    .setStatusCode(200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(opt.get().toString());
+            } else {
+                ApiResponse.sendError(
+                    ctx, 404, "NOT_FOUND",
+                    String.format("Role '%s' not found", rname)
+                );
             }
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+        });
     }
 
     /**
@@ -214,20 +214,17 @@ public final class RoleHandler {
         );
         if (existing.isPresent() && perms.implies(RoleHandler.UPDATE)
             || existing.isEmpty() && perms.implies(RoleHandler.CREATE)) {
-            ctx.vertx().executeBlocking(
-                MdcPropagation.withMdc(() -> {
-                    this.roles.addOrUpdate(body, rname);
-                    return null;
-                }),
-                false
-            ).onSuccess(
-                ignored -> {
+            CompletableFuture.runAsync(
+                () -> this.roles.addOrUpdate(body, rname),
+                HandlerExecutor.get()
+            ).whenComplete((ignored, err) -> {
+                if (err != null) {
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                } else {
                     this.policyCache.invalidate(rname);
                     ctx.response().setStatusCode(201).end();
                 }
-            ).onFailure(
-                err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-            );
+            });
         } else {
             ApiResponse.sendError(ctx, 403, "FORBIDDEN", "Insufficient permissions");
         }
@@ -239,20 +236,16 @@ public final class RoleHandler {
      */
     private void deleteRole(final RoutingContext ctx) {
         final String rname = ctx.pathParam(RoleHandler.NAME);
-        ctx.vertx().executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                this.roles.remove(rname);
-                return null;
-            }),
-            false
-        ).onSuccess(
-            ignored -> {
+        CompletableFuture.runAsync(
+            () -> this.roles.remove(rname),
+            HandlerExecutor.get()
+        ).whenComplete((ignored, err) -> {
+            if (err == null) {
                 this.policyCache.invalidate(rname);
                 ctx.response().setStatusCode(200).end();
-            }
-        ).onFailure(
-            err -> {
-                if (err instanceof IllegalStateException) {
+            } else {
+                final Throwable cause = err.getCause() != null ? err.getCause() : err;
+                if (cause instanceof IllegalStateException) {
                     ApiResponse.sendError(
                         ctx, 404, "NOT_FOUND",
                         String.format("Role '%s' not found", rname)
@@ -261,7 +254,7 @@ public final class RoleHandler {
                     ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
                 }
             }
-        );
+        });
     }
 
     /**
@@ -270,20 +263,16 @@ public final class RoleHandler {
      */
     private void enableRole(final RoutingContext ctx) {
         final String rname = ctx.pathParam(RoleHandler.NAME);
-        ctx.vertx().executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                this.roles.enable(rname);
-                return null;
-            }),
-            false
-        ).onSuccess(
-            ignored -> {
+        CompletableFuture.runAsync(
+            () -> this.roles.enable(rname),
+            HandlerExecutor.get()
+        ).whenComplete((ignored, err) -> {
+            if (err == null) {
                 this.policyCache.invalidate(rname);
                 ctx.response().setStatusCode(200).end();
-            }
-        ).onFailure(
-            err -> {
-                if (err instanceof IllegalStateException) {
+            } else {
+                final Throwable cause = err.getCause() != null ? err.getCause() : err;
+                if (cause instanceof IllegalStateException) {
                     ApiResponse.sendError(
                         ctx, 404, "NOT_FOUND",
                         String.format("Role '%s' not found", rname)
@@ -292,7 +281,7 @@ public final class RoleHandler {
                     ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
                 }
             }
-        );
+        });
     }
 
     /**
@@ -301,20 +290,16 @@ public final class RoleHandler {
      */
     private void disableRole(final RoutingContext ctx) {
         final String rname = ctx.pathParam(RoleHandler.NAME);
-        ctx.vertx().executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                this.roles.disable(rname);
-                return null;
-            }),
-            false
-        ).onSuccess(
-            ignored -> {
+        CompletableFuture.runAsync(
+            () -> this.roles.disable(rname),
+            HandlerExecutor.get()
+        ).whenComplete((ignored, err) -> {
+            if (err == null) {
                 this.policyCache.invalidate(rname);
                 ctx.response().setStatusCode(200).end();
-            }
-        ).onFailure(
-            err -> {
-                if (err instanceof IllegalStateException) {
+            } else {
+                final Throwable cause = err.getCause() != null ? err.getCause() : err;
+                if (cause instanceof IllegalStateException) {
                     ApiResponse.sendError(
                         ctx, 404, "NOT_FOUND",
                         String.format("Role '%s' not found", rname)
@@ -323,6 +308,6 @@ public final class RoleHandler {
                     ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
                 }
             }
-        );
+        });
     }
 }

@@ -2,6 +2,65 @@
 
 ---
 
+## v2.2.0 (May 2026)
+
+### Performance
+
+- **Per-host upstream circuit breaker + per-repo bulkhead.** Every upstream now has a state-machine circuit breaker in front of the Jetty client: closed → open on 5xx / 401 / 407 / non-rejection exceptions (429 stays the rate-limiter's responsibility), Fibonacci backoff with a 30 s seed and 60 min cap, daemon HEAD probe at expiry. While the breaker is open the client sees a synthesised `502` (`X-Pantera-Fault: circuit-breaker-open`) and the broken upstream is left alone. In parallel, every `*-proxy` repo has its own bounded semaphore (defaults: 200 concurrent, 1000 queue, 1 s `Retry-After`). Refusals return `503` and increment `pantera_bulkhead_overflow_total`. State and counters are exposed as `pantera_circuit_breaker_state`, `pantera_circuit_breaker_trips_total`, `pantera_circuit_breaker_fastfail_total`.
+- **Stream-through cache for npm-shape adapters.** PyPI, Composer, Go, and the existing npm path all now stream upstream bytes to the client and the on-disk cache simultaneously, with integrity verification on stream completion before the cache commits. Maven keeps its sidecar-verifying path (primary + digest sidecar are atomically validated as a pair). Docker, files-proxy and local-only adapters retain their existing serve paths — documented in the migration matrix as deliberate exceptions.
+- **Conditional GET + stale-while-revalidate on Maven metadata.** `MetadataCache` persists `ETag` / `Last-Modified` validators and emits `If-None-Match` / `If-Modified-Since` on refresh — a `304` bumps `lastVerified` without rewriting the blob. Within the soft TTL (default 30 s) reads are pure cache; between soft TTL and hard TTL (default 2 h) the cached bytes serve immediately while a single-flighted background refresh runs. Soft and hard TTL are tunable per repo via `cache.metadata.soft_ttl` / `cache.metadata.hard_ttl`.
+- **Single-flight cooldown evaluation.** Concurrent `evaluate()` calls for the same `(repoType, repoName, artifact, version)` tuple now share one downstream inspector lookup with a 30 s TTL on top of the existing 3-tier cooldown cache. Burst cache-miss patterns no longer fan a hundred lookups onto the publish-date registry for the same tuple.
+- **Cold-bench perf gate in CI.** New nightly + per-PR workflow runs the cold-bench against a fixed Maven coordinate, fails on median > 20 s or p95 > 25 s, and additionally asserts circuit-breaker invariants (zero trips, no breaker left open at end of run) on top of the existing M3-M4 amplification checks.
+
+### Added
+
+- **Per-repo anonymous-access controls.** A new `anonymous_read` / `anonymous_write` flag per repo decides whether unauthenticated requests get a `401` + `WWW-Authenticate: Basic realm="pantera"` or pass through to downstream auth. **Deny-by-default for every repo type** (proxy / group / hosted) — an admin explicitly opts in to anonymous reads on a curlable OSS-mirror proxy by setting `anonymous_read: true`. The admin UI exposes both flags as checkboxes on the per-repo Access card and a bulk-update action on the repository-management page.
+- **Async OSV.dev CVE scanner skeleton.** `OsvDevClient`, `VulnerabilityScanner` (worker pool with 5-step exponential backoff), and a two-table migration (`artifact_vulnerabilities`, `artifact_scan_status`) ship. Wiring to the cache-write hot path and the admin REST surface is deferred to a follow-up; the scanner is dormant in 2.2.0 unless explicitly invoked.
+- **Observability pack for the perf surface.** Two Grafana dashboards under `pantera-main/src/main/resources/grafana/`: `upstream-circuit-breaker.json` (per-host state, trip frequency, fast-fail rate, time-since-last-trip) and `proxy-phase-latency.json` (stacked p99 of `proxy_phase_duration_seconds` per `(phase, repo)`). Prometheus recording-rule alerts and four runbooks cover the 2.2.0 perf-pack — `bulkhead-overflow.md`, `low-conditional-get-hit-rate.md`, `upstream-429-sustained.md`, `upstream-circuit-breaker-open.md`.
+- **`ContextualExecutor` and trace propagation.** A new helper restores MDC + APM transaction context across any `CompletableFuture` continuation, RxJava `Maybe`/`Flowable` boundary, Quartz job execution, or pub/sub envelope. Pub/sub messages now carry a versioned envelope (v2 with trace context; v1 still parsed for rolling-deploy compatibility). Non-Jetty outbound HTTP (Vert.x WebClient for webhooks; `java.net.http.HttpClient` for OSV.dev) injects `traceparent` + `X-B3-*` via `TraceHeaders.httpClientHeaders()`.
+
+### Fixed
+
+- **`V130` migration parser failure.** The `COMMENT IS` string in V130 used a multi-line `||` concatenation that Flyway's parser tripped over on fresh installs; collapsed onto a single literal.
+- **Settings-layer integration test now uses `TRUNCATE`.** The v2.2.0 immutability triggers on `audit_log` refuse `DELETE` by design, so `SettingsLayerIntegrationTest` truncates between cases instead.
+
+### Security
+
+- **Path-traversal guard at the proxy entry.** `PathTraversalGuard.canonicalise(...)` is wired into `BaseCachedProxySlice.response()` and rejects (with `400`) raw `..`, percent-encoded `%2e%2e` / `%252e`, NUL bytes, ASCII control characters, Windows-style backslash probes, and malformed percent-encoding. Returns the URL-decoded canonical form on the safe path so downstream `KeyFromPath` keeps the existing contract. No per-adapter shortcut can bypass.
+- **Authorization stripping pinned.** `BaseCachedProxySlice.upstreamHeaders()` forwards only `User-Agent` + `Accept`; inbound `Authorization`, `Cookie`, `X-API-Key`, `X-Auth-Token`, `Proxy-Authorization` are dropped before the upstream call. `LogSanitizer.SENSITIVE_HEADERS` masks the same five names in every emitted log. Both behaviours are now pinned by an explicit test.
+- **PGP signature verifier + keyring (scoped subset).** `PgpVerifier` (Bouncy Castle LTS), `KeyringStore` (`JdbcKeyringStore` over the new `pgp_keyring` table from V131, `InMemoryKeyringStore` for tests / no-DB boots). Five-state `Result` (`VERIFIED` / `TAMPERED` / `UNTRUSTED_KEY` / `MISSING_SIGNATURE` / `MALFORMED`) so callers map each branch onto an HTTP + audit outcome. The admin REST endpoint to upload keys is deferred to a follow-up.
+- **Insert-only audit log with DB-enforced immutability.** V129 adds `details JSONB` / `success` / `ip_address` columns to `audit_log` plus BEFORE UPDATE / BEFORE DELETE triggers that raise `feature_not_supported`. The `AuditEvent` / `AuditService` abstractions are wired into admin endpoints (cooldown unblock + unblock-all, repo CRUD, negative-cache invalidate). Audit entries inherit the originating HTTP request's `trace.id`.
+- **Hardened response headers on every Pantera HTTP response.** `SecurityHeadersSlice` injects HSTS (TLS listeners only), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, a baseline CSP, and `Permissions-Policy`. The slice yields to any value the inner slice has already emitted, so UI routes that need `SAMEORIGIN` and per-route CSP overrides still win.
+- **TLS 1.2+ + Mozilla "intermediate" cipher suites enforced on every endpoint.** SSLv2 / SSLv2Hello / SSLv3 / TLS 1.0 / TLS 1.1 rejected at the handshake stage on both inbound listeners and outbound Jetty client. Excluded suites: RC4, 3DES, NULL, EXPORT, anonymous. Hostname verification is explicitly enabled on the outbound side. See [TLS Configuration](security/tls.md).
+- **Logging audit closes the secret-adjacent perimeter.** Every `EcsLogger` emission now carries `log.source` (`audit` / `application` / `http`) for shipper-side index routing; ECS schema conformance brought to 100% (no non-ECS extension fields shipped to Elastic); the bootstrap default-credential string no longer leaks into a WARN body; `YamlSettings` / `JwtPasswordAuth` / `Login` / `OAuthLoginSlice` / `AdminAuthHandler` all route error messages through `LogSanitizer`. Browser-side telemetry (`authError.ts`, OAuth callback view) sends `{ status, code }` instead of dumping raw `AxiosError` / IdP payloads. Previously-swallowed exceptions are surfaced at `WARN` or `ERROR` with `event.outcome: failure` — operators may see a brief WARN/ERROR uptick after deploy; this is intentional.
+
+### Documentation
+
+- New section on `log.source` (audit / application / http) in [Logging](admin-guide/logging.md); ECS-only field policy; audit-log immutability and retention; trace / span / transaction ID contract; note that swallowed exceptions are now surfaced.
+- [Monitoring](admin-guide/monitoring.md) lists the new circuit-breaker + bulkhead metrics and links the new dashboards.
+- [Performance Tuning](admin-guide/performance-tuning.md) documents `BulkheadLimits` defaults, circuit-breaker backoff envelope, and how to tune them.
+- [Security](security/) covers TLS 1.2+, the anonymous-access matrix, audit-log rotation under the new immutability triggers, and the scoped PGP verifier.
+- [Runbooks](runbooks/) — four runbooks for the 2.2.0 alert set landed, linked from [the admin-guide runbook index](admin-guide/runbooks.md).
+- [Developer Guide](developer-guide/) — new `ContextualExecutor` requirement for async hops on the request path, the pub/sub v2 envelope, and the `TraceHeaders.httpClientHeaders()` helper for non-Jetty outbound transports.
+
+### New Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `pantera_circuit_breaker_state` | Gauge | `upstream_host` | 1 = open, 0 = closed |
+| `pantera_circuit_breaker_trips_total` | Counter | `upstream_host` | Incremented on every closed → open transition |
+| `pantera_circuit_breaker_fastfail_total` | Counter | `upstream_host` | Incremented on every synthesised 502 |
+| `pantera_bulkhead_overflow_total` | Counter | `repo_name` | Incremented on every 503 from the per-repo semaphore |
+| `proxy_phase_duration_seconds` | Histogram | `phase`, `repo` | Per-phase latency in `BaseCachedProxySlice` |
+
+### Database Migrations
+
+- `V129` — `audit_log` hardening: `details JSONB`, `success BOOLEAN`, `ip_address TEXT`; BEFORE UPDATE / BEFORE DELETE triggers raising `feature_not_supported`; covering indexes
+- `V130` — `artifact_vulnerabilities` + `artifact_scan_status` tables for OSV.dev scanner
+- `V131` — `pgp_keyring` table for the PGP verifier
+
+---
+
 ## v2.1.0 (April 2026)
 
 ### Performance

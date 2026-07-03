@@ -183,16 +183,22 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                             }
                         }
                     } catch (final IOException ex) {
-                        EcsLogger.debug("com.auto1.pantera.asto.cache")
+                        // B7 decision-tree #2: cleanup path — keep DEBUG
+                        // and tag with event.action for SRE search.
+                        EcsLogger.debug("com.auto1.pantera.asto.s3")
                             .message("Failed to clean up orphaned file")
+                            .eventAction("resource_cleanup_failed")
                             .error(ex)
+                            .field("log.source", "application")
                             .log();
                     }
                 });
         } catch (final IOException ex) {
-            EcsLogger.debug("com.auto1.pantera.asto.cache")
+            EcsLogger.debug("com.auto1.pantera.asto.s3")
                 .message("Failed to walk directory for orphan cleanup")
+                .eventAction("resource_cleanup_failed")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -206,8 +212,10 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                 if (Files.exists(file) && Files.exists(meta)) {
                     return CacheMeta.read(meta);
                 }
-            } catch (final IOException ex) {
-                // Fall through to fetch on any cache read error
+            } catch (final IOException ex) { // NOPMD EmptyCatchBlock - intentional: any cache read error falls through to network fetch
+                // EXPECTED: any cache-read error falls through to a fresh
+                // network fetch. Cache is best-effort; correctness is
+                // preserved by the canonical S3 GET.
             }
             return null;
         }).thenCompose(cm -> {
@@ -251,9 +259,13 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                     CacheMeta.write(meta, updated);
                 }
             } catch (final IOException ex) {
-                EcsLogger.debug("com.auto1.pantera.asto.cache")
+                // B7 decision-tree #2: post-hit metadata update is best-
+                // effort — already at DEBUG; tag for SRE search.
+                EcsLogger.debug("com.auto1.pantera.asto.s3")
                     .message("Failed to update cache metadata after hit")
+                    .eventAction("resource_cleanup_failed")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
         });
@@ -285,9 +297,13 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
             Files.deleteIfExists(filePath(key));
             Files.deleteIfExists(metaPath(key));
         } catch (final IOException ex) {
-            EcsLogger.debug("com.auto1.pantera.asto.cache")
+            // B7 decision-tree #2: invalidate is best-effort; the next
+            // read will re-fetch on miss.
+            EcsLogger.debug("com.auto1.pantera.asto.s3")
                 .message("Failed to invalidate cache entry")
+                .eventAction("resource_cleanup_failed")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -346,9 +362,14 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                                     cm.hits = 1;
                                     CacheMeta.write(meta, cm);
                                 } catch (final IOException ex) {
-                                    EcsLogger.debug("com.auto1.pantera.asto.cache")
+                                    // B7 decision-tree #2: metadata write
+                                    // is best-effort — the cached file is
+                                    // still valid without it.
+                                    EcsLogger.debug("com.auto1.pantera.asto.s3")
                                         .message("Failed to write cache metadata after fetch")
+                                        .eventAction("resource_cleanup_failed")
                                         .error(ex)
+                                        .field("log.source", "application")
                                         .log();
                                 }
                                 return null;
@@ -358,16 +379,44 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                         }
                     })
                     .doOnError(th -> {
+                        // B7 decision-tree #2: secondary cleanup after a
+                        // primary error/cancel — keep DEBUG so the
+                        // primary failure isn't masked but operators can
+                        // still see it under verbose logging.
                         try { ch.close(); } catch (final IOException ex) {
-                            EcsLogger.debug("com.auto1.pantera.asto.cache")
+                            EcsLogger.debug("com.auto1.pantera.asto.s3")
                                 .message("Failed to close channel on error")
+                                .eventAction("resource_cleanup_failed")
                                 .error(ex)
+                                .field("log.source", "application")
                                 .log();
                         }
                         try { Files.deleteIfExists(tmp); } catch (final IOException ex) {
-                            EcsLogger.debug("com.auto1.pantera.asto.cache")
+                            EcsLogger.debug("com.auto1.pantera.asto.s3")
                                 .message("Failed to delete temp file on error")
+                                .eventAction("resource_cleanup_failed")
                                 .error(ex)
+                                .field("log.source", "application")
+                                .log();
+                        }
+                    })
+                    // Client cancelled mid-write (e.g., closed connection) — mirror doOnError
+                    // so the temp file and channel don't leak when subscription is cancelled.
+                    .doOnCancel(() -> {
+                        try { ch.close(); } catch (final IOException ex) {
+                            EcsLogger.debug("com.auto1.pantera.asto.s3")
+                                .message("Failed to close channel on cancel")
+                                .eventAction("resource_cleanup_failed")
+                                .error(ex)
+                                .field("log.source", "application")
+                                .log();
+                        }
+                        try { Files.deleteIfExists(tmp); } catch (final IOException ex) {
+                            EcsLogger.debug("com.auto1.pantera.asto.s3")
+                                .message("Failed to delete temp file on cancel")
+                                .eventAction("resource_cleanup_failed")
+                                .error(ex)
+                                .field("log.source", "application")
                                 .log();
                         }
                     });
@@ -420,9 +469,12 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
             }
             return ch;
         }, ch -> { try { ch.close(); } catch (final IOException ex) {
-            EcsLogger.debug("com.auto1.pantera.asto.cache")
+            // B7 decision-tree #2: publisher-cleanup channel close.
+            EcsLogger.debug("com.auto1.pantera.asto.s3")
                 .message("Failed to close file channel in publisher")
+                .eventAction("resource_cleanup_failed")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         } });
     }
@@ -442,9 +494,10 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                 try {
                     ((AutoCloseable) delegate).close();
                 } catch (final Exception ex) {
-                    EcsLogger.warn("com.auto1.pantera.asto.cache")
+                    EcsLogger.warn("com.auto1.pantera.asto.s3")
                         .message("Failed to close delegate storage")
                         .error(ex)
+                        .field("log.source", "application")
                         .log();
                 }
             }
@@ -456,9 +509,10 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
             try {
                 cleanup();
             } catch (final Throwable ex) {
-                EcsLogger.warn("com.auto1.pantera.asto.cache")
+                EcsLogger.warn("com.auto1.pantera.asto.s3")
                     .message("Cache cleanup failed")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -490,7 +544,10 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                             && !p.getFileName().toString().endsWith(".meta")
                             && !p.getFileName().toString().contains(".part-");
                     } catch (final Exception e) {
-                        return false;  // Skip on error
+                        // EXPECTED: a file vanishing or becoming inaccessible
+                        // mid-walk just means it's no longer a cleanup
+                        // candidate — return false to skip.
+                        return false;
                     }
                 })
                 .forEach(dataFiles::add);
@@ -504,9 +561,13 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
             CacheMeta cm = null;
             if (Files.exists(meta)) {
                 try { cm = CacheMeta.read(meta); } catch (final Exception ex) {
-                    EcsLogger.debug("com.auto1.pantera.asto.cache")
+                    // B7 decision-tree #2: cleanup-read failure falls
+                    // through to defaults below.
+                    EcsLogger.debug("com.auto1.pantera.asto.s3")
                         .message("Failed to read cache metadata during cleanup")
+                        .eventAction("resource_cleanup_failed")
                         .error(ex)
+                        .field("log.source", "application")
                         .log();
                 }
             }
@@ -541,9 +602,13 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                 Files.deleteIfExists(c.metaFile);
                 freed += c.meta.size;
             } catch (final IOException ex) {
-                EcsLogger.debug("com.auto1.pantera.asto.cache")
+                // B7 decision-tree #2: eviction is best-effort; the
+                // next pass will retry.
+                EcsLogger.debug("com.auto1.pantera.asto.s3")
                     .message("Failed to delete cache file during eviction")
+                    .eventAction("resource_cleanup_failed")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
             if (freed >= target) {

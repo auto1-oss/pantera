@@ -43,6 +43,27 @@ public interface ArtifactIndex extends Closeable {
     CompletableFuture<Void> remove(String repoName, String artifactPath);
 
     /**
+     * Remove every artifact row whose {@code name} starts with the given
+     * prefix. Used by the folder/package delete API to cascade the storage
+     * delete into the DB index — without this, search returned ghosts for
+     * files that had been removed from storage.
+     *
+     * <p>Default implementation returns the count as 0 without removing
+     * anything; concrete indexes should override.</p>
+     *
+     * @param repoName Repository name (exact match)
+     * @param pathPrefix Path prefix — rows where {@code name LIKE prefix%}
+     *                   are deleted. Must not be empty (a whole-repo wipe
+     *                   should go through the repo delete flow, not this).
+     * @return Future carrying the number of rows removed
+     */
+    default CompletableFuture<Integer> removePrefix(
+        final String repoName, final String pathPrefix
+    ) {
+        return CompletableFuture.completedFuture(0);
+    }
+
+    /**
      * Full-text search across all indexed artifacts.
      *
      * @param query Search query string
@@ -151,6 +172,11 @@ public interface ArtifactIndex extends Closeable {
         @Override
         public CompletableFuture<Void> remove(final String rn, final String ap) {
             return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletableFuture<Integer> removePrefix(final String rn, final String pref) {
+            return CompletableFuture.completedFuture(0);
         }
 
         @Override

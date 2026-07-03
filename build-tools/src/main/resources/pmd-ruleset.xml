@@ -1,172 +1,202 @@
-<ruleset xmlns="http://pmd.sourceforge.net/ruleset/2.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" name="Artipie Ruleset" xsi:schemaLocation="http://pmd.sourceforge.net/ruleset/2.0.0 http://pmd.sourceforge.net/ruleset_2_0_0.xsd">
+<?xml version="1.0"?>
+<ruleset name="pantera-curated"
+         xmlns="http://pmd.sourceforge.net/ruleset/2.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://pmd.sourceforge.net/ruleset/2.0.0 https://pmd.sourceforge.io/ruleset_2_0_0.xsd">
     <description>
-        This ruleset checks code for potential mess
+        Pantera curated PMD 7 ruleset (Phase 14).
+        Focused on rules that catch real bugs:
+          - errorprone: comparison/null/thread/state-machine bugs
+          - security:  hardcoded creds, weak crypto, path traversal
+          - bestpractices: modern-Java API mis-use, resource leaks
+          - codestyle: only the ones that hide real bugs
+          - design: real architecture issues; LOC-counting rules dropped
+          - performance: real perf issues, not micro-optimizations
+          - multithreading: real concurrency bugs
+        Noise rules (AvoidDuplicateLiterals, OnlyOneReturn, complexity-by-LOC,
+        naming-pedantry) are explicitly excluded — the prior 159
+        AvoidDuplicateLiterals suppressions alone showed the rule was a
+        wholesale-suppression magnet.
     </description>
-    <rule ref="category/java/bestpractices.xml">
-        <exclude name="JUnitTestsShouldIncludeAssert"/>
-        <exclude name="PositionLiteralsFirstInComparisons"/>
-        <exclude name="PositionLiteralsFirstInCaseInsensitiveComparisons"/>
-        <exclude name="GuardLogStatement"/>
-    </rule>
-    <rule ref="category/java/codestyle.xml">
-        <exclude name="AtLeastOneConstructor"/>
-        <exclude name="AvoidFinalLocalVariable"/>
-        <exclude name="ShortClassName"/>
-        <exclude name="ShortVariable"/>
-        <exclude name="AbstractNaming"/>
-        <exclude name="ClassNamingConventions"/>
-        <exclude name="CommentDefaultAccessModifier"/>
-        <exclude name="DefaultPackage"/>
-        <exclude name="LinguisticNaming"/>
-        <exclude name="CallSuperInConstructor"/>
-        <exclude name="OnlyOneReturn"/>
-        <exclude name="LocalVariableCouldBeFinal"/>
-        <exclude name="LongVariable"/>
-        <exclude name="MethodArgumentCouldBeFinal"/>
-    </rule>
 
-    <rule ref="category/java/design.xml">
-        <exclude name="LoosePackageCoupling"/>
-        <exclude name="LawOfDemeter"/>
-        <exclude name="SignatureDeclareThrowsException"/>
-        <exclude name="ExcessiveImports"/>
-        <exclude name="TooManyMethods"/>
-    </rule>
-    <rule ref="category/java/design.xml/CognitiveComplexity">
-        <properties>
-            <property name="reportLevel" value="17" />
-        </properties>
-    </rule>
-    <rule ref="category/java/design.xml/CyclomaticComplexity">
-        <properties>
-            <property name="classReportLevel" value="80" />
-            <property name="methodReportLevel" value="15" />
-            <property name="cycloOptions" value="" />
-        </properties>
-    </rule>
-    <rule ref="category/java/documentation.xml">
-        <exclude name="CommentRequired"/>
-        <exclude name="CommentSize"/>
-    </rule>
+    <!-- ===== ERROR-PRONE: real bugs ===== -->
     <rule ref="category/java/errorprone.xml">
-        <exclude name="DataflowAnomalyAnalysis"/>
+        <!-- noise: literals duplicated across e.g. logger names, paths, MIME types -->
+        <exclude name="AvoidDuplicateLiterals"/>
+        <!-- noise: legitimate pattern (e.g. constants like 200/404 in HTTP routing) -->
         <exclude name="AvoidLiteralsInIfCondition"/>
+        <!-- noise: serialVersionUID is largely cargo-cult for non-RMI code -->
         <exclude name="MissingSerialVersionUID"/>
+        <!-- noise: legitimate accessor/Lombok-style pattern -->
         <exclude name="AvoidFieldNameMatchingMethodName"/>
         <exclude name="AvoidFieldNameMatchingTypeName"/>
-        <exclude name="AvoidDuplicateLiterals"/>
+        <!-- Bucket C (14b): historically wholesale-suppressed (30 prior @SuppressWarnings); use code review for typo-vs-intent -->
+        <exclude name="AssignmentInOperand"/>
+        <!-- Bucket A->exclude (14b): "code smell" warning is too eager. Common pattern is `dataSource != null ? new X(dataSource) : null` in optional-dependency wiring, which PMD flags but is the correct pattern. 34 violations. -->
+        <exclude name="NullAssignment"/>
+        <!-- Bucket A->exclude (14b post-strip): codebase legitimately uses Field.setAccessible(true) for SubStorage/FileStorage decorator unwrapping, NegativeCacheConfig admin-resource introspection, and DirectBuffer cleanup. The rule's anti-reflection premise is reasonable but every site here is reviewed and intentional. 23 violations. -->
+        <exclude name="AvoidAccessibilityAlteration"/>
+        <!-- Bucket A->exclude (14b post-strip): codebase intentionally catches Throwable at boundaries: Vert.x event-loop handlers, prefetch worker loops, and Quartz job firing — losing thread-of-control here means losing the worker. 18 violations. -->
+        <exclude name="AvoidCatchingThrowable"/>
     </rule>
+
+    <!-- ===== SECURITY: weak crypto, hardcoded creds, etc. ===== -->
+    <rule ref="category/java/security.xml"/>
+
+    <!-- ===== BEST PRACTICES: modern Java, correct API use ===== -->
+    <rule ref="category/java/bestpractices.xml">
+        <!-- noise: false positives on @Test reflective invocation, lambda-only callers -->
+        <exclude name="UnusedPrivateMethod"/>
+        <!-- legit: constants on interfaces are a known idiom in this codebase -->
+        <exclude name="ConstantsInInterface"/>
+        <!-- noise: legacy log4j-style guard, replaced by SLF4J parameterized logging -->
+        <exclude name="GuardLogStatement"/>
+        <!-- legit: parameterized tests / contract tests don't always have @Test -->
+        <exclude name="JUnitTestsShouldIncludeAssert"/>
+        <!-- Bucket B (14b): fires on EnumSet/ConcurrentHashMap/JobDataMap where impl type IS the contract (perf, thread-safety, framework-required). 63 violations, wholesale-suppression magnet. -->
+        <exclude name="LooseCoupling"/>
+        <!-- Bucket A->exclude (14b): cosmetic test-code style; the rule fires on every assertion without a message, but assertion code is self-documenting via the comparison. 7 violations. -->
+        <exclude name="JUnitAssertionsShouldIncludeMessage"/>
+        <!-- Bucket A->exclude (14b post-strip): codebase consistently uses 'public final class XTest' which PMD flags. The rule's premise (package-private tests) is a JUnit 5 idiom but conflicts with Maven Surefire's default test discovery. 32 violations. -->
+        <exclude name="JUnit5TestShouldBePackagePrivate"/>
+    </rule>
+
+    <!-- ===== CODE STYLE: only the ones that hide real bugs ===== -->
+    <rule ref="category/java/codestyle.xml">
+        <!-- noise: multiple returns are fine; bad rule -->
+        <exclude name="OnlyOneReturn"/>
+        <!-- style only: variable name length not a bug indicator -->
+        <exclude name="LongVariable"/>
+        <exclude name="ShortVariable"/>
+        <exclude name="ShortMethodName"/>
+        <exclude name="ShortClassName"/>
+        <!-- noise: enforces a constructor on every class incl. utility -->
+        <exclude name="AtLeastOneConstructor"/>
+        <!-- noise: requires `final` on every parameter/local; opinionated -->
+        <exclude name="MethodArgumentCouldBeFinal"/>
+        <exclude name="LocalVariableCouldBeFinal"/>
+        <!-- noise: legitimate idiom -->
+        <exclude name="ConfusingTernary"/>
+        <!-- noise: super() is implicit; flagging absent calls is cosmetic -->
+        <exclude name="CallSuperInConstructor"/>
+        <!-- noise: snake_case test method names hit this regularly -->
+        <exclude name="MethodNamingConventions"/>
+        <!-- noise: opinionated, often wrong -->
+        <exclude name="LinguisticNaming"/>
+        <!-- noise: package-private comments are useless ceremony -->
+        <exclude name="CommentDefaultAccessModifier"/>
+        <!-- noise: requires explicit constructor on all classes -->
+        <exclude name="UnnecessaryConstructor"/>
+        <!-- noise: micro-cosmetic -->
+        <exclude name="UselessParentheses"/>
+        <exclude name="UnnecessaryFullyQualifiedName"/>
+        <exclude name="UnnecessaryAnnotationValueElement"/>
+        <exclude name="UnnecessaryImport"/>
+        <!-- noise: opinionated about local-var declaration position -->
+        <exclude name="PrematureDeclaration"/>
+        <!-- noise: empty bodies are sometimes intentional -->
+        <exclude name="EmptyControlStatement"/>
+        <!-- legit: var declared but assigned later is fine -->
+        <exclude name="UnnecessaryLocalBeforeReturn"/>
+        <!-- Bucket B (14b): pure cosmetic ordering rule. Codebase intentionally intermixes per-section fields. 135 violations. -->
+        <exclude name="FieldDeclarationsShouldBeAtStartOfClass"/>
+        <!-- Bucket B (14b): inverse of `var` adoption; modern Java guidance allows `var` when type is obvious. 34 violations. -->
+        <exclude name="UseExplicitTypes"/>
+        <!-- Bucket B (14b): fires on intentional EMPTY/INSTANCE/LOG static finals using a different (uppercase) convention. 3 violations. -->
+        <exclude name="FieldNamingConventions"/>
+        <!-- Bucket A->exclude (14b): cosmetic; PMD frequently misjudges callable-conversion compatibility (Optional.map/etc.). 32 violations. -->
+        <exclude name="LambdaCanBeMethodReference"/>
+        <!-- Bucket A->exclude (14b): cosmetic readability nit; not a bug indicator. 30 violations. -->
+        <exclude name="UselessQualifiedThis"/>
+        <!-- Bucket A->exclude (14b): cosmetic readability suggestion; underscores in numeric literals do not catch bugs. 20 violations. -->
+        <exclude name="UseUnderscoresInNumericLiterals"/>
+        <!-- Bucket A->exclude (14b): cosmetic; pre-Allman code-style rule. 5 violations. -->
+        <exclude name="ControlStatementBraces"/>
+        <!-- Bucket A->exclude (14b): cosmetic; `Long.valueOf(x)` vs `x` is harmless and sometimes more explicit. 5 violations. -->
+        <exclude name="UnnecessaryBoxing"/>
+    </rule>
+
+    <!-- ===== DESIGN: real architecture issues ===== -->
+    <rule ref="category/java/design.xml">
+        <!-- noise: frequently-wrong demand for getter-chain refactor -->
+        <exclude name="LawOfDemeter"/>
+        <!-- noise: package coupling heuristic, often wrong -->
+        <exclude name="LoosePackageCoupling"/>
+        <!-- noise: judgment-call class-shape rules -->
+        <exclude name="DataClass"/>
+        <exclude name="GodClass"/>
+        <!-- noise: LOC-counting rules; the kind of rule that gets suppressed wholesale -->
+        <exclude name="TooManyMethods"/>
+        <exclude name="TooManyFields"/>
+        <exclude name="ExcessiveImports"/>
+        <exclude name="ExcessivePublicCount"/>
+        <exclude name="ExcessiveParameterList"/>
+        <exclude name="CyclomaticComplexity"/>
+        <exclude name="CognitiveComplexity"/>
+        <exclude name="NPathComplexity"/>
+        <exclude name="NcssCount"/>
+        <!-- noise: forces UtilityClass pattern, often wrong -->
+        <exclude name="UseUtilityClass"/>
+        <!-- judgment: nested-if depth is sometimes natural -->
+        <exclude name="AvoidDeeplyNestedIfStmts"/>
+        <!-- legit in Optional.orElseThrow patterns and similar -->
+        <exclude name="AvoidThrowingNullPointerException"/>
+        <!-- noise: sometimes unavoidable when wrapping checked exns -->
+        <exclude name="AvoidThrowingRawExceptionTypes"/>
+        <exclude name="SignatureDeclareThrowsException"/>
+        <!-- noise: false positives on registries/caches/ATOMIC singletons -->
+        <exclude name="MutableStaticState"/>
+        <!-- noise: legitimate in tests / generic Throwable boundaries -->
+        <exclude name="AvoidCatchingGenericException"/>
+        <!-- judgment-call: can be a bug, but fires too widely -->
+        <exclude name="UseObjectForClearerAPI"/>
+        <!-- Bucket B (14b): LOC/dependency-count metric, same family as the dropped CyclomaticComplexity. 42 violations. -->
+        <exclude name="CouplingBetweenObjects"/>
+        <!-- Bucket B (14b): false positives on intentional control-flow (MetadataMerger retry loops). Heuristic, not bug detector. 9 violations. -->
+        <exclude name="ExceptionAsFlowControl"/>
+        <!-- Bucket A->exclude (14b post-strip): codebase intentionally documents unchecked exceptions in throws clauses for parser/writer interfaces (MetadataParser, MetadataRewriter, etc.). Removing them weakens the contract documentation. 13 violations. -->
+        <exclude name="AvoidUncheckedExceptionsInSignatures"/>
+    </rule>
+
+    <!-- ===== PERFORMANCE: real perf issues, not micro-opts ===== -->
     <rule ref="category/java/performance.xml">
+        <!-- noise: opinionated, sometimes the only correct pattern -->
         <exclude name="AvoidInstantiatingObjectsInLoops"/>
+        <!-- legit: + concatenation is fine in modern JIT -->
+        <exclude name="UseStringBufferForStringAppends"/>
+        <exclude name="ConsecutiveLiteralAppends"/>
+        <exclude name="InefficientEmptyStringCheck"/>
+        <exclude name="StringInstantiation"/>
+        <!-- Bucket A->exclude (14b): cosmetic micro-opt; `sb.append(a).append(b);` vs separate statements is JIT-equivalent. 27 violations. -->
+        <exclude name="ConsecutiveAppendsShouldReuse"/>
+        <!-- Bucket A->exclude (14b): cosmetic-only; modern JIT handles `sb.append("a")` identically to `sb.append('a')`. 13 violations. -->
+        <exclude name="AppendCharacterWithChar"/>
+        <!-- Bucket A->exclude (14b): cosmetic micro-perf; modern JIT handles indexOf("c") identically to indexOf('c'). 3 violations. -->
+        <exclude name="UseIndexOfChar"/>
     </rule>
+
+    <!-- ===== MULTITHREADING: real concurrency bugs ===== -->
     <rule ref="category/java/multithreading.xml">
-        <exclude name="AvoidUsingVolatile"/>
+        <!-- noise: ConcurrentHashMap not always the right choice -->
         <exclude name="UseConcurrentHashMap"/>
+        <!-- legit: Vert.x worker pools and JDK Thread are legitimate -->
         <exclude name="DoNotUseThreads"/>
+        <!-- legit: volatile is used correctly throughout for visibility -->
+        <exclude name="AvoidUsingVolatile"/>
+        <!-- Bucket B (14b): "Use ReentrantLock" is judgment; synchronized is correct for short critical sections. 46 violations. -->
+        <exclude name="AvoidSynchronizedStatement"/>
+        <!-- Bucket B (14b): same family as AvoidSynchronizedStatement; method-level synchronized on tiny accessor methods is fine. 6 violations. -->
+        <exclude name="AvoidSynchronizedAtMethodLevel"/>
     </rule>
-    <rule name="OnlyOneConstructorShouldDoInitialization" message="Avoid field initialization in several constructors." language="java" class="net.sourceforge.pmd.lang.rule.XPathRule">
-        <description>
-            Avoid doing field initialization in several constructors.
-            Only one main constructor should do real work.
-            Other constructors should delegate initialization to it.
-        </description>
-        <priority>3</priority>
-        <properties>
-            <property name="xpath">
-                <value><![CDATA[
-          //ClassOrInterfaceBody[count(ClassOrInterfaceBodyDeclaration/ConstructorDeclaration)>1]
-          [count(ClassOrInterfaceBodyDeclaration/ConstructorDeclaration[BlockStatement])>1]
-        ]]></value>
-            </property>
-        </properties>
-    </rule>
-    <rule name="ConstructorOnlyInitializesOrCallOtherConstructors" message="Only field initialization or call to other constructors in a constructor." language="java" class="net.sourceforge.pmd.lang.rule.XPathRule">
-        <description>
-            Avoid putting anything other than field assignments into constructors.
-            The only exception should be calling other constructors
-            or calling super class constructor.
-        </description>
-        <priority>3</priority>
-        <properties>
-            <property name="xpath">
-                <value><![CDATA[
-          //ConstructorDeclaration/BlockStatement[count(Statement/StatementExpression/PrimaryExpression[count(following-sibling::AssignmentOperator[1])>0]/PrimaryPrefix[@ThisModifier="true"])!=count(*)]
-        ]]></value>
-            </property>
-        </properties>
-    </rule>
-    <rule name="AvoidDirectAccessToStaticFields" message="Static fields should be accessed in a static way [CLASS_NAME.FIELD_NAME]." language="java" class="net.sourceforge.pmd.lang.rule.XPathRule">
-        <description>
-            Avoid accessing static fields directly.
-        </description>
-        <priority>3</priority>
-        <properties>
-            <property name="xpath">
-                <value><![CDATA[
-          //Name[@Image = //FieldDeclaration[@Static='true']/@Name]
-        ]]></value>
-            </property>
-        </properties>
-    </rule>
-<!--    The following rule does not seem to properly work-->
-<!--    <rule name="AvoidAccessToStaticMembersViaThis" message="Static members should be accessed in a static way [CLASS_NAME.FIELD_NAME], not via instance reference." language="java" class="net.sourceforge.pmd.lang.rule.XPathRule">-->
-<!--        <description>-->
-<!--            Avoid accessing static fields or methods via instance with 'this' keyword.-->
-<!--        </description>-->
-<!--        <priority>3</priority>-->
-<!--        <properties>-->
-<!--            <property name="xpath">-->
-<!--                <value><![CDATA[-->
-<!--          //PrimaryExpression[-->
-<!--            (./PrimaryPrefix[@ThisModifier='true']) and-->
-<!--            (./PrimarySuffix[-->
-<!--              @Image=//FieldDeclaration[@Static='true']/@VariableName-->
-<!--              or @Image=//MethodDeclaration[@Static='true']/@MethodName-->
-<!--            ])-->
-<!--          ]-->
-<!--        ]]></value>-->
-<!--            </property>-->
-<!--        </properties>-->
-<!--    </rule>-->
-    <rule name="ProhibitPublicStaticMethods" message="Public static methods are prohibited." language="java" class="net.sourceforge.pmd.lang.rule.XPathRule">
-        <description>
-            Public static methods are prohibited.
-        </description>
-        <priority>3</priority>
-        <properties>
-            <property name="xpath">
-                <value><![CDATA[
-          //ClassOrInterfaceBodyDeclaration[
-            MethodDeclaration[@Static='true' and @Public='true'
-              and not (
-               MethodDeclarator[
-                count(FormalParameters/FormalParameter)=1
-                and @Image='main'
-                and FormalParameters/FormalParameter[1]/Type/ReferenceType/ClassOrInterfaceType[@Image='String']
-                and FormalParameters/FormalParameter[@Varargs='true']
-               ] and not(ResultType/Type)
-              )
-            ] and (
-                Annotation/MarkerAnnotation/Name[@Image!='BeforeClass' and @Image!='AfterClass'
-                  and @Image!='Parameterized.Parameters']
-                or not (Annotation)
-            )
-          ]
-      ]]></value>
-            </property>
-        </properties>
-    </rule>
-    <rule name="ProhibitFilesCreateFileInTests" message="Files.createFile should not be used in tests, replace them with @Rule TemporaryFolder" language="java" class="net.sourceforge.pmd.lang.rule.XPathRule">
-        <description>
-            Files.createFile shouldn't be used in tests.
-        </description>
-        <priority>3</priority>
-        <properties>
-            <property name="xpath">
-                <value><![CDATA[
-          //ClassOrInterfaceDeclaration[ends-with(@SimpleName, 'Test')]//PrimaryPrefix/Name[@Name='Files.createFile']
-        ]]></value>
-            </property>
-        </properties>
-    </rule>
+
+    <!-- ===== Custom XPath rules from previous ruleset =====
+         All custom XPath rules from the PMD 6 ruleset have been DROPPED.
+         PMD 7's new AST renders the old XPath expressions invalid:
+           OnlyOneConstructorShouldDoInitialization — judgment, too noisy
+           ConstructorOnlyInitializesOrCallOtherConstructors — low value
+           AvoidDirectAccessToStaticFields — false positives on Builder.X access
+           ProhibitPublicStaticMethods — questionable rule (factory methods, parse methods)
+           ProhibitFilesCreateFileInTests — only 2 historical violations, low value
+         If any of these are needed, Phase 14b can add PMD 7-compatible
+         rewrites of the XPath expressions. -->
 </ruleset>

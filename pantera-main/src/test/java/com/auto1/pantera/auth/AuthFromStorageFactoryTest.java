@@ -20,7 +20,6 @@ import org.junit.jupiter.api.Test;
  * Test for {@link AuthFromStorageFactory}.
  * @since 0.30
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class AuthFromStorageFactoryTest {
 
     @Test

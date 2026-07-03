@@ -22,7 +22,6 @@ import org.junit.jupiter.api.extension.RegisterExtension;
  * Integration test with user's roles permissions.
  * @since 0.26
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class RolesITCase {
 
     /**

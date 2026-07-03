@@ -82,7 +82,6 @@ public final class MavenCacheConfig {
      * @param profile YAML mapping for a specific profile
      * @return Cache config
      */
-    @SuppressWarnings("PMD.ProhibitPublicStaticMethods")
     public static MavenCacheConfig fromProfile(final YamlMapping profile) {
         if (profile == null) {
             return new MavenCacheConfig();
@@ -117,13 +116,12 @@ public final class MavenCacheConfig {
      * @param profileName Name of the cache profile to load
      * @return Cache config
      */
-    @SuppressWarnings({"PMD.ProhibitPublicStaticMethods", "PMD.SystemPrintln"})
     public static MavenCacheConfig fromServer(
         final YamlMapping serverYaml,
         final String profileName
     ) {
         if (serverYaml == null) {
-            System.err.printf(
+            System.err.printf( // NOPMD SystemPrintln - config-load is pre-logger initialization; stderr is the only diagnostic channel
                 "[MavenCacheConfig] No server settings found, using built-in defaults%n"
             );
             return new MavenCacheConfig();
@@ -141,13 +139,13 @@ public final class MavenCacheConfig {
             if (profiles != null) {
                 final YamlMapping profileConfig = profiles.yamlMapping(profile);
                 if (profileConfig != null) {
-                    System.out.printf(
+                    System.out.printf( // NOPMD SystemPrintln - config-load is pre-logger initialization; stdout is the only diagnostic channel
                         "[MavenCacheConfig] Loaded cache profile '%s' from cache.profiles (global)%n",
                         profile
                     );
                     return fromProfile(profileConfig);
                 } else {
-                    System.err.printf(
+                    System.err.printf( // NOPMD SystemPrintln - config-load is pre-logger initialization; stderr is the only diagnostic channel
                         "[MavenCacheConfig] Cache profile '%s' not found in cache.profiles%n",
                         profile
                     );
@@ -162,7 +160,7 @@ public final class MavenCacheConfig {
             if (cacheProfiles != null) {
                 final YamlMapping profileConfig = cacheProfiles.yamlMapping(profile);
                 if (profileConfig != null) {
-                    System.out.printf(
+                    System.out.printf( // NOPMD SystemPrintln - config-load is pre-logger initialization; stdout is the only diagnostic channel
                         "[MavenCacheConfig] Loaded cache profile '%s' from maven.cacheProfiles (legacy)%n",
                         profile
                     );
@@ -172,7 +170,7 @@ public final class MavenCacheConfig {
         }
         
         // No profile found, use built-in defaults
-        System.err.printf(
+        System.err.printf( // NOPMD SystemPrintln - config-load is pre-logger initialization; stderr is the only diagnostic channel
             "[MavenCacheConfig] Cache profile '%s' not found in cache.profiles or maven.cacheProfiles, using built-in defaults%n",
             profile
         );
@@ -184,7 +182,6 @@ public final class MavenCacheConfig {
      * @param repoYaml Repository YAML
      * @return Profile name, or "default" if not specified
      */
-    @SuppressWarnings("PMD.ProhibitPublicStaticMethods")
     public static String getProfileName(final YamlMapping repoYaml) {
         if (repoYaml == null) {
             return "default";
@@ -200,7 +197,6 @@ public final class MavenCacheConfig {
      * @param defaultValue Default if parsing fails
      * @return Parsed duration
      */
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.UseLocaleWithCaseConversions", "PMD.SystemPrintln"})
     private static Duration parseDuration(final String value, final Duration defaultValue) {
         if (value == null || value.isEmpty()) {
             return defaultValue;
@@ -212,7 +208,7 @@ public final class MavenCacheConfig {
         } catch (Exception e1) {
             // Try simple format: 24h, 30m, 5s
             try {
-                final String lower = value.toLowerCase().trim();
+                final String lower = value.toLowerCase(java.util.Locale.ROOT).trim();
                 if (lower.endsWith("h")) {
                     return Duration.ofHours(Long.parseLong(lower.substring(0, lower.length() - 1)));
                 } else if (lower.endsWith("m")) {
@@ -225,7 +221,7 @@ public final class MavenCacheConfig {
                 // Try parsing as seconds
                 return Duration.ofSeconds(Long.parseLong(lower));
             } catch (Exception e2) {
-                System.err.printf(
+                System.err.printf( // NOPMD SystemPrintln - config-load is pre-logger initialization; stderr is the only diagnostic channel
                     "[MavenCacheConfig] Failed to parse duration '%s', using default: %s%n",
                     value, defaultValue
                 );
@@ -240,7 +236,6 @@ public final class MavenCacheConfig {
      * @param defaultValue Default if parsing fails
      * @return Parsed integer
      */
-    @SuppressWarnings("PMD.SystemPrintln")
     private static int parseInt(final String value, final int defaultValue) {
         if (value == null || value.isEmpty()) {
             return defaultValue;
@@ -249,7 +244,7 @@ public final class MavenCacheConfig {
         try {
             return Integer.parseInt(value.trim());
         } catch (NumberFormatException e) {
-            System.err.printf(
+            System.err.printf( // NOPMD SystemPrintln - config-load is pre-logger initialization; stderr is the only diagnostic channel
                 "[MavenCacheConfig] Failed to parse integer '%s', using default: %d%n",
                 value, defaultValue
             );

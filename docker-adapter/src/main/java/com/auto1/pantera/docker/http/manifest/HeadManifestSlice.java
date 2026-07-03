@@ -48,14 +48,19 @@ public class HeadManifestSlice extends DockerActionSlice {
             .eventAction("manifest_head")
             .field("container.image.name", request.name())
             .field("container.image.tag", request.reference().digest())
+            .field("log.source", "application")
             .log();
 
-        // Capture the authenticated login before crossing the async boundary.
-        // Mirrors the same fix in GetManifestSlice: body.asBytesFuture() may complete
-        // on a different thread where MDC.user.name is not set.
+        // Capture the authenticated login before crossing the async
+        // boundary. body.asBytesFuture() may complete on a different
+        // thread where MDC is not set. The trace.id + client.ip values
+        // come from the EcsLoggingSlice internal headers (see
+        // RequestContextHeaders.bindToMdc), which propagate even when
+        // the per-thread MDC does not.
         final String login = new Login(headers).getValue();
         return body.asBytesFuture().thenCompose(ignored -> {
             MDC.put("user.name", login);
+            com.auto1.pantera.http.log.RequestContextHeaders.bindToMdc(headers);
             return this.docker.repo(request.name()).manifests()
                 .get(request.reference())
                 .thenApply(
@@ -73,6 +78,7 @@ public class HeadManifestSlice extends DockerActionSlice {
                                 .field("container.image.tag", request.reference().digest())
                                 .field("package.size", size)
                                 .field("file.type", found.mediaType())
+                                .field("log.source", "application")
                                 .log();
 
                             return ResponseBuilder.ok()
@@ -90,6 +96,7 @@ public class HeadManifestSlice extends DockerActionSlice {
                                 .eventOutcome("failure")
                                 .field("container.image.name", request.name())
                                 .field("container.image.tag", request.reference().digest())
+                                .field("log.source", "application")
                                 .log();
 
                             return ResponseBuilder.notFound()

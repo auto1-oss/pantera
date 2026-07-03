@@ -97,7 +97,6 @@ public final class UserPermissions extends PermissionCollection {
     }
 
     @Override
-    @SuppressWarnings({"PMD.AvoidDeeplyNestedIfStmts", "PMD.CognitiveComplexity"})
     public boolean implies(final Permission permission) {
         final String first = this.lastRole.get();
         boolean res = this.checkReference(first, permission);

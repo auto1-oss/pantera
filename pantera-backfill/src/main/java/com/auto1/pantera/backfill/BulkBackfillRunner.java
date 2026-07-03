@@ -38,7 +38,6 @@ import org.slf4j.LoggerFactory;
  *
  * @since 1.20.13
  */
-@SuppressWarnings("PMD.ExcessiveImports")
 final class BulkBackfillRunner {
 
     /**
@@ -107,7 +106,6 @@ final class BulkBackfillRunner {
      * @param out Stream for summary output (typically System.err)
      * @checkstyle ParameterNumberCheck (10 lines)
      */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
     BulkBackfillRunner(
         final Path configDir,
         final Path storageRoot,
@@ -191,7 +189,7 @@ final class BulkBackfillRunner {
         try {
             entry = RepoConfigYaml.parse(file);
         } catch (final IOException ex) {
-            LOG.warn("PARSE_ERROR for '{}': {}", fileName, ex.getMessage());
+            LOG.warn("PARSE_ERROR for '{}': {}", fileName, ex.getMessage(), ex);
             return new RepoResult(
                 stem, "-", -1L, -1L,
                 "PARSE_ERROR (" + ex.getMessage() + ")"
@@ -204,7 +202,7 @@ final class BulkBackfillRunner {
         } catch (final IllegalArgumentException ex) {
             LOG.warn(
                 "Unknown type '{}' for repo '{}', skipping",
-                rawType, stem
+                rawType, stem, ex
             );
             return new RepoResult(
                 stem, "[UNKNOWN]", -1L, -1L,

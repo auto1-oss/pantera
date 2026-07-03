@@ -17,6 +17,7 @@ Welcome to the Pantera Artifact Registry User Guide. This guide covers everythin
 Step-by-step instructions for configuring your client and working with each package format:
 
 - [Maven](repositories/maven.md) -- Pull dependencies, deploy artifacts, configure `settings.xml`.
+- [Gradle](repositories/gradle.md) -- Resolve dependencies and publish artifacts; aliases to the Maven family.
 - [npm](repositories/npm.md) -- Install packages, publish packages, configure `.npmrc`.
 - [Docker](repositories/docker.md) -- Pull images, push images, configure Docker daemon.
 - [PyPI](repositories/pypi.md) -- Install packages with pip, upload with twine, configure `pip.conf`.

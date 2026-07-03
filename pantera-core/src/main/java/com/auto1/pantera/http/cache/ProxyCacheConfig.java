@@ -12,7 +12,6 @@ package com.auto1.pantera.http.cache;
 
 import com.amihaiemil.eoyaml.YamlMapping;
 import java.time.Duration;
-import java.util.Locale;
 import java.util.Optional;
 
 /**
@@ -32,7 +31,6 @@ import java.util.Optional;
  *     ttl: PT168H
  *   cooldown:
  *     enabled: true
- *   dedup_strategy: signal          # none | storage | signal
  *   conditional_requests: true      # ETag / If-None-Match
  *   stale_while_revalidate:
  *     enabled: false
@@ -62,6 +60,21 @@ public final class ProxyCacheConfig {
      * Default metadata cache TTL (7 days).
      */
     public static final Duration DEFAULT_METADATA_TTL = Duration.ofDays(7);
+
+    /**
+     * Default metadata soft TTL for the stale-while-revalidate fast path
+     * (30 s). Within this window of {@code lastVerified}, requests serve
+     * cached metadata with no upstream call.
+     */
+    public static final Duration DEFAULT_METADATA_SOFT_TTL = Duration.ofSeconds(30);
+
+    /**
+     * Default metadata hard TTL — the stale-while-revalidate budget
+     * (2 hours). Between soft and hard TTL, requests serve cached and fire
+     * a background single-flighted refresh. Past hard TTL, requests block
+     * on upstream.
+     */
+    public static final Duration DEFAULT_METADATA_HARD_TTL = Duration.ofHours(2);
 
     /**
      * Default stale-while-revalidate max age (1 hour).
@@ -135,21 +148,35 @@ public final class ProxyCacheConfig {
     }
 
     /**
-     * Check if cooldown is enabled for this adapter.
-     * @return True if enabled (default: false)
+     * Get metadata stale-while-revalidate soft TTL.
+     *
+     * <p>Within this window of {@code lastVerified}, metadata refreshes
+     * serve from the cache with no upstream call. T-P11
+     * (analysis/plan/v2/IMPLEMENTATION.md): default 30 s, configurable per
+     * repository via {@code cache.metadata.soft_ttl} in YAML.</p>
+     *
+     * @return Soft TTL duration (default: 30 s)
      */
-    public boolean cooldownEnabled() {
-        return this.boolValue("cache", "cooldown", "enabled").orElse(false);
+    public Duration metadataSoftTtl() {
+        return this.durationValue("cache", "metadata", "soft_ttl")
+            .orElse(DEFAULT_METADATA_SOFT_TTL);
     }
 
     /**
-     * Get request deduplication strategy.
-     * @return Dedup strategy (default: SIGNAL)
+     * Get metadata stale-while-revalidate hard TTL.
+     *
+     * <p>Between {@link #metadataSoftTtl()} and this value, metadata
+     * refreshes serve cached bytes immediately AND fire a single-flighted
+     * background refresh. Past this value, refreshes block on the upstream
+     * call (the cold-miss path). T-P11
+     * (analysis/plan/v2/IMPLEMENTATION.md): default 2 h, configurable per
+     * repository via {@code cache.metadata.hard_ttl} in YAML.</p>
+     *
+     * @return Hard TTL duration (default: 2 h)
      */
-    public DedupStrategy dedupStrategy() {
-        return this.stringValue("cache", "dedup_strategy")
-            .map(s -> DedupStrategy.valueOf(s.toUpperCase(Locale.ROOT)))
-            .orElse(DedupStrategy.SIGNAL);
+    public Duration metadataHardTtl() {
+        return this.durationValue("cache", "metadata", "hard_ttl")
+            .orElse(DEFAULT_METADATA_HARD_TTL);
     }
 
     /**
@@ -277,15 +304,6 @@ public final class ProxyCacheConfig {
         } catch (final Exception ex) {
             return Optional.empty();
         }
-    }
-
-    /**
-     * Get string value from nested YAML path.
-     * @param path YAML path segments
-     * @return Optional string value
-     */
-    private Optional<String> stringValue(final String... path) {
-        return Optional.ofNullable(this.rawValue(path));
     }
 
     /**

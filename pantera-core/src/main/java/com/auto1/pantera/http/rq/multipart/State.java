@@ -37,7 +37,6 @@ import java.util.function.IntUnaryOperator;
  * </p>
  * @since 1.0
  */
-@SuppressWarnings("PMD.AvoidAccessToStaticMembersViaThis")
 final class State {
 
     /**

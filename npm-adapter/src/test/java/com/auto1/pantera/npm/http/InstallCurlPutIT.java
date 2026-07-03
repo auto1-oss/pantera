@@ -51,7 +51,6 @@ import org.testcontainers.containers.GenericContainer;
  * @since 0.9
  */
 @DisabledOnOs(OS.WINDOWS)
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 final class InstallCurlPutIT {
     /**
      * Temporary directory for all tests.

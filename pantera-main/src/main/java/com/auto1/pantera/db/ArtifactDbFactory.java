@@ -234,7 +234,11 @@ public final class ArtifactDbFactory {
         hikariConfig.setMaximumPoolSize(maxSize);
         hikariConfig.setMinimumIdle(minIdle);
         hikariConfig.setConnectionTimeout(
-            ConfigDefaults.getLong("PANTERA_DB_CONNECTION_TIMEOUT_MS", 5000L)
+            // Fail-fast: 3s instead of 5s so that upstream Hikari timeouts
+            // propagate as 503 / queue-pressure signals before Vert.x
+            // request timeouts (30s default) or the client's own deadline.
+            // Operators can raise via PANTERA_DB_CONNECTION_TIMEOUT_MS.
+            ConfigDefaults.getLong("PANTERA_DB_CONNECTION_TIMEOUT_MS", 3000L)
         );
         hikariConfig.setIdleTimeout(
             ConfigDefaults.getLong("PANTERA_DB_IDLE_TIMEOUT_MS", 600_000L)
@@ -244,7 +248,12 @@ public final class ArtifactDbFactory {
         );
         hikariConfig.setPoolName(poolName);
         hikariConfig.setLeakDetectionThreshold(
-            ConfigDefaults.getLong("PANTERA_DB_LEAK_DETECTION_MS", 300000)
+            // Fail-fast: 5s instead of 300s so any leaked connection
+            // surfaces loudly in logs as a leak WARN rather than
+            // silently rotting the pool. Canary rollouts may raise to
+            // 30s initially via PANTERA_DB_LEAK_DETECTION_MS and drop
+            // back to the default once observed WARNs go to zero.
+            ConfigDefaults.getLong("PANTERA_DB_LEAK_DETECTION_MS", 5_000L)
         );
         hikariConfig.setRegisterMbeans(true);
 
@@ -255,6 +264,7 @@ public final class ArtifactDbFactory {
             .eventCategory("database")
             .eventAction("connection_pool_init")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
         return source;
     }
@@ -274,7 +284,7 @@ public final class ArtifactDbFactory {
         if (registry == null) {
             return;
         }
-        if (dataSource instanceof HikariDataSource hds) {
+        if (dataSource instanceof HikariDataSource hds) { // NOPMD CloseResource - DataSource is caller-owned; we only attach metrics, not manage lifecycle
             hds.setMetricsTrackerFactory(
                 new com.zaxxer.hikari.metrics.micrometer.MicrometerMetricsTrackerFactory(registry)
             );
@@ -282,6 +292,7 @@ public final class ArtifactDbFactory {
                 .message("HikariCP Micrometer metrics enabled for pool: " + hds.getPoolName())
                 .eventCategory("database")
                 .eventAction("metrics_init")
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -406,6 +417,7 @@ public final class ArtifactDbFactory {
                 EcsLogger.debug("com.auto1.pantera.db")
                     .message("Failed to add search_tokens column (may already exist)")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
             // GIN index for fast full-text search on search_tokens
@@ -417,6 +429,7 @@ public final class ArtifactDbFactory {
                 EcsLogger.debug("com.auto1.pantera.db")
                     .message("Failed to create GIN index idx_artifacts_search (may already exist)")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
             // Trigger function to auto-populate search_tokens on INSERT/UPDATE.
@@ -445,6 +458,7 @@ public final class ArtifactDbFactory {
                 EcsLogger.debug("com.auto1.pantera.db")
                     .message("Failed to create artifacts_search_update function")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
             // Attach trigger to artifacts table (drop first for idempotent re-creation)
@@ -464,6 +478,7 @@ public final class ArtifactDbFactory {
                 EcsLogger.debug("com.auto1.pantera.db")
                     .message("Failed to create trigger trg_artifacts_search")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
             // Performance indexes identified by full-stack audit
@@ -475,6 +490,7 @@ public final class ArtifactDbFactory {
                 EcsLogger.debug("com.auto1.pantera.db")
                     .message("Failed to create idx_artifacts_name_lower (may already exist)")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
             try {
@@ -485,6 +501,7 @@ public final class ArtifactDbFactory {
                 EcsLogger.debug("com.auto1.pantera.db")
                     .message("Failed to create idx_artifacts_repo_latest (may already exist)")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
             // Trigram index for fuzzy search (requires pg_trgm extension)
@@ -497,6 +514,7 @@ public final class ArtifactDbFactory {
                 EcsLogger.debug("com.auto1.pantera.db")
                     .message("Failed to create trigram index (pg_trgm extension may not be available)")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
             // Covering index for dashboard top-repos query — turns GROUP BY seq scan into
@@ -510,6 +528,7 @@ public final class ArtifactDbFactory {
                 EcsLogger.debug("com.auto1.pantera.db")
                     .message("Failed to create idx_artifacts_repo_size_cover (may already exist)")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
             // Materialized views for dashboard aggregates — sub-millisecond reads vs seq scans.
@@ -526,6 +545,7 @@ public final class ArtifactDbFactory {
                 EcsLogger.warn("com.auto1.pantera.db")
                     .message("Failed to create mv_artifact_totals")
                     .eventCategory("database").eventAction("mv_create").eventOutcome("failure")
+                    .field("log.source", "application")
                     .error(ex).log();
             }
             // Unique index on the synthetic id column — required for CONCURRENTLY
@@ -539,6 +559,7 @@ public final class ArtifactDbFactory {
                 EcsLogger.warn("com.auto1.pantera.db")
                     .message("Failed to create uq_mv_artifact_totals — REFRESH CONCURRENTLY will not work")
                     .eventCategory("database").eventAction("mv_index_create").eventOutcome("failure")
+                    .field("log.source", "application")
                     .error(ex).log();
             }
             try {
@@ -553,6 +574,7 @@ public final class ArtifactDbFactory {
                 EcsLogger.warn("com.auto1.pantera.db")
                     .message("Failed to create mv_artifact_per_repo")
                     .eventCategory("database").eventAction("mv_create").eventOutcome("failure")
+                    .field("log.source", "application")
                     .error(ex).log();
             }
             try {
@@ -568,6 +590,7 @@ public final class ArtifactDbFactory {
                 EcsLogger.warn("com.auto1.pantera.db")
                     .message("Failed to create indexes on mv_artifact_per_repo — REFRESH CONCURRENTLY will not work")
                     .eventCategory("database").eventAction("mv_index_create").eventOutcome("failure")
+                    .field("log.source", "application")
                     .error(ex).log();
             }
             statement.executeUpdate(
@@ -604,6 +627,7 @@ public final class ArtifactDbFactory {
                 EcsLogger.debug("com.auto1.pantera.db")
                     .message("Failed to drop constraint cooldown_parent_fk (may not exist)")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
             try {
@@ -614,6 +638,7 @@ public final class ArtifactDbFactory {
                 EcsLogger.debug("com.auto1.pantera.db")
                     .message("Failed to drop column parent_block_id (may not exist)")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
             // Migration: Drop artifact_cooldown_attempts table (no longer used)

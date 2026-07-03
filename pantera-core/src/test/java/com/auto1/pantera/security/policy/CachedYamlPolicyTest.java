@@ -31,7 +31,6 @@ import org.junit.jupiter.api.Test;
  * Test for {@link CachedYamlPolicy} and {@link UserPermissions}.
  * @since 1.2
  */
-@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.TooManyMethods"})
 class CachedYamlPolicyTest {
 
     /**

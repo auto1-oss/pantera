@@ -13,7 +13,6 @@ import org.junit.jupiter.api.Test;
  * Test for {@link DockerRegistryPermission.DockerRegistryPermissionCollection}.
  * @since 0.18
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class DockerRegistryPermissionCollectionTest {
 
     /**

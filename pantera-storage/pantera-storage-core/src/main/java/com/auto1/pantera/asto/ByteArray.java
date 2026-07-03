@@ -48,9 +48,8 @@ public final class ByteArray {
      *
      * @param bytes The bytes.
      */
-    @SuppressWarnings("PMD.ArrayIsStoredDirectly")
     public ByteArray(final Byte[] bytes) {
-        this.bytes = bytes;
+        this.bytes = bytes; // NOPMD ArrayIsStoredDirectly - immutable holder for an already-boxed array; primitiveBytes() returns a copy and boxedBytes() exposes the same internal pattern by design
     }
 
     /**
@@ -71,9 +70,8 @@ public final class ByteArray {
      *
      * @return Primitive byte array
      */
-    @SuppressWarnings("PMD.MethodReturnsInternalArray")
     public Byte[] boxedBytes() {
-        return this.bytes;
+        return this.bytes; // NOPMD MethodReturnsInternalArray - public API contract: returns the internal boxed array view; callers historically may mutate, defensive copy would be a behavior change
     }
 
     /**
@@ -81,10 +79,11 @@ public final class ByteArray {
      * @param primitive Primitive byte array
      * @return Boxed byte array
      */
-    @SuppressWarnings("PMD.AvoidArrayLoops")
     private static Byte[] boxed(final byte[] primitive) {
         final Byte[] res = new Byte[primitive.length];
-        for (int itr = 0; itr < primitive.length; itr += 1) {
+        // Boxing byte -> Byte requires per-element auto-boxing; cannot use
+        // Arrays.copyOf or System.arraycopy across primitive/reference types.
+        for (int itr = 0; itr < primitive.length; itr += 1) { // NOPMD AvoidArrayLoops - byte[] -> Byte[] requires per-element auto-boxing
             res[itr] = primitive[itr];
         }
         return res;

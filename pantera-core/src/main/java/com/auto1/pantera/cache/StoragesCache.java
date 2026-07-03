@@ -22,6 +22,7 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.RemovalCause;
 import com.google.common.base.Strings;
+import java.util.Locale;
 import org.apache.commons.lang3.NotImplementedException;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.misc.DispatchedStorage;
@@ -77,6 +78,7 @@ public class StoragesCache implements Cleanable<YamlMapping> {
             .eventCategory("database")
             .eventAction("cache_init")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
 
 
@@ -183,12 +185,13 @@ public class StoragesCache implements Cleanable<YamlMapping> {
                 .eventCategory("database")
                 .eventAction("cache_evict")
                 .eventOutcome("success")
+                .field("log.source", "application")
                 .log();
 
             // Record eviction metric
             if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
                 com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
-                    .recordCacheEviction("storage", "l1", cause.toString().toLowerCase());
+                    .recordCacheEviction("storage", "l1", cause.toString().toLowerCase(Locale.ROOT));
             }
         }
     }

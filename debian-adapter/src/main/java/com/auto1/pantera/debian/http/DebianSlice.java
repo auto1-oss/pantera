@@ -23,6 +23,7 @@ import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
 import com.auto1.pantera.http.slice.*;
 import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.scheduling.RepositoryEvents;
 import com.auto1.pantera.security.perms.Action;
 import com.auto1.pantera.security.perms.AdapterBasicPermission;
 import com.auto1.pantera.security.policy.Policy;
@@ -35,6 +36,11 @@ import java.util.regex.Pattern;
  * Debian slice.
  */
 public final class DebianSlice extends Slice.Wrap {
+
+    /**
+     * Repository type name.
+     */
+    private static final String REPO_TYPE = "debian";
 
     /**
      * Ctor.
@@ -50,6 +56,22 @@ public final class DebianSlice extends Slice.Wrap {
             final Authentication users,
             final Config config,
             final Optional<Queue<ArtifactEvent>> events
+    ) {
+        this(storage, policy, users, config, events,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+    }
+
+    /**
+     * Ctor with synchronous artifact-index writer.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public DebianSlice(
+            final Storage storage,
+            final Policy<?> policy,
+            final Authentication users,
+            final Config config,
+            final Optional<Queue<ArtifactEvent>> events,
+            final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
     ) {
         super(
             new SliceRoute(
@@ -69,7 +91,7 @@ public final class DebianSlice extends Slice.Wrap {
                         MethodRule.PUT, MethodRule.POST
                     ),
                     new BasicAuthzSlice(
-                        new ReleaseSlice(new UpdateSlice(storage, config, events), storage, config),
+                        new ReleaseSlice(new UpdateSlice(storage, config, events, syncIndex), storage, config),
                         users,
                         new OperationControl(
                             policy,
@@ -80,7 +102,12 @@ public final class DebianSlice extends Slice.Wrap {
                 new RtRulePath(
                     MethodRule.DELETE,
                     new BasicAuthzSlice(
-                        new DeleteSlice(storage, config),
+                        new DeleteSlice(
+                            storage, config,
+                            events.map(
+                                queue -> new RepositoryEvents(DebianSlice.REPO_TYPE, config.codename(), queue)
+                            )
+                        ),
                         users,
                         new OperationControl(
                             policy,

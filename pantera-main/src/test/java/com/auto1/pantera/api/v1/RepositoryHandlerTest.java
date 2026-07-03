@@ -239,4 +239,63 @@ public final class RepositoryHandlerTest extends AsyncApiTestBase {
             }
         );
     }
+
+    @Test
+    void putWithNonBooleanAnonymousReadReturns400(
+        final Vertx vertx, final VertxTestContext ctx
+    ) throws Exception {
+        // anonymous_read = "true" (a string) — must be a real JSON boolean.
+        final JsonObject body = new JsonObject()
+            .put(
+                "repo",
+                new JsonObject()
+                    .put("type", "maven-proxy")
+                    .put("storage", new JsonObject().put("type", "fs").put("path", "/tmp"))
+                    .put("anonymous_read", "true")
+            );
+        this.request(
+            vertx, ctx,
+            HttpMethod.PUT, "/api/v1/repositories/anon-read-bad",
+            body,
+            res -> {
+                Assertions.assertEquals(400, res.statusCode());
+                final JsonObject resp = res.bodyAsJsonObject();
+                Assertions.assertEquals("BAD_REQUEST", resp.getString("error"));
+                Assertions.assertTrue(
+                    resp.getString("message").contains("anonymous_read"),
+                    "Error message should mention 'anonymous_read'"
+                );
+            }
+        );
+    }
+
+    @Test
+    void putWithNonBooleanAnonymousWriteReturns400(
+        final Vertx vertx, final VertxTestContext ctx
+    ) throws Exception {
+        // anonymous_write = 1 (a number) — must be a real JSON boolean.
+        final JsonObject body = new JsonObject()
+            .put(
+                "repo",
+                new JsonObject()
+                    .put("type", "maven-proxy")
+                    .put("storage", new JsonObject().put("type", "fs").put("path", "/tmp"))
+                    .put("anonymous_write", 1)
+            );
+        this.request(
+            vertx, ctx,
+            HttpMethod.PUT, "/api/v1/repositories/anon-write-bad",
+            body,
+            res -> {
+                Assertions.assertEquals(400, res.statusCode());
+                final JsonObject resp = res.bodyAsJsonObject();
+                Assertions.assertEquals("BAD_REQUEST", resp.getString("error"));
+                Assertions.assertTrue(
+                    resp.getString("message").contains("anonymous_write"),
+                    "Error message should mention 'anonymous_write'"
+                );
+            }
+        );
+    }
+
 }

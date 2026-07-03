@@ -41,7 +41,6 @@ import org.quartz.JobExecutionContext;
  * NPM tarball paths follow convention: {name}/-/{name}-{version}.tgz
  * @since 1.5
  */
-@SuppressWarnings("PMD.DataClass")
 public final class NpmProxyPackageProcessor extends QuartzJob {
 
     /**
@@ -65,7 +64,6 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
     private String host;
 
     @Override
-    @SuppressWarnings("PMD.CyclomaticComplexity")
     public void execute(final JobExecutionContext context) {
         this.resolveFromRegistry(context);
         if (this.asto == null || this.packages == null || this.host == null
@@ -100,6 +98,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
             .message("Processing NPM batch (size: " + batch.size() + ")")
             .eventCategory("web")
             .eventAction("batch_processing")
+            .field("log.source", "application")
             .log();
 
         List<CompletableFuture<Void>> futures = batch.stream()
@@ -118,6 +117,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
                 .eventAction("batch_processing")
                 .eventOutcome("success")
                 .duration(duration)
+                .field("log.source", "application")
                 .log();
         } catch (Exception err) {
             final long duration = System.currentTimeMillis() - startTime;
@@ -128,6 +128,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
                 .eventOutcome("failure")
                 .duration(duration)
                 .error(err)
+                .field("log.source", "application")
                 .log();
         } finally {
             TraceContext.clear();
@@ -153,6 +154,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
                 .eventCategory("web")
                 .eventAction("package_validation")
                 .field("package.path", item.artifactKey().string())
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(null);
         }
@@ -174,7 +176,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
                         UploadSlice.REPO_TYPE, item.repoName(), item.ownerLogin(),
                         name, version, size.longValue(), created, release,
                         item.artifactKey().string()
-                    )
+                    ).withContext(item.traceId(), item.clientIp())
                 );
                 EcsLogger.debug("com.auto1.pantera.npm")
                     .message("Package event created from path")
@@ -182,6 +184,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
                     .eventAction("package_processing")
                     .field("package.name", name)
                     .field("package.version", version)
+                    .field("log.source", "application")
                     .log();
             })
             .exceptionally(err -> {
@@ -192,6 +195,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
                     .eventOutcome("failure")
                     .field("package.path", item.artifactKey().string())
                     .error(err)
+                    .field("log.source", "application")
                     .log();
                 return null;
             });
@@ -316,7 +320,6 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
      * Set registry key for events queue (JDBC mode).
      * @param key Registry key
      */
-    @SuppressWarnings("PMD.MethodNamingConventions")
     public void setEvents_key(final String key) {
         this.events = JobDataRegistry.lookup(key);
     }
@@ -325,7 +328,6 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
      * Set registry key for packages queue (JDBC mode).
      * @param key Registry key
      */
-    @SuppressWarnings("PMD.MethodNamingConventions")
     public void setPackages_key(final String key) {
         this.packages = JobDataRegistry.lookup(key);
     }
@@ -334,7 +336,6 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
      * Set registry key for storage (JDBC mode).
      * @param key Registry key
      */
-    @SuppressWarnings("PMD.MethodNamingConventions")
     public void setStorage_key(final String key) {
         this.asto = JobDataRegistry.lookup(key);
     }

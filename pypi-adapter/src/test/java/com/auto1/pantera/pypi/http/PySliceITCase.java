@@ -41,7 +41,6 @@ import org.junit.jupiter.api.extension.RegisterExtension;
  *
  * @since 0.4
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 @DisabledOnOs(OS.WINDOWS)
 public final class PySliceITCase {
 

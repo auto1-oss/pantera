@@ -88,10 +88,7 @@ public final class DbGatedAuth implements Authentication {
 
     @Override
     public boolean canHandle(final String username) {
-        if (!this.cache.isEnabled(this.type)) {
-            return false;
-        }
-        return this.inner.canHandle(username);
+        return this.cache.isEnabled(this.type) && this.inner.canHandle(username);
     }
 
     @Override
@@ -101,10 +98,7 @@ public final class DbGatedAuth implements Authentication {
 
     @Override
     public boolean isAuthoritative(final String username) {
-        if (!this.cache.isEnabled(this.type)) {
-            return false;
-        }
-        return this.inner.isAuthoritative(username);
+        return this.cache.isEnabled(this.type) && this.inner.isAuthoritative(username);
     }
 
     @Override
@@ -192,6 +186,7 @@ public final class DbGatedAuth implements Authentication {
                     .eventAction("enabled_types_refresh")
                     .eventOutcome("failure")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
                 // Keep the previous snapshot rather than going to no-providers.
                 if (this.snapshot.get() == null) {

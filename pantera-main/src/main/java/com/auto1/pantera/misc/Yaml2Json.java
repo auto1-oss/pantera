@@ -25,13 +25,23 @@ import javax.json.JsonStructure;
  */
 public final class Yaml2Json implements Function<String, JsonStructure> {
 
+    /**
+     * JSON writer — thread-safe once configured; hoisted to avoid per-call allocation.
+     */
+    private static final ObjectMapper JSON = new ObjectMapper();
+
+    /**
+     * YAML reader — thread-safe once configured; hoisted to avoid per-call allocation.
+     */
+    private static final ObjectMapper YAML = new ObjectMapper(new YAMLFactory());
+
     @Override
     public JsonStructure apply(final String yaml) {
         try {
             return Json.createReader(
                 new ByteArrayInputStream(
-                    new ObjectMapper().writeValueAsBytes(
-                        new ObjectMapper(new YAMLFactory())
+                    Yaml2Json.JSON.writeValueAsBytes(
+                        Yaml2Json.YAML
                             .readValue(Yaml2Json.escapeAsterisk(yaml), Object.class)
                     )
                 )

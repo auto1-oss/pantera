@@ -37,7 +37,6 @@ import org.junit.jupiter.api.Test;
  *
  * @since 0.4
  */
-@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.TooManyMethods"})
 class AstoRepositoryAddJsonTest {
 
     /**

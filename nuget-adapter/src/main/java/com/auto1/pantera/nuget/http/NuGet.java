@@ -114,6 +114,27 @@ public final class NuGet implements Slice {
         final String name,
         final Optional<Queue<ArtifactEvent>> events
     ) {
+        this(url, repository, policy, basicAuth, tokenAuth, name, events,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+    }
+
+    /** Synchronous artifact-index writer. */
+    private final com.auto1.pantera.index.SyncArtifactIndexer syncIndex;
+
+    /**
+     * Ctor with synchronous artifact-index writer.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public NuGet(
+        final URL url,
+        final Repository repository,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
+    ) {
         this.url = url;
         this.repository = repository;
         this.policy = policy;
@@ -121,6 +142,7 @@ public final class NuGet implements Slice {
         this.tokenAuth = tokenAuth;
         this.name = name;
         this.events = events;
+        this.syncIndex = syncIndex;
     }
 
     @Override
@@ -144,7 +166,9 @@ public final class NuGet implements Slice {
      * @return Resource found by path.
      */
     private Resource resource(final String path) {
-        final PackagePublish publish = new PackagePublish(this.repository, this.events, this.name);
+        final PackagePublish publish = new PackagePublish(
+            this.repository, this.events, this.name, this.syncIndex
+        );
         final PackageContent content = new PackageContent(this.url, this.repository);
         final PackageMetadata metadata = new PackageMetadata(this.repository, content);
         return new RoutingResource(

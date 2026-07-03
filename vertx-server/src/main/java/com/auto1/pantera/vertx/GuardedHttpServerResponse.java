@@ -120,6 +120,7 @@ public final class GuardedHttpServerResponse {
                     .eventAction("response_end")
                     .field("http.request.id", this.requestId)
                     .error(e)
+                    .field("log.source", "application")
                     .log();
                 return false;
             }
@@ -130,6 +131,7 @@ public final class GuardedHttpServerResponse {
                 .eventCategory("web")
                 .eventAction("response_end_duplicate")
                 .field("http.request.id", this.requestId)
+                .field("log.source", "application")
                 .log();
             return false;
         }
@@ -157,6 +159,7 @@ public final class GuardedHttpServerResponse {
                     .eventAction("response_end")
                     .field("http.request.id", this.requestId)
                     .error(e)
+                    .field("log.source", "application")
                     .log();
                 return false;
             }
@@ -166,6 +169,7 @@ public final class GuardedHttpServerResponse {
                 .eventCategory("web")
                 .eventAction("response_end_duplicate")
                 .field("http.request.id", this.requestId)
+                .field("log.source", "application")
                 .log();
             return false;
         }
@@ -198,6 +202,7 @@ public final class GuardedHttpServerResponse {
                     .eventAction("response_error")
                     .field("http.request.id", this.requestId)
                     .error(e)
+                    .field("log.source", "application")
                     .log();
                 return false;
             }
@@ -207,6 +212,7 @@ public final class GuardedHttpServerResponse {
                 .eventCategory("web")
                 .eventAction("response_error_duplicate")
                 .field("http.request.id", this.requestId)
+                .field("log.source", "application")
                 .log();
             return false;
         }

@@ -22,12 +22,6 @@ import org.reactivestreams.tck.TestEnvironment;
  *
  * @since 1.0
  */
-@SuppressWarnings(
-    {
-        "PMD.TestClassWithoutTestCases", "PMD.OnlyOneReturn",
-        "PMD.JUnit4TestShouldUseBeforeAnnotation"
-    }
-)
 public final class MultiPartsTckTest extends PublisherVerification<Integer> {
 
     /**
@@ -78,7 +72,6 @@ public final class MultiPartsTckTest extends PublisherVerification<Integer> {
      * @param boundary Boundary string
      * @return Chunk buffer
      */
-    @SuppressWarnings("PMD.AvoidDuplicateLiterals")
     private ByteBuffer newChunk(final long id, final boolean end, final String boundary) {
         final StringBuilder chunk = new StringBuilder(40);
         if (id == 0) {

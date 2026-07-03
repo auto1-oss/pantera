@@ -1,7 +1,0 @@
-repo:
-  type: php-proxy
-  storage:
-    type: fs
-    path: /var/artipie/data
-  remotes:
-    - url: https://repo.packagist.org

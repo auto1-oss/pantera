@@ -12,6 +12,7 @@ package com.auto1.pantera.cluster;
 
 import com.auto1.pantera.cache.ValkeyConnection;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsMdc;
 import io.lettuce.core.pubsub.RedisPubSubAdapter;
 import io.lettuce.core.pubsub.StatefulRedisPubSubConnection;
 import io.lettuce.core.pubsub.api.async.RedisPubSubAsyncCommands;
@@ -21,6 +22,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
+import org.slf4j.MDC;
 
 /**
  * Cross-instance event bus using Valkey pub/sub.
@@ -35,7 +37,13 @@ import java.util.function.Consumer;
  * published by the local instance are ignored on receipt to avoid
  * double-processing events that were already handled locally.
  * <p>
- * Message format on the wire: {@code instanceId|payload}
+ * Message format on the wire (current, v2):
+ * {@code v2:instanceId|traceId|spanId|payload}. The {@code v2:} prefix
+ * carries the originating-request trace context so the receiver can
+ * restore MDC trace.id / span.id for the duration of handler dispatch.
+ * Legacy {@code instanceId|payload} (v1) is still parsed for
+ * rolling-deploy compatibility — when received the handler runs with no
+ * trace MDC, exactly as it did before this change.
  * <p>
  * Thread safety: this class is thread-safe. Handler lists use
  * {@link CopyOnWriteArrayList} and topic subscriptions use
@@ -54,6 +62,16 @@ public final class ClusterEventBus implements AutoCloseable {
      * Message field separator between instance ID and payload.
      */
     private static final String SEP = "|";
+
+    /**
+     * Wire-format version that prepends trace.id / span.id between
+     * instance ID and JSON payload. Receivers that see this prefix
+     * restore the trace context into MDC for the handler callback;
+     * receivers running an older v1 build simply observe an extra
+     * couple of pipe-delimited tokens at the front of the payload
+     * and degrade gracefully (no MDC restore).
+     */
+    private static final String PAYLOAD_VERSION_TRACE = "v2:";
 
     /**
      * Unique instance identifier to filter out self-published messages.
@@ -102,6 +120,7 @@ public final class ClusterEventBus implements AutoCloseable {
             .eventCategory("host")
             .eventAction("eventbus_start")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
     }
 
@@ -115,9 +134,16 @@ public final class ClusterEventBus implements AutoCloseable {
      */
     public void publish(final String topic, final String payload) {
         final String channel = ClusterEventBus.CHANNEL_PREFIX + topic;
-        final String message = String.join(
-            ClusterEventBus.SEP, this.instanceId, payload
-        );
+        // Stamp trace.id + span.id from MDC into the wire envelope so the
+        // receiver can restore the originating-request trace context. Use
+        // empty strings when MDC is absent (publish from a non-request path
+        // like ConfigWatchService); v1 receivers see only the instance id.
+        final String traceId = nullToEmpty(MDC.get(EcsMdc.TRACE_ID));
+        final String spanId = nullToEmpty(MDC.get(EcsMdc.SPAN_ID));
+        final String message = ClusterEventBus.PAYLOAD_VERSION_TRACE
+            + String.join(
+                ClusterEventBus.SEP, this.instanceId, traceId, spanId, payload
+            );
         this.pubCommands.publish(channel, message);
         EcsLogger.debug("com.auto1.pantera.cluster")
             .message("Event published: " + topic)
@@ -125,7 +151,13 @@ public final class ClusterEventBus implements AutoCloseable {
             .eventAction("event_publish")
 
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
+    }
+
+    /** Coalesce nulls to empty strings to keep the wire format positional. */
+    private static String nullToEmpty(final String value) {
+        return value == null ? "" : value;
     }
 
     /**
@@ -151,6 +183,7 @@ public final class ClusterEventBus implements AutoCloseable {
                 .eventAction("topic_subscribe")
     
                 .eventOutcome("success")
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -182,6 +215,7 @@ public final class ClusterEventBus implements AutoCloseable {
             .eventCategory("host")
             .eventAction("eventbus_stop")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
     }
 
@@ -195,15 +229,38 @@ public final class ClusterEventBus implements AutoCloseable {
             if (!channel.startsWith(ClusterEventBus.CHANNEL_PREFIX)) {
                 return;
             }
-            final int sep = message.indexOf(ClusterEventBus.SEP);
-            if (sep < 0) {
-                return;
+            // Decode wire envelope. v2: <instanceId>|<traceId>|<spanId>|<json>
+            // v1 (no prefix): <instanceId>|<json>. Rolling-deploy compatible.
+            final String body;
+            final boolean v2;
+            if (message.startsWith(ClusterEventBus.PAYLOAD_VERSION_TRACE)) {
+                body = message.substring(
+                    ClusterEventBus.PAYLOAD_VERSION_TRACE.length()
+                );
+                v2 = true;
+            } else {
+                body = message;
+                v2 = false;
             }
-            final String sender = message.substring(0, sep);
+            final String[] parts;
+            if (v2) {
+                parts = body.split("\\" + ClusterEventBus.SEP, 4);
+                if (parts.length < 4) {
+                    return;
+                }
+            } else {
+                parts = body.split("\\" + ClusterEventBus.SEP, 2);
+                if (parts.length < 2) {
+                    return;
+                }
+            }
+            final String sender = parts[0];
             if (ClusterEventBus.this.instanceId.equals(sender)) {
                 return;
             }
-            final String payload = message.substring(sep + 1);
+            final String traceId = v2 ? parts[1] : "";
+            final String spanId = v2 ? parts[2] : "";
+            final String payload = v2 ? parts[3] : parts[1];
             final String topic = channel.substring(
                 ClusterEventBus.CHANNEL_PREFIX.length()
             );
@@ -212,32 +269,50 @@ public final class ClusterEventBus implements AutoCloseable {
             if (topicHandlers == null || topicHandlers.isEmpty()) {
                 return;
             }
-            for (final Consumer<String> handler : topicHandlers) {
-                try {
-                    handler.accept(payload);
-                } catch (final Exception ex) {
-                    EcsLogger.error("com.auto1.pantera.cluster")
-                        .message(
-                            "Event handler failed for topic: " + topic
-                        )
-                        .error(ex)
-                        .eventCategory("host")
-                        .eventAction("event_dispatch")
-            
-                        .eventOutcome("failure")
-                        .log();
+            final boolean restoreTrace = !traceId.isEmpty();
+            if (restoreTrace) {
+                MDC.put(EcsMdc.TRACE_ID, traceId);
+                if (!spanId.isEmpty()) {
+                    MDC.put(EcsMdc.SPAN_ID, spanId);
                 }
             }
-            EcsLogger.debug("com.auto1.pantera.cluster")
-                .message(
-                    "Event dispatched: " + topic + " to "
-                        + topicHandlers.size() + " handler(s)"
-                )
-                .eventCategory("host")
-                .eventAction("event_dispatch")
-    
-                .eventOutcome("success")
-                .log();
+            try {
+                for (final Consumer<String> handler : topicHandlers) {
+                    try {
+                        handler.accept(payload);
+                    } catch (final Exception ex) {
+                        EcsLogger.error("com.auto1.pantera.cluster")
+                            .message(
+                                "Event handler failed for topic: " + topic
+                            )
+                            .error(ex)
+                            .eventCategory("host")
+                            .eventAction("event_dispatch")
+
+                            .eventOutcome("failure")
+                            .field("log.source", "application")
+                            .log();
+                    }
+                }
+                EcsLogger.debug("com.auto1.pantera.cluster")
+                    .message(
+                        "Event dispatched: " + topic + " to "
+                            + topicHandlers.size() + " handler(s)"
+                    )
+                    .eventCategory("host")
+                    .eventAction("event_dispatch")
+
+                    .eventOutcome("success")
+                    .field("log.source", "application")
+                    .log();
+            } finally {
+                if (restoreTrace) {
+                    MDC.remove(EcsMdc.TRACE_ID);
+                    if (!spanId.isEmpty()) {
+                        MDC.remove(EcsMdc.SPAN_ID);
+                    }
+                }
+            }
         }
     }
 }

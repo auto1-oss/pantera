@@ -51,7 +51,6 @@ import javax.sql.DataSource;
  *
  * @since 1.21
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class CachedDbPolicy implements Policy<UserPermissions>, Cleanable<String> {
 
     /**
@@ -129,13 +128,16 @@ public final class CachedDbPolicy implements Policy<UserPermissions>, Cleanable<
             try {
                 return this.createUserPermissions(user).call();
             } catch (final Exception err) {
-                EcsLogger.error("com.auto1.pantera.security")
+                // B7: middle-layer log-and-rethrow — boundary is the
+                // AuthHandler / authz slice that converts the wrapped
+                // PanteraException into an HTTP response.
+                EcsLogger.trace("com.auto1.pantera.security")
                     .message("Failed to get user permissions from DB")
                     .eventCategory("authentication")
                     .eventAction("permissions_get")
-                    .eventOutcome("failure")
                     .field("user.name", user.name())
-                    .error(err)
+                    .field("error.type", err.getClass().getSimpleName())
+                    .field("log.source", "application")
                     .log();
                 throw new PanteraException(err);
             }
@@ -188,6 +190,7 @@ public final class CachedDbPolicy implements Policy<UserPermissions>, Cleanable<
                 .eventOutcome("failure")
                 .field("user.name", username)
                 .error(err)
+                .field("log.source", "application")
                 .log();
             return false;
         }
@@ -229,20 +232,21 @@ public final class CachedDbPolicy implements Policy<UserPermissions>, Cleanable<
         try (Connection conn = ds.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, role);
-            final ResultSet rs = ps.executeQuery();
-            if (!rs.next()) {
-                return EmptyPermissions.INSTANCE;
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return EmptyPermissions.INSTANCE;
+                }
+                if (!rs.getBoolean("enabled")) {
+                    return EmptyPermissions.INSTANCE;
+                }
+                final String permsJson = rs.getString("permissions");
+                if (permsJson == null || permsJson.isEmpty()) {
+                    return EmptyPermissions.INSTANCE;
+                }
+                return readPermissionsFromJson(
+                    Json.createReader(new StringReader(permsJson)).readObject()
+                );
             }
-            if (!rs.getBoolean("enabled")) {
-                return EmptyPermissions.INSTANCE;
-            }
-            final String permsJson = rs.getString("permissions");
-            if (permsJson == null || permsJson.isEmpty()) {
-                return EmptyPermissions.INSTANCE;
-            }
-            return readPermissionsFromJson(
-                Json.createReader(new StringReader(permsJson)).readObject()
-            );
         } catch (final Exception ex) {
             EcsLogger.error("com.auto1.pantera.security")
                 .message("Failed to read role permissions from DB")
@@ -251,6 +255,7 @@ public final class CachedDbPolicy implements Policy<UserPermissions>, Cleanable<
                 .eventOutcome("failure")
                 .field("user.roles", role)
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             return EmptyPermissions.INSTANCE;
         }
@@ -370,29 +375,31 @@ public final class CachedDbPolicy implements Policy<UserPermissions>, Cleanable<
             try (Connection conn = ds.getConnection();
                  PreparedStatement ps = conn.prepareStatement(sql)) {
                 ps.setString(1, username);
-                final ResultSet rs = ps.executeQuery();
-                if (!rs.next()) {
-                    EcsLogger.warn("com.auto1.pantera.security")
-                        .message("User not found in DB for policy lookup")
-                        .eventCategory("authentication")
-                        .eventAction("user_lookup")
-                        .eventOutcome("failure")
-                        .field("user.name", username)
-                        .log();
-                    return new UserRecord(true, Collections.emptyList());
-                }
-                final boolean enabled = rs.getBoolean("enabled");
-                final List<String> roles = new ArrayList<>();
-                final String rolesJson = rs.getString("roles");
-                if (rolesJson != null) {
-                    final javax.json.JsonArray arr = Json.createReader(
-                        new StringReader(rolesJson)
-                    ).readArray();
-                    for (int i = 0; i < arr.size(); i++) {
-                        roles.add(arr.getString(i));
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (!rs.next()) {
+                        EcsLogger.warn("com.auto1.pantera.security")
+                            .message("User not found in DB for policy lookup")
+                            .eventCategory("authentication")
+                            .eventAction("user_lookup")
+                            .eventOutcome("failure")
+                            .field("user.name", username)
+                            .field("log.source", "application")
+                            .log();
+                        return new UserRecord(true, Collections.emptyList());
                     }
+                    final boolean enabled = rs.getBoolean("enabled");
+                    final List<String> roles = new ArrayList<>();
+                    final String rolesJson = rs.getString("roles");
+                    if (rolesJson != null) {
+                        final javax.json.JsonArray arr = Json.createReader(
+                            new StringReader(rolesJson)
+                        ).readArray();
+                        for (int i = 0; i < arr.size(); i++) {
+                            roles.add(arr.getString(i));
+                        }
+                    }
+                    return new UserRecord(!enabled, roles);
                 }
-                return new UserRecord(!enabled, roles);
             } catch (final Exception ex) {
                 EcsLogger.error("com.auto1.pantera.security")
                     .message("Failed to load user from DB for policy")
@@ -401,6 +408,7 @@ public final class CachedDbPolicy implements Policy<UserPermissions>, Cleanable<
                     .eventOutcome("failure")
                     .field("user.name", username)
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
                 return new UserRecord(true, Collections.emptyList());
             }

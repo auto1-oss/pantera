@@ -21,13 +21,11 @@ public final class CodeBlob {
      * Class name of class.
      * It is used by class loader as classname.
      */
-    @SuppressWarnings("PMD.AvoidFieldNameMatchingMethodName")
     private final String classname;
 
     /**
      * Byte code of class.
      */
-    @SuppressWarnings("PMD.AvoidFieldNameMatchingMethodName")
     private final byte[] blob;
 
     /**
@@ -35,7 +33,6 @@ public final class CodeBlob {
      * @param classname Class name of class.
      * @param bytes Byte code of class
      */
-    @SuppressWarnings("PMD.ArrayIsStoredDirectly")
     public CodeBlob(final String classname, final byte[] bytes) {
         this.classname = classname;
         this.blob = bytes;
@@ -53,12 +50,10 @@ public final class CodeBlob {
      * Byte code of class.
      * @return Byte code.
      */
-    @SuppressWarnings("PMD.MethodReturnsInternalArray")
     public byte[] blob() {
         return this.blob;
     }
 
-    @SuppressWarnings("PMD.OnlyOneReturn")
     @Override
     public boolean equals(final Object obj) {
         if (this == obj) {

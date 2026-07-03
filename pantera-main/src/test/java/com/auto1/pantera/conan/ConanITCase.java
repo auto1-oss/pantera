@@ -28,7 +28,6 @@ import org.testcontainers.images.builder.ImageFromDockerfile;
  * @since 0.23
  */
 @EnabledOnOs({OS.LINUX, OS.MAC})
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class ConanITCase {
     /**
      * Path prefix to conan repository test data in java resources.
@@ -188,7 +187,6 @@ public final class ConanITCase {
      *
      * @return ImageFromDockerfile of testcontainers.
      */
-    @SuppressWarnings("PMD.LineLengthCheck")
     private static TestDeployment.ClientContainer prepareClientContainer() {
         return new TestDeployment.ClientContainer("pantera/conan-tests:1.0")
             .withCommand("tail", "-f", "/dev/null")

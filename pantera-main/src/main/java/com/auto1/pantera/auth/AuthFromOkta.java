@@ -52,6 +52,7 @@ public final class AuthFromOkta implements Authentication {
                 .eventOutcome("failure")
                 .field("user.name", username)
                 .error(interrupted)
+                .field("log.source", "application")
                 .log();
         } catch (final IOException err) {
             EcsLogger.error("com.auto1.pantera.auth")
@@ -61,6 +62,7 @@ public final class AuthFromOkta implements Authentication {
                 .eventOutcome("failure")
                 .field("user.name", username)
                 .error(err)
+                .field("log.source", "application")
                 .log();
         }
         return res;

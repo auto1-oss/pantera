@@ -24,7 +24,6 @@ import org.junit.jupiter.api.Test;
  * Tests for {@link GuavaFiltersCache}.
  * @since 0.28
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 final class GuavaFiltersCacheTest {
     /**
      * Maven repository name.

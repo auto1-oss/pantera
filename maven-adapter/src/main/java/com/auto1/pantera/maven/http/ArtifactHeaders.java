@@ -28,7 +28,6 @@ import java.util.Optional;
  * Maven client supports {@code X-Checksum-*} headers for different hash algorithms,
  * {@code ETag} header for caching, {@code Content-Type} and {@code Content-Disposition}.
  */
-@SuppressWarnings({"PMD.UseUtilityClass", "PMD.ProhibitPublicStaticMethods"})
 final class ArtifactHeaders {
 
     /**

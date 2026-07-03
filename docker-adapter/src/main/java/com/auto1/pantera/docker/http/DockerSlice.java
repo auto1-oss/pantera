@@ -57,6 +57,19 @@ public final class DockerSlice extends Slice.Wrap {
         Docker docker, Policy<?> policy, AuthScheme auth,
         Optional<Queue<ArtifactEvent>> events
     ) {
+        this(docker, policy, auth, events,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+    }
+
+    /**
+     * Ctor with synchronous artifact-index writer.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public DockerSlice(
+        Docker docker, Policy<?> policy, AuthScheme auth,
+        Optional<Queue<ArtifactEvent>> events,
+        com.auto1.pantera.index.SyncArtifactIndexer syncIndex
+    ) {
         super(
             new ErrorHandlingSlice(
                 new SliceRoute(
@@ -70,7 +83,7 @@ public final class DockerSlice extends Slice.Wrap {
                         auth(new GetManifestSlice(docker), policy, auth)
                     ),
                     RtRulePath.route(MethodRule.PUT, PathPatterns.MANIFESTS,
-                        auth(new PushManifestSlice(docker, events.orElse(null)),
+                        auth(new PushManifestSlice(docker, events.orElse(null), syncIndex),
                             policy, auth)
                     ),
                     RtRulePath.route(MethodRule.GET, PathPatterns.TAGS,

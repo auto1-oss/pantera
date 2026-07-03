@@ -17,6 +17,7 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.client.HttpClientSettings;
 import com.auto1.pantera.http.client.HttpServer;
 import com.auto1.pantera.http.client.ProxySettings;
+import com.auto1.pantera.http.client.ratelimit.RateLimitedClientSlice;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.RsStatus;
@@ -56,17 +57,24 @@ final class JettyClientSlicesTest {
         this.server.stop();
     }
 
+    // M3 (analysis/plan/v1/PLAN.md): every non-loopback per-host slice
+    // returned by JettyClientSlices is wrapped in RateLimitedClientSlice
+    // so the outbound rate limiter governs every adapter's traffic.
+    // Loopback hosts (localhost, 127.x.x.x, ::1) bypass the limiter
+    // since they are exclusively dev / test fixtures.
+
     @Test
     void shouldProduceHttp() {
         MatcherAssert.assertThat(
             new JettyClientSlices().http("example.com"),
-            new IsInstanceOf(JettyClientSlice.class)
+            new IsInstanceOf(RateLimitedClientSlice.class)
         );
     }
 
     @Test
     void shouldProduceHttpWithPort() {
         final int custom = 8080;
+        // localhost bypasses the rate limiter — raw Jetty slice.
         MatcherAssert.assertThat(
             new JettyClientSlices().http("localhost", custom),
             new IsInstanceOf(JettyClientSlice.class)
@@ -77,7 +85,7 @@ final class JettyClientSlicesTest {
     void shouldProduceHttps() {
         MatcherAssert.assertThat(
             new JettyClientSlices().http("pantera.com"),
-            new IsInstanceOf(JettyClientSlice.class)
+            new IsInstanceOf(RateLimitedClientSlice.class)
         );
     }
 
@@ -86,7 +94,7 @@ final class JettyClientSlicesTest {
         final int custom = 9876;
         MatcherAssert.assertThat(
             new JettyClientSlices().http("www.pantera.com", custom),
-            new IsInstanceOf(JettyClientSlice.class)
+            new IsInstanceOf(RateLimitedClientSlice.class)
         );
     }
 
@@ -173,7 +181,6 @@ final class JettyClientSlicesTest {
     }
 
     @Test
-    @SuppressWarnings("PMD.AvoidUsingHardCodedIP")
     void shouldTimeoutConnectionIfDisabled() {
         // When connectTimeout=0 (disabled), Jetty doesn't set connection timeout
         // Connection attempts will hang until OS timeout or test timeout
@@ -333,7 +340,6 @@ final class JettyClientSlicesTest {
         "self-signed.badssl.com",
         "untrusted-root.badssl.com"
     })
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     void shouldRejectBadCertificates(final String url) throws Exception {
         final JettyClientSlices client = new JettyClientSlices(
             new HttpClientSettings().setTrustAll(false)

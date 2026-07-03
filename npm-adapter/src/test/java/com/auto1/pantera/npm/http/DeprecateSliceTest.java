@@ -37,7 +37,6 @@ import wtf.g4s8.hamcrest.json.JsonValueIs;
  * Test for {@link DeprecateSlice}.
  * @since 0.8
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class DeprecateSliceTest {
 
     /**

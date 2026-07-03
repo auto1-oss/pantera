@@ -11,11 +11,13 @@
 package com.auto1.pantera.webhook;
 
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.trace.TraceHeaders;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.client.WebClient;
 import io.vertx.ext.web.client.WebClientOptions;
+import org.slf4j.MDC;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -23,8 +25,10 @@ import java.nio.charset.StandardCharsets;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -33,7 +37,6 @@ import java.util.Objects;
  *
  * @since 1.20.13
  */
-@SuppressWarnings("PMD.AvoidCatchingGenericException")
 public final class WebhookDispatcher {
 
     /**
@@ -104,10 +107,19 @@ public final class WebhookDispatcher {
             this.client.postAbs(webhook.url())
                 .putHeader("Content-Type", "application/json")
                 .putHeader("X-Pantera-Event", payload.getString("event"));
+        // Trace propagation: inject W3C traceparent + X-B3-* so the receiver
+        // can correlate its inbound request with the originating Pantera event.
+        final String[] traceHdrs = TraceHeaders.httpClientHeaders();
+        for (int i = 0; i < traceHdrs.length; i += 2) {
+            request.putHeader(traceHdrs[i], traceHdrs[i + 1]);
+        }
         webhook.signingSecret().ifPresent(secret -> {
             final String signature = computeHmac(body, secret);
             request.putHeader("X-Pantera-Signature", "sha256=" + signature);
         });
+        // Snapshot MDC at scheduling time so the retry timer (event-loop hop)
+        // can restore trace.id / span.id when it fires 1s..8s later.
+        final Map<String, String> mdcSnapshot = snapshotMdc();
         request.sendBuffer(Buffer.buffer(body), ar -> {
             if (ar.succeeded() && ar.result().statusCode() < 300) {
                 EcsLogger.debug("com.auto1.pantera.webhook")
@@ -117,12 +129,20 @@ public final class WebhookDispatcher {
                     .eventOutcome("success")
                     .field("url.full", webhook.url())
                     .field("event.type", payload.getString("event"))
+                    .field("log.source", "application")
                     .log();
             } else if (attempt < MAX_RETRIES) {
                 final long delay = (long) Math.pow(2, attempt) * 1000L;
-                io.vertx.core.Vertx.currentContext().owner().setTimer(delay, id ->
-                    this.deliverAsync(webhook, payload, attempt + 1)
-                );
+                io.vertx.core.Vertx.currentContext().owner().setTimer(delay, id -> {
+                    final Map<String, String> previous = snapshotMdc();
+                    restoreMdc(mdcSnapshot);
+                    try {
+                        this.deliverAsync(webhook, payload, attempt + 1);
+                    } finally {
+                        MDC.clear();
+                        restoreMdc(previous);
+                    }
+                });
             } else {
                 final String error = ar.succeeded()
                     ? "HTTP " + ar.result().statusCode()
@@ -134,9 +154,27 @@ public final class WebhookDispatcher {
                     .eventOutcome("failure")
                     .field("url.full", webhook.url())
                     .field("error.message", error)
+                    .field("log.source", "application")
                     .log();
             }
         });
+    }
+
+    /**
+     * Capture the current MDC into a new map. Returns an empty map when MDC
+     * is empty (typical case when retries fire after EcsLoggingSlice has
+     * already cleared the request context).
+     */
+    private static Map<String, String> snapshotMdc() {
+        final Map<String, String> ctx = MDC.getCopyOfContextMap();
+        return ctx == null ? new HashMap<>() : ctx;
+    }
+
+    /** Push a previously-captured MDC snapshot back into the current thread. */
+    private static void restoreMdc(final Map<String, String> snapshot) {
+        for (final Map.Entry<String, String> entry : snapshot.entrySet()) {
+            MDC.put(entry.getKey(), entry.getValue());
+        }
     }
 
     /**

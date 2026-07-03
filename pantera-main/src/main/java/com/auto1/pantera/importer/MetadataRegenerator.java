@@ -56,7 +56,6 @@ import java.util.stream.Collectors;
  *
  * @since 1.0
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class MetadataRegenerator {
 
     /**
@@ -140,6 +139,7 @@ public final class MetadataRegenerator {
             .eventAction("metadata_regenerate")
             .field("repository.name", this.repoName)
             .field("repository.type", this.repoType)
+            .field("log.source", "application")
             .log();
         final CompletionStage<Void> operation = switch (this.repoType.toLowerCase(Locale.ROOT)) {
             case "file", "files", "generic", "docker", "oci", "nuget", "conan" ->
@@ -162,6 +162,7 @@ public final class MetadataRegenerator {
                     .eventOutcome("failure")
                     .field("repository.type", this.repoType)
                     .field("repository.name", this.repoName)
+                    .field("log.source", "application")
                     .log();
                 yield CompletableFuture.completedFuture(null);
             }
@@ -179,6 +180,7 @@ public final class MetadataRegenerator {
                     .field("repository.name", this.repoName)
                     .field("repository.type", this.repoType)
                     .error(error)
+                    .field("log.source", "application")
                     .log();
             }
         });
@@ -254,6 +256,7 @@ public final class MetadataRegenerator {
                         .message("Base key '" + baseKey.string() + "' doesn't exist yet, creating metadata for first version")
                         .eventCategory("web")
                         .eventAction("maven_metadata_regenerate")
+                        .field("log.source", "application")
                         .log();
                     return List.of();
                 })
@@ -297,7 +300,7 @@ public final class MetadataRegenerator {
             }
             final String firstSegment = relative.split("/")[0];
             // Skip metadata files, hidden files, and system files
-            if (firstSegment.equals("maven-metadata.xml")
+            if ("maven-metadata.xml".equals(firstSegment)
                 || firstSegment.endsWith(".lastUpdated")
                 || firstSegment.endsWith(".properties")
                 || firstSegment.startsWith(".")  // Skip .DS_Store, .git, etc.
@@ -317,6 +320,7 @@ public final class MetadataRegenerator {
                     .eventAction("maven_metadata_regenerate")
                     .field("file.directory", firstSegment)
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -444,6 +448,7 @@ public final class MetadataRegenerator {
                 .eventCategory("web")
                 .eventAction("composer_metadata_regenerate")
                 .eventOutcome("failure")
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(null);
         }
@@ -459,6 +464,7 @@ public final class MetadataRegenerator {
                 .eventCategory("web")
                 .eventAction("composer_metadata_regenerate")
                 .eventOutcome("failure")
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(null);
         }
@@ -533,6 +539,7 @@ public final class MetadataRegenerator {
                             .eventCategory("web")
                             .eventAction("npm_metadata_regenerate")
                             .eventOutcome("failure")
+                            .field("log.source", "application")
                             .log();
                         return CompletableFuture.completedFuture(null);
                     }
@@ -540,12 +547,15 @@ public final class MetadataRegenerator {
                     // MetaUpdate.ByJson now uses storage.exclusively() for atomic updates
                     return new MetaUpdate.ByTgz(tgz).update(new Key.From(packageName), this.storage);
                 } catch (final Exception ex) {
-                    EcsLogger.error("com.auto1.pantera.importer")
+                    // B7: middle-layer log-and-rethrow — the import slice
+                    // / regenerator caller catches the CompletionException
+                    // and decides the HTTP / job outcome.
+                    EcsLogger.trace("com.auto1.pantera.importer")
                         .message("Failed to extract NPM package metadata at key: " + path)
                         .eventCategory("web")
                         .eventAction("npm_metadata_regenerate")
-                        .eventOutcome("failure")
-                        .error(ex)
+                        .field("error.type", ex.getClass().getSimpleName())
+                        .field("log.source", "application")
                         .log();
                     throw new CompletionException(ex);
                 }
@@ -723,6 +733,7 @@ public final class MetadataRegenerator {
             .message("Debian metadata regeneration not implemented for key: " + artifactKey.string())
             .eventCategory("web")
             .eventAction("debian_metadata_regenerate")
+            .field("log.source", "application")
             .log();
         return CompletableFuture.completedFuture(null);
     }
@@ -738,6 +749,7 @@ public final class MetadataRegenerator {
             .message("RPM metadata regeneration not implemented for key: " + artifactKey.string())
             .eventCategory("web")
             .eventAction("rpm_metadata_regenerate")
+            .field("log.source", "application")
             .log();
         return CompletableFuture.completedFuture(null);
     }
@@ -753,6 +765,7 @@ public final class MetadataRegenerator {
             .message("Conda metadata regeneration not implemented for key: " + artifactKey.string())
             .eventCategory("web")
             .eventAction("conda_metadata_regenerate")
+            .field("log.source", "application")
             .log();
         return CompletableFuture.completedFuture(null);
     }
@@ -849,7 +862,8 @@ public final class MetadataRegenerator {
                                             .eventCategory("web")
                                             .eventAction("maven_checksum_generate")
                                             .eventOutcome("failure")
-                                            .field("error.message", ex.getMessage())
+                                            .error(ex)
+                                            .field("log.source", "application")
                                             .log();
                                         return null;
                                     }).toCompletableFuture();
@@ -945,16 +959,19 @@ public final class MetadataRegenerator {
                         .eventCategory("web")
                         .eventAction("metadata_regenerate_retry")
                         .field("error.message", error.getMessage())
+                        .field("log.source", "application")
                         .log();
                     // Return null to signal retry needed
                     return null;
                 } else {
-                    EcsLogger.error("com.auto1.pantera.importer")
+                    // B7: middle-layer log-and-rethrow — caller chain
+                    // (slice / verticle) is the boundary.
+                    EcsLogger.trace("com.auto1.pantera.importer")
                         .message("Failed operation '" + description + "' after " + maxRetries + " retry attempts")
                         .eventCategory("web")
                         .eventAction("metadata_regenerate_retry")
-                        .eventOutcome("failure")
-                        .error(error)
+                        .field("error.type", error.getClass().getSimpleName())
+                        .field("log.source", "application")
                         .log();
                     throw new CompletionException(error);
                 }

@@ -33,7 +33,7 @@ ENV TMPDIR=/var/pantera/cache/tmp
 USER 2021:2020
 
 COPY --from=build --chown=pantera:pantera /app/pantera-main/target/dependency /usr/lib/pantera/lib
-COPY --from=build --chown=pantera:pantera /app/pantera-main/target/pantera-main-2.0.7.jar /usr/lib/pantera/pantera.jar
+COPY --from=build --chown=pantera:pantera /app/pantera-main/target/pantera-main-2.2.0.jar /usr/lib/pantera/pantera.jar
 
 WORKDIR /var/pantera
 

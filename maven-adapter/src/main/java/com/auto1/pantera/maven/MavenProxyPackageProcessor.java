@@ -32,14 +32,26 @@ import org.quartz.JobExecutionContext;
 
 /**
  * Processes artifacts uploaded by proxy and adds info to artifacts metadata events queue.
+ *
+ * <p>Multiple distinct error sites in this class (Quartz job lifecycle,
+ * metadata extraction, event-queue dispatch, scheduler shutdown) —
+ * distinct failure modes, kept separate for diagnostic context.
+ * See audit/aggressive-items.md (Tier 4 B7 duplicate-error bucket).
+ *
  * @since 0.10
  */
 public final class MavenProxyPackageProcessor extends QuartzJob {
 
     /**
-     * Repository type.
+     * Fallback repo_type used when a {@link ProxyArtifactEvent} arrives
+     * without an explicit {@code repoType} (legacy callers, fixtures
+     * predating the 2.2.0 plumbing fix). Maven and Gradle proxies share this
+     * processor; {@code maven-proxy} preserves the pre-2.2.0 behaviour for
+     * any code path that has not yet been migrated.
+     *
+     * @since 2.2.0
      */
-    private static final String REPO_TYPE = "maven-proxy";
+    private static final String FALLBACK_REPO_TYPE = "maven-proxy";
 
     /**
      * Maximum number of retry attempts for failed package processing.
@@ -74,7 +86,6 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
     private Storage asto;
 
     @Override
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.EmptyControlStatement"})
     public void execute(final JobExecutionContext context) {
         this.resolveFromRegistry(context);
         if (this.asto == null || this.packages == null || this.events == null) {
@@ -87,7 +98,6 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
     /**
      * Process packages in parallel batches for better performance.
      */
-    @SuppressWarnings({"PMD.AssignmentInOperand", "PMD.AvoidCatchingGenericException"})
     private void processPackagesBatch() {
         // Set trace context for background job
         final String traceId = TraceContext.generateTraceId();
@@ -123,6 +133,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
             .message("Processing Maven batch (batch size: " + batch.size() + ", unique: " + uniquePackages.size() + ", duplicates removed: " + duplicatesRemoved + ")")
             .eventCategory("web")
             .eventAction("batch_processing")
+            .field("log.source", "application")
             .log();
 
         // Process all unique packages in parallel
@@ -143,6 +154,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                 .eventAction("batch_processing")
                 .eventOutcome("success")
                 .duration(duration)
+                .field("log.source", "application")
                 .log();
         } catch (final RuntimeException err) {
             final long duration = System.currentTimeMillis() - startTime;
@@ -153,6 +165,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                 .eventOutcome("failure")
                 .duration(duration)
                 .error(err)
+                .field("log.source", "application")
                 .log();
         } finally {
             TraceContext.clear();
@@ -164,8 +177,8 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
      * @param event Package event to process
      * @return CompletableFuture that completes when processing is done
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private CompletableFuture<Void> processPackageAsync(final ProxyArtifactEvent event) {
+        final String repoType = resolveRepoType(event);
         return this.asto.list(event.artifactKey())
             .thenCompose(keys -> {
                 try {
@@ -174,7 +187,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                     final List<Key> filtered = keys.stream()
                         .filter(key -> !key.string().endsWith(".tmp"))
                         .collect(Collectors.toList());
-                    
+
                     if (filtered.isEmpty()) {
                         EcsLogger.debug("com.auto1.pantera.maven")
                             .message("Maven package has only temporary files, skipping (will retry later)")
@@ -182,12 +195,13 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                             .eventAction("proxy_package_process")
                             .eventOutcome("unknown")
                             .field("event.reason", "skipped")
-                            .field("repository.type", REPO_TYPE)
+                            .field("repository.type", repoType)
                             .field("package.name", event.artifactKey().string())
+                            .field("log.source", "application")
                             .log();
                         return CompletableFuture.completedFuture(null);
                     }
-                    
+
                     final Key archive = MavenSlice.EVENT_INFO.artifactPackage(filtered);
                     return this.asto.metadata(archive)
                         .thenApply(meta -> meta.read(Meta.OP_SIZE).get())
@@ -199,10 +213,15 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                                 event.artifactKey().parent().get()
                             );
                             final String version = new KeyLastPart(event.artifactKey()).get();
-                            
+
+                            // Forward request-context (trace.id, client.ip)
+                            // captured by ProxyArtifactEvent on the request
+                            // thread — ArtifactEvent's own MDC.get capture
+                            // sees nothing here because we run on the
+                            // package-processor worker thread.
                             this.events.add(
                                 new ArtifactEvent(
-                                    MavenProxyPackageProcessor.REPO_TYPE,
+                                    repoType,
                                     event.repoName(),
                                     owner == null || owner.isBlank()
                                         ? ArtifactEvent.DEF_OWNER
@@ -213,7 +232,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                                     created,
                                     release,
                                     event.artifactKey().string()
-                                )
+                                ).withContext(event.traceId(), event.clientIp())
                             );
 
                             // Clear retry count on successful processing
@@ -224,10 +243,11 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                                 .eventCategory("web")
                                 .eventAction("proxy_artifact_record")
                                 .eventOutcome("success")
-                                .field("repository.type", REPO_TYPE)
+                                .field("repository.type", repoType)
                                 .field("package.name", artifactName)
                                 .field("package.version", version)
                                 .field("file.size", size)
+                                .field("log.source", "application")
                                 .log();
                         })
                         .exceptionally(err -> {
@@ -240,8 +260,9 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                         .eventCategory("web")
                         .eventAction("proxy_package_process")
                         .eventOutcome("failure")
-                        .field("repository.type", REPO_TYPE)
+                        .field("repository.type", repoType)
                         .error(err)
+                        .field("log.source", "application")
                         .log();
                     return CompletableFuture.completedFuture(null);
                 }
@@ -252,9 +273,10 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                     .eventCategory("web")
                     .eventAction("proxy_package_process")
                     .eventOutcome("failure")
-                    .field("repository.type", REPO_TYPE)
+                    .field("repository.type", repoType)
                     .field("package.name", event.artifactKey().string())
                     .error(err)
+                    .field("log.source", "application")
                     .log();
                 return null;
             });
@@ -288,7 +310,6 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
      * Set registry key for events queue (JDBC mode).
      * @param key Registry key
      */
-    @SuppressWarnings("PMD.MethodNamingConventions")
     public void setEvents_key(final String key) {
         this.events = JobDataRegistry.lookup(key);
     }
@@ -297,7 +318,6 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
      * Set registry key for packages queue (JDBC mode).
      * @param key Registry key
      */
-    @SuppressWarnings("PMD.MethodNamingConventions")
     public void setPackages_key(final String key) {
         this.packages = JobDataRegistry.lookup(key);
     }
@@ -306,7 +326,6 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
      * Set registry key for storage (JDBC mode).
      * @param key Registry key
      */
-    @SuppressWarnings("PMD.MethodNamingConventions")
     public void setStorage_key(final String key) {
         this.asto = JobDataRegistry.lookup(key);
     }
@@ -333,6 +352,25 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
     }
 
     /**
+     * Resolve the effective repo_type for an inbound event. Uses the explicit
+     * {@code repoType} field when present (Maven/Gradle proxy slice plumbs it
+     * in via {@code buildArtifactEvent} as of 2.2.0). Falls back to
+     * {@link #FALLBACK_REPO_TYPE} for legacy events that predate the
+     * propagation fix so behaviour matches pre-2.2.0 for those code paths.
+     *
+     * @param event Inbound proxy event
+     * @return Effective repo_type for the downstream ArtifactEvent / log fields
+     * @since 2.2.0
+     */
+    private static String resolveRepoType(final ProxyArtifactEvent event) {
+        final String declared = event.repoType();
+        if (declared == null || declared.isBlank()) {
+            return FALLBACK_REPO_TYPE;
+        }
+        return declared;
+    }
+
+    /**
      * Handle processing error with retry logic.
      * Implements retry limits to prevent infinite retry loops for permanently failing packages.
      *
@@ -341,6 +379,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
      * @since 1.19.2
      */
     private void handleProcessingError(final ProxyArtifactEvent event, final Throwable err) {
+        final String repoType = resolveRepoType(event);
         // If ValueNotFoundException, the file might still be in transit
         // This can happen if file was just moved after listing
         if (err.getCause() instanceof com.auto1.pantera.asto.ValueNotFoundException) {
@@ -358,9 +397,10 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                     .eventAction("proxy_package_retry")
                     .eventOutcome("failure")
                     .field("event.reason", "retry_exhausted")
-                    .field("repository.type", REPO_TYPE)
+                    .field("repository.type", repoType)
                     .field("package.name", event.artifactKey().string())
                     .error(err)
+                    .field("log.source", "application")
                     .log();
             } else {
                 // Max retries reached, give up and clean up retry count
@@ -372,9 +412,10 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                     .eventAction("proxy_package_retry")
                     .eventOutcome("failure")
                     .field("event.reason", "request_abandoned")
-                    .field("repository.type", REPO_TYPE)
+                    .field("repository.type", repoType)
                     .field("package.name", event.artifactKey().string())
                     .error(err)
+                    .field("log.source", "application")
                     .log();
             }
         } else {
@@ -383,9 +424,10 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                 .eventCategory("web")
                 .eventAction("proxy_package_process")
                 .eventOutcome("failure")
-                .field("repository.type", REPO_TYPE)
+                .field("repository.type", repoType)
                 .field("package.name", event.artifactKey().string())
                 .error(err)
+                .field("log.source", "application")
                 .log();
         }
     }

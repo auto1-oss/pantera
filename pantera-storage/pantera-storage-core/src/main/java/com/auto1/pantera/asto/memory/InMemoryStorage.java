@@ -45,7 +45,6 @@ import java.util.function.Function;
  *
  * @since 0.14
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class InMemoryStorage implements Storage {
 
     /**

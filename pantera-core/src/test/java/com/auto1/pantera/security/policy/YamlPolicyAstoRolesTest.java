@@ -27,7 +27,6 @@ import org.junit.jupiter.params.provider.ValueSource;
  * Test for {@link CachedYamlPolicy#rolePermissions(BlockingStorage, String)} method.
  * @since 1.2
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class YamlPolicyAstoRolesTest {
 
     /**

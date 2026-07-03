@@ -34,10 +34,7 @@ agents/
 
 # Git worktrees
 .worktrees/
-/benchmark/fixtures
-/benchmark/results
 /docs/plans
-/docs/superpowers
 *.csv
 *.png
 !docs/pantera-banner.png
@@ -45,12 +42,33 @@ agents/
 /.superpowers
 /pantera-ui/mockups
 pantera-backfill/dependency-reduced-pom.xml
-/benchmark/isolated/results
 pantera-main/docker-compose/pantera/artifacts/npm/package-lock.json
 pantera-main/docker-compose/pantera/artifacts/php/composer.lock
 /pantera-main/docker-compose/pantera/security
-/pantera-main/docker-compose/pantera/security
-/benchmark/setup/repos-old/.system
-/benchmark/setup/repos-old/.tmp
 /pantera-backfill
 pantera-main/docker-compose/pantera/keys/
+logs/.analysis/
+# Perf harness: the SOURCES (wiremock mappings + generator, k6 scenarios,
+# repo configs, nginx conf, scripts) are tracked — CI boots the stack from
+# them. Only run OUTPUTS and rendered/secret files are ignored. Do NOT
+# re-add a broad performance/*/* ignore: it silently kept the whole harness
+# out of the repo and every perf workflow failed at checkout for months.
+performance/results/*
+!performance/results/.gitkeep
+performance/wiremock/__files/*.bin*
+performance/pantera-config.yml
+performance/secrets/*.pem
+performance/data/
+performance/fixtures/uploads/*.tgz
+performance/scripts/__pycache__/
+
+# Working / transient analysis + audit directories — never committed.
+# These hold model deliverables, scratch findings, internal RCA notes,
+# perf-bench harness outputs, and design specs that are not part of the
+# shipped product. Keep them on disk locally, but out of the repo so the
+# tree stays tight for users / admins / devs.
+analysis/
+audit/
+benchmark/
+docs/analysis/
+docs/superpowers/

@@ -26,7 +26,6 @@ import org.junit.jupiter.api.Test;
  *
  * @since 1.13.0
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class StoragesLoaderTest {
 
     @Test

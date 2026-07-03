@@ -51,7 +51,6 @@ public interface MultiRepodata {
      * the outside.
      * @since 0.3
      */
-    @SuppressWarnings("PMD.CloseResource")
     final class Unique implements MultiRepodata {
 
         /**
@@ -87,17 +86,15 @@ public interface MultiRepodata {
                     try (
                         OutputStream otars = new BufferedOutputStream(Files.newOutputStream(ftars));
                         OutputStream ocondas =
-                            new BufferedOutputStream(Files.newOutputStream(fcondas))
+                            new BufferedOutputStream(Files.newOutputStream(fcondas));
+                        JsonGenerator tars = factory.createGenerator(otars);
+                        JsonGenerator condas = factory.createGenerator(ocondas)
                     ) {
-                        final JsonGenerator tars = factory.createGenerator(otars);
-                        final JsonGenerator condas = factory.createGenerator(ocondas);
                         tars.writeStartObject();
                         condas.writeStartObject();
-                        for (final InputStream item : inputs) {
+                        for (final InputStream item : inputs) { // NOPMD CloseResource - input streams are caller-owned per Unique contract
                             this.processInput(factory.createParser(item), tars, condas);
                         }
-                        tars.close();
-                        condas.close();
                     }
                     try (
                         InputStream itars = new BufferedInputStream(Files.newInputStream(ftars));
@@ -127,7 +124,6 @@ public interface MultiRepodata {
          * @param condas Output for condas packages
          * @throws IOException On IO error
          */
-        @SuppressWarnings("PMD.AssignmentInOperand")
         private void processInput(final JsonParser parser, final JsonGenerator tars,
             final JsonGenerator condas) throws IOException {
             JsonToken token;

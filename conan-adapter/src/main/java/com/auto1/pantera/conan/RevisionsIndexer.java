@@ -55,7 +55,6 @@ public class RevisionsIndexer {
      * @param generator Generates full key value to one of the pkgfiles. (name, rev) -> key.
      * @return CompletableFuture with recipe revisions list.
      */
-    @SuppressWarnings("PMD.UseVarargs")
     public CompletionStage<List<Integer>> buildIndex(final Key key,
         final List<String> pkgfiles, final BiFunction<String, Integer, Key> generator) {
         final CompletionStage<List<Integer>> revisions = new PackageList(this.storage).get(

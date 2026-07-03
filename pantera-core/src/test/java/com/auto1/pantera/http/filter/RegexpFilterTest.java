@@ -21,7 +21,6 @@ import org.llorllale.cactoos.matchers.IsTrue;
 /**
  * Test for {@link RegexpFilter}.
  */
-@SuppressWarnings("PMD.UseLocaleWithCaseConversions")
 class RegexpFilterTest {
     /**
      * Request path.

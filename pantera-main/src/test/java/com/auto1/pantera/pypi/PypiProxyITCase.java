@@ -30,7 +30,6 @@ import org.junit.jupiter.api.extension.RegisterExtension;
  *  This test requires pantera/pantera-tests:1.0-SNAPSHOT image which is not available.
  *  Need to create Dockerfile and publish to Docker Hub or use local build.
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 @EnabledOnOs({OS.LINUX, OS.MAC})
 @Disabled("Requires pantera/pantera-tests:1.0-SNAPSHOT Docker image")
 public final class PypiProxyITCase {

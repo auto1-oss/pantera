@@ -61,7 +61,6 @@ public final class PyProxyPackageProcessor extends QuartzJob {
     private Storage asto;
 
     @Override
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException"})
     public void execute(final JobExecutionContext context) {
         this.resolveFromRegistry(context);
         if (this.asto == null || this.packages == null || this.events == null) {
@@ -90,6 +89,7 @@ public final class PyProxyPackageProcessor extends QuartzJob {
             .message("Processing PyPI batch (size: " + batch.size() + ")")
             .eventCategory("web")
             .eventAction("batch_processing")
+            .field("log.source", "application")
             .log();
 
         List<CompletableFuture<Void>> futures = batch.stream()
@@ -107,6 +107,7 @@ public final class PyProxyPackageProcessor extends QuartzJob {
                 .eventAction("batch_processing")
                 .eventOutcome("success")
                 .duration(duration)
+                .field("log.source", "application")
                 .log();
         } catch (Exception err) {
             final long duration = System.currentTimeMillis() - startTime;
@@ -117,6 +118,7 @@ public final class PyProxyPackageProcessor extends QuartzJob {
                 .eventOutcome("failure")
                 .duration(duration)
                 .error(err)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -137,6 +139,7 @@ public final class PyProxyPackageProcessor extends QuartzJob {
                     .eventCategory("web")
                     .eventAction("package_processing")
                     .field("package.name", key.string())
+                    .field("log.source", "application")
                     .log();
                 // Re-add event to queue for retry
                 this.packages.add(event);
@@ -171,7 +174,7 @@ public final class PyProxyPackageProcessor extends QuartzJob {
                                     created,
                                     release,
                                     event.artifactKey().string()
-                                )
+                                ).withContext(event.traceId(), event.clientIp())
                             );
 
                             EcsLogger.info("com.auto1.pantera.pypi")
@@ -185,6 +188,7 @@ public final class PyProxyPackageProcessor extends QuartzJob {
                                 .field("package.size", archive.length)
                                 .field("package.release_date", release == null ? null
                                     : Instant.ofEpochMilli(release).toString())
+                                .field("log.source", "application")
                                 .log();
                         } else {
                             EcsLogger.warn("com.auto1.pantera.pypi")
@@ -194,6 +198,7 @@ public final class PyProxyPackageProcessor extends QuartzJob {
                                 .eventOutcome("failure")
                                 .field("event.reason", "filename did not match WHEEL_PTRN or ARCHIVE_PTRN")
                                 .field("file.name", filename)
+                                .field("log.source", "application")
                                 .log();
                         }
                     } catch (final Exception err) {
@@ -204,6 +209,7 @@ public final class PyProxyPackageProcessor extends QuartzJob {
                             .eventOutcome("failure")
                             .field("package.name", key.string())
                             .error(err)
+                            .field("log.source", "application")
                             .log();
                     }
                 });
@@ -215,6 +221,7 @@ public final class PyProxyPackageProcessor extends QuartzJob {
                 .eventOutcome("failure")
                 .field("package.name", key.string())
                 .error(err)
+                .field("log.source", "application")
                 .log();
             return null;
         });
@@ -248,7 +255,6 @@ public final class PyProxyPackageProcessor extends QuartzJob {
      * Set registry key for events queue (JDBC mode).
      * @param key Registry key
      */
-    @SuppressWarnings("PMD.MethodNamingConventions")
     public void setEvents_key(final String key) {
         this.events = JobDataRegistry.lookup(key);
     }
@@ -257,7 +263,6 @@ public final class PyProxyPackageProcessor extends QuartzJob {
      * Set registry key for packages queue (JDBC mode).
      * @param key Registry key
      */
-    @SuppressWarnings("PMD.MethodNamingConventions")
     public void setPackages_key(final String key) {
         this.packages = JobDataRegistry.lookup(key);
     }
@@ -266,7 +271,6 @@ public final class PyProxyPackageProcessor extends QuartzJob {
      * Set registry key for storage (JDBC mode).
      * @param key Registry key
      */
-    @SuppressWarnings("PMD.MethodNamingConventions")
     public void setStorage_key(final String key) {
         this.asto = JobDataRegistry.lookup(key);
     }

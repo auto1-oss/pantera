@@ -36,7 +36,6 @@ public interface Validator {
      * @param code Status code
      * @return Validator instance
      */
-    @SuppressWarnings("PMD.ProhibitPublicStaticMethods")
     static Validator validator(final Supplier<Boolean> condition,
         final String message, final int code) {
         return context -> {
@@ -61,7 +60,6 @@ public interface Validator {
      * @param code Status code
      * @return Validator instance
      */
-    @SuppressWarnings("PMD.ProhibitPublicStaticMethods")
     static Validator validator(final Supplier<Boolean> condition,
         final Supplier<String> message, final int code) {
         return context -> {
@@ -85,7 +83,6 @@ public interface Validator {
      * @param code Status code
      * @return Validator instance
      */
-    @SuppressWarnings("PMD.ProhibitPublicStaticMethods")
     static Validator validator(final Verifier verifier, final int code) {
         return context -> {
             final boolean valid = verifier.valid();

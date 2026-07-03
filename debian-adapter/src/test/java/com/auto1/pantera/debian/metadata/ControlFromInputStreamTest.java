@@ -19,7 +19,6 @@ import org.junit.jupiter.api.Test;
  * Test for {@link Control.FromInputStream}.
  * @since 0.1
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class ControlFromInputStreamTest {
 
     @Test

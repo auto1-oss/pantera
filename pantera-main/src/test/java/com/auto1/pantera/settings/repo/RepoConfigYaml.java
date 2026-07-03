@@ -24,7 +24,6 @@ import java.nio.file.Path;
  * Repo config yaml.
  * @since 0.12
  */
-@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.TooManyMethods"})
 public final class RepoConfigYaml {
 
     /**

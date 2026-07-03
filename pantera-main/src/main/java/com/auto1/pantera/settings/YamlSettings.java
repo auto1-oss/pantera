@@ -24,13 +24,14 @@ import com.auto1.pantera.asto.factory.Config;
 import com.auto1.pantera.asto.factory.StoragesLoader;
 import com.auto1.pantera.auth.AuthFromDb;
 import com.auto1.pantera.auth.AuthFromEnv;
+import com.auto1.pantera.cache.ArtifactIndexCacheConfig;
 import com.auto1.pantera.cache.CacheInvalidationPubSub;
 import com.auto1.pantera.cache.GlobalCacheConfig;
 import com.auto1.pantera.cache.NegativeCacheConfig;
 import com.auto1.pantera.cache.PublishingCleanable;
 import com.auto1.pantera.cache.StoragesCache;
 import com.auto1.pantera.cache.ValkeyConnection;
-import com.auto1.pantera.cooldown.CooldownSettings;
+import com.auto1.pantera.cooldown.config.CooldownSettings;
 import com.auto1.pantera.cooldown.YamlCooldownSettings;
 import com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheConfig;
 import com.auto1.pantera.db.ArtifactDbFactory;
@@ -47,8 +48,11 @@ import com.auto1.pantera.settings.cache.CachedUsers;
 import com.auto1.pantera.settings.cache.GuavaFiltersCache;
 import com.auto1.pantera.settings.cache.PublishingFiltersCache;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.LogSanitizer;
 import com.auto1.pantera.index.ArtifactIndex;
+import com.auto1.pantera.index.ArtifactIndexCache;
 import com.auto1.pantera.index.DbArtifactIndex;
+import java.util.Locale;
 import org.quartz.SchedulerException;
 
 import javax.sql.DataSource;
@@ -69,9 +73,15 @@ import com.auto1.pantera.asto.factory.StoragesLoader;
 /**
  * Settings built from YAML.
  *
+ * <p>Multiple distinct error sites — distinct failure modes per
+ * config section (auth providers, storage backends, Valkey,
+ * cooldown, http-client). Each reports its own initialisation
+ * failure so a misconfigured section can be identified by the
+ * operator without re-reading the whole stack.
+ * See audit/aggressive-items.md (Tier 4 B7 duplicate-error bucket).
+ *
  * @since 0.1
  */
-@SuppressWarnings("PMD.TooManyMethods")
 public final class YamlSettings implements Settings {
 
     /**
@@ -135,6 +145,15 @@ public final class YamlSettings implements Settings {
     private final Optional<MetadataEventQueues> events;
 
     /**
+     * Synchronous artifact-index writer. Wired to the same DataSource that
+     * backs the async {@link DbConsumer}, but writes inline with each
+     * upload so the group resolver sees the artifact immediately. Falls
+     * back to {@link com.auto1.pantera.index.SyncArtifactIndexer#NOOP} when
+     * no DB is configured.
+     */
+    private final com.auto1.pantera.index.SyncArtifactIndexer syncIndexer;
+
+    /**
      * Logging context.
      */
     private final LoggingContext lctx;
@@ -170,6 +189,14 @@ public final class YamlSettings implements Settings {
     private final ArtifactIndex artifactIndex;
 
     /**
+     * L1 cache wrapping {@link #artifactIndex}, present only when a real
+     * DB-backed index was constructed. Held separately so the sync upload
+     * indexer (B7) can reach in and call
+     * {@link ArtifactIndexCache#invalidate(String)} after a fresh write.
+     */
+    private final Optional<ArtifactIndexCache> artifactIndexCache;
+
+    /**
      * Path to pantera.yaml config file.
      */
     private final Path configFilePath;
@@ -185,6 +212,15 @@ public final class YamlSettings implements Settings {
      * @since 1.20.13
      */
     private final ValkeyConnection valkeyConn;
+
+    /**
+     * Cached enabled-flag filter wrapping {@link com.auto1.pantera.auth.LocalEnabledFilter}.
+     * Held so admin handlers (user update/enable/disable/delete) can
+     * invalidate the per-user cache entry directly.
+     * May be {@code null} when no dataSource is configured.
+     * @since 2.2.0
+     */
+    private final com.auto1.pantera.auth.CachedLocalEnabledFilter cachedLocalEnabledFilter;
 
     /**
      * Guard flag to make {@link #close()} idempotent without spurious error logs.
@@ -226,7 +262,6 @@ public final class YamlSettings implements Settings {
      * @param shared Pre-created DataSource to reuse, or empty to create a new one
      * @since 1.20.13
      */
-    @SuppressWarnings("PMD.ConstructorOnlyInitializesOrCallOtherConstructors")
     public YamlSettings(final YamlMapping content, final Path path,
         final QuartzService quartz, final Optional<DataSource> shared) {
         this(content, path, quartz, shared, Optional.empty());
@@ -254,46 +289,63 @@ public final class YamlSettings implements Settings {
         this.jwtSettings = JwtSettings.fromYaml(this.meta());
         final Optional<ValkeyConnection> valkey = YamlSettings.initValkey(this.meta());
         this.valkeyConn = valkey.orElse(null);
-        // Initialize global cache config for all adapters
-        GlobalCacheConfig.initialize(valkey);
-        // Initialize unified negative cache config
-        NegativeCacheConfig.initialize(this.meta().yamlMapping("caches"));
+        // Initialize global cache config for all adapters. Pass the
+        // `caches` YAML mapping so per-cache config sections (e.g.
+        // `auth-enabled`) can be resolved by accessors like
+        // GlobalCacheConfig.getInstance().authEnabled().
+        GlobalCacheConfig.initialize(valkey, this.meta().yamlMapping("caches"));
         // Initialize cooldown metadata cache config
         FilteredMetadataCacheConfig.initialize(this.meta().yamlMapping("caches"));
+        // Parse ArtifactIndexCache tier configs eagerly so the index wiring
+        // below can pick them up. These are read directly per-instance rather
+        // than via a global singleton (the cache owns its own config).
+        final ArtifactIndexCacheConfig indexPositiveCfg = ArtifactIndexCacheConfig.fromYaml(
+            this.meta().yamlMapping("caches"), ArtifactIndexCacheConfig.POSITIVE_SUBKEY
+        );
+        final ArtifactIndexCacheConfig indexNegativeCfg = ArtifactIndexCacheConfig.fromYaml(
+            this.meta().yamlMapping("caches"), ArtifactIndexCacheConfig.NEGATIVE_SUBKEY
+        );
         // Initialize database early so AuthFromDb can be used in auth chain
         if (shared.isPresent()) {
             this.artifactsDb = shared;
         } else {
             this.artifactsDb = YamlSettings.initArtifactsDb(this.meta());
         }
-        final CachedUsers auth = YamlSettings.initAuth(
-            this.meta(), valkey, this.jwtSettings, this.artifactsDb.orElse(null)
+        // Create the cross-instance pub/sub up front so the
+        // CachedLocalEnabledFilter inside the auth chain can subscribe
+        // for L1 invalidation broadcasts. Both the pub/sub and the
+        // auth chain are ultimately owned by this settings object.
+        final CacheInvalidationPubSub psEarly = valkey // NOPMD CloseResource - lifecycle owned by this.cachePubSub field; closed in YamlSettings.close()
+            .map(CacheInvalidationPubSub::new)
+            .orElse(null);
+        this.cachePubSub = psEarly;
+        final AuthChain authChain = YamlSettings.initAuth(
+            this.meta(), valkey, this.jwtSettings, this.artifactsDb.orElse(null),
+            psEarly
         );
+        final CachedUsers auth = authChain.cachedUsers();
+        this.cachedLocalEnabledFilter = authChain.enabledFilter();
         this.security = new PanteraSecurity.FromYaml(
             this.meta(), auth, new PolicyStorage(this.meta()).parse(),
             this.artifactsDb.orElse(null)
         );
-        // Initialize cross-instance cache invalidation via Redis pub/sub
-        if (valkey.isPresent()) {
-            final CacheInvalidationPubSub ps =
-                new CacheInvalidationPubSub(valkey.get());
-            this.cachePubSub = ps;
-            ps.register("auth", auth);
+        // Register cache handlers on the pub/sub created earlier.
+        if (psEarly != null) {
+            psEarly.register("auth", auth);
             final GuavaFiltersCache filters = new GuavaFiltersCache();
-            ps.register("filters", filters);
+            psEarly.register("filters", filters);
             final Cleanable<String> policyCache;
             if (this.security.policy() instanceof Cleanable) {
                 policyCache = (Cleanable<String>) this.security.policy();
-                ps.register("policy", policyCache);
+                psEarly.register("policy", policyCache);
             }
             this.acach = new PanteraCaches.All(
-                new PublishingCleanable(auth, ps, "auth"),
+                new PublishingCleanable(auth, psEarly, "auth"),
                 new StoragesCache(),
                 this.security.policy(),
-                new PublishingFiltersCache(filters, ps)
+                new PublishingFiltersCache(filters, psEarly)
             );
         } else {
-            this.cachePubSub = null;
             this.acach = new PanteraCaches.All(
                 auth, new StoragesCache(), this.security.policy(), new GuavaFiltersCache()
             );
@@ -306,16 +358,37 @@ public final class YamlSettings implements Settings {
         final boolean indexEnabled = indexConfig != null
             && "true".equals(indexConfig.string("enabled"));
         if (indexEnabled && this.artifactsDb.isPresent()) {
-            this.artifactIndex = new DbArtifactIndex(this.artifactsDb.get());
+            final ArtifactIndexCache cached = new ArtifactIndexCache( // NOPMD CloseResource - lifecycle owned by this.artifactIndex / this.artifactIndexCache fields
+                new DbArtifactIndex(this.artifactsDb.get()),
+                indexPositiveCfg,
+                indexNegativeCfg,
+                (indexPositiveCfg.isValkeyEnabled() || indexNegativeCfg.isValkeyEnabled())
+                    ? valkey.map(ValkeyConnection::async)
+                    : Optional.empty(),
+                Optional.ofNullable(psEarly)
+            );
+            this.artifactIndex = cached;
+            this.artifactIndexCache = Optional.of(cached);
         } else if (indexEnabled) {
             throw new IllegalStateException(
                 "artifact_index.enabled=true requires artifacts_database to be configured"
             );
         } else if (this.artifactsDb.isPresent()) {
             // Auto-enable DB-backed index when database is configured
-            this.artifactIndex = new DbArtifactIndex(this.artifactsDb.get());
+            final ArtifactIndexCache cached = new ArtifactIndexCache( // NOPMD CloseResource - lifecycle owned by this.artifactIndex / this.artifactIndexCache fields
+                new DbArtifactIndex(this.artifactsDb.get()),
+                indexPositiveCfg,
+                indexNegativeCfg,
+                (indexPositiveCfg.isValkeyEnabled() || indexNegativeCfg.isValkeyEnabled())
+                    ? valkey.map(ValkeyConnection::async)
+                    : Optional.empty(),
+                Optional.ofNullable(psEarly)
+            );
+            this.artifactIndex = cached;
+            this.artifactIndexCache = Optional.of(cached);
         } else {
             this.artifactIndex = ArtifactIndex.NOP;
+            this.artifactIndexCache = Optional.empty();
         }
         // Use the dedicated write pool for DbConsumer when provided;
         // fall back to the shared pool so single-pool deployments work unchanged.
@@ -323,6 +396,10 @@ public final class YamlSettings implements Settings {
         this.events = eventsDs.flatMap(
             db -> YamlSettings.initArtifactsEvents(this.meta(), quartz, db)
         );
+        this.syncIndexer = eventsDs
+            .<com.auto1.pantera.index.SyncArtifactIndexer>map(db ->
+                new com.auto1.pantera.db.DbSyncArtifactIndexer(db, this.artifactIndexCache))
+            .orElse(com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
         this.prefixesConfig = new PrefixesConfig(YamlSettings.readPrefixes(this.meta()));
         this.httpServerRequestTimeout = YamlSettings.parseRequestTimeout(this.meta());
     }
@@ -378,6 +455,11 @@ public final class YamlSettings implements Settings {
     }
 
     @Override
+    public com.auto1.pantera.index.SyncArtifactIndexer syncArtifactIndexer() {
+        return this.syncIndexer;
+    }
+
+    @Override
     public Optional<MetadataEventQueues> artifactMetadata() {
         return this.events;
     }
@@ -418,6 +500,17 @@ public final class YamlSettings implements Settings {
     }
 
     @Override
+    public Optional<CacheInvalidationPubSub> cacheInvalidationPubSub() {
+        return Optional.ofNullable(this.cachePubSub);
+    }
+
+    @Override
+    public Optional<com.auto1.pantera.auth.CachedLocalEnabledFilter>
+        cachedLocalEnabledFilter() {
+        return Optional.ofNullable(this.cachedLocalEnabledFilter);
+    }
+
+    @Override
     public PrefixesConfig prefixes() {
         return this.prefixesConfig;
     }
@@ -433,13 +526,15 @@ public final class YamlSettings implements Settings {
     }
 
     @Override
+    public Optional<ArtifactIndexCache> artifactIndexCache() {
+        return this.artifactIndexCache;
+    }
+
+    @Override
     public boolean proxyProtocol() {
         final YamlMapping server = this.meta != null
             ? this.meta.yamlMapping("http_server") : null;
-        if (server == null) {
-            return false;
-        }
-        return "true".equalsIgnoreCase(server.string("proxy_protocol"));
+        return server != null && "true".equalsIgnoreCase(server.string("proxy_protocol"));
     }
 
     @Override
@@ -467,6 +562,7 @@ public final class YamlSettings implements Settings {
             .message("Closing YamlSettings and cleaning up storage resources")
             .eventCategory("configuration")
             .eventAction("settings_close")
+            .field("log.source", "application")
             .log();
         // Close ordering is critical — dependencies flow downward:
         // 1. Tracked storages (may use DataSource / Valkey indirectly)
@@ -489,6 +585,7 @@ public final class YamlSettings implements Settings {
                         .eventCategory("configuration")
                         .eventAction("storage_close")
                         .eventOutcome("success")
+                        .field("log.source", "application")
                         .log();
                 } else if (storage instanceof AutoCloseable) {
                     // Fallback: direct close for AutoCloseable storages
@@ -498,6 +595,7 @@ public final class YamlSettings implements Settings {
                         .eventCategory("configuration")
                         .eventAction("storage_close")
                         .eventOutcome("success")
+                        .field("log.source", "application")
                         .log();
                 }
             } catch (final Exception e) {
@@ -507,6 +605,7 @@ public final class YamlSettings implements Settings {
                     .eventAction("storage_close")
                     .eventOutcome("failure")
                     .error(e)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -519,6 +618,7 @@ public final class YamlSettings implements Settings {
                     .eventCategory("configuration")
                     .eventAction("index_close")
                     .eventOutcome("success")
+                    .field("log.source", "application")
                     .log();
             } catch (final Exception e) {
                 EcsLogger.error("com.auto1.pantera.settings")
@@ -527,6 +627,7 @@ public final class YamlSettings implements Settings {
                     .eventAction("index_close")
                     .eventOutcome("failure")
                     .error(e)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -541,6 +642,7 @@ public final class YamlSettings implements Settings {
                     .eventAction("pubsub_close")
                     .eventOutcome("failure")
                     .error(e)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -555,6 +657,7 @@ public final class YamlSettings implements Settings {
                         .eventCategory("configuration")
                         .eventAction("database_close")
                         .eventOutcome("success")
+                        .field("log.source", "application")
                         .log();
                 } catch (final Exception e) {
                     EcsLogger.error("com.auto1.pantera.settings")
@@ -563,6 +666,7 @@ public final class YamlSettings implements Settings {
                         .eventAction("database_close")
                         .eventOutcome("failure")
                         .error(e)
+                        .field("log.source", "application")
                         .log();
                 }
             }
@@ -576,6 +680,7 @@ public final class YamlSettings implements Settings {
                     .eventCategory("configuration")
                     .eventAction("valkey_close")
                     .eventOutcome("success")
+                    .field("log.source", "application")
                     .log();
             } catch (final Exception e) {
                 EcsLogger.error("com.auto1.pantera.settings")
@@ -584,6 +689,7 @@ public final class YamlSettings implements Settings {
                     .eventAction("valkey_close")
                     .eventOutcome("failure")
                     .error(e)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -593,6 +699,7 @@ public final class YamlSettings implements Settings {
             .eventCategory("configuration")
             .eventAction("settings_close")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
     }
 
@@ -606,7 +713,7 @@ public final class YamlSettings implements Settings {
         if (target instanceof com.auto1.pantera.http.misc.DispatchedStorage) {
             target = ((com.auto1.pantera.http.misc.DispatchedStorage) target).unwrap();
         }
-        final String className = target.getClass().getSimpleName().toLowerCase();
+        final String className = target.getClass().getSimpleName().toLowerCase(Locale.ROOT);
         if (className.contains("s3")) {
             return "s3";
         } else if (className.contains("file")) {
@@ -644,17 +751,19 @@ public final class YamlSettings implements Settings {
             try {
                 final long millis = Long.parseLong(trimmed);
                 if (millis < 0) {
-                    throw new IllegalStateException("`http_server.request_timeout` must be zero or positive");
+                    throw new IllegalStateException("`http_server.request_timeout` must be zero or positive", ex);
                 }
                 return Duration.ofMillis(millis);
             } catch (final NumberFormatException num) {
-                throw new IllegalStateException(
+                final IllegalStateException ise = new IllegalStateException(
                     String.format(
                         "Invalid `http_server.request_timeout` value '%s'. Provide ISO-8601 duration (e.g. PT30S) or milliseconds.",
                         trimmed
                     ),
                     ex
                 );
+                ise.addSuppressed(num);
+                throw ise;
             }
         }
     }
@@ -676,6 +785,7 @@ public final class YamlSettings implements Settings {
                 .message("No caches configuration found")
                 .eventCategory("configuration")
                 .eventAction("valkey_init")
+                .field("log.source", "application")
                 .log();
             return Optional.empty();
         }
@@ -685,6 +795,7 @@ public final class YamlSettings implements Settings {
                 .message("No valkey configuration found in caches")
                 .eventCategory("configuration")
                 .eventAction("valkey_init")
+                .field("log.source", "application")
                 .log();
             return Optional.empty();
         }
@@ -696,6 +807,7 @@ public final class YamlSettings implements Settings {
                 .message("Valkey is disabled in configuration (enabled: false)")
                 .eventCategory("configuration")
                 .eventAction("valkey_init")
+                .field("log.source", "application")
                 .log();
             return Optional.empty();
         }
@@ -723,6 +835,7 @@ public final class YamlSettings implements Settings {
             .eventAction("valkey_init")
             .field("destination.address", host)
             .field("destination.port", port)
+            .field("log.source", "application")
             .log();
         try {
             return Optional.of(new ValkeyConnection(host, port, timeout));
@@ -733,6 +846,7 @@ public final class YamlSettings implements Settings {
                 .eventAction("valkey_init")
                 .eventOutcome("failure")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             return Optional.empty();
         }
@@ -746,24 +860,27 @@ public final class YamlSettings implements Settings {
      * @param valkey Optional Valkey connection for L2 cache
      * @param jwtSettings JWT settings for cache TTL capping
      * @param dataSource Database data source (nullable)
+     * @param cachePubSub Optional cross-instance pub/sub (nullable)
      * @return Authentication
      * @checkstyle ParameterNumberCheck (5 lines)
      */
-    private static CachedUsers initAuth(
+    private static AuthChain initAuth(
         final YamlMapping settings,
         final Optional<ValkeyConnection> valkey,
         final JwtSettings jwtSettings,
-        final DataSource dataSource
+        final DataSource dataSource,
+        final com.auto1.pantera.cache.CacheInvalidationPubSub cachePubSub
     ) {
         Authentication res;
         if (dataSource != null) {
             // Database is the primary source of truth for user credentials
             res = new AuthFromDb(dataSource);
-            EcsLogger.info("com.auto1.pantera.security")
+            EcsLogger.info("com.auto1.pantera.settings")
                 .message("Using AuthFromDb as primary authenticator")
                 .eventCategory("authentication")
                 .eventAction("auth_init")
                 .field("event.provider", "db")
+                .field("log.source", "application")
                 .log();
         } else {
             res = new AuthFromEnv();
@@ -797,12 +914,19 @@ public final class YamlSettings implements Settings {
                         : auth;
                     res = new Authentication.Joined(res, gated);
                 } catch (final Exception ex) {
-                    EcsLogger.warn("com.auto1.pantera.security")
+                    // B4: YAML node `settings` may carry client_secret /
+                    // jwt private-key paths / IdP credentials. Drop the
+                    // throwable bundle and emit only sanitized message +
+                    // exception class so the secret-bearing scope never
+                    // reaches the log document.
+                    EcsLogger.warn("com.auto1.pantera.settings")
                         .message("Failed to load auth provider: " + type)
                         .eventCategory("authentication")
                         .eventAction("auth_init")
                         .eventOutcome("failure")
-                        .error(ex)
+                        .field("error.type", ex.getClass().getSimpleName())
+                        .field("error.message", LogSanitizer.sanitizeMessage(ex.getMessage()))
+                        .field("log.source", "application")
                         .log();
                 }
             }
@@ -815,21 +939,53 @@ public final class YamlSettings implements Settings {
         // checks enabled for local users, but SSO providers do not.
         // Order matters: wrap BEFORE CachedUsers so a stale cache
         // entry cannot let a just-disabled user through.
+        com.auto1.pantera.auth.CachedLocalEnabledFilter cachedEnabledFilter = null;
         if (dataSource != null) {
-            res = new com.auto1.pantera.auth.LocalEnabledFilter(res, dataSource);
+            final Authentication local = new com.auto1.pantera.auth.LocalEnabledFilter(
+                res, dataSource
+            );
+            // Cache the enabled-flag lookup so the per-request JDBC hit in
+            // LocalEnabledFilter does not fire on every CLI basic-auth pull.
+            // Admin toggles (enable/disable/update/delete) call
+            // CachedLocalEnabledFilter.invalidate(username) via the hook in
+            // UserHandler, and pub/sub broadcasts the invalidation to peer
+            // Pantera instances so stale L1 copies drop within ms.
+            cachedEnabledFilter = new com.auto1.pantera.auth.CachedLocalEnabledFilter(
+                local,
+                com.auto1.pantera.cache.GlobalCacheConfig.getInstance(),
+                valkey.orElse(null),
+                cachePubSub
+            );
+            res = cachedEnabledFilter;
         }
         // Create CachedUsers with Valkey connection and JWT settings for TTL capping
+        final CachedUsers users;
         if (valkey.isPresent()) {
             EcsLogger.info("com.auto1.pantera.settings")
                 .message(String.format("Initializing auth cache with Valkey L2 cache and JWT TTL cap: expires=%s, expirySeconds=%d", jwtSettings.expires(), jwtSettings.expirySeconds()))
                 .eventCategory("authentication")
                 .eventAction("auth_cache_init")
+                .field("log.source", "application")
                 .log();
-            return new CachedUsers(res, valkey.get(), jwtSettings);
+            users = new CachedUsers(res, valkey.get(), jwtSettings);
         } else {
-            return new CachedUsers(res, null, jwtSettings);
+            users = new CachedUsers(res, null, jwtSettings);
         }
+        return new AuthChain(users, cachedEnabledFilter);
     }
+
+    /**
+     * Result holder for {@link #initAuth}: the outer {@link CachedUsers}
+     * credential cache plus the inner {@link com.auto1.pantera.auth.CachedLocalEnabledFilter}
+     * reference so admin handlers can invalidate it directly.
+     *
+     * @param cachedUsers Outer cached credential chain
+     * @param enabledFilter Inner enabled-flag filter (nullable when no DB)
+     */
+    private record AuthChain(
+        CachedUsers cachedUsers,
+        com.auto1.pantera.auth.CachedLocalEnabledFilter enabledFilter
+    ) { }
 
     /**
      * Initialize and scheduled mechanism to gather artifact events

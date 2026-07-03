@@ -19,9 +19,12 @@ import io.micrometer.core.instrument.Tags;
 import io.micrometer.prometheus.PrometheusMeterRegistry;
 import com.auto1.pantera.http.log.EcsLogger;
 
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.Map;
+import java.util.function.BooleanSupplier;
+import java.util.function.IntSupplier;
 
 /**
  * Micrometer metrics for Pantera.
@@ -56,6 +59,7 @@ public final class MicrometerMetrics {
             .eventCategory("configuration")
             .eventAction("micrometer_metrics_init")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
     }
 
@@ -328,7 +332,24 @@ public final class MicrometerMetrics {
             .increment();
     }
 
+    // ========== Publish-Date Registry Metrics ==========
 
+    /**
+     * Records one publish-date lookup outcome.
+     *
+     * @param repoType repo type ("maven", "npm", ...)
+     * @param outcome  one of: l1_hit, l2_hit, source_hit, source_miss, source_error
+     * @param durationMs total time spent in {@code publishDate(...)} for this call
+     */
+    public void recordPublishDateLookup(
+        final String repoType, final String outcome, final long durationMs
+    ) {
+        Timer.builder("pantera.publish_date.lookup")
+            .description("Publish-date registry lookup latency")
+            .tags("repository.type", repoType, "outcome", outcome)
+            .register(registry)
+            .record(java.time.Duration.ofMillis(durationMs));
+    }
 
     // ========== Storage Metrics ==========
 
@@ -432,6 +453,418 @@ public final class MicrometerMetrics {
             .tags("group_name", groupName)
             .register(registry)
             .record(java.time.Duration.ofMillis(durationMs));
+    }
+
+    /**
+     * Record the duration of a single phase inside the group-resolution
+     * handler chain (Phase 7.5 profiler instrumentation).
+     *
+     * <p>Emits {@code pantera_handler_phase_seconds{group_name,phase}} so
+     * dashboards can compute per-phase wall contribution as
+     * {@code phase_sum / total_count}. Phases overlap when async work runs
+     * concurrently — the sum across phases will exceed wall time when this
+     * happens, which is itself a useful signal.
+     *
+     * @param groupName group repository name
+     * @param phase     phase name (e.g. {@code "index_lookup"},
+     *                  {@code "targeted_local_read"},
+     *                  {@code "proxy_only_fanout"},
+     *                  {@code "full_two_phase_fanout"})
+     * @param durationNs phase duration in nanoseconds
+     */
+    public void recordHandlerPhaseDuration(
+        final String groupName, final String phase, final long durationNs
+    ) {
+        Timer.builder("pantera.handler.phase")
+            .description("Per-stage latency inside the group-resolution handler "
+                + "(Phase 7.5 profiler instrumentation)")
+            .tags("group_name", groupName, "phase", phase)
+            .register(registry)
+            .record(java.time.Duration.ofNanos(durationNs));
+    }
+
+    /**
+     * Record per-phase latency on a proxy cache slice
+     * ({@link com.auto1.pantera.http.cache.BaseCachedProxySlice}).
+     *
+     * <p>Emits {@code pantera_proxy_phase_seconds{repo_name,phase}} so we
+     * can decompose the in-pantera per-request handler time on the
+     * member-slice side (cache-hit serve, pre-process branch, fetch-direct,
+     * etc.) — the missing half of the Phase 7.5 profiler.
+     *
+     * @param repoName  repository name (e.g. {@code "maven_proxy"})
+     * @param phase     phase name (e.g. {@code "cache_first_flow"})
+     * @param durationNs phase duration in nanoseconds
+     */
+    public void recordProxyPhaseDuration(
+        final String repoName, final String phase, final long durationNs
+    ) {
+        Timer.builder("pantera.proxy.phase")
+            .description("Per-stage latency inside the proxy cache slice "
+                + "(Phase 7.5 profiler instrumentation)")
+            .tags("repo_name", repoName, "phase", phase)
+            .register(registry)
+            .record(java.time.Duration.ofNanos(durationNs));
+    }
+
+    // ========== M1 (Finding #8): Outbound observability foundation ==========
+    //
+    // Every outbound request (foreground proxy, cooldown HEAD, metadata
+    // refresh — and historically prefetch, deleted in M2) increments one of
+    // these counters. The amplification ratio
+    //   sum(rate(pantera_upstream_requests_total[5m]))
+    //     /
+    //   sum(rate(pantera_http_requests_total{result="success"}[5m]))
+    // is the primary gate the perf harness enforces: any sustained value
+    // above 1.5 is a regression. See analysis/plan/v1/PLAN.md milestone M1.
+
+    /**
+     * Record an outbound HTTP request to an upstream host.
+     *
+     * <p>Emits {@code pantera_upstream_requests_total{upstream_host, caller_tag,
+     * outcome}} so dashboards can compute amplification ratio and per-source
+     * outbound mix. The {@code outcome} label buckets status codes into
+     * coarse groups + isolates {@code 429} for the rate-limit alerting path.
+     *
+     * <p>Also records latency under
+     * {@code pantera_upstream_request_duration_seconds} with the same labels.
+     *
+     * @param upstreamHost the host of the upstream server (e.g.
+     *     {@code "repo1.maven.org"}). Used as the {@code upstream_host} label.
+     * @param callerTag    one of {@code "foreground"}, {@code "cooldown_head"},
+     *     {@code "metadata_refresh"} — identifies which Pantera subsystem
+     *     issued the outbound request. Defaulted from the
+     *     {@code RequestContext.KEY_CALLER_TAG} ThreadContext entry by the
+     *     calling slice.
+     * @param outcome      one of {@code "2xx"}, {@code "3xx"}, {@code "4xx"},
+     *     {@code "429"}, {@code "5xx"}, {@code "timeout"},
+     *     {@code "connect_error"}, {@code "error"}. The {@code "429"} bucket
+     *     is isolated for alerting.
+     * @param durationMs   wall-clock duration of the upstream call in
+     *     milliseconds (request send → response received).
+     */
+    public void recordOutboundRequest(
+        final String upstreamHost,
+        final String callerTag,
+        final String outcome,
+        final long durationMs
+    ) {
+        Counter.builder("pantera.upstream.requests.total")
+            .description("Outbound HTTP requests to upstream registries, "
+                + "labelled by caller subsystem and outcome bucket. "
+                + "Drives the amplification-ratio alert.")
+            .tags(
+                "upstream_host", upstreamHost,
+                "caller_tag", callerTag,
+                "outcome", outcome
+            )
+            .register(registry)
+            .increment();
+        Timer.builder("pantera.upstream.request.duration")
+            .description("Outbound HTTP request latency to upstream registries.")
+            .tags(
+                "upstream_host", upstreamHost,
+                "caller_tag", callerTag,
+                "outcome", outcome
+            )
+            .register(registry)
+            .record(java.time.Duration.ofMillis(durationMs));
+    }
+
+    /**
+     * Record an upstream {@code 429 Too Many Requests} response. Primary
+     * alerting signal for "Maven Central / npm registry / packagist /
+     * etc. is rate-limiting us."
+     *
+     * <p>Emits {@code pantera_proxy_429_total{upstream_host, repo_name}}.
+     * Operators should alert on
+     * {@code sum(increase(pantera_proxy_429_total[10m])) > 0} per host
+     * — any sustained 429 from a known-throttling upstream means our
+     * rate limiter is set too high or our amplification ratio is above 1.
+     *
+     * <p>Called from {@code JettyClientSlice} in addition to
+     * {@link #recordOutboundRequest} (the latter buckets the same response
+     * under {@code outcome="429"} for amplification context).
+     *
+     * @param upstreamHost host that returned 429 (e.g. {@code "repo1.maven.org"}).
+     * @param repoName     repository the foreground request was for
+     *     (e.g. {@code "maven_proxy"}); read from
+     *     {@code ThreadContext.get(RequestContext.KEY_REPO_NAME)} by the
+     *     caller. Pass {@code "unknown"} when not available.
+     */
+    public void recordUpstream429(final String upstreamHost, final String repoName) {
+        Counter.builder("pantera.proxy.429.total")
+            .description("Upstream 429 Too Many Requests responses received, "
+                + "labelled by upstream host and originating repo. Primary "
+                + "throttling alert signal.")
+            .tags("upstream_host", upstreamHost, "repo_name", repoName)
+            .register(registry)
+            .increment();
+    }
+
+    /**
+     * Record a self-imposed outbound rate-limit hit. Differs from
+     * {@link #recordUpstream429}: this fires when Pantera's local
+     * token-bucket gate denied an outbound request before it left the
+     * JVM (M3 of {@code analysis/plan/v1/PLAN.md}). A non-zero count
+     * here is normal — it means the limiter is doing its job; a
+     * sustained high rate means the bucket size is too small for the
+     * legitimate workload.
+     *
+     * <p>Emits {@code pantera_outbound_rate_limited_total{upstream_host,
+     * reason}}. {@code reason} ∈ {@code "gate_closed"}
+     * (per-host 429 / Retry-After gate is open) or {@code "bucket_empty"}
+     * (steady-state RPS cap hit, gate is open).
+     *
+     * @param upstreamHost host whose limit was hit.
+     * @param reason {@code "gate_closed"} or {@code "bucket_empty"}.
+     * @since 2.2.0
+     */
+    public void recordOutboundRateLimited(final String upstreamHost, final String reason) {
+        Counter.builder("pantera.outbound.rate_limited.total")
+            .description("Outbound requests denied by Pantera's own per-host token-bucket "
+                + "or 429 gate. Sustained non-zero rate hints the bucket is undersized "
+                + "for legitimate traffic.")
+            .tags("upstream_host", upstreamHost, "reason", reason)
+            .register(registry)
+            .increment();
+    }
+
+    /**
+     * Per-host registry of circuit-breaker {@link BooleanSupplier}s that
+     * back the {@code pantera_circuit_breaker_state} gauge. Serves two
+     * purposes:
+     *
+     * <ol>
+     *   <li><b>Idempotency.</b> {@link io.micrometer.core.instrument.MeterRegistry}
+     *       does NOT deduplicate {@code register()} calls; registering the
+     *       same gauge twice produces ambiguous scrapes. Presence of the
+     *       key is the "already registered" signal.</li>
+     *   <li><b>Strong reference retention.</b> Micrometer holds the
+     *       second-arg state object of {@code Gauge.builder(name, obj, fn)}
+     *       via a {@link java.lang.ref.WeakReference}. If the
+     *       {@code BooleanSupplier} we pass is only referenced from the
+     *       caller's stack at register time, GC clears it and the gauge
+     *       returns {@code NaN} on every subsequent scrape. Storing the
+     *       supplier here keeps it strongly reachable for the JVM lifetime.</li>
+     * </ol>
+     */
+    private final Map<String, BooleanSupplier> circuitBreakerGaugeHosts = new ConcurrentHashMap<>();
+
+    /**
+     * Register a polling gauge {@code pantera_circuit_breaker_state{upstream_host}}
+     * for the given host. The gauge reads from the supplied
+     * {@link BooleanSupplier} on every scrape, so it reflects the live
+     * state of the breaker (including auto-close after the block window
+     * elapses) without needing explicit transition events.
+     *
+     * <p>Idempotent: calling with the same host twice registers the
+     * gauge exactly once. The {@code BooleanSupplier} passed on
+     * subsequent calls is ignored.
+     *
+     * @param upstreamHost upstream host this breaker protects.
+     * @param isOpen supplier returning {@code true} when the breaker
+     *     is currently open (blocking outbound calls).
+     * @since 2.2.0 (T-P02b)
+     */
+    public void registerCircuitBreakerStateGauge(
+        final String upstreamHost, final BooleanSupplier isOpen
+    ) {
+        // putIfAbsent + retained reference: the map STRONGLY holds the
+        // BooleanSupplier so Micrometer's WeakReference inside the gauge
+        // cannot clear it. Without this, the lambda goes out of scope
+        // after this method returns and every subsequent scrape returns
+        // NaN. Re-register attempts are no-ops (idempotent by host).
+        final BooleanSupplier prev =
+            this.circuitBreakerGaugeHosts.putIfAbsent(upstreamHost, isOpen);
+        if (prev != null) {
+            return;
+        }
+        Gauge.builder(
+                "pantera.circuit_breaker.state",
+                isOpen,
+                supplier -> supplier.getAsBoolean() ? 1.0 : 0.0
+            )
+            .description("Per-upstream circuit-breaker state (1=open, 0=closed). "
+                + "Open means outbound calls fast-fail with a synthetic 502. Sustained "
+                + "open is a primary alert signal — surfaces upstream brokenness "
+                + "before the rate-limit gate would.")
+            .tags("upstream_host", upstreamHost)
+            .register(registry);
+    }
+
+    /**
+     * Increment {@code pantera_circuit_breaker_trips_total{upstream_host}}.
+     * Fires once per state transition from closed → open. A trip burst
+     * (several trips in quick succession) indicates either a real
+     * upstream outage or a flapping connection — the rate of this
+     * counter is the canonical "breaker is doing work" signal.
+     *
+     * @param upstreamHost host whose breaker tripped.
+     * @since 2.2.0 (T-P02b)
+     */
+    public void recordCircuitBreakerTrip(final String upstreamHost) {
+        Counter.builder("pantera.circuit_breaker.trips.total")
+            .description("Circuit-breaker trip events per upstream host. A trip is a "
+                + "transition from closed to open; sustained trip rate indicates "
+                + "upstream brokenness or flap.")
+            .tags("upstream_host", upstreamHost)
+            .register(registry)
+            .increment();
+    }
+
+    /**
+     * Increment {@code pantera_circuit_breaker_fastfail_total{upstream_host}}.
+     * Fires every time a client request hits an open breaker and receives
+     * a synthesised 502 without reaching the upstream. High fast-fail
+     * counts during an outage are EXPECTED — they prove the breaker is
+     * absorbing the would-be amplification.
+     *
+     * @param upstreamHost host whose breaker fast-failed the request.
+     * @since 2.2.0 (T-P02b)
+     */
+    public void recordCircuitBreakerFastfail(final String upstreamHost) {
+        Counter.builder("pantera.circuit_breaker.fastfail.total")
+            .description("Synthetic 502 responses returned by the circuit-breaker "
+                + "fast-fail path. High counts during an outage are expected and "
+                + "indicate the breaker is suppressing upstream amplification.")
+            .tags("upstream_host", upstreamHost)
+            .register(registry)
+            .increment();
+    }
+
+    /**
+     * Increment {@code pantera_bulkhead_overflow_total{repo}}. Fires every
+     * time a request hits the per-repo bulkhead while its semaphore is
+     * full and gets fast-failed with a 503. The rate of this counter is
+     * the canonical "this repo is saturating" alert signal.
+     *
+     * @param repo repository name whose bulkhead rejected the request.
+     * @since 2.2.0 (T-P12)
+     */
+    public void recordBulkheadOverflow(final String repo) {
+        Counter.builder("pantera.bulkhead.overflow.total")
+            .description("Per-repo bulkhead rejections — a 503 was returned because "
+                + "the repo's concurrency semaphore was full. Sustained non-zero "
+                + "means the repo is saturated and clients are seeing back-pressure.")
+            .tags("repo", repo)
+            .register(registry)
+            .increment();
+    }
+
+    /**
+     * Strong references to per-repo AIMD permit suppliers, mirroring the
+     * circuit-breaker pattern above. Micrometer holds gauges weakly; without
+     * this map the supplier lambda is GC'd after registration and the gauge
+     * scrapes NaN forever.
+     */
+    private final Map<String, IntSupplier> bulkheadPermitsSuppliers = new ConcurrentHashMap<>();
+
+    /**
+     * Register a polling gauge {@code pantera_bulkhead_permits_current{repo}}
+     * that reflects the current AIMD-tuned permit ceiling for the given
+     * repository. Idempotent per repo — the first registration wins.
+     *
+     * @param repo Repository name.
+     * @param permitsSupplier Supplier returning the current permit ceiling.
+     * @since 2.2.0
+     */
+    public void registerBulkheadPermitsGauge(
+        final String repo, final IntSupplier permitsSupplier
+    ) {
+        final IntSupplier prev =
+            this.bulkheadPermitsSuppliers.putIfAbsent(repo, permitsSupplier);
+        if (prev != null) {
+            return;
+        }
+        Gauge.builder(
+                "pantera.bulkhead.permits.current",
+                permitsSupplier,
+                IntSupplier::getAsInt
+            )
+            .description("Current AIMD-tuned permit ceiling for the per-repo bulkhead. "
+                + "Tracks how aggressively the controller is letting traffic through right now. "
+                + "Sustained min = upstream is unhealthy; sustained max = upstream is healthy and "
+                + "demand exceeds the cap (consider raising max_permits).")
+            .tags("repo", repo)
+            .register(registry);
+    }
+
+    /**
+     * Increment {@code pantera_bulkhead_ramp_events_total{repo,direction}}.
+     * Fires once per AIMD step that actually changed the permit ceiling.
+     *
+     * @param repo Repository name.
+     * @param direction Either {@code "up"} (additive increase) or {@code "down"} (multiplicative decrease).
+     * @since 2.2.0
+     */
+    public void recordBulkheadRampEvent(final String repo, final String direction) {
+        Counter.builder("pantera.bulkhead.ramp.events.total")
+            .description("Per-repo AIMD permit-ceiling adjustments. Up = healthy window "
+                + "increased the ceiling; down = error or high-latency window halved it. "
+                + "A sustained ramp-down rate indicates upstream instability or under-provisioned max.")
+            .tags("repo", repo, "direction", direction)
+            .register(registry)
+            .increment();
+    }
+
+    /**
+     * Bucket a response status code into a coarse outcome label.
+     * Isolates {@code 429} from the rest of {@code 4xx} for the alerting
+     * path.
+     *
+     * @param statusCode HTTP status code from the upstream response.
+     * @return one of {@code "2xx"}, {@code "3xx"}, {@code "4xx"},
+     *     {@code "429"}, {@code "5xx"}, or {@code "unknown"}.
+     */
+    public static String outcomeBucket(final int statusCode) {
+        if (statusCode == 429) {
+            return "429";
+        }
+        if (statusCode >= 200 && statusCode < 300) {
+            return "2xx";
+        }
+        if (statusCode >= 300 && statusCode < 400) {
+            return "3xx";
+        }
+        if (statusCode >= 400 && statusCode < 500) {
+            return "4xx";
+        }
+        if (statusCode >= 500 && statusCode < 600) {
+            return "5xx";
+        }
+        return "unknown";
+    }
+
+    /**
+     * Bucket an upstream-call failure into a coarse outcome label.
+     *
+     * @param failure the {@link Throwable} surfaced from the Jetty client.
+     *     {@code null} returns {@code "error"} as a safe default.
+     * @return one of {@code "timeout"}, {@code "connect_error"},
+     *     {@code "error"}.
+     */
+    public static String outcomeFromFailure(final Throwable failure) {
+        if (failure == null) {
+            return "error";
+        }
+        if (failure instanceof java.util.concurrent.TimeoutException) {
+            return "timeout";
+        }
+        if (failure instanceof java.net.ConnectException
+            || failure instanceof java.net.SocketException) {
+            return "connect_error";
+        }
+        // Jetty wraps connection failures sometimes; check the cause too.
+        final Throwable cause = failure.getCause();
+        if (cause instanceof java.net.ConnectException
+            || cause instanceof java.net.SocketException) {
+            return "connect_error";
+        }
+        if (cause instanceof java.util.concurrent.TimeoutException) {
+            return "timeout";
+        }
+        return "error";
     }
 }
 

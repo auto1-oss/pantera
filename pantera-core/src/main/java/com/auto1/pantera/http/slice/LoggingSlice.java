@@ -67,6 +67,7 @@ public final class LoggingSlice implements Slice {
                 .message("HTTP request: " + msg.toString())
                 .eventCategory("web")
                 .eventAction("request")
+                .field("log.source", "application")
                 .log();
         }
 
@@ -82,6 +83,7 @@ public final class LoggingSlice implements Slice {
                         .message("HTTP response: " + sb.toString())
                         .eventCategory("web")
                         .eventAction("response")
+                        .field("log.source", "application")
                         .log();
                 }
 

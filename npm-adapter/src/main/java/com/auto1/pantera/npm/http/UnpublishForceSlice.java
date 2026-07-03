@@ -89,7 +89,7 @@ final class UnpublishForceSlice implements Slice {
                 if (this.events.isPresent()) {
                     res = res.thenRun(
                         () -> this.events.map(
-                            queue -> queue.add(
+                            queue -> queue.add( // ok: unbounded ConcurrentLinkedDeque (ArtifactEvent queue)
                                 new ArtifactEvent(UploadSlice.REPO_TYPE, this.rname, pkg)
                             )
                         )

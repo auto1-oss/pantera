@@ -29,7 +29,6 @@ import org.junit.jupiter.api.Test;
  * Test for {@link RpmMetadata.Append}.
  * @since 1.5
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class RpmMetadataAppendTest {
 
     @Test

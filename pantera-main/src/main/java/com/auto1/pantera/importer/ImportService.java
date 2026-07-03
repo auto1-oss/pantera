@@ -175,6 +175,7 @@ public final class ImportService {
                     .eventAction("import_normalize")
                     .field("url.original", path)
                     .field("url.path", normalized)
+                    .field("log.source", "application")
                     .log();
                 return normalized;
             }
@@ -189,6 +190,7 @@ public final class ImportService {
                 .eventAction("import_normalize")
                 .field("url.original", path)
                 .field("url.path", normalized)
+                .field("log.source", "application")
                 .log();
             return normalized;
         }
@@ -245,6 +247,7 @@ public final class ImportService {
                 .eventAction("import_artifact")
                 .eventOutcome("unknown")
                 .field("event.reason", "skipped")
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(
                 new ImportResult(
@@ -264,6 +267,7 @@ public final class ImportService {
                 .eventAction("import_artifact")
                 .field("repository.name", request.repo())
                 .field("url.path", request.path())
+                .field("log.source", "application")
                 .log();
             final long size = request.size().orElse(0L);
             this.sessions.ifPresent(store -> store.markCompleted(session, size, buildExpectedDigests(request)));
@@ -315,14 +319,18 @@ public final class ImportService {
                 // Configurable import timeout (default: 30 minutes)
                 .orTimeout(Long.getLong("pantera.import.timeout.seconds", 1800L), TimeUnit.SECONDS)
         ).toCompletableFuture().exceptionally(err -> {
-            EcsLogger.error("com.auto1.pantera.importer")
+            // B7: middle-layer log-and-rethrow — the import slice /
+            // verticle that owns the HTTP response is the boundary.
+            // CompletionException re-thrown here propagates with the
+            // full original cause attached.
+            EcsLogger.trace("com.auto1.pantera.importer")
                 .message("Import failed")
                 .eventCategory("web")
                 .eventAction("import_artifact")
-                .eventOutcome("failure")
                 .field("repository.name", request.repo())
                 .field("url.path", request.path())
-                .error(err)
+                .field("error.type", err.getClass().getSimpleName())
+                .field("log.source", "application")
                 .log();
             this.sessions.ifPresent(store -> store.markFailed(session, err.getMessage()));
             throw new CompletionException(err);
@@ -370,9 +378,10 @@ public final class ImportService {
                 .field("repository.name", request.repo())
                 .field("url.path", request.path())
                 .field("error.message", mismatch.get())
+                .field("log.source", "application")
                 .log();
             final Storage root = rootStorage(storage).orElse(storage);
-            if (root == storage) {
+            if (root == storage) { // NOPMD CompareObjectsWithEquals - intentional identity check (orElse returned the same instance)
                 // Same storage, simple move
                 return storage.move(staging, quarantine).thenApply(
                     ignored -> {
@@ -423,6 +432,7 @@ public final class ImportService {
                             .eventAction("import_cleanup")
                             .eventOutcome("failure")
                             .field("error.message", cleanupErr.getMessage())
+                            .field("log.source", "application")
                             .log();
                         return null;
                     });
@@ -441,6 +451,7 @@ public final class ImportService {
                                     .eventCategory("web")
                                     .eventAction("import_artifact")
                                     .field("repository.name", request.repo())
+                                    .field("log.source", "application")
                                     .log();
                             }
                             return writeShardsForImport(storage, target, request, size, toPersist, baseUrl)
@@ -452,6 +463,7 @@ public final class ImportService {
                                         .eventOutcome("failure")
                                         .field("repository.name", request.repo())
                                         .field("error.message", err.getMessage())
+                                        .field("log.source", "application")
                                         .log();
                                     return null;
                                 })
@@ -482,6 +494,7 @@ public final class ImportService {
                                         .eventOutcome("failure")
                                         .field("repository.name", request.repo())
                                         .field("error.message", err.getMessage())
+                                        .field("log.source", "application")
                                         .log();
                                     return null; // Continue even if metadata regeneration fails
                                 })
@@ -524,7 +537,6 @@ public final class ImportService {
     private static CompletionStage<Void> writePyPiShard(
         final Storage storage,
         final Key target,
-        final ImportRequest request,
         final long size,
         final EnumMap<DigestType, String> digests
     ) {
@@ -689,6 +701,7 @@ public final class ImportService {
                         .eventCategory("web")
                         .eventAction("import_cleanup")
                         .field("error.message", err.getMessage())
+                        .field("log.source", "application")
                         .log();
                     return null;
                 })
@@ -703,6 +716,7 @@ public final class ImportService {
                                     .eventCategory("web")
                                     .eventAction("import_cleanup")
                                     .field("error.message", err.getMessage())
+                                    .field("log.source", "application")
                                     .log();
                                 return null;
                             })
@@ -717,6 +731,7 @@ public final class ImportService {
                                                 .eventCategory("web")
                                                 .eventAction("import_cleanup")
                                                 .field("error.message", err.getMessage())
+                                                .field("log.source", "application")
                                                 .log();
                                             return null;
                                         });
@@ -765,8 +780,10 @@ public final class ImportService {
                 origin.setAccessible(true);
                 return Optional.of((Storage) origin.get(storage));
             }
-        } catch (final Exception ignore) {
-            // ignore and treat as not a SubStorage
+        } catch (final Exception ignore) { // NOPMD EmptyCatchBlock - intentional: any reflection failure means the storage is not a SubStorage; return empty
+            // EXPECTED: any reflection failure (class missing, field
+            // missing, security manager) means the runtime storage isn't
+            // a SubStorage, so we return Optional.empty.
         }
         return Optional.empty();
     }
@@ -786,16 +803,8 @@ public final class ImportService {
                 final String raw = ym.get().string("metadata_merge_mode");
                 if (raw != null && !raw.isBlank()) {
                     final String mode = raw.trim().toLowerCase(Locale.ROOT);
-                    // Explicit legacy/direct/off disables shards
-                    if ("legacy".equals(mode) || "direct".equals(mode) || "off".equals(mode)) {
-                        return false;
-                    }
-                    // Explicit shards enables shards
-                    if ("shards".equals(mode)) {
-                        return true;
-                    }
-                    // Unknown values: default to shards
-                    return true;
+                    // Explicit legacy/direct/off disables shards; everything else defaults to shards.
+                    return !"legacy".equals(mode) && !"direct".equals(mode) && !"off".equals(mode);
                 }
             }
         } catch (final Exception ex) {
@@ -804,6 +813,7 @@ public final class ImportService {
                 .eventCategory("configuration")
                 .eventAction("settings_read")
                 .field("error.message", ex.getMessage())
+                .field("log.source", "application")
                 .log();
         }
         final String prop = System.getProperty("pantera.metadata.merge.mode", "");
@@ -889,10 +899,10 @@ public final class ImportService {
             return writeMavenShard(storage, target, request, size, digests);
         }
         if ("helm".equals(type)) {
-            return writeHelmShard(storage, target, request, size, digests, baseUrl);
+            return writeHelmShard(storage, target, size, digests, baseUrl);
         }
         if ("pypi".equals(type) || "python".equals(type)) {
-            return writePyPiShard(storage, target, request, size, digests);
+            return writePyPiShard(storage, target, size, digests);
         }
         return CompletableFuture.completedFuture(null);
     }
@@ -915,6 +925,7 @@ public final class ImportService {
                 .message("Skipping maven-metadata.xml file at path: " + path)
                 .eventCategory("web")
                 .eventAction("import_shard_write")
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(null);
         }
@@ -926,6 +937,7 @@ public final class ImportService {
                 .eventAction("import_shard_write")
                 .field("package.name", request.artifact().orElse(null))
                 .field("package.version", request.version().orElse(null))
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(null);
         }
@@ -937,6 +949,7 @@ public final class ImportService {
             .field("file.path", coords.groupPath)
             .field("package.name", coords.artifactId)
             .field("package.version", coords.version)
+            .field("log.source", "application")
             .log();
         final String shard = String.format(
             Locale.ROOT,
@@ -956,6 +969,7 @@ public final class ImportService {
             .message("Extracted filename '" + filename + "' from path: " + path)
             .eventCategory("web")
             .eventAction("import_shard_write")
+            .field("log.source", "application")
             .log();
         // Build shard key parts, avoiding empty groupPath
         final java.util.List<String> keyParts = new java.util.ArrayList<>();
@@ -981,6 +995,7 @@ public final class ImportService {
             .message("Creating shard key (parts: " + keyParts.toString() + ")")
             .eventCategory("web")
             .eventAction("import_shard_write")
+            .field("log.source", "application")
             .log();
         final Key shardKey = new Key.From(keyParts.toArray(new String[0]));
         return storage.save(shardKey, new Content.From(shard.getBytes(StandardCharsets.UTF_8)))
@@ -1002,7 +1017,6 @@ public final class ImportService {
     private static CompletionStage<Void> writeHelmShard(
         final Storage storage,
         final Key target,
-        final ImportRequest request,
         final long size,
         final EnumMap<DigestType, String> digests,
         final Optional<String> baseUrl
@@ -1036,6 +1050,7 @@ public final class ImportService {
                 .eventCategory("web")
                 .eventAction("import_shard_write")
                 .field("file.name", file)
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(null);
         }
@@ -1083,6 +1098,7 @@ public final class ImportService {
             .field("url.path", path)
             .field("package.name", hdrArtifact)
             .field("package.version", hdrVersion)
+            .field("log.source", "application")
             .log();
         // Check if path starts with slash and remove it
         String normalizedPath = path;
@@ -1094,6 +1110,7 @@ public final class ImportService {
                 .eventAction("maven_coords_infer")
                 .field("url.original", path)
                 .field("url.path", normalizedPath)
+                .field("log.source", "application")
                 .log();
         }
         if (hdrArtifact != null && hdrVersion != null && !hdrVersion.isEmpty()) {
@@ -1101,6 +1118,7 @@ public final class ImportService {
                 .message("Using headers for coordinates")
                 .eventCategory("web")
                 .eventAction("maven_coords_infer")
+                .field("log.source", "application")
                 .log();
             final int idx = normalizedPath.lastIndexOf('/');
             if (idx > 0) {
@@ -1117,6 +1135,7 @@ public final class ImportService {
             .message("Using path parsing fallback")
             .eventCategory("web")
             .eventAction("maven_coords_infer")
+            .field("log.source", "application")
             .log();
         // Fallback: .../{artifactId}/{version}/{file}
         final String[] segs = normalizedPath.split("/");
@@ -1125,6 +1144,7 @@ public final class ImportService {
             .eventCategory("web")
             .eventAction("maven_coords_infer")
             .field("url.path", normalizedPath)
+            .field("log.source", "application")
             .log();
         if (segs.length < 3) {
             EcsLogger.debug("com.auto1.pantera.importer")
@@ -1132,6 +1152,7 @@ public final class ImportService {
                 .eventCategory("web")
                 .eventAction("maven_coords_infer")
                 .eventOutcome("failure")
+                .field("log.source", "application")
                 .log();
             return null;
         }
@@ -1151,6 +1172,7 @@ public final class ImportService {
             .field("package.name", artifactId)
             .field("package.version", version)
             .field("file.path", groupPath)
+            .field("log.source", "application")
             .log();
         if (groupPath.isEmpty()) {
             return null;
@@ -1230,6 +1252,7 @@ public final class ImportService {
                 .eventAction("base_url_resolve")
                 .field("repository.name", config.name())
                 .field("error.message", ex.getMessage())
+                .field("log.source", "application")
                 .log();
             return Optional.empty();
         }

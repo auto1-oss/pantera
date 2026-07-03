@@ -105,8 +105,8 @@ public final class BrowseSlice implements Slice {
         final Collection<Key> files,
         final Collection<Key> directories
     ) {
-        final StringBuilder html = new StringBuilder();
-        
+        final StringBuilder html = new StringBuilder(2048);
+
         // Determine the base path for links (the full path up to current directory)
         final String basePath = fullPath.endsWith("/") ? fullPath : fullPath + "/";
         final String displayPath = artifactPath.isEmpty() || "/".equals(artifactPath) 

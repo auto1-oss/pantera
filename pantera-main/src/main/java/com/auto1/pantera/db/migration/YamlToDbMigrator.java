@@ -43,6 +43,14 @@ import org.slf4j.LoggerFactory;
  * Checks for {@code migration_completed} flag in settings table.
  * If absent, reads YAML files and populates DB tables.
  * If present, skips entirely.
+ *
+ * <p>Multiple distinct error sites in this class — distinct failure
+ * modes (settings init, per-repo migration, per-user migration,
+ * per-token migration, etc.). Each per-record failure is logged
+ * with its identifying key so partial-migration recovery is
+ * actionable. See audit/aggressive-items.md
+ * (Tier 4 B7 duplicate-error bucket).
+ *
  * @since 1.0
  */
 public final class YamlToDbMigrator {
@@ -280,7 +288,7 @@ public final class YamlToDbMigrator {
                         builder.add("roles", rolesArr);
                     }
                     dao.addOrUpdate(builder.build(), name);
-                    LOG.info("Migrated user: {}", name);
+                    LOG.debug("Migrated user: {}", name);
                 } catch (final Exception ex) {
                     LOG.error("Failed to migrate user file: {}", file, ex);
                 }
@@ -340,7 +348,6 @@ public final class YamlToDbMigrator {
      * http_client, http_server, metrics, caches, global_prefixes,
      * storage aliases, and auth providers.
      */
-    @SuppressWarnings({"PMD.CognitiveComplexity", "PMD.NPathComplexity"})
     private void migratePanteraYml() {
         if (this.panteraYml == null || !Files.isRegularFile(this.panteraYml)) {
             LOG.info("No pantera.yml path provided or file not found, skipping settings migration");
@@ -374,7 +381,7 @@ public final class YamlToDbMigrator {
                 final YamlMapping nested = meta.yamlMapping(section);
                 if (nested != null) {
                     settings.put(section, yamlToJson(nested), "migration");
-                    LOG.info("Migrated settings section: {}", section);
+                    LOG.debug("Migrated settings section: {}", section);
                 }
             }
             // Migrate global_prefixes as a JSON array
@@ -407,7 +414,7 @@ public final class YamlToDbMigrator {
                     final YamlMapping aliasConfig = storages.yamlMapping(key);
                     if (aliasConfig != null) {
                         aliasDao.put(aliasName, null, yamlToJson(aliasConfig));
-                        LOG.info("Migrated storage alias: {}", aliasName);
+                        LOG.debug("Migrated storage alias: {}", aliasName);
                     }
                 }
             }
@@ -517,8 +524,8 @@ public final class YamlToDbMigrator {
                 assign.setInt(1, userId);
                 assign.executeUpdate();
             }
-            LOG.warn("Bootstrapped default admin user — username='admin' "
-                + "password='admin' (must_change_password=TRUE on first login). "
+            LOG.warn("Bootstrapped default admin user — username='<redacted>' "
+                + "password='<redacted>' (must_change_password=TRUE on first login). "
                 + "CHANGE THIS IMMEDIATELY in production.");
         } catch (final Exception ex) {
             LOG.error("Failed to bootstrap default admin user", ex);
@@ -544,6 +551,9 @@ public final class YamlToDbMigrator {
                     try {
                         builder.add(keyStr, Long.parseLong(resolved));
                     } catch (final NumberFormatException nfe) {
+                        // EXPECTED: not a parseable number — keep the
+                        // original string. This is type coercion, not a
+                        // failure.
                         builder.add(keyStr, resolved);
                     }
                 }

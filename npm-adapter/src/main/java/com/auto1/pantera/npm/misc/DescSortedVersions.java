@@ -35,7 +35,6 @@ import javax.json.JsonObject;
  *
  * @since 0.1
  */
-@SuppressWarnings("PMD.OnlyOneReturn")
 public final class DescSortedVersions {
 
     /**

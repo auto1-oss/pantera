@@ -13,25 +13,29 @@ package com.auto1.pantera.api.v1;
 import com.auto1.pantera.api.AuthzHandler;
 import com.auto1.pantera.api.ManageRepoSettings;
 import com.auto1.pantera.api.perms.ApiRolePermission;
-import com.auto1.pantera.cooldown.CooldownSettings;
+import com.auto1.pantera.cooldown.config.CooldownSettings;
 import com.auto1.pantera.db.dao.AuthProviderDao;
 import com.auto1.pantera.db.dao.SettingsDao;
 import com.auto1.pantera.http.client.HttpClientSettings;
-import com.auto1.pantera.http.trace.MdcPropagation;
+import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.misc.PanteraProperties;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.JwtSettings;
 import com.auto1.pantera.settings.MetricsContext;
 import com.auto1.pantera.settings.PrefixesPersistence;
 import com.auto1.pantera.settings.Settings;
+import com.auto1.pantera.settings.runtime.SettingsKey;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
+import java.io.StringReader;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
+import java.util.concurrent.CompletableFuture;
 import javax.json.Json;
 import javax.sql.DataSource;
 import org.eclipse.jetty.http.HttpStatus;
@@ -67,11 +71,6 @@ public final class SettingsHandler {
     private final Settings settings;
 
     /**
-     * Repository settings manager.
-     */
-    private final ManageRepoSettings manageRepo;
-
-    /**
      * Settings DAO for database persistence (nullable).
      */
     private final SettingsDao settingsDao;
@@ -104,12 +103,12 @@ public final class SettingsHandler {
      * @checkstyle ParameterNumberCheck (6 lines)
      */
     public SettingsHandler(final int port, final Settings settings,
-        final ManageRepoSettings manageRepo, final DataSource dataSource,
+        final ManageRepoSettings manageRepo, // NOPMD UnusedFormalParameter - public API; reserved for upcoming repo-settings management endpoints
+        final DataSource dataSource,
         final Policy<?> policy,
         final com.auto1.pantera.asto.misc.Cleanable<String> authCache) {
         this.port = port;
         this.settings = settings;
-        this.manageRepo = manageRepo;
         this.settingsDao = dataSource != null ? new SettingsDao(dataSource) : null;
         this.authProviderDao = dataSource != null ? new AuthProviderDao(dataSource) : null;
         this.policy = policy;
@@ -183,6 +182,20 @@ public final class SettingsHandler {
         router.put("/api/v1/auth-providers/:id/config")
             .handler(new AuthzHandler(this.policy, admin))
             .handler(this::updateAuthProviderConfig);
+        // Runtime tunables — key/value catalog backed by the settings DB.
+        // Routed under /api/v1/settings/runtime/* to avoid colliding with
+        // the legacy section-based endpoints above (/api/v1/settings,
+        // /api/v1/settings/ui, /api/v1/settings/:section).
+        router.get("/api/v1/settings/runtime")
+            .handler(this::handleRuntimeList);
+        router.get("/api/v1/settings/runtime/:key")
+            .handler(this::handleRuntimeGet);
+        router.patch("/api/v1/settings/runtime/:key")
+            .handler(new AuthzHandler(this.policy, admin))
+            .handler(this::handleRuntimePatch);
+        router.delete("/api/v1/settings/runtime/:key")
+            .handler(new AuthzHandler(this.policy, admin))
+            .handler(this::handleRuntimeDelete);
     }
 
     /**
@@ -190,17 +203,19 @@ public final class SettingsHandler {
      * @param ctx Routing context
      */
     private void getSettings(final RoutingContext ctx) {
-        ctx.vertx().<JsonObject>executeBlocking(
-            MdcPropagation.withMdc(() -> this.buildFullSettings()),
-            false
-        ).onSuccess(
-            result -> ctx.response()
-                .setStatusCode(HttpStatus.OK_200)
-                .putHeader("Content-Type", "application/json")
-                .end(result.encode())
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+        CompletableFuture.supplyAsync(
+            (java.util.function.Supplier<JsonObject>) this::buildFullSettings,
+            HandlerExecutor.get()
+        ).whenComplete((result, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
+                ctx.response()
+                    .setStatusCode(HttpStatus.OK_200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(result.encode());
+            }
+        });
     }
 
     /**
@@ -279,6 +294,15 @@ public final class SettingsHandler {
         final JsonObject cooldownJson = new JsonObject()
             .put("enabled", cd.enabled())
             .put("minimum_allowed_age", cd.minimumAllowedAge().toString());
+        final CooldownSettings.SnapshotPolicy snap = cd.snapshotPolicy();
+        if (!snap.isInherit()) {
+            final JsonObject snapJson = new JsonObject();
+            snap.enabled().ifPresent(v -> snapJson.put("enabled", v));
+            snap.minimumAllowedAge().ifPresent(
+                v -> snapJson.put("minimum_allowed_age", v.toString())
+            );
+            cooldownJson.put("snapshots", snapJson);
+        }
         response.put("cooldown", cooldownJson);
         // Credentials / auth providers
         if (this.authProviderDao != null) {
@@ -384,23 +408,39 @@ public final class SettingsHandler {
         }
         final String actor = ctx.user() != null
             ? ctx.user().principal().getString("sub", "system") : "system";
-        ctx.vertx().<Void>executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                // Convert vertx JsonObject to javax.json.JsonObject
-                final javax.json.JsonObject jobj = Json.createReader(
-                    new java.io.StringReader(body.encode())
-                ).readObject();
-                this.settingsDao.put(section, jobj, actor);
-                return null;
-            }),
-            false
-        ).onSuccess(
-            ignored -> ctx.response().setStatusCode(HttpStatus.OK_200)
-                .putHeader("Content-Type", "application/json")
-                .end(new JsonObject().put("status", "saved").encode())
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+        final String sectionIp = SettingsHandler.clientIp(ctx);
+        // Capture the pre-mutation row so audit_log.old_value answers
+        // "what was there before". Runs on the event loop, before the
+        // worker-thread write — small synchronous JDBC read; acceptable
+        // for an admin path that's already not on the hot critical path.
+        final String oldValueJson = this.readSettingsValueAsJson(section);
+        final String newValueJson = body.encode();
+        CompletableFuture.runAsync(() -> {
+            // Convert vertx JsonObject to javax.json.JsonObject
+            final javax.json.JsonObject jobj = Json.createReader(
+                new java.io.StringReader(body.encode())
+            ).readObject();
+            this.settingsDao.put(section, jobj, actor);
+        }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
+            // T-S04 audit log: every settings mutation lands a row in
+            // audit_log so SOC2 review can answer "who changed cooldown
+            // duration on 2026-05-15 at 14:32 and to what". The value
+            // diff lives in old_value / new_value; "details" is empty so
+            // the same fact isn't stored twice.
+            SettingsHandler.audit(
+                actor, "SETTINGS_SECTION_UPDATE", section,
+                java.util.Map.of(),
+                err == null, sectionIp,
+                oldValueJson, err == null ? newValueJson : null
+            );
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
+                ctx.response().setStatusCode(HttpStatus.OK_200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(new JsonObject().put("status", "saved").encode());
+            }
+        });
     }
 
     /**
@@ -426,45 +466,41 @@ public final class SettingsHandler {
             return;
         }
         final boolean enabled = body.getBoolean("enabled");
-        ctx.vertx().<Void>executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                // Refuse to disable protected providers (local, jwt-password).
-                // Enable is always allowed since it just restores the default.
-                if (!enabled) {
-                    final String type = this.authProviderDao.typeOf(providerId);
-                    if (type == null) {
-                        throw new IllegalArgumentException("not_found");
-                    }
-                    if (PROTECTED_PROVIDERS.contains(type)) {
-                        throw new IllegalArgumentException("protected:" + type);
-                    }
+        CompletableFuture.runAsync(() -> {
+            // Refuse to disable protected providers (local, jwt-password).
+            // Enable is always allowed since it just restores the default.
+            if (!enabled) {
+                final String type = this.authProviderDao.typeOf(providerId);
+                if (type == null) {
+                    throw new IllegalArgumentException("not_found");
                 }
-                if (enabled) {
-                    this.authProviderDao.enable(providerId);
-                } else {
-                    this.authProviderDao.disable(providerId);
+                if (PROTECTED_PROVIDERS.contains(type)) {
+                    throw new IllegalArgumentException("protected:" + type);
                 }
-                return null;
-            }),
-            false
-        ).onSuccess(
-            ignored -> {
+            }
+            if (enabled) {
+                this.authProviderDao.enable(providerId);
+            } else {
+                this.authProviderDao.disable(providerId);
+            }
+        }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
+            if (err == null) {
                 this.flushAuthCache();
                 ctx.response().setStatusCode(200)
                     .putHeader("Content-Type", "application/json")
                     .end(new JsonObject().put("status", "saved").encode());
-            }
-        ).onFailure(err -> {
-            final String msg = err.getCause() != null
-                ? err.getCause().getMessage() : err.getMessage();
-            if ("not_found".equals(msg)) {
-                ApiResponse.sendError(ctx, 404, "NOT_FOUND", "Auth provider not found");
-            } else if (msg != null && msg.startsWith("protected:")) {
-                ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
-                    "Cannot disable the '" + msg.substring("protected:".length())
-                        + "' provider — it is required for fallback access.");
             } else {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                final Throwable cause = err.getCause() != null ? err.getCause() : err;
+                final String msg = cause.getMessage();
+                if ("not_found".equals(msg)) {
+                    ApiResponse.sendError(ctx, 404, "NOT_FOUND", "Auth provider not found");
+                } else if (msg != null && msg.startsWith("protected:")) {
+                    ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                        "Cannot disable the '" + msg.substring("protected:".length())
+                            + "' provider — it is required for fallback access.");
+                } else {
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                }
             }
         });
     }
@@ -490,17 +526,15 @@ public final class SettingsHandler {
         final String type = body.getString("type").trim();
         final int priority = body.getInteger("priority", 100);
         final JsonObject config = body.getJsonObject("config", new JsonObject());
-        ctx.vertx().<Void>executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                final javax.json.JsonObject jcfg = Json.createReader(
-                    new java.io.StringReader(config.encode())
-                ).readObject();
-                this.authProviderDao.put(type, priority, jcfg);
-                return null;
-            }),
-            false
-        ).onSuccess(
-            ignored -> {
+        CompletableFuture.runAsync(() -> {
+            final javax.json.JsonObject jcfg = Json.createReader(
+                new java.io.StringReader(config.encode())
+            ).readObject();
+            this.authProviderDao.put(type, priority, jcfg);
+        }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
                 this.flushAuthCache();
                 ctx.response().setStatusCode(201)
                     .putHeader("Content-Type", "application/json")
@@ -509,9 +543,7 @@ public final class SettingsHandler {
                         .put("type", type)
                         .encode());
             }
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+        });
     }
 
     /**
@@ -532,35 +564,31 @@ public final class SettingsHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid provider ID");
             return;
         }
-        ctx.vertx().<Void>executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                final String type = this.authProviderDao.typeOf(providerId);
-                if (type == null) {
-                    throw new IllegalArgumentException("not_found");
-                }
-                if (PROTECTED_PROVIDERS.contains(type)) {
-                    throw new IllegalArgumentException("protected:" + type);
-                }
-                this.authProviderDao.delete(providerId);
-                return null;
-            }),
-            false
-        ).onSuccess(
-            ignored -> {
+        CompletableFuture.runAsync(() -> {
+            final String type = this.authProviderDao.typeOf(providerId);
+            if (type == null) {
+                throw new IllegalArgumentException("not_found");
+            }
+            if (PROTECTED_PROVIDERS.contains(type)) {
+                throw new IllegalArgumentException("protected:" + type);
+            }
+            this.authProviderDao.delete(providerId);
+        }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
+            if (err == null) {
                 this.flushAuthCache();
                 ctx.response().setStatusCode(204).end();
-            }
-        ).onFailure(err -> {
-            final String msg = err.getCause() != null
-                ? err.getCause().getMessage() : err.getMessage();
-            if ("not_found".equals(msg)) {
-                ApiResponse.sendError(ctx, 404, "NOT_FOUND", "Auth provider not found");
-            } else if (msg != null && msg.startsWith("protected:")) {
-                ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
-                    "Cannot delete the '" + msg.substring("protected:".length())
-                        + "' provider — it is required for fallback access.");
             } else {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                final Throwable cause = err.getCause() != null ? err.getCause() : err;
+                final String msg = cause.getMessage();
+                if ("not_found".equals(msg)) {
+                    ApiResponse.sendError(ctx, 404, "NOT_FOUND", "Auth provider not found");
+                } else if (msg != null && msg.startsWith("protected:")) {
+                    ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                        "Cannot delete the '" + msg.substring("protected:".length())
+                            + "' provider — it is required for fallback access.");
+                } else {
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                }
             }
         });
     }
@@ -587,25 +615,21 @@ public final class SettingsHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "JSON body is required");
             return;
         }
-        ctx.vertx().<Void>executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                final javax.json.JsonObject jobj = Json.createReader(
-                    new java.io.StringReader(body.encode())
-                ).readObject();
-                this.authProviderDao.updateConfig(providerId, jobj);
-                return null;
-            }),
-            false
-        ).onSuccess(
-            ignored -> {
+        CompletableFuture.runAsync(() -> {
+            final javax.json.JsonObject jobj = Json.createReader(
+                new java.io.StringReader(body.encode())
+            ).readObject();
+            this.authProviderDao.updateConfig(providerId, jobj);
+        }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
                 this.flushAuthCache();
                 ctx.response().setStatusCode(200)
                     .putHeader("Content-Type", "application/json")
                     .end(new JsonObject().put("status", "saved").encode());
             }
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+        });
     }
 
     /**
@@ -614,7 +638,7 @@ public final class SettingsHandler {
      * @return True if secret
      */
     private static boolean isSecret(final String key) {
-        final String lower = key.toLowerCase();
+        final String lower = key.toLowerCase(Locale.ROOT);
         return lower.contains("secret") || lower.contains("password")
             || lower.contains("token") || lower.contains("key");
     }
@@ -635,6 +659,438 @@ public final class SettingsHandler {
             return "***";
         }
         return value.substring(0, 2) + "***" + value.substring(value.length() - 2);
+    }
+
+    /**
+     * GET /api/v1/settings/runtime — list all runtime-tunable keys.
+     * Each entry contains the current value (or default if unset),
+     * the spec default, and the {@code source} ({@code "db"} or
+     * {@code "default"}).
+     *
+     * <p><b>Value format:</b> the {@code value} field is the JSON literal repr
+     * of the stored value (e.g. {@code "100"} for an integer, {@code "true"}
+     * for a boolean), matching the {@code defaultRepr} format used by
+     * {@link SettingsKey}. Consumers may round-trip via
+     * {@code Json.createReader(new StringReader(value)).readValue()}.
+     *
+     * @param ctx Routing context
+     */
+    private void handleRuntimeList(final RoutingContext ctx) {
+        if (this.settingsDao == null) {
+            ApiResponse.sendError(ctx, 503, "UNAVAILABLE",
+                "Database not configured");
+            return;
+        }
+        CompletableFuture.supplyAsync(this.settingsDao::listAll,
+            HandlerExecutor.get())
+            .whenComplete((rows, err) -> {
+                if (err != null) {
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
+                        err.getMessage());
+                    return;
+                }
+                final JsonObject body = new JsonObject();
+                for (final SettingsKey k : SettingsKey.values()) {
+                    final boolean present = rows.containsKey(k.key());
+                    final String value;
+                    if (present) {
+                        value = extractValueRepr(rows.get(k.key()));
+                    } else {
+                        value = k.defaultRepr();
+                    }
+                    body.put(k.key(), new JsonObject()
+                        .put("value", value)
+                        .put("default", k.defaultRepr())
+                        .put("source", present ? "db" : "default"));
+                }
+                ctx.response()
+                    .setStatusCode(HttpStatus.OK_200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(body.encode());
+            });
+    }
+
+    /**
+     * GET /api/v1/settings/runtime/:key — single runtime-tunable key.
+     *
+     * <p><b>Value format:</b> the {@code value} field is the JSON literal repr
+     * of the stored value (e.g. {@code "100"} for an integer, {@code "true"}
+     * for a boolean), matching the {@code defaultRepr} format used by
+     * {@link SettingsKey}. Consumers may round-trip via
+     * {@code Json.createReader(new StringReader(value)).readValue()}.
+     *
+     * @param ctx Routing context
+     */
+    private void handleRuntimeGet(final RoutingContext ctx) {
+        final String key = ctx.pathParam("key");
+        if (!SettingsKey.allKeys().contains(key)) {
+            ApiResponse.sendError(ctx, 404, "NOT_FOUND",
+                "Unknown setting key: " + key);
+            return;
+        }
+        if (this.settingsDao == null) {
+            ApiResponse.sendError(ctx, 503, "UNAVAILABLE",
+                "Database not configured");
+            return;
+        }
+        CompletableFuture.supplyAsync(() -> this.settingsDao.get(key),
+            HandlerExecutor.get())
+            .whenComplete((row, err) -> {
+                if (err != null) {
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
+                        err.getMessage());
+                    return;
+                }
+                final JsonObject body = new JsonObject().put("key", key);
+                if (row.isPresent()) {
+                    body.put("value", extractValueRepr(row.get()));
+                    body.put("source", "db");
+                } else {
+                    body.put("value", defaultRepr(key));
+                    body.put("source", "default");
+                }
+                ctx.response()
+                    .setStatusCode(HttpStatus.OK_200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(body.encode());
+            });
+    }
+
+    /**
+     * PATCH /api/v1/settings/runtime/:key — update a runtime-tunable.
+     * Admin-gated by {@link AuthzHandler} ahead of this method.
+     * Body: {@code {"value": <typed>}}.
+     *
+     * <p><b>Response shape:</b> on success, returns the same
+     * {@code {key, value, source: "db"}} envelope that
+     * {@link #handleRuntimeGet} returns, so a UI can re-render directly
+     * from the response without a follow-up GET. The {@code value} field
+     * is the JSON literal repr (e.g. {@code "100"} for ints, {@code "true"}
+     * for booleans), matching the {@code defaultRepr} format used by
+     * {@link SettingsKey}.
+     *
+     * <p><b>Eventual consistency:</b> persists the new value to the
+     * {@code settings} table immediately, then returns 200. The in-process
+     * {@code RuntimeSettingsCache} on this node refreshes within ~few ms via
+     * {@code LISTEN settings_changed}; remote nodes in a clustered deployment
+     * converge over the next NOTIFY round-trip (typically &lt; 1s). Consumers
+     * that need a strict happens-before should verify with a follow-up GET if
+     * needed; for routine UI use the response is the canonical post-patch
+     * state.
+     *
+     * @param ctx Routing context
+     */
+    private void handleRuntimePatch(final RoutingContext ctx) {
+        final String key = ctx.pathParam("key");
+        if (!SettingsKey.allKeys().contains(key)) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                "Unknown setting key: " + key);
+            return;
+        }
+        if (this.settingsDao == null) {
+            ApiResponse.sendError(ctx, 503, "UNAVAILABLE",
+                "Database not configured");
+            return;
+        }
+        final JsonObject body = ctx.body().asJsonObject();
+        if (body == null || !body.containsKey("value")) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                "Missing 'value' field");
+            return;
+        }
+        final Object value = body.getValue("value");
+        if (!validateRuntime(key, value)) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                "Value out of range for key '" + key + "'");
+            return;
+        }
+        final String actor = ctx.user() != null
+            ? ctx.user().principal().getString("sub", "unknown")
+            : "unknown";
+        final String patchIp = SettingsHandler.clientIp(ctx);
+        final String oldRuntimeJson = this.readSettingsValueAsJson(key);
+        final String newRuntimeJson = body.encode();
+        CompletableFuture.runAsync(() -> {
+            final javax.json.JsonObject jakarta = Json.createReader(
+                new StringReader(body.encode())
+            ).readObject();
+            this.settingsDao.put(key, jakarta, actor);
+        }, HandlerExecutor.get())
+            .whenComplete((ignored, err) -> {
+                // T-S04 audit log: per-key runtime tunable mutations
+                // are SOC2-significant (cooldown duration, bulkhead
+                // controller knobs, etc.). The before/after value diff
+                // lives in old_value / new_value; "details" stays empty
+                // so the same fact isn't stored twice.
+                SettingsHandler.audit(
+                    actor, "SETTINGS_RUNTIME_UPDATE", key,
+                    java.util.Map.of(),
+                    err == null, patchIp,
+                    oldRuntimeJson, err == null ? newRuntimeJson : null
+                );
+                if (err != null) {
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
+                        err.getMessage());
+                } else {
+                    // Return the canonical GET-shaped response so a UI can
+                    // re-render from the response without a re-fetch. The
+                    // {@code value} is the JSON literal repr of the stored
+                    // value, matching {@link SettingsKey#defaultRepr}.
+                    final JsonObject responseBody = new JsonObject()
+                        .put("key", key)
+                        .put("value", io.vertx.core.json.Json
+                            .encode(body.getValue("value")))
+                        .put("source", "db");
+                    ctx.response()
+                        .setStatusCode(HttpStatus.OK_200)
+                        .putHeader("Content-Type", "application/json")
+                        .end(responseBody.encode());
+                }
+            });
+    }
+
+    /**
+     * DELETE /api/v1/settings/runtime/:key — remove a runtime-tunable
+     * row, causing subsequent reads to return the spec default.
+     * Admin-gated by {@link AuthzHandler} ahead of this method.
+     * @param ctx Routing context
+     */
+    private void handleRuntimeDelete(final RoutingContext ctx) {
+        final String key = ctx.pathParam("key");
+        if (!SettingsKey.allKeys().contains(key)) {
+            ApiResponse.sendError(ctx, 404, "NOT_FOUND",
+                "Unknown setting key: " + key);
+            return;
+        }
+        if (this.settingsDao == null) {
+            ApiResponse.sendError(ctx, 503, "UNAVAILABLE",
+                "Database not configured");
+            return;
+        }
+        final String deleteActor = ctx.user() != null
+            ? ctx.user().principal().getString("sub", "unknown")
+            : "unknown";
+        final String deleteIp = SettingsHandler.clientIp(ctx);
+        // Capture the row being deleted so audit_log.old_value preserves
+        // the prior state. new_value is null — deletion has no post-image
+        // beyond "fell back to spec default".
+        final String oldDeleteJson = this.readSettingsValueAsJson(key);
+        CompletableFuture.runAsync(() -> this.settingsDao.delete(key),
+            HandlerExecutor.get())
+            .whenComplete((ignored, err) -> {
+                // T-S04 audit log: reverting a runtime tunable back to
+                // the spec default is a deliberate operator action and
+                // SOC2-significant — it implicitly changes production
+                // behaviour even though no "value" is supplied.
+                SettingsHandler.audit(
+                    deleteActor, "SETTINGS_RUNTIME_DELETE", key,
+                    java.util.Map.of(),
+                    err == null, deleteIp,
+                    oldDeleteJson, null
+                );
+                if (err != null) {
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
+                        err.getMessage());
+                } else {
+                    ctx.response().setStatusCode(204).end();
+                }
+            });
+    }
+
+    /**
+     * Write a SOC2-shaped audit row for a settings mutation. Same
+     * contract as the audit helpers in {@link CooldownHandler},
+     * {@link RepositoryHandler}, and {@link BulkAccessPolicyHandler}
+     * — actor + action + target + details JSON + success bit, plus
+     * the per-request {@code client.ip} pulled from MDC. Persistence
+     * failures are swallowed by {@code JdbcAuditService}'s contract so
+     * an audit-write hiccup never blocks the user's setting change.
+     */
+    private static void audit(final String actor,
+        final String action, final String target,
+        final java.util.Map<String, Object> details, final boolean success,
+        final String clientIp) {
+        SettingsHandler.audit(actor, action, target, details, success,
+            clientIp, null, null);
+    }
+
+    /**
+     * Same as {@link #audit(String, String, String, java.util.Map, boolean, String)}
+     * with explicit before / after snapshots written to the V100
+     * {@code old_value} / {@code new_value} JSONB columns. Used by every
+     * runtime-tunable PATCH / DELETE so reviewers can answer "what was
+     * the value before".
+     *
+     * @param actor Authenticated principal
+     * @param action Action verb
+     * @param target Target identifier
+     * @param details Free-form structured payload
+     * @param success {@code true} on completed mutation
+     * @param clientIp Client IP extracted from the request (may be null)
+     * @param oldValueJson JSON literal of the prior state (may be null)
+     * @param newValueJson JSON literal of the new state (may be null)
+     */
+    private static void audit(final String actor,
+        final String action, final String target,
+        final java.util.Map<String, Object> details, final boolean success,
+        final String clientIp,
+        final String oldValueJson, final String newValueJson) {
+        // Prefer the explicit IP extracted by the caller on the routing
+        // thread. HandlerExecutor-dispatched continuations can run on a
+        // worker whose MDC was not yet inherited, leaving the legacy
+        // MDC-only read with a null IP. Falling back to MDC keeps the
+        // contract loose for paths that still rely on it.
+        final String effectiveIp;
+        if (clientIp != null && !clientIp.isBlank()) {
+            effectiveIp = clientIp;
+        } else {
+            effectiveIp = org.slf4j.MDC.get(
+                com.auto1.pantera.http.log.EcsMdc.CLIENT_IP
+            );
+        }
+        final com.auto1.pantera.audit.AuditEvent event =
+            new com.auto1.pantera.audit.AuditEvent(
+                java.time.Instant.now(), actor, action, target,
+                details, success, effectiveIp, oldValueJson, newValueJson
+            );
+        com.auto1.pantera.audit.AuditServiceRegistry.instance()
+            .sharedService().record(event);
+    }
+
+    /**
+     * Read the current row for {@code key} from the {@code settings} table
+     * as a compact JSON literal. Used by the audit pipeline to populate
+     * {@code old_value} BEFORE a PATCH / DELETE mutates the row. Returns
+     * {@code null} when no DB is configured, no row exists, or the read
+     * fails — audit must never break the user-facing mutation.
+     *
+     * @param key Settings key
+     * @return JSON literal of the prior value, or {@code null}
+     */
+    private String readSettingsValueAsJson(final String key) {
+        if (this.settingsDao == null) {
+            return null;
+        }
+        try {
+            final java.util.Optional<javax.json.JsonObject> row =
+                this.settingsDao.get(key);
+            return row.map(javax.json.JsonObject::toString).orElse(null);
+        } catch (final RuntimeException ex) {
+            return null;
+        }
+    }
+
+    /**
+     * Extract the per-request client IP from the routing context, in the
+     * same order the early {@code /api/v1/*} trace handler uses:
+     * {@code X-Forwarded-For} (first entry) → {@code X-Real-IP} → the
+     * TCP remote address.
+     *
+     * @param ctx Vert.x routing context (never null)
+     * @return Client IP, or {@code null} when no address can be determined
+     */
+    private static String clientIp(final RoutingContext ctx) {
+        final io.vertx.core.http.HttpServerRequest req = ctx.request();
+        String hint = req.getHeader("X-Forwarded-For");
+        if (hint != null && hint.contains(",")) {
+            hint = hint.substring(0, hint.indexOf(',')).trim();
+        }
+        if (hint == null || hint.isBlank()) {
+            hint = req.getHeader("X-Real-IP");
+        }
+        if (hint == null || hint.isBlank()) {
+            final io.vertx.core.net.SocketAddress remote = req.remoteAddress();
+            if (remote != null) {
+                hint = remote.host();
+            }
+        }
+        return hint != null && !hint.isBlank() ? hint : null;
+    }
+
+    /**
+     * Extract the {@code value} field from a stored settings row as the
+     * JSON literal repr. The row is shaped {@code {"value": <typed>}}.
+     * Returns the JSON literal so it round-trips with {@link SettingsKey}'s
+     * {@code defaultRepr} (e.g. {@code "1"} for numbers, {@code "true"} for
+     * booleans).
+     */
+    private static String extractValueRepr(final javax.json.JsonObject row) {
+        final javax.json.JsonValue v = row.get("value");
+        return v == null ? "null" : v.toString();
+    }
+
+    /** Look up the {@code defaultRepr} for a known catalog key. */
+    private static String defaultRepr(final String key) {
+        for (final SettingsKey k : SettingsKey.values()) {
+            if (k.key().equals(key)) {
+                return k.defaultRepr();
+            }
+        }
+        return "null";
+    }
+
+    /**
+     * Per-key range/type validator. Vert.x's {@link JsonObject#getValue}
+     * returns {@code Number} (concrete subclass varies by encoded value)
+     * for JSON numbers, {@code Boolean} for booleans, {@code String} for
+     * strings. We accept any integral {@code Number} for int-valued keys,
+     * rejecting fractional values since runtime tunables are all ints.
+     *
+     * @param key Catalog key (assumed already to exist)
+     * @param value Decoded JSON value
+     * @return true iff {@code value} is a valid setting for {@code key}
+     */
+    private static boolean validateRuntime(final String key, final Object value) {
+        return switch (key) {
+            case "http_client.bulkhead.adaptive" ->
+                value instanceof Boolean;
+            case "http_client.bulkhead.min_permits" ->
+                isIntInRange(value, 1, 1000);
+            case "http_client.bulkhead.max_permits" ->
+                isIntInRange(value, 1, 5000);
+            case "http_client.bulkhead.initial_permits" ->
+                isIntInRange(value, 1, 5000);
+            case "http_client.bulkhead.target_p99_ms" ->
+                isIntInRange(value, 1, 60_000);
+            case "http_client.bulkhead.window_seconds" ->
+                isIntInRange(value, 1, 600);
+            case "http_client.bulkhead.ramp_up_step" ->
+                isIntInRange(value, 1, 100);
+            case "http_client.bulkhead.ramp_down_factor" ->
+                isDoubleInRange(value, 0.05d, 0.95d);
+            default -> false;
+        };
+    }
+
+    /**
+     * Returns true iff {@code value} is a {@link Number} representable as
+     * a finite double in {@code [min, max]} (inclusive).
+     */
+    private static boolean isDoubleInRange(final Object value, final double min, final double max) {
+        if (!(value instanceof Number n)) {
+            return false;
+        }
+        final double d = n.doubleValue();
+        if (Double.isNaN(d) || Double.isInfinite(d)) {
+            return false;
+        }
+        return d >= min && d <= max;
+    }
+
+    /**
+     * Returns true iff {@code value} is a {@link Number} representable as
+     * an int (no fractional part) and falls within {@code [min, max]}.
+     */
+    private static boolean isIntInRange(final Object value, final int min, final int max) {
+        if (!(value instanceof Number n)) {
+            return false;
+        }
+        final double d = n.doubleValue();
+        if (d != Math.floor(d) || Double.isInfinite(d)) {
+            return false;
+        }
+        final long asLong = n.longValue();
+        return asLong >= min && asLong <= max;
     }
 
     /**

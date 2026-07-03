@@ -114,6 +114,7 @@ public final class StorageArtifactSlice implements Slice {
                 .eventCategory("file")
                 .eventAction("artifact_slice_select")
                 .eventOutcome("success")
+                .field("log.source", "application")
                 .log();
             // Use original storage to preserve SubStorage prefix (repo scoping)
             // Wrap with RangeSlice for HTTP Range request support (resumable/parallel downloads)
@@ -128,6 +129,7 @@ public final class StorageArtifactSlice implements Slice {
             .eventCategory("file")
             .eventAction("artifact_slice_select")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
         // Wrap with RangeSlice for HTTP Range request support (resumable/parallel downloads)
         return new RangeSlice(new GenericArtifactSlice(this.storage));
@@ -151,7 +153,7 @@ public final class StorageArtifactSlice implements Slice {
             
             try {
                 // Try DiskCacheStorage unwrapping
-                if (className.equals("DiskCacheStorage")) {
+                if ("DiskCacheStorage".equals(className)) {
                     final java.lang.reflect.Field backend = 
                         current.getClass().getDeclaredField("backend");
                     backend.setAccessible(true);
@@ -160,7 +162,7 @@ public final class StorageArtifactSlice implements Slice {
                 }
                 
                 // Try SubStorage unwrapping
-                if (className.equals("SubStorage")) {
+                if ("SubStorage".equals(className)) {
                     final java.lang.reflect.Field origin = 
                         current.getClass().getDeclaredField("origin");
                     origin.setAccessible(true);
@@ -174,7 +176,10 @@ public final class StorageArtifactSlice implements Slice {
                 }
                 
             } catch (Exception e) {
-                // Can't unwrap this layer, stop trying
+                // EXPECTED: reflection-based storage unwrapping fails
+                // (no `origin` field, security manager, etc.) → stop
+                // unwrapping and use what we have. Correctness is
+                // preserved by the standard storage.value() path.
                 break;
             }
         }
@@ -261,6 +266,7 @@ public final class StorageArtifactSlice implements Slice {
                     .eventAction("artifact_serve")
                     .eventOutcome("failure")
                     .error(throwable)
+                    .field("log.source", "application")
                     .log();
                 return ResponseBuilder.internalError()
                     .textBody("Failed to serve artifact: " + throwable.getMessage())

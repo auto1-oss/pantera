@@ -341,6 +341,112 @@ final class MavenScannerTest {
     }
 
     @Test
+    void indexesUnconventionalExtensions(@TempDir final Path temp)
+        throws IOException {
+        // Regression: MavenScanner used to filter by a hardcoded extension
+        // whitelist (.jar/.war/.aar/.zip/.pom/.module) which caused valid
+        // Maven-layout artifacts like .graphql to be silently dropped on
+        // backfill, while UploadSlice (upload path) and ArtifactNameParser
+        // (group lookup) already accepted them. Fix B aligns all three sites
+        // on structural detection: filename must start with "artifactId-".
+        final Path dir = temp.resolve(
+            "wkda/common/graphql/retail-classifieds-content-gql"
+                + "/1.0.0-628-202510161022"
+        );
+        Files.createDirectories(dir);
+        Files.write(
+            dir.resolve(
+                "retail-classifieds-content-gql-1.0.0-628-202510161022.graphql"
+            ),
+            new byte[420]
+        );
+        final MavenScanner scanner = new MavenScanner("maven");
+        final List<ArtifactRecord> records = scanner.scan(temp, "libs-release")
+            .collect(Collectors.toList());
+        MatcherAssert.assertThat(
+            "Standalone .graphql artifact must be indexed",
+            records,
+            Matchers.hasSize(1)
+        );
+        MatcherAssert.assertThat(
+            "Name should be groupId.artifactId",
+            records.get(0).name(),
+            Matchers.is(
+                "wkda.common.graphql.retail-classifieds-content-gql"
+            )
+        );
+        MatcherAssert.assertThat(
+            "Version should be parsed from the version directory",
+            records.get(0).version(),
+            Matchers.is("1.0.0-628-202510161022")
+        );
+        MatcherAssert.assertThat(
+            "Size should be the .graphql file size",
+            records.get(0).size(),
+            Matchers.is(420L)
+        );
+    }
+
+    @Test
+    void rejectsFilesNotMatchingArtifactId(@TempDir final Path temp)
+        throws IOException {
+        // A stray file in a Maven-layout directory whose name does NOT
+        // start with "<artifactId>-" should be ignored — the structural
+        // invariant protects against indexing unrelated files as artifacts.
+        final Path dir = temp.resolve("com/test/lib/1.0");
+        Files.createDirectories(dir);
+        Files.write(dir.resolve("lib-1.0.jar"), new byte[100]);
+        Files.write(dir.resolve("README.txt"), new byte[10]);
+        Files.write(dir.resolve("unrelated-0.1.jar"), new byte[50]);
+        final MavenScanner scanner = new MavenScanner("maven");
+        final List<ArtifactRecord> records = scanner.scan(temp, "repo")
+            .collect(Collectors.toList());
+        MatcherAssert.assertThat(
+            "Only the matching artifact should be indexed",
+            records,
+            Matchers.hasSize(1)
+        );
+        MatcherAssert.assertThat(
+            "Should be the matching jar",
+            records.get(0).size(),
+            Matchers.is(100L)
+        );
+    }
+
+    @Test
+    void skipsMavenMetadataXmlByName(@TempDir final Path temp)
+        throws IOException {
+        // maven-metadata.xml lives at group/artifact level and must be
+        // filtered by name even though it would otherwise structurally
+        // match a 4+ segment path.
+        final Path dir = temp.resolve("com/test/lib");
+        Files.createDirectories(dir);
+        Files.writeString(
+            dir.resolve("maven-metadata.xml"),
+            "<?xml version=\"1.0\"?><metadata/>"
+        );
+        Files.writeString(
+            dir.resolve("maven-metadata.xml.sha1"), "hash"
+        );
+        final Path ver = temp.resolve("com/test/lib/1.0");
+        Files.createDirectories(ver);
+        Files.write(ver.resolve("lib-1.0.jar"), new byte[100]);
+        final MavenScanner scanner = new MavenScanner("maven");
+        final List<ArtifactRecord> records = scanner.scan(temp, "repo")
+            .collect(Collectors.toList());
+        MatcherAssert.assertThat(
+            "Only the real artifact should be indexed",
+            records,
+            Matchers.hasSize(1)
+        );
+        MatcherAssert.assertThat(
+            "Indexed record should be the jar",
+            records.get(0).name(),
+            Matchers.is("com.test.lib")
+        );
+    }
+
+    @Test
     void deduplicatesJarAndPom(@TempDir final Path temp) throws IOException {
         final Path dir = temp.resolve("com/test/lib/1.0");
         Files.createDirectories(dir);

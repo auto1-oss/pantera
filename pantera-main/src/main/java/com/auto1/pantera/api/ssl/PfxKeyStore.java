@@ -41,9 +41,11 @@ class PfxKeyStore extends YamlBasedKeyStore {
 
     @Override
     public HttpServerOptions secureOptions(final Vertx vertx, final Storage storage) {
-        return new HttpServerOptions()
-            .setSsl(true)
-            .setPfxKeyCertOptions(this.pfxOptions(storage));
+        return TlsHardening.apply(
+            new HttpServerOptions()
+                .setSsl(true)
+                .setPfxKeyCertOptions(this.pfxOptions(storage))
+        );
     }
 
     /**

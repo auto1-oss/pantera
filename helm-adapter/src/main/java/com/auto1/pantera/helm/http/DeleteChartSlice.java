@@ -132,7 +132,7 @@ final class DeleteChartSlice implements Slice {
                         noth -> {
                             if (wasdeleted.get()) {
                                 this.events.ifPresent(
-                                    queue -> queue.add(
+                                    queue -> queue.add( // ok: unbounded ConcurrentLinkedDeque (ArtifactEvent queue)
                                         vers.map(
                                             item -> new ArtifactEvent(
                                                 PushChartSlice.REPO_TYPE, this.repoName, name, item

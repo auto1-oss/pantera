@@ -59,7 +59,6 @@ public final class EventsProcessor<T> extends QuartzJob {
     private Consumer<T> action;
 
     @Override
-    @SuppressWarnings("PMD.CognitiveComplexity")
     public void execute(final JobExecutionContext context) {
         MDC.put(EcsMdc.TRACE_ID, SpanContext.generateHex16());
         MDC.put(EcsMdc.SPAN_ID, SpanContext.generateHex16());
@@ -87,6 +86,7 @@ public final class EventsProcessor<T> extends QuartzJob {
                                     .eventAction("event_process")
                                     .eventOutcome("failure")
                                     .error(ex)
+                                    .field("log.source", "application")
                                     .log();
                             }
                         }
@@ -97,6 +97,7 @@ public final class EventsProcessor<T> extends QuartzJob {
                                 .eventCategory("process")
                                 .eventAction("event_drop")
                                 .eventOutcome("failure")
+                                .field("log.source", "application")
                                 .log();
                         }
                     }
@@ -106,6 +107,7 @@ public final class EventsProcessor<T> extends QuartzJob {
                     .eventCategory("process")
                     .eventAction("event_process")
                     .eventOutcome("success")
+                    .field("log.source", "application")
                     .log();
             }
         } finally {
@@ -134,7 +136,6 @@ public final class EventsProcessor<T> extends QuartzJob {
      * Set registry key for elements queue (JDBC mode).
      * @param key Registry key to look up the queue from {@link JobDataRegistry}
      */
-    @SuppressWarnings("PMD.MethodNamingConventions")
     public void setElements_key(final String key) {
         this.elements = JobDataRegistry.lookup(key);
     }
@@ -143,7 +144,6 @@ public final class EventsProcessor<T> extends QuartzJob {
      * Set registry key for action consumer (JDBC mode).
      * @param key Registry key to look up the consumer from {@link JobDataRegistry}
      */
-    @SuppressWarnings("PMD.MethodNamingConventions")
     public void setAction_key(final String key) {
         this.action = JobDataRegistry.lookup(key);
     }

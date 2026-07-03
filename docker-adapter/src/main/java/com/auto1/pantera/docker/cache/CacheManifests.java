@@ -127,6 +127,14 @@ public final class CacheManifests implements Manifests {
     public CompletableFuture<Optional<Manifest>> get(final ManifestReference ref) {
         final long startTime = System.currentTimeMillis();
         final String requestOwner = MDC.get("user.name");
+        // Capture trace.id + client.ip from the request-thread MDC at the
+        // entrypoint so the audit log emitted later (from the worker that
+        // commits the manifest) carries them. Without this both fields are
+        // missing on the artifact_publish audit record because the chain
+        // hops through .thenCompose callbacks on a worker pool that doesn't
+        // inherit MDC.
+        final String requestTraceId = MDC.get(com.auto1.pantera.http.log.EcsMdc.TRACE_ID);
+        final String requestClientIp = MDC.get(com.auto1.pantera.http.log.EcsMdc.CLIENT_IP);
         return this.origin.manifests().get(ref).handle(
             (original, throwable) -> {
                 final long duration = System.currentTimeMillis() - startTime;
@@ -134,7 +142,7 @@ public final class CacheManifests implements Manifests {
                 if (throwable == null) {
                     if (original.isPresent()) {
                         this.recordProxyMetric("success", duration);
-                        EcsLogger.info("com.auto1.pantera.docker.proxy")
+                        EcsLogger.info("com.auto1.pantera.docker.cache")
                             .message("CacheManifests origin returned manifest")
                             .eventCategory("web")
                             .eventAction("cache_manifest_get")
@@ -144,13 +152,14 @@ public final class CacheManifests implements Manifests {
                             .field("container.image.hash.all", ref.digest())
                             .field("url.original", this.upstreamUrl)
                             .duration(duration)
+                            .field("log.source", "application")
                             .log();
                         Manifest manifest = original.get();
                         if (Manifest.MANIFEST_SCHEMA2.equals(manifest.mediaType()) ||
                             Manifest.MANIFEST_OCI_V1.equals(manifest.mediaType()) ||
                             Manifest.MANIFEST_LIST_SCHEMA2.equals(manifest.mediaType()) ||
                             Manifest.MANIFEST_OCI_INDEX.equals(manifest.mediaType())) {
-                            this.copy(ref, requestOwner);
+                            this.copy(ref, requestOwner, requestTraceId, requestClientIp);
                             result = CompletableFuture.completedFuture(original);
                         } else {
                             EcsLogger.warn("com.auto1.pantera.docker")
@@ -162,12 +171,13 @@ public final class CacheManifests implements Manifests {
                                 .field("container.image.name", this.name)
                                 .field("container.image.hash.all", ref.digest())
                                 .field("file.type", manifest.mediaType())
+                                .field("log.source", "application")
                                 .log();
                             result = CompletableFuture.completedFuture(original);
                         }
                     } else {
                         this.recordProxyMetric("not_found", duration);
-                        EcsLogger.info("com.auto1.pantera.docker.proxy")
+                        EcsLogger.info("com.auto1.pantera.docker.cache")
                             .message("CacheManifests origin returned empty, falling back to cache")
                             .eventCategory("web")
                             .eventAction("cache_manifest_get")
@@ -178,6 +188,7 @@ public final class CacheManifests implements Manifests {
                             .field("container.image.hash.all", ref.digest())
                             .field("url.original", this.upstreamUrl)
                             .duration(duration)
+                            .field("log.source", "application")
                             .log();
                         result = this.cache.manifests().get(ref).exceptionally(ignored -> original);
                     }
@@ -194,6 +205,7 @@ public final class CacheManifests implements Manifests {
                         .field("container.image.hash.all", ref.digest())
                         .field("url.original", this.upstreamUrl)
                         .error(throwable)
+                        .field("log.source", "application")
                         .log();
                     result = this.cache.manifests().get(ref);
                 }
@@ -214,12 +226,22 @@ public final class CacheManifests implements Manifests {
      *
      * @param ref Manifest reference.
      * @param owner Authenticated user login captured from request thread.
+     * @param traceId Request {@code trace.id} captured from MDC on the
+     *                request thread; threaded through to the downstream
+     *                ArtifactEvent for audit-log propagation. Nullable.
+     * @param clientIp Request {@code client.ip} captured from MDC on the
+     *                 request thread; same propagation purpose as
+     *                 {@code traceId}. Nullable.
      * @return Copy completion.
      */
-    private CompletionStage<Void> copy(final ManifestReference ref, final String owner) {
+    private CompletionStage<Void> copy(
+        final ManifestReference ref, final String owner,
+        final String traceId, final String clientIp
+    ) {
         return this.origin.manifests().get(ref)
             .thenApply(Optional::get)
-            .thenCompose(manifest -> this.copySequentially(ref, manifest, owner))
+            .thenCompose(manifest ->
+                this.copySequentially(ref, manifest, owner, traceId, clientIp))
             .handle(
                 (ignored, ex) -> {
                     if (ex != null) {
@@ -232,6 +254,7 @@ public final class CacheManifests implements Manifests {
                             .field("container.image.name", this.name)
                             .field("container.image.hash.all", ref.digest())
                             .error(ex)
+                            .field("log.source", "application")
                             .log();
                     }
                     return null;
@@ -251,7 +274,9 @@ public final class CacheManifests implements Manifests {
     private CompletionStage<Void> copySequentially(
         final ManifestReference ref,
         final Manifest manifest,
-        final String owner
+        final String owner,
+        final String traceId,
+        final String clientIp
     ) {
         final boolean needRelease = this.events.isPresent() || this.inspector.isPresent();
         final CompletionStage<Optional<Long>> release = needRelease
@@ -265,13 +290,14 @@ public final class CacheManifests implements Manifests {
                         .field("repository.name", this.rname)
                         .field("container.image.name", this.name)
                         .field("container.image.hash.all", ref.digest())
-                        .field("error.message", ex.getMessage())
+                        .error(ex)
+                        .field("log.source", "application")
                         .log();
                     return Optional.empty();
                 })
             : CompletableFuture.completedFuture(Optional.empty());
         return release.thenCompose(
-            rel -> this.finalizeManifestCache(ref, manifest, rel, owner)
+            rel -> this.finalizeManifestCache(ref, manifest, rel, owner, traceId, clientIp)
         );
     }
 
@@ -289,7 +315,9 @@ public final class CacheManifests implements Manifests {
         final ManifestReference ref,
         final Manifest manifest,
         final Optional<Long> rel,
-        final String owner
+        final String owner,
+        final String traceId,
+        final String clientIp
     ) {
         // Get inspector release date asynchronously (FIX: removed blocking .join())
         final CompletionStage<Optional<Long>> inspectorReleaseFuture = this.inspector
@@ -329,7 +357,10 @@ public final class CacheManifests implements Manifests {
                             effectiveOwner = ArtifactEvent.DEF_OWNER;
                         }
                     }
-                    queue.add(
+                    // Bind request-thread context onto the event so the
+                    // audit log written from DbConsumer (on a worker
+                    // thread with empty MDC) carries trace.id + client.ip.
+                    queue.add( // ok: unbounded ConcurrentLinkedDeque (ArtifactEvent queue)
                         new ArtifactEvent(
                             CacheManifests.REPO_TYPE,
                             this.rname,
@@ -339,7 +370,7 @@ public final class CacheManifests implements Manifests {
                             size,
                             created,
                             effectiveRelease.orElse(null)
-                        )
+                        ).withContext(traceId, clientIp)
                     );
                 });
                 return this.cache.manifests().putUnchecked(ref, manifest.content())
@@ -350,7 +381,15 @@ public final class CacheManifests implements Manifests {
 
     private CompletionStage<Optional<Long>> releaseTimestamp(final Manifest manifest) {
         if (manifest.isManifestList()) {
-            return CompletableFuture.completedFuture(Optional.empty());
+            // Multi-arch tags (e.g. ubuntu:latest, python:3.12) resolve to
+            // an OCI image index / Docker manifest list with no `config`
+            // blob. Historically we returned empty here, which caused
+            // cooldown to fail-open for every multi-arch image on first
+            // pull. Resolve through: fetch the first child (typically
+            // linux/amd64) and read its config's `created` timestamp.
+            // All children of a single tag share a build run, so any
+            // one of them gives a representative release date.
+            return this.firstChildReleaseTimestamp(manifest);
         }
         return this.origin.layers().get(manifest.config()).thenCompose(
             blob -> {
@@ -362,6 +401,54 @@ public final class CacheManifests implements Manifests {
                     .thenApply(this::extractCreatedTimestamp);
             }
         );
+    }
+
+    /**
+     * Resolve a manifest list's release timestamp by fetching the first
+     * child manifest and reading its image-config {@code created} field.
+     * Returns empty on any upstream failure — never throws — so the
+     * caller falls through to the existing "no release date → allow"
+     * branch rather than blocking on a transient upstream blip.
+     *
+     * <p>Cost is bounded: the result is cached in
+     * {@link DockerProxyCooldownInspector}'s Caffeine cache
+     * ({@code maximumSize=10_000}, {@code expireAfterWrite=24h}), so at
+     * most one extra upstream pair per {@code image:tag} per day. The
+     * child manifest and its config blob are also warmed in the
+     * registry cache for the downstream pull.</p>
+     */
+    private CompletionStage<Optional<Long>> firstChildReleaseTimestamp(
+        final Manifest manifestList
+    ) {
+        final Collection<Digest> children = manifestList.manifestListChildren();
+        if (children.isEmpty()) {
+            return CompletableFuture.completedFuture(Optional.empty());
+        }
+        final Digest firstChild = children.iterator().next();
+        return this.origin.manifests()
+            .get(ManifestReference.from(firstChild))
+            .thenCompose(opt -> {
+                // Defensive: nested manifest lists are not defined by
+                // OCI but some registries emit them. Bail out rather
+                // than recurse.
+                if (opt.isEmpty() || opt.get().isManifestList()) {
+                    return CompletableFuture.<Optional<Long>>completedFuture(Optional.empty());
+                }
+                return this.releaseTimestamp(opt.get());
+            })
+            .exceptionally(ex -> {
+                EcsLogger.debug("com.auto1.pantera.docker")
+                    .message("Could not resolve child manifest for release date")
+                    .eventCategory("web")
+                    .eventAction("manifest_cache")
+                    .field("repository.name", this.rname)
+                    .field("container.image.name", this.name)
+                    .field("container.image.hash.all", firstChild.string())
+                    .field("error.message", ex.getMessage())
+                    .field("log.source", "application")
+                    .log();
+                return Optional.empty();
+            });
     }
 
     private Optional<Long> extractCreatedTimestamp(final byte[] config) {
@@ -379,6 +466,7 @@ public final class CacheManifests implements Manifests {
                 .field("repository.name", this.rname)
                 .field("container.image.name", this.name)
                 .field("error.message", ex.getMessage())
+                .field("log.source", "application")
                 .log();
         }
         return Optional.empty();
@@ -450,7 +538,6 @@ public final class CacheManifests implements Manifests {
     /**
      * Record metric safely (only if metrics are enabled).
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
             if (com.auto1.pantera.metrics.PanteraMetrics.isEnabled()) {
@@ -460,6 +547,7 @@ public final class CacheManifests implements Manifests {
             EcsLogger.debug("com.auto1.pantera.docker")
                 .message("Failed to record metric")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }

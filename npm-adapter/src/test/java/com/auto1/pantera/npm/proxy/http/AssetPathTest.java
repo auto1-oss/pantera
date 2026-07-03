@@ -20,7 +20,6 @@ import org.junit.jupiter.api.Test;
  * AssetPath tests.
  * @since 0.1
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public class AssetPathTest {
     @Test
     public void getsPath() {

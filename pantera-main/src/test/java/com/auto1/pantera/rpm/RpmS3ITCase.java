@@ -30,7 +30,6 @@ import java.io.IOException;
  * IT case for RPM repository.
  * @since 0.12
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 @DisabledOnOs(OS.WINDOWS)
 public final class RpmS3ITCase {
 

@@ -35,7 +35,6 @@ import java.util.concurrent.atomic.AtomicInteger;
  *
  * @since 1.19.1
  */
-@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.TooManyMethods"})
 class MetadataMergerTest {
 
     @Test

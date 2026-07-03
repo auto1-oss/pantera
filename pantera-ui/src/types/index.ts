@@ -91,6 +91,8 @@ export interface TreeEntry {
   type: 'file' | 'directory'
   size?: number
   modified?: string
+  artifact_kind?: 'ARTIFACT' | 'CHECKSUM' | 'SIGNATURE' | 'METADATA'
+  yanked?: boolean
 }
 
 export interface ArtifactDetail {
@@ -184,6 +186,33 @@ export interface BlockedArtifact {
   blocked_date: string
   blocked_until: string
   remaining_hours: number
+  release_date?: string
+}
+
+// Cooldown history — same as BlockedArtifact plus archive metadata.
+// Returned by GET /api/v1/cooldown/history (registered by Task 13).
+export type ArchiveReason = 'EXPIRED' | 'MANUAL_UNBLOCK' | 'ADMIN_PURGE'
+
+export interface HistoryArtifact extends BlockedArtifact {
+  archived_at: string
+  archive_reason: ArchiveReason
+  archived_by: string
+}
+
+// Cooldown SNAPSHOT policy — optional override for Maven/Gradle SNAPSHOT
+// timestamped artifacts. Missing fields inherit from the next tier.
+export interface CooldownSnapshotPolicy {
+  enabled?: boolean
+  minimum_allowed_age?: string
+}
+
+// Per-repository cooldown override (highest priority, beats type and global).
+// Either field may be absent; the {@code snapshots} sub-policy further
+// overrides for Maven/Gradle SNAPSHOT timestamped artifacts on that repo.
+export interface CooldownRepoOverride {
+  enabled?: boolean
+  minimum_allowed_age?: string
+  snapshots?: CooldownSnapshotPolicy
 }
 
 // Cooldown config
@@ -193,7 +222,20 @@ export interface CooldownConfig {
   repo_types?: Record<string, {
     enabled: boolean
     minimum_allowed_age?: string
+    snapshots?: CooldownSnapshotPolicy
   }>
+  // Optional persistence/cleanup tunables (Task 8). GET /cooldown/config
+  // may not yet echo these fields back — treat as optional on read.
+  history_retention_days?: number
+  cleanup_batch_limit?: number
+  // SNAPSHOT classifier — applies a stricter cooldown to Maven/Gradle
+  // SNAPSHOT artifacts. Per-repo override wins over global.
+  snapshots?: CooldownSnapshotPolicy
+  repo_name_snapshots?: Record<string, CooldownSnapshotPolicy>
+  // Unified per-repo-name overrides — see CooldownRepoOverride. Replaces
+  // the legacy repo_name_snapshots channel; servers may echo both for
+  // back-compat with older UI builds.
+  repo_names?: Record<string, CooldownRepoOverride>
 }
 
 // Settings

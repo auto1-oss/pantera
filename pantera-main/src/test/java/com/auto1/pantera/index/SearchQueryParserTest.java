@@ -25,7 +25,6 @@ import java.util.List;
  *
  * @since 2.1.0
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class SearchQueryParserTest {
 
     @Test

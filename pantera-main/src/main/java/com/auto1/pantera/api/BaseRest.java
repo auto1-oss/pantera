@@ -61,6 +61,7 @@ abstract class BaseRest {
                     .field("http.request.method", context.request().method().name())
                     .field("user.name", context.user() != null ? context.user().principal().getString("sub") : null)
                     .error(context.failure())
+                    .field("log.source", "application")
                     .log();
                 // Try to end the response if not already ended
                 if (!context.response().ended()) {
@@ -87,6 +88,7 @@ abstract class BaseRest {
                 .field("http.request.method", context.request().method().name())
                 .field("user.name", context.user() != null ? context.user().principal().getString("sub") : null)
                 .error(context.failure())
+                .field("log.source", "application")
                 .log();
         };
     }

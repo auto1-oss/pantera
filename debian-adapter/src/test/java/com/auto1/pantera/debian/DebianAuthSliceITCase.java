@@ -54,7 +54,6 @@ import org.testcontainers.containers.GenericContainer;
  * Test for {@link DebianSlice}.
  * @since 0.1
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 @EnabledOnOs({OS.LINUX, OS.MAC})
 public final class DebianAuthSliceITCase {
 

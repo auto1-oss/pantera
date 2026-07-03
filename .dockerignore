@@ -8,6 +8,8 @@
 agents
 docs
 benchmark
+performance
+logs
 pantera-ui/node_modules
 pantera-ui/dist
 pantera-import-cli/target

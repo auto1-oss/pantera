@@ -166,6 +166,7 @@ public final class FileSystemBrowseSlice implements Slice {
                     .eventOutcome("success")
                     .field("url.path", key.string())
                     .duration(elapsed)
+                    .field("log.source", "application")
                     .log();
 
                 return ResponseBuilder.ok()
@@ -181,6 +182,7 @@ public final class FileSystemBrowseSlice implements Slice {
                     .eventOutcome("failure")
                     .field("url.path", key.string())
                     .error(e)
+                    .field("log.source", "application")
                     .log();
                 return ResponseBuilder.internalError()
                     .textBody("Failed to browse directory: " + e.getMessage())
@@ -480,7 +482,7 @@ public final class FileSystemBrowseSlice implements Slice {
             // Unwrap decorators to find SubStorage / FileStorage
             final Storage unwrapped = unwrapDecorators(storage);
             // Check if this is SubStorage
-            if (unwrapped.getClass().getSimpleName().equals("SubStorage")) {
+            if ("SubStorage".equals(unwrapped.getClass().getSimpleName())) {
                 // Extract prefix from SubStorage
                 final Field prefixField = unwrapped.getClass().getDeclaredField("prefix");
                 prefixField.setAccessible(true);
@@ -522,6 +524,10 @@ public final class FileSystemBrowseSlice implements Slice {
                     delegate.setAccessible(true);
                     current = (Storage) delegate.get(current);
                 } catch (Exception e) {
+                    // EXPECTED: reflective unwrap failure (e.g. delegate
+                    // field renamed) — stop the loop with whatever we
+                    // have. Correctness preserved by the caller's
+                    // storage.value() / list() path.
                     break;
                 }
             } else {

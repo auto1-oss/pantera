@@ -73,26 +73,32 @@ upload_artifact "$ZIP_FILE" "zip"
 echo ""
 echo "✅ Successfully published $MODULE_PATH@$VERSION"
 
-# Test the uploaded module by fetching it from outside the module directory
+# Test the uploaded module by fetching it from outside the module directory.
+# Use a *fresh* GOMODCACHE so prior runs (which may have cached an empty
+# go.mod or a 404 from before the upload finished) cannot poison the test.
 echo ""
 echo "Testing module download from Pantera..."
 TEST_DIR=$(mktemp -d)
-trap 'rm -rf "$TMP_DIR" "$TEST_DIR"' EXIT
+TEST_MOD_CACHE=$(mktemp -d)
+trap 'chmod -R u+w "$TEST_MOD_CACHE" 2>/dev/null; rm -rf "$TMP_DIR" "$TEST_DIR" "$TEST_MOD_CACHE"' EXIT
 cd "$TEST_DIR"
 
 # Initialize a test module
 go mod init test-module
 
-# Configure Go to use our proxy (go_group combines local + upstream)
+# Configure Go to use our proxy (go_group combines local + upstream).
+# GOMODCACHE points at a brand-new directory so this run does NOT inherit
+# stale module artifacts from earlier failed publishes.
 export GOPROXY="https://$PANTERA_USER:$PANTERA_PASS@localhost:8443/test_prefix/api/go/go_group"
 export GOINSECURE="*"
 export GONOSUMDB="$MODULE_PATH"
 export GONOSUMCHECK="$MODULE_PATH"
+export GOSUMDB=off
+export GOMODCACHE="$TEST_MOD_CACHE"
 
 echo "Attempting to get $MODULE_PATH@$VERSION from group..."
 if go get -v "$MODULE_PATH@$VERSION"; then
     echo "✅ Successfully downloaded $MODULE_PATH@$VERSION from Pantera group"
 else
     echo "❌ Failed to download $MODULE_PATH@$VERSION from Pantera group"
-    echo "This may be expected if testing upload functionality only"
 fi

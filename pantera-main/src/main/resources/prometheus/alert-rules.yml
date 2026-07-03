@@ -1,0 +1,138 @@
+# Pantera 2.2.0 — alert rules.
+#
+# T-O02 of analysis/plan/v2/IMPLEMENTATION.md. Companion runbooks live
+# under docs/runbooks/; each alert's annotation.runbook_url points at
+# the matching markdown.
+#
+# Validation:
+#   promtool check rules pantera-main/src/main/resources/prometheus/alert-rules.yml
+#
+# The pre-existing M1 recording rules + amplification alerts live in
+# docker-compose/prometheus/rules/amplification.yml. They are NOT
+# duplicated here — this file is additive, focused on the alerts that
+# depend on the v2.2.0 perf-pack (circuit breaker, bulkhead, conditional
+# GET).
+
+groups:
+  - name: pantera_v22_alerts
+    rules:
+
+      # ------------------------------------------------------------------
+      # Alert: circuit breaker open > 5 minutes.
+      #
+      # Per-host gauge {pantera_circuit_breaker_state} reads 1 while the
+      # breaker is open. A sustained open state means the upstream HAS
+      # NOT recovered between probe intervals — operator attention is
+      # needed (real outage, DNS misconfiguration, firewall block).
+      # ------------------------------------------------------------------
+      - alert: PanteraUpstreamCircuitBreakerOpen
+        expr: max by (upstream_host) (pantera_circuit_breaker_state) == 1
+        for: 5m
+        labels:
+          severity: page
+          team: devops
+          component: upstream-circuit-breaker
+        annotations:
+          summary: "Upstream circuit breaker open > 5m for {{ $labels.upstream_host }}"
+          description: |
+            pantera_circuit_breaker_state{upstream_host="{{ $labels.upstream_host }}"} has been 1 (open)
+            sustained 5 minutes. The breaker fast-fails outbound calls and emits synthetic 502s.
+            Either the upstream is down, the route to it is broken, or a credential / TLS issue is
+            causing repeated 5xx. Check pantera_circuit_breaker_trips_total for trip frequency and
+            pantera_upstream_requests_total{outcome=~"5xx|error"} for the underlying failure.
+          runbook_url: "https://github.com/auto1-oss/pantera/blob/master/docs/runbooks/upstream-circuit-breaker-open.md"
+
+      # ------------------------------------------------------------------
+      # Alert: upstream 429 rate sustained > 0 for 1 minute.
+      #
+      # The rate-limit gate is meant to prevent us from ever seeing a 429
+      # in steady state — if one fires, our self-imposed token bucket is
+      # set too high for the upstream's true tolerance.
+      # ------------------------------------------------------------------
+      - alert: PanteraUpstream429Sustained
+        expr: |
+          sum by (upstream_host, repo_name) (
+            rate(pantera_proxy_429_total[1m])
+          ) > 0
+        for: 1m
+        labels:
+          severity: warn
+          team: devops
+          component: rate-limit
+        annotations:
+          summary: "Upstream {{ $labels.upstream_host }} is 429-ing repo {{ $labels.repo_name }}"
+          description: |
+            pantera_proxy_429_total has been incrementing for > 1 minute against upstream
+            {{ $labels.upstream_host }} on repo {{ $labels.repo_name }}. The self-imposed rate
+            limiter is allowing more outbound traffic than the upstream tolerates. Drop the
+            per-host token rate (PANTERA_RATE_LIMIT_<HOST>) or audit which caller_tag is
+            producing the load via pantera_upstream_requests_total.
+          runbook_url: "https://github.com/auto1-oss/pantera/blob/master/docs/runbooks/upstream-429-sustained.md"
+
+      # ------------------------------------------------------------------
+      # Alert: bulkhead overflow sustained > 0 for 1 minute.
+      #
+      # The per-repo bulkhead (T-P12) emits a 503 with Retry-After=1 when
+      # a repo's in-flight + queued requests exceed the configured cap.
+      # Sustained overflow means a single repo is saturating its own
+      # bulkhead — either a hot artifact is going through cold cache, a
+      # client is hammering us, or the bulkhead is sized too low.
+      # ------------------------------------------------------------------
+      - alert: PanteraBulkheadOverflow
+        expr: |
+          sum by (repo) (
+            rate(pantera_bulkhead_overflow_total[1m])
+          ) > 0
+        for: 1m
+        labels:
+          severity: warn
+          team: devops
+          component: bulkhead
+        annotations:
+          summary: "Bulkhead overflow on repo {{ $labels.repo }}"
+          description: |
+            pantera_bulkhead_overflow_total{repo="{{ $labels.repo }}"} has been incrementing
+            > 1 minute, meaning concurrent requests exceeded the per-repo cap and were
+            shed with 503. Check pantera_http_requests_total{repo,status="503"} for the
+            request volume being shed, and pantera_proxy_phase_duration_seconds for which
+            phase is slow (so we know whether to raise the bulkhead or fix the slow phase).
+          runbook_url: "https://github.com/auto1-oss/pantera/blob/master/docs/runbooks/bulkhead-overflow.md"
+
+      # ------------------------------------------------------------------
+      # Alert: conditional-GET hit rate < 70%.
+      #
+      # The MetadataCache (T-P10) sends If-None-Match / If-Modified-Since
+      # on every refresh; a healthy proxy should see ≥ 70% of metadata
+      # refreshes return 304. A low hit rate indicates either:
+      #   * the upstream isn't honouring our validators (rare, but worth
+      #     a manual curl to confirm);
+      #   * a cache eviction bug is clearing the stored ETag / Last-Modified
+      #     before the next refresh;
+      #   * the soft TTL is set so short the cache never has time to warm.
+      #
+      # Metric series: pantera_metadata_refresh_total{repo,outcome=("304"|"200"|"404")}
+      # — emitted by MetadataCache.recordRefresh(...) in T-P10.
+      # ------------------------------------------------------------------
+      - alert: PanteraConditionalGetHitRateLow
+        expr: |
+          (
+            sum by (repo) (rate(pantera_metadata_refresh_total{outcome="304"}[10m]))
+            /
+            clamp_min(
+              sum by (repo) (rate(pantera_metadata_refresh_total[10m])),
+              0.001
+            )
+          ) < 0.7
+        for: 10m
+        labels:
+          severity: warn
+          team: devops
+          component: metadata-cache
+        annotations:
+          summary: "Conditional-GET hit rate < 70% on repo {{ $labels.repo }}"
+          description: |
+            Less than 70% of metadata refreshes against repo {{ $labels.repo }} are returning
+            304 over the last 10 minutes. Either the upstream is no longer honouring our
+            If-None-Match / If-Modified-Since validators, or a cache eviction bug is dropping
+            the stored ETag. Reproduce with: `curl -i -H 'If-None-Match: <etag>' <upstream-url>`.
+          runbook_url: "https://github.com/auto1-oss/pantera/blob/master/docs/runbooks/low-conditional-get-hit-rate.md"

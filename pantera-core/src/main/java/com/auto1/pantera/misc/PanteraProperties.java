@@ -21,7 +21,6 @@ import java.util.Properties;
  * Pantera properties.
  * @since 0.21
  */
-@SuppressWarnings("PMD.ConstructorOnlyInitializesOrCallOtherConstructors")
 public final class PanteraProperties {
     /**
      * Key of field which contains Pantera version.

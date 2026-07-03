@@ -40,6 +40,15 @@ import javax.json.JsonValue;
  * <p>It queries all members in parallel, waits for their responses, and merges
  * the vulnerability data from all sources.
  *
+ * <p><b>Trace context contract.</b> Trace context (trace.id / span.id /
+ * span.parent.id) is inherited from the {@code EcsLoggingSlice} MDC scope
+ * set at request entry. Any async hop introduced in this slice MUST use
+ * {@code ContextualExecutor.contextualize(...)} (or an equivalent MDC
+ * capture-and-restore) to preserve trace.id across the executor
+ * boundary — without it, log lines emitted from the worker thread
+ * surface in Kibana with no trace correlation back to the originating
+ * request.
+ *
  * @since 1.1
  */
 public final class GroupAuditSlice implements Slice {
@@ -104,6 +113,7 @@ public final class GroupAuditSlice implements Slice {
             .eventCategory("web")
             .eventAction("group_audit_start")
             .field("url.path", line.uri().getPath())
+            .field("log.source", "application")
             .log();
 
         // Read the body once (it will be reused for all members)
@@ -127,13 +137,11 @@ public final class GroupAuditSlice implements Slice {
                     final Map<String, JsonValue> merged = new HashMap<>();
                     int emptyCount = 0;
                     int nonEmptyCount = 0;
-                    int idx = 0;
 
                     for (CompletableFuture<JsonObject> future : auditResults) {
                         // Safe: allOf() guarantees all futures are complete
                         // getNow() is non-blocking when future is complete
                         final JsonObject result = future.getNow(Json.createObjectBuilder().build());
-                        final String memberName = idx < this.members.size() ? this.members.get(idx).name : "unknown";
                         if (result.isEmpty()) {
                             emptyCount++;
                         } else {
@@ -141,7 +149,6 @@ public final class GroupAuditSlice implements Slice {
                             // Merge entries - later entries with same key overwrite
                             result.forEach(merged::put);
                         }
-                        idx++;
                     }
 
                     final long duration = System.currentTimeMillis() - startTime;
@@ -152,6 +159,7 @@ public final class GroupAuditSlice implements Slice {
                             .eventAction("group_audit")
                             .eventOutcome("success")
                             .duration(duration)
+                            .field("log.source", "application")
                             .log();
                         return ResponseBuilder.ok()
                             .jsonBody(Json.createObjectBuilder().build())
@@ -164,6 +172,7 @@ public final class GroupAuditSlice implements Slice {
                         .eventAction("group_audit")
                         .eventOutcome("success")
                         .duration(duration)
+                        .field("log.source", "application")
                         .log();
 
                     // Build merged response
@@ -183,6 +192,7 @@ public final class GroupAuditSlice implements Slice {
                         .eventOutcome("failure")
                         .duration(duration)
                         .error(err)
+                        .field("log.source", "application")
                         .log();
                     // On timeout/error, return empty (no vulnerabilities) rather than fail
                     return ResponseBuilder.ok()
@@ -211,6 +221,7 @@ public final class GroupAuditSlice implements Slice {
             .eventCategory("web")
             .eventAction("group_audit")
             .field("url.path", line.uri().getPath())
+            .field("log.source", "application")
             .log();
 
         return member.slice.response(
@@ -225,6 +236,7 @@ public final class GroupAuditSlice implements Slice {
                     .eventCategory("web")
                     .eventAction("group_audit")
                     .field("http.response.status_code", response.status().code())
+                    .field("log.source", "http")
                     .log();
                 // Drain body and return empty
                 return response.body().asBytesFuture()
@@ -234,11 +246,12 @@ public final class GroupAuditSlice implements Slice {
                 .thenApply(bytes -> {
                     try {
                         final String json = new String(bytes, StandardCharsets.UTF_8);
-                        if (json.isBlank() || json.equals("{}")) {
+                        if (json.isBlank() || "{}".equals(json)) {
                             EcsLogger.debug("com.auto1.pantera.npm")
                                 .message("Member returned empty audit response: " + member.name)
                                 .eventCategory("web")
                                 .eventAction("group_audit")
+                                .field("log.source", "application")
                                 .log();
                             return Json.createObjectBuilder().build();
                         }
@@ -248,6 +261,7 @@ public final class GroupAuditSlice implements Slice {
                                 .message(String.format("Member '%s' returned audit data with %d entries", member.name, result.size()))
                                 .eventCategory("web")
                                 .eventAction("group_audit")
+                                .field("log.source", "application")
                                 .log();
                             return result;
                         }
@@ -257,6 +271,7 @@ public final class GroupAuditSlice implements Slice {
                             .eventCategory("web")
                             .eventAction("group_audit")
                             .error(e)
+                            .field("log.source", "application")
                             .log();
                         return Json.createObjectBuilder().build();
                     }
@@ -267,6 +282,7 @@ public final class GroupAuditSlice implements Slice {
                 .eventCategory("web")
                 .eventAction("group_audit")
                 .error(err)
+                .field("log.source", "application")
                 .log();
             return Json.createObjectBuilder().build();
         });
@@ -312,7 +328,7 @@ public final class GroupAuditSlice implements Slice {
     private static Headers dropFullPathHeader(final Headers headers) {
         return new Headers(
             headers.asList().stream()
-                .filter(h -> !h.getKey().equalsIgnoreCase("X-FullPath"))
+                .filter(h -> !"X-FullPath".equalsIgnoreCase(h.getKey()))
                 .toList()
         );
     }

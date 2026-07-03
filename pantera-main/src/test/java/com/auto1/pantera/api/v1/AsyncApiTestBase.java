@@ -15,7 +15,7 @@ import com.auth0.jwt.algorithms.Algorithm;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.auth.JwtTokens;
-import com.auto1.pantera.cooldown.NoopCooldownService;
+import com.auto1.pantera.cooldown.impl.NoopCooldownService;
 import com.auto1.pantera.db.DbManager;
 import com.auto1.pantera.db.PostgreSQLTestConfig;
 import com.auto1.pantera.http.auth.AuthUser;

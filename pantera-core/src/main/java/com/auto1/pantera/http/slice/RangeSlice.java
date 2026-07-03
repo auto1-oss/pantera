@@ -180,7 +180,6 @@ public final class RangeSlice implements Slice {
         private final AtomicLong skipped = new AtomicLong(0);
         private final AtomicLong emitted = new AtomicLong(0);
         private final AtomicBoolean completed = new AtomicBoolean(false);
-        private Subscription upstream;
 
         RangeLimitSubscriber(
             final Subscriber<? super ByteBuffer> downstream,
@@ -194,7 +193,6 @@ public final class RangeSlice implements Slice {
 
         @Override
         public void onSubscribe(final Subscription subscription) {
-            this.upstream = subscription;
             this.downstream.onSubscribe(subscription);
         }
 
@@ -265,6 +263,7 @@ public final class RangeSlice implements Slice {
                     .eventAction("range_stream_error")
                     .eventOutcome("failure")
                     .field("error.message", error.getMessage())
+                    .field("log.source", "application")
                     .log();
             }
         }

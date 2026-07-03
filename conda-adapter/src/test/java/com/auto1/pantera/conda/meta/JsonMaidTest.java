@@ -25,7 +25,6 @@ import org.skyscreamer.jsonassert.JSONAssert;
  * Test for {@link JsonMaid.Jackson}.
  * @since 0.1
  */
-@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.TooManyMethods"})
 class JsonMaidTest {
 
     @Test

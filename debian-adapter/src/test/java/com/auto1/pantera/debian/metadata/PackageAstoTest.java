@@ -31,7 +31,6 @@ import org.junit.jupiter.api.Test;
  * Test for {@link Package.Asto}.
  * @since 0.1
  */
-@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.AssignmentInOperand"})
 class PackageAstoTest {
 
     /**

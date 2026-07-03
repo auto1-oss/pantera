@@ -12,7 +12,7 @@ package com.auto1.pantera.adapters.npm;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Storage;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.metadata.CooldownMetadataService;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
@@ -67,7 +67,7 @@ public final class NpmProxyAdapter implements Slice {
         final Optional<Storage> asto = cfg.storageOpt();
         final Optional<URL> baseUrl = Optional.of(cfg.url());
         
-        // Support multiple remotes with GroupSlice (similar to maven-proxy).
+        // Support multiple remotes with GroupResolver (similar to maven-proxy).
         // Each remote gets its own NpmProxy + NpmProxySlice, evaluated in
         // priority order.
         this.slice = new RaceSlice(
@@ -79,13 +79,36 @@ public final class NpmProxyAdapter implements Slice {
                         GenericAuthenticator.create(client, remote.username(), remote.pwd())
                     );
                     
-                    // Create NpmProxy for this remote with 12h metadata TTL
-                    final NpmProxy npmProxy = new NpmProxy(
-                        asto.orElseThrow(() -> new IllegalStateException(
+                    // Create NpmProxy for this remote with 12h metadata TTL.
+                    // The cache-write and packument hooks are passed as null:
+                    // their only previous consumer was the speculative prefetch
+                    // subsystem, deleted wholesale in M2 (analysis/plan/v1/PLAN.md).
+                    // The hook surface on NpmProxy is retained so a future
+                    // observed-coordinate prewarming feature (Phase 4c, 2.3.0)
+                    // can wire in without redesigning the adapter.
+                    final Storage npmStorage = asto.orElseThrow(
+                        () -> new IllegalStateException(
                             "npm-proxy requires storage to be set"
-                        )),
+                        )
+                    );
+                    // Phase 11.5: wire fine-grained sub-phase profiler so
+                    // /metrics/vertx exposes pantera_proxy_phase_seconds for
+                    // npm_storage_* sub-phases tagged by repo name.
+                    final String repoName = cfg.name();
+                    final java.util.function.BiConsumer<String, Long> phaseRecorder =
+                        (phase, durationNs) -> {
+                            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                                com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
+                                    .recordProxyPhaseDuration(repoName, phase, durationNs);
+                            }
+                        };
+                    final NpmProxy npmProxy = new NpmProxy(
+                        npmStorage,
                         remoteSlice,
-                        NpmProxy.DEFAULT_METADATA_TTL
+                        NpmProxy.DEFAULT_METADATA_TTL,
+                        null,
+                        null,
+                        phaseRecorder
                     );
                     
                     // Wrap with NpmProxySlice

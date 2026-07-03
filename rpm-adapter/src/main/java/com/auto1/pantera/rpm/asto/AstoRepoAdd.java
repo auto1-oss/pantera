@@ -148,6 +148,7 @@ public final class AstoRepoAdd {
                             .eventOutcome("failure")
                             .field("package.name", key.string())
                             .error(throwable)
+                            .field("log.source", "application")
                             .log();
                         return new RxStorageWrapper(this.asto).delete(key)
                             .andThen(Flowable.empty());

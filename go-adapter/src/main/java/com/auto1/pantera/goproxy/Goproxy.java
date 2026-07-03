@@ -103,13 +103,12 @@ public final class Goproxy {
      * @param content Content instance to be read
      * @return ByteBuffer contains all data from the content
      */
-    @SuppressWarnings("cast")
     static Single<ByteBuffer> readCompletely(final Content content) {
         return Flowable.fromPublisher(content)
             .reduce(
                 ByteBuffer.allocate(0),
                 (left, right) ->
-                    (ByteBuffer) ByteBuffer.allocate(left.remaining() + right.remaining())
+                    ByteBuffer.allocate(left.remaining() + right.remaining())
                         .put(left).put(right).flip()
             );
     }
@@ -232,7 +231,6 @@ public final class Goproxy {
      * @return Path to ZIP archive
      * @throws IOException if an error occurred when temporary ZIP file created
      */
-    @SuppressWarnings("PMD.AvoidInstantiatingObjectsInLoops")
     private Single<Path> archive(final String prefix, final String target) throws IOException {
         final Path zip = Files.createTempFile("", ".zip");
         zip.toFile().deleteOnExit();

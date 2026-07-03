@@ -5,12 +5,18 @@
 package com.auto1.pantera.adapters.docker;
 
 import com.auto1.pantera.asto.Content;
-import com.auto1.pantera.cooldown.CooldownRequest;
-import com.auto1.pantera.cooldown.CooldownResponses;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.audit.AuditContext;
+import com.auto1.pantera.audit.AuditLogger;
+import com.auto1.pantera.cooldown.api.CooldownRequest;
+import com.auto1.pantera.cooldown.response.CooldownResponseRegistry;
+import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.docker.Digest;
 import com.auto1.pantera.docker.Docker;
 import com.auto1.pantera.docker.cache.DockerProxyCooldownInspector;
+import com.auto1.pantera.docker.cooldown.DockerManifestByTagHandler;
+import com.auto1.pantera.docker.cooldown.DockerManifestByTagMetadataRequestDetector;
+import com.auto1.pantera.docker.cooldown.DockerMetadataRequestDetector;
+import com.auto1.pantera.docker.cooldown.DockerTagsListHandler;
 import com.auto1.pantera.docker.http.DigestHeader;
 import com.auto1.pantera.docker.http.PathPatterns;
 import com.auto1.pantera.docker.http.manifest.ManifestRequest;
@@ -23,6 +29,9 @@ import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsMdc;
+import com.auto1.pantera.http.log.RequestContextHeaders;
+import org.slf4j.MDC;
 
 import javax.json.Json;
 import javax.json.JsonException;
@@ -36,6 +45,18 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.StreamSupport;
 
+/**
+ * Cooldown evaluator for the docker-proxy adapter.
+ *
+ * <p><b>Trace context contract.</b> Trace context (trace.id / span.id /
+ * span.parent.id) is inherited from the {@code EcsLoggingSlice} MDC scope
+ * set at request entry. Any async hop introduced in this slice MUST use
+ * {@code ContextualExecutor.contextualize(...)} (or an equivalent MDC
+ * capture-and-restore) to preserve trace.id across the executor
+ * boundary — without it, log lines emitted from the worker thread
+ * surface in Kibana with no trace correlation back to the originating
+ * request.
+ */
 public final class DockerProxyCooldownSlice implements Slice {
 
     private static final String DIGEST_HEADER = "Docker-Content-Digest";
@@ -56,6 +77,32 @@ public final class DockerProxyCooldownSlice implements Slice {
 
     private final Docker docker;
 
+    /**
+     * Handler for {@code /v2/<name>/tags/list} — filters cooldown-blocked
+     * tags out of the JSON response. Prior to this wiring the Docker
+     * bundle registered in {@code CooldownWiring} was dead code.
+     */
+    private final DockerTagsListHandler tagsHandler;
+
+    /**
+     * Detector for {@code /v2/<name>/tags/list} paths.
+     */
+    private final DockerMetadataRequestDetector tagsDetector;
+
+    /**
+     * Handler for {@code /v2/<name>/manifests/<tag>} — returns 404
+     * MANIFEST_UNKNOWN when the tag itself OR the digest it resolves
+     * to is in cooldown. See class-level javadoc on the handler for
+     * why both must be checked.
+     */
+    private final DockerManifestByTagHandler manifestTagHandler;
+
+    /**
+     * Detector for {@code /v2/<name>/manifests/<tag>} paths. Returns
+     * true only for tag references, not digest references.
+     */
+    private final DockerManifestByTagMetadataRequestDetector manifestTagDetector;
+
     public DockerProxyCooldownSlice(
         final Slice origin,
         final String repoName,
@@ -70,6 +117,14 @@ public final class DockerProxyCooldownSlice implements Slice {
         this.cooldown = cooldown;
         this.inspector = inspector;
         this.docker = docker;
+        this.tagsHandler = new DockerTagsListHandler(
+            origin, cooldown, inspector, repoType, repoName
+        );
+        this.tagsDetector = new DockerMetadataRequestDetector();
+        this.manifestTagHandler = new DockerManifestByTagHandler(
+            origin, cooldown, inspector, repoType, repoName
+        );
+        this.manifestTagDetector = new DockerManifestByTagMetadataRequestDetector();
     }
 
     @Override
@@ -78,6 +133,33 @@ public final class DockerProxyCooldownSlice implements Slice {
         final Headers headers,
         final Content body
     ) {
+        final String path = line.uri().getPath();
+        RequestContextHeaders.bindToMdc(headers);
+        final AuditContext ctx = new AuditContext(
+            MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP)
+        );
+        // GET /v2/<name>/tags/list — route through the tags-list filter
+        // handler. This is where the Docker cooldown bundle registered
+        // in CooldownWiring is actually consumed; without this dispatch
+        // the bundle is dead infrastructure and blocked tags leak via
+        // `docker pull --all-tags` and `skopeo list-tags`.
+        if (line.method() == RqMethod.GET && this.tagsDetector.isMetadataRequest(path)) {
+            // Consume request body to match the invariant elsewhere that
+            // nothing leaks a Vert.x stream.
+            return body.asBytesFuture().thenCompose(ignored ->
+                this.tagsHandler.handle(line, headers, new Login(headers).getValue())
+            );
+        }
+        // GET /v2/<name>/manifests/<tag> — route through the manifest-tag
+        // filter. Returns 404 MANIFEST_UNKNOWN when the tag or the digest
+        // it resolves to is blocked by cooldown. Digest references fall
+        // through to the existing flow below, which handles digest-addressed
+        // manifests (release-date bookkeeping + cooldown evaluation).
+        if (line.method() == RqMethod.GET && this.manifestTagDetector.isMetadataRequest(path)) {
+            return this.manifestTagHandler.handle(
+                line, headers, body, new Login(headers).getValue()
+            );
+        }
         if (!this.shouldInspect(line)) {
             return this.origin.response(line, headers, body);
         }
@@ -85,9 +167,10 @@ public final class DockerProxyCooldownSlice implements Slice {
         try {
             request = ManifestRequest.from(line);
         } catch (final IllegalArgumentException ex) {
-            EcsLogger.debug("com.auto1.pantera.docker")
+            EcsLogger.debug("com.auto1.pantera.adapters.docker")
                 .message("Failed to parse manifest request, falling through to origin")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             return this.origin.response(line, headers, body);
         }
@@ -129,13 +212,9 @@ public final class DockerProxyCooldownSlice implements Slice {
                             this.repoType, this.repoName,
                             artifact, version, user, Instant.now()
                         );
-                        return this.cooldown.evaluate(cooldownRequest, this.inspector)
-                            .thenApply(result -> result.blocked()
-                                ? CooldownResponses.forbidden(result.block().orElseThrow())
-                                : rebuilt
-                            );
+                        return this.evaluateAndAudit(cooldownRequest, rebuilt, ctx, user);
                     }
-                    
+
                     // No release date in headers - extract from manifest config
                     // Check if we've seen this artifact before (cached from previous request)
                     if (this.inspector.known(artifact, version)) {
@@ -144,15 +223,11 @@ public final class DockerProxyCooldownSlice implements Slice {
                             this.repoType, this.repoName,
                             artifact, version, user, Instant.now()
                         );
-                        return this.cooldown.evaluate(cooldownRequest, this.inspector)
-                            .thenApply(result -> result.blocked()
-                                ? CooldownResponses.forbidden(result.block().orElseThrow())
-                                : rebuilt
-                            );
+                        return this.evaluateAndAudit(cooldownRequest, rebuilt, ctx, user);
                     }
-                    
+
                     // First time seeing this artifact - WAIT for extraction then evaluate
-                    return this.determineReleaseSync(request, response.headers(), bytes, artifact, version, digest, user)
+                    return this.determineReleaseSync(request, response.headers(), bytes, artifact, version, digest)
                         .thenCompose(release -> {
                             this.inspector.register(
                                 artifact, version, release,
@@ -162,14 +237,10 @@ public final class DockerProxyCooldownSlice implements Slice {
                                 this.repoType, this.repoName,
                                 artifact, version, user, Instant.now()
                             );
-                            return this.cooldown.evaluate(cooldownRequest, this.inspector)
-                                .thenApply(result -> result.blocked()
-                                    ? CooldownResponses.forbidden(result.block().orElseThrow())
-                                    : rebuilt
-                                );
+                            return this.evaluateAndAudit(cooldownRequest, rebuilt, ctx, user);
                         });
                 }).exceptionally(ex -> {
-                    EcsLogger.warn("com.auto1.pantera.docker")
+                    EcsLogger.warn("com.auto1.pantera.adapters.docker")
                         .message("Failed to process manifest")
                         .eventCategory("web")
                         .eventAction("manifest_process")
@@ -177,6 +248,7 @@ public final class DockerProxyCooldownSlice implements Slice {
                         .field("package.name", artifact)
                         .field("package.version", version)
                         .error(ex)
+                        .field("log.source", "application")
                         .log();
                     // Register with empty release date on error
                     this.inspector.register(artifact, version, Optional.empty(), user, this.repoName, digest);
@@ -186,10 +258,49 @@ public final class DockerProxyCooldownSlice implements Slice {
     }
 
     /**
+     * Evaluate cooldown for a digest-addressed manifest request and audit
+     * the outcome. Shared by the three near-identical branches above (known
+     * release date via headers, cached release date, freshly-extracted
+     * release date) so the audit call site exists exactly once.
+     *
+     * @param cooldownRequest Cooldown evaluation request
+     * @param rebuilt Response to return when cooldown allows the fetch
+     * @param ctx Request correlation context
+     * @param owner Requesting user
+     * @return Forbidden response when blocked, otherwise {@code rebuilt}
+     */
+    private CompletableFuture<Response> evaluateAndAudit(
+        final CooldownRequest cooldownRequest,
+        final Response rebuilt,
+        final AuditContext ctx,
+        final String owner
+    ) {
+        return this.cooldown.evaluate(cooldownRequest, this.inspector)
+            .thenApply(result -> {
+                if (result.blocked()) {
+                    AuditLogger.access(
+                        ctx, this.repoType, this.repoName,
+                        cooldownRequest.artifact(), cooldownRequest.version(), 0L, owner,
+                        AuditLogger.OUTCOME_FAILURE, AuditLogger.REASON_COOLDOWN_ACTIVE
+                    );
+                    return CooldownResponseRegistry.instance()
+                        .getOrThrow(this.repoType)
+                        .forbidden(result.block().orElseThrow());
+                }
+                AuditLogger.access(
+                    ctx, this.repoType, this.repoName,
+                    cooldownRequest.artifact(), cooldownRequest.version(), 0L, owner,
+                    AuditLogger.OUTCOME_SUCCESS, null
+                );
+                return rebuilt;
+            });
+    }
+
+    /**
      * Extract release date from manifest config synchronously.
      * Waits for extraction to complete before returning.
      * Used on first request to properly evaluate cooldown.
-     * 
+     *
      * @param request Manifest request
      * @param headers Response headers
      * @param manifestBytes Manifest body bytes
@@ -205,8 +316,7 @@ public final class DockerProxyCooldownSlice implements Slice {
         final byte[] manifestBytes,
         final String artifact,
         final String version,
-        final Optional<String> digest,
-        final String user
+        final Optional<String> digest
     ) {
         final Optional<Manifest> manifest = this.manifestFrom(headers, manifestBytes);
         if (manifest.isEmpty() || manifest.get().isManifestList()) {
@@ -224,7 +334,7 @@ public final class DockerProxyCooldownSlice implements Slice {
                 .thenApply(this::extractCreatedInstant);
         }).whenComplete((release, error) -> {
             if (error != null) {
-                EcsLogger.warn("com.auto1.pantera.docker")
+                EcsLogger.warn("com.auto1.pantera.adapters.docker")
                     .message("Failed to extract release date from config")
                     .eventCategory("web")
                     .eventAction("release_date_extract")
@@ -232,9 +342,10 @@ public final class DockerProxyCooldownSlice implements Slice {
                     .field("package.name", artifact)
                     .field("package.version", version)
                     .error(error)
+                    .field("log.source", "application")
                     .log();
             } else if (release.isPresent()) {
-                EcsLogger.debug("com.auto1.pantera.docker")
+                EcsLogger.debug("com.auto1.pantera.adapters.docker")
                     .message("Extracted release date from config")
                     .eventCategory("web")
                     .eventAction("release_date_extract")
@@ -242,12 +353,13 @@ public final class DockerProxyCooldownSlice implements Slice {
                     .field("package.name", artifact)
                     .field("package.version", version)
                     .field("package.release_date", release.get().toString())
+                    .field("log.source", "application")
                     .log();
                 // Also record by digest
                 digest.ifPresent(d -> this.inspector.recordRelease(artifact, d, release.get()));
             }
         }).exceptionally(ex -> {
-            EcsLogger.warn("com.auto1.pantera.docker")
+            EcsLogger.warn("com.auto1.pantera.adapters.docker")
                 .message("Exception extracting release date")
                 .eventCategory("web")
                 .eventAction("release_date_extract")
@@ -255,6 +367,7 @@ public final class DockerProxyCooldownSlice implements Slice {
                 .field("package.name", artifact)
                 .field("package.version", version)
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             return Optional.empty();
         });
@@ -288,7 +401,7 @@ public final class DockerProxyCooldownSlice implements Slice {
                 .thenApply(this::extractCreatedInstant);
         }).thenAccept(release -> {
             if (release.isPresent()) {
-                EcsLogger.debug("com.auto1.pantera.docker")
+                EcsLogger.debug("com.auto1.pantera.adapters.docker")
                     .message("Extracted release date from config")
                     .eventCategory("web")
                     .eventAction("release_date_extract")
@@ -296,12 +409,13 @@ public final class DockerProxyCooldownSlice implements Slice {
                     .field("package.name", artifact)
                     .field("package.version", version)
                     .field("package.release_date", release.get().toString())
+                    .field("log.source", "application")
                     .log();
                 this.inspector.recordRelease(artifact, version, release.get());
                 digest.ifPresent(d -> this.inspector.recordRelease(artifact, d, release.get()));
             }
         }).exceptionally(ex -> {
-            EcsLogger.debug("com.auto1.pantera.docker")
+            EcsLogger.debug("com.auto1.pantera.adapters.docker")
                 .message("Failed to extract release date from config")
                 .eventCategory("web")
                 .eventAction("release_date_extract")
@@ -309,6 +423,7 @@ public final class DockerProxyCooldownSlice implements Slice {
                 .field("package.name", artifact)
                 .field("package.version", version)
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             return null;
         });
@@ -319,12 +434,13 @@ public final class DockerProxyCooldownSlice implements Slice {
             final Digest digest = new DigestHeader(headers).value();
             return Optional.of(new Manifest(digest, bytes));
         } catch (final IllegalArgumentException ex) {
-            EcsLogger.warn("com.auto1.pantera.docker")
+            EcsLogger.warn("com.auto1.pantera.adapters.docker")
                 .message("Failed to build manifest from response headers")
                 .eventCategory("web")
                 .eventAction("manifest_build")
                 .eventOutcome("failure")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             return Optional.empty();
         }
@@ -338,12 +454,13 @@ public final class DockerProxyCooldownSlice implements Slice {
                 return Optional.of(Instant.parse(created));
             }
         } catch (final DateTimeParseException | JsonException ex) {
-            EcsLogger.debug("com.auto1.pantera.docker")
+            EcsLogger.debug("com.auto1.pantera.adapters.docker")
                 .message("Unable to parse manifest config created field")
                 .eventCategory("web")
                 .eventAction("manifest_parse")
                 .eventOutcome("failure")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
         return Optional.empty();
@@ -368,9 +485,10 @@ public final class DockerProxyCooldownSlice implements Slice {
                 try {
                     return Optional.of(Instant.from(DateTimeFormatter.RFC_1123_DATE_TIME.parse(value)));
                 } catch (final DateTimeParseException ex) {
-                    EcsLogger.debug("com.auto1.pantera.docker")
+                    EcsLogger.debug("com.auto1.pantera.adapters.docker")
                         .message("Failed to parse date header for release time")
                         .error(ex)
+                        .field("log.source", "application")
                         .log();
                     return Optional.empty();
                 }

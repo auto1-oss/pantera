@@ -25,7 +25,6 @@ import org.junit.jupiter.api.Test;
  * Tests for {@link CurlPublish}.
  * @since 0.9
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 final class CurlPublishTest {
     @Test
     void metaFileAndTgzArchiveExist() {

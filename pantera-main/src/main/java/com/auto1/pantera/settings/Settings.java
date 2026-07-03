@@ -15,7 +15,7 @@ import com.amihaiemil.eoyaml.YamlSequence;
 import com.auto1.pantera.api.ssl.KeyStore;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.cache.ValkeyConnection;
-import com.auto1.pantera.cooldown.CooldownSettings;
+import com.auto1.pantera.cooldown.config.CooldownSettings;
 import com.auto1.pantera.http.client.HttpClientSettings;
 import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.scheduling.MetadataEventQueues;
@@ -94,6 +94,17 @@ public interface Settings extends AutoCloseable {
     Optional<MetadataEventQueues> artifactMetadata();
 
     /**
+     * Synchronous artifact-index writer used by upload slices to give the
+     * group resolver read-after-write consistency. Defaults to
+     * {@link com.auto1.pantera.index.SyncArtifactIndexer#NOOP} when no DB
+     * is configured (file-only deployments / tests).
+     * @return Synchronous artifact-index writer
+     */
+    default com.auto1.pantera.index.SyncArtifactIndexer syncArtifactIndexer() {
+        return com.auto1.pantera.index.SyncArtifactIndexer.NOOP;
+    }
+
+    /**
      * Crontab settings.
      * @return Yaml sequence of crontab strings.
      */
@@ -162,10 +173,56 @@ public interface Settings extends AutoCloseable {
     }
 
     /**
+     * The L1 cache wrapping {@link #artifactIndex()}, when one is in play
+     * (i.e. when a real DB-backed index was constructed). Returned as
+     * {@link Optional} so callers — notably the sync upload indexer — can
+     * call {@link com.auto1.pantera.index.ArtifactIndexCache#invalidate} to
+     * drop a stale entry after a fresh write.
+     *
+     * @return Wrapping cache, or {@link Optional#empty()} when the index is
+     *     a NOP / no DB-backed index is configured.
+     */
+    default java.util.Optional<com.auto1.pantera.index.ArtifactIndexCache> artifactIndexCache() {
+        return java.util.Optional.empty();
+    }
+
+    /**
      * Optional Valkey connection for cache operations.
      * @return Valkey connection if configured
      */
     default Optional<ValkeyConnection> valkeyConnection() {
+        return Optional.empty();
+    }
+
+    /**
+     * Optional cross-instance cache-invalidation pub/sub bus. Returned
+     * present only when Valkey is configured — the bus needs a real
+     * Valkey connection for its subscribe/publish channels. Used by the
+     * cooldown wiring to fan out L1 invalidations to peers so they don't
+     * serve stale block decisions / filtered-metadata envelopes for the
+     * cache TTL after an unblock or expiry on another instance.
+     *
+     * @return Pub/sub bus, or empty for single-instance deployments
+     */
+    default Optional<com.auto1.pantera.cache.CacheInvalidationPubSub>
+        cacheInvalidationPubSub() {
+        return Optional.empty();
+    }
+
+    /**
+     * Cached filter for the "local user enabled" JDBC lookup, if the
+     * deployment has a dataSource configured and the auth chain was
+     * wrapped with {@code CachedLocalEnabledFilter}. Returned empty
+     * otherwise.
+     *
+     * <p>Exposed so admin user-management handlers can invalidate a
+     * per-user cache entry immediately when enabled state is toggled
+     * (enable / disable / update / delete).
+     *
+     * @return Optional filter reference; empty in deployments without a DB
+     */
+    default Optional<com.auto1.pantera.auth.CachedLocalEnabledFilter>
+        cachedLocalEnabledFilter() {
         return Optional.empty();
     }
 

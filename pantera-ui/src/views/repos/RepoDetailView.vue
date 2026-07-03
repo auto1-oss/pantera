@@ -7,6 +7,7 @@ import { yankVersion, unyankVersion } from '@/api/pypi'
 import { useNotificationStore } from '@/stores/notifications'
 import { useAuthStore } from '@/stores/auth'
 import RepoTypeBadge from '@/components/common/RepoTypeBadge.vue'
+import ArtifactTreeTable from '@/components/repos/ArtifactTreeTable.vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Card from 'primevue/card'
 import Tag from 'primevue/tag'
@@ -94,14 +95,18 @@ const treeLoading = ref(false)
 const marker = ref<string | null>(null)
 const hasMore = ref(false)
 const sortAsc = ref(true)
+const sortBy = ref<'name' | 'date' | 'size'>('name')
+const sortDir = computed<'asc' | 'desc'>(() => (sortAsc.value ? 'asc' : 'desc'))
 
-const sortedItems = computed(() => {
-  return [...treeItems.value].sort((a, b) => {
-    if (a.type !== b.type) return a.type === 'directory' ? -1 : 1
-    const cmp = a.name.localeCompare(b.name, undefined, { numeric: true })
-    return sortAsc.value ? cmp : -cmp
-  })
-})
+function onHeaderClick(key: 'name' | 'date' | 'size') {
+  if (key === sortBy.value) {
+    sortAsc.value = !sortAsc.value
+  } else {
+    sortBy.value = key
+    sortAsc.value = true
+  }
+  loadTree(currentPath.value)
+}
 
 // Artifact detail dialog
 const detailVisible = ref(false)
@@ -154,11 +159,15 @@ async function loadTree(path: string) {
   treeLoading.value = true
   currentPath.value = path
   try {
-    const resp = await getTree(props.name, { path }, ctrl.signal)
+    const resp = await getTree(props.name, {
+      path,
+      sort: sortBy.value,
+      sort_dir: sortDir.value,
+    }, ctrl.signal)
     if (ctrl.signal.aborted) return
-    treeItems.value = resp.items
-    marker.value = resp.marker
-    hasMore.value = resp.hasMore
+    treeItems.value = Array.isArray(resp?.items) ? resp.items : []
+    marker.value = resp?.marker ?? null
+    hasMore.value = resp?.hasMore ?? false
   } catch (err: unknown) {
     if (ctrl.signal.aborted) return
     treeItems.value = []
@@ -169,14 +178,25 @@ async function loadTree(path: string) {
 
 async function loadMore() {
   if (!marker.value) return
+  if (treeAbortCtrl) treeAbortCtrl.abort()
+  treeAbortCtrl = new AbortController()
+  const ctrl = treeAbortCtrl
   treeLoading.value = true
   try {
-    const resp = await getTree(props.name, { path: currentPath.value, marker: marker.value })
-    treeItems.value.push(...resp.items)
-    marker.value = resp.marker
-    hasMore.value = resp.hasMore
+    const resp = await getTree(props.name, {
+      path: currentPath.value,
+      marker: marker.value,
+      sort: sortBy.value,
+      sort_dir: sortDir.value,
+    }, ctrl.signal)
+    if (ctrl.signal.aborted) return
+    if (Array.isArray(resp?.items)) treeItems.value.push(...resp.items)
+    marker.value = resp?.marker ?? null
+    hasMore.value = resp?.hasMore ?? false
+  } catch {
+    if (ctrl.signal.aborted) return
   } finally {
-    treeLoading.value = false
+    if (!ctrl.signal.aborted) treeLoading.value = false
   }
 }
 
@@ -253,7 +273,7 @@ async function downloadArtifact(path: string) {
 }
 
 function formatSize(bytes?: number): string {
-  if (!bytes) return '-'
+  if (bytes === undefined || bytes === null) return '-'
   if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MB`
   if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${bytes} B`
@@ -327,15 +347,14 @@ function formatSize(bytes?: number): string {
         <template #title>
           <div class="flex items-center justify-between">
             <span>Artifacts</span>
-            <div class="flex items-center gap-1">
-              <Button
-                :icon="sortAsc ? 'pi pi-sort-alpha-down' : 'pi pi-sort-alpha-up'"
-                :title="sortAsc ? 'A → Z' : 'Z → A'"
-                text size="small"
-                @click="sortAsc = !sortAsc"
-              />
-              <Button v-if="currentPath !== '/'" icon="pi pi-arrow-up" label="Up" text size="small" @click="goUp" />
-            </div>
+            <Button
+              v-if="currentPath !== '/'"
+              icon="pi pi-arrow-up"
+              label="Up"
+              text
+              size="small"
+              @click="goUp"
+            />
           </div>
         </template>
         <template #content>
@@ -349,26 +368,15 @@ function formatSize(bytes?: number): string {
             No artifacts in this directory
           </div>
 
-          <div v-else class="divide-y divide-gray-100 dark:divide-gray-700">
-            <div
-              v-for="entry in sortedItems"
-              :key="entry.path"
-              class="flex items-center gap-3 py-2 px-2 hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer rounded"
-              @click="navigateTree(entry)"
-            >
-              <i :class="entry.type === 'directory' ? 'pi pi-folder text-yellow-500' : 'pi pi-file text-gray-400'" />
-              <span class="flex-1 text-sm font-mono text-gray-800 dark:text-gray-200">{{ entry.name }}</span>
-              <span v-if="entry.size" class="text-xs text-gray-400">{{ formatSize(entry.size) }}</span>
-              <!-- PyPI yanked status badge (action buttons are in the artifact detail dialog) -->
-              <Tag
-                v-if="isPypi && entry.type === 'file' && (entry as Record<string, unknown>).yanked"
-                value="Yanked"
-                severity="danger"
-                class="text-xs"
-              />
-              <i class="pi pi-chevron-right text-gray-300" />
-            </div>
-          </div>
+          <ArtifactTreeTable
+            v-else
+            :items="treeItems"
+            :sort-by="sortBy"
+            :sort-dir="sortDir"
+            :loading="treeLoading"
+            @sort="onHeaderClick"
+            @navigate="navigateTree"
+          />
 
           <div v-if="hasMore" class="text-center mt-4">
             <Button label="Load more" severity="secondary" text :loading="treeLoading" @click="loadMore" />

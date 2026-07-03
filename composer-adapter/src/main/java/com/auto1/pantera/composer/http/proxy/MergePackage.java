@@ -42,7 +42,6 @@ public interface MergePackage {
      * Merging local data with data from remote.
      * @since 0.4
      */
-    @SuppressWarnings("PMD.AvoidDuplicateLiterals")
     class WithRemote implements MergePackage {
         /**
          * Package name.
@@ -145,6 +144,7 @@ public interface MergePackage {
                 .eventCategory("web")
                 .eventAction("package_merge")
                 .field("package.name", this.name)
+                .field("log.source", "application")
                 .log();
             vrsns.forEach(
                 vers -> bldr.add(

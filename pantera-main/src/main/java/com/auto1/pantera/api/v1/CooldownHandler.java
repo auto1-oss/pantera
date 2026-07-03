@@ -13,16 +13,22 @@ package com.auto1.pantera.api.v1;
 import com.auto1.pantera.api.AuthTokenRest;
 import com.auto1.pantera.api.AuthzHandler;
 import com.auto1.pantera.api.RepositoryName;
+import com.auto1.pantera.api.perms.ApiCooldownHistoryPermission;
 import com.auto1.pantera.api.perms.ApiCooldownPermission;
-import com.auto1.pantera.http.auth.AuthUser;
-import com.auto1.pantera.security.perms.AdapterBasicPermission;
+import com.auto1.pantera.cooldown.ArchiveReason;
 import com.auto1.pantera.cooldown.CooldownRepository;
-import com.auto1.pantera.cooldown.CooldownService;
-import com.auto1.pantera.cooldown.CooldownSettings;
-import com.auto1.pantera.cooldown.metadata.CooldownMetadataService;
 import com.auto1.pantera.cooldown.DbBlockRecord;
+import com.auto1.pantera.cooldown.DbHistoryRecord;
+import com.auto1.pantera.cooldown.api.CooldownService;
+import com.auto1.pantera.cooldown.cache.CooldownCache;
+import com.auto1.pantera.cooldown.config.CooldownSettings;
+import com.auto1.pantera.cooldown.metadata.CooldownMetadataService;
+import com.auto1.pantera.cooldown.metrics.CooldownMetrics;
 import com.auto1.pantera.db.dao.SettingsDao;
-import com.auto1.pantera.http.trace.MdcPropagation;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.http.context.HandlerExecutor;
+import com.auto1.pantera.http.observability.StructuredLogger;
+import com.auto1.pantera.security.perms.AdapterBasicPermission;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.repo.CrudRepoSettings;
 import io.vertx.core.json.JsonArray;
@@ -39,6 +45,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import javax.json.Json;
 import javax.json.JsonStructure;
 import javax.json.JsonValue;
@@ -50,6 +58,11 @@ import javax.sql.DataSource;
  * @checkstyle ClassDataAbstractionCouplingCheck (300 lines)
  */
 public final class CooldownHandler {
+
+    /**
+     * Logger component name for StructuredLogger.local() (Tier-4).
+     */
+    private static final String LOG_COMPONENT = "com.auto1.pantera.cooldown.admin";
 
     /**
      * JSON key for repo section.
@@ -70,6 +83,12 @@ public final class CooldownHandler {
      * Cooldown metadata service (for filtered metadata cache invalidation on unblock).
      */
     private final CooldownMetadataService metadataService;
+
+    /**
+     * Cooldown decision cache (for L1+L2 invalidation on unblock).
+     * May be null when cooldown is backed by NoopCooldownService.
+     */
+    private final CooldownCache cooldownCache;
 
     /**
      * Repository settings CRUD.
@@ -100,6 +119,33 @@ public final class CooldownHandler {
      * Ctor.
      * @param cooldown Cooldown service
      * @param metadataService Cooldown metadata service for cache invalidation
+     * @param cooldownCache Cooldown decision cache (nullable)
+     * @param crs Repository settings CRUD
+     * @param csettings Cooldown settings
+     * @param dataSource Database data source (nullable)
+     * @param policy Security policy
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public CooldownHandler(final CooldownService cooldown,
+        final CooldownMetadataService metadataService,
+        final CooldownCache cooldownCache,
+        final CrudRepoSettings crs,
+        final CooldownSettings csettings, final DataSource dataSource,
+        final Policy<?> policy) {
+        this.cooldown = cooldown;
+        this.metadataService = metadataService;
+        this.cooldownCache = cooldownCache;
+        this.crs = crs;
+        this.csettings = csettings;
+        this.repository = dataSource != null ? new CooldownRepository(dataSource) : null;
+        this.settingsDao = dataSource != null ? new SettingsDao(dataSource) : null;
+        this.policy = policy;
+    }
+
+    /**
+     * Backward-compatible ctor (no CooldownCache).
+     * @param cooldown Cooldown service
+     * @param metadataService Cooldown metadata service for cache invalidation
      * @param crs Repository settings CRUD
      * @param csettings Cooldown settings
      * @param dataSource Database data source (nullable)
@@ -110,13 +156,7 @@ public final class CooldownHandler {
         final CooldownMetadataService metadataService, final CrudRepoSettings crs,
         final CooldownSettings csettings, final DataSource dataSource,
         final Policy<?> policy) {
-        this.cooldown = cooldown;
-        this.metadataService = metadataService;
-        this.crs = crs;
-        this.csettings = csettings;
-        this.repository = dataSource != null ? new CooldownRepository(dataSource) : null;
-        this.settingsDao = dataSource != null ? new SettingsDao(dataSource) : null;
-        this.policy = policy;
+        this(cooldown, metadataService, null, crs, csettings, dataSource, policy);
     }
 
     /**
@@ -140,6 +180,15 @@ public final class CooldownHandler {
         router.get("/api/v1/cooldown/blocked")
             .handler(new AuthzHandler(this.policy, ApiCooldownPermission.READ))
             .handler(this::blocked);
+        // GET /api/v1/cooldown/history — paginated archive/history feed.
+        // Gated by ApiCooldownHistoryPermission.READ — a separate, narrower
+        // permission than ApiCooldownPermission.READ so operators can expose
+        // the live blocked list without exposing the long-term archive. The
+        // per-request handler additionally filters rows to repos the caller
+        // has AdapterBasicPermission(repo, "read") on.
+        router.get("/api/v1/cooldown/history")
+            .handler(new AuthzHandler(this.policy, ApiCooldownHistoryPermission.READ))
+            .handler(this::history);
         // POST /api/v1/repositories/:name/cooldown/unblock — unblock single artifact
         router.post("/api/v1/repositories/:name/cooldown/unblock")
             .handler(new AuthzHandler(this.policy, ApiCooldownPermission.WRITE))
@@ -158,7 +207,9 @@ public final class CooldownHandler {
         final JsonObject response = new JsonObject()
             .put("enabled", this.csettings.enabled())
             .put("minimum_allowed_age",
-                CooldownHandler.formatDuration(this.csettings.minimumAllowedAge()));
+                CooldownHandler.formatDuration(this.csettings.minimumAllowedAge()))
+            .put("history_retention_days", this.csettings.historyRetentionDays())
+            .put("cleanup_batch_limit", this.csettings.cleanupBatchLimit());
         final JsonObject overrides = new JsonObject();
         for (final Map.Entry<String, CooldownSettings.RepoTypeConfig> entry
             : this.csettings.repoTypeOverrides().entrySet()) {
@@ -168,6 +219,48 @@ public final class CooldownHandler {
                     CooldownHandler.formatDuration(entry.getValue().minimumAllowedAge())));
         }
         response.put("repo_types", overrides);
+        encodeSnapshotPolicy(this.csettings.snapshotPolicy())
+            .ifPresent(json -> response.put("snapshots", json));
+        final JsonObject repoNameSnap = new JsonObject();
+        for (final Map.Entry<String, CooldownSettings.SnapshotPolicy> entry
+            : this.csettings.repoNameSnapshotOverrides().entrySet()) {
+            encodeSnapshotPolicy(entry.getValue())
+                .ifPresent(json -> repoNameSnap.put(entry.getKey(), json));
+        }
+        if (!repoNameSnap.isEmpty()) {
+            response.put("repo_name_snapshots", repoNameSnap);
+        }
+        // Unified per-repo-name block: each entry carries the optional
+        // cooldown enabled/age fields plus an optional snapshots policy.
+        // The UI consumes this single block; the legacy
+        // {@code repo_name_snapshots} key above is kept for back-compat.
+        final JsonObject repoNames = new JsonObject();
+        for (final Map.Entry<String, CooldownSettings.RepoTypeConfig> entry
+            : this.csettings.repoNameOverrides().entrySet()) {
+            final JsonObject body = new JsonObject()
+                .put("enabled", entry.getValue().enabled())
+                .put("minimum_allowed_age",
+                    CooldownHandler.formatDuration(entry.getValue().minimumAllowedAge()));
+            final CooldownSettings.SnapshotPolicy snap =
+                this.csettings.repoNameSnapshotOverrides().get(entry.getKey());
+            encodeSnapshotPolicy(snap).ifPresent(json -> body.put("snapshots", json));
+            repoNames.put(entry.getKey(), body);
+        }
+        // Also surface repos that only have a SNAPSHOT override (no
+        // cooldown enable/age override) so the UI sees a single source of
+        // truth in {@code repo_names}.
+        for (final Map.Entry<String, CooldownSettings.SnapshotPolicy> entry
+            : this.csettings.repoNameSnapshotOverrides().entrySet()) {
+            if (repoNames.containsKey(entry.getKey())) {
+                continue;
+            }
+            encodeSnapshotPolicy(entry.getValue()).ifPresent(snapJson ->
+                repoNames.put(entry.getKey(), new JsonObject().put("snapshots", snapJson))
+            );
+        }
+        if (!repoNames.isEmpty()) {
+            response.put("repo_names", repoNames);
+        }
         ctx.response()
             .setStatusCode(200)
             .putHeader("Content-Type", "application/json")
@@ -175,21 +268,72 @@ public final class CooldownHandler {
     }
 
     /**
+     * Encode a SNAPSHOT policy as a JSON sub-document. Returns empty when the
+     * policy inherits everything so the response stays terse.
+     */
+    private static java.util.Optional<JsonObject> encodeSnapshotPolicy(
+        final CooldownSettings.SnapshotPolicy policy
+    ) {
+        if (policy == null || policy.isInherit()) {
+            return java.util.Optional.empty();
+        }
+        final JsonObject json = new JsonObject();
+        policy.enabled().ifPresent(v -> json.put("enabled", v));
+        policy.minimumAllowedAge().ifPresent(
+            v -> json.put("minimum_allowed_age", CooldownHandler.formatDuration(v))
+        );
+        return java.util.Optional.of(json);
+    }
+
+    /**
+     * Decode a SNAPSHOT policy JSON sub-document. Missing fields propagate as
+     * "inherit" so per-tier defaults apply.
+     */
+    private static CooldownSettings.SnapshotPolicy decodeSnapshotPolicy(final JsonObject json) {
+        if (json == null) {
+            return CooldownSettings.SnapshotPolicy.inherit();
+        }
+        final Boolean enabled = json.containsKey("enabled")
+            ? json.getBoolean("enabled") : null;
+        final Duration age = json.containsKey("minimum_allowed_age")
+            ? CooldownHandler.parseDuration(json.getString("minimum_allowed_age"))
+            : null;
+        return CooldownSettings.SnapshotPolicy.of(enabled, age);
+    }
+
+    /**
      * PUT /api/v1/cooldown/config — update cooldown configuration with hot reload.
      * @param ctx Routing context
      * @checkstyle ExecutableStatementCountCheck (60 lines)
      */
-    @SuppressWarnings("PMD.CognitiveComplexity")
     private void updateConfig(final RoutingContext ctx) {
         final JsonObject body = ctx.body().asJsonObject();
         if (body == null) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "JSON body is required");
             return;
         }
+        // Capture the pre-mutation state for the audit_log.old_value column.
+        // Must happen before any csettings.update() / repository.archive*()
+        // call so the snapshot reflects what the operator is replacing.
+        final String oldValueJson = this.snapshotConfig().encode();
         final boolean newEnabled = body.getBoolean("enabled", this.csettings.enabled());
         final Duration newAge = body.containsKey("minimum_allowed_age")
             ? CooldownHandler.parseDuration(body.getString("minimum_allowed_age"))
             : this.csettings.minimumAllowedAge();
+        final Integer historyRetentionDays = body.getInteger("history_retention_days");
+        final Integer cleanupBatchLimit = body.getInteger("cleanup_batch_limit");
+        if (historyRetentionDays != null
+            && (historyRetentionDays <= 0 || historyRetentionDays > 3650)) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                "history_retention_days must be in (0, 3650]");
+            return;
+        }
+        if (cleanupBatchLimit != null
+            && (cleanupBatchLimit <= 0 || cleanupBatchLimit > 100_000)) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                "cleanup_batch_limit must be in (0, 100000]");
+            return;
+        }
         final Map<String, CooldownSettings.RepoTypeConfig> overrides = new HashMap<>();
         final JsonObject repoTypes = body.getJsonObject("repo_types");
         if (repoTypes != null) {
@@ -208,15 +352,20 @@ public final class CooldownHandler {
         final boolean wasEnabled = this.csettings.enabled();
         final Map<String, CooldownSettings.RepoTypeConfig> oldOverrides =
             this.csettings.repoTypeOverrides();
-        this.csettings.update(newEnabled, newAge, overrides);
+        final int effectiveRetentionDays = historyRetentionDays != null
+            ? historyRetentionDays : this.csettings.historyRetentionDays();
+        final int effectiveBatchLimit = cleanupBatchLimit != null
+            ? cleanupBatchLimit : this.csettings.cleanupBatchLimit();
         // Auto-unblock when cooldown changes
         if (this.repository != null) {
             final String actor = ctx.user() != null
                 ? ctx.user().principal().getString(AuthTokenRest.SUB, "system")
                 : "system";
             if (wasEnabled && !newEnabled) {
-                // Global cooldown disabled — unblock everything
-                this.repository.unblockAll(actor);
+                // Global cooldown disabled — archive + unblock everything so
+                // the sweep leaves a MANUAL_UNBLOCK audit trail in history.
+                this.repository.archiveAndDeleteAll(
+                    ArchiveReason.MANUAL_UNBLOCK, actor);
             } else if (newEnabled) {
                 // Check each repo type override for disable transitions
                 for (final Map.Entry<String, CooldownSettings.RepoTypeConfig> entry
@@ -224,17 +373,23 @@ public final class CooldownHandler {
                     if (!entry.getValue().enabled()) {
                         final CooldownSettings.RepoTypeConfig old =
                             oldOverrides.get(entry.getKey());
-                        // Unblock if was enabled (or new) and now disabled
+                        // Unblock if was enabled (or new) and now disabled —
+                        // archive + delete so per-repo-type sweeps also
+                        // produce MANUAL_UNBLOCK history rows.
                         if (old == null || old.enabled()) {
-                            this.repository.unblockByRepoType(entry.getKey(), actor);
+                            this.repository.archiveAndDeleteByRepoType(
+                                entry.getKey(),
+                                ArchiveReason.MANUAL_UNBLOCK, actor);
                         }
                     }
                 }
             }
         }
-        // Persist to DB if available
+        // Persist to DB FIRST — if the DB write fails, the exception propagates
+        // and we do NOT mutate in-memory state. This prevents drift where
+        // in-memory is ahead of DB and a restart reverts to the stale blob.
         if (this.settingsDao != null) {
-            final String actor = ctx.user() != null
+            final String actor2 = ctx.user() != null
                 ? ctx.user().principal().getString(AuthTokenRest.SUB, "system")
                 : "system";
             final javax.json.JsonObjectBuilder jb = Json.createObjectBuilder()
@@ -253,8 +408,199 @@ public final class CooldownHandler {
                 }
                 jb.add("repo_types", rtb);
             }
-            this.settingsDao.put("cooldown", jb.build(), actor);
+            // Persist the two new tunables only when the caller set them —
+            // absence preserves "use code default" semantics at next reload.
+            if (historyRetentionDays != null) {
+                jb.add("history_retention_days", (int) historyRetentionDays);
+            }
+            if (cleanupBatchLimit != null) {
+                jb.add("cleanup_batch_limit", (int) cleanupBatchLimit);
+            }
+            // Mirror the top-level SNAPSHOT policy into the persisted blob.
+            // Without this branch the in-memory setSnapshotPolicy(...) call
+            // below would be lost on restart — loadDbCooldownSettings has
+            // nothing to rehydrate from.
+            if (body.containsKey("snapshots")) {
+                final JsonObject snap = body.getJsonObject("snapshots");
+                if (snap != null) {
+                    final javax.json.JsonObjectBuilder sb = Json.createObjectBuilder();
+                    if (snap.containsKey("enabled")) {
+                        sb.add("enabled", snap.getBoolean("enabled"));
+                    }
+                    if (snap.containsKey("minimum_allowed_age")) {
+                        sb.add("minimum_allowed_age",
+                            snap.getString("minimum_allowed_age"));
+                    }
+                    jb.add("snapshots", sb);
+                }
+            }
+            // Mirror the legacy top-level repo_name_snapshots map (kept for
+            // back-compat with older API consumers) so rehydration of
+            // SNAPSHOT-only overrides survives a restart even when the
+            // caller uses the legacy shape rather than the unified repo_names.
+            if (body.containsKey("repo_name_snapshots")) {
+                final JsonObject legacy = body.getJsonObject("repo_name_snapshots");
+                if (legacy != null && !legacy.isEmpty()) {
+                    final javax.json.JsonObjectBuilder lb = Json.createObjectBuilder();
+                    for (final String rn : legacy.fieldNames()) {
+                        final JsonObject snapJson = legacy.getJsonObject(rn);
+                        final javax.json.JsonObjectBuilder sb =
+                            Json.createObjectBuilder();
+                        if (snapJson != null) {
+                            if (snapJson.containsKey("enabled")) {
+                                sb.add("enabled", snapJson.getBoolean("enabled"));
+                            }
+                            if (snapJson.containsKey("minimum_allowed_age")) {
+                                sb.add("minimum_allowed_age",
+                                    snapJson.getString("minimum_allowed_age"));
+                            }
+                        }
+                        lb.add(rn, sb);
+                    }
+                    jb.add("repo_name_snapshots", lb);
+                }
+            }
+            // Mirror the per-repo block into the persisted blob so it
+            // survives a restart. Same shape as the wire (enabled,
+            // minimum_allowed_age, optional snapshots sub-object).
+            if (body.containsKey("repo_names")) {
+                final JsonObject reqRepoNames = body.getJsonObject("repo_names");
+                if (reqRepoNames != null && !reqRepoNames.isEmpty()) {
+                    final javax.json.JsonObjectBuilder rnb = Json.createObjectBuilder();
+                    for (final String rn : reqRepoNames.fieldNames()) {
+                        final JsonObject entry = reqRepoNames.getJsonObject(rn);
+                        if (entry == null) {
+                            continue;
+                        }
+                        final javax.json.JsonObjectBuilder eb = Json.createObjectBuilder();
+                        if (entry.containsKey("enabled")) {
+                            eb.add("enabled", entry.getBoolean("enabled"));
+                        }
+                        if (entry.containsKey("minimum_allowed_age")) {
+                            eb.add("minimum_allowed_age",
+                                entry.getString("minimum_allowed_age"));
+                        }
+                        if (entry.containsKey("snapshots")) {
+                            final JsonObject snapJson = entry.getJsonObject("snapshots");
+                            final javax.json.JsonObjectBuilder sb =
+                                Json.createObjectBuilder();
+                            if (snapJson != null) {
+                                if (snapJson.containsKey("enabled")) {
+                                    sb.add("enabled", snapJson.getBoolean("enabled"));
+                                }
+                                if (snapJson.containsKey("minimum_allowed_age")) {
+                                    sb.add("minimum_allowed_age",
+                                        snapJson.getString("minimum_allowed_age"));
+                                }
+                            }
+                            eb.add("snapshots", sb);
+                        }
+                        rnb.add(rn, eb);
+                    }
+                    jb.add("repo_names", rnb);
+                }
+            }
+            this.settingsDao.put("cooldown", jb.build(), actor2);
         }
+        // DB write succeeded (or no DAO) — now apply in-memory.
+        this.csettings.update(
+            newEnabled, newAge, overrides,
+            effectiveRetentionDays, effectiveBatchLimit
+        );
+        // Apply SNAPSHOT-policy mutations after the base update so the new
+        // policy survives the in-memory map rebuild inside update(). When the
+        // caller omits the snapshots block we leave the existing policy
+        // untouched — explicit "{}" or null is treated as "inherit
+        // everything". Same convention for repo_name_snapshots.
+        if (body.containsKey("snapshots")) {
+            this.csettings.setSnapshotPolicy(
+                decodeSnapshotPolicy(body.getJsonObject("snapshots"))
+            );
+        }
+        final JsonObject snapNames = body.getJsonObject("repo_name_snapshots");
+        if (snapNames != null) {
+            for (final String repoName : snapNames.fieldNames()) {
+                this.csettings.setRepoNameSnapshotOverride(
+                    repoName, decodeSnapshotPolicy(snapNames.getJsonObject(repoName))
+                );
+            }
+        }
+        // Unified per-repo-name block: when the caller PUTs a {@code repo_names}
+        // object, each entry replaces both the cooldown-enable/age override and
+        // (optionally) the SNAPSHOT policy for that repo. Repos that were
+        // previously overridden but are absent from the new block fall back to
+        // their type-level / global tier (the UI saves the WHOLE config, so
+        // omission == remove). Same convention as {@code repo_types}.
+        if (body.containsKey("repo_names")) {
+            final JsonObject repoNamesBlock = body.getJsonObject("repo_names");
+            final java.util.Set<String> seen = new java.util.HashSet<>();
+            if (repoNamesBlock != null) {
+                for (final String repoName : repoNamesBlock.fieldNames()) {
+                    final JsonObject entry = repoNamesBlock.getJsonObject(repoName);
+                    if (entry == null) {
+                        continue;
+                    }
+                    seen.add(repoName);
+                    if (entry.containsKey("enabled")
+                        || entry.containsKey("minimum_allowed_age")) {
+                        final boolean repoEnabled = entry.getBoolean("enabled", newEnabled);
+                        final Duration repoAge = entry.containsKey("minimum_allowed_age")
+                            ? CooldownHandler.parseDuration(entry.getString("minimum_allowed_age"))
+                            : newAge;
+                        this.csettings.setRepoNameOverride(repoName, repoEnabled, repoAge);
+                    } else {
+                        // Entry only carries a SNAPSHOT policy — drop any prior
+                        // cooldown override so the repo falls back to type/global.
+                        this.csettings.removeRepoNameOverride(repoName);
+                    }
+                    if (entry.containsKey("snapshots")) {
+                        this.csettings.setRepoNameSnapshotOverride(repoName,
+                            decodeSnapshotPolicy(entry.getJsonObject("snapshots")));
+                    } else {
+                        this.csettings.setRepoNameSnapshotOverride(repoName, null);
+                    }
+                }
+            }
+            // Anything previously overridden but omitted from this PUT must
+            // revert — UI ships the full block, omission is removal. Union
+            // the prior cooldown-override and snapshot-override key sets so
+            // a SNAPSHOT-only override is also dropped on omission.
+            final java.util.Set<String> priorKeys = new java.util.HashSet<>(
+                this.csettings.repoNameOverrides().keySet()
+            );
+            priorKeys.addAll(this.csettings.repoNameSnapshotOverrides().keySet());
+            for (final String prior : priorKeys) {
+                if (!seen.contains(prior)) {
+                    this.csettings.removeRepoNameOverride(prior);
+                    this.csettings.setRepoNameSnapshotOverride(prior, null);
+                }
+            }
+        }
+        // Invalidate ALL caches: a policy change (e.g. 30d→7d) can shift
+        // which versions are in/out of the cooldown window, so every cached
+        // decision and every cached filtered-metadata response may be stale.
+        this.metadataService.clearAll();
+        if (this.cooldownCache != null) {
+            this.cooldownCache.clear();
+        }
+        CooldownHandler.recordAdminMetric("policy_change");
+        StructuredLogger.local().forComponent(LOG_COMPONENT)
+            .message("Cooldown policy updated — all caches invalidated"
+                + " (enabled=" + newEnabled
+                + ", minimum_allowed_age=" + CooldownHandler.formatDuration(newAge) + ")")
+            .info();
+        final String auditActor = ctx.user() != null
+            ? ctx.user().principal().getString(AuthTokenRest.SUB, "system")
+            : "system";
+        // Build the post-mutation snapshot AFTER csettings.update so the
+        // "new_value" reflects what readers will see going forward.
+        // "details" is intentionally empty: every field of the policy is
+        // captured in old_value / new_value, so duplicating it here would
+        // just bloat the row and create a second source of truth.
+        final String newValueJson = this.snapshotConfig().encode();
+        CooldownHandler.audit(auditActor, "COOLDOWN_POLICY_UPDATE",
+            "cooldown", Map.of(), true, CooldownHandler.clientIp(ctx),
+            oldValueJson, newValueJson);
         ctx.response()
             .setStatusCode(200)
             .putHeader("Content-Type", "application/json")
@@ -273,67 +619,65 @@ public final class CooldownHandler {
                 ctx.user().principal().getString(AuthTokenRest.CONTEXT)
             )
         );
-        ctx.vertx().<List<JsonObject>>executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                final Collection<String> all = this.crs.listAll();
-                final List<JsonObject> result = new ArrayList<>(all.size());
-                for (final String name : all) {
-                    if (!perms.implies(new AdapterBasicPermission(name, "read"))) {
+        CompletableFuture.supplyAsync((java.util.function.Supplier<List<JsonObject>>) () -> {
+            final Collection<String> all = this.crs.listAll();
+            final List<JsonObject> result = new ArrayList<>(all.size());
+            for (final String name : all) {
+                if (!perms.implies(new AdapterBasicPermission(name, "read"))) {
+                    continue;
+                }
+                final RepositoryName rname = new RepositoryName.Simple(name);
+                try {
+                    final JsonStructure config = this.crs.value(rname);
+                    if (!(config instanceof javax.json.JsonObject)) {
                         continue;
                     }
-                    final RepositoryName rname = new RepositoryName.Simple(name);
-                    try {
-                        final JsonStructure config = this.crs.value(rname);
-                        if (config == null
-                            || !(config instanceof javax.json.JsonObject)) {
+                    final javax.json.JsonObject jobj =
+                        (javax.json.JsonObject) config;
+                    final javax.json.JsonObject repoSection;
+                    if (jobj.containsKey(CooldownHandler.REPO)) {
+                        final javax.json.JsonValue rv =
+                            jobj.get(CooldownHandler.REPO);
+                        if (rv.getValueType() != JsonValue.ValueType.OBJECT) {
                             continue;
                         }
-                        final javax.json.JsonObject jobj =
-                            (javax.json.JsonObject) config;
-                        final javax.json.JsonObject repoSection;
-                        if (jobj.containsKey(CooldownHandler.REPO)) {
-                            final javax.json.JsonValue rv =
-                                jobj.get(CooldownHandler.REPO);
-                            if (rv.getValueType() != JsonValue.ValueType.OBJECT) {
-                                continue;
-                            }
-                            repoSection = (javax.json.JsonObject) rv;
-                        } else {
-                            repoSection = jobj;
-                        }
-                        final String repoType = repoSection.getString(
-                            CooldownHandler.TYPE, ""
-                        );
-                        // Check if cooldown is actually enabled for this repo type
-                        if (!this.csettings.enabledFor(repoType)) {
-                            continue;
-                        }
-                        // Only proxy repos can have cooldown
-                        if (!repoType.endsWith("-proxy")) {
-                            continue;
-                        }
-                        final Duration minAge =
-                            this.csettings.minimumAllowedAgeFor(repoType);
-                        final JsonObject entry = new JsonObject()
-                            .put("name", name)
-                            .put(CooldownHandler.TYPE, repoType)
-                            .put("cooldown", formatDuration(minAge));
-                        // Add active block count if DB is available
-                        if (this.repository != null) {
-                            final long count =
-                                this.repository.countActiveBlocks(repoType, name);
-                            entry.put("active_blocks", count);
-                        }
-                        result.add(entry);
-                    } catch (final Exception ex) {
-                        // skip repos that cannot be read
+                        repoSection = (javax.json.JsonObject) rv;
+                    } else {
+                        repoSection = jobj;
                     }
+                    final String repoType = repoSection.getString(
+                        CooldownHandler.TYPE, ""
+                    );
+                    // Check if cooldown is actually enabled for this repo type
+                    if (!this.csettings.enabledFor(repoType)) {
+                        continue;
+                    }
+                    // Only proxy repos can have cooldown
+                    if (!repoType.endsWith("-proxy")) {
+                        continue;
+                    }
+                    final Duration minAge =
+                        this.csettings.minimumAllowedAgeFor(repoType);
+                    final JsonObject entry = new JsonObject()
+                        .put("name", name)
+                        .put(CooldownHandler.TYPE, repoType)
+                        .put("cooldown", formatDuration(minAge));
+                    // Add active block count if DB is available
+                    if (this.repository != null) {
+                        final long count =
+                            this.repository.countActiveBlocks(repoType, name);
+                        entry.put("active_blocks", count);
+                    }
+                    result.add(entry);
+                } catch (final Exception ex) { // NOPMD EmptyCatchBlock - intentional: any per-repo read error skips the repo from the overview
+                    // skip repos that cannot be read
                 }
-                return result;
-            }),
-            false
-        ).onSuccess(
-            repos -> {
+            }
+            return result;
+        }, HandlerExecutor.get()).whenComplete((repos, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
                 final JsonArray arr = new JsonArray();
                 for (final JsonObject repo : repos) {
                     arr.add(repo);
@@ -343,9 +687,7 @@ public final class CooldownHandler {
                     .putHeader("Content-Type", "application/json")
                     .end(new JsonObject().put("repos", arr).encode());
             }
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+        });
     }
 
     /**
@@ -358,7 +700,25 @@ public final class CooldownHandler {
         "repo", "repo_name",
         "repo_type", "repo_type",
         "reason", "reason",
-        "remaining_hours", "blocked_until"
+        "remaining_hours", "blocked_until",
+        "release_date", "release_date"
+    );
+
+    /**
+     * Frontend sort field → DB column mapping for the history endpoint.
+     * Shape mirrors {@link #SORT_COL_MAP} so the UI can use the same field
+     * names — {@code remaining_hours} is replaced by archive-specific
+     * columns ({@code archived_at}, {@code archive_reason}).
+     */
+    private static final Map<String, String> HISTORY_SORT_COL_MAP = Map.of(
+        "package_name", "artifact",
+        "version", "version",
+        "repo", "repo_name",
+        "repo_type", "repo_type",
+        "reason", "reason",
+        "archived_at", "archived_at",
+        "archive_reason", "archive_reason",
+        "release_date", "release_date"
     );
 
     /**
@@ -384,6 +744,10 @@ public final class CooldownHandler {
         );
         final String searchQuery = ctx.queryParam("search").stream()
             .findFirst().orElse(null);
+        final String repoFilter = ctx.queryParam("repo").stream()
+            .findFirst().orElse(null);
+        final String repoTypeFilter = ctx.queryParam("repo_type").stream()
+            .findFirst().orElse(null);
         final String sortByParam = ctx.queryParam("sort_by").stream()
             .findFirst().orElse(null);
         // SORT_COL_MAP is an immutable Map.of() which throws NPE on null key — guard explicitly
@@ -393,70 +757,158 @@ public final class CooldownHandler {
         final boolean sortAsc = "asc".equalsIgnoreCase(
             ctx.queryParam("sort_dir").stream().findFirst().orElse("desc")
         );
-        final PermissionCollection perms = this.policy.getPermissions(
-            new AuthUser(
-                ctx.user().principal().getString(AuthTokenRest.SUB),
-                ctx.user().principal().getString(AuthTokenRest.CONTEXT)
-            )
+        // Build AuthUser on the event loop (cheap — just reads ctx principal).
+        // Defer policy.getPermissions(...) and crs.listAll() into the async closure:
+        // CachedYamlPolicy falls back to storage (blocking) on cache miss, and
+        // CrudRepoSettings (RepositoryDao) runs JDBC — neither belongs on the
+        // Vert.x event loop.
+        final AuthUser authUser = new AuthUser(
+            ctx.user().principal().getString(AuthTokenRest.SUB),
+            ctx.user().principal().getString(AuthTokenRest.CONTEXT)
         );
-        ctx.vertx().<JsonObject>executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                final List<DbBlockRecord> allBlocks =
-                    this.repository.findAllActivePaginated(
-                        0, Integer.MAX_VALUE, searchQuery, sortDbCol, sortAsc
-                    );
-                final Instant now = Instant.now();
-                final JsonArray items = new JsonArray();
-                int skipped = 0;
-                int added = 0;
-                for (final DbBlockRecord rec : allBlocks) {
-                    if (!perms.implies(
-                        new AdapterBasicPermission(rec.repoName(), "read"))) {
-                        continue;
-                    }
-                    if (skipped < page * size) {
-                        skipped++;
-                        continue;
-                    }
-                    if (added >= size) {
-                        continue;
-                    }
-                    final long remainingSecs =
-                        Duration.between(now, rec.blockedUntil()).getSeconds();
-                    final JsonObject item = new JsonObject()
-                        .put("package_name", rec.artifact())
-                        .put("version", rec.version())
-                        .put("repo", rec.repoName())
-                        .put("repo_type", rec.repoType())
-                        .put("reason", rec.reason().name())
-                        .put("blocked_date", rec.blockedAt().toString())
-                        .put("blocked_until", rec.blockedUntil().toString())
-                        .put("remaining_hours",
-                            Math.max(0, remainingSecs / 3600));
-                    items.add(item);
-                    added++;
-                }
-                final int filteredTotal = skipped + added
-                    + (int) allBlocks.stream()
-                        .skip((long) skipped + added)
-                        .filter(r -> perms.implies(
-                            new AdapterBasicPermission(r.repoName(), "read")))
-                        .count();
-                return ApiResponse.paginated(items, page, size, filteredTotal);
-            }),
-            false
-        ).onSuccess(
-            result -> ctx.response()
+        CompletableFuture.supplyAsync((java.util.function.Supplier<JsonObject>) () -> {
+            final PermissionCollection perms = this.policy.getPermissions(authUser);
+            // Compute accessible repo set once per request — O(repos), not O(blocks).
+            // Scoping is pushed into SQL via ANY(?), so the DB returns only rows
+            // the caller may see — the former Java-side skip/filter pagination
+            // (and its off-by-N filteredTotal bug) is gone.
+            final Set<String> accessibleRepos = this.crs.listAll().stream()
+                .filter(n -> perms.implies(new AdapterBasicPermission(n, "read")))
+                .collect(java.util.stream.Collectors.toSet());
+            final List<DbBlockRecord> rows = this.repository.findActivePaginated(
+                accessibleRepos, repoFilter, repoTypeFilter, searchQuery,
+                sortDbCol, sortAsc, page * size, size
+            );
+            final long total = this.repository.countActiveBlocks(
+                accessibleRepos, repoFilter, repoTypeFilter, searchQuery
+            );
+            final Instant now = Instant.now();
+            final JsonArray items = new JsonArray();
+            for (final DbBlockRecord rec : rows) {
+                final long remainingSecs =
+                    Duration.between(now, rec.blockedUntil()).getSeconds();
+                final JsonObject item = new JsonObject()
+                    .put("package_name", rec.artifact())
+                    .put("version", rec.version())
+                    .put("repo", rec.repoName())
+                    .put("repo_type", rec.repoType())
+                    .put("reason", rec.reason().name())
+                    .put("blocked_date", rec.blockedAt().toString())
+                    .put("blocked_until", rec.blockedUntil().toString())
+                    .put("remaining_hours",
+                        Math.max(0, remainingSecs / 3600));
+                rec.releaseDate().ifPresent(rd ->
+                    item.put("release_date", rd.toString()));
+                items.add(item);
+            }
+            return ApiResponse.paginated(items, page, size, (int) total);
+        }, HandlerExecutor.get()).whenComplete((result, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
+                ctx.response()
+                    .setStatusCode(200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(result.encode());
+            }
+        });
+    }
+
+    /**
+     * GET /api/v1/cooldown/history — paginated list of archived blocks
+     * ({@code artifact_cooldowns_history}). Mirrors {@link #blocked} exactly
+     * except the SQL targets the history table and the serialised rows add
+     * the archive fields ({@code archived_at}, {@code archive_reason},
+     * {@code archived_by}). Authorisation: the route-level
+     * {@link ApiCooldownPermission#READ} gates the API surface, and the
+     * handler additionally restricts rows to repositories the caller has
+     * {@code AdapterBasicPermission(repo, "read")} on.
+     * @param ctx Routing context
+     * @checkstyle ExecutableStatementCountCheck (60 lines)
+     */
+    private void history(final RoutingContext ctx) {
+        if (this.repository == null) {
+            ctx.response()
                 .setStatusCode(200)
                 .putHeader("Content-Type", "application/json")
-                .end(result.encode())
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
+                .end(ApiResponse.paginated(new JsonArray(), 0, 20, 0).encode());
+            return;
+        }
+        final int page = ApiResponse.intParam(
+            ctx.queryParam("page").stream().findFirst().orElse(null), 0
         );
+        final int size = ApiResponse.clampSize(
+            ApiResponse.intParam(
+                ctx.queryParam("size").stream().findFirst().orElse(null), 50
+            )
+        );
+        final String searchQuery = ctx.queryParam("search").stream()
+            .findFirst().orElse(null);
+        final String repoFilter = ctx.queryParam("repo").stream()
+            .findFirst().orElse(null);
+        final String repoTypeFilter = ctx.queryParam("repo_type").stream()
+            .findFirst().orElse(null);
+        final String sortByParam = ctx.queryParam("sort_by").stream()
+            .findFirst().orElse(null);
+        // HISTORY_SORT_COL_MAP is an immutable Map.of() — guard null explicitly.
+        final String sortDbCol = sortByParam != null
+            ? HISTORY_SORT_COL_MAP.getOrDefault(sortByParam, "archived_at")
+            : "archived_at";
+        final boolean sortAsc = "asc".equalsIgnoreCase(
+            ctx.queryParam("sort_dir").stream().findFirst().orElse("desc")
+        );
+        // AuthUser built on the event loop; perms + listAll are deferred
+        // because they may hit storage / JDBC.
+        final AuthUser authUser = new AuthUser(
+            ctx.user().principal().getString(AuthTokenRest.SUB),
+            ctx.user().principal().getString(AuthTokenRest.CONTEXT)
+        );
+        CompletableFuture.supplyAsync((java.util.function.Supplier<JsonObject>) () -> {
+            final PermissionCollection perms = this.policy.getPermissions(authUser);
+            final Set<String> accessibleRepos = this.crs.listAll().stream()
+                .filter(n -> perms.implies(new AdapterBasicPermission(n, "read")))
+                .collect(java.util.stream.Collectors.toSet());
+            final List<DbHistoryRecord> rows = this.repository.findHistoryPaginated(
+                accessibleRepos, repoFilter, repoTypeFilter, searchQuery,
+                sortDbCol, sortAsc, page * size, size
+            );
+            final long total = this.repository.countHistory(
+                accessibleRepos, repoFilter, repoTypeFilter, searchQuery
+            );
+            final JsonArray items = new JsonArray();
+            for (final DbHistoryRecord rec : rows) {
+                final JsonObject item = new JsonObject()
+                    .put("package_name", rec.artifact())
+                    .put("version", rec.version())
+                    .put("repo", rec.repoName())
+                    .put("repo_type", rec.repoType())
+                    .put("reason", rec.reason().name())
+                    .put("blocked_date", rec.blockedAt().toString())
+                    .put("blocked_until", rec.blockedUntil().toString())
+                    .put("archived_at", rec.archivedAt().toString())
+                    .put("archive_reason", rec.archiveReason().name())
+                    .put("archived_by", rec.archivedBy());
+                rec.releaseDate().ifPresent(rd ->
+                    item.put("release_date", rd.toString()));
+                items.add(item);
+            }
+            return ApiResponse.paginated(items, page, size, (int) total);
+        }, HandlerExecutor.get()).whenComplete((result, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
+                ctx.response()
+                    .setStatusCode(200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(result.encode());
+            }
+        });
     }
 
     /**
      * POST /api/v1/repositories/:name/cooldown/unblock — unblock a single artifact version.
+     * Flow: DB write → CooldownCache invalidation → FilteredMetadataCache invalidation → 204.
+     * All invalidations complete synchronously before the response is sent.
      * @param ctx Routing context
      * @checkstyle ExecutableStatementCountCheck (60 lines)
      */
@@ -493,23 +945,54 @@ public final class CooldownHandler {
             return;
         }
         final String actor = ctx.user().principal().getString(AuthTokenRest.SUB);
+        final String unblockIp = CooldownHandler.clientIp(ctx);
+        // DB write completes first, then synchronous cache invalidation, then response
         this.cooldown.unblock(repoType, name, artifact, version, actor)
-            .whenComplete(
-                (ignored, error) -> {
-                    if (error == null) {
-                        this.metadataService.invalidate(repoType, name, artifact);
-                        ctx.response().setStatusCode(204).end();
-                    } else {
-                        ApiResponse.sendError(
-                            ctx, 500, "INTERNAL_ERROR", error.getMessage()
-                        );
-                    }
+            .thenRun(() -> {
+                // CooldownCache L1+L2 invalidation (handler-level guarantee)
+                if (this.cooldownCache != null) {
+                    this.cooldownCache.unblock(name, artifact, version);
                 }
-            );
+                // FilteredMetadataCache invalidation
+                this.metadataService.invalidate(repoType, name, artifact);
+                CooldownHandler.recordAdminMetric("unblock");
+                StructuredLogger.local().forComponent(LOG_COMPONENT)
+                    .message("Admin unblock: version unblocked")
+                    .field("repository.name", name)
+                    .field("repository.type", repoType)
+                    .field("package.name", artifact)
+                    .field("package.version", version)
+                    .field("user.name", actor)
+                    .info();
+            })
+            .whenComplete((ignored, error) -> {
+                if (error == null) {
+                    CooldownHandler.audit(actor, "COOLDOWN_UNBLOCK", name,
+                        java.util.Map.of(
+                            "repository.type", repoType,
+                            "package.name", artifact,
+                            "package.version", version
+                        ), true, unblockIp);
+                    ctx.response().setStatusCode(204).end();
+                } else {
+                    CooldownHandler.audit(actor, "COOLDOWN_UNBLOCK", name,
+                        java.util.Map.of(
+                            "repository.type", repoType,
+                            "package.name", artifact,
+                            "package.version", version,
+                            "error", String.valueOf(error.getMessage())
+                        ), false, unblockIp);
+                    ApiResponse.sendError(
+                        ctx, 500, "INTERNAL_ERROR", error.getMessage()
+                    );
+                }
+            });
     }
 
     /**
      * POST /api/v1/repositories/:name/cooldown/unblock-all — unblock all artifacts in repo.
+     * Flow: DB write → CooldownCache invalidation → FilteredMetadataCache invalidation → 204.
+     * All invalidations complete synchronously before the response is sent.
      * @param ctx Routing context
      */
     private void unblockAll(final RoutingContext ctx) {
@@ -527,19 +1010,40 @@ public final class CooldownHandler {
             return;
         }
         final String actor = ctx.user().principal().getString(AuthTokenRest.SUB);
+        final String unblockAllIp = CooldownHandler.clientIp(ctx);
+        // DB write completes first, then synchronous cache invalidation, then response
         this.cooldown.unblockAll(repoType, name, actor)
-            .whenComplete(
-                (ignored, error) -> {
-                    if (error == null) {
-                        this.metadataService.invalidateAll(repoType, name);
-                        ctx.response().setStatusCode(204).end();
-                    } else {
-                        ApiResponse.sendError(
-                            ctx, 500, "INTERNAL_ERROR", error.getMessage()
-                        );
-                    }
+            .thenRun(() -> {
+                // CooldownCache L1+L2 invalidation (handler-level guarantee)
+                if (this.cooldownCache != null) {
+                    this.cooldownCache.unblockAll(name);
                 }
-            );
+                // FilteredMetadataCache invalidation
+                this.metadataService.invalidateAll(repoType, name);
+                CooldownHandler.recordAdminMetric("unblock_all");
+                StructuredLogger.local().forComponent(LOG_COMPONENT)
+                    .message("Admin unblock-all: all versions unblocked for repo")
+                    .field("repository.name", name)
+                    .field("repository.type", repoType)
+                    .field("user.name", actor)
+                    .info();
+            })
+            .whenComplete((ignored, error) -> {
+                if (error == null) {
+                    CooldownHandler.audit(actor, "COOLDOWN_UNBLOCK_ALL", name,
+                        java.util.Map.of("repository.type", repoType), true, unblockAllIp);
+                    ctx.response().setStatusCode(204).end();
+                } else {
+                    CooldownHandler.audit(actor, "COOLDOWN_UNBLOCK_ALL", name,
+                        java.util.Map.of(
+                            "repository.type", repoType,
+                            "error", String.valueOf(error.getMessage())
+                        ), false, unblockAllIp);
+                    ApiResponse.sendError(
+                        ctx, 500, "INTERNAL_ERROR", error.getMessage()
+                    );
+                }
+            });
     }
 
     /**
@@ -614,5 +1118,171 @@ public final class CooldownHandler {
             return Duration.ofMinutes(amount);
         }
         return Duration.ofHours(amount);
+    }
+
+    /**
+     * Record admin action counter: {@code pantera.cooldown.admin{action=...}}.
+     * Safe to call even when Micrometer is not initialised (guard-checked).
+     * @param action Action tag value (unblock, unblock_all, policy_change)
+     */
+    private static void recordAdminMetric(final String action) {
+        if (CooldownMetrics.isAvailable()) {
+            CooldownMetrics.getInstance().recordAdminAction(action);
+        }
+    }
+
+    /**
+     * T-S04: emit an audit event for an admin mutation. Looks up the shared
+     * {@link com.auto1.pantera.audit.AuditService} via the registry — when no
+     * service is installed (tests / DB-less boot) this is a no-op.
+     *
+     * <p>The {@code clientIp} parameter is the per-request client address
+     * extracted with {@link #clientIp(RoutingContext)} on the routing
+     * thread. We do NOT read it from MDC inside this method because
+     * handlers dispatched via {@code HandlerExecutor} can run on a worker
+     * thread whose MDC was not yet inherited at audit time; passing the
+     * IP explicitly guarantees {@code ip_address} is always populated.
+     * A null/blank value falls through to MDC as a defensive fallback for
+     * call paths that still depend on MDC propagation.
+     *
+     * @param actor Authenticated principal
+     * @param action Action verb (SCREAMING_SNAKE_CASE)
+     * @param target Target identifier (repo name)
+     * @param details Structured payload for the {@code details} JSON column
+     * @param success {@code true} on completed mutation
+     * @param clientIp Client IP extracted from the request (may be null)
+     */
+    private static void audit(final String actor,
+        final String action, final String target,
+        final Map<String, Object> details, final boolean success,
+        final String clientIp) {
+        CooldownHandler.audit(actor, action, target, details, success,
+            clientIp, null, null);
+    }
+
+    /**
+     * Same as {@link #audit(String, String, String, Map, boolean, String)}
+     * with explicit pre / post snapshots written to the V100
+     * {@code old_value} / {@code new_value} JSONB columns. Used by the
+     * cooldown policy PUT so reviewers can answer "what changed".
+     *
+     * @param actor Authenticated principal
+     * @param action Action verb
+     * @param target Target identifier
+     * @param details Free-form structured payload
+     * @param success {@code true} on completed mutation
+     * @param clientIp Client IP extracted from the request (may be null)
+     * @param oldValueJson JSON literal of the prior state (may be null)
+     * @param newValueJson JSON literal of the new state (may be null)
+     */
+    private static void audit(final String actor,
+        final String action, final String target,
+        final Map<String, Object> details, final boolean success,
+        final String clientIp,
+        final String oldValueJson, final String newValueJson) {
+        final String effectiveIp;
+        if (clientIp != null && !clientIp.isBlank()) {
+            effectiveIp = clientIp;
+        } else {
+            effectiveIp = org.slf4j.MDC.get(
+                com.auto1.pantera.http.log.EcsMdc.CLIENT_IP
+            );
+        }
+        final com.auto1.pantera.audit.AuditEvent event =
+            new com.auto1.pantera.audit.AuditEvent(
+                java.time.Instant.now(), actor, action, target,
+                details, success, effectiveIp, oldValueJson, newValueJson
+            );
+        com.auto1.pantera.audit.AuditServiceRegistry.instance()
+            .sharedService().record(event);
+    }
+
+    /**
+     * Snapshot of the live cooldown configuration as a JSON object — the
+     * same shape returned by {@code GET /api/v1/cooldown/config}. Captured
+     * before and after {@code updateConfig} mutations so the {@code old_value}
+     * and {@code new_value} audit columns can diff what changed.
+     *
+     * @return JSON snapshot of {@code this.csettings}.
+     */
+    private JsonObject snapshotConfig() {
+        final JsonObject snap = new JsonObject()
+            .put("enabled", this.csettings.enabled())
+            .put("minimum_allowed_age",
+                CooldownHandler.formatDuration(this.csettings.minimumAllowedAge()))
+            .put("history_retention_days", this.csettings.historyRetentionDays())
+            .put("cleanup_batch_limit", this.csettings.cleanupBatchLimit());
+        final JsonObject overrides = new JsonObject();
+        for (final Map.Entry<String, CooldownSettings.RepoTypeConfig> entry
+            : this.csettings.repoTypeOverrides().entrySet()) {
+            overrides.put(entry.getKey(), new JsonObject()
+                .put("enabled", entry.getValue().enabled())
+                .put("minimum_allowed_age",
+                    CooldownHandler.formatDuration(entry.getValue().minimumAllowedAge())));
+        }
+        snap.put("repo_types", overrides);
+        encodeSnapshotPolicy(this.csettings.snapshotPolicy())
+            .ifPresent(j -> snap.put("snapshots", j));
+        final JsonObject repoNameSnap = new JsonObject();
+        for (final Map.Entry<String, CooldownSettings.SnapshotPolicy> entry
+            : this.csettings.repoNameSnapshotOverrides().entrySet()) {
+            encodeSnapshotPolicy(entry.getValue())
+                .ifPresent(j -> repoNameSnap.put(entry.getKey(), j));
+        }
+        if (!repoNameSnap.isEmpty()) {
+            snap.put("repo_name_snapshots", repoNameSnap);
+        }
+        final JsonObject repoNames = new JsonObject();
+        for (final Map.Entry<String, CooldownSettings.RepoTypeConfig> entry
+            : this.csettings.repoNameOverrides().entrySet()) {
+            final JsonObject body = new JsonObject()
+                .put("enabled", entry.getValue().enabled())
+                .put("minimum_allowed_age",
+                    CooldownHandler.formatDuration(entry.getValue().minimumAllowedAge()));
+            final CooldownSettings.SnapshotPolicy snapPol =
+                this.csettings.repoNameSnapshotOverrides().get(entry.getKey());
+            encodeSnapshotPolicy(snapPol).ifPresent(j -> body.put("snapshots", j));
+            repoNames.put(entry.getKey(), body);
+        }
+        for (final Map.Entry<String, CooldownSettings.SnapshotPolicy> entry
+            : this.csettings.repoNameSnapshotOverrides().entrySet()) {
+            if (repoNames.containsKey(entry.getKey())) {
+                continue;
+            }
+            encodeSnapshotPolicy(entry.getValue()).ifPresent(j ->
+                repoNames.put(entry.getKey(), new JsonObject().put("snapshots", j))
+            );
+        }
+        if (!repoNames.isEmpty()) {
+            snap.put("repo_names", repoNames);
+        }
+        return snap;
+    }
+
+    /**
+     * Extract the per-request client IP from the routing context, in the
+     * same order the early {@code /api/v1/*} trace handler uses:
+     * {@code X-Forwarded-For} (first entry) → {@code X-Real-IP} → the
+     * TCP remote address.
+     *
+     * @param ctx Vert.x routing context (never null)
+     * @return Client IP, or {@code null} when no address can be determined
+     */
+    private static String clientIp(final RoutingContext ctx) {
+        final io.vertx.core.http.HttpServerRequest req = ctx.request();
+        String hint = req.getHeader("X-Forwarded-For");
+        if (hint != null && hint.contains(",")) {
+            hint = hint.substring(0, hint.indexOf(',')).trim();
+        }
+        if (hint == null || hint.isBlank()) {
+            hint = req.getHeader("X-Real-IP");
+        }
+        if (hint == null || hint.isBlank()) {
+            final io.vertx.core.net.SocketAddress remote = req.remoteAddress();
+            if (remote != null) {
+                hint = remote.host();
+            }
+        }
+        return hint != null && !hint.isBlank() ? hint : null;
     }
 }

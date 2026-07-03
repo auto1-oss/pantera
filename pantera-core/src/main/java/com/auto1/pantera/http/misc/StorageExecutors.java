@@ -27,7 +27,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <ul>
  *   <li>READ: PANTERA_IO_READ_THREADS, default 4x CPUs</li>
  *   <li>WRITE: PANTERA_IO_WRITE_THREADS, default 2x CPUs</li>
- *   <li>LIST: PANTERA_IO_LIST_THREADS, default 1x CPUs</li>
+ *   <li>LIST: PANTERA_IO_LIST_THREADS, default 2x CPUs</li>
  * </ul>
  *
  * @since 1.20.13
@@ -62,7 +62,7 @@ public final class StorageExecutors {
     public static final ExecutorService LIST = Executors.newFixedThreadPool(
         ConfigDefaults.getInt(
             "PANTERA_IO_LIST_THREADS",
-            Runtime.getRuntime().availableProcessors()
+            Runtime.getRuntime().availableProcessors() * 2
         ),
         namedThreadFactory("pantera-io-list-%d")
     );
@@ -107,7 +107,6 @@ public final class StorageExecutors {
      * Shutdown all storage executor pools and await termination.
      * Should be called during application shutdown.
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     public static void shutdown() {
         READ.shutdown();
         WRITE.shutdown();

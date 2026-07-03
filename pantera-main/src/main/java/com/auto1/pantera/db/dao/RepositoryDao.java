@@ -41,8 +41,8 @@ public final class RepositoryDao implements CrudRepoSettings {
         try (Connection conn = this.source.getConnection();
              PreparedStatement ps = conn.prepareStatement(
                  "SELECT name FROM repositories ORDER BY name"
-             )) {
-            final ResultSet rs = ps.executeQuery();
+             );
+             ResultSet rs = ps.executeQuery()) {
             while (rs.next()) {
                 result.add(rs.getString("name"));
             }
@@ -79,14 +79,15 @@ public final class RepositoryDao implements CrudRepoSettings {
                  "SELECT config FROM repositories WHERE name = ?"
              )) {
             ps.setString(1, rname.toString());
-            final ResultSet rs = ps.executeQuery();
-            if (rs.next()) {
-                return Json.createReader(
-                    new StringReader(rs.getString("config"))
-                ).readObject();
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return Json.createReader(
+                        new StringReader(rs.getString("config"))
+                    ).readObject();
+                }
             }
             throw new IllegalStateException("Repository not found: " + rname);
-        } catch (final IllegalStateException ex) {
+        } catch (final IllegalStateException ex) { // NOPMD AvoidRethrowingException - rethrow preserves the "not-found" marker so callers can distinguish it from the generic Exception catch wrapped below
             throw ex;
         } catch (final Exception ex) {
             throw new IllegalStateException("Failed to get repo: " + rname, ex);

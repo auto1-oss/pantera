@@ -266,11 +266,11 @@ final class GoScanner implements Scanner {
             }
         } catch (final JsonException ex) {
             LOG.warn(
-                "Invalid JSON in {}: {}", infoFile, ex.getMessage()
+                "Invalid JSON in {}: {}", infoFile, ex.getMessage(), ex
             );
         } catch (final Exception ex) {
             LOG.warn(
-                "Cannot parse .info file {}: {}", infoFile, ex.getMessage()
+                "Cannot parse .info file {}: {}", infoFile, ex.getMessage(), ex
             );
         }
         return fallback;

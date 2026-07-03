@@ -27,7 +27,6 @@ import org.junit.jupiter.params.provider.CsvSource;
  *
  * @since 0.12
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 @EnabledOnOs({OS.LINUX, OS.MAC})
 final class PypiITCase {
     /**

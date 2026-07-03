@@ -101,6 +101,7 @@ public final class BlockedThreadDiagnostics {
                 .message("Blocked thread diagnostics disabled via environment variable")
                 .eventCategory("host")
                 .eventAction("diagnostics_disabled")
+                .field("log.source", "application")
                 .log();
             return null;
         }
@@ -114,6 +115,7 @@ public final class BlockedThreadDiagnostics {
                     GC_PAUSE_THRESHOLD_MS))
                 .eventCategory("host")
                 .eventAction("diagnostics_init")
+                .field("log.source", "application")
                 .log();
         }
         return instance;
@@ -168,13 +170,16 @@ public final class BlockedThreadDiagnostics {
                         gcTimeDelta, gcCountDelta, avgPauseMs, totalGcTime))
                     .eventCategory("host")
                     .eventAction("gc_pause")
+                    .field("log.source", "application")
                     .log();
 
                 // Also log thread states during long GC
                 this.logAllBlockedThreads();
             }
-        } catch (final Exception ex) {
-            // Ignore diagnostics errors
+        } catch (final Exception ex) { // NOPMD EmptyCatchBlock - diagnostics is best-effort: any thread/JMX failure must not propagate to the host
+            // EXPECTED: diagnostics is best-effort. JMX / GC bean access
+            // can throw on shutdown or under SecurityManager — must not
+            // propagate or it kills the host.
         }
     }
 
@@ -215,11 +220,14 @@ public final class BlockedThreadDiagnostics {
                         blockedCount, waitingCount, runnableCount))
                     .eventCategory("host")
                     .eventAction("thread_state")
+                    .field("log.source", "application")
                     .log();
                 this.logAllBlockedThreads();
             }
-        } catch (final Exception ex) {
-            // Ignore diagnostics errors
+        } catch (final Exception ex) { // NOPMD EmptyCatchBlock - diagnostics is best-effort: any thread/JMX failure must not propagate to the host
+            // EXPECTED: diagnostics is best-effort. JMX / GC bean access
+            // can throw on shutdown or under SecurityManager — must not
+            // propagate or it kills the host.
         }
     }
 
@@ -233,7 +241,7 @@ public final class BlockedThreadDiagnostics {
                 if (info.getThreadState() == Thread.State.BLOCKED
                     && info.getThreadName().contains("vert.x-eventloop")) {
                     
-                    final StringBuilder sb = new StringBuilder();
+                    final StringBuilder sb = new StringBuilder(512);
                     sb.append("Thread ").append(info.getThreadName())
                         .append(" BLOCKED on ").append(info.getLockName())
                         .append(" owned by ").append(info.getLockOwnerName())
@@ -249,13 +257,16 @@ public final class BlockedThreadDiagnostics {
                             info.getThreadName(), info.getLockName(), info.getLockOwnerName()))
                         .eventCategory("host")
                         .eventAction("blocked_thread")
-                        .field("pantera.blocked_thread.name", info.getThreadName())
                         .field("error.stack_trace", sb.toString())
+                        .field("log.source", "application")
+                        .field("event.outcome", "failure")
                         .log();
                 }
             }
-        } catch (final Exception ex) {
-            // Ignore diagnostics errors
+        } catch (final Exception ex) { // NOPMD EmptyCatchBlock - diagnostics is best-effort: any thread/JMX failure must not propagate to the host
+            // EXPECTED: diagnostics is best-effort. JMX / GC bean access
+            // can throw on shutdown or under SecurityManager — must not
+            // propagate or it kills the host.
         }
     }
 
@@ -290,6 +301,8 @@ public final class BlockedThreadDiagnostics {
                 this.scheduler.shutdownNow();
             }
         } catch (final InterruptedException e) {
+            // EXPECTED: shutdown signalled while waiting for scheduler
+            // termination — force-stop and restore interrupt flag.
             this.scheduler.shutdownNow();
             Thread.currentThread().interrupt();
         }

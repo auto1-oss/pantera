@@ -10,32 +10,88 @@
  */
 package com.auto1.pantera.composer.http.proxy;
 
+import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.cache.Cache;
+import com.auto1.pantera.audit.AuditContext;
 import com.auto1.pantera.composer.Repository;
+import com.auto1.pantera.composer.cooldown.ComposerPackageMetadataHandler;
+import com.auto1.pantera.composer.cooldown.ComposerRootPackagesHandler;
 import com.auto1.pantera.composer.http.PackageMetadataSlice;
-import com.auto1.pantera.cooldown.CooldownInspector;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
+import com.auto1.pantera.cooldown.api.CooldownService;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.client.ClientSlices;
 import com.auto1.pantera.http.client.UriClientSlice;
 import com.auto1.pantera.http.client.auth.AuthClientSlice;
 import com.auto1.pantera.http.client.auth.Authenticator;
+import com.auto1.pantera.http.headers.Login;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsMdc;
+import com.auto1.pantera.http.log.RequestContextHeaders;
+import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rt.MethodRule;
 import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
 import com.auto1.pantera.http.slice.SliceSimple;
+import com.auto1.pantera.publishdate.PublishDateRegistries;
+import com.auto1.pantera.publishdate.RegistryBackedInspector;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 
 import java.net.URI;
 import java.util.Optional;
 import java.util.Queue;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Composer proxy repository slice.
+ *
+ * <p>Dispatch order (cooldown-aware):</p>
+ * <ol>
+ *   <li>{@link ComposerRootPackagesHandler} for {@code /packages.json}
+ *       and {@code /repo.json} — filters blocked versions out of
+ *       inline root aggregation shapes before the response leaves
+ *       the proxy.</li>
+ *   <li>{@link ComposerPackageMetadataHandler} for
+ *       {@code /p2/<vendor>/<pkg>.json} and
+ *       {@code /packages/<vendor>/<pkg>.json} — filters blocked
+ *       versions out of per-package metadata. This is where the
+ *       {@code composerBundle} registered in {@code CooldownWiring}
+ *       is actually consumed on the serve path.</li>
+ *   <li>Fallback to the legacy {@link SliceRoute} that services
+ *       archive downloads and non-metadata requests via
+ *       {@link CachedProxySlice} / {@link ProxyDownloadSlice}.</li>
+ * </ol>
+ *
+ * <p>Mirrors the handler-dispatch pattern established by
+ * {@code GoListHandler} ({@code 1eb53ceb}), {@code PypiSimpleHandler}
+ * ({@code 19bc60cb}) and {@code DockerTagsListHandler}
+ * ({@code 6c5a30ef}).</p>
  */
-public class ComposerProxySlice extends Slice.Wrap {
+public class ComposerProxySlice implements Slice {
+
+    /**
+     * Fallback slice-route for archive downloads and non-cooldown
+     * metadata endpoints. Built once per instance so the per-request
+     * dispatch path stays O(1).
+     */
+    private final Slice fallback;
+
+    /**
+     * Cooldown handler for {@code /packages.json} / {@code /repo.json}
+     * root aggregation filtering. {@code null} when cooldown is
+     * disabled (no-op service) — the dispatch check short-circuits.
+     */
+    private final ComposerRootPackagesHandler rootHandler;
+
+    /**
+     * Cooldown handler for per-package metadata filtering.
+     */
+    private final ComposerPackageMetadataHandler packageHandler;
+
     /**
      * New Composer proxy without cache.
      * @param clients HTTP clients
@@ -48,8 +104,8 @@ public class ComposerProxySlice extends Slice.Wrap {
         final Repository repo, final Authenticator auth
     ) {
         this(clients, remote, repo, auth, Cache.NOP, Optional.empty(), "composer", "php",
-            com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE,
-            new NoopComposerCooldownInspector(),
+            com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE,
+            new RegistryBackedInspector("composer", PublishDateRegistries.instance()),
             "http://localhost:8080");
     }
 
@@ -69,8 +125,8 @@ public class ComposerProxySlice extends Slice.Wrap {
         final Cache cache
     ) {
         this(clients, remote, repository, auth, cache, Optional.empty(), "composer", "php",
-            com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE,
-            new NoopComposerCooldownInspector(),
+            com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE,
+            new RegistryBackedInspector("composer", PublishDateRegistries.instance()),
             "http://localhost:8080");
     }
     
@@ -133,59 +189,136 @@ public class ComposerProxySlice extends Slice.Wrap {
         final String baseUrl,
         final String upstreamUrl
     ) {
-        super(
-            new SliceRoute(
-                new RtRulePath(
-                    new RtRule.All(
-                        new RtRule.ByPath(PackageMetadataSlice.ALL_PACKAGES),
-                        MethodRule.GET
-                    ),
-                    new SliceSimple(
-                        () -> ResponseBuilder.ok()
-                            .jsonBody(
-                                String.format(
-                                    "{\"packages\":{}, \"metadata-url\":\"/%s/p2/%%package%%.json\"}",
-                                    rname
-                                )
+        // Build the cache+rewrite slice once and share it between the
+        // fallback SliceRoute (cooldown-off path) and the cooldown
+        // handlers (cooldown-on path). The previous wiring built a
+        // raw-remote slice for the handlers, which bypassed the metadata
+        // cache AND the dist.url rewriter — so on the cooldown-enabled
+        // path, /p2/<vendor>/<pkg>.json responses still pointed Composer
+        // at the upstream (api.github.com / packagist) for archive
+        // downloads, breaking the proxy. Sharing the slice keeps cache
+        // + URL rewriting + primary-artifact integrity intact on both
+        // paths, with per-version cooldown filtering layered on top.
+        final CachedProxySlice cachedProxy = new CachedProxySlice(
+            remote(clients, remote, auth),
+            repository,
+            cache,
+            events,
+            rname,
+            baseUrl,
+            upstreamUrl
+        );
+        this.fallback = new SliceRoute(
+            new RtRulePath(
+                new RtRule.All(
+                    new RtRule.ByPath(PackageMetadataSlice.ALL_PACKAGES),
+                    MethodRule.GET
+                ),
+                new SliceSimple(
+                    () -> ResponseBuilder.ok()
+                        .jsonBody(
+                            String.format(
+                                "{\"packages\":{}, \"metadata-url\":\"/%s/p2/%%package%%.json\"}",
+                                rname
                             )
-                            .build()
-                    )
+                        )
+                        .build()
+                )
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    new RtRule.ByPath(PackageMetadataSlice.PACKAGE),
+                    MethodRule.GET
                 ),
-                new RtRulePath(
-                    new RtRule.All(
-                        new RtRule.ByPath(PackageMetadataSlice.PACKAGE),
-                        MethodRule.GET
-                    ),
-                    new CachedProxySlice(
-                        remote(clients, remote, auth),
-                        repository,
-                        cache,
-                        events,
-                        rname,
-                        rtype,
-                        cooldown,
-                        inspector,
-                        baseUrl,
-                        upstreamUrl
-                    )
-                ),
-                new RtRulePath(
-                    RtRule.FALLBACK,
-                    // Proxy all other requests (zip files, etc.) through to remote
-                    new ProxyDownloadSlice(
-                        remote(clients, remote, auth),
-                        clients,
-                        remote,
-                        events,
-                        rname,
-                        rtype,
-                        repository.storage(),
-                        cooldown,
-                        inspector
-                    )
+                cachedProxy
+            ),
+            new RtRulePath(
+                RtRule.FALLBACK,
+                // Proxy all other requests (zip files, etc.) through to remote
+                new ProxyDownloadSlice(
+                    remote(clients, remote, auth),
+                    clients,
+                    remote,
+                    events,
+                    rname,
+                    rtype,
+                    repository.storage(),
+                    cooldown,
+                    inspector
                 )
             )
         );
+        // Handlers are constructed UNCONDITIONALLY — including when the
+        // cooldown service is the Noop instance. They are the only place
+        // the per-request artifact_resolution audit record fires for
+        // Composer metadata, and the taxonomy contract is that every
+        // metadata listing view is audited whether filtering is configured
+        // or not. With NoopCooldownService, evaluateWithKnownDate always
+        // returns "allowed", so the handlers pass metadata through
+        // unfiltered — behaviourally identical to the old
+        // skip-handlers-when-noop gate, minus the audit blackout.
+        //
+        // Handlers fetch through the shared cache+rewrite slice
+        // (rather than re-entering this dispatcher) — so metadata
+        // is served from cache with dist.url already rewritten,
+        // and the handler just layers per-version filtering on top.
+        // Per-version release dates come from the packument's inline
+        // {@code time} field (Composer always inlines them); the
+        // CooldownInspector is therefore not threaded through the
+        // handler path — the evaluator uses {@code
+        // evaluateWithKnownDate} which skips inspector lookup
+        // entirely. Mirrors the npm/PyPI packument-inline pattern
+        // landed in {@code dbdde1736}.
+        this.rootHandler = new ComposerRootPackagesHandler(
+            cachedProxy, cooldown, rtype, rname
+        );
+        this.packageHandler = new ComposerPackageMetadataHandler(
+            cachedProxy, cooldown, rtype, rname
+        );
+    }
+
+    @Override
+    public CompletableFuture<Response> response(
+        final RequestLine line, final Headers headers, final Content body
+    ) {
+        final String path = line.uri().getPath();
+        final String user = new Login(headers).getValue();
+        // Bound as early as possible — before any async hop — so the
+        // AuditLogger.resolution() call downstream in the cooldown
+        // handlers gets real trace.id / client.ip instead of nulls from
+        // a worker thread that never had EcsLoggingSlice's MDC bound.
+        RequestContextHeaders.bindToMdc(headers);
+        final AuditContext auditCtx = new AuditContext(
+            org.slf4j.MDC.get(EcsMdc.TRACE_ID),
+            org.slf4j.MDC.get(EcsMdc.CLIENT_IP)
+        );
+        // Cooldown handlers run ahead of the legacy route so blocked
+        // versions cannot leak through the root / per-package
+        // metadata surfaces. Mirrors the Go / PyPI / Docker
+        // dispatch pattern (1eb53ceb, 19bc60cb, 6c5a30ef).
+        if (this.rootHandler != null && this.rootHandler.matches(path)) {
+            EcsLogger.debug("com.auto1.pantera.composer")
+                .message("Dispatching root packages request to cooldown root handler")
+                .eventCategory("web")
+                .eventAction("proxy_request")
+                .field("url.path", path)
+                .field("log.source", "application")
+                .log();
+            return body.asBytesFuture()
+                .thenCompose(ignored -> this.rootHandler.handle(line, user, auditCtx));
+        }
+        if (this.packageHandler != null && this.packageHandler.matches(path)) {
+            EcsLogger.debug("com.auto1.pantera.composer")
+                .message("Dispatching per-package metadata to cooldown handler")
+                .eventCategory("web")
+                .eventAction("proxy_request")
+                .field("url.path", path)
+                .field("log.source", "application")
+                .log();
+            return body.asBytesFuture()
+                .thenCompose(ignored -> this.packageHandler.handle(line, user, auditCtx));
+        }
+        return this.fallback.response(line, headers, body);
     }
 
     /**

@@ -149,6 +149,7 @@ public final class FileSystemArtifactSlice implements Slice {
                     .eventOutcome("success")
                     .duration(elapsed)
                     .field("file.size", fileSize)
+                    .field("log.source", "application")
                     .log();
 
                 return ResponseBuilder.ok()
@@ -164,6 +165,7 @@ public final class FileSystemArtifactSlice implements Slice {
                     .eventAction("artifact_serve")
                     .eventOutcome("failure")
                     .error(e)
+                    .field("log.source", "application")
                     .log();
                 return ResponseBuilder.internalError()
                     .textBody("Failed to serve artifact: " + e.getMessage())
@@ -409,8 +411,17 @@ public final class FileSystemArtifactSlice implements Slice {
                 if (channel != null) {
                     try {
                         channel.close();
-                    } catch (IOException e) {
-                        // Ignore close errors
+                    } catch (IOException e) { // NOPMD EmptyCatchBlock - close() failure during cleanup is benign; resource is being released anyway
+                        // B7 decision-tree #2: secondary cleanup failure.
+                        // Surface at DEBUG so SREs can see the cause when
+                        // debugging file-descriptor leaks; the primary
+                        // request error (if any) is unaffected.
+                        EcsLogger.debug("com.auto1.pantera.http.slice")
+                            .message("Failed to close file channel during cleanup")
+                            .eventAction("resource_cleanup_failed")
+                            .error(e)
+                            .field("log.source", "application")
+                            .log();
                     }
                     channel = null;
                 }
@@ -461,6 +472,7 @@ public final class FileSystemArtifactSlice implements Slice {
                         .eventAction("buffer_cleanup")
                         .eventOutcome("failure")
                         .error(ex)
+                        .field("log.source", "application")
                         .log();
                 }
             }
@@ -478,7 +490,7 @@ public final class FileSystemArtifactSlice implements Slice {
     private static Path getBasePath(final Storage storage) {
         try {
             // Check if this is SubStorage
-            if (storage.getClass().getSimpleName().equals("SubStorage")) {
+            if ("SubStorage".equals(storage.getClass().getSimpleName())) {
                 // Extract prefix from SubStorage
                 final Field prefixField = storage.getClass().getDeclaredField("prefix");
                 prefixField.setAccessible(true);

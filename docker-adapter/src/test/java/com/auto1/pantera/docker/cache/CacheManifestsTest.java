@@ -219,6 +219,162 @@ final class CacheManifestsTest {
     }
 
     /**
+     * Regression: a multi-arch manifest list (e.g. {@code ubuntu:latest} —
+     * an OCI image index) must produce a release timestamp by resolving
+     * through its first child manifest, not fail-open with Optional.empty().
+     *
+     * <p>Before the fix, {@code CacheManifests.releaseTimestamp} short-circuited
+     * to empty on {@code isManifestList() == true}, which caused
+     * {@code JdbcCooldownService.shouldBlockNewArtifact} to log
+     * "No release date found - allowing" and bypass cooldown for every
+     * multi-arch image on first pull. Observed in v2.2.0 when
+     * {@code docker build FROM ubuntu:latest} succeeded against a 14-day
+     * cooldown while the image was 6 days old.</p>
+     */
+    @Test
+    void recordsReleaseTimestampFromManifestListChild() throws Exception {
+        final Instant created = Instant.parse("2026-01-15T08:00:00Z");
+        final Digest configDigest = new Digest.Sha256(
+            "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee01"
+        );
+        final byte[] configBytes = Json.createObjectBuilder()
+            .add("created", created.toString())
+            .build().toString().getBytes();
+        // Platform child: single-arch manifest with the config that carries `created`.
+        final Digest childDigest = new Digest.Sha256(
+            "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee02"
+        );
+        final byte[] childBytes = Json.createObjectBuilder()
+            .add("mediaType", Manifest.MANIFEST_SCHEMA2)
+            .add("config", Json.createObjectBuilder().add("digest", configDigest.string()))
+            .add("layers", Json.createArrayBuilder())
+            .build().toString().getBytes();
+        final Manifest childManifest = new Manifest(childDigest, childBytes);
+        // Manifest list referencing the child — no `config`, no `layers`.
+        final byte[] listBytes = Json.createObjectBuilder()
+            .add("mediaType", Manifest.MANIFEST_OCI_INDEX)
+            .add(
+                "manifests",
+                Json.createArrayBuilder().add(
+                    Json.createObjectBuilder().add("digest", childDigest.string())
+                )
+            )
+            .build().toString().getBytes();
+        final Digest listDigest = new Digest.Sha256(
+            "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee03"
+        );
+        final Manifest listManifest = new Manifest(listDigest, listBytes);
+        final ManifestReference tagRef = ManifestReference.fromTag("latest");
+        final Queue<ArtifactEvent> events = new ConcurrentLinkedQueue<>();
+        final DockerProxyCooldownInspector inspector = new DockerProxyCooldownInspector();
+        final Manifests originManifests = new MapManifests(Map.of(
+            tagRef.digest(), listManifest,
+            childDigest.string(), childManifest
+        ));
+        final Repo origin = new StubRepo(
+            new StaticLayers(Map.of(
+                configDigest.string(), new TestBlob(configDigest, configBytes)
+            )),
+            originManifests
+        );
+        new CacheManifests(
+            "library/ubuntu",
+            origin,
+            new StubRepo(new RecordingLayers(), new RecordingManifests()),
+            Optional.of(events),
+            "docker-proxy",
+            Optional.of(inspector)
+        ).get(tagRef).toCompletableFuture().join();
+        ArtifactEvent recorded = null;
+        final long deadline = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(2);
+        while (recorded == null && System.currentTimeMillis() < deadline) {
+            recorded = events.poll();
+            if (recorded == null) {
+                Thread.sleep(10L);
+            }
+        }
+        Assertions.assertNotNull(recorded, "Expected artifact event to be queued");
+        Assertions.assertTrue(
+            recorded.releaseDate().isPresent(),
+            "Release date must be resolved through the first child of a manifest list — "
+                + "a missing value here means cooldown will fail-open for multi-arch tags"
+        );
+        Assertions.assertEquals(
+            created.toEpochMilli(),
+            recorded.releaseDate().orElseThrow()
+        );
+        Assertions.assertEquals(
+            Optional.of(created),
+            inspector.releaseDate("library/ubuntu", listDigest.string()).join(),
+            "Inspector must carry the child-derived release date for the list digest "
+                + "so the cooldown service can evaluate freshness on the next pull"
+        );
+    }
+
+    /**
+     * Fault-injection: if the first child of a manifest list cannot be
+     * fetched (upstream hiccup, GC, permission surprise), releaseTimestamp
+     * must fall through to empty rather than throwing. The existing
+     * "no release date → allow" branch in JdbcCooldownService then
+     * preserves the pre-fix behaviour on transient failures.
+     */
+    @Test
+    void manifestListChildMissingFallsThroughToEmpty() throws Exception {
+        final Digest childDigest = new Digest.Sha256(
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+        );
+        final byte[] listBytes = Json.createObjectBuilder()
+            .add("mediaType", Manifest.MANIFEST_OCI_INDEX)
+            .add(
+                "manifests",
+                Json.createArrayBuilder().add(
+                    Json.createObjectBuilder().add("digest", childDigest.string())
+                )
+            )
+            .build().toString().getBytes();
+        final Manifest listManifest = new Manifest(
+            new Digest.Sha256(
+                "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdead0001"
+            ),
+            listBytes
+        );
+        final ManifestReference tagRef = ManifestReference.fromTag("latest");
+        final Queue<ArtifactEvent> events = new ConcurrentLinkedQueue<>();
+        final DockerProxyCooldownInspector inspector = new DockerProxyCooldownInspector();
+        // Origin that returns the list for the tag but empty for the child digest.
+        final Manifests originManifests = new MapManifests(Map.of(
+            tagRef.digest(), listManifest
+            // childDigest deliberately absent → origin.manifests().get(child) returns empty
+        ));
+        final Repo origin = new StubRepo(
+            new StaticLayers(Map.of()), originManifests
+        );
+        // Must not throw.
+        new CacheManifests(
+            "library/nginx",
+            origin,
+            new StubRepo(new RecordingLayers(), new RecordingManifests()),
+            Optional.of(events),
+            "docker-proxy",
+            Optional.of(inspector)
+        ).get(tagRef).toCompletableFuture().join();
+        ArtifactEvent recorded = null;
+        final long deadline = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(2);
+        while (recorded == null && System.currentTimeMillis() < deadline) {
+            recorded = events.poll();
+            if (recorded == null) {
+                Thread.sleep(10L);
+            }
+        }
+        Assertions.assertNotNull(recorded, "Event should still be queued even without release date");
+        Assertions.assertTrue(
+            recorded.releaseDate().isEmpty(),
+            "Release date must be empty when the child cannot be resolved — "
+                + "the cooldown service treats this as 'unknown, allow' on purpose"
+        );
+    }
+
+    /**
      * Regression: when inspector has UNKNOWN (stored by DockerProxyCooldownSlice using
      * pre-auth headers), CacheManifests must ignore it and use MDC user.name instead.
      *
@@ -458,6 +614,39 @@ final class CacheManifestsTest {
         @Override
         public CompletableFuture<Optional<Manifest>> get(final ManifestReference ref) {
             return CompletableFuture.completedFuture(Optional.of(this.manifest));
+        }
+
+        @Override
+        public CompletableFuture<com.auto1.pantera.docker.Tags> tags(final Pagination pagination) {
+            throw new UnsupportedOperationException();
+        }
+    }
+
+    /**
+     * Test-only {@link Manifests} that dispatches on the reference digest
+     * string. {@link ManifestReference#digest()} returns either the tag
+     * ("latest") for tag refs or the sha256:... digest string for digest
+     * refs, so this stub supports both a tag → list lookup and a
+     * digest → child lookup from the same map.
+     */
+    private static final class MapManifests implements Manifests {
+
+        private final Map<String, Manifest> byRef;
+
+        private MapManifests(final Map<String, Manifest> byRef) {
+            this.byRef = byRef;
+        }
+
+        @Override
+        public CompletableFuture<Manifest> put(final ManifestReference ref, final Content content) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public CompletableFuture<Optional<Manifest>> get(final ManifestReference ref) {
+            return CompletableFuture.completedFuture(
+                Optional.ofNullable(this.byRef.get(ref.digest()))
+            );
         }
 
         @Override

@@ -34,7 +34,7 @@ import javax.json.stream.JsonParser;
  * Pantera-conan storage structure for now corresponds to standard conan_server.
  * @since 0.1
  */
-public final class ConansEntityV2 {
+public final class ConansEntityV2 { // NOPMD MissingStaticMethodInNonInstantiatableClass - namespace container for nested REST endpoint slices; intentionally non-instantiable
 
     /**
      * File with binary package information on corresponding build configuration.

@@ -35,7 +35,6 @@ import software.amazon.awssdk.services.s3.model.CreateBucketRequest;
  *
  * @since 0.1
  */
-@SuppressWarnings("PMD.TestClassWithoutTestCases")
 @DisabledOnOs(OS.WINDOWS)
 @Testcontainers
 public final class S3StorageWhiteboxVerificationTest extends StorageWhiteboxVerification {

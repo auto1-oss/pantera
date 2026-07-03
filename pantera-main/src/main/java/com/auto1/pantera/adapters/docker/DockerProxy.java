@@ -16,7 +16,9 @@ import com.auto1.pantera.docker.composite.ReadWriteDocker;
 import com.auto1.pantera.docker.http.DockerSlice;
 import com.auto1.pantera.docker.http.TrimmedDocker;
 import com.auto1.pantera.docker.proxy.ProxyDocker;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownService;
+import com.auto1.pantera.publishdate.DbPublishDateRegistry;
+import com.auto1.pantera.publishdate.PublishDateRegistries;
 import com.auto1.pantera.http.auth.CombinedAuthScheme;
 import com.auto1.pantera.http.DockerRoutingSlice;
 import com.auto1.pantera.http.Headers;
@@ -76,18 +78,19 @@ public final class DockerProxy implements Slice {
         final Content body
     ) {
         final long start = System.currentTimeMillis();
-        EcsLogger.info("com.auto1.pantera.docker.proxy")
+        EcsLogger.info("com.auto1.pantera.adapters.docker")
             .message("DockerProxy request")
             .eventCategory("web")
             .eventAction("proxy_request")
             .field("http.request.method", line.method().value())
             .field("url.path", line.uri().getPath())
+            .field("log.source", "application")
             .log();
         return this.delegate.response(line, headers, body)
             .whenComplete((resp, err) -> {
                 final long duration = System.currentTimeMillis() - start;
                 if (err != null) {
-                    EcsLogger.error("com.auto1.pantera.docker.proxy")
+                    EcsLogger.error("com.auto1.pantera.adapters.docker")
                         .message("DockerProxy error")
                         .eventCategory("web")
                         .eventAction("proxy_request")
@@ -95,9 +98,10 @@ public final class DockerProxy implements Slice {
                         .field("url.path", line.uri().getPath())
                         .duration(duration)
                         .error(err)
+                        .field("log.source", "application")
                         .log();
                 } else {
-                    EcsLogger.info("com.auto1.pantera.docker.proxy")
+                    EcsLogger.info("com.auto1.pantera.adapters.docker")
                         .message("DockerProxy response")
                         .eventCategory("web")
                         .eventAction("proxy_request")
@@ -105,6 +109,7 @@ public final class DockerProxy implements Slice {
                         .field("url.path", line.uri().getPath())
                         .field("http.response.status_code", resp.status().code())
                         .duration(duration)
+                        .field("log.source", "application")
                         .log();
                 }
             });
@@ -125,9 +130,11 @@ public final class DockerProxy implements Slice {
             final CooldownService cooldown
     ) {
         final DockerProxyCooldownInspector inspector = new DockerProxyCooldownInspector();
-        // Register inspector globally so unblock can invalidate its cache
-        com.auto1.pantera.cooldown.InspectorRegistry.instance()
-            .register("docker", cfg.name(), inspector);
+        final var registry = PublishDateRegistries.instance();
+        if (registry instanceof DbPublishDateRegistry dbRegistry) {
+            inspector.setReleaseDateCallback((artifact, version, release) ->
+                dbRegistry.persist("docker", artifact, version, release, "manifest-config"));
+        }
         final Docker proxies = new MultiReadDocker(
             cfg.remotes().stream().map(r -> proxy(client, cfg, events, r, inspector))
                 .toList()

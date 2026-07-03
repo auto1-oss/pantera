@@ -87,7 +87,6 @@ public interface Package {
          * @param res Where to write the result
          * @param append New bytes to append
          */
-        @SuppressWarnings("PMD.AssignmentInOperand")
         private static void decompressAppendCompress(
             final InputStream decompress, final OutputStream res, final byte[] append
         ) {

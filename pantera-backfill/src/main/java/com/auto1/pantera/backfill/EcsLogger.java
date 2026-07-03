@@ -1,0 +1,261 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.backfill;
+
+import java.util.HashMap;
+import java.util.Map;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.message.MapMessage;
+
+/**
+ * ECS-compliant logger for the backfill CLI.
+ *
+ * <p>Mirrors the shape of {@code com.auto1.pantera.asto.log.EcsLogger} and
+ * {@code com.auto1.pantera.http.log.EcsLogger} so log lines emitted from the
+ * standalone backfill jar carry the same structured fields as the runtime
+ * service. {@code pantera-backfill} is a shaded standalone artifact and
+ * cannot depend on {@code pantera-core} / {@code pantera-storage-core}; this
+ * is a slim local copy for that reason.
+ *
+ * @since 2.2.0
+ */
+public final class EcsLogger {
+
+    /** Logger name / category. */
+    private final String category;
+
+    /** Log level. */
+    private final Level level;
+
+    /** Log message. */
+    private String message;
+
+    /** ECS field: {@code event.category}. */
+    private String eventCategory;
+
+    /** ECS field: {@code event.action}. */
+    private String eventAction;
+
+    /** ECS field: {@code event.outcome}. */
+    private String eventOutcome;
+
+    /** Exception to log. */
+    private Throwable exception;
+
+    /** Additional structured fields. */
+    private final Map<String, Object> fields = new HashMap<>();
+
+    private EcsLogger(final String category, final Level level) {
+        this.category = category;
+        this.level = level;
+    }
+
+    /**
+     * Create TRACE level logger.
+     *
+     * @param category Logger category
+     * @return EcsLogger instance
+     */
+    public static EcsLogger trace(final String category) {
+        return new EcsLogger(category, Level.TRACE);
+    }
+
+    /**
+     * Create DEBUG level logger.
+     *
+     * @param category Logger category
+     * @return EcsLogger instance
+     */
+    public static EcsLogger debug(final String category) {
+        return new EcsLogger(category, Level.DEBUG);
+    }
+
+    /**
+     * Create INFO level logger.
+     *
+     * @param category Logger category
+     * @return EcsLogger instance
+     */
+    public static EcsLogger info(final String category) {
+        return new EcsLogger(category, Level.INFO);
+    }
+
+    /**
+     * Create WARN level logger.
+     *
+     * @param category Logger category
+     * @return EcsLogger instance
+     */
+    public static EcsLogger warn(final String category) {
+        return new EcsLogger(category, Level.WARN);
+    }
+
+    /**
+     * Create ERROR level logger.
+     *
+     * @param category Logger category
+     * @return EcsLogger instance
+     */
+    public static EcsLogger error(final String category) {
+        return new EcsLogger(category, Level.ERROR);
+    }
+
+    /**
+     * Set log message.
+     *
+     * @param msg Message
+     * @return This instance for chaining
+     */
+    public EcsLogger message(final String msg) {
+        this.message = msg;
+        return this;
+    }
+
+    /**
+     * Set event category.
+     *
+     * @param category Event category
+     * @return This instance for chaining
+     */
+    public EcsLogger eventCategory(final String category) {
+        this.eventCategory = category;
+        return this;
+    }
+
+    /**
+     * Set event action.
+     *
+     * @param action Event action
+     * @return This instance for chaining
+     */
+    public EcsLogger eventAction(final String action) {
+        this.eventAction = action;
+        return this;
+    }
+
+    /**
+     * Set event outcome ({@code success}, {@code failure}, {@code unknown}).
+     *
+     * @param outcome Event outcome
+     * @return This instance for chaining
+     */
+    public EcsLogger eventOutcome(final String outcome) {
+        this.eventOutcome = outcome;
+        return this;
+    }
+
+    /**
+     * Attach an exception. Populates {@code error.type} / {@code error.message}
+     * fields automatically.
+     *
+     * @param throwable Exception
+     * @return This instance for chaining
+     */
+    public EcsLogger error(final Throwable throwable) {
+        this.exception = throwable;
+        if (throwable != null) {
+            this.fields.put("error.type", throwable.getClass().getName());
+            this.fields.put("error.message", throwable.getMessage());
+        }
+        return this;
+    }
+
+    /**
+     * Add a structured field.
+     *
+     * @param name Field name (ECS naming preferred)
+     * @param value Field value
+     * @return This instance for chaining
+     */
+    public EcsLogger field(final String name, final Object value) {
+        if (value != null) {
+            this.fields.put(name, value);
+        }
+        return this;
+    }
+
+    /**
+     * Emit the log entry as a Log4j2 {@link MapMessage} so the EcsLayout
+     * produces the structured-JSON output downstream consumers expect.
+     */
+    public void log() {
+        final org.apache.logging.log4j.Logger logger =
+            LogManager.getLogger(this.category);
+        if (this.eventCategory != null) {
+            this.fields.put("event.category", this.eventCategory);
+        }
+        if (this.eventAction != null) {
+            this.fields.put("event.action", this.eventAction);
+        }
+        if (this.eventOutcome != null) {
+            this.fields.put("event.outcome", this.eventOutcome);
+        }
+        final MapMessage<?, Object> mapMessage = new MapMessage<>(this.fields);
+        final String logMessage =
+            this.message == null ? "Backfill event" : this.message;
+        mapMessage.with("message", logMessage);
+        switch (this.level) {
+            case TRACE:
+                if (this.exception == null) {
+                    logger.trace(mapMessage);
+                } else {
+                    logger.trace(mapMessage, this.exception);
+                }
+                break;
+            case DEBUG:
+                if (this.exception == null) {
+                    logger.debug(mapMessage);
+                } else {
+                    logger.debug(mapMessage, this.exception);
+                }
+                break;
+            case INFO:
+                if (this.exception == null) {
+                    logger.info(mapMessage);
+                } else {
+                    logger.info(mapMessage, this.exception);
+                }
+                break;
+            case WARN:
+                if (this.exception == null) {
+                    logger.warn(mapMessage);
+                } else {
+                    logger.warn(mapMessage, this.exception);
+                }
+                break;
+            case ERROR:
+                if (this.exception == null) {
+                    logger.error(mapMessage);
+                } else {
+                    logger.error(mapMessage, this.exception);
+                }
+                break;
+            default:
+                throw new IllegalStateException(
+                    "Unknown log level: " + this.level
+                );
+        }
+    }
+
+    /** Log levels. */
+    private enum Level {
+        /** Trace level. */
+        TRACE,
+        /** Debug level. */
+        DEBUG,
+        /** Info level. */
+        INFO,
+        /** Warn level. */
+        WARN,
+        /** Error level. */
+        ERROR
+    }
+}

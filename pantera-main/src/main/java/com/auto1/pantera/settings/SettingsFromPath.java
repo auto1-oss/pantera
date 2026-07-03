@@ -119,6 +119,7 @@ public final class SettingsFromPath {
                 .eventCategory("configuration")
                 .eventAction("default_config_create")
                 .eventOutcome("success")
+                .field("log.source", "application")
                 .log();
         }
         return settings;

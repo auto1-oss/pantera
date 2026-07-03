@@ -110,9 +110,9 @@ onMounted(() => { load(); loadRoles() })
         <Button v-if="auth.hasAction('api_user_permissions', 'create')" label="Create User" icon="pi pi-plus" @click="createVisible = true" />
       </div>
 
-      <InputText v-model="search" placeholder="Search users..." @keyup.enter="load" class="w-64" />
+      <InputText v-model="search" placeholder="Search users..." class="w-64" @keyup.enter="load" />
 
-      <DataTable :value="users" :loading="loading" stripedRows class="shadow-sm">
+      <DataTable :value="users" :loading="loading" striped-rows class="shadow-sm">
         <Column field="name" header="Username" sortable />
         <Column field="email" header="Email" />
         <Column field="enabled" header="Status">
@@ -124,16 +124,20 @@ onMounted(() => { load(); loadRoles() })
           <template #body="{ data }">
             <div class="flex gap-1">
               <Button v-if="auth.hasAction('api_user_permissions', 'update')" icon="pi pi-pencil" text size="small" @click="$router.push(`/admin/users/${data.name}`)" />
-              <Button v-if="auth.hasAction('api_user_permissions', 'enable')" :icon="data.enabled !== false ? 'pi pi-ban' : 'pi pi-check-circle'" text size="small"
-                :severity="data.enabled !== false ? 'warn' : 'success'" @click="toggleUser(data)" />
+              <Button
+                v-if="auth.hasAction('api_user_permissions', 'enable')" :icon="data.enabled !== false ? 'pi pi-ban' : 'pi pi-check-circle'" text size="small"
+                :severity="data.enabled !== false ? 'warn' : 'success'" @click="toggleUser(data)"
+              />
               <Button v-if="auth.hasAction('api_user_permissions', 'delete')" icon="pi pi-trash" text size="small" severity="danger" @click="handleDelete(data.name)" />
             </div>
           </template>
         </Column>
       </DataTable>
 
-      <Paginator v-if="total > size" :rows="size" :totalRecords="total" :first="page * size"
-        @page="(e: any) => { page = e.page; size = e.rows; load() }" :rowsPerPageOptions="[10, 20, 50]" />
+      <Paginator
+        v-if="total > size" :rows="size" :total-records="total" :first="page * size"
+        :rows-per-page-options="[10, 20, 50]" @page="(e: any) => { page = e.page; size = e.rows; load() }"
+      />
 
       <!-- Delete Dialog -->
       <Dialog v-model:visible="delVisible" header="Confirm Delete" modal class="w-96">

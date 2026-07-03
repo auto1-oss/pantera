@@ -83,7 +83,6 @@ public enum RsStatus {
     /**
      * Method Not Allowed.
      */
-    @SuppressWarnings("PMD.LongVariable")
     METHOD_NOT_ALLOWED(HttpStatus.SC_METHOD_NOT_ALLOWED),
     /**
      * Request Time-out.

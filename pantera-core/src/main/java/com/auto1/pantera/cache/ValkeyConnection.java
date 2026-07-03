@@ -247,6 +247,7 @@ public final class ValkeyConnection implements AutoCloseable {
                     EcsLogger.debug("com.auto1.pantera.cache")
                         .message("Failed to return connection to pool during close")
                         .error(ex)
+                        .field("log.source", "application")
                         .log();
                 }
             }

@@ -66,7 +66,11 @@ class SettingsLayerIntegrationTest {
             conn.createStatement().execute("DELETE FROM storage_aliases");
             conn.createStatement().execute("DELETE FROM settings");
             conn.createStatement().execute("DELETE FROM auth_providers");
-            conn.createStatement().execute("DELETE FROM audit_log");
+            // audit_log has a BEFORE DELETE immutability trigger (V129) so
+            // a plain DELETE is rejected with "audit_log rows are immutable".
+            // TRUNCATE bypasses row-level triggers by design — the correct
+            // primitive for between-test state reset of an immutable table.
+            conn.createStatement().execute("TRUNCATE audit_log RESTART IDENTITY");
         }
     }
 

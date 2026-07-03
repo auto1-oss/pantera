@@ -1,9 +1,12 @@
 #!/bin/zsh
 
 set -e
+PANTERA_PASSWORD=ayd
+PANTERA_USER=ayd
 
 echo " Docker login to Pantera Docker registry "
-docker login -u ayd -p ayd localhost:8081
+docker logout localhost:8081 >/dev/null 2>&1 || true
+echo "$PANTERA_PASSWORD" | docker login localhost:8081 -u "$PANTERA_USER" --password-stdin
 
 echo " Docker pull image from Pantera Docker registry "
 docker pull localhost:8081/test_prefix/docker_group/voxpupuli/renovate

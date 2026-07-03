@@ -66,22 +66,23 @@ public final class GoProxyPackageProcessor extends QuartzJob {
     private Storage asto;
 
     @Override
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException"})
     public void execute(final JobExecutionContext context) {
         this.resolveFromRegistry(context);
         if (this.asto == null || this.packages == null || this.events == null) {
-            EcsLogger.error("com.auto1.pantera.go")
+            EcsLogger.error("com.auto1.pantera.goproxy")
                 .message("Go proxy processor not initialized properly")
                 .eventCategory("web")
                 .eventAction("proxy_processor")
                 .eventOutcome("failure")
+                .field("log.source", "application")
                 .log();
             super.stopJob(context);
         } else {
-            EcsLogger.debug("com.auto1.pantera.go")
+            EcsLogger.debug("com.auto1.pantera.goproxy")
                 .message("Go proxy processor running (queue size: " + this.packages.size() + ")")
                 .eventCategory("web")
                 .eventAction("proxy_processor")
+                .field("log.source", "application")
                 .log();
             this.processPackagesBatch();
         }
@@ -101,10 +102,11 @@ public final class GoProxyPackageProcessor extends QuartzJob {
             return;
         }
 
-        EcsLogger.info("com.auto1.pantera.go")
+        EcsLogger.info("com.auto1.pantera.goproxy")
             .message("Processing Go batch (size: " + batch.size() + ")")
             .eventCategory("web")
             .eventAction("proxy_processor")
+            .field("log.source", "application")
             .log();
 
         List<CompletableFuture<Void>> futures = batch.stream()
@@ -115,19 +117,21 @@ public final class GoProxyPackageProcessor extends QuartzJob {
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
                 .orTimeout(30, TimeUnit.SECONDS)
                 .join();
-            EcsLogger.info("com.auto1.pantera.go")
+            EcsLogger.info("com.auto1.pantera.goproxy")
                 .message("Go batch processing complete (size: " + batch.size() + ")")
                 .eventCategory("web")
                 .eventAction("proxy_processor")
                 .eventOutcome("success")
+                .field("log.source", "application")
                 .log();
         } catch (Exception err) {
-            EcsLogger.error("com.auto1.pantera.go")
+            EcsLogger.error("com.auto1.pantera.goproxy")
                 .message("Go batch processing failed (size: " + batch.size() + ")")
                 .eventCategory("web")
                 .eventAction("proxy_processor")
                 .eventOutcome("failure")
                 .error(err)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -139,22 +143,24 @@ public final class GoProxyPackageProcessor extends QuartzJob {
      */
     private CompletableFuture<Void> processGoPackageAsync(final ProxyArtifactEvent event) {
         final Key key = event.artifactKey();
-        EcsLogger.debug("com.auto1.pantera.go")
+        EcsLogger.debug("com.auto1.pantera.goproxy")
             .message("Processing Go proxy event")
             .eventCategory("web")
             .eventAction("proxy_processor")
             .field("package.name", key.string())
+            .field("log.source", "application")
             .log();
 
         // Parse module coordinates from event key
         final ModuleCoordinates coords = parseCoordinates(key);
         if (coords == null) {
-            EcsLogger.warn("com.auto1.pantera.go")
+            EcsLogger.warn("com.auto1.pantera.goproxy")
                 .message("Could not parse coordinates, skipping")
                 .eventCategory("web")
                 .eventAction("proxy_processor")
                 .eventOutcome("failure")
                 .field("package.name", key.string())
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(null);
         }
@@ -167,13 +173,14 @@ public final class GoProxyPackageProcessor extends QuartzJob {
         // Check existence and get metadata asynchronously
         return this.asto.exists(zipKey).thenCompose(exists -> {
             if (!exists) {
-                EcsLogger.warn("com.auto1.pantera.go")
+                EcsLogger.warn("com.auto1.pantera.goproxy")
                     .message("No .zip file found, re-queuing for retry")
                     .eventCategory("web")
                     .eventAction("proxy_processor")
                     .eventOutcome("failure")
                     .field("package.name", key.string())
                     .field("file.target_path", zipKey.string())
+                    .field("log.source", "application")
                     .log();
                 // Re-add event to queue for retry
                 this.packages.add(event);
@@ -185,12 +192,13 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                 .thenApply(sizeOpt -> sizeOpt.map(Long::longValue))
                 .thenAccept(size -> {
                     if (size.isEmpty()) {
-                        EcsLogger.warn("com.auto1.pantera.go")
+                        EcsLogger.warn("com.auto1.pantera.goproxy")
                             .message("Missing size metadata, skipping")
                             .eventCategory("web")
                             .eventAction("proxy_processor")
                             .eventOutcome("failure")
                             .field("file.path", zipKey.string())
+                            .field("log.source", "application")
                             .log();
                         return;
                     }
@@ -212,10 +220,10 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                             created,
                             release,
                             event.artifactKey().string()
-                        )
+                        ).withContext(event.traceId(), event.clientIp())
                     );
 
-                    EcsLogger.info("com.auto1.pantera.go")
+                    EcsLogger.info("com.auto1.pantera.goproxy")
                         .message("Recorded Go proxy module")
                         .eventCategory("web")
                         .eventAction("proxy_processor")
@@ -226,16 +234,18 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                         .field("package.size", size.get())
                         .field("package.release_date", release == null ? null
                             : java.time.Instant.ofEpochMilli(release).toString())
+                        .field("log.source", "application")
                         .log();
                 });
         }).exceptionally(err -> {
-            EcsLogger.error("com.auto1.pantera.go")
+            EcsLogger.error("com.auto1.pantera.goproxy")
                 .message("Failed to process Go package")
                 .eventCategory("web")
                 .eventAction("proxy_processor")
                 .eventOutcome("failure")
                 .field("package.name", key.string())
                 .error(err)
+                .field("log.source", "application")
                 .log();
             return null;
         });
@@ -292,7 +302,6 @@ public final class GoProxyPackageProcessor extends QuartzJob {
      * Set registry key for events queue (JDBC mode).
      * @param key Registry key
      */
-    @SuppressWarnings("PMD.MethodNamingConventions")
     public void setEvents_key(final String key) {
         this.events = JobDataRegistry.lookup(key);
     }
@@ -301,7 +310,6 @@ public final class GoProxyPackageProcessor extends QuartzJob {
      * Set registry key for packages queue (JDBC mode).
      * @param key Registry key
      */
-    @SuppressWarnings("PMD.MethodNamingConventions")
     public void setPackages_key(final String key) {
         this.packages = JobDataRegistry.lookup(key);
     }
@@ -310,7 +318,6 @@ public final class GoProxyPackageProcessor extends QuartzJob {
      * Set registry key for storage (JDBC mode).
      * @param key Registry key
      */
-    @SuppressWarnings("PMD.MethodNamingConventions")
     public void setStorage_key(final String key) {
         this.asto = JobDataRegistry.lookup(key);
     }

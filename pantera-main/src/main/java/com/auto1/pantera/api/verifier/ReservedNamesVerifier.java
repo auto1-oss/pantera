@@ -50,7 +50,6 @@ public final class ReservedNamesVerifier implements Verifier {
      * Set of reserved words.
      * @return Reserved words
      */
-    @SuppressWarnings("PMD.ProhibitPublicStaticMethods")
     public static Set<String> reservedWords() {
         return ReservedNamesVerifier.RESERVED;
     }
@@ -59,6 +58,7 @@ public final class ReservedNamesVerifier implements Verifier {
      * Validate repository name.
      * @return True if valid
      */
+    @Override
     public boolean valid() {
         return ReservedNamesVerifier.RESERVED.stream()
             .filter(this.name::contains).findAny().isEmpty();
@@ -68,6 +68,7 @@ public final class ReservedNamesVerifier implements Verifier {
      * Get error message.
      * @return Error message
      */
+    @Override
     public String message() {
         return
             new StringBuilder()

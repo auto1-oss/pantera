@@ -94,6 +94,7 @@ public final class DeadLetterWriter {
             .eventAction("dead_letter_write")
             .eventOutcome("success")
             .field("file.path", file.toString())
+            .field("log.source", "application")
             .log();
         return file;
     }

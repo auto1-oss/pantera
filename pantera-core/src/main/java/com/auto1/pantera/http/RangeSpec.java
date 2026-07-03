@@ -89,13 +89,8 @@ public final class RangeSpec {
      * @return True if valid
      */
     public boolean isValid(final long fileSize) {
-        if (this.start >= fileSize) {
-            return false;
-        }
-        if (this.end != -1 && this.end >= fileSize) {
-            return false;
-        }
-        return true;
+        return this.start < fileSize
+            && !(this.end != -1 && this.end >= fileSize);
     }
 
     /**

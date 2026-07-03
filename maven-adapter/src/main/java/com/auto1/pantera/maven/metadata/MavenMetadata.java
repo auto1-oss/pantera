@@ -27,7 +27,6 @@ import org.xembly.Xembler;
  * Maven metadata generator.
  * @since 0.3
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class MavenMetadata {
 
     /**

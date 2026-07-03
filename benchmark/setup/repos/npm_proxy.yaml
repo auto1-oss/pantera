@@ -1,9 +1,0 @@
-repo:
-  type: npm-proxy
-  url: http://localhost:8080/npm_proxy
-  path: npm_proxy
-  remotes:
-    - url: https://registry.npmjs.org
-  storage:
-    type: fs
-    path: /var/pantera/data

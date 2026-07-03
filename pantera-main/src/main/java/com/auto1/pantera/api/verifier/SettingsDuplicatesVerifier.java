@@ -43,6 +43,7 @@ public final class SettingsDuplicatesVerifier implements Verifier {
      * Validate repository name has duplicates of settings names.
      * @return True if has no duplicates
      */
+    @Override
     public boolean valid() {
         return !this.crs.hasSettingsDuplicates(this.rname);
     }
@@ -51,6 +52,7 @@ public final class SettingsDuplicatesVerifier implements Verifier {
      * Get error message.
      * @return Error message
      */
+    @Override
     public String message() {
         return String.format("Repository %s has settings duplicates. Please remove repository and create it again.", this.rname);
     }

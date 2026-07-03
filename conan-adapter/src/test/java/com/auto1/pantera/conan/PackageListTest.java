@@ -22,7 +22,6 @@ import org.junit.jupiter.api.Test;
  * Tests for PackageList class.
  * @since 0.1
  */
-@SuppressWarnings("PMD.UseVarargs")
 class PackageListTest {
 
     /**

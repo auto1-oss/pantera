@@ -44,7 +44,6 @@ import java.util.function.Function;
 /**
  * Add writer of info about charts to index file.
  */
-@SuppressWarnings({"PMD.NPathComplexity", "PMD.CognitiveComplexity"})
 interface AddWriter {
     /**
      * Add info about charts to index. If index contains a chart with the same

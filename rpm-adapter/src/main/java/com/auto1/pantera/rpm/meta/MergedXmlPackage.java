@@ -159,8 +159,9 @@ public final class MergedXmlPackage implements MergedXml {
                 break;
             } else {
                 if (event.isStartElement()
-                    && event.asStartElement().getName().getLocalPart()
-                    .equals(XmlMaid.ByPkgidAttr.TAG)
+                    && XmlMaid.ByPkgidAttr.TAG.equals(
+                        event.asStartElement().getName().getLocalPart()
+                    )
                 ) {
                     valid = !ids.contains(
                         event.asStartElement().getAttributeByName(new QName("pkgid")).getValue()

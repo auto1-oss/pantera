@@ -73,7 +73,6 @@ final class MultipartITCase {
     }
 
     @Test
-    @SuppressWarnings("PMD.AvoidDuplicateLiterals")
     void parseMultiparRequest() throws Exception {
         final AtomicReference<String> result = new AtomicReference<>();
         this.container.deploy(

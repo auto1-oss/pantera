@@ -185,6 +185,159 @@ public final class RxNpmProxyStorageTest {
         );
     }
 
+    /**
+     * Phase 12 — stream-through happy path: subscribing to the tee'd
+     * publisher delivers the upstream bytes to the caller AND lands the
+     * tarball + meta on disk via background saves.
+     */
+    @Test
+    public void streamThroughTeesBytesToCallerAndStorage() {
+        final String path = "asdas/-/asdas-1.0.0.tgz";
+        final NpmAsset upstream = new NpmAsset(
+            path,
+            new Content.From(RxNpmProxyStorageTest.DEF_CONTENT.getBytes(StandardCharsets.UTF_8)),
+            RxNpmProxyStorageTest.MODIFIED,
+            RxNpmProxyStorageTest.CONTENT_TYPE
+        );
+        final NpmAsset teed = this.storage.saveStreamThrough(upstream).blockingGet();
+        MatcherAssert.assertThat(
+            "Stream-through asset preserves upstream path",
+            teed.path(),
+            new IsEqual<>(path)
+        );
+        // Subscribe to the tee'd publisher and collect the bytes the client
+        // would see.
+        final String clientBytes = new Content.From(teed.dataPublisher()).asString();
+        MatcherAssert.assertThat(
+            "Client receives identical bytes to upstream",
+            clientBytes,
+            new IsEqual<>(RxNpmProxyStorageTest.DEF_CONTENT)
+        );
+        // After stream completion, both the tarball and the meta sidecar
+        // must be in storage.
+        MatcherAssert.assertThat(
+            "Tarball written to storage matches upstream bytes",
+            this.publisherAsStr(path),
+            new IsEqual<>(RxNpmProxyStorageTest.DEF_CONTENT)
+        );
+        final String metadata = this.publisherAsStr(
+            String.format("%s.meta", path)
+        );
+        final JsonObject json = new JsonObject(metadata);
+        MatcherAssert.assertThat(
+            "Sidecar last-modified is correct",
+            json.getString("last-modified"),
+            new IsEqual<>(RxNpmProxyStorageTest.MODIFIED)
+        );
+        MatcherAssert.assertThat(
+            "Sidecar content-type is correct",
+            json.getString("content-type"),
+            new IsEqual<>(RxNpmProxyStorageTest.CONTENT_TYPE)
+        );
+    }
+
+    /**
+     * Phase 12 — integrity invariant: bytes the client receives MUST equal
+     * bytes written to disk, even when the upstream publisher emits multiple
+     * chunks of varying size.
+     */
+    @Test
+    public void streamThroughIntegrityWithMultipleChunks() {
+        final String path = "multichunk/-/multichunk-1.0.0.tgz";
+        final byte[] payload = new byte[64 * 1024 + 17];
+        for (int idx = 0; idx < payload.length; idx++) {
+            payload[idx] = (byte) (idx & 0xFF);
+        }
+        // Emit the payload as 4 chunks so the tee's per-buffer copy logic is
+        // exercised end-to-end.
+        final java.util.List<java.nio.ByteBuffer> chunks = new java.util.ArrayList<>();
+        final int chunkSize = payload.length / 4;
+        for (int idx = 0; idx < 4; idx++) {
+            final int start = idx * chunkSize;
+            final int end = idx == 3 ? payload.length : start + chunkSize;
+            chunks.add(java.nio.ByteBuffer.wrap(
+                java.util.Arrays.copyOfRange(payload, start, end)
+            ));
+        }
+        final NpmAsset upstream = new NpmAsset(
+            path,
+            new Content.From(
+                (long) payload.length,
+                io.reactivex.Flowable.fromIterable(chunks)
+            ),
+            RxNpmProxyStorageTest.MODIFIED,
+            RxNpmProxyStorageTest.CONTENT_TYPE
+        );
+        final NpmAsset teed = this.storage.saveStreamThrough(upstream).blockingGet();
+        // Drain the tee'd publisher exactly the way the HTTP response body
+        // would.
+        final byte[] clientBytes = io.reactivex.Flowable.fromPublisher(teed.dataPublisher())
+            .toList()
+            .blockingGet()
+            .stream()
+            .collect(
+                java.io.ByteArrayOutputStream::new,
+                (out, buf) -> {
+                    final byte[] tmp = new byte[buf.remaining()];
+                    buf.duplicate().get(tmp);
+                    out.write(tmp, 0, tmp.length);
+                },
+                (a, b) -> a.write(b.toByteArray(), 0, b.size())
+            )
+            .toByteArray();
+        MatcherAssert.assertThat(
+            "Client bytes length matches upstream",
+            clientBytes.length,
+            new IsEqual<>(payload.length)
+        );
+        org.junit.jupiter.api.Assertions.assertArrayEquals(
+            payload, clientBytes,
+            "Client bytes must equal upstream bytes"
+        );
+        // Verify on-disk bytes equal upstream too.
+        final byte[] onDisk = this.delegate.value(new Key.From(path)).join().asBytesFuture().join();
+        org.junit.jupiter.api.Assertions.assertArrayEquals(
+            payload, onDisk,
+            "Disk bytes must equal upstream bytes"
+        );
+    }
+
+    /**
+     * Phase 12 — upstream error mid-stream: the client subscriber sees the
+     * error and the storage tarball is NOT written (no garbage in cache).
+     */
+    @Test
+    public void streamThroughDoesNotWriteOnUpstreamError() {
+        final String path = "broken/-/broken-1.0.0.tgz";
+        final NpmAsset upstream = new NpmAsset(
+            path,
+            new Content.From(
+                io.reactivex.Flowable.<java.nio.ByteBuffer>concat(
+                    io.reactivex.Flowable.just(java.nio.ByteBuffer.wrap("first-chunk".getBytes(StandardCharsets.UTF_8))),
+                    io.reactivex.Flowable.error(new java.io.IOException("upstream blew up"))
+                )
+            ),
+            RxNpmProxyStorageTest.MODIFIED,
+            RxNpmProxyStorageTest.CONTENT_TYPE
+        );
+        final NpmAsset teed = this.storage.saveStreamThrough(upstream).blockingGet();
+        final Throwable err = io.reactivex.Flowable.fromPublisher(teed.dataPublisher())
+            .ignoreElements()
+            .blockingGet();
+        org.junit.jupiter.api.Assertions.assertNotNull(err, "Client must observe upstream error");
+        MatcherAssert.assertThat(
+            "Error message propagates",
+            err.getMessage(),
+            new IsEqual<>("upstream blew up")
+        );
+        // Tarball must NOT be in storage (upstream failed before complete).
+        MatcherAssert.assertThat(
+            "No partial tarball in storage on upstream error",
+            this.delegate.exists(new Key.From(path)).join(),
+            new IsEqual<>(Boolean.FALSE)
+        );
+    }
+
     @BeforeEach
     void setUp() {
         this.delegate = new InMemoryStorage();

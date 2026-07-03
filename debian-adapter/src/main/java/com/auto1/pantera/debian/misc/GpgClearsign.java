@@ -41,9 +41,6 @@ import org.bouncycastle.openpgp.operator.jcajce.JcePBESecretKeyDecryptorBuilder;
  * https://github.com/bcgit/bc-java/blob/master/pg/src/main/java/org/bouncycastle/openpgp/examples/ClearSignedFileProcessor.java.
  * @since 0.4
  */
-@SuppressWarnings(
-    {"PMD.AvoidDuplicateLiterals", "PMD.AssignmentInOperand", "PMD.ArrayIsStoredDirectly"}
-)
 public final class GpgClearsign {
 
     /**
@@ -56,7 +53,7 @@ public final class GpgClearsign {
      * @param content Bytes content to sign
      */
     public GpgClearsign(final byte[] content) {
-        this.content = content;
+        this.content = content; // NOPMD ArrayIsStoredDirectly - private final immutable holder; bytes consumed only via signedContent()
     }
 
     /**
@@ -98,21 +95,25 @@ public final class GpgClearsign {
                 return out.toByteArray();
             }
         } catch (final PGPException err) {
-            EcsLogger.error("com.auto1.pantera.debian")
+            // B7: middle-layer log-and-rethrow — the boundary catcher (the
+            // adapter slice that converts to an HTTP response) keeps the
+            // full stack. Emit TRACE here so deep-debug still surfaces
+            // the path without flooding production logs.
+            EcsLogger.trace("com.auto1.pantera.debian")
                 .message("Error while generating gpg-signature")
                 .eventCategory("web")
                 .eventAction("gpg_sign")
-                .eventOutcome("failure")
-                .error(err)
+                .field("error.type", err.getClass().getSimpleName())
+                .field("log.source", "application")
                 .log();
             throw new PanteraException(err);
         } catch (final IOException err) {
-            EcsLogger.error("com.auto1.pantera.debian")
+            EcsLogger.trace("com.auto1.pantera.debian")
                 .message("IO error while generating gpg-signature")
                 .eventCategory("web")
                 .eventAction("gpg_sign")
-                .eventOutcome("failure")
-                .error(err)
+                .field("error.type", err.getClass().getSimpleName())
+                .field("log.source", "application")
                 .log();
             throw new PanteraIOException(err);
         }
@@ -148,21 +149,22 @@ public final class GpgClearsign {
                 return out.toByteArray();
             }
         } catch (final PGPException err) {
-            EcsLogger.error("com.auto1.pantera.debian")
+            // B7: middle-layer log-and-rethrow — see above.
+            EcsLogger.trace("com.auto1.pantera.debian")
                 .message("Error while generating gpg-signature")
                 .eventCategory("web")
                 .eventAction("gpg_sign")
-                .eventOutcome("failure")
-                .error(err)
+                .field("error.type", err.getClass().getSimpleName())
+                .field("log.source", "application")
                 .log();
             throw new PanteraException(err);
         } catch (final IOException err) {
-            EcsLogger.error("com.auto1.pantera.debian")
+            EcsLogger.trace("com.auto1.pantera.debian")
                 .message("IO error while generating gpg-signature")
                 .eventCategory("web")
                 .eventAction("gpg_sign")
-                .eventOutcome("failure")
-                .error(err)
+                .field("error.type", err.getClass().getSimpleName())
+                .field("log.source", "application")
                 .log();
             throw new PanteraIOException(err);
         }

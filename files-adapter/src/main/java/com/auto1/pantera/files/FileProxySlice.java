@@ -17,9 +17,10 @@ import com.auto1.pantera.asto.cache.CacheControl;
 import com.auto1.pantera.asto.cache.StreamThroughCache;
 import com.auto1.pantera.asto.cache.FromStorageCache;
 import com.auto1.pantera.asto.cache.Remote;
-import com.auto1.pantera.cooldown.CooldownRequest;
-import com.auto1.pantera.cooldown.CooldownResponses;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
+import com.auto1.pantera.cooldown.api.CooldownRequest;
+import com.auto1.pantera.cooldown.response.CooldownResponseRegistry;
+import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
@@ -32,6 +33,8 @@ import com.auto1.pantera.http.client.auth.Authenticator;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.KeyFromPath;
+import com.auto1.pantera.publishdate.PublishDateRegistries;
+import com.auto1.pantera.publishdate.RegistryBackedInspector;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.scheduling.RepositoryEvents;
 import io.reactivex.Flowable;
@@ -45,6 +48,15 @@ import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Binary files proxy {@link Slice} implementation.
+ *
+ * <p>G7 (T-P09, analysis/plan/v2/IMPLEMENTATION.md): the files adapter
+ * already wires {@link StreamThroughCache} into its cache pipeline. The
+ * upstream body is tee'd to the client publisher and a temp file in a
+ * single pass; the temp file commits to storage on stream completion.
+ * Migrating to {@code ProxyCacheWriter.streamThroughAndCommit} would
+ * swap one stream-through primitive for another with no TTFB win — the
+ * universal-tee gap (G7) is therefore <em>already closed</em> at the
+ * cache abstraction layer.</p>
  */
 public final class FileProxySlice implements Slice {
 
@@ -81,7 +93,7 @@ public final class FileProxySlice implements Slice {
     /**
      * Cooldown inspector.
      */
-    private final FilesCooldownInspector inspector;
+    private final CooldownInspector inspector;
 
     /**
      * Upstream URL for metrics.
@@ -101,7 +113,7 @@ public final class FileProxySlice implements Slice {
      */
     public FileProxySlice(final ClientSlices clients, final URI remote) {
         this(new UriClientSlice(clients, remote), Cache.NOP, Optional.empty(), FilesSlice.ANY_REPO,
-            com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE, "unknown", Optional.empty());
+            com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE, "unknown", Optional.empty());
     }
 
     /**
@@ -116,7 +128,7 @@ public final class FileProxySlice implements Slice {
         this(
             new AuthClientSlice(new UriClientSlice(clients, remote), auth),
             new StreamThroughCache(asto), Optional.empty(), FilesSlice.ANY_REPO,
-            com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE, remote.toString(), Optional.of(asto)
+            com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE, remote.toString(), Optional.of(asto)
         );
     }
 
@@ -133,7 +145,7 @@ public final class FileProxySlice implements Slice {
         this(
             new AuthClientSlice(new UriClientSlice(clients, remote), Authenticator.ANONYMOUS),
             new StreamThroughCache(asto), Optional.of(events), rname,
-            com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE, remote.toString(), Optional.of(asto)
+            com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE, remote.toString(), Optional.of(asto)
         );
     }
 
@@ -143,7 +155,7 @@ public final class FileProxySlice implements Slice {
      */
     FileProxySlice(final Slice remote, final Cache cache) {
         this(remote, cache, Optional.empty(), FilesSlice.ANY_REPO,
-            com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE, "unknown", Optional.empty());
+            com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE, "unknown", Optional.empty());
     }
 
     /**
@@ -194,12 +206,37 @@ public final class FileProxySlice implements Slice {
         final CooldownService cooldown, final String upstreamUrl,
         final Optional<Storage> storage
     ) {
+        this(remote, cache, events, rname, "file-proxy", cooldown, upstreamUrl, storage);
+    }
+
+    /**
+     * Full constructor honouring the slice's configured repository type
+     * for cooldown lookups. Other ctors default {@code rtype} to
+     * {@code "file-proxy"} since that is the only repository type
+     * {@code RepositorySlices} routes through this slice.
+     *
+     * @param remote Remote slice
+     * @param cache Cache
+     * @param events Artifact events
+     * @param rname Repository name
+     * @param rtype Repository type (matches {@code cfg.type()})
+     * @param cooldown Cooldown service
+     * @param upstreamUrl Upstream URL for metrics
+     * @param storage Optional storage for cache-first lookup
+     */
+    public FileProxySlice(
+        final Slice remote, final Cache cache,
+        final Optional<Queue<ArtifactEvent>> events, final String rname,
+        final String rtype,
+        final CooldownService cooldown, final String upstreamUrl,
+        final Optional<Storage> storage
+    ) {
         this.remote = remote;
         this.cache = cache;
         this.events = events;
         this.rname = rname;
         this.cooldown = cooldown;
-        this.inspector = new FilesCooldownInspector(remote);
+        this.inspector = new RegistryBackedInspector(rtype, PublishDateRegistries.instance());
         this.upstreamUrl = upstreamUrl;
         this.storage = storage;
     }
@@ -288,7 +325,9 @@ public final class FileProxySlice implements Slice {
             .thenCompose(result -> {
                 if (result.blocked()) {
                     return java.util.concurrent.CompletableFuture.completedFuture(
-                        CooldownResponses.forbidden(result.block().orElseThrow())
+                        CooldownResponseRegistry.instance()
+                            .getOrThrow(FileProxySlice.REPO_TYPE)
+                            .forbidden(result.block().orElseThrow())
                     );
                 }
                 final long startTime = System.currentTimeMillis();
@@ -411,7 +450,6 @@ public final class FileProxySlice implements Slice {
     /**
      * Record metric safely (only if metrics are enabled).
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
             if (com.auto1.pantera.metrics.PanteraMetrics.isEnabled()) {
@@ -421,6 +459,7 @@ public final class FileProxySlice implements Slice {
             EcsLogger.debug("com.auto1.pantera.files")
                 .message("Failed to record metric")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }

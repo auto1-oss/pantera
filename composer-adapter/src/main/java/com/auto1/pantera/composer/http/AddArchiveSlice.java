@@ -21,6 +21,7 @@ import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.scheduling.ArtifactEvent;
+import java.util.Locale;
 
 import java.util.Optional;
 import java.util.Queue;
@@ -32,8 +33,16 @@ import java.util.regex.Pattern;
  * Slice for adding a package to the repository in ZIP format.
  * Accepts any .zip file and extracts metadata from composer.json inside.
  * See <a href="https://getcomposer.org/doc/05-repositories.md#artifact">Artifact repository</a>.
+ *
+ * <p><b>Trace context contract.</b> Trace context (trace.id / span.id /
+ * span.parent.id) is inherited from the {@code EcsLoggingSlice} MDC scope
+ * set at request entry. Any async hop introduced in this slice MUST use
+ * {@code ContextualExecutor.contextualize(...)} (or an equivalent MDC
+ * capture-and-restore) to preserve trace.id across the executor
+ * boundary — without it, log lines emitted from the worker thread
+ * surface in Kibana with no trace correlation back to the originating
+ * request.
  */
-@SuppressWarnings({"PMD.SingularField", "PMD.UnusedPrivateField"})
 final class AddArchiveSlice implements Slice {
     /**
      * Repository type.
@@ -61,11 +70,12 @@ final class AddArchiveSlice implements Slice {
      * @param rname Repository name
      */
     AddArchiveSlice(final Repository repository, final String rname) {
-        this(repository, Optional.empty(), rname);
+        this(repository, Optional.empty(), rname,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
     }
 
     /**
-     * Ctor.
+     * Legacy ctor (no synchronous index writer).
      * @param repository Repository
      * @param events Artifact events
      * @param rname Repository name
@@ -74,9 +84,29 @@ final class AddArchiveSlice implements Slice {
         final Repository repository, final Optional<Queue<ArtifactEvent>> events,
         final String rname
     ) {
+        this(repository, events, rname,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+    }
+
+    /** Synchronous artifact-index writer for read-after-write consistency. */
+    private final com.auto1.pantera.index.SyncArtifactIndexer syncIndex;
+
+    /**
+     * Ctor with synchronous index writer.
+     * @param repository Repository
+     * @param events Artifact events
+     * @param rname Repository name
+     * @param syncIndex Synchronous artifact-index writer
+     */
+    AddArchiveSlice(
+        final Repository repository, final Optional<Queue<ArtifactEvent>> events,
+        final String rname,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
+    ) {
         this.repository = repository;
         this.events = events;
         this.rname = rname;
+        this.syncIndex = syncIndex;
     }
 
     @Override
@@ -91,6 +121,7 @@ final class AddArchiveSlice implements Slice {
                 .eventAction("archive_upload")
                 .eventOutcome("failure")
                 .field("url.path", uri)
+                .field("log.source", "application")
                 .log();
             return ResponseBuilder.badRequest()
                 .textBody("Path traversal not allowed")
@@ -98,7 +129,7 @@ final class AddArchiveSlice implements Slice {
         }
 
         // Validate archive format - support .zip, .tar.gz, .tgz
-        final String lowerUri = uri.toLowerCase();
+        final String lowerUri = uri.toLowerCase(Locale.ROOT);
         final boolean isZip = lowerUri.endsWith(".zip");
         final boolean isTarGz = lowerUri.endsWith(".tar.gz") || lowerUri.endsWith(".tgz");
 
@@ -109,6 +140,7 @@ final class AddArchiveSlice implements Slice {
                 .eventAction("archive_upload")
                 .eventOutcome("failure")
                 .field("url.path", uri)
+                .field("log.source", "application")
                 .log();
             return ResponseBuilder.badRequest()
                 .textBody("Only .zip, .tar.gz, and .tgz archives are supported for Composer packages")
@@ -136,6 +168,7 @@ final class AddArchiveSlice implements Slice {
                             .eventAction("archive_upload")
                             .eventOutcome("failure")
                             .field("url.path", uri)
+                            .field("log.source", "application")
                             .log();
                         return CompletableFuture.completedFuture(
                             ResponseBuilder.badRequest()
@@ -161,6 +194,7 @@ final class AddArchiveSlice implements Slice {
                             .eventAction("archive_upload")
                             .field("package.version", version)
                             .field("file.name", filename)
+                            .field("log.source", "application")
                             .log();
                     }
                     
@@ -173,6 +207,7 @@ final class AddArchiveSlice implements Slice {
                             .eventAction("archive_upload")
                             .eventOutcome("failure")
                             .field("package.name", packageName)
+                            .field("log.source", "application")
                             .log();
                         return CompletableFuture.completedFuture(
                             ResponseBuilder.badRequest()
@@ -205,6 +240,7 @@ final class AddArchiveSlice implements Slice {
                                 .message("Dev version detected, preserving unique identifier: " + uniqueSuffix)
                                 .eventCategory("web")
                                 .eventAction("archive_upload")
+                                .field("log.source", "application")
                                 .log();
                         }
                     }
@@ -237,6 +273,7 @@ final class AddArchiveSlice implements Slice {
                         .field("package.version", version)
                         .field("package.path", artifactPath)
                         .field("file.type", isZip ? "ZIP" : "TAR.GZ")
+                        .field("log.source", "application")
                         .log();
                     
                     // Create appropriate archive handler for final storage
@@ -251,55 +288,54 @@ final class AddArchiveSlice implements Slice {
                         new Content.From(bytes)
                     );
                     
-                    // Record artifact event if enabled
-                    if (this.events.isPresent()) {
-                        res = res.thenAccept(
-                            nothing -> {
-                                final long size;
-                                try {
-                                    size = this.repository.storage()
-                                        .metadata(archive.name().artifact())
-                                        .thenApply(meta -> meta.read(Meta.OP_SIZE))
-                                        .join()
-                                        .map(Long::longValue)
-                                        .orElse(0L);
-                                } catch (final Exception e) {
-                                    EcsLogger.warn("com.auto1.pantera.composer")
-                                        .message("Failed to get file size for event")
-                                        .eventCategory("web")
-                                        .eventAction("event_creation")
-                                        .eventOutcome("failure")
-                                        .field("error.message", e.getMessage())
-                                        .log();
-                                    return;
-                                }
-                                final long created = System.currentTimeMillis();
-                                this.events.get().add(
-                                    new ArtifactEvent(
-                                        AddArchiveSlice.REPO_TYPE,
-                                        this.rname,
-                                        new Login(headers).getValue(),
-                                        packageName,
-                                        version,
-                                        size,
-                                        created,
-                                        (Long) null  // No release date for local uploads
-                                    )
-                                );
-                                EcsLogger.info("com.auto1.pantera.composer")
-                                    .message("Recorded Composer package upload event")
-                                    .eventCategory("web")
-                                    .eventAction("event_creation")
-                                    .eventOutcome("success")
-                                    .field("package.name", packageName)
-                                    .field("package.version", version)
-                                    .field("repository.name", this.rname)
-                                    .field("package.size", size)
-                                    .log();
-                            }
+                    // Record artifact event AND synchronously update index so
+                    // group resolver sees the new artifact immediately.
+                    res = res.thenCompose(nothing -> {
+                        final long size;
+                        try {
+                            size = this.repository.storage()
+                                .metadata(archive.name().artifact())
+                                .thenApply(meta -> meta.read(Meta.OP_SIZE))
+                                .join()
+                                .map(Long::longValue)
+                                .orElse(0L);
+                        } catch (final Exception e) {
+                            EcsLogger.warn("com.auto1.pantera.composer")
+                                .message("Failed to get file size for event")
+                                .eventCategory("web")
+                                .eventAction("event_creation")
+                                .eventOutcome("failure")
+                                .error(e)
+                                .field("log.source", "application")
+                                .log();
+                            return CompletableFuture.completedFuture(null);
+                        }
+                        final long created = System.currentTimeMillis();
+                        final ArtifactEvent event = new ArtifactEvent(
+                            AddArchiveSlice.REPO_TYPE,
+                            this.rname,
+                            new Login(headers).getValue(),
+                            packageName,
+                            version,
+                            size,
+                            created,
+                            (Long) null  // No release date for local uploads
                         );
-                    }
-                    
+                        this.events.ifPresent(queue -> queue.add(event));
+                        EcsLogger.info("com.auto1.pantera.composer")
+                            .message("Recorded Composer package upload event")
+                            .eventCategory("web")
+                            .eventAction("event_creation")
+                            .eventOutcome("success")
+                            .field("package.name", packageName)
+                            .field("package.version", version)
+                            .field("repository.name", this.rname)
+                            .field("package.size", size)
+                            .field("log.source", "application")
+                            .log();
+                        return this.syncIndex.recordSync(event);
+                    });
+
                     return res.thenApply(nothing -> ResponseBuilder.created().build());
                 })
                 .exceptionally(error -> {
@@ -310,6 +346,7 @@ final class AddArchiveSlice implements Slice {
                         .eventOutcome("failure")
                         .error(error)
                         .field("file.name", filename)
+                        .field("log.source", "application")
                         .log();
                     return ResponseBuilder.internalError()
                         .textBody(

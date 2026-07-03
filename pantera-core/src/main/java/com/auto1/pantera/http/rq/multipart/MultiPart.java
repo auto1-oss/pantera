@@ -24,7 +24,6 @@ import org.reactivestreams.Subscription;
 /**
  * Multipart request part.
  */
-@SuppressWarnings("PMD.NullAssignment")
 final class MultiPart implements RqMultipart.Part, ByteBufferTokenizer.Receiver, Subscription {
 
     /**

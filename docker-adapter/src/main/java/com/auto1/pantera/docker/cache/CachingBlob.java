@@ -152,6 +152,7 @@ final class CachingBlob implements Blob {
                             .eventOutcome("success")
                             .field("package.checksum", this.origin.digest().string())
                             .field("package.size", size)
+                            .field("log.source", "application")
                             .log();
                     }
                 });
@@ -196,6 +197,7 @@ final class CachingBlob implements Blob {
             EcsLogger.debug("com.auto1.pantera.docker")
                 .message("Failed to close file channel")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -207,6 +209,7 @@ final class CachingBlob implements Blob {
             EcsLogger.debug("com.auto1.pantera.docker")
                 .message("Failed to delete temp file")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -218,6 +221,7 @@ final class CachingBlob implements Blob {
             .eventAction("blob_cache")
             .eventOutcome("failure")
             .error(err)
+            .field("log.source", "application")
             .log();
     }
 }

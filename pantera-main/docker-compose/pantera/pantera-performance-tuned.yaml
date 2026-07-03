@@ -1,54 +1,278 @@
-# Pantera Configuration with Performance Tuning
-# This is an example configuration showing all available database performance settings
+# Pantera production-tuned configuration
+#
+# Target workload:
+#   - 1000 req/s sustained
+#   - 5,000,000 artifacts in catalog
+#   - Multi-instance HA cluster
+#
+# Pantera container sizing (per node):
+#   - 15 vCPU, 20 GiB memory
+#   - JVM: -Xms14g -Xmx14g (G1GC, 300 ms pause target)
+#   - Direct memory: 4 GiB (Jetty + Vert.x buffers)
+#
+# Valkey sizing (shared):
+#   - cache.r6g.large (2 vCPU sustained, 13.07 GiB, up to 10 Gbps)
+#   - Multi-AZ replication group recommended for HA
+#   - Server-side: maxmemory-policy = allkeys-lru
+#
+# Every value below is sized to fit the above with comfortable headroom.
+# See docs/admin-guide/cache-configuration.md for the per-cache reference.
 
 meta:
   storage:
     type: fs
     path: /var/pantera/repo
 
-# Database configuration with performance optimizations
-artifacts_database:
-  # PostgreSQL connection settings
-  postgres_host: ${POSTGRES_HOST}  # or localhost
-  postgres_port: 5432
-  postgres_database: artifacts
-  postgres_user: pantera
-  postgres_password: pantera
-  
-  # Connection pool settings (HikariCP)
-  pool_max_size: 20        # Maximum number of connections in pool (default: 20)
-  pool_min_idle: 5         # Minimum idle connections (default: 5)
-  
-  # Buffer settings for batch processing
-  buffer_time_seconds: 2   # Time to wait before flushing batch (default: 2)
-  buffer_size: 50          # Maximum events per batch (default: 50)
-  
-  # Legacy settings (still supported)
-  threads_count: 3         # Number of parallel consumer threads (default: 1)
-  interval_seconds: 5      # Interval to check events queue (default: 1)
+  # JWT — RS256 asymmetric keys. Mount the key pair from a secret store.
+  jwt:
+    private-key-path: ${JWT_PRIVATE_KEY_PATH}
+    public-key-path: ${JWT_PUBLIC_KEY_PATH}
+    access-token-expiry-seconds: 3600        # 1 h
+    refresh-token-expiry-seconds: 604800     # 7 d
 
-# Performance Tuning Guidelines:
-#
-# For HIGH THROUGHPUT (many artifacts/sec):
-#   - Increase pool_max_size to 30-50
-#   - Increase buffer_size to 100-200
-#   - Increase threads_count to 5-10
-#   - Decrease buffer_time_seconds to 1
-#
-# For LOW LATENCY (quick writes):
-#   - Decrease buffer_time_seconds to 1
-#   - Decrease buffer_size to 20-30
-#   - Keep pool_max_size at 20
-#
-# For RESOURCE CONSTRAINED (limited memory/CPU):
-#   - Decrease pool_max_size to 10
-#   - Decrease threads_count to 1-2
-#   - Keep buffer settings at defaults
-#
-# Database Indexes:
-#   All critical indexes are created automatically on startup:
-#   - idx_artifacts_repo_lookup (repo_name, name, version)
-#   - idx_artifacts_repo_type_name (repo_type, repo_name, name)
-#   - idx_artifacts_created_date (created_date)
-#   - idx_artifacts_owner (owner)
-#   - idx_artifacts_release_date (release_date)
+  credentials:
+    # Production credential chain: Keycloak (corporate SSO) → JWT (API tokens)
+    # → Okta (federated SSO). Okta requires policy storage to be configured
+    # under meta.policy below; remove this block if Okta is not in use.
+    - type: keycloak
+      url: ${KEYCLOAK_URL}
+      realm: pantera
+      client-id: pantera
+      client-password: ${KEYCLOAK_CLIENT_SECRET}
+      user-domains:
+        - "${PANTERA_CORPORATE_DOMAIN}"
+
+    - type: jwt-password
+
+    - type: okta
+      issuer: ${OKTA_ISSUER}
+      client-id: ${OKTA_CLIENT_ID}
+      client-secret: ${OKTA_CLIENT_SECRET}
+      redirect-uri: ${OKTA_REDIRECT_URI}
+      scope: "openid email profile groups"
+      groups-claim: "groups"
+      # ACCESS GATE — without `allowed-groups`, any authenticated Okta user
+      # would auto-provision as a reader. Insecure for production.
+      allowed-groups:
+        - pantera_readers
+        - pantera_admins
+      group-roles:
+        - pantera_readers: "reader"
+        - pantera_admins: "admin"
+      user-domains:
+        - "${PANTERA_CORPORATE_DOMAIN}"
+
+  # Authorization (RBAC) policy storage. Required for the Okta provider.
+  policy:
+    type: pantera
+    eviction_millis: 180000
+    storage:
+      type: fs
+      path: /var/pantera/security
+
+  # Cooldown is opt-in per repo type. Defaults disabled at the global level
+  # to avoid surprising users; per-type rules below turn it on for the
+  # proxy adapters where fresh-release shadowing is actually a concern.
+  cooldown:
+    enabled: false
+    minimum_allowed_age: 7d
+    repo_types:
+      npm-proxy:
+        enabled: true
+      maven-proxy:
+        enabled: true
+      gradle-proxy:
+        enabled: true
+      pypi-proxy:
+        enabled: true
+
+  # PostgreSQL pool tuning for 1000 req/s.
+  # - pool_max_size 80 covers concurrent request handling + background
+  #   consumers (artifact-events, cooldown sweep, materialized refresh).
+  # - threads_count 8 lets DbConsumer batch artifact events in parallel
+  #   without contending with REST API handlers.
+  # - buffer_size 200 reduces commit-overhead per event under burst.
+  artifacts_database:
+    postgres_host: ${POSTGRES_HOST}
+    postgres_port: 5432
+    postgres_database: pantera
+    postgres_user: ${POSTGRES_USER}
+    postgres_password: ${POSTGRES_PASSWORD}
+    pool_max_size: 80
+    pool_min_idle: 20
+    buffer_time_seconds: 2
+    buffer_size: 200
+    threads_count: 8
+    interval_seconds: 1
+
+  # Outbound HTTP client tuned for the 1000 req/s upstream-fanout shape.
+  # - max_connections_per_destination 512 lets the Jetty pool open
+  #   enough TCP sockets per upstream to amortize Cloudflare RTT.
+  # - max_requests_queued 4096 absorbs short bursts without 503s.
+  # - idle_timeout 60 s aligns with most CDN keepalive windows.
+  http_client:
+    proxy_timeout: 120
+    max_connections_per_destination: 512
+    max_requests_queued_per_destination: 4096
+    idle_timeout: 60000
+    connection_timeout: 15000
+    follow_redirects: true
+    connection_acquire_timeout: 120000
+
+  http_server:
+    request_timeout: PT2M
+
+  metrics:
+    endpoint: /metrics/vertx
+    port: 8087
+    types:
+      - jvm
+      - storage
+      - http
+
+  # ---------------------------------------------------------------------
+  # Cache configuration — production sizing for r6g.large Valkey
+  # ---------------------------------------------------------------------
+  # Memory budget summary:
+  #   - JVM heap (14 GB):  L1 caches up to ~3-4 GB; rest for working set
+  #   - Valkey (13 GB):    L2 caches sized to ~9-10 GB usable
+  #
+  # Per-cache rationale lives next to each block. The big two by memory
+  # are cooldown-metadata (large payloads) and group-metadata-stale
+  # (last-known-good fallback).
+  # ---------------------------------------------------------------------
+  caches:
+    valkey:
+      enabled: true
+      host: ${VALKEY_HOST}
+      port: ${VALKEY_PORT:-6379}
+      timeout: 150ms                # sustained CPU on r6g — predictable RTT
+
+    # auth-enabled — per-user enabled flag for LocalEnabledFilter.
+    # Hit on every authenticated request → highest hit-rate requirement.
+    # Pub/sub propagates user disable/password change across nodes.
+    auth-enabled:
+      l1:
+        maxSize: 30000              # ≈ 3x active-user count
+        ttlSeconds: 300             # 5 min — admin changes propagate fast
+      l2:
+        enabled: true
+        ttlSeconds: 3600            # 1 h
+        timeoutMs: 100
+
+    # group-metadata-stale — last-known-good metadata for group repos
+    # during partial upstream outages. Aid, not breaker. Sized generously;
+    # under normal load no eviction fires.
+    group-metadata-stale:
+      l1:
+        maxSize: 100000
+        ttlSeconds: 2592000         # 30 d — survive long outages
+      l2:
+        enabled: true
+        ttlSeconds: 604800          # 7 d explicit cap (no LRU dependency)
+        timeoutMs: 100
+
+    # repo-negative — shared 404 cache used by GroupResolver,
+    # BaseCachedProxySlice, CachedNpmProxySlice, CachedPyProxySlice.
+    # Upload-side invalidation (per-adapter) means TTL is freshness
+    # insurance, not the primary freshness mechanism. Long TTL = high hits.
+    repo-negative:
+      ttl: 1h
+      maxSize: 200000               # ~10 MB L1
+      valkey:
+        enabled: true
+        l1MaxSize: 200000
+        l1Ttl: 1h
+        l2MaxSize: 3000000          # ~750 MB Valkey footprint
+        l2Ttl: 24h
+        timeout: 100ms
+
+    # cooldown-metadata — the cooldown-filtered metadata envelope cache.
+    # Largest single L1 by memory (payloads are 5-50 KB each).
+    # Per-entry TTL is min(blockedUntil) when blocks exist; the static
+    # cap below applies only when nothing is blocked. Upload-side
+    # invalidation (per-adapter) covers the "new version appeared
+    # upstream while no blocks active" case.
+    cooldown-metadata:
+      ttl: 1h
+      maxSize: 100000               # ≈ 1 GB L1 — the biggest L1 consumer
+      valkey:
+        enabled: true
+        l1MaxSize: 100000
+        l1Ttl: 1h
+        l2MaxSize: 500000           # ~5 GB Valkey — the biggest L2 consumer
+        l2Ttl: 12h
+        timeout: 200ms              # larger payloads — be lenient
+
+    # artifact-index-positive — search "which repos serve this artifact?".
+    # Surgical pub/sub invalidation on upload/delete keeps entries fresh,
+    # so TTL is high and L2 covers the full 5M-artifact catalog.
+    artifact-index-positive:
+      ttl: 1h
+      maxSize: 500000               # ~100 MB L1
+      valkey:
+        enabled: true
+        l1MaxSize: 500000
+        l1Ttl: 1h
+        l2MaxSize: 5000000          # full catalog coverage
+        l2Ttl: 2h
+        timeout: 100ms
+
+    # artifact-index-negative — short-TTL 404 sentinels for search probes.
+    # Surgical invalidation drops on upload, so a fresh publish appears
+    # immediately even with non-zero TTL.
+    artifact-index-negative:
+      ttl: 10m
+      maxSize: 300000               # ~15 MB L1
+      valkey:
+        enabled: true
+        l1MaxSize: 300000
+        l1Ttl: 10m
+        l2MaxSize: 1000000
+        l2Ttl: 1h
+        timeout: 100ms
+
+    # auth — CachedUsers (full user record). Hit on every authenticated
+    # request alongside auth-enabled. Larger entries than auth-enabled.
+    auth:
+      ttl: 10m
+      maxSize: 20000                # ~20 MB L1 — fits the full user base
+      valkey:
+        enabled: true
+        l1MaxSize: 20000
+        l1Ttl: 10m
+        l2MaxSize: 200000
+        l2Ttl: 2h
+
+    # policy-perms / policy-users / policy-roles — authorization YAMLs.
+    # Hot on every authenticated request; small entries; short TTL with
+    # pub/sub invalidation on admin edits.
+    policy-perms:
+      ttl: 5m
+      maxSize: 5000
+    policy-users:
+      ttl: 5m
+      maxSize: 30000                # ≈ active-user count
+    policy-roles:
+      ttl: 5m
+      maxSize: 2000
+
+    # filters — parsed per-repo filter configurations. Small set.
+    filters:
+      ttl: 5m
+      maxSize: 2000                 # ≈ repo count
+
+    # npm-search — npm /-/v1/search response cache.
+    # Large entries (~20-50 KB each), low change frequency. Keep L1 lean.
+    npm-search:
+      ttl: 6h
+      maxSize: 5000
+      valkey:
+        enabled: true
+        l1MaxSize: 2000             # ~50 MB L1 — large entries
+        l1Ttl: 1h
+        l2MaxSize: 30000
+        l2Ttl: 12h
+
+  global_prefixes:
+    - ${PANTERA_URL_PREFIX:-pantera}

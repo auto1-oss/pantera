@@ -224,7 +224,7 @@ public final class MetadataEnhancer {
 
             // Copy all fields except internal ones
             for (String key : versionMeta.keySet()) {
-                if (!key.startsWith("_publish") && !key.equals("_time")) {
+                if (!key.startsWith("_publish") && !"_time".equals(key)) {
                     versionCleaned.add(key, versionMeta.get(key));
                 }
             }
@@ -251,6 +251,7 @@ public final class MetadataEnhancer {
                 EcsLogger.debug("com.auto1.pantera.npm")
                     .message("Failed to parse _publishTime field")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -263,6 +264,7 @@ public final class MetadataEnhancer {
                 EcsLogger.debug("com.auto1.pantera.npm")
                     .message("Failed to parse _time field")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -275,6 +277,7 @@ public final class MetadataEnhancer {
                 EcsLogger.debug("com.auto1.pantera.npm")
                     .message("Failed to parse publishTime field")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
         }

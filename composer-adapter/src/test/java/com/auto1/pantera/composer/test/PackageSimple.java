@@ -17,7 +17,6 @@ import javax.json.Json;
  * Simple sample of package for using in tests.
  * @since 0.4
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public class PackageSimple {
     /**
      * Repository url.

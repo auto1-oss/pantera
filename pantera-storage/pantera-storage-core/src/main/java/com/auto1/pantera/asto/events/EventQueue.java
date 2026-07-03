@@ -37,7 +37,6 @@ public final class EventQueue<T> {
     /**
      * Queue.
      */
-    @SuppressWarnings("PMD.AvoidFieldNameMatchingMethodName")
     private final Queue<T> queue;
 
     /**
@@ -85,10 +84,11 @@ public final class EventQueue<T> {
                 .message(String.format("Event queue full, dropping event: capacity=%d, size=%d", this.capacity, current))
                 .eventCategory("process")
                 .eventAction("queue_drop")
+                .field("log.source", "application")
                 .log();
             return false;
         }
-        this.queue.add(item);
+        this.queue.add(item); // ok: unbounded ConcurrentLinkedQueue, capacity enforced by AtomicInteger above
         return true;
     }
 
@@ -116,7 +116,6 @@ public final class EventQueue<T> {
      * Queue, not public intentionally, the queue should be accessible only from this package.
      * @return The queue.
      */
-    @SuppressWarnings("PMD.AvoidFieldNameMatchingMethodName")
     Queue<T> queue() {
         return this.queue;
     }

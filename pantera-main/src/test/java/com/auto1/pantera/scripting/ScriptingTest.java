@@ -21,7 +21,6 @@ import org.junit.jupiter.api.Test;
  * Tests Script.StandardScript and Script.PrecompiledScript.
  * @since 0.1
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public class ScriptingTest {
 
     /**

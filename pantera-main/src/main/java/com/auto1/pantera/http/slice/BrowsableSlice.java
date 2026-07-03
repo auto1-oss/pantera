@@ -20,6 +20,7 @@ import com.auto1.pantera.http.headers.Accept;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.log.EcsLogger;
+import java.util.Locale;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -163,7 +164,7 @@ public final class BrowsableSlice implements Slice {
         return headers.stream()
             .filter(h -> Accept.NAME.equalsIgnoreCase(h.getKey()))
             .anyMatch(h -> {
-                final String value = h.getValue().toLowerCase();
+                final String value = h.getValue().toLowerCase(Locale.ROOT);
                 
                 // If PyPI Simple API content types are present, this is an API request
                 if (value.contains("application/vnd.pypi.simple.v1+json") || 
@@ -205,7 +206,7 @@ public final class BrowsableSlice implements Slice {
             return false;
         }
         
-        final String extension = lastSegment.substring(lastDot + 1).toLowerCase();
+        final String extension = lastSegment.substring(lastDot + 1).toLowerCase(Locale.ROOT);
         return FILE_EXTENSIONS.contains(extension);
     }
 
@@ -246,6 +247,7 @@ public final class BrowsableSlice implements Slice {
                 .message("Using FileSystemBrowseSlice for direct NIO access (unwrapped: " + unwrapped.getClass().getSimpleName() + ", original: " + this.storage.getClass().getSimpleName() + ")")
                 .eventCategory("web")
                 .eventAction("browse_slice_select")
+                .field("log.source", "application")
                 .log();
             // Use original storage to preserve SubStorage prefix (repo scoping)
             return new FileSystemBrowseSlice(this.storage);
@@ -257,6 +259,7 @@ public final class BrowsableSlice implements Slice {
             .message("Using StreamingBrowseSlice for storage type: " + unwrapped.getClass().getSimpleName())
             .eventCategory("web")
             .eventAction("browse_slice_select")
+            .field("log.source", "application")
             .log();
         return new StreamingBrowseSlice(this.storage);
     }
@@ -279,7 +282,7 @@ public final class BrowsableSlice implements Slice {
             
             try {
                 // Try DispatchedStorage unwrapping
-                if (className.equals("DispatchedStorage")) {
+                if ("DispatchedStorage".equals(className)) {
                     final java.lang.reflect.Field delegate =
                         current.getClass().getDeclaredField("delegate");
                     delegate.setAccessible(true);
@@ -288,13 +291,14 @@ public final class BrowsableSlice implements Slice {
                         .message("Unwrapped DispatchedStorage to: " + next.getClass().getSimpleName())
                         .eventCategory("web")
                         .eventAction("storage_unwrap")
+                        .field("log.source", "application")
                         .log();
                     current = next;
                     unwrapped = true;
                 }
 
                 // Try DiskCacheStorage unwrapping
-                if (className.equals("DiskCacheStorage")) {
+                if ("DiskCacheStorage".equals(className)) {
                     final java.lang.reflect.Field backend =
                         current.getClass().getDeclaredField("backend");
                     backend.setAccessible(true);
@@ -303,13 +307,14 @@ public final class BrowsableSlice implements Slice {
                         .message("Unwrapped DiskCacheStorage to: " + next.getClass().getSimpleName())
                         .eventCategory("web")
                         .eventAction("storage_unwrap")
+                        .field("log.source", "application")
                         .log();
                     current = next;
                     unwrapped = true;
                 }
 
                 // Try SubStorage unwrapping
-                if (className.equals("SubStorage")) {
+                if ("SubStorage".equals(className)) {
                     final java.lang.reflect.Field origin =
                         current.getClass().getDeclaredField("origin");
                     origin.setAccessible(true);
@@ -318,6 +323,7 @@ public final class BrowsableSlice implements Slice {
                         .message("Unwrapped SubStorage to: " + next.getClass().getSimpleName())
                         .eventCategory("web")
                         .eventAction("storage_unwrap")
+                        .field("log.source", "application")
                         .log();
                     current = next;
                     unwrapped = true;
@@ -335,6 +341,7 @@ public final class BrowsableSlice implements Slice {
                     .eventAction("storage_unwrap")
                     .eventOutcome("failure")
                     .field("error.message", e.getMessage())
+                    .field("log.source", "application")
                     .log();
                 break;
             }

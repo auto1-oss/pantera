@@ -283,8 +283,7 @@ public final class EcsLogger {
         payload.put("message", logMessage);
 
         final Throwable error = extractError();
-        @SuppressWarnings({"rawtypes", "unchecked"})
-        final MapMessage mapMessage = new MapMessage(payload);
+        final MapMessage<?, Object> mapMessage = new MapMessage<>(payload);
 
         switch (this.level) {
             case TRACE:

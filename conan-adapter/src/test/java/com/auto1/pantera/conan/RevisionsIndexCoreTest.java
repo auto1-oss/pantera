@@ -24,7 +24,6 @@ import org.junit.jupiter.api.Test;
  * Tests for RevisionsIndexCore class.
  * @since 0.1
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class RevisionsIndexCoreTest {
 
     /**

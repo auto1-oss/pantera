@@ -24,12 +24,6 @@ import org.reactivestreams.tck.TestEnvironment;
  *
  * @since 1.0
  */
-@SuppressWarnings(
-    {
-        "PMD.TestClassWithoutTestCases", "PMD.OnlyOneReturn",
-        "PMD.JUnit4TestShouldUseBeforeAnnotation"
-    }
-)
 public final class MultiPartTckTest extends PublisherVerification<ByteBuffer> {
 
     /**

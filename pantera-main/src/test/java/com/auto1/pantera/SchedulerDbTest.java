@@ -37,7 +37,6 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  * {@link com.auto1.pantera.db.DbConsumer}.
  * @since 0.31
  */
-@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.TooManyMethods"})
 @Testcontainers
 public final class SchedulerDbTest {
 

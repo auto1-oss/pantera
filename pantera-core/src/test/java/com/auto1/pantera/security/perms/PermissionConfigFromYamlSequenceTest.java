@@ -21,7 +21,6 @@ import org.junit.jupiter.api.Test;
  * Test for {@link PermissionConfig.FromYamlSequence}.
  * @since 1.3
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class PermissionConfigFromYamlSequenceTest {
 
     @Test

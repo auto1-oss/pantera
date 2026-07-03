@@ -121,6 +121,7 @@ public final class AuthFromStorage implements Authentication {
                 .eventOutcome("failure")
                 .field("user.name", name)
                 .error(err)
+                .field("log.source", "application")
                 .log();
         }
         return res;

@@ -47,7 +47,6 @@ import org.junit.jupiter.api.Test;
  * }</pre>
  * @since 1.2
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public class PermissionConfigFromYamlMappingTest {
 
     @Test

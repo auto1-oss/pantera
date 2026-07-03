@@ -36,7 +36,6 @@ import org.xmlunit.matchers.CompareMatcher;
  * Test for {@link XmlEventPrimary}.
  * @since 1.5
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class XmlEventPrimaryTest {
 
     @ParameterizedTest

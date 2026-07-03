@@ -206,4 +206,54 @@ class JettyClientSliceTest {
             ).join().body().asString()
         );
     }
+
+    /**
+     * Regression for fix(http-client): preserve raw inbound path. The earlier
+     * Apache {@code URIBuilder} round-trip percent-encoded characters that
+     * RFC 3986 §3.3 lists as valid {@code pchar} — {@code @} (sub-delim),
+     * {@code :}, {@code +}, {@code ,}, {@code ;}, {@code =}, {@code !},
+     * {@code *}, {@code (}, {@code )}, {@code '} — and that broke real
+     * upstreams: {@code proxy.golang.org} RST_STREAMs on {@code %40v};
+     * strict private npm registries 404 on {@code %40scope};
+     * PyPI-strict mirrors fail on {@code %2B} in local-version wheel
+     * names. The test pins the wire shape of these paths to whatever
+     * the inbound client sent.
+     *
+     * <p>Known carve-out: {@code $} (also an RFC sub-delim) is still
+     * percent-encoded to {@code %24} by Jetty 12's transport layer
+     * during URI canonicalisation — this is internal to the Jetty
+     * client and is not reachable from Pantera without forking
+     * {@code org.eclipse.jetty.http.HttpURI}. Composer's Packagist v2
+     * sha-pinned URLs ({@code /p2/<vendor>/<pkg>$<sha>.json}) are the
+     * only known Pantera path affected, and Packagist accepts the
+     * {@code %24} form. Re-add {@code "/p2/sym/console$abc.json"} to
+     * this list when a Jetty upgrade or workaround eliminates the
+     * remaining encoding.
+     *
+     * @param path Path the test client emits; it must arrive at the test
+     *             server verbatim.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "/go.uber.org/multierr/@v/v1.10.0.zip",
+        "/@types/node",
+        "/v2/library/nginx/manifests/sha256:abc123",
+        "/wheel/torch-2.0+cu118-py3.whl",
+        "/path,with;sub=delims!and*more('quoted')"
+    })
+    void shouldPreservePcharInUpstreamPath(final String path) {
+        final AtomicReference<String> received = new AtomicReference<>();
+        this.server.update(
+            (rqline, rqheaders, rqbody) -> {
+                received.set(rqline.uri().getRawPath());
+                return CompletableFuture.completedFuture(ResponseBuilder.ok().build());
+            }
+        );
+        this.slice.response(
+            new RequestLine(RqMethod.GET, path),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(received.get(), new IsEqual<>(path));
+    }
 }

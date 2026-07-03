@@ -13,6 +13,7 @@ package com.auto1.pantera.index;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -135,7 +136,7 @@ public final class SearchQueryParser {
             final int colon = token.indexOf(':');
             if (colon > 0 && colon < token.length() - 1) {
                 // field:value (no space after colon)
-                final String field = token.substring(0, colon).toLowerCase();
+                final String field = token.substring(0, colon).toLowerCase(Locale.ROOT);
                 final String value = token.substring(colon + 1);
                 if (KNOWN_FIELDS.contains(field)) {
                     fieldValues.computeIfAbsent(field, k -> new ArrayList<>())
@@ -145,14 +146,14 @@ public final class SearchQueryParser {
                 }
             } else if (colon > 0 && colon == token.length() - 1) {
                 // field: value (space after colon) — peek at next non-operator token
-                final String field = token.substring(0, colon).toLowerCase();
+                final String field = token.substring(0, colon).toLowerCase(Locale.ROOT);
                 if (KNOWN_FIELDS.contains(field) && i + 1 < tokens.size()) {
                     final String next = tokens.get(i + 1);
                     if (!"AND".equals(next) && !"OR".equals(next)
                         && !"(".equals(next) && !")".equals(next)) {
                         fieldValues.computeIfAbsent(field, k -> new ArrayList<>())
                             .add(normalizeValue(field, next));
-                        i++;
+                        i++; // NOPMD AvoidReassigningLoopVariables - intentional: consume the peeked-ahead value token so the outer for-loop skips it
                         continue;
                     }
                 }

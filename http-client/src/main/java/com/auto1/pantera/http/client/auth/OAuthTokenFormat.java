@@ -36,6 +36,20 @@ final class OAuthTokenFormat implements TokenFormat {
         if (token != null) {
             return token;
         }
+        // OAuth Registry V2 error envelope: when the upstream refuses to
+        // mint a token (anonymous access denied, repo not found, scope
+        // not granted, etc.) it can reply HTTP 200 with a body shaped as
+        // {"errors":[{"code":"...","message":"..."}]} — see
+        // https://distribution.github.io/distribution/spec/api/#errors-2.
+        // GCR (Google Artifact Registry) and DHI do this. Surfacing
+        // {@link IllegalStateException} here would mask the real reason
+        // and treat a normal denial as a programming error; instead we
+        // throw {@link UpstreamAuthDeniedException} carrying the upstream
+        // code so the upper layer can distinguish "the upstream said no"
+        // from "the response shape is broken".
+        if (json.containsKey("errors")) {
+            throw new UpstreamAuthDeniedException(json.get("errors").toString());
+        }
         throw new IllegalStateException(
             "Token response contains neither 'access_token' nor 'token' field"
         );

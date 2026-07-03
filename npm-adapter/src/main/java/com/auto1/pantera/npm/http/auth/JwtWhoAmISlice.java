@@ -51,6 +51,7 @@ public final class JwtWhoAmISlice implements Slice {
                     .eventCategory("authentication")
                     .eventAction("whoami")
                     .eventOutcome("failure")
+                    .field("log.source", "application")
                     .log();
                 return ResponseBuilder.unauthorized()
                     .jsonBody("{\"error\": \"Authentication required\"}")
@@ -62,6 +63,7 @@ public final class JwtWhoAmISlice implements Slice {
                 .eventCategory("authentication")
                 .eventAction("whoami")
                 .field("user.name", username)
+                .field("log.source", "application")
                 .log();
 
             // Return username in npm whoami format

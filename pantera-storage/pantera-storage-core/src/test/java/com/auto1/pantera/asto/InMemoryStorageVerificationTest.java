@@ -18,7 +18,6 @@ import com.auto1.pantera.asto.test.StorageWhiteboxVerification;
  *
  * @since 1.14.0
  */
-@SuppressWarnings("PMD.TestClassWithoutTestCases")
 public final class InMemoryStorageVerificationTest extends StorageWhiteboxVerification {
 
     @Override
