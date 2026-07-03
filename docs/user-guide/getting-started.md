@@ -12,7 +12,7 @@ This page covers the essentials you need before interacting with Pantera as a pa
 
 ## What is Pantera
 
-Pantera is a universal artifact registry that hosts, proxies, and groups package repositories across 16 formats in a single deployment. It serves as the central gateway for all artifact traffic in your organization -- whether you are pulling open-source dependencies, pushing internal builds, or searching for artifacts across teams.
+Pantera is a universal artifact registry that hosts, proxies, and groups package repositories across 16 formats in a single deployment. It serves as the central gateway for all artifact traffic in your organization -- whether you are pulling open-source dependencies, pushing internal builds, or searching for artifacts across teams. This guide assumes a running Pantera instance; if you need to deploy one, see the [Admin Guide -- Installation](../admin-guide/installation.md) (prebuilt Docker images are published for every release).
 
 ---
 

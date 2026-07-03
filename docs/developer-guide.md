@@ -715,6 +715,8 @@ mvn clean install -Pitcase
 
 ### Running Locally
 
+> **No build required:** if you only need a running Pantera instance (e.g. to test a client or compare against a released version), pull the official images `ghcr.io/auto1-oss/pantera` and `ghcr.io/auto1-oss/pantera-ui` instead of building — see the [Admin Guide — Installation](admin-guide/installation.md#published-docker-images-recommended).
+
 **Via Docker Compose (recommended):**
 
 ```bash

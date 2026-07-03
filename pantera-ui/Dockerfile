@@ -1,5 +1,8 @@
-# Build stage
-FROM node:22-alpine AS build
+# Build stage. Pinned to the BUILD platform: the vite output is
+# platform-independent static files, so under buildx --platform
+# amd64+arm64 the npm build runs once natively instead of once more
+# under QEMU emulation; only the nginx runtime stage is per-arch.
+FROM --platform=$BUILDPLATFORM node:22-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci

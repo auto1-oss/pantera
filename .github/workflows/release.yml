@@ -217,7 +217,10 @@ jobs:
           ### Docker
 
           \`\`\`bash
+          # Backend (amd64 + arm64)
           docker pull ghcr.io/${{ github.repository }}:${VERSION}
+          # Management UI (nginx + static bundle)
+          docker pull ghcr.io/${{ github.repository }}-ui:${VERSION}
           \`\`\`
 
           ### Requirements
@@ -321,5 +324,55 @@ jobs:
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+  publish-ui-image:
+    name: Publish UI Docker image (GHCR)
+    # Gated on build-ui so a UI test/lint failure blocks the image even
+    # though the image itself rebuilds from source (multi-stage) — the
+    # build stage runs once on the build platform, only the nginx
+    # runtime stage is per-arch.
+    needs: [version, build-ui]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # Raw buildx + preinstalled docker CLI instead of docker/* actions —
+      # org Actions policy allows GitHub-owned only.
+      - name: Set up QEMU + Buildx
+        run: |
+          docker run --privileged --rm tonistiigi/binfmt --install arm64
+          docker buildx create --use --name release-ui-builder
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build and push UI image (amd64 + arm64)
+        id: push
+        run: |
+          VERSION="${{ needs.version.outputs.version }}"
+          IMAGE="ghcr.io/${{ github.repository }}-ui"
+          TAG_ARGS="-t ${IMAGE}:${VERSION}"
+          # :latest only for finals — pre-releases must not steal it.
+          case "$VERSION" in
+            *RC*|*beta*|*alpha*) ;;
+            *) TAG_ARGS="${TAG_ARGS} -t ${IMAGE}:latest" ;;
+          esac
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --push ${TAG_ARGS} \
+            --metadata-file /tmp/ui-build-metadata.json \
+            -f pantera-ui/Dockerfile pantera-ui
+          DIGEST=$(python3 -c "import json;print(json.load(open('/tmp/ui-build-metadata.json'))['containerimage.digest'])")
+          echo "digest=${DIGEST}" >> $GITHUB_OUTPUT
+
+      - name: Attest UI image provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-name: ghcr.io/${{ github.repository }}-ui
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true

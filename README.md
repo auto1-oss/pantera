@@ -58,6 +58,77 @@ Pantera is based on [Artipie](https://github.com/artipie/artipie), an open-sourc
 - Docker and Docker Compose (for running)
 - **pg_cron** PostgreSQL extension — required for dashboard statistics (artifact count, storage usage). Without it the dashboard shows zeros. See [Admin Guide — Database Setup](docs/admin-guide/installation.md#database-setup-dashboard-materialized-views) for setup.
 
+### Run the published Docker images
+
+Every release publishes multi-arch (amd64 + arm64) images to GitHub Container Registry:
+
+```bash
+docker pull ghcr.io/auto1-oss/pantera:latest      # backend (8080 repository, 8086 REST API)
+docker pull ghcr.io/auto1-oss/pantera-ui:latest   # management UI (nginx, port 80)
+```
+
+Generate the RS256 JWT key pair (required at boot):
+
+```bash
+mkdir -p keys
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out keys/jwt-private.pem
+openssl rsa -in keys/jwt-private.pem -pubout -out keys/jwt-public.pem
+```
+
+Minimal `docker compose` wiring (PostgreSQL + backend + UI):
+
+```yaml
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: pantera
+      POSTGRES_PASSWORD: changeme
+      POSTGRES_DB: pantera
+
+  pantera:
+    image: ghcr.io/auto1-oss/pantera:latest
+    depends_on: [db]
+    environment:
+      JWT_PRIVATE_KEY_PATH: /etc/pantera/keys/jwt-private.pem
+      JWT_PUBLIC_KEY_PATH: /etc/pantera/keys/jwt-public.pem
+      POSTGRES_USER: pantera
+      POSTGRES_PASSWORD: changeme
+    volumes:
+      - ./pantera.yml:/etc/pantera/pantera.yml   # see Configuration below
+      - ./keys:/etc/pantera/keys:ro
+      - pantera-data:/var/pantera                # must be writable by uid 2021
+    ports:
+      - "8080:8080"   # repository traffic
+      - "8086:8086"   # REST API
+
+  ui:
+    image: ghcr.io/auto1-oss/pantera-ui:latest
+    depends_on: [pantera]
+    environment:
+      API_UPSTREAM: pantera:8086   # UI nginx proxies /api/v1 to the backend
+    ports:
+      - "8090:80"
+
+volumes:
+  pantera-data:
+```
+
+In `pantera.yml`, point `artifacts_database.postgres_host` at the `db` service and reference the mounted JWT keys (see [Configuration](#configuration) below). For production setup — pg_cron, Valkey, SSO, monitoring — see the [Admin Guide — Installation](docs/admin-guide/installation.md).
+
+### Run from release artifacts
+
+Each [GitHub release](https://github.com/auto1-oss/pantera/releases) also attaches standalone artifacts: `pantera-<version>.jar`, `pantera-<version>-dist.tar.gz` (the JAR plus a `dependency/` directory with all runtime jars), `pantera-ui-<version>.tar.gz` (compiled UI static files), and `SHA256SUMS`. To run the backend without Docker (JDK 21+, PostgreSQL 15+; Valkey only for HA):
+
+```bash
+tar xzf pantera-<version>-dist.tar.gz
+java -cp 'pantera-main-<version>.jar:dependency/*' \
+  com.auto1.pantera.VertxMain \
+  --config-file=pantera.yml --port=8080 --api-port=8086
+```
+
+The UI tarball can be served by any static web server — see [UI Deployment](docs/admin-guide/ui-deployment.md).
+
 ### Build from source
 
 ```bash
