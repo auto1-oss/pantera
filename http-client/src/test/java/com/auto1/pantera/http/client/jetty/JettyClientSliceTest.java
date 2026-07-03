@@ -98,15 +98,37 @@ class JettyClientSliceTest {
                 return CompletableFuture.completedFuture(ResponseBuilder.ok().build());
             }
         );
-        this.slice.response(
-            RequestLine.from(String.format("%s HTTP/1.1", line)),
-            Headers.EMPTY,
-            Content.EMPTY
-        ).join();
+        sendWithRetry(RequestLine.from(String.format("%s HTTP/1.1", line)));
         MatcherAssert.assertThat(
             actual.get().toString(),
             new StringStartsWith(String.format("%s HTTP", line))
         );
+    }
+
+    /**
+     * Send through the slice, retrying briefly on transient transport
+     * failures. The per-test server + client are freshly started; under
+     * parallel-build CI load the first connect/TLS handshake occasionally
+     * loses the race with the listener becoming fully ready (observed in
+     * the HTTPS subclass), which is not what these tests assert.
+     */
+    final void sendWithRetry(final RequestLine line) {
+        java.util.concurrent.CompletionException last = null;
+        for (int attempt = 0; attempt < 3; attempt = attempt + 1) {
+            try {
+                this.slice.response(line, Headers.EMPTY, Content.EMPTY).join();
+                return;
+            } catch (final java.util.concurrent.CompletionException ex) {
+                last = ex;
+                try {
+                    Thread.sleep(200L);
+                } catch (final InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+        throw last;
     }
 
     @Test
