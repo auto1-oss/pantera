@@ -111,8 +111,13 @@ jobs:
       # build-tools ruleset jar AND sibling-module jars (aux classpath) from
       # the local repository, which is empty on a clean runner — only an
       # in-session reactor build resolves them without prior `install`.
+      #
+      # -Dexec.skip: the docker-build profile auto-activates whenever
+      # /var/run/docker.sock exists (true on runners) and binds a multi-arch
+      # `docker buildx --load` to pantera-main's install phase — impossible
+      # without arm64 binfmt and not CI's job; release.yml publishes images.
       - name: Build, test, verify (unit tests + PMD + license)
-        run: mvn clean install -T8 --fail-at-end -ntp
+        run: mvn clean install -T8 --fail-at-end -ntp -Dexec.skip=true
         env:
           POSTGRES_USER: pantera
           POSTGRES_PASSWORD: pantera
