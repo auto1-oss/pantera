@@ -52,10 +52,10 @@ final class HandlerExecutorTest {
         ThreadContext.put("user.name", "test-admin");
         final AtomicReference<String> seenTrace = new AtomicReference<>();
         final AtomicReference<String> seenUser = new AtomicReference<>();
-        CompletableFuture.runAsync(() -> {
+        submitWithRetry(() -> {
             seenTrace.set(ThreadContext.get("trace.id"));
             seenUser.set(ThreadContext.get("user.name"));
-        }, HandlerExecutor.get()).get(5, TimeUnit.SECONDS);
+        }).get(5, TimeUnit.SECONDS);
         MatcherAssert.assertThat(
             "trace.id visible on worker",
             seenTrace.get(), Matchers.is("test-trace-123")
@@ -71,21 +71,20 @@ final class HandlerExecutorTest {
     void callerThreadContextIsolatedFromWorkerThread() throws Exception {
         // Submit a task with caller context.
         ThreadContext.put("trace.id", "caller-only");
-        CompletableFuture.runAsync(() -> {
+        submitWithRetry(() -> {
             MatcherAssert.assertThat(
                 "caller context visible inside the task",
                 ThreadContext.get("trace.id"), Matchers.is("caller-only")
             );
-        }, HandlerExecutor.get()).get(5, TimeUnit.SECONDS);
+        }).get(5, TimeUnit.SECONDS);
         // Now clear the caller's ThreadContext (simulating a different request
         // on the event loop) and submit a new task. The worker must NOT see
         // the previous caller's "trace.id" — the contextual executor captures
         // the NEW (empty) caller context, not the worker's prior state.
         ThreadContext.clearMap();
         final AtomicReference<String> leakedTrace = new AtomicReference<>();
-        CompletableFuture.runAsync(
-            () -> leakedTrace.set(ThreadContext.get("trace.id")),
-            HandlerExecutor.get()
+        submitWithRetry(
+            () -> leakedTrace.set(ThreadContext.get("trace.id"))
         ).get(5, TimeUnit.SECONDS);
         MatcherAssert.assertThat(
             "previous caller's ThreadContext does not leak to new caller's task",
@@ -93,13 +92,35 @@ final class HandlerExecutorTest {
         );
     }
 
+    /**
+     * Submit to the shared handler pool, retrying briefly on
+     * {@link java.util.concurrent.RejectedExecutionException}. The pool's
+     * bounded queue + AbortPolicy is deliberate production behaviour
+     * (backpressure must be visible), but in the shared surefire JVM a
+     * previous test class's leaked async work can keep the queue full for
+     * a moment on a loaded CI runner — that saturation is not what these
+     * tests assert, so wait it out instead of failing.
+     */
+    private static CompletableFuture<Void> submitWithRetry(final Runnable task)
+        throws InterruptedException {
+        java.util.concurrent.RejectedExecutionException last = null;
+        for (int attempt = 0; attempt < 50; attempt = attempt + 1) {
+            try {
+                return CompletableFuture.runAsync(task, HandlerExecutor.get());
+            } catch (final java.util.concurrent.RejectedExecutionException ex) {
+                last = ex;
+                Thread.sleep(100L);
+            }
+        }
+        throw last;
+    }
+
     @Test
     @DisplayName("Pool threads are daemon threads")
     void poolThreadsAreDaemon() throws Exception {
         final AtomicBoolean daemon = new AtomicBoolean(false);
-        CompletableFuture.runAsync(
-            () -> daemon.set(Thread.currentThread().isDaemon()),
-            HandlerExecutor.get()
+        submitWithRetry(
+            () -> daemon.set(Thread.currentThread().isDaemon())
         ).get(5, TimeUnit.SECONDS);
         MatcherAssert.assertThat(
             "handler pool thread is daemon",
@@ -111,9 +132,8 @@ final class HandlerExecutorTest {
     @DisplayName("Pool threads have a descriptive name starting with 'pantera-handler-'")
     void poolHasDescriptiveThreadName() throws Exception {
         final AtomicReference<String> name = new AtomicReference<>();
-        CompletableFuture.runAsync(
-            () -> name.set(Thread.currentThread().getName()),
-            HandlerExecutor.get()
+        submitWithRetry(
+            () -> name.set(Thread.currentThread().getName())
         ).get(5, TimeUnit.SECONDS);
         MatcherAssert.assertThat(
             "thread name starts with pantera-handler-",
