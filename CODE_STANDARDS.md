@@ -58,7 +58,7 @@ Pantera project. All contributors must follow these standards.
 HTTP request handler classes follow the `*Slice` naming pattern:
 
 ```
-MavenSlice, HealthSlice, CircuitBreakerSlice, GzipSlice, LoggingSlice
+MavenSlice, HealthSlice, CircuitBreakingClientSlice, GzipSlice, LoggingSlice
 ```
 
 ### Storage implementations
@@ -209,7 +209,7 @@ void shouldConnectToValkey() {
 
 ### Circuit breakers
 
-- Use circuit breakers (`CircuitBreakerSlice`, `CooldownCircuitBreaker`) for external
+- Use circuit breakers (`UpstreamCircuitBreaker`, `AutoBlockRegistry`, `CooldownCircuitBreaker`) for external
   upstream calls.
 - The cooldown service tracks failed upstream requests and prevents repeated failures for
   a configurable period (default: 72 hours).

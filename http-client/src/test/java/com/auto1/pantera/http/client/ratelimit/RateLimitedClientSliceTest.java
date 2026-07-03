@@ -46,9 +46,7 @@ final class RateLimitedClientSliceTest {
     @Test
     void gatedRequestNeverReachesWrappedSlice() {
         final TestClock clock = new TestClock(Instant.parse("2026-05-13T10:00:00Z"));
-        final UpstreamRateLimiter limiter = new UpstreamRateLimiter.Default(
-            RateLimitConfig.uniform(100.0, 100.0), clock
-        );
+        final UpstreamRateLimiter limiter = new UpstreamRateLimiter.Default(clock);
         limiter.recordRateLimit("repo1.maven.org", Duration.ofSeconds(10));
         final RecordingSlice downstream = new RecordingSlice();
         final RateLimitedClientSlice slice = new RateLimitedClientSlice(
@@ -74,9 +72,7 @@ final class RateLimitedClientSliceTest {
     @Test
     void upstream429ClosesTheGate() {
         final TestClock clock = new TestClock(Instant.parse("2026-05-13T10:00:00Z"));
-        final UpstreamRateLimiter limiter = new UpstreamRateLimiter.Default(
-            RateLimitConfig.uniform(100.0, 100.0), clock
-        );
+        final UpstreamRateLimiter limiter = new UpstreamRateLimiter.Default(clock);
         final AtomicReference<Response> next = new AtomicReference<>(
             ResponseBuilder.from(RsStatus.TOO_MANY_REQUESTS)
                 .header("Retry-After", "60")
@@ -108,15 +104,11 @@ final class RateLimitedClientSliceTest {
 
     @Test
     void burstBucketSettingsDoNotThrottleSuccessiveCalls() {
-        // 2026-05-14: token-bucket admission removed. Even an aggressive
-        // 1 req/s + burst 1 configuration must not produce a synthesised
-        // 429 — successive calls flow through. The bucket/refill values
-        // are kept on the config surface for the reactive gate's
-        // bookkeeping only.
+        // Token-bucket admission is gone entirely (2026-05-14 disabled,
+        // later deleted as dead code): successive calls must always flow
+        // through — only the reactive 429/Retry-After gate may block.
         final TestClock clock = new TestClock(Instant.parse("2026-05-13T10:00:00Z"));
-        final UpstreamRateLimiter limiter = new UpstreamRateLimiter.Default(
-            RateLimitConfig.uniform(1.0, 1.0), clock
-        );
+        final UpstreamRateLimiter limiter = new UpstreamRateLimiter.Default(clock);
         final Slice downstream = (line, headers, body) ->
             CompletableFuture.completedFuture(ResponseBuilder.ok().build());
         final RateLimitedClientSlice slice = new RateLimitedClientSlice(

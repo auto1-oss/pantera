@@ -186,7 +186,7 @@ As of v2.2.0 the correlation contract is closed across:
 - `java.net.http.HttpClient` outbound calls (OSV.dev scanner).
 - Cross-instance pub/sub: `ClusterEventBus` and `CacheInvalidationPubSub` stamp `trace.id` + `span.id` into a versioned envelope (v2 prefix; v1 still parsed for rolling-deploy compatibility).
 - Quartz jobs (`scheduleJob` writes MDC into `JobDataMap`; `TracingJobWrapper` restores it on `Job.execute`).
-- Async cache and metadata refreshes (`SwrMetadataCache`, PyPI `ProxySlice` background refresh, `WebhookDispatcher` retry timer).
+- Async cache and metadata refreshes (PyPI `ProxySlice` background refresh, `WebhookDispatcher` retry timer).
 
 Audit-log entries inherit the originating HTTP request's `trace.id` so an artifact upload and its HTTP session join in Kibana under a single value.
 

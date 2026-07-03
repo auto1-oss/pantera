@@ -28,76 +28,27 @@ import org.junit.jupiter.api.Test;
 final class UpstreamRateLimiterTest {
 
     /**
-     * Burst tokens are available immediately; the bucket only blocks
-     * after the burst is drained.
+     * The 429 gate closes for the Retry-After window and re-opens once
+     * the deadline passes.
      */
     @Test
-    void acquiresBurstTokensWithoutWaiting() {
+    void gateClosesAndReopens() {
         final TestClock clock = new TestClock(Instant.parse("2026-05-13T10:00:00Z"));
-        final RateLimitConfig cfg = RateLimitConfig.uniform(10.0, 5.0);
-        final UpstreamRateLimiter limiter = new UpstreamRateLimiter.Default(cfg, clock);
-        for (int i = 0; i < 5; i++) {
-            MatcherAssert.assertThat(
-                "burst token " + i,
-                limiter.tryAcquire("repo1.maven.org"),
-                new IsEqual<>(true)
-            );
-        }
-        MatcherAssert.assertThat(
-            "sixth token must wait for refill",
-            limiter.tryAcquire("repo1.maven.org"),
-            new IsEqual<>(false)
-        );
-    }
-
-    /**
-     * After draining the burst, the bucket refills at the configured
-     * rate; advancing the clock makes the next token available.
-     */
-    @Test
-    void refillsAtConfiguredRate() {
-        final TestClock clock = new TestClock(Instant.parse("2026-05-13T10:00:00Z"));
-        final RateLimitConfig cfg = RateLimitConfig.uniform(10.0, 1.0); // 10/s, burst 1
-        final UpstreamRateLimiter limiter = new UpstreamRateLimiter.Default(cfg, clock);
-        MatcherAssert.assertThat(
-            limiter.tryAcquire("h.example"), new IsEqual<>(true)
-        );
-        MatcherAssert.assertThat(
-            limiter.tryAcquire("h.example"), new IsEqual<>(false)
-        );
-        clock.advance(Duration.ofMillis(110));
-        MatcherAssert.assertThat(
-            "after 110 ms with 10 tok/s, one token should be available",
-            limiter.tryAcquire("h.example"), new IsEqual<>(true)
-        );
-    }
-
-    /**
-     * The 429 gate trumps token availability — even with tokens in the
-     * bucket, an open gate denies acquire until the deadline passes.
-     */
-    @Test
-    void gateBlocksDespiteAvailableTokens() {
-        final TestClock clock = new TestClock(Instant.parse("2026-05-13T10:00:00Z"));
-        final RateLimitConfig cfg = RateLimitConfig.uniform(100.0, 100.0);
-        final UpstreamRateLimiter limiter = new UpstreamRateLimiter.Default(cfg, clock);
-        // Burst is large, tokens are plentiful, but the gate is closed:
+        final UpstreamRateLimiter limiter = new UpstreamRateLimiter.Default(clock);
         limiter.recordRateLimit("h.example", Duration.ofSeconds(10));
         MatcherAssert.assertThat(
-            "gate closed for 10 s; acquire must fail",
-            limiter.tryAcquire("h.example"), new IsEqual<>(false)
+            "gate closed for 10 s",
+            limiter.gateOpenUntil("h.example") != null, new IsEqual<>(true)
         );
-        // 9 s later still gated
         clock.advance(Duration.ofSeconds(9));
         MatcherAssert.assertThat(
             "still gated after 9 s",
-            limiter.tryAcquire("h.example"), new IsEqual<>(false)
+            limiter.gateOpenUntil("h.example") != null, new IsEqual<>(true)
         );
-        // After 10 s, gate re-opens
         clock.advance(Duration.ofSeconds(2));
         MatcherAssert.assertThat(
             "gate re-opens after 11 s",
-            limiter.tryAcquire("h.example"), new IsEqual<>(true)
+            limiter.gateOpenUntil("h.example") == null, new IsEqual<>(true)
         );
     }
 
@@ -107,8 +58,7 @@ final class UpstreamRateLimiterTest {
     @Test
     void recordRateLimitUsesDefaultDurationWhenAbsent() {
         final TestClock clock = new TestClock(Instant.parse("2026-05-13T10:00:00Z"));
-        final RateLimitConfig cfg = RateLimitConfig.uniform(100.0, 100.0);
-        final UpstreamRateLimiter limiter = new UpstreamRateLimiter.Default(cfg, clock);
+        final UpstreamRateLimiter limiter = new UpstreamRateLimiter.Default(clock);
         limiter.recordRateLimit("h.example", Duration.ZERO);
         final Instant gateUntil = limiter.gateOpenUntil("h.example");
         MatcherAssert.assertThat(
@@ -128,15 +78,14 @@ final class UpstreamRateLimiterTest {
     @Test
     void hostsAreIndependent() {
         final TestClock clock = new TestClock(Instant.parse("2026-05-13T10:00:00Z"));
-        final RateLimitConfig cfg = RateLimitConfig.uniform(100.0, 100.0);
-        final UpstreamRateLimiter limiter = new UpstreamRateLimiter.Default(cfg, clock);
+        final UpstreamRateLimiter limiter = new UpstreamRateLimiter.Default(clock);
         limiter.recordRateLimit("repo1.maven.org", Duration.ofMinutes(5));
         MatcherAssert.assertThat(
-            "maven gated", limiter.tryAcquire("repo1.maven.org"),
-            new IsEqual<>(false)
+            "maven gated", limiter.gateOpenUntil("repo1.maven.org") != null,
+            new IsEqual<>(true)
         );
         MatcherAssert.assertThat(
-            "npm is independent", limiter.tryAcquire("registry.npmjs.org"),
+            "npm is independent", limiter.gateOpenUntil("registry.npmjs.org") == null,
             new IsEqual<>(true)
         );
     }
@@ -148,9 +97,7 @@ final class UpstreamRateLimiterTest {
     @Test
     void recordResponseOnlyGatesOn429() {
         final TestClock clock = new TestClock(Instant.parse("2026-05-13T10:00:00Z"));
-        final UpstreamRateLimiter limiter = new UpstreamRateLimiter.Default(
-            RateLimitConfig.uniform(100.0, 100.0), clock
-        );
+        final UpstreamRateLimiter limiter = new UpstreamRateLimiter.Default(clock);
         limiter.recordResponse("h.example", 200, Duration.ofSeconds(60));
         MatcherAssert.assertThat(
             "200 must not gate",

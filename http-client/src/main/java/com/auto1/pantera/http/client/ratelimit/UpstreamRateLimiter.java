@@ -19,25 +19,19 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Per-upstream-host token bucket plus 429 / Retry-After gate. One
- * instance is shared across the JVM — held by
+ * Per-upstream-host reactive 429 / Retry-After gate. One instance is
+ * shared across the JVM — held by
  * {@link com.auto1.pantera.http.client.jetty.JettyClientSlices} so that
  * every outbound request through any adapter funnels through the same
  * governor.
  *
- * <p>Two coupled mechanisms run per host:
- * <ol>
- *   <li><b>Token bucket.</b> Refilled at a configured rate
- *       ({@link RateLimitConfig#refillPerSecond(String)}). Each outbound
- *       call invokes {@link #tryAcquire(String)}; an empty bucket returns
- *       {@code false} and the caller fails-fast with {@code outcome="rate_limited"}.</li>
- *   <li><b>429 / Retry-After gate.</b> A 429 (or 503 with Retry-After)
- *       closes the gate until {@code now + retryAfter}; while closed,
- *       {@link #tryAcquire(String)} returns {@code false} regardless of
- *       token state. {@link #gateOpenUntil(String)} exposes the deadline
- *       so foreground responses can carry the right Retry-After value
- *       back to the client.</li>
- * </ol>
+ * <p>A 429 (or 503 with Retry-After) closes the per-host gate until
+ * {@code now + retryAfter}; {@link #gateOpenUntil(String)} exposes the
+ * deadline so callers fast-fail with the right Retry-After while the
+ * gate is closed. There is deliberately no proactive token-bucket
+ * admission: Pantera forwards at line rate and honours the upstream's
+ * own throttle signals (the last remnant of the old proactive bucket
+ * was removed as dead code — it had no production callers).
  *
  * <p>State is per host (case-insensitive). Granularity matches the
  * per-IP throttling Maven Central and Cloudflare-fronted registries
@@ -54,14 +48,6 @@ public interface UpstreamRateLimiter {
 
     /** Fallback gate duration when no Retry-After is provided. */
     Duration DEFAULT_GATE_DURATION = Duration.ofSeconds(30);
-
-    /**
-     * @param host Upstream host (lower-cased internally).
-     * @return {@code true} when admission was granted (token consumed
-     *     and gate open); {@code false} when either the bucket is empty
-     *     or the gate is currently closed.
-     */
-    boolean tryAcquire(String host);
 
     /**
      * Inspect the upstream response. Implementations close the per-host
@@ -87,46 +73,11 @@ public interface UpstreamRateLimiter {
      */
     final class Default implements UpstreamRateLimiter {
 
-        private final RateLimitConfig config;
         private final Clock clock;
         private final Map<String, AtomicReference<Bucket>> buckets = new ConcurrentHashMap<>();
 
-        public Default(final RateLimitConfig config, final Clock clock) {
-            this.config = config;
+        public Default(final Clock clock) {
             this.clock = clock;
-        }
-
-        @Override
-        public boolean tryAcquire(final String host) {
-            final String key = normalise(host);
-            final AtomicReference<Bucket> ref = bucketFor(key);
-            while (true) {
-                final Bucket current = ref.get();
-                final Instant now = this.clock.instant();
-                if (current.gateUntil != null && now.isBefore(current.gateUntil)) {
-                    return false;
-                }
-                final double refilled = refill(current, now);
-                if (refilled < 1.0) {
-                    final Bucket touched = new Bucket(
-                        refilled, now,
-                        current.gateUntil, current.refillPerSecond, current.burstCapacity
-                    );
-                    // Best-effort timestamp advance — failure means another
-                    // thread won and our advance is moot; either way, return false.
-                    ref.compareAndSet(current, touched);
-                    return false;
-                }
-                final Bucket next = new Bucket(
-                    refilled - 1.0, now,
-                    current.gateUntil != null && !now.isBefore(current.gateUntil)
-                        ? null : current.gateUntil,
-                    current.refillPerSecond, current.burstCapacity
-                );
-                if (ref.compareAndSet(current, next)) {
-                    return true;
-                }
-            }
         }
 
         @Override
@@ -147,10 +98,7 @@ public interface UpstreamRateLimiter {
                 final Bucket current = ref.get();
                 final Instant target = current.gateUntil != null && current.gateUntil.isAfter(gateUntil)
                     ? current.gateUntil : gateUntil;
-                final Bucket next = new Bucket(
-                    current.tokens, current.lastRefill, target,
-                    current.refillPerSecond, current.burstCapacity
-                );
+                final Bucket next = new Bucket(target);
                 if (ref.compareAndSet(current, next)) {
                     return;
                 }
@@ -172,24 +120,7 @@ public interface UpstreamRateLimiter {
 
         private AtomicReference<Bucket> bucketFor(final String key) {
             return this.buckets.computeIfAbsent(
-                key, k -> {
-                    final double rate = this.config.refillPerSecond(k);
-                    final double burst = this.config.burstCapacity(k);
-                    return new AtomicReference<>(
-                        new Bucket(burst, this.clock.instant(), null, rate, burst)
-                    );
-                }
-            );
-        }
-
-        private static double refill(final Bucket current, final Instant now) {
-            final long elapsedNanos = Duration.between(current.lastRefill, now).toNanos();
-            if (elapsedNanos <= 0) {
-                return current.tokens;
-            }
-            return Math.min(
-                current.tokens + (elapsedNanos / 1_000_000_000.0) * current.refillPerSecond,
-                current.burstCapacity
+                key, k -> new AtomicReference<>(new Bucket(null))
             );
         }
 
@@ -198,12 +129,10 @@ public interface UpstreamRateLimiter {
         }
 
         /**
-         * Immutable per-host bucket state. CAS-updated so concurrent
-         * acquires see a coherent view.
+         * Immutable per-host gate state. CAS-updated so concurrent
+         * writers see a coherent view. {@code gateUntil == null} means
+         * the gate is open.
          */
-        private record Bucket(
-            double tokens, Instant lastRefill, Instant gateUntil,
-            double refillPerSecond, double burstCapacity
-        ) { }
+        private record Bucket(Instant gateUntil) { }
     }
 }
