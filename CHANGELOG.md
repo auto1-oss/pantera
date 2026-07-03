@@ -17,8 +17,6 @@
   ([@aydasraf](https://github.com/aydasraf))
 - **Outbound-traffic observability.** Per-upstream-host request counts, error counts, and the outbound/inbound amplification ratio are exported as Prometheus metrics. Recording rules and Grafana-compatible alert definitions ship under `pantera-main/docker-compose/prometheus/rules/`.
   ([@aydasraf](https://github.com/aydasraf))
-- **Performance benchmark harness** under `performance/` — WireMock-backed mock upstreams behind nginx, k6 load scenarios, and behavioral invariant checks (zero upstream 429s, amplification ratio at or below 1.5, no circuit-breaker trips), runnable from a fresh checkout with `make setup`.
-  ([@aydasraf](https://github.com/aydasraf))
 - **Official Docker images on GHCR.** Releases publish multi-arch (`amd64` + `arm64`) images for both the backend (`ghcr.io/auto1-oss/pantera`) and the management UI (`ghcr.io/auto1-oss/pantera-ui`, nginx + static bundle); release artifacts (JAR, full distribution, UI bundle) ship with `SHA256SUMS` and build-provenance attestations.
   ([@aydasraf](https://github.com/aydasraf))
 - **Observability pack for the perf surface.** Two new Grafana dashboards ship under `pantera-main/src/main/resources/grafana/` — one for the per-host upstream circuit breaker (state, trip counts, fast-fail rate, time-since-last-trip) and one for proxy-phase latency (stacked p99 by phase and repo, the canonical view for cold-bench debugging). Recording-rule alerts cover the 2.2.0 perf-pack (circuit-breaker-open, bulkhead overflow, sustained upstream 429s, low conditional-GET hit rate) with matching runbooks under `docs/runbooks/`.

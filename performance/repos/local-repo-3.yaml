@@ -1,6 +1,0 @@
-repo:
-  type: npm
-  url: http://pantera-sut:8080/local-repo-3
-  storage:
-    type: fs
-    path: /var/pantera/data

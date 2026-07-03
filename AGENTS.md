@@ -11,7 +11,7 @@ Pantera is a multi-module Maven project for a binary artifact registry. Core Jav
 - `mvn verify -Pitcase`: run integration tests with Failsafe and TestContainers.
 - `mvn install -pl maven-adapter -am -DskipTests`: build one module and required dependencies.
 - `mvn license:format`: add missing Java license headers.
-- `make up`, `make down`, `make logs`: manage the local Docker Compose stack using `.env.dev`.
+- `cd pantera-main/docker-compose && docker compose up` / `docker compose down`: manage the local Docker Compose stack.
 - `cd pantera-ui && npm install && npm run dev`: start the Vite UI dev server.
 - `cd pantera-ui && npm test && npm run lint && npm run build`: test, lint, type-check, and build the UI.
 
