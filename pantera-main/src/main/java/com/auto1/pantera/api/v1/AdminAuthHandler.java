@@ -96,6 +96,10 @@ public final class AdminAuthHandler {
             .handler(adminAuthz).handler(this::getCircuitBreakerSettings);
         router.put("/api/v1/admin/circuit-breaker-settings")
             .handler(adminAuthz).handler(this::updateCircuitBreakerSettings);
+        router.get("/api/v1/admin/upstream-breaker-settings")
+            .handler(adminAuthz).handler(this::getUpstreamBreakerSettings);
+        router.put("/api/v1/admin/upstream-breaker-settings")
+            .handler(adminAuthz).handler(this::updateUpstreamBreakerSettings);
     }
 
     /**
@@ -221,6 +225,128 @@ public final class AdminAuthHandler {
                         + String.join(",", body.fieldNames()) + ")")
                     .eventCategory("configuration")
                     .eventAction("circuit_breaker_settings_update")
+                    .eventOutcome("success")
+                    .field("log.source", "application")
+                    .log();
+                ctx.response().setStatusCode(204).end();
+            }
+        });
+    }
+
+    /**
+     * Whitelist for the OUTBOUND http-client breaker endpoint —
+     * distinct from {@link #CB_KEYS} (group-member breaker).
+     */
+    private static final java.util.Set<String> UB_KEYS = java.util.Set.of(
+        "upstream_breaker_failure_rate_threshold",
+        "upstream_breaker_minimum_calls",
+        "upstream_breaker_window_seconds",
+        "upstream_breaker_seed_backoff_seconds",
+        "upstream_breaker_max_backoff_seconds"
+    );
+
+    /**
+     * GET /api/v1/admin/upstream-breaker-settings — current values for
+     * the per-upstream (scheme://host:port) outbound breaker. Always
+     * returns every key so the UI form populates without null checks.
+     */
+    private void getUpstreamBreakerSettings(final RoutingContext ctx) {
+        CompletableFuture.supplyAsync(() -> {
+            final com.auto1.pantera.http.client.circuitbreaker.CircuitBreakerConfig current =
+                com.auto1.pantera.circuit.UpstreamBreakerSettingsLoader.activeSupplier().get();
+            return new JsonObject()
+                .put("upstream_breaker_failure_rate_threshold",
+                    String.valueOf(current.failureRateThreshold()))
+                .put("upstream_breaker_minimum_calls",
+                    String.valueOf(current.minimumCalls()))
+                .put("upstream_breaker_window_seconds",
+                    String.valueOf(current.windowSeconds()))
+                .put("upstream_breaker_seed_backoff_seconds",
+                    String.valueOf(current.seedBackoff().toSeconds()))
+                .put("upstream_breaker_max_backoff_seconds",
+                    String.valueOf(current.maxBackoff().toSeconds()));
+        }, HandlerExecutor.get()).whenComplete((settings, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
+                ctx.response()
+                    .setStatusCode(200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(settings.encode());
+            }
+        });
+    }
+
+    /**
+     * PUT /api/v1/admin/upstream-breaker-settings — partial updates OK;
+     * only {@link #UB_KEYS} accepted. Values validated by round-tripping
+     * through the {@code CircuitBreakerConfig} record constructor before
+     * anything is written.
+     */
+    private void updateUpstreamBreakerSettings(final RoutingContext ctx) {
+        final JsonObject body = ctx.body().asJsonObject();
+        if (body == null || body.isEmpty()) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Request body is required");
+            return;
+        }
+        for (final String key : body.fieldNames()) {
+            if (!UB_KEYS.contains(key)) {
+                ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                    "Unknown upstream-breaker setting: " + key);
+                return;
+            }
+        }
+        final com.auto1.pantera.http.client.circuitbreaker.CircuitBreakerConfig current =
+            com.auto1.pantera.circuit.UpstreamBreakerSettingsLoader.activeSupplier().get();
+        try {
+            new com.auto1.pantera.http.client.circuitbreaker.CircuitBreakerConfig(
+                java.time.Duration.ofSeconds(Integer.parseInt(body.getString(
+                    "upstream_breaker_seed_backoff_seconds",
+                    String.valueOf(current.seedBackoff().toSeconds())
+                ))),
+                java.time.Duration.ofSeconds(Integer.parseInt(body.getString(
+                    "upstream_breaker_max_backoff_seconds",
+                    String.valueOf(current.maxBackoff().toSeconds())
+                ))),
+                current.shouldTripOnException(),
+                current.shouldTripOnStatus(),
+                Double.parseDouble(body.getString(
+                    "upstream_breaker_failure_rate_threshold",
+                    String.valueOf(current.failureRateThreshold())
+                )),
+                Integer.parseInt(body.getString(
+                    "upstream_breaker_minimum_calls",
+                    String.valueOf(current.minimumCalls())
+                )),
+                Integer.parseInt(body.getString(
+                    "upstream_breaker_window_seconds",
+                    String.valueOf(current.windowSeconds())
+                ))
+            );
+        } catch (final IllegalArgumentException ex) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                "Invalid upstream-breaker setting: " + ex.getMessage());
+            return;
+        }
+        CompletableFuture.supplyAsync(() -> {
+            for (final String key : body.fieldNames()) {
+                this.settingsDao.put(key, body.getValue(key).toString());
+            }
+            final com.auto1.pantera.circuit.UpstreamBreakerSettingsLoader loader =
+                com.auto1.pantera.circuit.UpstreamBreakerSettingsLoader.installed();
+            if (loader != null) {
+                loader.invalidate();
+            }
+            return null;
+        }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
+                EcsLogger.info("com.auto1.pantera.api.v1")
+                    .message("Admin updated upstream-breaker settings (keys="
+                        + String.join(",", body.fieldNames()) + ")")
+                    .eventCategory("configuration")
+                    .eventAction("upstream_breaker_settings_update")
                     .eventOutcome("success")
                     .field("log.source", "application")
                     .log();

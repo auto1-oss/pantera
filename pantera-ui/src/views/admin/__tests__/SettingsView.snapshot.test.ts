@@ -40,6 +40,8 @@ vi.mock('@/api/auth', () => ({
   updateAuthSettings: vi.fn().mockResolvedValue(undefined),
   getCircuitBreakerSettings: () => Promise.resolve({}),
   updateCircuitBreakerSettings: vi.fn().mockResolvedValue(undefined),
+  getUpstreamBreakerSettings: () => Promise.resolve({}),
+  updateUpstreamBreakerSettings: vi.fn().mockResolvedValue(undefined),
 }))
 
 vi.mock('@/composables/useRuntimeSettings', async () => {
@@ -184,6 +186,20 @@ describe('SettingsView — unified save bar', () => {
     const pill = wrapper.find('[data-testid="section-pill-http_server"]')
     expect(pill.exists()).toBe(true)
     expect(pill.text()).toContain('Restart required')
+  })
+
+  it('tracks the upstream HTTP breaker as its own section, distinct from the group-member breaker', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    // Both breaker cards render with their distinguishing labels.
+    expect(wrapper.text()).toContain('Group Member Circuit Breaker')
+    expect(wrapper.text()).toContain('Upstream HTTP Circuit Breaker')
+    // Editing an upstream-breaker field dirties ONLY the new section.
+    const vm = wrapper.vm as unknown as { ubMinCalls: number }
+    vm.ubMinCalls = 42
+    await flushPromises()
+    expect(wrapper.find('[data-testid="save-bar-chip-upstream_breaker"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="save-bar-chip-circuit_breaker"]').exists()).toBe(false)
   })
 
   it('clicking Discard reverts the edited section back to its baseline', async () => {

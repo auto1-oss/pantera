@@ -315,6 +315,15 @@ public final class VertxMain {
                 new com.auto1.pantera.db.dao.AuthSettingsDao(ds)
             )
         );
+        // Same lifecycle for the OUTBOUND http-client breaker settings
+        // (upstream_breaker_* keys) — distinct from the group-member
+        // breaker above. RepositorySlices hands the supplier to every
+        // JettyClientSlices instance it creates.
+        sharedDs.ifPresent(ds ->
+            com.auto1.pantera.circuit.UpstreamBreakerSettingsLoader.install(
+                new com.auto1.pantera.db.dao.AuthSettingsDao(ds)
+            )
+        );
         // Install singleton PublishDateRegistry. Each adapter slice now resolves
         // canonical publish dates via RegistryBackedInspector(repoType, registry)
         // instead of HEAD-probing upstream — eliminates the per-cooldown-eval

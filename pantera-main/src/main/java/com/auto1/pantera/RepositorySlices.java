@@ -1662,6 +1662,11 @@ public class RepositorySlices {
                 // HTTP/1.1 client with the keep-alive pool sized by the static
                 // YAML settings.maxConnectionsPerDestination() (typical 20-50).
                 this.client = new JettyClientSlices(key.toSettings());
+                // DB-backed admin settings for the per-upstream breaker
+                // (falls back to hardcoded defaults when no DB).
+                this.client.circuitBreakerConfig(
+                    com.auto1.pantera.circuit.UpstreamBreakerSettingsLoader.activeSupplier()
+                );
                 // Start the Jetty client on the dedicated resolve executor to avoid
                 // blocking the Vert.x event loop. The start() call can take 100ms+
                 // due to SSL context initialization and socket setup.

@@ -7,6 +7,7 @@ import {
 import {
   getAuthSettings, updateAuthSettings,
   getCircuitBreakerSettings, updateCircuitBreakerSettings,
+  getUpstreamBreakerSettings, updateUpstreamBreakerSettings,
 } from '@/api/auth'
 import type { RuntimeSettingKey } from '@/api/runtimeSettings'
 import { useRuntimeSettings } from '@/composables/useRuntimeSettings'
@@ -36,7 +37,7 @@ const saving = ref<string | null>(null)
  * immediately vs require a restart. The id keys into {@link SECTION_META}.
  */
 type SectionId =
-  | 'prefixes' | 'jwt' | 'auth' | 'circuit_breaker'
+  | 'prefixes' | 'jwt' | 'auth' | 'circuit_breaker' | 'upstream_breaker'
   | 'cooldown' | 'http_client' | 'bulkhead' | 'http_server'
   | 'external_links'
 
@@ -82,7 +83,11 @@ const SECTION_META: Record<SectionId, SectionMeta> = {
     hotReload: true,
   },
   circuit_breaker: {
-    label: 'Upstream Failure Circuit Breaker',
+    label: 'Group Member Circuit Breaker',
+    hotReload: true,
+  },
+  upstream_breaker: {
+    label: 'Upstream HTTP Circuit Breaker',
     hotReload: true,
   },
   cooldown: {
@@ -129,12 +134,21 @@ const authRefreshTtl = ref(604800)
 const authApiMaxTtl = ref(7776000)
 const authAllowPermanent = ref(true)
 
-// Circuit breaker (rate-over-sliding-window, 2.2.0)
+// Group-member circuit breaker (rate-over-sliding-window, 2.2.0)
 const cbFailureRatePercent = ref(50)     // stored as 0.0-1.0 on server, shown as % here
 const cbMinCalls = ref(20)
 const cbWindowSeconds = ref(30)
 const cbInitialBlockSeconds = ref(20)
 const cbMaxBlockSeconds = ref(300)
+
+// Upstream HTTP circuit breaker (outbound per-endpoint breaker) —
+// distinct from the group-member breaker above: this one gates
+// outbound HTTP calls per upstream scheme://host:port.
+const ubRatePct = ref(50)                // stored as 0.0-1.0 on server, shown as % here
+const ubMinCalls = ref(10)
+const ubWindowSeconds = ref(30)
+const ubSeedBackoffSeconds = ref(2)
+const ubMaxBackoffSeconds = ref(3600)
 
 // Cooldown config
 const cooldownConfig = ref<CooldownConfig | null>(null)
@@ -290,6 +304,15 @@ onMounted(async () => {
         cbInitialBlockSeconds.value = parseInt(s.circuit_breaker_initial_block_seconds ?? '20')
         cbMaxBlockSeconds.value = parseInt(s.circuit_breaker_max_block_seconds ?? '300')
       }),
+      getUpstreamBreakerSettings().then(s => {
+        ubRatePct.value = Math.round(
+          parseFloat(s.upstream_breaker_failure_rate_threshold ?? '0.5') * 100,
+        )
+        ubMinCalls.value = parseInt(s.upstream_breaker_minimum_calls ?? '10')
+        ubWindowSeconds.value = parseInt(s.upstream_breaker_window_seconds ?? '30')
+        ubSeedBackoffSeconds.value = parseInt(s.upstream_breaker_seed_backoff_seconds ?? '2')
+        ubMaxBackoffSeconds.value = parseInt(s.upstream_breaker_max_backoff_seconds ?? '3600')
+      }),
       runtime.load(),
     ])
   } catch {
@@ -409,6 +432,49 @@ async function saveCircuitBreakerSettings() {
     notify.success('Circuit breaker settings saved')
   } catch {
     notify.error('Failed to save circuit breaker settings')
+  } finally {
+    saving.value = null
+  }
+}
+
+/**
+ * Save upstream HTTP circuit breaker settings (outbound per-endpoint
+ * breaker — NOT the group-member breaker above). Same convention:
+ * rate is edited as a percent and persisted as a 0-1 fraction string;
+ * the server re-validates and rejects with 400 if anything slips
+ * through, so nothing gets persisted in an invalid state.
+ */
+async function saveUpstreamBreakerSettings() {
+  const ratePct = ubRatePct.value
+  if (ratePct <= 0 || ratePct > 100) {
+    notify.error('Failure rate must be between 1 and 100%')
+    return
+  }
+  if (ubMinCalls.value < 1) {
+    notify.error('Minimum calls in window must be at least 1')
+    return
+  }
+  if (ubWindowSeconds.value < 1) {
+    notify.error('Sliding window must be at least 1 second')
+    return
+  }
+  if (ubSeedBackoffSeconds.value < 1
+      || ubMaxBackoffSeconds.value < ubSeedBackoffSeconds.value) {
+    notify.error('Initial backoff must be >= 1s and <= max backoff duration')
+    return
+  }
+  saving.value = 'upstream-breaker'
+  try {
+    await updateUpstreamBreakerSettings({
+      upstream_breaker_failure_rate_threshold: (ratePct / 100).toFixed(3),
+      upstream_breaker_minimum_calls: String(ubMinCalls.value),
+      upstream_breaker_window_seconds: String(ubWindowSeconds.value),
+      upstream_breaker_seed_backoff_seconds: String(ubSeedBackoffSeconds.value),
+      upstream_breaker_max_backoff_seconds: String(ubMaxBackoffSeconds.value),
+    })
+    notify.success('Upstream HTTP breaker settings saved')
+  } catch {
+    notify.error('Failed to save upstream HTTP breaker settings')
   } finally {
     saving.value = null
   }
@@ -557,6 +623,11 @@ interface Baseline {
   cbWindowSeconds: number
   cbInitialBlockSeconds: number
   cbMaxBlockSeconds: number
+  ubRatePct: number
+  ubMinCalls: number
+  ubWindowSeconds: number
+  ubSeedBackoffSeconds: number
+  ubMaxBackoffSeconds: number
   cooldownEnabled: boolean
   cooldownAge: string
   cooldownHistoryRetentionDays: number
@@ -592,6 +663,11 @@ function snapshot(): Baseline {
     cbWindowSeconds: cbWindowSeconds.value,
     cbInitialBlockSeconds: cbInitialBlockSeconds.value,
     cbMaxBlockSeconds: cbMaxBlockSeconds.value,
+    ubRatePct: ubRatePct.value,
+    ubMinCalls: ubMinCalls.value,
+    ubWindowSeconds: ubWindowSeconds.value,
+    ubSeedBackoffSeconds: ubSeedBackoffSeconds.value,
+    ubMaxBackoffSeconds: ubMaxBackoffSeconds.value,
     cooldownEnabled: cooldownEnabled.value,
     cooldownAge: cooldownAge.value,
     cooldownHistoryRetentionDays: cooldownHistoryRetentionDays.value,
@@ -634,6 +710,13 @@ const isDirtyCircuitBreaker = computed(() =>
       || baseline.value.cbWindowSeconds !== cbWindowSeconds.value
       || baseline.value.cbInitialBlockSeconds !== cbInitialBlockSeconds.value
       || baseline.value.cbMaxBlockSeconds !== cbMaxBlockSeconds.value))
+const isDirtyUpstreamBreaker = computed(() =>
+  !!baseline.value
+    && (baseline.value.ubRatePct !== ubRatePct.value
+      || baseline.value.ubMinCalls !== ubMinCalls.value
+      || baseline.value.ubWindowSeconds !== ubWindowSeconds.value
+      || baseline.value.ubSeedBackoffSeconds !== ubSeedBackoffSeconds.value
+      || baseline.value.ubMaxBackoffSeconds !== ubMaxBackoffSeconds.value))
 const isDirtyCooldown = computed(() =>
   !!baseline.value
     && (baseline.value.cooldownEnabled !== cooldownEnabled.value
@@ -672,6 +755,7 @@ const DIRTY_PER_SECTION: Record<SectionId, { value: boolean }> = {
   jwt: isDirtyJwt,
   auth: isDirtyAuth,
   circuit_breaker: isDirtyCircuitBreaker,
+  upstream_breaker: isDirtyUpstreamBreaker,
   cooldown: isDirtyCooldown,
   http_client: isDirtyHttpClient,
   bulkhead: isDirtyBulkhead,
@@ -696,6 +780,7 @@ async function saveSectionById(id: SectionId): Promise<void> {
     case 'jwt': await Promise.resolve(saveJwt()); break
     case 'auth': await saveAuthSettings(); break
     case 'circuit_breaker': await saveCircuitBreakerSettings(); break
+    case 'upstream_breaker': await saveUpstreamBreakerSettings(); break
     case 'cooldown': await saveCooldown(); break
     case 'http_client': await Promise.resolve(saveHttpClient()); break
     case 'bulkhead': await runtime.saveAllDirty(); break
@@ -757,6 +842,11 @@ function discardAll() {
   cbWindowSeconds.value = b.cbWindowSeconds
   cbInitialBlockSeconds.value = b.cbInitialBlockSeconds
   cbMaxBlockSeconds.value = b.cbMaxBlockSeconds
+  ubRatePct.value = b.ubRatePct
+  ubMinCalls.value = b.ubMinCalls
+  ubWindowSeconds.value = b.ubWindowSeconds
+  ubSeedBackoffSeconds.value = b.ubSeedBackoffSeconds
+  ubMaxBackoffSeconds.value = b.ubMaxBackoffSeconds
   cooldownEnabled.value = b.cooldownEnabled
   cooldownAge.value = b.cooldownAge
   cooldownHistoryRetentionDays.value = b.cooldownHistoryRetentionDays
@@ -917,16 +1007,19 @@ const SectionHeader = (props: { id: SectionId; dirty: boolean }) => {
         </template>
       </Card>
 
-      <!-- Upstream Failure Circuit Breaker (rate-over-sliding-window) -->
+      <!-- Group Member Circuit Breaker (rate-over-sliding-window) -->
       <Card class="shadow-sm">
         <template #title>
           <SectionHeader id="circuit_breaker" :dirty="isDirtyCircuitBreaker" />
         </template>
         <template #subtitle>
-          Rate-over-sliding-window breaker for proxy upstream calls. Opens when
+          Rate-over-sliding-window breaker that blocks a member repository
+          during group resolution after sustained failures. Opens when
           the failure rate inside the window exceeds the threshold AND the window
           has seen at least the minimum number of calls — the volume gate
-          protects against cold-start false positives.
+          protects against cold-start false positives. Distinct from the
+          Upstream HTTP Circuit Breaker below, which gates outbound HTTP
+          calls per upstream endpoint (scheme://host:port).
         </template>
         <template #content>
           <div class="space-y-4">
@@ -973,6 +1066,69 @@ const SectionHeader = (props: { id: SectionId; dirty: boolean }) => {
               upstream — no restart needed. A very low rate threshold combined with
               a low minimum-calls value makes the breaker trip-happy under cold-start
               bursts; the defaults are tuned to avoid that.
+            </div>
+          </div>
+        </template>
+      </Card>
+
+      <!-- Upstream HTTP Circuit Breaker (outbound per-endpoint) -->
+      <Card class="shadow-sm">
+        <template #title>
+          <SectionHeader id="upstream_breaker" :dirty="isDirtyUpstreamBreaker" />
+        </template>
+        <template #subtitle>
+          Gates outbound HTTP calls per upstream endpoint (scheme://host:port).
+          Distinct from the Group Member Circuit Breaker above, which gates
+          member repositories during group resolution. Opens after sustained
+          5xx/connection failures to an endpoint and recovers via a HEAD probe
+          with Fibonacci backoff.
+        </template>
+        <template #content>
+          <div class="space-y-4">
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Failure rate threshold (%)</label>
+                <InputNumber v-model="ubRatePct" :min="1" :max="100" suffix="%" class="w-full" />
+                <span class="text-xs text-gray-400">
+                  Default: 50%. Breaker opens when the outbound failure rate to an
+                  endpoint reaches this value across the window.
+                </span>
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Minimum calls in window</label>
+                <InputNumber v-model="ubMinCalls" :min="1" :max="10000" class="w-full" />
+                <span class="text-xs text-gray-400">
+                  Default: 10. No trip until the window has seen this many outcomes
+                  for the endpoint (rate + volume gate).
+                </span>
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Sliding window (seconds)</label>
+                <InputNumber v-model="ubWindowSeconds" :min="1" :max="600" suffix=" s" class="w-full" />
+                <span class="text-xs text-gray-400">
+                  Default: 30s. Rolling window over which the failure rate is computed.
+                </span>
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Initial backoff (seconds)</label>
+                <InputNumber v-model="ubSeedBackoffSeconds" :min="1" :max="3600" suffix=" s" class="w-full" />
+                <span class="text-xs text-gray-400">
+                  Default: 2s. Seed of the Fibonacci backoff between HEAD recovery probes.
+                </span>
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Max backoff (seconds)</label>
+                <InputNumber v-model="ubMaxBackoffSeconds" :min="1" :max="86400" suffix=" s" class="w-full" />
+                <span class="text-xs text-gray-400">
+                  Default: 3600s (1 hour). Upper bound on the Fibonacci backoff.
+                </span>
+              </div>
+            </div>
+            <div class="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded p-2">
+              <i class="pi pi-info-circle mr-1" />
+              Settings take effect on the next recorded outcome for every upstream
+              endpoint — no restart needed. While an endpoint is blocked, outbound
+              requests to it fail fast until a HEAD probe succeeds.
             </div>
           </div>
         </template>
