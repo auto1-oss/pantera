@@ -373,10 +373,8 @@ Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
                 <exclude>**/docker-compose/**</exclude>
                 <exclude>**/docs/**</exclude>
                 <exclude>**/scripts/**</exclude>
-                <exclude>**/benchmark/**</exclude>
                 <exclude>**/.superpowers/**</exclude>
                 <exclude>**/pantera-ui/**</exclude>
-                <exclude>**/performance/**</exclude>
               </excludes>
             </licenseSet>
           </licenseSets>

@@ -102,7 +102,6 @@ Maven, Gradle (Maven-layout), Docker, NPM, PyPI, Composer (PHP), Helm, Go, Gem (
                             |
 +-----------------------------------------------------------+
 |                    Cluster Layer                           |
-|  DbNodeRegistry  | ClusterEventBus (Valkey pub/sub)        |
 |  CacheInvalidationPubSub | QuartzService (JDBC clustering) |
 +-----------------------------------------------------------+
 ```
@@ -126,7 +125,7 @@ Maven, Gradle (Maven-layout), Docker, NPM, PyPI, Composer (PHP), Helm, Go, Gem (
 | Module | Purpose |
 |--------|---------|
 | `pantera-main` | Application entry point (`VertxMain`), REST API (`AsyncApiVerticle`), database layer (`ArtifactDbFactory`, `DbConsumer`, `DbManager`), Quartz scheduling, repository wiring (`RepositorySlices`), Flyway migrations, health checks, metrics verticle. |
-| `pantera-core` | Core types: `Slice` interface, `Storage` interface, `Key`, `Content`, `Headers`, `Response`, cache infrastructure (`BaseCachedProxySlice`, `NegativeCache`, `RequestDeduplicator`), `StorageExecutors`, `DispatchedStorage`, cluster event bus, security/auth framework. |
+| `pantera-core` | Core types: `Slice` interface, `Storage` interface, `Key`, `Content`, `Headers`, `Response`, cache infrastructure (`BaseCachedProxySlice`, `NegativeCache`, `RequestDeduplicator`), `StorageExecutors`, `DispatchedStorage`, security/auth framework. |
 | `pantera-storage` | Parent module for storage implementations. Contains three sub-modules. |
 | `pantera-storage-core` | `Storage` interface definition, `Key`, `Content`, `Meta`, `InMemoryStorage`, `BlockingStorage`, storage test verification harness. |
 | `pantera-storage-vertx-file` | Filesystem storage using Vert.x NIO. |
@@ -351,7 +350,6 @@ Migrations are applied automatically by `DbManager.migrate(dataSource)` at start
 | `artifacts` | Artifact metadata (repo_type, repo_name, name, version, size, dates, owner, search_tokens tsvector). |
 | `artifact_cooldowns` | Cooldown/quarantine records for blocked artifacts. |
 | `import_sessions` | Tracks bulk import progress with idempotency keys. |
-| `pantera_nodes` | Cluster node registry with heartbeats and status. |
 | `repositories` | Repository configurations (JSONB). |
 | `users` | User accounts with auth provider references. |
 | `roles` | RBAC role definitions (JSONB permissions). |
@@ -405,7 +403,6 @@ The `type` claim is mandatory. Tokens missing the `type` claim are rejected rega
 **Access tokens** (not DB-stored) are invalidated via a blocklist:
 
 1. `POST /api/v1/admin/revoke-user/:username` writes a revocation record and publishes a `pantera:revoke:user:{username}` message on the Valkey pub/sub channel.
-2. All cluster nodes receive the message via `ClusterEventBus` and add the username to their in-memory revocation cache.
 3. On each access token validation, the cache is consulted. Tokens issued before the revocation timestamp are rejected.
 4. Without Valkey, nodes poll the `user_tokens` revocation table every 30 seconds.
 
@@ -527,29 +524,6 @@ Read-through on-disk cache for S3 storage:
 ---
 
 ## 8. Cluster Architecture
-
-### 8.1 DbNodeRegistry
-
-Location: `pantera-main/src/main/java/com/auto1/pantera/cluster/DbNodeRegistry.java`
-
-PostgreSQL-backed node registry for HA clustering:
-
-- Each node registers on startup with a unique `node_id`, hostname, port, and timestamp.
-- Periodic heartbeats update `last_heartbeat`.
-- Nodes missing heartbeats are marked as dead.
-- Schema: `pantera_nodes(node_id, hostname, port, started_at, last_heartbeat, status)`.
-
-### 8.2 ClusterEventBus
-
-Location: `pantera-core/src/main/java/com/auto1/pantera/cluster/ClusterEventBus.java`
-
-Cross-instance event bus using Valkey pub/sub:
-
-- Channel naming: `pantera:events:{topic}`.
-- Message format: `{instanceId}|{payload}`.
-- **Self-message filtering:** Each instance generates a UUID on startup. Messages from the local instance are ignored to avoid double-processing.
-- Uses separate Lettuce connections for subscribe and publish (required by Redis pub/sub spec).
-- Handler registration: `ConcurrentHashMap<String, CopyOnWriteArrayList<Consumer<String>>>`.
 
 ### 8.3 CacheInvalidationPubSub
 
@@ -1074,7 +1048,6 @@ mvn verify -Pitcase
 mvn test -pl pantera-core -Dtest=NegativeCacheTest
 
 # Valkey-dependent tests
-VALKEY_HOST=localhost mvn test -pl pantera-core -Dtest=ClusterEventBusTest
 
 # Skip tests entirely
 mvn install -DskipTests
@@ -1212,7 +1185,6 @@ jattach 1 jcmd "JFR.dump name=pantera filename=/var/pantera/logs/pantera.jfr"
 
 ## 17. Performance benchmarking
 
-Pantera ships a local Docker-based scaling benchmark under [`performance/`](../performance/README.md) that measures saturation-rps and SLO-rps at configurable CPU/RAM sizes. See the linked README for prerequisites, the run commands (`make smoke`, `make matrix`), and interpretation caveats.
 
 Quick start:
 ```bash

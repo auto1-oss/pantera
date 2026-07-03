@@ -259,8 +259,34 @@ final class ProxyCacheWriterTest {
         ).toCompletableFuture().join();
 
         assertThat("Err on partial failure", result, instanceOf(Result.Err.class));
-        assertFalse(cache.exists(PRIMARY_KEY).join(), "primary rolled back");
-        assertFalse(cache.exists(sha1Key).join(), "sidecar rolled back");
+        // rollbackAfterPartialFailure fires its deletes without awaiting them
+        // (best-effort by design — the Err result must not block on cleanup),
+        // so the keys disappear shortly AFTER the Err completes. Poll instead
+        // of asserting instantly; the instant assert flaked under CI load.
+        awaitGone(cache, PRIMARY_KEY, "primary rolled back");
+        awaitGone(cache, sha1Key, "sidecar rolled back");
+    }
+
+    /**
+     * Poll until the key is deleted (rollback deletes are deliberately
+     * fire-and-forget) or fail after 5 s.
+     */
+    private static void awaitGone(
+        final com.auto1.pantera.asto.Storage cache, final Key key, final String reason
+    ) {
+        final long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+        while (System.nanoTime() < deadline) {
+            if (!cache.exists(key).join()) {
+                return;
+            }
+            try {
+                Thread.sleep(25L);
+            } catch (final InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        assertFalse(cache.exists(key).join(), reason);
     }
 
     // ===== swrCoherence =====

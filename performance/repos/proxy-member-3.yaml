@@ -1,9 +1,0 @@
-repo:
-  type: npm-proxy
-  url: http://pantera-sut:8080/proxy-member-3
-  path: proxy-member-3
-  remotes:
-    - url: http://mock-upstream:8080/m3
-  storage:
-    type: fs
-    path: /var/pantera/data

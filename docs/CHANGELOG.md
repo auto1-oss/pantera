@@ -15,9 +15,8 @@
 ### Added
 
 - **Per-repo anonymous-access controls.** A new `anonymous_read` / `anonymous_write` flag per repo decides whether unauthenticated requests get a `401` + `WWW-Authenticate: Basic realm="pantera"` or pass through to downstream auth. **Deny-by-default for every repo type** (proxy / group / hosted) — an admin explicitly opts in to anonymous reads on a curlable OSS-mirror proxy by setting `anonymous_read: true`. The admin UI exposes both flags as checkboxes on the per-repo Access card and a bulk-update action on the repository-management page.
-- **Async OSV.dev CVE scanner skeleton.** `OsvDevClient`, `VulnerabilityScanner` (worker pool with 5-step exponential backoff), and a two-table migration (`artifact_vulnerabilities`, `artifact_scan_status`) ship. Wiring to the cache-write hot path and the admin REST surface is deferred to a follow-up; the scanner is dormant in 2.2.0 unless explicitly invoked.
 - **Observability pack for the perf surface.** Two Grafana dashboards under `pantera-main/src/main/resources/grafana/`: `upstream-circuit-breaker.json` (per-host state, trip frequency, fast-fail rate, time-since-last-trip) and `proxy-phase-latency.json` (stacked p99 of `proxy_phase_duration_seconds` per `(phase, repo)`). Prometheus recording-rule alerts and four runbooks cover the 2.2.0 perf-pack — `bulkhead-overflow.md`, `low-conditional-get-hit-rate.md`, `upstream-429-sustained.md`, `upstream-circuit-breaker-open.md`.
-- **`ContextualExecutor` and trace propagation.** A new helper restores MDC + APM transaction context across any `CompletableFuture` continuation, RxJava `Maybe`/`Flowable` boundary, Quartz job execution, or pub/sub envelope. Pub/sub messages now carry a versioned envelope (v2 with trace context; v1 still parsed for rolling-deploy compatibility). Non-Jetty outbound HTTP (Vert.x WebClient for webhooks; `java.net.http.HttpClient` for OSV.dev) injects `traceparent` + `X-B3-*` via `TraceHeaders.httpClientHeaders()`.
+- **`ContextualExecutor` and trace propagation.** A new helper restores MDC + APM transaction context across any `CompletableFuture` continuation, RxJava `Maybe`/`Flowable` boundary, Quartz job execution, or pub/sub envelope. Pub/sub messages now carry a versioned envelope (v2 with trace context; v1 still parsed for rolling-deploy compatibility). Non-Jetty outbound HTTP injects `traceparent` + `X-B3-*` via `TraceHeaders.httpClientHeaders()`.
 
 ### Fixed
 
@@ -56,7 +55,7 @@
 ### Database Migrations
 
 - `V129` — `audit_log` hardening: `details JSONB`, `success BOOLEAN`, `ip_address TEXT`; BEFORE UPDATE / BEFORE DELETE triggers raising `feature_not_supported`; covering indexes
-- `V130` — `artifact_vulnerabilities` + `artifact_scan_status` tables for OSV.dev scanner
+- `V130` — `artifact_vulnerabilities` + `artifact_scan_status` tables (reserved; the scanner plumbing was removed before release)
 - `V131` — `pgp_keyring` table for the PGP verifier
 
 ---

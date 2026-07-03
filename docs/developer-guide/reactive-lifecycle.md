@@ -101,15 +101,14 @@ Any of these on the request path:
 
 ### Pub/sub v2 envelope
 
-`ClusterEventBus` and `CacheInvalidationPubSub` now ship messages in a versioned envelope. The v2 prefix carries `trace.id` + `span.id` alongside the payload; v1 envelopes are still parsed for **rolling-deploy compatibility** so a v2.1.x node can publish to a v2.2.0 subscriber and vice versa during the rolling upgrade window.
+`CacheInvalidationPubSub` and `CacheInvalidationPubSub` now ship messages in a versioned envelope. The v2 prefix carries `trace.id` + `span.id` alongside the payload; v1 envelopes are still parsed for **rolling-deploy compatibility** so a v2.1.x node can publish to a v2.2.0 subscriber and vice versa during the rolling upgrade window.
 
-When emitting from new code: use the existing `ClusterEventBus.publish(channel, payload)` API; the envelope wrapping is internal. When consuming: the trace.id is restored to MDC for the duration of the subscriber callback — no caller action required.
+When emitting from new code: use the existing `CacheInvalidationPubSub.publish(cacheType, key)` API; the envelope wrapping is internal. When consuming: the trace.id is restored to MDC for the duration of the subscriber callback — no caller action required.
 
 ### Non-Jetty outbound transports
 
 The `JettyClientSlices` decorator chain injects `traceparent` + `X-B3-*` automatically on every outbound proxy fetch. Other outbound transports do **not** get this for free — they must use `TraceHeaders.httpClientHeaders()` and merge the resulting map into their outbound request headers:
 
-- `WebhookDispatcher` (Vert.x WebClient) — already wired.
 - `OsvDevClient` (`java.net.http.HttpClient`) — already wired.
 - Any new outbound transport you add — must follow the same pattern.
 

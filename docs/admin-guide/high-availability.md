@@ -35,7 +35,7 @@ All Pantera nodes are stateless application servers. State is held in three shar
 | Service | Role |
 |---------|------|
 | PostgreSQL | Persistent state: repository configs, users, roles, artifact metadata, search index, cooldown records, import sessions, Quartz scheduler tables |
-| Valkey | Distributed cache: L2 negative cache, L2 auth cache, cache invalidation pub/sub, cluster event bus |
+| Valkey | Distributed cache: L2 negative cache, L2 auth cache, cache invalidation pub/sub |
 | S3 | Shared artifact storage: all nodes read and write to the same bucket |
 
 ---
@@ -226,27 +226,6 @@ For AWS deployments:
 
 ---
 
-## Cluster Event Bus
-
-Pantera uses the Vert.x event bus combined with Valkey pub/sub for cross-node event propagation. Events include:
-
-- Repository create, update, and delete
-- User and role changes
-- Cache invalidation
-- Settings updates
-
-Each node registers itself in the `pantera_nodes` PostgreSQL table with a unique node ID, hostname, and heartbeat timestamp. Nodes that miss heartbeats are considered dead and excluded from cluster operations.
-
-### Node Registration
-
-The node registry is automatic. On startup, each Pantera instance:
-
-1. Generates a unique node ID (UUID).
-2. Registers in `pantera_nodes` with hostname, port, and startup timestamp.
-3. Publishes periodic heartbeats.
-4. On shutdown, removes its registration.
-
----
 
 ## Quartz Scheduler Clustering
 

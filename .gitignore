@@ -48,20 +48,6 @@ pantera-main/docker-compose/pantera/artifacts/php/composer.lock
 /pantera-backfill
 pantera-main/docker-compose/pantera/keys/
 logs/.analysis/
-# Perf harness: the SOURCES (wiremock mappings + generator, k6 scenarios,
-# repo configs, nginx conf, scripts) are tracked — CI boots the stack from
-# them. Only run OUTPUTS and rendered/secret files are ignored. Do NOT
-# re-add a broad performance/*/* ignore: it silently kept the whole harness
-# out of the repo and every perf workflow failed at checkout for months.
-performance/results/*
-!performance/results/.gitkeep
-performance/wiremock/__files/*.bin*
-performance/pantera-config.yml
-performance/secrets/*.pem
-performance/data/
-performance/fixtures/uploads/*.tgz
-performance/scripts/__pycache__/
-
 # Working / transient analysis + audit directories — never committed.
 # These hold model deliverables, scratch findings, internal RCA notes,
 # perf-bench harness outputs, and design specs that are not part of the

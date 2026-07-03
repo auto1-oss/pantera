@@ -18,7 +18,6 @@ import com.auto1.pantera.http.client.circuitbreaker.CircuitBreakerConfig;
 import com.auto1.pantera.http.client.circuitbreaker.CircuitBreakingClientSlice;
 import com.auto1.pantera.http.client.circuitbreaker.UpstreamCircuitBreaker;
 import com.auto1.pantera.http.client.circuitbreaker.UpstreamCircuitBreakerRegistry;
-import com.auto1.pantera.http.client.ratelimit.RateLimitConfig;
 import com.auto1.pantera.http.client.ratelimit.RateLimitedClientSlice;
 import com.auto1.pantera.http.client.ratelimit.UpstreamRateLimiter;
 import java.time.Clock;
@@ -166,7 +165,7 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
         final int maxConnectionsPerDestination
     ) {
         this(settings, maxConnectionsPerDestination,
-            new UpstreamRateLimiter.Default(RateLimitConfig.defaults(), Clock.systemUTC()));
+            new UpstreamRateLimiter.Default(Clock.systemUTC()));
     }
 
     /**

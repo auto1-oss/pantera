@@ -214,7 +214,7 @@ final class AutoBlockRegistryTest {
     /**
      * Regression pin for the high-traffic block-extension bug from the
      * pre-2.2.0 design: while the circuit is OPEN, every in-flight
-     * CircuitBreakerSlice.recordFailure call must NOT extend the block
+     * recordFailure call must NOT extend the block
      * window. Otherwise the circuit never self-heals.
      */
     @Test

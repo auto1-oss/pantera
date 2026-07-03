@@ -301,8 +301,44 @@ public final class VertxMain {
         } else {
             enabledCheck = com.auto1.pantera.auth.UserEnabledCheck.ALWAYS_ENABLED;
         }
+        // Revocation blocklist — previously never wired: revocation
+        // endpoints persisted to the DB but in-flight access tokens kept
+        // validating until natural expiry. Valkey-backed when the cluster
+        // infra is present (entries in Valkey + cross-node broadcast via
+        // CacheInvalidationPubSub, channel type "revocation"); DB-polling
+        // fallback otherwise; disabled only in storage-less test boots.
+        final com.auto1.pantera.auth.RevocationBlocklist revocationBlocklist;
+        if (settings.valkeyConnection().isPresent()
+            && settings.cacheInvalidationPubSub().isPresent()) {
+            revocationBlocklist = new com.auto1.pantera.auth.ValkeyRevocationBlocklist(
+                settings.valkeyConnection().get(),
+                settings.cacheInvalidationPubSub().get(),
+                (int) java.time.Duration.ofHours(2).toSeconds()
+            );
+            EcsLogger.info("com.auto1.pantera")
+                .message("Valkey-backed token revocation blocklist active (cross-node broadcast)")
+                .eventCategory("configuration")
+                .eventAction("revocation_blocklist_init")
+                .eventOutcome("success")
+                .field("log.source", "application")
+                .log();
+        } else if (sharedDs.isPresent()) {
+            revocationBlocklist = new com.auto1.pantera.auth.DbRevocationBlocklist(
+                new com.auto1.pantera.db.dao.RevocationDao(sharedDs.get())
+            );
+            EcsLogger.info("com.auto1.pantera")
+                .message("DB-polling token revocation blocklist active (single-node mode)")
+                .eventCategory("configuration")
+                .eventAction("revocation_blocklist_init")
+                .eventOutcome("success")
+                .field("log.source", "application")
+                .log();
+        } else {
+            revocationBlocklist = null;
+        }
         final com.auto1.pantera.auth.JwtTokens jwtTokens = new com.auto1.pantera.auth.JwtTokens(
-            rsaKeys.privateKey(), rsaKeys.publicKey(), userTokenDao, null, null, enabledCheck
+            rsaKeys.privateKey(), rsaKeys.publicKey(), userTokenDao, null,
+            revocationBlocklist, enabledCheck
         );
         // Install the circuit-breaker settings loader BEFORE constructing
         // RepositorySlices so the default-constructor activeSupplier()

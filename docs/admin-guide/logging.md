@@ -66,7 +66,6 @@ table below:
 | cluster, system, memory | host |
 | user, admin | iam |
 | security | authentication |
-| webhook, http_client | network |
 | factory | configuration |
 
 **Note (v2.1.3+):** `event.duration` is in **milliseconds** (Pantera convention,
@@ -182,11 +181,9 @@ Every log entry on the request path carries three correlation fields:
 
 As of v2.2.0 the correlation contract is closed across:
 
-- Vert.x WebClient outbound calls (webhooks).
-- `java.net.http.HttpClient` outbound calls (OSV.dev scanner).
-- Cross-instance pub/sub: `ClusterEventBus` and `CacheInvalidationPubSub` stamp `trace.id` + `span.id` into a versioned envelope (v2 prefix; v1 still parsed for rolling-deploy compatibility).
+- Cross-instance pub/sub: `CacheInvalidationPubSub` stamps `trace.id` + `span.id` into a versioned envelope (v2 prefix; v1 still parsed for rolling-deploy compatibility).
 - Quartz jobs (`scheduleJob` writes MDC into `JobDataMap`; `TracingJobWrapper` restores it on `Job.execute`).
-- Async cache and metadata refreshes (`SwrMetadataCache`, PyPI `ProxySlice` background refresh, `WebhookDispatcher` retry timer).
+- Async cache and metadata refreshes (PyPI `ProxySlice` background refresh).
 
 Audit-log entries inherit the originating HTTP request's `trace.id` so an artifact upload and its HTTP session join in Kibana under a single value.
 

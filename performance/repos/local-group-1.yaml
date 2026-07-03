@@ -1,6 +1,0 @@
-repo:
-  type: npm-group
-  url: http://pantera-sut:8080/local-group-1
-  members:
-    - local-repo-1
-    - local-repo-2
