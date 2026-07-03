@@ -22,7 +22,6 @@ import com.auto1.pantera.http.rt.MethodRule;
 import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
-import com.auto1.pantera.http.slice.SliceDownload;
 import com.auto1.pantera.http.slice.StorageArtifactSlice;
 import com.auto1.pantera.http.slice.SliceSimple;
 import com.auto1.pantera.rpm.RepoConfig;
@@ -55,7 +54,8 @@ public final class RpmSlice extends Slice.Wrap {
         final RepoConfig config,
         final Optional<Queue<ArtifactEvent>> events
     ) {
-        this(storage, policy, auth, null, config, events);
+        this(storage, policy, auth, null, config, events,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
     }
 
     /**
@@ -75,8 +75,27 @@ public final class RpmSlice extends Slice.Wrap {
         final RepoConfig config,
         final Optional<Queue<ArtifactEvent>> events
     ) {
+        this(storage, policy, basicAuth, tokenAuth, config, events,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+    }
+
+    /**
+     * Ctor with synchronous artifact-index writer.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public RpmSlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final RepoConfig config,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
+    ) {
         super(
-            RpmSlice.createSliceRoute(storage, policy, basicAuth, tokenAuth, config, events)
+            RpmSlice.createSliceRoute(
+                storage, policy, basicAuth, tokenAuth, config, events, syncIndex
+            )
         );
     }
 
@@ -96,7 +115,8 @@ public final class RpmSlice extends Slice.Wrap {
         final Authentication basicAuth,
         final TokenAuthentication tokenAuth,
         final RepoConfig config,
-        final Optional<Queue<ArtifactEvent>> events
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
     ) {
         return new SliceRoute(
             new RtRulePath(
@@ -113,7 +133,7 @@ public final class RpmSlice extends Slice.Wrap {
             new RtRulePath(
                 MethodRule.PUT,
                 RpmSlice.createAuthSlice(
-                    new RpmUpload(storage, config, events),
+                    new RpmUpload(storage, config, events, syncIndex),
                     basicAuth,
                     tokenAuth,
                     new OperationControl(

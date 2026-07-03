@@ -22,7 +22,6 @@ import org.junit.jupiter.api.Test;
  * Test for {@link PackagesItem.Asto}.
  * @since 0.1
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class PackagesItemTest {
 
     @Test

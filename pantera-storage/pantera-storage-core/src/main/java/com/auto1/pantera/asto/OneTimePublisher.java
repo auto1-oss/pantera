@@ -20,7 +20,6 @@ import org.reactivestreams.Subscription;
  * @param <T> The type of publisher elements.
  * @since 0.23
  */
-@SuppressWarnings("PMD.UncommentedEmptyMethodBody")
 public final class OneTimePublisher<T> implements Publisher<T> {
 
     /**

@@ -157,6 +157,7 @@ const allActionsMap: Record<string, string[]> = {
   api_storage_alias_permissions: ['read', 'create', 'delete'],
   api_search_permissions: ['read', 'write'],
   api_cooldown_permissions: ['read', 'write'],
+  api_cooldown_history_permissions: ['read'],
   adapter_basic_permissions: ['read', 'write', 'delete'],
   docker_repository_permissions: ['pull', 'push', 'overwrite'],
   docker_registry_permissions: ['base', 'catalog'],
@@ -307,7 +308,7 @@ onMounted(load)
         <Button v-if="auth.hasAction('api_role_permissions', 'create')" label="Create Role" icon="pi pi-plus" @click="openCreateRole" />
       </div>
 
-      <DataTable :value="roles" :loading="loading" stripedRows class="shadow-sm">
+      <DataTable :value="roles" :loading="loading" striped-rows class="shadow-sm">
         <Column field="name" header="Name" sortable />
         <Column field="enabled" header="Status">
           <template #body="{ data }">
@@ -318,16 +319,20 @@ onMounted(load)
           <template #body="{ data }">
             <div class="flex gap-1">
               <Button v-if="auth.hasAction('api_role_permissions', 'update')" icon="pi pi-pencil" text size="small" @click="openEditRole(data.name)" />
-              <Button v-if="auth.hasAction('api_role_permissions', 'enable')" :icon="data.enabled !== false ? 'pi pi-ban' : 'pi pi-check-circle'" text size="small"
-                :severity="data.enabled !== false ? 'warn' : 'success'" @click="toggleRole(data)" />
+              <Button
+                v-if="auth.hasAction('api_role_permissions', 'enable')" :icon="data.enabled !== false ? 'pi pi-ban' : 'pi pi-check-circle'" text size="small"
+                :severity="data.enabled !== false ? 'warn' : 'success'" @click="toggleRole(data)"
+              />
               <Button v-if="auth.hasAction('api_role_permissions', 'delete')" icon="pi pi-trash" text size="small" severity="danger" @click="handleDelete(data.name)" />
             </div>
           </template>
         </Column>
       </DataTable>
 
-      <Paginator v-if="total > size" :rows="size" :totalRecords="total" :first="page * size"
-        @page="(e: any) => { page = e.page; size = e.rows; load() }" :rowsPerPageOptions="[10, 20, 50]" />
+      <Paginator
+        v-if="total > size" :rows="size" :total-records="total" :first="page * size"
+        :rows-per-page-options="[10, 20, 50]" @page="(e: any) => { page = e.page; size = e.rows; load() }"
+      />
 
       <Dialog v-model:visible="delVisible" header="Confirm Delete" modal class="w-96">
         <p>Delete role <strong>{{ targetName }}</strong>?</p>
@@ -343,7 +348,7 @@ onMounted(load)
           <InputText v-model="newRoleName" placeholder="Role name" class="w-full" :disabled="editMode" />
 
           <div class="flex items-center gap-2">
-            <Checkbox v-model="advancedMode" :binary="true" inputId="advRoleMode" />
+            <Checkbox v-model="advancedMode" :binary="true" input-id="advRoleMode" />
             <label for="advRoleMode" class="text-sm text-gray-500 cursor-pointer">Advanced mode (raw JSON)</label>
           </div>
 
@@ -357,7 +362,7 @@ onMounted(load)
           <template v-else>
             <!-- All Permission -->
             <div class="flex items-center gap-2 p-3 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg border border-yellow-200 dark:border-yellow-800">
-              <Checkbox v-model="allPermission" :binary="true" inputId="allPerm" />
+              <Checkbox v-model="allPermission" :binary="true" input-id="allPerm" />
               <label for="allPerm" class="text-sm font-semibold cursor-pointer">Grant All Permissions (admin)</label>
             </div>
 
@@ -370,7 +375,7 @@ onMounted(load)
                   <span class="text-xs font-semibold text-gray-500 uppercase">Repository Management</span>
                   <div class="flex flex-wrap gap-x-4 gap-y-1 mt-1">
                     <div v-for="a in ['read', 'create', 'update', 'delete', 'move']" :key="'apirepo_' + a" class="flex items-center gap-1">
-                      <Checkbox v-model="apiRepoActions" :value="a" :inputId="'apirepo_' + a" />
+                      <Checkbox v-model="apiRepoActions" :value="a" :input-id="'apirepo_' + a" />
                       <label :for="'apirepo_' + a" class="text-sm cursor-pointer">{{ a }}</label>
                     </div>
                   </div>
@@ -380,7 +385,7 @@ onMounted(load)
                   <span class="text-xs font-semibold text-gray-500 uppercase">User Management</span>
                   <div class="flex flex-wrap gap-x-4 gap-y-1 mt-1">
                     <div v-for="a in ['read', 'create', 'update', 'delete', 'enable', 'change_password']" :key="'apiuser_' + a" class="flex items-center gap-1">
-                      <Checkbox v-model="apiUserActions" :value="a" :inputId="'apiuser_' + a" />
+                      <Checkbox v-model="apiUserActions" :value="a" :input-id="'apiuser_' + a" />
                       <label :for="'apiuser_' + a" class="text-sm cursor-pointer">{{ a }}</label>
                     </div>
                   </div>
@@ -390,7 +395,7 @@ onMounted(load)
                   <span class="text-xs font-semibold text-gray-500 uppercase">Role Management</span>
                   <div class="flex flex-wrap gap-x-4 gap-y-1 mt-1">
                     <div v-for="a in ['read', 'create', 'update', 'delete', 'enable']" :key="'apirole_' + a" class="flex items-center gap-1">
-                      <Checkbox v-model="apiRoleActions" :value="a" :inputId="'apirole_' + a" />
+                      <Checkbox v-model="apiRoleActions" :value="a" :input-id="'apirole_' + a" />
                       <label :for="'apirole_' + a" class="text-sm cursor-pointer">{{ a }}</label>
                     </div>
                   </div>
@@ -400,7 +405,7 @@ onMounted(load)
                   <span class="text-xs font-semibold text-gray-500 uppercase">Storage Aliases</span>
                   <div class="flex flex-wrap gap-x-4 gap-y-1 mt-1">
                     <div v-for="a in ['read', 'create', 'delete']" :key="'apisto_' + a" class="flex items-center gap-1">
-                      <Checkbox v-model="apiStorageActions" :value="a" :inputId="'apisto_' + a" />
+                      <Checkbox v-model="apiStorageActions" :value="a" :input-id="'apisto_' + a" />
                       <label :for="'apisto_' + a" class="text-sm cursor-pointer">{{ a }}</label>
                     </div>
                   </div>
@@ -410,7 +415,7 @@ onMounted(load)
                   <span class="text-xs font-semibold text-gray-500 uppercase">Search</span>
                   <div class="flex flex-wrap gap-x-4 gap-y-1 mt-1">
                     <div v-for="a in ['read', 'write']" :key="'apisrch_' + a" class="flex items-center gap-1">
-                      <Checkbox v-model="apiSearchActions" :value="a" :inputId="'apisrch_' + a" />
+                      <Checkbox v-model="apiSearchActions" :value="a" :input-id="'apisrch_' + a" />
                       <label :for="'apisrch_' + a" class="text-sm cursor-pointer">{{ a }}</label>
                     </div>
                   </div>
@@ -420,7 +425,7 @@ onMounted(load)
                   <span class="text-xs font-semibold text-gray-500 uppercase">Cooldown</span>
                   <div class="flex flex-wrap gap-x-4 gap-y-1 mt-1">
                     <div v-for="a in ['read', 'write']" :key="'apicd_' + a" class="flex items-center gap-1">
-                      <Checkbox v-model="apiCooldownActions" :value="a" :inputId="'apicd_' + a" />
+                      <Checkbox v-model="apiCooldownActions" :value="a" :input-id="'apicd_' + a" />
                       <label :for="'apicd_' + a" class="text-sm cursor-pointer">{{ a }}</label>
                     </div>
                   </div>
@@ -436,14 +441,14 @@ onMounted(load)
                 <p v-if="repoEntries.length === 0" class="text-xs text-gray-400">No repository access rules. Click "Add Repo" to grant read/write/delete on specific repositories.</p>
                 <div v-for="(entry, i) in repoEntries" :key="'repo_' + i" class="flex items-start gap-2 p-2 bg-gray-50 dark:bg-gray-800 rounded">
                   <div class="flex-1 space-y-1">
-                    <AutoComplete v-model="entry.name" :suggestions="repoSuggestions" @complete="searchRepos" :completeOnFocus="true" placeholder="Select repo or * for all" class="w-full" inputClass="w-full" size="small" />
+                    <AutoComplete v-model="entry.name" :suggestions="repoSuggestions" :complete-on-focus="true" placeholder="Select repo or * for all" class="w-full" input-class="w-full" size="small" @complete="searchRepos" />
                     <div class="flex gap-x-4">
                       <div v-for="a in ['read', 'write', 'delete']" :key="'re_' + i + a" class="flex items-center gap-1">
-                        <Checkbox v-model="entry.actions" :value="a" :inputId="'re_' + i + a" />
+                        <Checkbox v-model="entry.actions" :value="a" :input-id="'re_' + i + a" />
                         <label :for="'re_' + i + a" class="text-xs cursor-pointer">{{ a }}</label>
                       </div>
                       <div class="flex items-center gap-1">
-                        <Checkbox v-model="entry.actions" value="*" :inputId="'re_' + i + 'all'" />
+                        <Checkbox v-model="entry.actions" value="*" :input-id="'re_' + i + 'all'" />
                         <label :for="'re_' + i + 'all'" class="text-xs cursor-pointer">all</label>
                       </div>
                     </div>
@@ -472,7 +477,7 @@ onMounted(load)
                       <div class="flex gap-2">
                         <div class="flex-1">
                           <label class="text-xs text-gray-500 mb-0.5 block">Repository</label>
-                          <AutoComplete v-model="entry.repo" :suggestions="repoSuggestions" @complete="searchRepos" :completeOnFocus="true" placeholder="Docker repo or *" class="w-full" inputClass="w-full" size="small" />
+                          <AutoComplete v-model="entry.repo" :suggestions="repoSuggestions" :complete-on-focus="true" placeholder="Docker repo or *" class="w-full" input-class="w-full" size="small" @complete="searchRepos" />
                         </div>
                         <div class="flex-1">
                           <label class="text-xs text-gray-500 mb-0.5 block">Image</label>
@@ -481,11 +486,11 @@ onMounted(load)
                       </div>
                       <div class="flex gap-x-4">
                         <div v-for="a in ['pull', 'push', 'overwrite']" :key="'dr_' + i + a" class="flex items-center gap-1">
-                          <Checkbox v-model="entry.actions" :value="a" :inputId="'dr_' + i + a" />
+                          <Checkbox v-model="entry.actions" :value="a" :input-id="'dr_' + i + a" />
                           <label :for="'dr_' + i + a" class="text-xs cursor-pointer">{{ a }}</label>
                         </div>
                         <div class="flex items-center gap-1">
-                          <Checkbox v-model="entry.actions" value="*" :inputId="'dr_' + i + 'all'" />
+                          <Checkbox v-model="entry.actions" value="*" :input-id="'dr_' + i + 'all'" />
                           <label :for="'dr_' + i + 'all'" class="text-xs cursor-pointer">all</label>
                         </div>
                       </div>
@@ -506,14 +511,14 @@ onMounted(load)
                   <p v-if="dockerRegEntries.length === 0" class="text-xs text-gray-400">No registry access rules. Users need <strong>base</strong> to connect and <strong>catalog</strong> to list images.</p>
                   <div v-for="(entry, i) in dockerRegEntries" :key="'dreg_' + i" class="flex items-start gap-2 p-2 bg-gray-50 dark:bg-gray-800 rounded">
                     <div class="flex-1 space-y-1">
-                      <AutoComplete v-model="entry.repo" :suggestions="repoSuggestions" @complete="searchRepos" :completeOnFocus="true" placeholder="Docker repo or *" class="w-full" inputClass="w-full" size="small" />
+                      <AutoComplete v-model="entry.repo" :suggestions="repoSuggestions" :complete-on-focus="true" placeholder="Docker repo or *" class="w-full" input-class="w-full" size="small" @complete="searchRepos" />
                       <div class="flex gap-x-4">
                         <div v-for="a in ['base', 'catalog']" :key="'rg_' + i + a" class="flex items-center gap-1">
-                          <Checkbox v-model="entry.actions" :value="a" :inputId="'rg_' + i + a" />
+                          <Checkbox v-model="entry.actions" :value="a" :input-id="'rg_' + i + a" />
                           <label :for="'rg_' + i + a" class="text-xs cursor-pointer">{{ a }} <span class="text-gray-400">{{ a === 'base' ? '(connect to /v2/)' : '(list all images)' }}</span></label>
                         </div>
                         <div class="flex items-center gap-1">
-                          <Checkbox v-model="entry.actions" value="*" :inputId="'rg_' + i + 'all'" />
+                          <Checkbox v-model="entry.actions" value="*" :input-id="'rg_' + i + 'all'" />
                           <label :for="'rg_' + i + 'all'" class="text-xs cursor-pointer">all</label>
                         </div>
                       </div>

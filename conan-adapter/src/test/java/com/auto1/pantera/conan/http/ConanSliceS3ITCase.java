@@ -46,7 +46,6 @@ import java.util.UUID;
  * Test container and data for package base of Ubuntu 20.04 LTS x86_64.
  * @since 0.1
  */
-@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.TooManyMethods"})
 class ConanSliceS3ITCase {
 
     @RegisterExtension

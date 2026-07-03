@@ -24,7 +24,6 @@ import org.junit.jupiter.api.io.TempDir;
  * database.
  * @since 0.31
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class MetadataDockerITCase {
 
     /**

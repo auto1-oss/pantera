@@ -21,12 +21,6 @@ import org.junit.jupiter.api.extension.ExtensionContext;
  *
  * @since 0.3
  */
-@SuppressWarnings({
-    "PMD.AvoidCatchingGenericException",
-    "PMD.OnlyOneReturn",
-    "PMD.AvoidDuplicateLiterals",
-    "PMD.AvoidCatchingThrowable"
-})
 public final class DockerClientExtension
     implements BeforeEachCallback, BeforeAllCallback, AfterAllCallback {
 

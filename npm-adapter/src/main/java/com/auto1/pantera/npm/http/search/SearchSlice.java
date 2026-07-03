@@ -49,22 +49,16 @@ public final class SearchSlice implements Slice {
     private static final int DEFAULT_SIZE = 20;
     
     /**
-     * Storage.
-     */
-    private final Storage storage;
-    
-    /**
      * Package index.
      */
     private final PackageIndex index;
-    
+
     /**
      * Constructor.
-     * @param storage Storage
+     * @param storage Storage (reserved for future on-disk index access)
      * @param index Package index
      */
-    public SearchSlice(final Storage storage, final PackageIndex index) {
-        this.storage = storage;
+    public SearchSlice(final Storage storage, final PackageIndex index) { // NOPMD UnusedFormalParameter - public API; storage is reserved for future on-disk index lookups
         this.index = index;
     }
     

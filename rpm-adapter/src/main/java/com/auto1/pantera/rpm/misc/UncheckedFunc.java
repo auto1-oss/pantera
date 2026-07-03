@@ -35,7 +35,6 @@ public final class UncheckedFunc<T, R, E extends Throwable> implements Function<
     }
 
     @Override
-    @SuppressWarnings("PMD.AvoidCatchingThrowable")
     public R apply(final T val) {
         try {
             return this.checked.apply(val);

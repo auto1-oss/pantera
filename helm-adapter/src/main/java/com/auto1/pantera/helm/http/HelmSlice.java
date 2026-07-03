@@ -22,7 +22,6 @@ import com.auto1.pantera.http.rt.MethodRule;
 import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
-import com.auto1.pantera.http.slice.SliceDownload;
 import com.auto1.pantera.http.slice.StorageArtifactSlice;
 import com.auto1.pantera.http.slice.SliceSimple;
 import com.auto1.pantera.scheduling.ArtifactEvent;
@@ -57,7 +56,8 @@ public final class HelmSlice extends Slice.Wrap {
         final String name,
         final Optional<Queue<ArtifactEvent>> events
     ) {
-        this(storage, base, policy, auth, null, name, events);
+        this(storage, base, policy, auth, null, name, events,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
     }
 
     /**
@@ -80,6 +80,24 @@ public final class HelmSlice extends Slice.Wrap {
         final String name,
         final Optional<Queue<ArtifactEvent>> events
     ) {
+        this(storage, base, policy, basicAuth, tokenAuth, name, events,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+    }
+
+    /**
+     * Ctor with synchronous artifact-index writer.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public HelmSlice(
+        final Storage storage,
+        final String base,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
+    ) {
         super(
             new SliceRoute(
                 new RtRulePath(
@@ -87,7 +105,7 @@ public final class HelmSlice extends Slice.Wrap {
                         MethodRule.PUT, MethodRule.POST
                     ),
                     HelmSlice.createAuthSlice(
-                        new PushChartSlice(storage, events, name),
+                        new PushChartSlice(storage, events, name, syncIndex),
                         basicAuth,
                         tokenAuth,
                         new OperationControl(

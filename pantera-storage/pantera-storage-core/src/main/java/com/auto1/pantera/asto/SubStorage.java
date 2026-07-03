@@ -44,6 +44,14 @@ public final class SubStorage implements Storage {
     private final String id;
 
     /**
+     * Pre-compiled pattern used by {@link #list(Key)} and
+     * {@link #list(Key, String)} to strip the configured prefix from
+     * returned keys. Hoisted out of the hot path to avoid re-compiling
+     * on every call.
+     */
+    private final Pattern listPattern;
+
+    /**
      * Sub storage with prefix.
      * @param prefix Prefix key
      * @param origin Origin key
@@ -54,6 +62,9 @@ public final class SubStorage implements Storage {
         this.id = String.format(
             "SubStorage: prefix=%s, origin=%s", this.prefix, this.origin.identifier()
         );
+        this.listPattern = Pattern.compile(
+            "^" + Pattern.quote(this.prefix.string()) + "/"
+        );
     }
 
     @Override
@@ -63,25 +74,23 @@ public final class SubStorage implements Storage {
 
     @Override
     public CompletableFuture<Collection<Key>> list(final Key filter) {
-        final Pattern ptn = Pattern.compile(String.format("^%s/", this.prefix.string()));
         return this.origin.list(new PrefixedKed(this.prefix, filter)).thenApply(
             keys -> keys.stream()
-                .map(key -> new Key.From(ptn.matcher(key.string()).replaceFirst("")))
+                .map(key -> new Key.From(this.listPattern.matcher(key.string()).replaceFirst("")))
                 .collect(Collectors.toList())
         );
     }
 
     @Override
     public CompletableFuture<ListResult> list(final Key root, final String delimiter) {
-        final Pattern ptn = Pattern.compile(String.format("^%s/", this.prefix.string()));
         return this.origin
             .list(new PrefixedKed(this.prefix, root), delimiter)
             .thenApply(result -> {
                 final Collection<Key> files = result.files().stream()
-                    .map(key -> new Key.From(ptn.matcher(key.string()).replaceFirst("")))
+                    .map(key -> new Key.From(this.listPattern.matcher(key.string()).replaceFirst("")))
                     .collect(Collectors.toList());
                 final Collection<Key> dirs = result.directories().stream()
-                    .map(key -> new Key.From(ptn.matcher(key.string()).replaceFirst("")))
+                    .map(key -> new Key.From(this.listPattern.matcher(key.string()).replaceFirst("")))
                     .collect(Collectors.toList());
                 return new ListResult.Simple(files, dirs);
             });

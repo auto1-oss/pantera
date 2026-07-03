@@ -145,6 +145,7 @@ public final class JwtSettings {
                 EcsLogger.warn("com.auto1.pantera.settings")
                     .message("Invalid JWT expiry-seconds value, using default")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
         }

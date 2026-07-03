@@ -10,10 +10,14 @@
  */
 package com.auto1.pantera.pypi.http;
 
+import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.http.auth.BasicAuthzSlice;
 import com.auto1.pantera.http.auth.CombinedAuthzSliceWrap;
@@ -24,23 +28,29 @@ import com.auto1.pantera.http.rt.MethodRule;
 import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
-import com.auto1.pantera.http.slice.SliceDownload;
 import com.auto1.pantera.http.slice.StorageArtifactSlice;
 import com.auto1.pantera.http.slice.SliceSimple;
 import com.auto1.pantera.http.slice.SliceWithHeaders;
 import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.scheduling.RepositoryEvents;
 import com.auto1.pantera.security.perms.Action;
 import com.auto1.pantera.security.perms.AdapterBasicPermission;
 import com.auto1.pantera.security.policy.Policy;
 
 import java.util.Optional;
 import java.util.Queue;
+import java.util.concurrent.CompletableFuture;
 import java.util.regex.Pattern;
 
 /**
  * PyPi HTTP entry point.
  */
 public final class PySlice extends Slice.Wrap {
+
+    /**
+     * Repository type name.
+     */
+    private static final String REPO_TYPE = "pypi";
 
     /**
      * Primary ctor.
@@ -57,7 +67,8 @@ public final class PySlice extends Slice.Wrap {
         final String name,
         final Optional<Queue<ArtifactEvent>> queue
     ) {
-        this(storage, policy, auth, null, name, queue);
+        this(storage, policy, auth, null, name, queue,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
     }
 
     /**
@@ -76,6 +87,23 @@ public final class PySlice extends Slice.Wrap {
         final TokenAuthentication tokenAuth,
         final String name,
         final Optional<Queue<ArtifactEvent>> queue
+    ) {
+        this(storage, policy, basicAuth, tokenAuth, name, queue,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+    }
+
+    /**
+     * Ctor with synchronous artifact-index writer.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public PySlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> queue,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
     ) {
         super(
             new SliceRoute(
@@ -104,7 +132,7 @@ public final class PySlice extends Slice.Wrap {
                         )
                     ),
                     PySlice.createAuthSlice(
-                        new WheelSlice(storage, queue, name),
+                        new WheelSlice(storage, queue, name, syncIndex),
                         basicAuth,
                         tokenAuth,
                         new OperationControl(
@@ -157,12 +185,58 @@ public final class PySlice extends Slice.Wrap {
                 new RtRulePath(
                     MethodRule.DELETE,
                     PySlice.createAuthSlice(
-                        new DeleteSlice(storage),
+                        new DeleteSlice(
+                            storage,
+                            queue.map(
+                                item -> new RepositoryEvents(PySlice.REPO_TYPE, name, item)
+                            )
+                        ),
                         basicAuth,
                         tokenAuth,
                         new OperationControl(
                                 policy,
                                 new AdapterBasicPermission(name, Action.Standard.WRITE)
+                        )
+                    )
+                ),
+                // HEAD support for hosted artifacts + index pages. uv (and other
+                // resolvers) probe `.whl` URLs with HEAD before deciding to
+                // stream — without these routes the request fell through to
+                // the FALLBACK and returned 404 even though the file existed.
+                // Both HEAD routes delegate to the same handlers as their GET
+                // counterparts via {@link HeadAsGetSlice}, which drains the
+                // body and returns the response headers.
+                new RtRulePath(
+                    new RtRule.All(
+                        MethodRule.HEAD,
+                        new RtRule.ByPath(
+                            ".*\\.(whl|tar\\.gz|zip|tar\\.bz2|tar\\.Z|tar|egg)"
+                        )
+                    ),
+                    PySlice.createAuthSlice(
+                        new HeadAsGetSlice(
+                            new SliceWithHeaders(
+                                new StorageArtifactSlice(storage),
+                                Headers.from(ContentType.mime("application/octet-stream"))
+                            )
+                        ),
+                        basicAuth,
+                        tokenAuth,
+                        new OperationControl(
+                            policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                        )
+                    )
+                ),
+                new RtRulePath(
+                    new RtRule.All(
+                        MethodRule.HEAD,
+                        new RtRule.ByPath("(^\\/)|(.*(\\/[a-z0-9\\-]+?\\/?$))")
+                    ),
+                    new BasicAuthzSlice(
+                        new HeadAsGetSlice(new SliceIndex(storage)),
+                        basicAuth,
+                        new OperationControl(
+                            policy, new AdapterBasicPermission(name, Action.Standard.READ)
                         )
                     )
                 ),
@@ -172,6 +246,41 @@ public final class PySlice extends Slice.Wrap {
                 )
             )
         );
+    }
+
+    /**
+     * Adapter that turns a HEAD request into a GET against the wrapped
+     * slice, then drops the body before returning. RFC 9110 §9.3.2 lets
+     * a server respond to HEAD by computing the GET response and omitting
+     * the body — this is the minimum-effort implementation: the underlying
+     * GET path stays the single source of truth for "does this file exist
+     * and what are its headers".
+     *
+     * <p>The drained body is discarded; status and headers are forwarded
+     * to the caller. The Content-Length header (if present in the GET
+     * response) lets HEAD callers size-check without downloading.</p>
+     */
+    private static final class HeadAsGetSlice implements Slice {
+
+        private final Slice origin;
+
+        HeadAsGetSlice(final Slice origin) {
+            this.origin = origin;
+        }
+
+        @Override
+        public CompletableFuture<Response> response(
+            final RequestLine line, final Headers headers, final Content body
+        ) {
+            final RequestLine asGet = new RequestLine(
+                RqMethod.GET, line.uri(), line.version()
+            );
+            return this.origin.response(asGet, headers, body).thenCompose(resp ->
+                resp.body().asBytesFuture().thenApply(ignored ->
+                    new Response(resp.status(), resp.headers(), Content.EMPTY)
+                )
+            );
+        }
     }
 
     /**

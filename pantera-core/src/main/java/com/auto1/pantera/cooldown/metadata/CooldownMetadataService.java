@@ -10,9 +10,8 @@
  */
 package com.auto1.pantera.cooldown.metadata;
 
-import com.auto1.pantera.cooldown.CooldownInspector;
+import com.auto1.pantera.audit.AuditContext;
 
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -37,6 +36,13 @@ public interface CooldownMetadataService {
     /**
      * Filter metadata to remove blocked versions.
      *
+     * <p>Prefer {@link #filterMetadata(String, String, String, byte[],
+     * MetadataParser, MetadataFilter, MetadataRewriter, AuditContext, String)}
+     * at any HTTP-entry call site — this overload has no requester identity
+     * to attribute the resulting {@code artifact.audit} resolution record
+     * to, so the default implementation falls back to {@link AuditContext#NONE}
+     * and a generic owner label.
+     *
      * @param repoType Repository type (e.g., "npm", "maven")
      * @param repoName Repository name
      * @param packageName Package name
@@ -44,7 +50,6 @@ public interface CooldownMetadataService {
      * @param parser Parser for this metadata format
      * @param filter Filter for this metadata format
      * @param rewriter Rewriter for this metadata format
-     * @param inspector Optional cooldown inspector for release date lookups
      * @param <T> Type of parsed metadata
      * @return CompletableFuture with filtered metadata bytes
      * @throws AllVersionsBlockedException If all versions are blocked
@@ -56,9 +61,57 @@ public interface CooldownMetadataService {
         byte[] rawMetadata,
         MetadataParser<T> parser,
         MetadataFilter<T> filter,
-        MetadataRewriter<T> rewriter,
-        Optional<CooldownInspector> inspector
+        MetadataRewriter<T> rewriter
     );
+
+    /**
+     * Filter metadata to remove blocked versions, attributing the resulting
+     * {@code artifact.audit} resolution record to the given requester.
+     *
+     * <p>Default implementation delegates to the context-less overload and
+     * then emits an {@code artifact_resolution} audit record with an empty
+     * filtered-versions list on success. The taxonomy contract is that EVERY
+     * metadata listing view is audited — including deployments wired with
+     * {@link NoopCooldownMetadataService} (no cooldown infrastructure at
+     * all), where "no filtering happened" is exactly what the record should
+     * say. Implementations with real filtering (e.g. {@link
+     * MetadataFilterService}) override this method and emit their own,
+     * more detailed record instead.
+     *
+     * @param repoType Repository type (e.g., "npm", "maven")
+     * @param repoName Repository name
+     * @param packageName Package name
+     * @param rawMetadata Raw metadata bytes from upstream
+     * @param parser Parser for this metadata format
+     * @param filter Filter for this metadata format
+     * @param rewriter Rewriter for this metadata format
+     * @param ctx Request correlation context (trace id / client IP)
+     * @param owner Requesting user name
+     * @param <T> Type of parsed metadata
+     * @return CompletableFuture with filtered metadata bytes
+     * @throws AllVersionsBlockedException If all versions are blocked
+     */
+    default <T> CompletableFuture<byte[]> filterMetadata(
+        final String repoType,
+        final String repoName,
+        final String packageName,
+        final byte[] rawMetadata,
+        final MetadataParser<T> parser,
+        final MetadataFilter<T> filter,
+        final MetadataRewriter<T> rewriter,
+        final AuditContext ctx,
+        final String owner
+    ) {
+        return this.filterMetadata(
+            repoType, repoName, packageName, rawMetadata, parser, filter, rewriter
+        ).whenComplete((bytes, error) -> {
+            if (error == null) {
+                com.auto1.pantera.audit.AuditLogger.resolution(
+                    ctx, repoType, repoName, packageName, owner, java.util.List.of()
+                );
+            }
+        });
+    }
 
     /**
      * Invalidate cached metadata for a package.
@@ -77,6 +130,13 @@ public interface CooldownMetadataService {
      * @param repoName Repository name
      */
     void invalidateAll(String repoType, String repoName);
+
+    /**
+     * Clear all cached metadata across all repositories.
+     * Called on global policy changes (e.g. cooldown duration change)
+     * that may affect all cached entries.
+     */
+    void clearAll();
 
     /**
      * Get cache statistics.

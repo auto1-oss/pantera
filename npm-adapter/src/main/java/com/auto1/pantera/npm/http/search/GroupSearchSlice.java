@@ -180,10 +180,10 @@ public final class GroupSearchSlice implements Slice {
                     ));
                 }
             }
-        } catch (Exception e) {
-            // If parsing fails, return empty list
+        } catch (Exception e) { // NOPMD EmptyCatchBlock - intentional: parse failure returns the (possibly empty) list collected so far; search is best-effort
+            // If parsing fails, return what we collected so far
         }
-        
+
         return results;
     }
     

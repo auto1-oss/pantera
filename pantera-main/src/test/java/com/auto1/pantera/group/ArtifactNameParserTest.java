@@ -27,7 +27,6 @@ import java.util.Optional;
  *
  * @since 1.21.0
  */
-@SuppressWarnings("PMD.TooManyMethods")
 final class ArtifactNameParserTest {
 
     // ---- Maven: artifact downloads ----

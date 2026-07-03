@@ -27,7 +27,6 @@ import org.junit.jupiter.api.Test;
  * Tests for {@link MetaUpdate.ByTgz}.
  * @since 0.9
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 final class MetaUpdateByTgzTest {
     /**
      * Storage.

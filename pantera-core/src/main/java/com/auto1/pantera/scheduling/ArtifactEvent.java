@@ -91,6 +91,16 @@ public final class ArtifactEvent {
     private final String checksum;
 
     /**
+     * Originating client IP — captured from MDC at construction time so the
+     * audit log entry written later (on the DB-consumer thread) carries the
+     * IP of the HTTP caller that triggered the publish. Without this the
+     * audit log misses {@code client.ip} entirely, because the consumer
+     * thread (RxComputationThreadPool) inherits no MDC from the request
+     * thread. Same propagation pattern as {@link #traceId}. Nullable.
+     */
+    private final String clientIp;
+
+    /**
      * Ctor for the event to remove all artifact versions.
      * @param repoType Repository type
      * @param repoName Repository name
@@ -129,18 +139,21 @@ public final class ArtifactEvent {
                           long created, Optional<Long> release, String pathPrefix,
                           Type etype) {
         this(repoType, repoName, owner, artifactName, version, size, created,
-            release, pathPrefix, etype, MDC.get(EcsMdc.TRACE_ID), null);
+            release, pathPrefix, etype,
+            MDC.get(EcsMdc.TRACE_ID), null, MDC.get(EcsMdc.CLIENT_IP));
     }
 
     /**
      * Full-args ctor used by the public {@link #withChecksum(String)} copy path
-     * and by the auto-trace-capture delegate above. The {@code traceId} is
-     * captured once at event-construction time; later copies preserve it.
+     * and by the auto-trace-capture delegate above. The {@code traceId} and
+     * {@code clientIp} are captured once at event-construction time; later
+     * copies preserve them.
      */
     private ArtifactEvent(String repoType, String repoName, String owner,
                           String artifactName, String version, long size,
                           long created, Optional<Long> release, String pathPrefix,
-                          Type etype, String traceId, String checksum) {
+                          Type etype, String traceId, String checksum,
+                          String clientIp) {
         this.repoType = repoType;
         this.repoName = repoName;
         this.owner = owner;
@@ -153,6 +166,7 @@ public final class ArtifactEvent {
         this.eventType = etype;
         this.traceId = traceId;
         this.checksum = checksum;
+        this.clientIp = clientIp;
     }
 
     /**
@@ -167,7 +181,34 @@ public final class ArtifactEvent {
         return new ArtifactEvent(
             this.repoType, this.repoName, this.owner, this.artifactName,
             this.version, this.size, this.created, this.release,
-            this.pathPrefix, this.eventType, this.traceId, sha256Hex
+            this.pathPrefix, this.eventType, this.traceId, sha256Hex,
+            this.clientIp
+        );
+    }
+
+    /**
+     * Return a copy carrying the supplied request-context fields. Used by
+     * proxy package processors: the processor consumes events on a worker
+     * thread (no MDC) but the originating {@link ProxyArtifactEvent}
+     * captured {@code trace.id} + {@code client.ip} on the request thread.
+     * Calling {@code .withContext(proxy.traceId(), proxy.clientIp())}
+     * threads those values through to the audit log without requiring
+     * every ctor to take both as explicit params.
+     *
+     * @param traceId trace id to bind, or {@code null} to keep the
+     *                MDC-captured value
+     * @param clientIp client IP to bind, or {@code null} to keep the
+     *                 MDC-captured value
+     * @return copy with the supplied (or kept) context fields
+     */
+    public ArtifactEvent withContext(final String traceId, final String clientIp) {
+        return new ArtifactEvent(
+            this.repoType, this.repoName, this.owner, this.artifactName,
+            this.version, this.size, this.created, this.release,
+            this.pathPrefix, this.eventType,
+            traceId != null ? traceId : this.traceId,
+            this.checksum,
+            clientIp != null ? clientIp : this.clientIp
         );
     }
 
@@ -186,6 +227,15 @@ public final class ArtifactEvent {
      */
     public String checksum() {
         return this.checksum;
+    }
+
+    /**
+     * Originating HTTP {@code client.ip} captured at construction time.
+     * @return Client IP, or {@code null} when the event was produced outside
+     *     a request scope (scheduled jobs, import CLI, server-side cleanup).
+     */
+    public String clientIp() {
+        return this.clientIp;
     }
 
     /**

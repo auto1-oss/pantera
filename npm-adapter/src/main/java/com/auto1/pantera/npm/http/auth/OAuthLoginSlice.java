@@ -13,6 +13,7 @@ package com.auto1.pantera.npm.http.auth;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.LogSanitizer;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
@@ -24,6 +25,7 @@ import com.auto1.pantera.http.rq.RequestLine;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import javax.json.Json;
@@ -76,6 +78,7 @@ public final class OAuthLoginSlice implements Slice {
                     .eventCategory("authentication")
                     .eventAction("login")
                     .field("user.name", username)
+                    .field("log.source", "application")
                     .log();
 
                 // Validate credentials via Authentication (synchronous)
@@ -91,6 +94,7 @@ public final class OAuthLoginSlice implements Slice {
                         .eventAction("login")
                         .eventOutcome("success")
                         .field("user.name", authUser.name())
+                        .field("log.source", "application")
                         .log();
                     final String token = createToken(authUser, username, password, headers);
                     return CompletableFuture.completedFuture(
@@ -104,6 +108,7 @@ public final class OAuthLoginSlice implements Slice {
                     .eventAction("login")
                     .eventOutcome("failure")
                     .field("user.name", username)
+                    .field("log.source", "application")
                     .log();
                 return CompletableFuture.completedFuture(
                     ResponseBuilder.unauthorized()
@@ -118,6 +123,7 @@ public final class OAuthLoginSlice implements Slice {
                     .eventAction("login")
                     .eventOutcome("failure")
                     .error(e)
+                    .field("log.source", "application")
                     .log();
                 return CompletableFuture.completedFuture(
                     ResponseBuilder.badRequest()
@@ -147,13 +153,19 @@ public final class OAuthLoginSlice implements Slice {
             try {
                 token = this.tokens.generate(user);
             } catch (final Exception err) {
+                // B4: password and request headers are in scope (Basic /
+                // Bearer / X-API-Key). Drop the throwable bundle so a
+                // verbose JWT library message can never echo a token; emit
+                // sanitized exception class + message only.
                 EcsLogger.warn("com.auto1.pantera.npm")
                     .message("Failed to generate npm token via Tokens service")
                     .eventCategory("authentication")
                     .eventAction("token_generation")
                     .eventOutcome("failure")
                     .field("user.name", user.name())
-                    .error(err)
+                    .field("error.type", err.getClass().getSimpleName())
+                    .field("error.message", LogSanitizer.sanitizeMessage(err.getMessage()))
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -176,7 +188,7 @@ public final class OAuthLoginSlice implements Slice {
         return headers.find("authorization").stream()
             .findFirst()
             .map(Header::getValue)
-            .filter(v -> v.toLowerCase().startsWith("bearer "))
+            .filter(v -> v.toLowerCase(Locale.ROOT).startsWith("bearer "))
             .map(v -> v.substring(7).trim())
             .filter(v -> !v.isEmpty());
     }

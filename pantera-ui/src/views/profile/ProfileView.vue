@@ -150,7 +150,7 @@ async function submitPasswordChange() {
         <template #content>
           <form class="space-y-4" @submit.prevent="submitPasswordChange">
             <PasswordComplexityForm
-              v-model:oldPassword="pwOld"
+              v-model:old-password="pwOld"
               v-model:password="pwNew"
               :username="auth.username"
               :disabled="pwSubmitting"
@@ -195,12 +195,12 @@ async function submitPasswordChange() {
               </div>
               <Tag :value="expiryLabel(t)" :severity="expirySeverity(t)" class="mr-3" />
               <Button
+                v-tooltip.top="'Revoke token'"
                 icon="pi pi-trash"
                 severity="danger"
                 text
                 size="small"
                 @click="handleRevoke(t.id)"
-                v-tooltip.top="'Revoke token'"
               />
             </div>
           </div>

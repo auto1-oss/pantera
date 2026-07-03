@@ -45,13 +45,14 @@ public final class Gzip {
      * @param dest Destination directory
      * @throws IOException If fails
      */
-    @SuppressWarnings("PMD.AssignmentInOperand")
     public void unpackTar(final Path dest) throws IOException {
-        final GzipCompressorInputStream input =
-            new GzipCompressorInputStream(Files.newInputStream(this.file));
-        try (TarArchiveInputStream tar = new TarArchiveInputStream(input)) {
+        try (
+            GzipCompressorInputStream input =
+                new GzipCompressorInputStream(Files.newInputStream(this.file));
+            TarArchiveInputStream tar = new TarArchiveInputStream(input)
+        ) {
             TarArchiveEntry entry;
-            while ((entry = (TarArchiveEntry) tar.getNextEntry()) != null) {
+            while ((entry = tar.getNextEntry()) != null) {
                 final Path next = dest.resolve(entry.getName());
                 if (!next.normalize().startsWith(dest)) {
                     throw new IllegalStateException("Bad tar.gz entry");
@@ -71,6 +72,7 @@ public final class Gzip {
             .eventAction("archive_extraction")
             .field("file.path", this.file.toString())
             .field("destination.address", dest.toString())
+            .field("log.source", "application")
             .log();
     }
 
@@ -79,7 +81,6 @@ public final class Gzip {
      * @param dest Destination directory
      * @throws IOException If fails
      */
-    @SuppressWarnings("PMD.AssignmentInOperand")
     public void unpack(final Path dest) throws IOException {
         try (OutputStream out = Files.newOutputStream(dest);
             GZIPInputStream input = new GZIPInputStream(Files.newInputStream(this.file))) {
@@ -91,6 +92,7 @@ public final class Gzip {
             .eventAction("archive_extraction")
             .field("file.path", this.file.toString())
             .field("destination.address", dest.toString())
+            .field("log.source", "application")
             .log();
     }
 }

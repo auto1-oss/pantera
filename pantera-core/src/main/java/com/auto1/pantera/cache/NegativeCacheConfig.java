@@ -12,6 +12,7 @@ package com.auto1.pantera.cache;
 
 import com.amihaiemil.eoyaml.YamlMapping;
 import java.time.Duration;
+import java.util.Locale;
 import java.util.Optional;
 
 /**
@@ -70,11 +71,6 @@ public final class NegativeCacheConfig {
      * Default L2 operation timeout (50ms - fail fast to avoid blocking).
      */
     public static final Duration DEFAULT_L2_TIMEOUT = Duration.ofMillis(50);
-
-    /**
-     * Global instance (singleton).
-     */
-    private static volatile NegativeCacheConfig instance;
 
     /**
      * TTL for single-tier or fallback.
@@ -243,48 +239,6 @@ public final class NegativeCacheConfig {
     }
 
     /**
-     * Initialize global instance from YAML.
-     * Should be called once at startup.
-     * @param caches The caches YAML mapping from _server.yaml
-     */
-    public static void initialize(final YamlMapping caches) {
-        if (instance == null) {
-            synchronized (NegativeCacheConfig.class) {
-                if (instance == null) {
-                    instance = fromYaml(caches);
-                }
-            }
-        }
-    }
-
-    /**
-     * Get the global instance.
-     * @return Global config (defaults if not initialized)
-     */
-    public static NegativeCacheConfig getInstance() {
-        if (instance == null) {
-            return new NegativeCacheConfig();
-        }
-        return instance;
-    }
-
-    /**
-     * Reset for testing.
-     */
-    public static void reset() {
-        instance = null;
-    }
-
-    /**
-     * Parse configuration from YAML under the {@code negative} sub-key.
-     * @param caches The caches YAML mapping
-     * @return Parsed config
-     */
-    public static NegativeCacheConfig fromYaml(final YamlMapping caches) {
-        return fromYaml(caches, "negative");
-    }
-
-    /**
      * Parse configuration from YAML under a caller-specified sub-key.
      * Enables reuse of the same structural schema for differently named
      * negative caches (for example {@code group-negative}) without mutating
@@ -336,7 +290,7 @@ public final class NegativeCacheConfig {
             return defaultVal;
         }
         try {
-            final String trimmed = value.trim().toLowerCase();
+            final String trimmed = value.trim().toLowerCase(Locale.ROOT);
             if (trimmed.endsWith("d")) {
                 return Duration.ofDays(Long.parseLong(trimmed.substring(0, trimmed.length() - 1)));
             } else if (trimmed.endsWith("h")) {

@@ -180,7 +180,7 @@ public final class ProxySearchSlice implements Slice {
                     }
                 }
             }
-        } catch (Exception e) {
+        } catch (Exception e) { // NOPMD EmptyCatchBlock - intentional: any parse failure falls through to local-only results; remote search is best-effort
             // If parsing fails, just use local results
         }
         

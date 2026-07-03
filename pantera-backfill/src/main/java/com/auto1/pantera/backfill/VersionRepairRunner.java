@@ -245,7 +245,7 @@ public final class VersionRepairRunner {
         // a row for both 'UNKNOWN' and '1.0.0-SNAPSHOT'. Without it,
         // the UPDATE violates the unique constraint and aborts the
         // whole batch.
-        final StringBuilder sql = new StringBuilder();
+        final StringBuilder sql = new StringBuilder(256);
         sql.append(String.format("UPDATE %s t SET version = v.new_version FROM (VALUES ", this.table));
         for (int i = 0; i < toUpdate.size(); i++) {
             if (i > 0) {
@@ -359,10 +359,8 @@ public final class VersionRepairRunner {
             return false;
         }
         final char first = token.charAt(0);
-        if (Character.isDigit(first)) {
-            return true;
-        }
-        return first == 'v' && token.length() > 1
-            && Character.isDigit(token.charAt(1));
+        return Character.isDigit(first)
+            || first == 'v' && token.length() > 1
+                && Character.isDigit(token.charAt(1));
     }
 }

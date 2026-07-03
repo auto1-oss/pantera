@@ -12,8 +12,8 @@ package com.auto1.pantera.rpm.meta;
 
 import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.misc.UncheckedIOConsumer;
-import com.auto1.pantera.asto.misc.UncheckedIOScalar;
 import com.fasterxml.aalto.stax.InputFactoryImpl;
+import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -32,7 +32,13 @@ import javax.xml.stream.events.XMLEvent;
 public final class XmlPrimaryChecksums {
 
     /**
-     * File path.
+     * Primary file path (nullable when constructed from an InputStream).
+     */
+    private final Path path;
+
+    /**
+     * Primary input stream (nullable when constructed from a Path – opened lazily in
+     * {@link #read()}).
      */
     private final InputStream inp;
 
@@ -41,7 +47,8 @@ public final class XmlPrimaryChecksums {
      * @param path Primary file path
      */
     public XmlPrimaryChecksums(final Path path) {
-        this(new UncheckedIOScalar<>(() -> Files.newInputStream(path)).value());
+        this.path = path;
+        this.inp = null;
     }
 
     /**
@@ -49,6 +56,7 @@ public final class XmlPrimaryChecksums {
      * @param inp Primary input stream
      */
     public XmlPrimaryChecksums(final InputStream inp) {
+        this.path = null;
         this.inp = inp;
     }
 
@@ -57,9 +65,28 @@ public final class XmlPrimaryChecksums {
      * @return Map of packages names and checksums.
      */
     public Map<String, String> read() {
+        if (this.path != null) {
+            try (InputStream stream = Files.newInputStream(this.path)) {
+                return XmlPrimaryChecksums.parse(stream, false);
+            } catch (final IOException err) {
+                throw new PanteraIOException(err);
+            }
+        }
+        return XmlPrimaryChecksums.parse(this.inp, true);
+    }
+
+    /**
+     * Parse the primary xml from the given stream.
+     * @param stream Input stream to read from
+     * @param closeStream Whether to close the stream after parsing (legacy behaviour
+     *  for the {@code InputStream} ctor – the caller that owns the stream via
+     *  {@code Path} ctor relies on try-with-resources instead).
+     * @return Map of packages names and checksums.
+     */
+    private static Map<String, String> parse(final InputStream stream, final boolean closeStream) {
         final Map<String, String> res = new HashMap<>();
         try {
-            final XMLEventReader reader = new InputFactoryImpl().createXMLEventReader(this.inp);
+            final XMLEventReader reader = new InputFactoryImpl().createXMLEventReader(stream);
             XMLEvent event;
             String name = "";
             String checksum = "";
@@ -81,7 +108,9 @@ public final class XmlPrimaryChecksums {
         } catch (final XMLStreamException err) {
             throw new PanteraIOException(err);
         } finally {
-            Optional.of(this.inp).ifPresent(new UncheckedIOConsumer<>(InputStream::close));
+            if (closeStream) {
+                Optional.of(stream).ifPresent(new UncheckedIOConsumer<>(InputStream::close));
+            }
         }
         return res;
     }

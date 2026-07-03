@@ -35,7 +35,6 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  *
  * @since 0.1
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 @Testcontainers
 @DisabledOnOs(OS.WINDOWS)
 public final class GoproxyITCase {

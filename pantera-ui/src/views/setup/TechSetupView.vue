@@ -168,12 +168,20 @@ async function copyStep(code: string, index: number) {
               <span class="text-sm font-medium text-gray-800 dark:text-gray-200">{{ step.title }}</span>
             </div>
 
-            <!-- Optional description -->
+            <!--
+              `step.description` is author-controlled static markup from
+              `utils/techSetup.ts` (`getSetupSteps`). It is never sourced
+              from user input — it is a compile-time-constant English
+              sentence with inline `<code>` tags for syntax styling. No
+              XSS surface; `vue/no-v-html` is suppressed locally.
+            -->
+            <!-- eslint-disable vue/no-v-html -->
             <div
               v-if="step.description"
               class="px-4 pt-3 text-xs text-gray-500 dark:text-gray-400 [&_code]:bg-gray-100 [&_code]:dark:bg-gray-700 [&_code]:px-1 [&_code]:rounded [&_code]:font-mono"
               v-html="step.description"
             />
+            <!-- eslint-enable vue/no-v-html -->
 
             <!-- Code block -->
             <div class="relative group">

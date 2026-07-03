@@ -103,6 +103,7 @@ public final class LocalEnabledFilter implements Authentication {
                 .eventAction("login")
                 .eventOutcome("failure")
                 .field("user.name", username)
+                .field("log.source", "application")
                 .log();
             return Optional.empty();
         }
@@ -125,7 +126,6 @@ public final class LocalEnabledFilter implements Authentication {
      * @return {@code true} if enabled, {@code false} if disabled,
      *     {@code null} if no row exists
      */
-    @SuppressWarnings("PMD.CloseResource")
     private Boolean loadEnabled(final String username) {
         try (Connection conn = this.source.getConnection();
             PreparedStatement ps = conn.prepareStatement(SQL)) {
@@ -147,6 +147,7 @@ public final class LocalEnabledFilter implements Authentication {
                 .eventOutcome("failure")
                 .field("user.name", username)
                 .error(err)
+                .field("log.source", "application")
                 .log();
             return false;
         }

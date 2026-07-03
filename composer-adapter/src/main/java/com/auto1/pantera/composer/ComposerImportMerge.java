@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.http.log.EcsLogger;
+import java.util.Locale;
 
 import javax.json.Json;
 import javax.json.JsonObject;
@@ -64,11 +65,6 @@ public final class ComposerImportMerge {
     private final Storage storage;
 
     /**
-     * Repository base URL.
-     */
-    private final Optional<String> baseUrl;
-
-    /**
      * Successful merges counter.
      */
     private final AtomicLong mergedPackages;
@@ -85,13 +81,12 @@ public final class ComposerImportMerge {
 
     /**
      * Ctor.
-     * 
+     *
      * @param storage Storage
-     * @param baseUrl Base URL for repository
+     * @param baseUrl Base URL for repository (reserved for future absolute-URL rewrites in merged metadata)
      */
-    public ComposerImportMerge(final Storage storage, final Optional<String> baseUrl) {
+    public ComposerImportMerge(final Storage storage, final Optional<String> baseUrl) { // NOPMD UnusedFormalParameter - public API; baseUrl is reserved for upcoming absolute-URL rewriting in merged dist metadata
         this.storage = storage;
-        this.baseUrl = baseUrl;
         this.mergedPackages = new AtomicLong(0);
         this.mergedVersions = new AtomicLong(0);
         this.failedPackages = new AtomicLong(0);
@@ -110,6 +105,7 @@ public final class ComposerImportMerge {
             .eventCategory("web")
             .eventAction("import_merge")
             .field("file.directory", stagingRoot.string())
+            .field("log.source", "application")
             .log();
 
         // NOTE: storage.exists() returns false for directories in FileStorage,
@@ -123,6 +119,7 @@ public final class ComposerImportMerge {
                         .eventAction("import_merge")
                         .eventOutcome("success")
                         .field("file.directory", ".versions/")
+                        .field("log.source", "application")
                         .log();
                     return CompletableFuture.completedFuture(
                         new MergeResult(0, 0, 0)
@@ -133,6 +130,7 @@ public final class ComposerImportMerge {
                     .message("Found " + packages.size() + " packages to merge")
                     .eventCategory("web")
                     .eventAction("import_merge")
+                    .field("log.source", "application")
                     .log();
                 
                 // Merge each package sequentially to avoid overwhelming storage
@@ -156,6 +154,7 @@ public final class ComposerImportMerge {
                         .eventCategory("web")
                         .eventAction("import_merge")
                         .eventOutcome("success")
+                        .field("log.source", "application")
                         .log();
                     return this.cleanupStagingArea(stagingRoot)
                         .thenApply(ignored -> result);
@@ -166,6 +165,7 @@ public final class ComposerImportMerge {
                     .eventAction("import_merge")
                     .eventOutcome("failure")
                     .field("event.reason", "partial_failure")
+                    .field("log.source", "application")
                     .log();
                 return CompletableFuture.completedFuture(result);
             });
@@ -187,6 +187,7 @@ public final class ComposerImportMerge {
                     .eventAction("import_merge")
                     .field("file.directory", stagingRoot.string())
                     .field("error.message", ex.getMessage())
+                    .field("log.source", "application")
                     .log();
                 return List.of();
             })
@@ -256,7 +257,8 @@ public final class ComposerImportMerge {
                     .eventAction("import_merge")
                     .eventOutcome("failure")
                     .field("file.name", fileKey.string())
-                    .field("error.message", ex.getMessage())
+                    .error(ex)
+                    .field("log.source", "application")
                     .log();
                 return Optional.<String>empty();
             })
@@ -275,6 +277,7 @@ public final class ComposerImportMerge {
             .eventCategory("web")
             .eventAction("import_merge")
             .field("package.name", packageName)
+            .field("log.source", "application")
             .log();
         
         // Convert vendor/package to vendor-package for directory name
@@ -305,6 +308,7 @@ public final class ComposerImportMerge {
                         .eventAction("import_merge")
                         .eventOutcome("failure")
                         .field("package.name", packageName)
+                        .field("log.source", "application")
                         .log();
                     return CompletableFuture.completedFuture(null);
                 }
@@ -322,6 +326,7 @@ public final class ComposerImportMerge {
                     .eventCategory("web")
                     .eventAction("import_merge")
                     .field("package.name", packageName)
+                    .field("log.source", "application")
                     .log();
                 
                 // Merge stable and dev versions into p2/ files
@@ -350,6 +355,7 @@ public final class ComposerImportMerge {
                     .eventOutcome("failure")
                     .field("package.name", packageName)
                     .error(error)
+                    .field("log.source", "application")
                     .log();
                 this.failedPackages.incrementAndGet();
                 return null;
@@ -481,7 +487,8 @@ public final class ComposerImportMerge {
                         .eventAction("import_merge")
                         .eventOutcome("failure")
                         .field("file.name", key.string())
-                        .field("error.message", error.getMessage())
+                        .error(error)
+                        .field("log.source", "application")
                         .log();
                     return Optional.<JsonObject>empty();
                 }
@@ -493,7 +500,8 @@ public final class ComposerImportMerge {
                     .eventAction("import_merge")
                     .eventOutcome("failure")
                     .field("file.name", key.string())
-                    .field("error.message", error.getMessage())
+                    .error(error)
+                    .field("log.source", "application")
                     .log();
                 return Optional.empty();
             })
@@ -522,7 +530,8 @@ public final class ComposerImportMerge {
                     .eventCategory("web")
                     .eventAction("import_merge")
                     .eventOutcome("failure")
-                    .field("error.message", error.getMessage())
+                    .error(error)
+                    .field("log.source", "application")
                     .log();
                 return null;
             });
@@ -535,10 +544,10 @@ public final class ComposerImportMerge {
      * @return True if dev branch
      */
     private boolean isDevBranch(final String version) {
-        final String lower = version.toLowerCase();
+        final String lower = version.toLowerCase(Locale.ROOT);
         return lower.startsWith("dev-")
             || lower.matches(".*\\.x-dev")
-            || lower.equals("dev-master")
+            || "dev-master".equals(lower)
             || (lower.endsWith("-dev") && !lower.matches(".*\\d+\\.\\d+.*-dev"));
     }
 

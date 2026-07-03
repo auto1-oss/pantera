@@ -59,6 +59,9 @@ public final class ImportSlice implements Slice {
         try {
             request = ImportRequest.parse(line, headers);
         } catch (final ResponseException error) {
+            // EXPECTED: ResponseException carries its own HTTP response
+            // (e.g. 400 with structured body); no log needed at this
+            // boundary — the response itself is the diagnostic.
             return CompletableFuture.completedFuture(error.response());
         } catch (final Exception error) {
             EcsLogger.error("com.auto1.pantera.importer")
@@ -68,6 +71,7 @@ public final class ImportSlice implements Slice {
                 .eventOutcome("failure")
                 .field("url.path", line.uri().getPath())
                 .error(error)
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(
                 ResponseBuilder.badRequest(error).build()
@@ -87,10 +91,13 @@ public final class ImportSlice implements Slice {
                         .eventAction("import_artifact")
                         .eventOutcome("failure")
                         .error(cause)
+                        .field("log.source", "application")
                         .log();
                     return ResponseBuilder.internalError(cause).build();
                 }).toCompletableFuture();
         } catch (final ResponseException rex) {
+            // EXPECTED: ResponseException carries its own HTTP response;
+            // returning it is the boundary's recovery path.
             return CompletableFuture.completedFuture(rex.response());
         } catch (final Exception ex) {
             EcsLogger.error("com.auto1.pantera.importer")
@@ -99,6 +106,7 @@ public final class ImportSlice implements Slice {
                 .eventAction("import_artifact")
                 .eventOutcome("failure")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(ResponseBuilder.internalError(ex).build());
         }

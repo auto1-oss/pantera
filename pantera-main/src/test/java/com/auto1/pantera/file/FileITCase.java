@@ -26,7 +26,6 @@ import org.junit.jupiter.params.provider.CsvSource;
  * Integration test for binary repo.
  * @since 0.18
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 final class FileITCase {
 
     /**

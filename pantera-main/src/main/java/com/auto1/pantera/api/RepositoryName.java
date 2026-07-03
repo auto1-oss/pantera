@@ -28,6 +28,7 @@ public interface RepositoryName {
      * The name of the repository.
      * @return String name
      */
+    @Override
     String toString();
 
     /**

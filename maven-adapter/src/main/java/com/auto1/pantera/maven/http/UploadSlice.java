@@ -24,6 +24,7 @@ import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.ContentWithSize;
 import com.auto1.pantera.http.slice.KeyFromPath;
+import com.auto1.pantera.index.SyncArtifactIndexer;
 import com.auto1.pantera.maven.metadata.MavenTimestamp;
 import com.auto1.pantera.maven.metadata.Version;
 import com.auto1.pantera.scheduling.ArtifactEvent;
@@ -77,15 +78,24 @@ public final class UploadSlice implements Slice {
     private final String rname;
 
     /**
+     * Synchronous artifact-index writer. Runs inline with upload so the
+     * group resolver's index lookup sees the new artifact immediately —
+     * no stale-index window. Defaults to {@link SyncArtifactIndexer#NOOP}
+     * when no DB is configured.
+     */
+    private final SyncArtifactIndexer syncIndex;
+
+    /**
      * Ctor without events.
      * @param storage Abstract storage
      */
     public UploadSlice(final Storage storage) {
-        this(storage, Optional.empty(), "maven");
+        this(storage, Optional.empty(), "maven", SyncArtifactIndexer.NOOP);
     }
 
     /**
-     * Ctor with events.
+     * Legacy ctor — no synchronous index writer. Kept for callers that
+     * have not been updated yet; tests use this overload.
      * @param storage Storage
      * @param events Artifact events queue
      * @param rname Repository name
@@ -95,9 +105,26 @@ public final class UploadSlice implements Slice {
         final Optional<Queue<ArtifactEvent>> events,
         final String rname
     ) {
+        this(storage, events, rname, SyncArtifactIndexer.NOOP);
+    }
+
+    /**
+     * Ctor with synchronous index writer.
+     * @param storage Storage
+     * @param events Artifact events queue
+     * @param rname Repository name
+     * @param syncIndex Synchronous artifact-index writer
+     */
+    public UploadSlice(
+        final Storage storage,
+        final Optional<Queue<ArtifactEvent>> events,
+        final String rname,
+        final SyncArtifactIndexer syncIndex
+    ) {
         this.storage = storage;
         this.events = events;
         this.rname = rname;
+        this.syncIndex = syncIndex;
     }
 
     @Override
@@ -119,6 +146,7 @@ public final class UploadSlice implements Slice {
                 .message("Stripped metadata properties from path: " + path + " -> " + sanitizedPath)
                 .eventCategory("web")
                 .eventAction("path_sanitization")
+                .field("log.source", "application")
                 .log();
         } else {
             sanitizedPath = path;
@@ -155,6 +183,7 @@ public final class UploadSlice implements Slice {
                 .eventCategory("web")
                 .eventAction("metadata_upload")
                 .field("package.path", keyPath)
+                .field("log.source", "application")
                 .log();
             return new ContentWithSize(body, headers).asBytesFuture().thenCompose(
                 bytes -> this.fixMetadataBytes(bytes).thenCompose(
@@ -167,6 +196,7 @@ public final class UploadSlice implements Slice {
                                     .eventCategory("web")
                                     .eventAction("metadata_upload")
                                     .field("package.path", keyPath)
+                                    .field("log.source", "application")
                                     .log();
                                 // Generate checksums for the fixed content
                                 return this.generateChecksums(key);
@@ -174,11 +204,9 @@ public final class UploadSlice implements Slice {
                         );
                     }
                 )
-            ).thenApply(
-                sha256 -> {
-                    this.addEvent(key, owner, size, sha256);
-                    return ResponseBuilder.created().build();
-                }
+            ).thenCompose(
+                sha256 -> this.addEvent(key, owner, size, sha256)
+                    .thenApply(ignored -> ResponseBuilder.created().build())
             ).exceptionally(
                 throwable -> {
                     EcsLogger.error("com.auto1.pantera.maven")
@@ -188,6 +216,7 @@ public final class UploadSlice implements Slice {
                         .eventOutcome("failure")
                         .error(throwable)
                         .field("package.path", keyPath)
+                        .field("log.source", "application")
                         .log();
                     return ResponseBuilder.internalError().build();
                 }
@@ -201,6 +230,7 @@ public final class UploadSlice implements Slice {
                 .eventCategory("web")
                 .eventAction("checksum_upload")
                 .field("package.path", keyPath)
+                .field("log.source", "application")
                 .log();
             // Don't save Maven's checksums - we already generated correct ones
             return CompletableFuture.completedFuture(ResponseBuilder.created().build());
@@ -215,6 +245,7 @@ public final class UploadSlice implements Slice {
                     .eventAction("artifact_upload")
                     .field("package.path", keyPath)
                     .field("package.size", size)
+                    .field("log.source", "application")
                     .log();
 
                 // For non-metadata/checksum files, generate checksums
@@ -224,11 +255,9 @@ public final class UploadSlice implements Slice {
                     return CompletableFuture.<String>completedFuture(null);
                 }
             }
-        ).thenApply(
-            sha256 -> {
-                this.addEvent(key, owner, size, sha256);
-                return ResponseBuilder.created().build();
-            }
+        ).thenCompose(
+            sha256 -> this.addEvent(key, owner, size, sha256)
+                .thenApply(ignored -> ResponseBuilder.created().build())
         ).exceptionally(
             throwable -> {
                 EcsLogger.error("com.auto1.pantera.maven")
@@ -238,6 +267,7 @@ public final class UploadSlice implements Slice {
                     .eventOutcome("failure")
                     .error(throwable)
                     .field("package.path", keyPath)
+                    .field("log.source", "application")
                     .log();
                 return ResponseBuilder.internalError().build();
             }
@@ -254,7 +284,6 @@ public final class UploadSlice implements Slice {
      * @param bytes Original metadata XML bytes
      * @return Completable future with normalised bytes
      */
-    @SuppressWarnings("PMD.CognitiveComplexity")
     private CompletableFuture<byte[]> fixMetadataBytes(final byte[] bytes) {
         return CompletableFuture.supplyAsync(() -> {
             try {
@@ -328,6 +357,7 @@ public final class UploadSlice implements Slice {
                     .eventAction("metadata_fix")
                     .eventOutcome("success")
                     .field("package.version", newLatest)
+                    .field("log.source", "application")
                     .log();
                 return result.getBytes(StandardCharsets.UTF_8);
             } catch (final IllegalArgumentException | SAXException | IOException
@@ -337,7 +367,8 @@ public final class UploadSlice implements Slice {
                     .eventCategory("web")
                     .eventAction("metadata_fix")
                     .eventOutcome("failure")
-                    .field("error.message", ex.getMessage())
+                    .error(ex)
+                    .field("log.source", "application")
                     .log();
                 return bytes;
             }
@@ -448,11 +479,9 @@ public final class UploadSlice implements Slice {
      * @param owner Owner
      * @param size Artifact size
      */
-    private void addEvent(final Key key, final String owner, final long size, final String sha256) {
-        if (this.events.isEmpty()) {
-            return;
-        }
-
+    private CompletableFuture<Void> addEvent(
+        final Key key, final String owner, final long size, final String sha256
+    ) {
         final String path = key.string().startsWith("/") ? key.string() : "/" + key.string();
 
         if (!this.isPrimaryArtifactPath(path)) {
@@ -461,13 +490,14 @@ public final class UploadSlice implements Slice {
                 .eventCategory("web")
                 .eventAction("event_creation")
                 .field("package.path", path)
+                .field("log.source", "application")
                 .log();
-            return;
+            return CompletableFuture.completedFuture(null);
         }
 
         // pkg = "{groupId}/{artifactId}/{version}" (everything before the filename)
         final String pkg = path.substring(0, path.lastIndexOf('/'));
-        this.createAndAddEvent(pkg, owner, size, sha256);
+        return this.createAndAddEvent(pkg, owner, size, sha256);
     }
 
     /**
@@ -516,8 +546,9 @@ public final class UploadSlice implements Slice {
      * @param owner Owner
      * @param size Artifact size
      */
-    private void createAndAddEvent(final String pkg, final String owner, final long size,
-        final String sha256) {
+    private CompletableFuture<Void> createAndAddEvent(
+        final String pkg, final String owner, final long size, final String sha256
+    ) {
         // Extract version (last directory before the file)
         final String[] parts = pkg.split("/");
         final String version = parts.length > 0 ? parts[parts.length - 1] : "unknown";
@@ -533,7 +564,21 @@ public final class UploadSlice implements Slice {
         // Format artifact name as group.artifact (replacing / with .)
         final String artifactName = MavenSlice.EVENT_INFO.formatArtifactName(groupArtifact);
 
-        final ArtifactEvent event = new ArtifactEvent(
+        // Drop any cached 404 for this artifact so a request that 404'd
+        // before the upload (e.g. via a group fanout) does not keep
+        // returning 404 once the artifact is live. Uses the URL-form
+        // groupArtifact (slashes), matching what the proxy / group
+        // slices write to the negative cache via NegativeCacheKey.fromPath.
+        com.auto1.pantera.http.cache.NegativeCacheRegistry.instance()
+            .invalidateAfterUpload("maven", groupArtifact);
+        // Drop any cached cooldown-filtered envelope. The envelope cache
+        // is keyed by the dotted artifactName (MavenSlice.EVENT_INFO
+        // format) — same form the cooldown filter writes when caching
+        // a filtered metadata.xml.
+        com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry.instance()
+            .invalidateAfterUpload("maven", artifactName);
+
+        final ArtifactEvent base = new ArtifactEvent(
             "maven",
             this.rname,
             owner == null || owner.isBlank() ? ArtifactEvent.DEF_OWNER : owner,
@@ -543,9 +588,9 @@ public final class UploadSlice implements Slice {
             System.currentTimeMillis(),
             (Long) null  // No release date for uploads
         );
-        this.events.get().add(
-            sha256 == null ? event : event.withChecksum(sha256)
-        );
+        final ArtifactEvent event = sha256 == null ? base : base.withChecksum(sha256);
+        // Async path: queue for audit/metrics consumers (DbConsumer batches).
+        this.events.ifPresent(queue -> queue.add(event));
         EcsLogger.debug("com.auto1.pantera.maven")
             .message("Added artifact event")
             .eventCategory("web")
@@ -554,14 +599,17 @@ public final class UploadSlice implements Slice {
             .field("package.name", artifactName)
             .field("package.version", version)
             .field("package.size", size)
+            .field("log.source", "application")
             .log();
+        // Sync path: write the index row inline so the next group lookup
+        // sees the artifact without waiting for the async batch.
+        return this.syncIndex.recordSync(event);
     }
 
     /**
      * Record metric safely (only if metrics are enabled).
      * @param metric Metric recording action
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
             if (com.auto1.pantera.metrics.PanteraMetrics.isEnabled()) {
@@ -571,6 +619,7 @@ public final class UploadSlice implements Slice {
             EcsLogger.debug("com.auto1.pantera.maven")
                 .message("Failed to record metric")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }

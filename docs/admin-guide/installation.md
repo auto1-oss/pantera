@@ -2,7 +2,11 @@
 
 > **Guide:** Admin Guide | **Section:** Installation
 
-This page covers the three supported deployment methods for Pantera: Docker standalone, Docker Compose (production), and JAR file.
+This page covers the supported installation methods for Pantera:
+
+- **[Published Docker Images](#published-docker-images-recommended)** (recommended) — prebuilt backend and UI images from GitHub Container Registry
+- **[Release Artifacts](#release-artifacts-jar-and-ui-bundle)** — the released JAR distribution run directly on a JDK, plus the UI bundle for any static web server
+- **[Docker Standalone](#docker-standalone)**, **[Docker Compose (Production)](#docker-compose-production)**, and **[JAR File](#jar-file)** — deployments built from source
 
 ---
 
@@ -12,8 +16,127 @@ This page covers the three supported deployment methods for Pantera: Docker stan
 |-------------|---------|-------|
 | Docker | 24+ | Required for container-based deployment |
 | Docker Compose | v2+ | Required for production stack |
-| JDK | 21+ (Temurin) | Required only for JAR file deployment |
+| JDK | 21+ (Temurin) | Required only for JAR/dist deployment |
 | Maven | 3.4+ | Required only for building from source |
+| PostgreSQL | 15+ | Required by all deployments (the Docker Compose stack provisions it) |
+| Valkey | 8+ | Optional — required only for [HA clustering](high-availability.md) |
+
+---
+
+## Published Docker Images (Recommended)
+
+Every release publishes prebuilt multi-arch (amd64 + arm64) images to GitHub Container Registry:
+
+| Image | Contents | Container Ports |
+|-------|----------|-----------------|
+| `ghcr.io/auto1-oss/pantera:<version>` | Backend (artifact registry + REST API) | `8080` repository traffic, `8086` REST API |
+| `ghcr.io/auto1-oss/pantera-ui:<version>` | Management UI (nginx + compiled SPA) | `80` |
+
+**Tag policy:** every release is tagged `:<version>` (e.g. `:2.2.0`). The `:latest` tag always points to the most recent final release; pre-releases (RC / beta / alpha) are never tagged `:latest`.
+
+**Provenance:** images and release binaries carry GitHub build-provenance attestations. Verify before deploying:
+
+```bash
+gh attestation verify oci://ghcr.io/auto1-oss/pantera:2.2.0 --repo auto1-oss/pantera
+```
+
+### Minimal Compose Stack
+
+The backend reads its configuration from `/etc/pantera/pantera.yml` and requires an RS256 JWT key pair at boot. Generate the keys first:
+
+```bash
+mkdir -p keys
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out keys/jwt-private.pem
+openssl rsa -in keys/jwt-private.pem -pubout -out keys/jwt-public.pem
+```
+
+Then wire PostgreSQL, the backend, and the UI:
+
+```yaml
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: pantera
+      POSTGRES_PASSWORD: changeme
+      POSTGRES_DB: pantera
+
+  pantera:
+    image: ghcr.io/auto1-oss/pantera:latest
+    depends_on: [db]
+    environment:
+      JWT_PRIVATE_KEY_PATH: /etc/pantera/keys/jwt-private.pem
+      JWT_PUBLIC_KEY_PATH: /etc/pantera/keys/jwt-public.pem
+      POSTGRES_USER: pantera
+      POSTGRES_PASSWORD: changeme
+    volumes:
+      - ./pantera.yml:/etc/pantera/pantera.yml
+      - ./keys:/etc/pantera/keys:ro
+      - pantera-data:/var/pantera
+    ports:
+      - "8080:8080"   # repository traffic
+      - "8086:8086"   # REST API
+
+  ui:
+    image: ghcr.io/auto1-oss/pantera-ui:latest
+    depends_on: [pantera]
+    environment:
+      API_UPSTREAM: pantera:8086   # UI nginx proxies /api/v1 to the backend
+    ports:
+      - "8090:80"
+
+volumes:
+  pantera-data:
+```
+
+Notes:
+
+- In `pantera.yml`, point `artifacts_database.postgres_host` at the `db` service and reference the mounted JWT keys via `${JWT_PRIVATE_KEY_PATH}` / `${JWT_PUBLIC_KEY_PATH}` — see [Configuration](configuration.md).
+- The backend runs as UID `2021`; bind-mounted data directories must be writable by that user (see [Container User](#container-user)).
+- `API_UPSTREAM` makes the UI container's nginx proxy `/api/` to the backend, so the browser only needs to reach the UI. All UI runtime variables are described in [UI Deployment](ui-deployment.md).
+- Dashboard statistics require the `pg_cron` extension, which the plain `postgres:17` image does not include — see [Database Setup](#database-setup-dashboard-materialized-views).
+
+The `docker run` flags shown under [Docker Standalone](#docker-standalone) apply unchanged to the published image — substitute `ghcr.io/auto1-oss/pantera:<version>` for the locally built tag.
+
+---
+
+## Release Artifacts (JAR and UI Bundle)
+
+Each [GitHub release](https://github.com/auto1-oss/pantera/releases) attaches standalone artifacts for deployments without Docker:
+
+| Artifact | Description |
+|----------|-------------|
+| `pantera-<version>.jar` | Main application JAR |
+| `pantera-<version>-dist.tar.gz` | Complete distribution: `pantera-main-<version>.jar` plus a `dependency/` directory with all runtime jars |
+| `pantera-ui-<version>.tar.gz` | Management UI — compiled static files for any web server |
+| `SHA256SUMS` | Checksums for all of the above |
+
+Verify downloads before running (binaries carry the same build-provenance attestations as the images):
+
+```bash
+sha256sum --check --ignore-missing SHA256SUMS
+gh attestation verify pantera-<version>-dist.tar.gz --repo auto1-oss/pantera
+```
+
+### Run the Backend
+
+Requires JDK 21+ and PostgreSQL 15+; Valkey is optional (HA clustering only).
+
+```bash
+tar xzf pantera-<version>-dist.tar.gz
+
+java -cp 'pantera-main-<version>.jar:dependency/*' \
+  com.auto1.pantera.VertxMain \
+  --config-file=pantera.yml \
+  --port=8080 \
+  --api-port=8086
+```
+
+The [JAR File](#jar-file) section below covers CLI options, the recommended directory layout, JVM flags, and a systemd unit — all of it applies equally to the released distribution; only the classpath differs.
+
+### Deploy the UI Bundle
+
+`pantera-ui-<version>.tar.gz` contains the compiled single-page application. Extract it into any static web server's document root and configure an `/api/` proxy to the backend — see [UI Deployment](ui-deployment.md#static-files-release-tarball).
 
 ---
 
@@ -185,7 +308,7 @@ For the full list of `.env` variables, see the [Configuration Reference](../conf
 
 ## JAR File
 
-Run Pantera directly from the JAR without Docker. This requires JDK 21+ installed on the host.
+Run Pantera directly from the JAR without Docker. This requires JDK 21+ installed on the host. To skip the build entirely, use the released distribution tarball instead — see [Release Artifacts](#release-artifacts-jar-and-ui-bundle).
 
 ### Build from Source
 
@@ -294,6 +417,23 @@ shared_preload_libraries = 'pg_cron'
 cron.database_name = 'artifacts'
 ```
 
+### pg_cron is optional
+
+Pantera prefers pg_cron for cooldown cleanup but does not require it.
+When the extension is not installed (common on managed Postgres variants
+that don't include pg_cron in the preload list), a Vertx-periodic task
+inside the application runs the same cleanup logic on the same 10-minute
+cadence. No manual intervention is needed.
+
+Check which mode is active in the logs at startup:
+
+    grep 'pantera.cooldown.cleanup' pantera.log | head -5
+
+Expect one of:
+
+- `pg_cron cleanup job is scheduled; skipping Vertx fallback`
+- `pg_cron cleanup job not scheduled; starting Vertx fallback`
+
 ### 2. Create the Extension
 
 Run once as a superuser against your Pantera database:
@@ -388,6 +528,7 @@ curl -X POST http://localhost:8086/api/v1/auth/token \
 ## Related Pages
 
 - [Configuration](configuration.md) -- Configure pantera.yml after installation
+- [UI Deployment](ui-deployment.md) -- Deploying and configuring the management UI
 - [Environment Variables](environment-variables.md) -- All tunable environment variables
 - [High Availability](high-availability.md) -- Multi-node production deployment
 - [Performance Tuning](performance-tuning.md) -- Resource allocation and JVM tuning

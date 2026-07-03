@@ -352,6 +352,21 @@ meta:
     connection_acquire_timeout: 120000
 ```
 
+#### Runtime-tunable HTTP client keys (DB-backed, hot-reloaded)
+
+The following keys live in the `settings` table and are editable from the admin UI or via `PATCH /api/v1/settings/runtime/<key>`. They are NOT read from `pantera.yml`. Changes apply without a restart; admin operations are written to the immutable `audit_log` with old + new values.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `http_client.bulkhead.adaptive` | boolean | `true` | When `true` the per-repo bulkhead permit count grows/shrinks based on observed p99 latency; when `false` the bulkhead is fixed at `initial_permits`. |
+| `http_client.bulkhead.min_permits` | int | `5` | Floor for the adaptive permit count — the controller will never shrink below this. |
+| `http_client.bulkhead.max_permits` | int | `100` | Ceiling for the adaptive permit count. |
+| `http_client.bulkhead.initial_permits` | int | `10` | Permit count on cold start; also the fixed value when `adaptive=false`. |
+| `http_client.bulkhead.target_p99_ms` | int | `500` | Latency target. p99 above this triggers a permit-down step; p99 below triggers a permit-up step. |
+| `http_client.bulkhead.window_seconds` | int | `5` | Length of the rolling latency window the controller samples. |
+| `http_client.bulkhead.ramp_up_step` | int | `1` | Permits added per up-step. |
+| `http_client.bulkhead.ramp_down_factor` | float | `0.5` | Fraction the controller multiplies the current permit count by on a down-step (e.g. `0.5` halves). |
+
 ---
 
 ### 1.8 meta.http_server
@@ -405,6 +420,35 @@ meta:
         enabled: true
 ```
 
+### DB-backed cooldown settings
+
+These settings are persisted in the `settings` table (key `"cooldown"`)
+and edited via `PUT /api/v1/cooldown/config` or the admin UI
+"Cooldown settings" dialog. They are NOT configured via YAML.
+
+#### history_retention_days
+
+- Type: integer
+- Bounds: `(0, 3650]`
+- Default: 90
+- Description: Days to retain entries in `artifact_cooldowns_history`
+  before automatic purge. Read at job-run time by the pg_cron
+  `purge-cooldown-history` job (via `_cooldown_retention_days()` Postgres
+  function) and by the Vertx fallback's purge routine. Admin changes take
+  effect on the next purge tick without restart.
+
+#### cleanup_batch_limit
+
+- Type: integer
+- Bounds: `[1, 100000]`
+- Default: 10000
+- Description: Maximum rows moved from `artifact_cooldowns` to history
+  in a single cleanup tick (applies to both pg_cron and Vertx fallback
+  paths). Reduce on very large tables to minimize lock contention at the
+  cost of more cleanup iterations per run. Admin changes take effect on
+  the next cleanup tick without restart (via `_cooldown_batch_limit()` or
+  direct CooldownSettings read).
+
 ---
 
 ### 1.10 meta.caches
@@ -437,14 +481,19 @@ Each named cache section supports:
 
 **Named cache sections:**
 
-| Cache Name | Purpose |
-|-----------|---------|
-| `cooldown` | Cooldown result cache (upstream failure tracking) |
-| `negative` | Negative lookup cache (artifact-not-found results) |
-| `auth` | Authentication/authorization decision cache |
-| `maven-metadata` | Maven metadata XML cache |
-| `npm-search` | NPM package search index cache |
-| `cooldown-metadata` | Long-lived cooldown metadata cache |
+| Cache Name | Purpose | Reader |
+|-----------|---------|---|
+| `auth-enabled` | Per-user enabled-flag cache for `LocalEnabledFilter` (L1+L2) | `GlobalCacheConfig.authEnabled()` |
+| `group-metadata-stale` | Last-known-good metadata for group repos during upstream outage | `GlobalCacheConfig.groupMetadataStale()` |
+| `repo-negative` | Shared 404 negative cache (legacy alias: `group-negative`, deprecated with WARN) | `RepositorySlices.loadNegativeCacheConfig()` |
+| `cooldown-metadata` | Filtered-metadata envelope cache for cooldown re-evaluation | `FilteredMetadataCacheConfig.fromYaml()` |
+| `artifact-index-positive` | Search-index positive tier (`repos that have this artifact`) | `ArtifactIndexCacheConfig.fromYaml(caches, POSITIVE_SUBKEY)` |
+| `artifact-index-negative` | Search-index 404 sentinels | `ArtifactIndexCacheConfig.fromYaml(caches, NEGATIVE_SUBKEY)` |
+| `auth` | User credential cache | `CachedUsers` via generic `CacheConfig.from()` |
+| `npm-search` | npm package-search index | `InMemoryPackageIndex` via generic `CacheConfig.from()` |
+| `policy-perms` / `policy-users` / `policy-roles` | Authorization policy YAML caches | `CachedYamlPolicy` via generic `CacheConfig.from()` |
+| `filters` | Parsed per-repo filter configurations | `GuavaFiltersCache` via generic `CacheConfig.from()` |
+| `profiles.<name>` | Shared L1/L2 profile referenced by other blocks via `profile:` field | `CacheConfig.fromProfile()` |
 
 ```yaml
 meta:
@@ -455,26 +504,28 @@ meta:
       port: 6379
       timeout: 100ms
 
-    cooldown:
-      ttl: 24h
-      maxSize: 1000
+    # Global shared NegativeCache used by GroupResolver, BaseCachedProxySlice,
+    # and per-adapter proxy slices via NegativeCacheRegistry. One instance
+    # per Pantera node. Covers hosted/proxy/group repo types after the
+    # WI-06 consolidation. The earlier key name `group-negative` is still
+    # accepted at boot with a deprecation WARN and will be removed in
+    # a future release — admins should migrate to `repo-negative`.
+    #
+    # For per-repository overrides (e.g. different TTL on a specific
+    # Maven proxy), use the per-repo `cache.negative.{enabled,ttl,maxSize}`
+    # block in `repo/<name>.yaml`, NOT this global key.
+    repo-negative:
+      ttl: 5m
+      maxSize: 10000
       valkey:
         enabled: true
-        l1MaxSize: 1000
-        l1Ttl: 24h
-        l2MaxSize: 5000000
-        l2Ttl: 7d
+        l1MaxSize: 10000
+        l1Ttl: 5m
+        l2MaxSize: 1000000
+        l2Ttl: 5m
 
-    negative:
-      ttl: 24h
-      maxSize: 5000
-      valkey:
-        enabled: true
-        l1MaxSize: 5000
-        l1Ttl: 24h
-        l2MaxSize: 5000000
-        l2Ttl: 7d
-
+    # User credential cache. Read by CachedUsers via the generic CacheConfig
+    # factory; see pantera-main/settings/cache/CachedUsers.java:158.
     auth:
       ttl: 5m
       maxSize: 1000
@@ -485,16 +536,8 @@ meta:
         l2MaxSize: 100000
         l2Ttl: 5m
 
-    maven-metadata:
-      ttl: 24h
-      maxSize: 1000
-      valkey:
-        enabled: true
-        l1MaxSize: 0
-        l1Ttl: 24h
-        l2MaxSize: 1000000
-        l2Ttl: 72h
-
+    # npm package-search index cache. Read by InMemoryPackageIndex via the
+    # generic CacheConfig factory; see npm-adapter/.../InMemoryPackageIndex.java:112.
     npm-search:
       ttl: 24h
       maxSize: 1000
@@ -505,6 +548,9 @@ meta:
         l2MaxSize: 1000000
         l2Ttl: 72h
 
+    # Cooldown-filtered metadata envelope cache. Read by
+    # FilteredMetadataCacheConfig.fromYaml; see
+    # pantera-core/.../FilteredMetadataCacheConfig.java:268.
     cooldown-metadata:
       ttl: 30d
       maxSize: 1000
@@ -515,6 +561,15 @@ meta:
         l2MaxSize: 500000
         l2Ttl: 30d
 ```
+
+> **Note — keys NOT to use.** Earlier docs listed `meta.caches.cooldown.*`,
+> `meta.caches.negative.*`, and `meta.caches.maven-metadata.*` as configurable. None of these are read by the current
+> code path. The cooldown decision cache (`CooldownCache`) is constructed
+> via its no-arg constructor with hardcoded defaults; the generic
+> `meta.caches.negative` block is parsed into a singleton that has zero
+> production consumers; `maven-metadata` only appears as a metric tag,
+> not a YAML key. See [admin-guide/cache-configuration.md](admin-guide/cache-configuration.md)
+> for the authoritative cache key inventory.
 
 ---
 
@@ -1439,7 +1494,7 @@ a Java system property using the lowercase, dot-separated equivalent (e.g.,
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PANTERA_METRICS_MAX_REPOS` | `50` | Maximum distinct `repo_name` label values before cardinality limiting |
-| `PANTERA_METRICS_PERCENTILES_HISTOGRAM` | `false` | Enable histogram buckets for all Timer metrics |
+| `PANTERA_METRICS_PERCENTILES_HISTOGRAM` | `false` | Publish histogram buckets for latency timers using curated SLO ladders (16 buckets for control-plane timers up to 30 s; 18 for transfer timers up to 20 min). Required for the Grafana p95/p99 panels. Bucket shape is fixed at meter creation - changing it needs a restart |
 
 ### 7.5 HTTP Client (Jetty)
 

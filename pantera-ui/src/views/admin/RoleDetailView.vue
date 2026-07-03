@@ -50,8 +50,10 @@ async function handleSave() {
         <template #title>
           <div class="flex items-center gap-3">
             {{ role.name }}
-            <Tag :value="role.enabled !== false ? 'Active' : 'Disabled'"
-              :severity="role.enabled !== false ? 'success' : 'danger'" />
+            <Tag
+              :value="role.enabled !== false ? 'Active' : 'Disabled'"
+              :severity="role.enabled !== false ? 'success' : 'danger'"
+            />
           </div>
         </template>
         <template #content>

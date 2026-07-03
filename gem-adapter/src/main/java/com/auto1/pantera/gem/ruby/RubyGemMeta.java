@@ -84,7 +84,6 @@ public final class RubyGemMeta implements GemMeta, SharedRuntime.RubyPlugin {
         }
 
         @Override
-        @SuppressWarnings("PMD.AvoidDuplicateLiterals")
         public void print(final MetaFormat fmt) {
             fmt.print("name", this.spec.getInstanceVariable("@name").asJavaString());
             fmt.print(

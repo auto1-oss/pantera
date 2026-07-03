@@ -138,7 +138,6 @@ public final class MetadataEventQueues {
      * @param config Repository config
      * @return Queue for proxy events
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     public Optional<Queue<ProxyArtifactEvent>> proxyEventQueues(final RepoConfig config) {
         Optional<Queue<ProxyArtifactEvent>> result =
             Optional.ofNullable(this.queues.get(config.name()));
@@ -188,6 +187,7 @@ public final class MetadataEventQueues {
                                 .eventAction("metadata_job_init")
                                 .eventOutcome("success")
                                 .field("repository.name", config.name())
+                                .field("log.source", "application")
                                 .log();
                         } catch (final SchedulerException err) {
                             throw new PanteraException(err);
@@ -211,6 +211,7 @@ public final class MetadataEventQueues {
                     .eventOutcome("failure")
                     .field("repository.name", config.name())
                     .error(err)
+                    .field("log.source", "application")
                     .log();
                 result = Optional.empty();
             }

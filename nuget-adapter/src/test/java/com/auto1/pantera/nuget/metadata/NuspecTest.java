@@ -23,7 +23,6 @@ import org.junit.jupiter.params.provider.CsvSource;
  * Test for {@link Nuspec.Xml}.
  * @since 0.6
  */
-@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.TooManyMethods"})
 class NuspecTest {
 
     @Test

@@ -114,14 +114,14 @@ async function handleSsoRedirect(providerType: string) {
         <div class="login-divider"><span>or sign in manually</span></div>
       </div>
 
-      <form data-testid="login-form" @submit.prevent="handleLogin" class="login-form">
+      <form data-testid="login-form" class="login-form" @submit.prevent="handleLogin">
         <div class="form-group">
           <label for="username">Username</label>
-          <InputText id="username" data-testid="username" v-model="username" class="w-full" placeholder="Enter your username" :disabled="auth.loading" @input="clearError" />
+          <InputText id="username" v-model="username" data-testid="username" class="w-full" placeholder="Enter your username" :disabled="auth.loading" @input="clearError" />
         </div>
         <div class="form-group">
           <label for="password">Password</label>
-          <Password inputId="password" data-testid="password" v-model="password" class="w-full" :feedback="false" toggleMask :disabled="auth.loading" :pt="{ root: { class: 'w-full' }, input: { class: 'w-full' } }" @input="clearError" />
+          <Password v-model="password" input-id="password" data-testid="password" class="w-full" :feedback="false" toggle-mask :disabled="auth.loading" :pt="{ root: { class: 'w-full' }, input: { class: 'w-full' } }" @input="clearError" />
         </div>
         <Message
           v-if="errorMsg"

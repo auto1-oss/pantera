@@ -138,6 +138,7 @@ public final class MetadataRebuildSlice implements Slice {
             .field("package.name", coords.artifactId)
             .field("package.version", coords.version)
             .field("file.path", uploadPath)
+            .field("log.source", "application")
             .log();
 
         // Build metadata path: /{groupId}/{artifactId}/maven-metadata.xml
@@ -161,6 +162,7 @@ public final class MetadataRebuildSlice implements Slice {
                     .field("package.name", coords.artifactId)
                     .field("package.version", coords.version)
                     .field("package.name", metadataKey.string())
+                    .field("log.source", "application")
                     .log();
 
                 // TODO: Integrate with existing MavenMetadata class
@@ -181,6 +183,7 @@ public final class MetadataRebuildSlice implements Slice {
                     .field("package.group", coords.groupId)
                     .field("package.name", coords.artifactId)
                     .field("package.version", coords.version)
+                    .field("log.source", "application")
                     .log();
                 // Record failed metadata rebuild
                 recordMetadataOperation("rebuild_failed", duration);

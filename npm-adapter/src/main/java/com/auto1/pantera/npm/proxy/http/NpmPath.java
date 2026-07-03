@@ -47,6 +47,7 @@ public abstract class NpmPath {
                 .eventCategory("web")
                 .eventAction("path_resolution")
                 .field("url.path", path)
+                .field("log.source", "application")
                 .log();
             return path;
         } else {

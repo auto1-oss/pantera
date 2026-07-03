@@ -68,7 +68,7 @@ public final class PersistedMetadataCache extends MetadataCache {
      * @param snapshotPath Path to snapshot file
      */
     public PersistedMetadataCache(final Path snapshotPath) {
-        this(snapshotPath, DEFAULT_TTL, DEFAULT_MAX_SIZE, DEFAULT_SNAPSHOT_INTERVAL);
+        this(snapshotPath, DEFAULT_SOFT_TTL, DEFAULT_MAX_SIZE, DEFAULT_SNAPSHOT_INTERVAL);
     }
     
     /**
@@ -78,7 +78,6 @@ public final class PersistedMetadataCache extends MetadataCache {
      * @param maxSize Maximum cache size
      * @param snapshotInterval How often to snapshot
      */
-    @SuppressWarnings({"PMD.ConstructorOnlyInitializesOrCallOtherConstructors", "PMD.NullAssignment"})
     public PersistedMetadataCache(
         final Path snapshotPath,
         final Duration ttl,
@@ -145,7 +144,7 @@ public final class PersistedMetadataCache extends MetadataCache {
                 
                 for (Map.Entry<String, CachedEntry> entry : data.entries.entrySet()) {
                     final CachedEntry cached = entry.getValue();
-                    if (!cached.isExpired(super.ttl, now)) {
+                    if (!cached.isExpired(super.hardTtl, now)) {
                         // Note: We can't restore the actual Content (it's not serializable)
                         // So we only restore the metadata, not the content itself
                         // This is still valuable - we know which keys exist
@@ -160,6 +159,7 @@ public final class PersistedMetadataCache extends MetadataCache {
                     .eventAction("cache_restore")
                     .eventOutcome("success")
                     .duration(elapsed)
+                    .field("log.source", "application")
                     .log();
             }
         } catch (IOException | ClassNotFoundException e) {
@@ -168,7 +168,8 @@ public final class PersistedMetadataCache extends MetadataCache {
                 .eventCategory("web")
                 .eventAction("cache_restore")
                 .eventOutcome("failure")
-                .field("error.message", e.getMessage())
+                .error(e)
+                .field("log.source", "application")
                 .log();
             // Continue with empty cache
         }
@@ -188,6 +189,7 @@ public final class PersistedMetadataCache extends MetadataCache {
                 .eventAction("cache_snapshot")
                 .eventOutcome("failure")
                 .field("error.message", e.getMessage())
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -234,6 +236,7 @@ public final class PersistedMetadataCache extends MetadataCache {
             .eventAction("cache_snapshot")
             .eventOutcome("success")
             .duration(elapsed)
+            .field("log.source", "application")
             .log();
     }
     
@@ -261,7 +264,8 @@ public final class PersistedMetadataCache extends MetadataCache {
                     .eventCategory("web")
                     .eventAction("cache_snapshot")
                     .eventOutcome("failure")
-                    .field("error.message", e.getMessage())
+                    .error(e)
+                    .field("log.source", "application")
                     .log();
             }
         }

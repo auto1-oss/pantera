@@ -24,7 +24,6 @@ import org.junit.jupiter.api.Test;
  * Tests for {@link Archive.Zip}.
  * @since 0.4
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 final class ArchiveZipTest {
     @Test
     void obtainingComposerJsonWorks() {

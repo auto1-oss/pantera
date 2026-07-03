@@ -46,7 +46,6 @@ import java.util.Optional;
  *  password parameters to insecure url with corresponding error: "refusing to pass credentials
  *  to insecure URL".
  */
-@SuppressWarnings("PMD.StaticAccessToStaticFields")
 @DisabledOnOs(OS.WINDOWS)
 public final class GoSliceITCase {
 

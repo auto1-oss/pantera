@@ -1,5 +1,0 @@
-repo:
-  type: php-group
-  members:
-    - php
-    - php_proxy

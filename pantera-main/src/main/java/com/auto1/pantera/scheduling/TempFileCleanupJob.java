@@ -114,6 +114,7 @@ public final class TempFileCleanupJob implements Job {
                 .eventCategory("process")
                 .eventAction("temp_cleanup")
                 .eventOutcome("failure")
+                .field("log.source", "application")
                 .log();
             return;
         }
@@ -127,6 +128,7 @@ public final class TempFileCleanupJob implements Job {
                 .eventCategory("process")
                 .eventAction("temp_cleanup")
                 .eventOutcome("failure")
+                .field("log.source", "application")
                 .log();
             return;
         }
@@ -136,7 +138,7 @@ public final class TempFileCleanupJob implements Job {
         final AtomicInteger deleted = new AtomicInteger(0);
         final AtomicInteger failed = new AtomicInteger(0);
         try {
-            Files.walkFileTree(dir, new SimpleFileVisitor<Path>() {
+            Files.walkFileTree(dir, new SimpleFileVisitor<>() {
                 @Override
                 public FileVisitResult visitFile(
                     final Path file, final BasicFileAttributes attrs
@@ -155,6 +157,7 @@ public final class TempFileCleanupJob implements Job {
                                 .eventCategory("process")
                                 .eventAction("temp_cleanup_delete")
                                 .eventOutcome("success")
+                                .field("log.source", "application")
                                 .log();
                         } catch (final IOException ex) {
                             failed.incrementAndGet();
@@ -168,6 +171,7 @@ public final class TempFileCleanupJob implements Job {
                                 .eventAction("temp_cleanup_delete")
                                 .eventOutcome("failure")
                                 .error(ex)
+                                .field("log.source", "application")
                                 .log();
                         }
                     }
@@ -188,6 +192,7 @@ public final class TempFileCleanupJob implements Job {
                         .eventAction("temp_cleanup")
                         .eventOutcome("failure")
                         .error(exc)
+                        .field("log.source", "application")
                         .log();
                     return FileVisitResult.CONTINUE;
                 }
@@ -203,6 +208,7 @@ public final class TempFileCleanupJob implements Job {
                 .eventAction("temp_cleanup")
                 .eventOutcome("failure")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
         EcsLogger.info("com.auto1.pantera.scheduling")
@@ -215,6 +221,7 @@ public final class TempFileCleanupJob implements Job {
             .eventCategory("process")
             .eventAction("temp_cleanup")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
     }
 

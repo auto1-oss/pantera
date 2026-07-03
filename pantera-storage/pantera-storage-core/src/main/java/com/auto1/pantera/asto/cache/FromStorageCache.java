@@ -82,6 +82,7 @@ public final class FromStorageCache implements Cache {
                         .eventAction("cache_toctou_recovered")
                         .eventOutcome("success")
                         .field("file.path", key.string())
+                        .field("log.source", "application")
                         .log();
                     return Maybe.empty();
                 }
@@ -94,6 +95,7 @@ public final class FromStorageCache implements Cache {
                     .eventAction("cache_read")
                     .eventOutcome("failure")
                     .error(err)
+                    .field("log.source", "application")
                     .log()
             )
             .onErrorComplete()
@@ -127,7 +129,6 @@ public final class FromStorageCache implements Cache {
      * @param sto Storage to save to
      * @return Content that streams to caller and saves to storage
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private static Content teeContent(final Key key, final Content remote, final Storage sto) {
         final ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         final AtomicBoolean saveFired = new AtomicBoolean(false);
@@ -150,6 +151,7 @@ public final class FromStorageCache implements Cache {
                                         .eventAction("stream_through_save")
                                         .eventOutcome("failure")
                                         .error(err)
+                                        .field("log.source", "application")
                                         .log();
                                 }
                             });
@@ -160,6 +162,7 @@ public final class FromStorageCache implements Cache {
                             .eventAction("stream_through_save")
                             .eventOutcome("failure")
                             .error(ex)
+                            .field("log.source", "application")
                             .log();
                     }
                 }

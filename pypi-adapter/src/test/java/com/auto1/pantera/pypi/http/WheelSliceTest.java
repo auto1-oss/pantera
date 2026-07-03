@@ -41,7 +41,6 @@ import java.util.Queue;
  * Test for {@link WheelSlice}.
  * @since 0.5
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class WheelSliceTest {
 
     /**

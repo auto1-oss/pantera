@@ -14,6 +14,7 @@ import com.auto1.pantera.api.AuthTokenRest;
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.LogSanitizer;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.auth.User;
 import io.vertx.ext.auth.authentication.TokenCredentials;
@@ -101,6 +102,7 @@ public final class JwtPasswordAuth implements Authentication {
                     .eventAction("jwt_password_auth")
                     .eventOutcome("failure")
                     .field("user.name", username)
+                    .field("log.source", "application")
                     .log();
                 return Optional.empty();
             }
@@ -112,6 +114,7 @@ public final class JwtPasswordAuth implements Authentication {
                     .eventAction("jwt_password_auth")
                     .eventOutcome("failure")
                     .field("user.name", username)
+                    .field("log.source", "application")
                     .log();
                 return Optional.empty();
             }
@@ -125,6 +128,7 @@ public final class JwtPasswordAuth implements Authentication {
                 .eventAction("jwt_password_auth")
                 .eventOutcome("failure")
                 .field("user.name", username)
+                .field("log.source", "application")
                 .log();
             return Optional.empty();
         } catch (final Exception ex) {
@@ -140,8 +144,14 @@ public final class JwtPasswordAuth implements Authentication {
                 .eventAction("jwt_password_auth")
                 .eventOutcome("failure")
                 .field("user.name", username)
+                // B4: the password string survived looksLikeJwt() and is
+                // therefore in scope as a raw JWT — sanitize the cause
+                // message before logging in case the verifier echoed it.
+                .field("error.type", ex.getClass().getSimpleName())
                 .field("error.message",
-                    ex.getMessage() != null ? ex.getMessage() : ex.getClass().getName())
+                    LogSanitizer.sanitizeMessage(
+                        ex.getMessage() != null ? ex.getMessage() : ex.getClass().getName()))
+                .field("log.source", "application")
                 .log();
             return Optional.empty();
         }

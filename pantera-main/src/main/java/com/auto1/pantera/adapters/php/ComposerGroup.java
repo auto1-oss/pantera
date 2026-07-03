@@ -52,10 +52,11 @@ public final class ComposerGroup implements Slice {
      */
     public ComposerGroup(final List<Slice> repositories) {
         this.repositories = repositories;
-        EcsLogger.debug("com.auto1.pantera.composer")
+        EcsLogger.debug("com.auto1.pantera.adapters.php")
             .message("Created Composer group (" + this.repositories.size() + " repositories)")
             .eventCategory("web")
             .eventAction("group_create")
+            .field("log.source", "application")
             .log();
     }
 
@@ -65,11 +66,12 @@ public final class ComposerGroup implements Slice {
         final Headers headers,
         final Content body
     ) {
-        EcsLogger.debug("com.auto1.pantera.composer")
+        EcsLogger.debug("com.auto1.pantera.adapters.php")
             .message("Composer group request")
             .eventCategory("web")
             .eventAction("group_request")
             .field("url.path", line.uri().getPath())
+            .field("log.source", "application")
             .log();
         return this.tryRepositories(0, line, headers, body);
     }
@@ -81,12 +83,13 @@ public final class ComposerGroup implements Slice {
         final Content body
     ) {
         if (index >= this.repositories.size()) {
-            EcsLogger.warn("com.auto1.pantera.composer")
+            EcsLogger.warn("com.auto1.pantera.adapters.php")
                 .message("No repository in group could serve request")
                 .eventCategory("web")
                 .eventAction("group_request")
                 .eventOutcome("failure")
                 .field("url.path", line.uri().getPath())
+                .field("log.source", "application")
                 .log();
             return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
         }
@@ -94,22 +97,24 @@ public final class ComposerGroup implements Slice {
         final Slice repo = this.repositories.get(index);
         return repo.response(line, headers, body).thenCompose(response -> {
             if (response.status().success()) {
-                EcsLogger.debug("com.auto1.pantera.composer")
+                EcsLogger.debug("com.auto1.pantera.adapters.php")
                     .message("Repository served request successfully (index: " + index + ")")
                     .eventCategory("web")
                     .eventAction("group_request")
                     .eventOutcome("success")
                     .field("url.path", line.uri().getPath())
+                    .field("log.source", "application")
                     .log();
                 return CompletableFuture.completedFuture(response);
             }
-            EcsLogger.debug("com.auto1.pantera.composer")
+            EcsLogger.debug("com.auto1.pantera.adapters.php")
                 .message("Repository failed, trying next (index: " + index + ")")
                 .eventCategory("web")
                 .eventAction("group_request")
                 .eventOutcome("failure")
                 .field("http.response.status_code", response.status().code())
                 .field("url.path", line.uri().getPath())
+                .field("log.source", "application")
                 .log();
             return this.tryRepositories(index + 1, line, headers, body);
         });

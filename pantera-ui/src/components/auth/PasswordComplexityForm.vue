@@ -82,12 +82,12 @@ watch(formValid, v => emit('valid', v), { immediate: true })
         Current password
       </label>
       <InputText
-        :modelValue="oldPassword"
-        @update:modelValue="(v: string) => emit('update:oldPassword', v)"
+        :model-value="oldPassword"
         type="password"
         class="w-full"
         autocomplete="current-password"
         :disabled="disabled"
+        @update:model-value="(v: string) => emit('update:oldPassword', v)"
       />
     </div>
 
@@ -96,12 +96,12 @@ watch(formValid, v => emit('valid', v), { immediate: true })
         New password
       </label>
       <InputText
-        :modelValue="password"
-        @update:modelValue="(v: string) => emit('update:password', v)"
+        :model-value="password"
         type="password"
         class="w-full"
         autocomplete="new-password"
         :disabled="disabled"
+        @update:model-value="(v: string) => emit('update:password', v)"
       />
     </div>
 

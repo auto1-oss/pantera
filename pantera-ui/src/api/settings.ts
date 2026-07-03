@@ -2,7 +2,7 @@ import { getApiClient } from './client'
 import type {
   Settings, HealthResponse, DashboardStats, ReposByType,
   StorageAlias, PaginatedResponse, CooldownRepo, BlockedArtifact,
-  CooldownConfig,
+  HistoryArtifact, CooldownConfig,
 } from '@/types'
 
 // Settings
@@ -71,10 +71,22 @@ export async function getCooldownOverview(): Promise<CooldownRepo[]> {
 }
 
 export async function getCooldownBlocked(params: {
-  repo?: string; page?: number; size?: number; search?: string;
-  sort_by?: string; sort_dir?: string
+  repo?: string; repo_type?: string;
+  page?: number; size?: number; search?: string;
+  sort_by?: string; sort_dir?: 'asc' | 'desc'
 } = {}, signal?: AbortSignal): Promise<PaginatedResponse<BlockedArtifact>> {
   const { data } = await getApiClient().get('/cooldown/blocked', { params, signal })
+  return data
+}
+
+// GET /cooldown/history — registered by Task 13. Same filter + pagination
+// shape as /cooldown/blocked; items include archive metadata.
+export async function getCooldownHistory(params: {
+  repo?: string; repo_type?: string;
+  page?: number; size?: number; search?: string;
+  sort_by?: string; sort_dir?: 'asc' | 'desc'
+} = {}, signal?: AbortSignal): Promise<PaginatedResponse<HistoryArtifact>> {
+  const { data } = await getApiClient().get('/cooldown/history', { params, signal })
   return data
 }
 
@@ -107,3 +119,8 @@ export async function createAuthProvider(payload: {
 export async function deleteAuthProvider(id: number): Promise<void> {
   await getApiClient().delete(`/auth-providers/${id}`)
 }
+
+// Friendlier short aliases for the cooldown GET/PUT pair — same wire
+// endpoints. Useful for callers that already have a `getX/putX` shape
+// (e.g. the per-repo cooldown card on RepoEditView).
+export { getCooldownConfig as getCooldown, updateCooldownConfig as putCooldown }

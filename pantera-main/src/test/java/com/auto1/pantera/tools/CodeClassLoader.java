@@ -18,7 +18,6 @@ import java.util.TreeMap;
  * Classloader of dynamically compiled classes.
  * @since 0.28
  */
-@SuppressWarnings("PMD.ConstructorShouldDoInitialization")
 public final class CodeClassLoader extends ClassLoader {
     /**
      * Code blobs.

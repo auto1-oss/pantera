@@ -81,6 +81,7 @@ public final class MultiReadManifests implements Manifests {
                                     .eventOutcome("failure")
                                     .field("container.image.hash.all", ref.digest())
                                     .error(throwable)
+                                    .field("log.source", "application")
                                     .log();
                                 result = Optional.empty();
                             }

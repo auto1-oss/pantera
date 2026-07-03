@@ -36,6 +36,12 @@ import java.util.concurrent.atomic.AtomicLong;
  * Service to watch pantera.yml for changes and hot reload global_prefixes.
  * Implements 500ms debounce to avoid excessive reloads.
  *
+ * <p>Multiple distinct error sites — distinct failure modes (watch
+ * service registration, debounce timer, config reload parse,
+ * shutdown). Each is the boundary for its own decision (close watch
+ * vs. retry vs. abort). Kept separate by design.
+ * See audit/aggressive-items.md (Tier 4 B7 duplicate-error bucket).
+ *
  * @since 1.0
  */
 public final class ConfigWatchService implements AutoCloseable {
@@ -123,6 +129,7 @@ public final class ConfigWatchService implements AutoCloseable {
                     .eventAction("config_watch_start")
                     .eventOutcome("success")
                     .field("file.path", this.configPath.toString())
+                    .field("log.source", "application")
                     .log();
 
                 this.watchThread = new Thread(this::watchLoop, "pantera.config.watcher");
@@ -135,6 +142,7 @@ public final class ConfigWatchService implements AutoCloseable {
                     .eventAction("config_watch_start")
                     .eventOutcome("failure")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
                 this.running.set(false);
             }
@@ -164,9 +172,12 @@ public final class ConfigWatchService implements AutoCloseable {
                 }
                 key.reset();
             } catch (final InterruptedException ex) {
+                // EXPECTED: shutdown signalled mid-take. Restore the
+                // interrupt flag and exit the loop cleanly.
                 Thread.currentThread().interrupt();
                 break;
             } catch (final ClosedWatchServiceException ex) {
+                // EXPECTED: close() ran on another thread; exit the loop.
                 break;
             } catch (final Exception ex) {
                 EcsLogger.error("com.auto1.pantera.settings")
@@ -175,6 +186,7 @@ public final class ConfigWatchService implements AutoCloseable {
                     .eventAction("config_watch")
                     .eventOutcome("failure")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -207,6 +219,7 @@ public final class ConfigWatchService implements AutoCloseable {
                 .eventCategory("configuration")
                 .eventAction("config_reload")
                 .eventOutcome("success")
+                .field("log.source", "application")
                 .log();
         } catch (final Exception ex) {
             EcsLogger.error("com.auto1.pantera.settings")
@@ -216,6 +229,7 @@ public final class ConfigWatchService implements AutoCloseable {
                 .eventOutcome("failure")
                 .field("file.path", this.configPath.toString())
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -264,6 +278,7 @@ public final class ConfigWatchService implements AutoCloseable {
                     .eventAction("config_watch_stop")
                     .eventOutcome("failure")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
             this.executor.shutdown();
@@ -283,6 +298,7 @@ public final class ConfigWatchService implements AutoCloseable {
                 .eventCategory("configuration")
                 .eventAction("config_watch_stop")
                 .eventOutcome("success")
+                .field("log.source", "application")
                 .log();
         }
     }

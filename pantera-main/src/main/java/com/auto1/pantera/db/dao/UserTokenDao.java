@@ -113,7 +113,7 @@ public final class UserTokenDao {
      * @return List of token info records
      */
     public List<TokenInfo> listByUser(final String username, final String tokenType) {
-        final StringBuilder sql = new StringBuilder(128)
+        final StringBuilder sql = new StringBuilder(192)
             .append("SELECT id, label, expires_at, created_at FROM user_tokens")
             .append(" WHERE username = ? AND revoked = FALSE");
         if (tokenType != null) {
@@ -127,15 +127,16 @@ public final class UserTokenDao {
             if (tokenType != null) {
                 ps.setString(2, tokenType);
             }
-            final ResultSet rs = ps.executeQuery();
-            while (rs.next()) {
-                final Timestamp exp = rs.getTimestamp("expires_at");
-                result.add(new TokenInfo(
-                    rs.getObject("id", UUID.class),
-                    rs.getString("label"),
-                    exp != null ? exp.toInstant() : null,
-                    rs.getTimestamp("created_at").toInstant()
-                ));
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    final Timestamp exp = rs.getTimestamp("expires_at");
+                    result.add(new TokenInfo(
+                        rs.getObject("id", UUID.class),
+                        rs.getString("label"),
+                        exp != null ? exp.toInstant() : null,
+                        rs.getTimestamp("created_at").toInstant()
+                    ));
+                }
             }
         } catch (final Exception ex) {
             throw new IllegalStateException("Failed to list tokens", ex);

@@ -197,7 +197,6 @@ public interface Key {
          * Ctor.
          * @param parts Parts
          */
-        @SuppressWarnings("PMD.ConstructorOnlyInitializesOrCallOtherConstructors")
         public From(final List<String> parts) {
             if (parts.size() == 1 && parts.get(0).isEmpty()) {
                 this.parts = Collections.emptyList();

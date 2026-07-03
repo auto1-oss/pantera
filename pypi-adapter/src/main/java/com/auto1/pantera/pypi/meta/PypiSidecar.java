@@ -21,6 +21,7 @@ import javax.json.JsonReader;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
@@ -110,7 +111,13 @@ public final class PypiSidecar {
                         final JsonObject obj = reader.readObject();
                         final String rp = obj.isNull("requires-python")
                             ? null : obj.getString("requires-python");
-                        final Instant time = Instant.parse(obj.getString("upload-time"));
+                        // PEP 700 caps upload-time at microsecond precision.
+                        // Stale sidecars written before this constraint may
+                        // carry nanosecond values; truncate on read so the
+                        // Meta value is always compliant regardless of
+                        // on-disk precision.
+                        final Instant time = Instant.parse(obj.getString("upload-time"))
+                            .truncatedTo(ChronoUnit.MICROS);
                         final boolean yanked = obj.getBoolean("yanked", false);
                         final String yr = obj.isNull("yanked-reason")
                             ? null : obj.getString("yanked-reason");
@@ -148,7 +155,6 @@ public final class PypiSidecar {
      * requested) and amortizes to O(1) per artifact after the first
      * hit.</p>
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private static CompletableFuture<Optional<Meta>> generateFromStorageMetadata(
         final Storage storage,
         final Key artifactKey
@@ -158,10 +164,16 @@ public final class PypiSidecar {
                 return CompletableFuture.completedFuture(Optional.empty());
             }
             return storage.metadata(artifactKey).thenCompose(fileMeta -> {
+                // Linux filesystem creationTime() carries nanosecond
+                // resolution. PEP 700 caps upload-time at 6 fractional
+                // digits, so truncate at the source — keeps every
+                // downstream Instant (sidecar write, JSON render)
+                // within spec without needing to re-truncate everywhere.
                 final Instant uploadTime = fileMeta
                     .read(com.auto1.pantera.asto.Meta.OP_CREATED_AT)
                     .map(Instant.class::cast)
-                    .orElse(Instant.now());
+                    .orElseGet(Instant::now)
+                    .truncatedTo(ChronoUnit.MICROS);
                 // Persist the sidecar (fire-and-forget) so subsequent
                 // reads hit the fast path. Errors are swallowed — the
                 // in-memory Meta is returned regardless.
@@ -178,7 +190,7 @@ public final class PypiSidecar {
                 // in tests). Fall back to "now" but don't persist — the
                 // next read will try again.
                 return Optional.of(new Meta(
-                    null, Instant.now(), false,
+                    null, Instant.now().truncatedTo(ChronoUnit.MICROS), false,
                     Optional.empty(), Optional.empty()
                 ));
             });

@@ -23,7 +23,6 @@ import org.skyscreamer.jsonassert.JSONAssert;
  * Test for {@link IndexJson.Delete}.
  * @since 1.6
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class IndexJsonDeleteTest {
 
     /**

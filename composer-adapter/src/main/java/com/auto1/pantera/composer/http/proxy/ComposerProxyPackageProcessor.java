@@ -50,7 +50,6 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
     private Storage asto;
 
     @Override
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.CognitiveComplexity"})
     public void execute(final JobExecutionContext context) {
         this.resolveFromRegistry(context);
         if (this.asto == null || this.packages == null || this.events == null) {
@@ -59,6 +58,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                 .eventCategory("web")
                 .eventAction("proxy_processor")
                 .eventOutcome("failure")
+                .field("log.source", "application")
                 .log();
             super.stopJob(context);
         } else {
@@ -66,6 +66,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                 .message("Composer proxy processor running (queue size: " + this.packages.size() + ")")
                 .eventCategory("web")
                 .eventAction("proxy_processor")
+                .field("log.source", "application")
                 .log();
             while (!this.packages.isEmpty()) {
                 final ProxyArtifactEvent event = this.packages.poll();
@@ -76,6 +77,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                         .eventCategory("web")
                         .eventAction("proxy_processor")
                         .field("package.path", key.string())
+                        .field("log.source", "application")
                         .log();
                     try {
                         // Key format is now "vendor/package/version" from ProxyDownloadSlice
@@ -88,6 +90,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                                 .eventAction("proxy_processor")
                                 .eventOutcome("failure")
                                 .field("package.path", key.string())
+                                .field("log.source", "application")
                                 .log();
                             continue;
                         }
@@ -120,7 +123,10 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                             }
                             }
                         } catch (final Exception ignored) {
-                            // Fall back to 0 if size cannot be read
+                            // EXPECTED: size is a best-effort hint for the
+                            // artifact event; zero is a valid fallback and
+                            // the import will continue with the rest of
+                            // the metadata.
                         }
 
                         // Record only the specific version that was downloaded
@@ -137,7 +143,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                                 created,
                                 release,
                                 event.artifactKey().string()
-                            )
+                            ).withContext(event.traceId(), event.clientIp())
                         );
 
                         EcsLogger.info("com.auto1.pantera.composer")
@@ -150,6 +156,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                             .field("repository.name", event.repoName())
                             .field("user.name", owner)
                             .field("package.release_date", release == null ? null : java.time.Instant.ofEpochMilli(release).toString())
+                            .field("log.source", "application")
                             .log();
 
                         // Remove all duplicate events from queue
@@ -165,6 +172,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                             .eventOutcome("failure")
                             .field("package.path", key.string())
                             .error(err)
+                            .field("log.source", "application")
                             .log();
                     }
                 }
@@ -200,7 +208,6 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
      * Set registry key for events queue (JDBC mode).
      * @param key Registry key
      */
-    @SuppressWarnings("PMD.MethodNamingConventions")
     public void setEvents_key(final String key) {
         this.events = JobDataRegistry.lookup(key);
     }
@@ -209,7 +216,6 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
      * Set registry key for packages queue (JDBC mode).
      * @param key Registry key
      */
-    @SuppressWarnings("PMD.MethodNamingConventions")
     public void setPackages_key(final String key) {
         this.packages = JobDataRegistry.lookup(key);
     }
@@ -218,7 +224,6 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
      * Set registry key for storage (JDBC mode).
      * @param key Registry key
      */
-    @SuppressWarnings("PMD.MethodNamingConventions")
     public void setStorage_key(final String key) {
         this.asto = JobDataRegistry.lookup(key);
     }
@@ -263,6 +268,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                     .eventCategory("web")
                     .eventAction("proxy_processor")
                     .field("package.name", packageName)
+                    .field("log.source", "application")
                     .log();
                 return null;
             }
@@ -306,6 +312,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                     .field("package.name", packageName)
                     .field("package.version", version)
                     .field("package.release_date", timeStr)
+                    .field("log.source", "application")
                     .log();
                 return releaseMillis;
             }
@@ -319,7 +326,8 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                 .eventOutcome("failure")
                 .field("package.name", packageName)
                 .field("package.version", version)
-                .field("error.message", err.getMessage())
+                .error(err)
+                .field("log.source", "application")
                 .log();
             return null;
         }

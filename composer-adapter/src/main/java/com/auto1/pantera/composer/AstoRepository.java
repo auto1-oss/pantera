@@ -324,7 +324,7 @@ public final class AstoRepository implements Repository {
         if (key.equals(AstoRepository.ALL_PACKAGES)) {
             return this.satis.generateRootPackagesJson()
                 .thenCompose(nothing -> this.asto.value(key))
-                .thenApply(content -> (Packages) new JsonPackages(content))
+                .<Packages>thenApply(content -> new JsonPackages(content))
                 .thenApply(Optional::of)
                 .exceptionally(err -> {
                     // If generation fails, return empty (repo might be empty)
@@ -338,7 +338,7 @@ public final class AstoRepository implements Repository {
                 final CompletionStage<Optional<Packages>> packages;
                 if (exists) {
                     packages = this.asto.value(key)
-                        .thenApply(content -> (Packages) new JsonPackages(content))
+                        .<Packages>thenApply(content -> new JsonPackages(content))
                         .thenApply(Optional::of);
                 } else {
                     packages = CompletableFuture.completedFuture(Optional.empty());

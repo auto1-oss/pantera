@@ -42,6 +42,7 @@ public final class PanteraMetrics {
                         .eventCategory("process")
                         .eventAction("metrics_init")
                         .eventOutcome("success")
+                        .field("log.source", "application")
                         .log();
                 }
             }

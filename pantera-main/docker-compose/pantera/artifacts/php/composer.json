@@ -11,7 +11,8 @@
     "require": {
         "openai-php/client": "^0.17.1",
         "symfony/http-client": "^7.3",
-        "nyholm/psr7": "^1.8"
+        "nyholm/psr7": "^1.8",
+        "hideyukimori/nene2": "^1.5"
     },
     "repositories": [
         {

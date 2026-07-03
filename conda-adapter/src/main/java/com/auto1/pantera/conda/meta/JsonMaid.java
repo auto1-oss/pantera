@@ -64,7 +64,6 @@ public interface JsonMaid {
         }
 
         @Override
-        @SuppressWarnings("PMD.AssignmentInOperand")
         public void clean(final Set<String> checksums) throws IOException {
             JsonToken token;
             while ((token = this.parser.nextToken()) != null) {

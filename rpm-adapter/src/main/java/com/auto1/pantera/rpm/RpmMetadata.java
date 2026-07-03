@@ -155,7 +155,6 @@ public interface RpmMetadata {
          * @param packages Rpms to append info about, map of the path to file and location
          * @throws PanteraIOException On io-operation error
                  */
-        @SuppressWarnings("PMD.AvoidDuplicateLiterals")
         public void perform(final Collection<Package.Meta> packages) {
             try {
                 final Path temp = Files.createTempFile("rpm-primary-append", RpmMetadata.SUFFIX);

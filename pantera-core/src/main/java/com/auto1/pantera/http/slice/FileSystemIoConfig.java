@@ -84,6 +84,7 @@ public final class FileSystemIoConfig {
             .eventCategory("configuration")
             .eventAction("thread_pool_init")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
     }
 
@@ -124,6 +125,8 @@ public final class FileSystemIoConfig {
                     .eventCategory("configuration")
                     .eventAction("thread_pool_config")
                     .eventOutcome("failure")
+                    .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -140,6 +143,8 @@ public final class FileSystemIoConfig {
                     .eventCategory("configuration")
                     .eventAction("thread_pool_config")
                     .eventOutcome("failure")
+                    .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -152,6 +157,7 @@ public final class FileSystemIoConfig {
             .eventCategory("configuration")
             .eventAction("thread_pool_config")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
         return defaultSize;
     }
@@ -170,6 +176,7 @@ public final class FileSystemIoConfig {
                 .eventCategory("configuration")
                 .eventAction("thread_pool_validate")
                 .eventOutcome("success")
+                .field("log.source", "application")
                 .log();
             return MIN_THREADS;
         }
@@ -179,6 +186,7 @@ public final class FileSystemIoConfig {
                 .eventCategory("configuration")
                 .eventAction("thread_pool_validate")
                 .eventOutcome("success")
+                .field("log.source", "application")
                 .log();
             return MAX_THREADS;
         }
@@ -187,6 +195,7 @@ public final class FileSystemIoConfig {
             .eventCategory("configuration")
             .eventAction("thread_pool_validate")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
         return value;
     }

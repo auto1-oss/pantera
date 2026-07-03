@@ -116,7 +116,6 @@ public final class UniquePackage implements Package {
      * @param items Items to append
      * @return List of the `Filename`s fields of the duplicated packages.
      */
-    @SuppressWarnings({"PMD.AssignmentInOperand", "PMD.CyclomaticComplexity"})
     private static List<String> decompressAppendCompress(
         final InputStream decompress, final OutputStream res, final Iterable<String> items
     ) {
@@ -160,7 +159,6 @@ public final class UniquePackage implements Package {
         return duplicates;
     }
 
-    @SuppressWarnings({"PMD.AssignmentInOperand", "PMD.CyclomaticComplexity"})
     private static List<String> decompressRemoveCompress(
             final InputStream decompress, final OutputStream res, final Iterable<String> items
     ) {

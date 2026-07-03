@@ -53,7 +53,6 @@ public final class AuthFromEnv implements Authentication {
     }
 
     @Override
-    @SuppressWarnings("PMD.OnlyOneReturn")
     public Optional<AuthUser> user(final String username, final String password) {
         final Optional<AuthUser> result;
         if (Objects.equals(Objects.requireNonNull(username), this.env.get(AuthFromEnv.ENV_NAME))

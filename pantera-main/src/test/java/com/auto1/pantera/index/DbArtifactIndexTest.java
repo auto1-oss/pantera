@@ -12,11 +12,13 @@ package com.auto1.pantera.index;
 
 import com.amihaiemil.eoyaml.Yaml;
 import com.auto1.pantera.db.ArtifactDbFactory;
+import com.auto1.pantera.db.DbManager;
 import com.auto1.pantera.db.PostgreSQLTestConfig;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -27,6 +29,7 @@ import com.zaxxer.hikari.HikariDataSource;
 import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.Statement;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -40,7 +43,6 @@ import java.util.Optional;
  *
  * @since 1.20.13
  */
-@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.TooManyMethods", "PMD.TooManyStaticImports"})
 @Testcontainers
 class DbArtifactIndexTest {
 
@@ -79,6 +81,11 @@ class DbArtifactIndexTest {
             ).build(),
             "artifacts"
         ).initialize();
+        // Run Flyway migrations so Flyway-managed columns
+        // (name_sort V123, version_sort V111, search_tokens V109, …) are
+        // present. Production calls initialize() followed by
+        // DbManager.migrate(); tests must mirror that.
+        DbManager.migrate(this.dataSource);
         // Clean up artifacts table before each test
         try (Connection conn = this.dataSource.getConnection();
              Statement stmt = conn.createStatement()) {
@@ -637,6 +644,359 @@ class DbArtifactIndexTest {
             "Total hits with allowedRepos must be 1",
             filtered.totalHits(),
             new IsEqual<>(1L)
+        );
+    }
+
+    /**
+     * Regression for the 2.2.0 SearchHandler date-sort bug.
+     * Prior to the fix, SearchHandler passed {@code SortField.DATE.name().toLowerCase()}
+     * ("date") as the wire value, but {@link DbArtifactIndex#toSortField(String)}
+     * only recognises "created_at", so every date-sorted query silently degraded
+     * to RELEVANCE. This test asserts the contract that the index honours
+     * "created_at" as the wire key and that asc/desc produce strictly opposite
+     * orderings.
+     */
+    @Test
+    void createdAtSortHonoursDirection() throws Exception {
+        final Instant oldest = Instant.parse("2024-01-01T00:00:00Z");
+        final Instant middle = Instant.parse("2024-06-01T00:00:00Z");
+        final Instant newest = Instant.parse("2024-12-01T00:00:00Z");
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "sorted-alpha", "sorted-alpha",
+            "1.0.0", 100L, oldest, "user"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "sorted-bravo", "sorted-bravo",
+            "1.0.0", 100L, middle, "user"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "sorted-charlie", "sorted-charlie",
+            "1.0.0", 100L, newest, "user"
+        )).join();
+        final SearchResult asc = this.index.search(
+            "sorted", 10, 0, null, null, "created_at", true, null
+        ).join();
+        MatcherAssert.assertThat(
+            "asc order must place the oldest timestamp first",
+            asc.documents().get(0).artifactName(),
+            new IsEqual<>("sorted-alpha")
+        );
+        MatcherAssert.assertThat(
+            "asc order must place the newest timestamp last",
+            asc.documents().get(asc.documents().size() - 1).artifactName(),
+            new IsEqual<>("sorted-charlie")
+        );
+        final SearchResult desc = this.index.search(
+            "sorted", 10, 0, null, null, "created_at", false, null
+        ).join();
+        MatcherAssert.assertThat(
+            "desc order must place the newest timestamp first",
+            desc.documents().get(0).artifactName(),
+            new IsEqual<>("sorted-charlie")
+        );
+        MatcherAssert.assertThat(
+            "desc order must place the oldest timestamp last",
+            desc.documents().get(desc.documents().size() - 1).artifactName(),
+            new IsEqual<>("sorted-alpha")
+        );
+    }
+
+    /**
+     * Natural name sort via V123's {@code name_sort} generated column: numeric
+     * runs embedded in filenames must sort numerically, not lexicographically.
+     * Without the column, {@code pkg-10} sorts before {@code pkg-2}; with it,
+     * every digit run is zero-padded to 20 chars so lexicographic comparison
+     * preserves numeric order.
+     */
+    @Test
+    void nameSortIsNatural() throws Exception {
+        final Instant now = Instant.now();
+        // Intentional insertion order is not-sorted; relies on the column,
+        // not insertion order, to place rows correctly.
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "pkg-2", "pkg-2",
+            "1.0.0", 100L, now, "user"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "pkg-10", "pkg-10",
+            "1.0.0", 100L, now, "user"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "pkg-11", "pkg-11",
+            "1.0.0", 100L, now, "user"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "pkg-100", "pkg-100",
+            "1.0.0", 100L, now, "user"
+        )).join();
+        final SearchResult asc = this.index.search(
+            "pkg", 10, 0, null, null, "name", true, null
+        ).join();
+        final List<String> ascNames = asc.documents().stream()
+            .map(ArtifactDocument::artifactName).toList();
+        MatcherAssert.assertThat(
+            "Natural sort must place pkg-2 before pkg-10, pkg-10 before pkg-11,"
+                + " and pkg-11 before pkg-100 — lexicographic sort would reverse these",
+            ascNames,
+            Matchers.contains("pkg-2", "pkg-10", "pkg-11", "pkg-100")
+        );
+        final SearchResult desc = this.index.search(
+            "pkg", 10, 0, null, null, "name", false, null
+        ).join();
+        final List<String> descNames = desc.documents().stream()
+            .map(ArtifactDocument::artifactName).toList();
+        MatcherAssert.assertThat(
+            "Desc order must reverse the natural sort",
+            descNames,
+            Matchers.contains("pkg-100", "pkg-11", "pkg-10", "pkg-2")
+        );
+    }
+
+    /**
+     * V124 classification: search must exclude metadata, checksum, and
+     * signature rows from user-facing results. The pre-fix complaint was
+     * 16 510 `.meta.maven.shards.*` rows dominating a single query; this
+     * test pins the regression by inserting one primary artifact plus
+     * representative rows of every non-ARTIFACT kind and asserting only
+     * the primary artifact is returned.
+     */
+    @Test
+    void searchExcludesNonArtifactKinds() throws Exception {
+        final Instant now = Instant.now();
+        // Primary artifact — should be returned
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "com/example/vehicle-api", "vehicle-api",
+            "1.0.0", 1024L, now, "user"
+        )).join();
+        // Non-artifact rows that must be hidden by default
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", ".meta.maven.shards.vehicle-api", "vehicle-api",
+            "1.0.0-1e7d13d", 340L, now, "system"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "vehicle-api-1.0.0.jar.md5", "vehicle-api",
+            "1.0.0", 32L, now, "system"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "vehicle-api-1.0.0.jar.sha256", "vehicle-api",
+            "1.0.0", 64L, now, "system"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "vehicle-api-1.0.0.jar.asc", "vehicle-api",
+            "1.0.0", 800L, now, "system"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "maven-metadata.xml", "vehicle-api",
+            "1.0.0", 512L, now, "system"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "vehicle-api.pantera-meta.json", "vehicle-api",
+            "1.0.0", 128L, now, "system"
+        )).join();
+        final SearchResult result = this.index.search(
+            "vehicle-api", 50, 0, null, null, "relevance", true, null
+        ).join();
+        MatcherAssert.assertThat(
+            "Only the primary artifact should be searchable; non-ARTIFACT"
+                + " rows remain in the index for routing but are filtered"
+                + " from user-facing search results",
+            result.documents().size(),
+            new IsEqual<>(1)
+        );
+        MatcherAssert.assertThat(
+            "The single hit must be the real vehicle-api artifact",
+            result.documents().get(0).artifactPath(),
+            new IsEqual<>("com/example/vehicle-api")
+        );
+        MatcherAssert.assertThat(
+            "Total hits must reflect the filtered count, not the raw row"
+                + " count — otherwise hasMore/pagination breaks",
+            result.totalHits(),
+            new IsEqual<>(1L)
+        );
+    }
+
+    /**
+     * Classification function contract: every known pattern produces the
+     * expected kind. Tests the DB function directly via SELECT; any future
+     * change to classify_artifact must keep these invariants or adjust this
+     * test.
+     */
+    @Test
+    void classificationFunctionLabelsKnownPatterns() throws Exception {
+        try (Connection conn = this.dataSource.getConnection();
+             Statement stmt = conn.createStatement()) {
+            final java.util.Map<String, String> cases = new java.util.LinkedHashMap<>();
+            cases.put("vehicle-api-1.0.0.jar", "ARTIFACT");
+            cases.put("some-library", "ARTIFACT");
+            cases.put("pkg.md5", "CHECKSUM");
+            cases.put("pkg.SHA1", "CHECKSUM");
+            cases.put("pkg.sha256", "CHECKSUM");
+            cases.put("pkg.sha512", "CHECKSUM");
+            cases.put("pkg.asc", "SIGNATURE");
+            cases.put("pkg.sig", "SIGNATURE");
+            cases.put("maven-metadata.xml", "METADATA");
+            // Checksum rule fires first — maven-metadata.xml.md5 is the
+            // checksum of a metadata file. Both kinds are excluded from
+            // search results, so the user-visible outcome is the same.
+            cases.put("maven-metadata.xml.md5", "CHECKSUM");
+            cases.put(".meta.maven.shards.foo", "METADATA");
+            cases.put(".pantera-heartbeat", "METADATA");
+            cases.put("foo.pantera-meta.json", "METADATA");
+            cases.put("Packages", "METADATA");
+            cases.put("Packages.gz", "METADATA");
+            cases.put("Release", "METADATA");
+            cases.put("InRelease", "METADATA");
+            cases.put("index.yaml", "METADATA");
+            cases.put("packages.json", "METADATA");
+            for (final var entry : cases.entrySet()) {
+                try (ResultSet rs = stmt.executeQuery(
+                    "SELECT classify_artifact('"
+                        + entry.getKey().replace("'", "''") + "')"
+                )) {
+                    MatcherAssert.assertThat(
+                        "classify_artifact('" + entry.getKey() + "') must be "
+                            + entry.getValue(),
+                        rs.next() && rs.getString(1).equals(entry.getValue()),
+                        new IsEqual<>(true)
+                    );
+                }
+            }
+        }
+    }
+
+    /**
+     * Cascade delete: {@code removePrefix} must hit every row whose
+     * {@code name} starts with the prefix, leave rows in other repos
+     * alone, and leave unrelated rows in the same repo alone. Before
+     * 2.2.0 the DELETE handler removed storage but left ghost rows in
+     * the index — this pins the fix.
+     */
+    @Test
+    void removePrefixDeletesExactlyMatchingRows() throws Exception {
+        final Instant now = Instant.now();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "com/example/pkg/1.0/pkg-1.0.jar", "pkg",
+            "1.0", 100L, now, "user"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "com/example/pkg/1.0/pkg-1.0.pom", "pkg",
+            "1.0", 50L, now, "user"
+        )).join();
+        // Same prefix but different repo — must not be touched
+        this.index.index(new ArtifactDocument(
+            "maven", "repo2", "com/example/pkg/1.0/pkg-1.0.jar", "pkg",
+            "1.0", 100L, now, "user"
+        )).join();
+        // Different prefix in same repo — must not be touched
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "com/example/other/2.0/other-2.0.jar", "other",
+            "2.0", 100L, now, "user"
+        )).join();
+        final int deleted = this.index.removePrefix(
+            "repo1", "com/example/pkg/1.0/"
+        ).join();
+        MatcherAssert.assertThat(
+            "removePrefix must delete exactly the two matching rows",
+            deleted,
+            new IsEqual<>(2)
+        );
+        // After delete, the path should only locate to repo2 (repo1's row
+        // was cascaded away); locate returns the surviving repos per path.
+        final List<String> locateResult = this.index.locateByName(
+            "com/example/pkg/1.0/pkg-1.0.jar"
+        ).join().orElseThrow();
+        MatcherAssert.assertThat(
+            "repo1 must no longer appear in locate (cascaded delete)",
+            locateResult,
+            Matchers.not(Matchers.hasItem("repo1"))
+        );
+        MatcherAssert.assertThat(
+            "repo2 row with the same path must still be locatable",
+            locateResult,
+            Matchers.contains("repo2")
+        );
+        MatcherAssert.assertThat(
+            "unrelated prefix in the same repo must still be locatable",
+            this.index.locateByName("com/example/other/2.0/other-2.0.jar")
+                .join().orElseThrow(),
+            Matchers.contains("repo1")
+        );
+    }
+
+    /**
+     * Passing an empty prefix must NOT wipe an entire repo — it signals
+     * a coding error and the index should refuse.
+     */
+    @Test
+    void removePrefixRefusesEmptyPrefix() throws Exception {
+        final Instant now = Instant.now();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "com/example/anything", "anything",
+            "1.0", 100L, now, "user"
+        )).join();
+        final java.util.concurrent.CompletionException err =
+            Assertions.assertThrows(
+                java.util.concurrent.CompletionException.class,
+                () -> this.index.removePrefix("repo1", "").join()
+            );
+        MatcherAssert.assertThat(
+            "Must refuse empty prefix with IllegalArgumentException",
+            err.getCause() instanceof IllegalArgumentException,
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "The existing row must not have been touched",
+            this.index.locateByName("com/example/anything")
+                .join().orElseThrow(),
+            Matchers.contains("repo1")
+        );
+    }
+
+    /**
+     * LIKE wildcards in the caller-supplied prefix must be escaped so
+     * `foo%` doesn't accidentally wipe `foobar`. Without escape, the
+     * prefix `foo%` would match `foobar/...` as well.
+     */
+    @Test
+    void removePrefixEscapesLikeWildcards() throws Exception {
+        final Instant now = Instant.now();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "foo%literal/a", "foo",
+            "1", 1L, now, "u"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven", "repo1", "foobar/a", "foo",
+            "1", 1L, now, "u"
+        )).join();
+        final int deleted = this.index.removePrefix(
+            "repo1", "foo%literal/"
+        ).join();
+        MatcherAssert.assertThat(
+            "Only the literal 'foo%literal/' prefix must be removed",
+            deleted,
+            new IsEqual<>(1)
+        );
+        MatcherAssert.assertThat(
+            "foobar/ row (which LIKE would match with unescaped '%')"
+                + " must remain",
+            this.index.locateByName("foobar/a").join().orElseThrow(),
+            Matchers.contains("repo1")
+        );
+    }
+
+    /**
+     * Contract test: {@link DbArtifactIndex#toSortField(String)} accepts the
+     * wire format ("created_at") only — the enum-name form ("date") must NOT
+     * be accepted, otherwise the round-trip bug could be re-introduced by a
+     * future caller that passes {@code SortField.DATE.name().toLowerCase()}.
+     */
+    @Test
+    void toSortFieldRejectsEnumNameFormForDate() {
+        MatcherAssert.assertThat(
+            "'date' (enum-name form) must NOT map to DATE — only 'created_at' does",
+            DbArtifactIndex.toSortField("date"),
+            new IsEqual<>(DbArtifactIndex.SortField.RELEVANCE)
         );
     }
 }

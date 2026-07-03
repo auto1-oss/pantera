@@ -57,6 +57,14 @@ public final class IniFile {
     }
 
     /**
+     * Initializes object instance with .ini file contents as text.
+     * @param data Contents of the .ini file.
+     */
+    public IniFile(final String data) {
+        this(IniFile.loadEntries(data));
+    }
+
+    /**
      * Initializes object instance with Map of .ini entries.
      * @param entries Map of .ini file entries.
      */
@@ -70,7 +78,6 @@ public final class IniFile {
      * @return IniFile object with contents of the file.
      * @throws IOException In case some I/O error occurs.
      */
-    @SuppressWarnings("PMD.ProhibitPublicStaticMethods")
     public static IniFile loadIniFile(final Path path) throws IOException {
         return new IniFile(IniFile.loadEntries(new String(Files.readAllBytes(path))));
     }
@@ -207,7 +214,6 @@ public final class IniFile {
      * @return Loaded map with ini file data: section->(key->value).
      * @throws IOException In case some I/O error occurs.
      */
-    @SuppressWarnings("PMD.AssignmentInOperand")
     private static Map<String, Map<String, String>> loadEntries(final String data) {
         try (BufferedReader reader = new BufferedReader(new StringReader(data))) {
             final Map<String, Map<String, String>> entries = new HashMap<>();

@@ -22,7 +22,6 @@ import javax.annotation.concurrent.NotThreadSafe;
  * @since 1.0
  */
 @NotThreadSafe
-@SuppressWarnings("PMD.TooManyMethods")
 public final class BufAccumulator implements ReadableByteChannel, WritableByteChannel {
 
     /**
@@ -168,7 +167,6 @@ public final class BufAccumulator implements ReadableByteChannel, WritableByteCh
     }
 
     @Override
-    @SuppressWarnings("PMD.NullAssignment")
     public void close() {
         this.check();
         // assign to null means broken state, it's verified by `check` method.

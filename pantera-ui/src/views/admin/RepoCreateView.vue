@@ -82,15 +82,15 @@ async function handleCreate() {
               <Select
                 v-model="type"
                 :options="repoTypes"
-                optionLabel="label"
-                optionValue="value"
+                option-label="label"
+                option-value="value"
                 placeholder="Select type"
                 class="w-full"
               />
             </div>
 
             <div class="flex items-center gap-2 pt-2">
-              <Checkbox v-model="advancedMode" :binary="true" inputId="advMode" />
+              <Checkbox v-model="advancedMode" :binary="true" input-id="advMode" />
               <label for="advMode" class="text-sm text-gray-500 cursor-pointer">Advanced mode (raw JSON)</label>
             </div>
           </div>

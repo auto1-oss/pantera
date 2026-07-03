@@ -1,16 +1,61 @@
 name: Release
 
+# Manually triggered only — from the Actions tab or
+# `gh workflow run release.yml --ref <branch>`. The version is read from
+# the root POM of the dispatched ref (bump-version.sh is the single source
+# of truth), so there is no tag to prepare up front: the workflow creates
+# the v<version> tag, the GitHub release (artifacts + SHA256SUMS +
+# provenance attestations), and publishes the multi-arch image to GHCR.
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
+  packages: write
+  id-token: write
+  attestations: write
+
+# Never run two releases at once; a second dispatch queues, not cancels.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
+  version:
+    name: Resolve version + guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.pom.outputs.VERSION }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Read version from root POM
+        id: pom
+        run: |
+          VERSION=$(python3 -c "
+          import xml.etree.ElementTree as ET
+          ns = {'m': 'http://maven.apache.org/POM/4.0.0'}
+          print(ET.parse('pom.xml').getroot().find('m:version', ns).text)
+          ")
+          test -n "$VERSION"
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing v$VERSION from $GITHUB_REF_NAME @ $GITHUB_SHA"
+
+      - name: Refuse to re-release an existing tag
+        env:
+          VERSION: ${{ steps.pom.outputs.VERSION }}
+        run: |
+          if git ls-remote --exit-code origin "refs/tags/v${VERSION}" > /dev/null 2>&1; then
+            echo "ERROR: tag v${VERSION} already exists — run ./bump-version.sh first."
+            exit 1
+          fi
+          echo "Tag v${VERSION} is free"
+
   build-backend:
     name: Build Backend
+    needs: version
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -31,28 +76,14 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
         with:
           java-version: '21'
           distribution: 'temurin'
           cache: 'maven'
-
-      - name: Extract version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
-
-      - name: Verify version matches POM
-        run: |
-          POM_VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
-          TAG_VERSION="${{ steps.version.outputs.VERSION }}"
-          if [ "$POM_VERSION" != "$TAG_VERSION" ]; then
-            echo "ERROR: POM version ($POM_VERSION) does not match tag version ($TAG_VERSION)"
-            exit 1
-          fi
-          echo "Version verified: $POM_VERSION"
 
       - name: Build test Docker images
         run: cd test_images && ./build.sh
@@ -68,7 +99,7 @@ jobs:
 
       - name: Prepare release artifacts
         run: |
-          VERSION="${{ steps.version.outputs.VERSION }}"
+          VERSION="${{ needs.version.outputs.version }}"
           mkdir -p release-artifacts
 
           # Copy main JAR
@@ -81,7 +112,7 @@ jobs:
           cd ../..
 
       - name: Upload backend artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: backend-release
           path: release-artifacts/
@@ -89,6 +120,7 @@ jobs:
 
   build-ui:
     name: Build UI
+    needs: version
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -98,18 +130,14 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Set up Node.js 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: 'npm'
           cache-dependency-path: pantera-ui/package-lock.json
-
-      - name: Extract version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
 
       - name: Install dependencies
         run: npm ci
@@ -127,12 +155,12 @@ jobs:
 
       - name: Package UI artifact
         run: |
-          VERSION="${{ steps.version.outputs.VERSION }}"
+          VERSION="${{ needs.version.outputs.version }}"
           cd dist
           tar czf ../../pantera-ui-${VERSION}.tar.gz .
 
       - name: Upload UI artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ui-release
           path: pantera-ui-*.tar.gz
@@ -140,63 +168,60 @@ jobs:
 
   create-release:
     name: Create GitHub Release
-    needs: [build-backend, build-ui]
+    needs: [version, build-backend, build-ui]
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Extract version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Download backend artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: backend-release
           path: release/
 
       - name: Download UI artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ui-release
           path: release/
 
       - name: Generate release notes
-        id: notes
         run: |
-          VERSION="${{ steps.version.outputs.VERSION }}"
-          cat > release-notes.md << 'NOTES'
-          ## Pantera ${{ steps.version.outputs.VERSION }}
+          VERSION="${{ needs.version.outputs.version }}"
+          cat > release-notes.md << NOTES
+          ## Pantera ${VERSION}
 
           ### Release Artifacts
 
           | Artifact | Description |
           |----------|-------------|
-          | `pantera-${VERSION}.jar` | Main application JAR |
-          | `pantera-${VERSION}-dist.tar.gz` | Complete distribution (JAR + all dependencies) |
-          | `pantera-ui-${VERSION}.tar.gz` | Management UI (static files for nginx) |
+          | \`pantera-${VERSION}.jar\` | Main application JAR |
+          | \`pantera-${VERSION}-dist.tar.gz\` | Complete distribution (JAR + all dependencies) |
+          | \`pantera-ui-${VERSION}.tar.gz\` | Management UI (static files for nginx) |
 
           ### Quick Start
 
-          ```bash
+          \`\`\`bash
           # Extract distribution
           tar xzf pantera-${VERSION}-dist.tar.gz
 
           # Run
-          java -cp pantera-main-${VERSION}.jar:dependency/* \
-            com.auto1.pantera.VertxMain \
-            --config-file=pantera.yml \
+          java -cp pantera-main-${VERSION}.jar:dependency/* \\
+            com.auto1.pantera.VertxMain \\
+            --config-file=pantera.yml \\
             --port=8080 --api-port=8086
-          ```
+          \`\`\`
 
           ### Docker
 
-          ```bash
-          cd pantera-main/docker-compose
-          docker compose up -d
-          ```
+          \`\`\`bash
+          # Backend (amd64 + arm64)
+          docker pull ghcr.io/${{ github.repository }}:${VERSION}
+          # Management UI (nginx + static bundle)
+          docker pull ghcr.io/${{ github.repository }}-ui:${VERSION}
+          \`\`\`
 
           ### Requirements
 
@@ -205,14 +230,149 @@ jobs:
           - Valkey/Redis (optional, for HA)
           NOTES
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Generate SHA256SUMS
+        run: |
+          cd release
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Attest release binaries (build provenance)
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
-          name: Pantera v${{ steps.version.outputs.VERSION }}
-          body_path: release-notes.md
-          draft: false
-          prerelease: ${{ contains(steps.version.outputs.VERSION, 'RC') || contains(steps.version.outputs.VERSION, 'beta') || contains(steps.version.outputs.VERSION, 'alpha') }}
-          files: |
-            release/pantera-${{ steps.version.outputs.VERSION }}.jar
-            release/pantera-${{ steps.version.outputs.VERSION }}-dist.tar.gz
-            release/pantera-ui-${{ steps.version.outputs.VERSION }}.tar.gz
+          subject-path: |
+            release/pantera-${{ needs.version.outputs.version }}.jar
+            release/pantera-${{ needs.version.outputs.version }}-dist.tar.gz
+            release/pantera-ui-${{ needs.version.outputs.version }}.tar.gz
+
+      # gh CLI (preinstalled, GITHUB_TOKEN) instead of a third-party
+      # release action — org Actions policy allows GitHub-owned only.
+      # --target creates the v<version> tag at the dispatched commit.
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ needs.version.outputs.version }}"
+          PRE_FLAG=""
+          case "$VERSION" in
+            *RC*|*beta*|*alpha*) PRE_FLAG="--prerelease" ;;
+          esac
+          gh release create "v${VERSION}" \
+            --title "Pantera v${VERSION}" \
+            --target "${GITHUB_SHA}" \
+            --notes-file release-notes.md \
+            $PRE_FLAG \
+            "release/pantera-${VERSION}.jar" \
+            "release/pantera-${VERSION}-dist.tar.gz" \
+            "release/pantera-ui-${VERSION}.tar.gz" \
+            "release/SHA256SUMS"
+
+  publish-image:
+    name: Publish Docker image (GHCR)
+    needs: [version, build-backend]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Download backend artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: backend-release
+          path: release/
+
+      - name: Unpack dist into Docker build context
+        run: |
+          VERSION="${{ needs.version.outputs.version }}"
+          mkdir -p pantera-main/target
+          tar xzf release/pantera-${VERSION}-dist.tar.gz -C pantera-main/target
+          ls pantera-main/target/pantera-main-${VERSION}.jar pantera-main/target/dependency > /dev/null
+
+      # Raw buildx + preinstalled docker CLI instead of docker/* actions —
+      # org Actions policy allows GitHub-owned only. binfmt is a container
+      # image (not a `uses:` action), so it is not policy-gated.
+      - name: Set up QEMU + Buildx
+        run: |
+          docker run --privileged --rm tonistiigi/binfmt --install arm64
+          docker buildx create --use --name release-builder
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build and push (amd64 + arm64)
+        id: push
+        run: |
+          VERSION="${{ needs.version.outputs.version }}"
+          IMAGE="ghcr.io/${{ github.repository }}"
+          TAG_ARGS="-t ${IMAGE}:${VERSION}"
+          # :latest only for finals — pre-releases must not steal it.
+          case "$VERSION" in
+            *RC*|*beta*|*alpha*) ;;
+            *) TAG_ARGS="${TAG_ARGS} -t ${IMAGE}:latest" ;;
+          esac
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --push ${TAG_ARGS} \
+            --build-arg JAR_FILE=pantera-main-${VERSION}.jar \
+            --metadata-file /tmp/build-metadata.json \
+            -f pantera-main/Dockerfile pantera-main
+          DIGEST=$(python3 -c "import json;print(json.load(open('/tmp/build-metadata.json'))['containerimage.digest'])")
+          echo "digest=${DIGEST}" >> $GITHUB_OUTPUT
+
+      - name: Attest image provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+  publish-ui-image:
+    name: Publish UI Docker image (GHCR)
+    # Gated on build-ui so a UI test/lint failure blocks the image even
+    # though the image itself rebuilds from source (multi-stage) — the
+    # build stage runs once on the build platform, only the nginx
+    # runtime stage is per-arch.
+    needs: [version, build-ui]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # Raw buildx + preinstalled docker CLI instead of docker/* actions —
+      # org Actions policy allows GitHub-owned only.
+      - name: Set up QEMU + Buildx
+        run: |
+          docker run --privileged --rm tonistiigi/binfmt --install arm64
+          docker buildx create --use --name release-ui-builder
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build and push UI image (amd64 + arm64)
+        id: push
+        run: |
+          VERSION="${{ needs.version.outputs.version }}"
+          IMAGE="ghcr.io/${{ github.repository }}-ui"
+          TAG_ARGS="-t ${IMAGE}:${VERSION}"
+          # :latest only for finals — pre-releases must not steal it.
+          case "$VERSION" in
+            *RC*|*beta*|*alpha*) ;;
+            *) TAG_ARGS="${TAG_ARGS} -t ${IMAGE}:latest" ;;
+          esac
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --push ${TAG_ARGS} \
+            --metadata-file /tmp/ui-build-metadata.json \
+            -f pantera-ui/Dockerfile pantera-ui
+          DIGEST=$(python3 -c "import json;print(json.load(open('/tmp/ui-build-metadata.json'))['containerimage.digest'])")
+          echo "digest=${DIGEST}" >> $GITHUB_OUTPUT
+
+      - name: Attest UI image provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-name: ghcr.io/${{ github.repository }}-ui
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true

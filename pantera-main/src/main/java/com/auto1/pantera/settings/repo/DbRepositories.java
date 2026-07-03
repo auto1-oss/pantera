@@ -119,6 +119,7 @@ public final class DbRepositories implements Repositories {
                 .eventCategory("configuration")
                 .eventAction("config_load")
                 .eventOutcome("success")
+                .field("log.source", "application")
                 .log();
         } catch (final Exception ex) {
             EcsLogger.error("com.auto1.pantera.settings")
@@ -127,6 +128,7 @@ public final class DbRepositories implements Repositories {
                 .eventAction("config_load")
                 .eventOutcome("failure")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }
@@ -162,6 +164,7 @@ public final class DbRepositories implements Repositories {
                 .eventOutcome("failure")
                 .field("repository.name", name)
                 .error(ex)
+                .field("log.source", "application")
                 .log();
             return null;
         }

@@ -28,7 +28,6 @@ import java.util.UUID;
  * Source server for obtaining uploaded content by url. For using in test scope.
  * @since 0.4
  */
-@SuppressWarnings("PMD.ConstructorOnlyInitializesOrCallOtherConstructors")
 public final class SourceServer implements Closeable {
     /**
      * Free port for starting server.

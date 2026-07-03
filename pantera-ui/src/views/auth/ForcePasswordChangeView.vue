@@ -63,7 +63,7 @@ async function submit() {
       <template #content>
         <form class="space-y-4" @submit.prevent="submit">
           <PasswordComplexityForm
-            v-model:oldPassword="oldPassword"
+            v-model:old-password="oldPassword"
             v-model:password="newPassword"
             :username="auth.username"
             :disabled="submitting"

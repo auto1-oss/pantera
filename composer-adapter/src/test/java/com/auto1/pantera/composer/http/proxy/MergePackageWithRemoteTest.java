@@ -27,7 +27,6 @@ import java.util.Optional;
  * Test for {@link MergePackage.WithRemote}.
  * @since 0.4
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 final class MergePackageWithRemoteTest {
     @ParameterizedTest
     @ValueSource(strings = {"{}", "{\"packages\":{}}"})

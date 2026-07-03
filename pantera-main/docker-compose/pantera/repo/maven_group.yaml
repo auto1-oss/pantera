@@ -1,6 +1,10 @@
 repo:
   type: "maven-group"
   # Existing samples: mvn-local.yaml (name: mvn-local) and proxy.yml (name: proxy)
+  # v2.2.0: order is significant — sequential fanout (Nexus/JFrog style).
+  # Hosted (`maven`) first so locally-published artifacts shadow upstream
+  # collisions and answer immediately on a 404 without an upstream RTT.
+  # See docs/admin-guide/group-member-ordering.md.
   members:
-    - remotes
     - maven
+    - remotes

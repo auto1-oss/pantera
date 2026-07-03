@@ -22,7 +22,6 @@ import org.testcontainers.containers.BindMode;
  * Integration test for Composer repo.
  * @since 0.18
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 final class PhpComposerITCase {
     /**
      * Package for installation.

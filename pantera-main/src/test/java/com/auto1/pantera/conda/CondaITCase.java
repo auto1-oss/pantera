@@ -30,7 +30,6 @@ import org.junit.jupiter.params.provider.CsvSource;
  * @since 0.23
  */
 @EnabledOnOs({OS.LINUX, OS.MAC})
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class CondaITCase {
 
     /**

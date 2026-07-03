@@ -24,7 +24,6 @@ import org.llorllale.cactoos.matchers.Satisfies;
  *
  * @since 0.11
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public class RpmOptionsTest {
 
     @Test

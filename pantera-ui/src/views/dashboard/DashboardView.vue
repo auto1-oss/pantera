@@ -6,7 +6,6 @@ import { useAuthStore } from '@/stores/auth'
 import { repoTypeColor } from '@/utils/repoTypes'
 import RepoTypeBadge from '@/components/common/RepoTypeBadge.vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
-import Button from 'primevue/button'
 import type { DashboardStats } from '@/types'
 
 const config = useConfigStore()

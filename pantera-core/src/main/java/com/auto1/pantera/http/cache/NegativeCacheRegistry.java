@@ -10,108 +10,124 @@
  */
 package com.auto1.pantera.http.cache;
 
-import com.auto1.pantera.asto.Key;
-
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-
 /**
- * Global registry of all proxy NegativeCache instances.
- * Enables cross-adapter cache invalidation when artifacts are published.
+ * Global accessor for the single shared {@link NegativeCache} bean.
+ *
+ * <p>Set once at startup from {@code RepositorySlices}; adapters obtain it via
+ * {@link #sharedCache()}. Falls back to a default instance if the shared cache
+ * has not been initialized (used by tests and early startup).
  *
  * @since 1.20.13
  */
 public final class NegativeCacheRegistry {
 
-    /**
-     * Singleton instance.
-     */
     private static final NegativeCacheRegistry INSTANCE = new NegativeCacheRegistry();
 
-    /**
-     * Registered caches: key = "repoType:repoName".
-     */
-    private final ConcurrentMap<String, NegativeCache> caches;
+    private static final NegativeCache FALLBACK = createFallback();
 
-    /**
-     * Private ctor.
-     */
+    private volatile NegativeCache shared;
+
     private NegativeCacheRegistry() {
-        this.caches = new ConcurrentHashMap<>();
     }
 
-    /**
-     * Get singleton instance.
-     * @return Registry instance
-     */
     public static NegativeCacheRegistry instance() {
         return INSTANCE;
     }
 
     /**
-     * Register a negative cache instance.
-     * @param repoType Repository type
-     * @param repoName Repository name
-     * @param cache Negative cache instance
+     * Set the single shared NegativeCache bean. Called once at startup.
+     * @param cache Shared NegativeCache instance
      */
-    public void register(
-        final String repoType, final String repoName, final NegativeCache cache
-    ) {
-        this.caches.put(key(repoType, repoName), cache);
+    public void setSharedCache(final NegativeCache cache) {
+        this.shared = cache;
     }
 
     /**
-     * Unregister a negative cache instance.
-     * @param repoType Repository type
-     * @param repoName Repository name
+     * Check whether a shared cache has been explicitly set.
+     * @return true if the shared cache is initialized
      */
-    public void unregister(final String repoType, final String repoName) {
-        this.caches.remove(key(repoType, repoName));
+    public boolean isSharedCacheSet() {
+        return this.shared != null;
     }
 
     /**
-     * Invalidate a specific artifact path across ALL registered negative caches.
-     * Called when an artifact is published to ensure stale 404 entries are cleared.
+     * Get the shared NegativeCache bean. Returns a default fallback if the
+     * shared bean has not been initialized yet (tests, early startup).
+     * @return Shared NegativeCache
+     */
+    public NegativeCache sharedCache() {
+        final NegativeCache s = this.shared;
+        if (s != null) {
+            return s;
+        }
+        return FALLBACK;
+    }
+
+    /**
+     * Clear the shared reference (for testing).
+     */
+    public void clear() {
+        this.shared = null;
+    }
+
+    /**
+     * Invalidate every negative-cache entry whose canonical artifact name
+     * matches {@code artifactName} (exact or parent-prefix; see
+     * {@link NegativeCache#invalidateByArtifactName(String)}). Called by
+     * every adapter's upload / publish path so a 404 cached before the
+     * artifact existed does not keep shadowing it for the negative TTL.
      *
-     * @param artifactPath Artifact path to invalidate
-     */
-    public void invalidateGlobally(final String artifactPath) {
-        final Key artKey = new Key.From(artifactPath);
-        this.caches.values().forEach(cache -> cache.invalidate(artKey));
-    }
-
-    /**
-     * Invalidate a specific artifact path in a specific repository's negative cache.
+     * <p>The invalidation is published on {@code CacheInvalidationPubSub}
+     * (via {@link NegativeCache#invalidateByArtifactName}) so peer
+     * instances in a multi-node cluster also drop their L1 entries; the
+     * uploading instance's L1 + the shared L2 are cleared synchronously
+     * before this method returns.
      *
-     * @param repoType Repository type
-     * @param repoName Repository name
-     * @param artifactPath Artifact path to invalidate
+     * <p>Never throws — an exception in cache cleanup must not break the
+     * user-facing upload.
+     *
+     * @param repoType  Repository type (e.g. {@code "maven-proxy"},
+     *                  {@code "npm-hosted"}) for logging only.
+     * @param artifactName Canonical artifact name as the cache stores it
+     *                  (e.g. {@code "com/google/guava/guava"} for Maven,
+     *                  {@code "lodash"} for npm). {@code null} or empty
+     *                  → no-op.
+     * @return number of L1 entries invalidated on this instance (0 on null/empty input or on failure).
      */
-    public void invalidate(
-        final String repoType, final String repoName, final String artifactPath
-    ) {
-        final NegativeCache cache = this.caches.get(key(repoType, repoName));
-        if (cache != null) {
-            cache.invalidate(new Key.From(artifactPath));
+    public int invalidateAfterUpload(final String repoType, final String artifactName) {
+        if (artifactName == null || artifactName.isEmpty()) {
+            return 0;
+        }
+        try {
+            final int count = this.sharedCache().invalidateByArtifactName(artifactName);
+            if (count > 0) {
+                com.auto1.pantera.http.log.EcsLogger.info("com.auto1.pantera.cache")
+                    .message("Negative-cache invalidated after upload (n=" + count + ")")
+                    .eventCategory("database")
+                    .eventAction("neg_cache_invalidate_on_upload")
+                    .eventOutcome("success")
+                    .field("package.name", artifactName)
+                    .field("repository.type", repoType == null ? "unknown" : repoType)
+                    .field("log.source", "application")
+                    .log();
+            }
+            return count;
+        } catch (final RuntimeException ex) {
+            com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.cache")
+                .message("Negative-cache invalidation failed; entry will expire via TTL")
+                .eventCategory("database")
+                .eventAction("neg_cache_invalidate_on_upload")
+                .eventOutcome("failure")
+                .field("package.name", artifactName)
+                .field("repository.type", repoType == null ? "unknown" : repoType)
+                .error(ex)
+                .field("log.source", "application")
+                .log();
+            return 0;
         }
     }
 
-    /**
-     * Get the number of registered caches.
-     * @return Count of registered caches
-     */
-    public int size() {
-        return this.caches.size();
-    }
-
-    /**
-     * Clear all registrations (for testing).
-     */
-    public void clear() {
-        this.caches.clear();
-    }
-
-    private static String key(final String repoType, final String repoName) {
-        return repoType + ":" + repoName;
+    private static NegativeCache createFallback() {
+        return new NegativeCache(new com.auto1.pantera.cache.NegativeCacheConfig());
     }
 }

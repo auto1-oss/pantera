@@ -23,7 +23,6 @@ import org.junit.jupiter.api.Test;
  *
  * @since 0.4
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 @DockerClientSupport
 final class DockerAuthITCase {
 

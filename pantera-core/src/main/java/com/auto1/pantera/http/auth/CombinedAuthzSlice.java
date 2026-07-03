@@ -114,7 +114,7 @@ public final class CombinedAuthzSlice implements Slice {
     public CompletableFuture<Response> response(
         final RequestLine line, final Headers headers, final com.auto1.pantera.asto.Content body
     ) {
-        return this.authenticate(headers, line)
+        return this.authenticate(headers)
             .toCompletableFuture()
             .thenCompose(
                 result -> {
@@ -149,6 +149,7 @@ public final class CombinedAuthzSlice implements Slice {
                             EcsLogger.debug("com.auto1.pantera.http.auth")
                                 .message("Auth scheme does not provide challenge")
                                 .error(ex)
+                                .field("log.source", "application")
                                 .log();
                         }
                         if (this.control.allowed(result.user())) {
@@ -174,11 +175,10 @@ public final class CombinedAuthzSlice implements Slice {
      * Authenticate using either Basic or Bearer authentication.
      *
      * @param headers Request headers.
-     * @param line Request line.
      * @return Authentication result.
      */
     private CompletionStage<AuthScheme.Result> authenticate(
-        final Headers headers, final RequestLine line
+        final Headers headers
     ) {
         return new RqHeaders(headers, Authorization.NAME)
             .stream()

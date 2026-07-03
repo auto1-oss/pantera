@@ -11,6 +11,7 @@
 package com.auto1.pantera.http.headers;
 
 import com.auto1.pantera.http.Headers;
+import java.util.Locale;
 
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
@@ -30,7 +31,7 @@ public final class ContentType {
     }
 
     public static Header mime(String mime, Charset charset) {
-        return new Header(NAME, mime + "; charset=" + charset.displayName().toLowerCase());
+        return new Header(NAME, mime + "; charset=" + charset.displayName().toLowerCase(Locale.ROOT));
     }
 
     public static Header json() {

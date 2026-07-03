@@ -41,7 +41,6 @@ public final class MavenTimestamp {
      * Current timestamp in Maven metadata format.
      * @return Timestamp string, e.g. "20260213120000"
      */
-    @SuppressWarnings("PMD.ProhibitPublicStaticMethods")
     public static String now() {
         return FMT.format(Instant.now());
     }
@@ -51,7 +50,6 @@ public final class MavenTimestamp {
      * @param instant The instant to format
      * @return Timestamp string, e.g. "20260213120000"
      */
-    @SuppressWarnings("PMD.ProhibitPublicStaticMethods")
     public static String format(final Instant instant) {
         return FMT.format(instant);
     }

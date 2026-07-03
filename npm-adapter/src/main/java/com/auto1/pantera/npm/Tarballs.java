@@ -28,7 +28,6 @@ import javax.json.JsonPatchBuilder;
  * absolute URL: /@scope/package-name -&gt; http://host:port/base-path/@scope/package-name.
  * @since 0.6
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class Tarballs {
 
     /**
@@ -111,7 +110,7 @@ public final class Tarballs {
             // and extracts just @scope/pkg/-/@scope/pkg-1.0.0.tgz
             try {
                 tarballPath = new TgzRelativePath(tarballPath).relative();
-            } catch (final com.auto1.pantera.PanteraException ex) {
+            } catch (final com.auto1.pantera.PanteraException ex) { // NOPMD EmptyCatchBlock - intentional: unparseable tarball paths fall through and are used as-is to preserve backward compatibility
                 // If TgzRelativePath can't parse it, use as-is
                 // This preserves backward compatibility
             }

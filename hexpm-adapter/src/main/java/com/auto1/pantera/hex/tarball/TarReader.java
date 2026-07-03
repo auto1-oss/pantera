@@ -24,7 +24,6 @@ import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
  *
  * @since 0.1
  */
-@SuppressWarnings("PMD.AssignmentInOperand")
 public class TarReader {
     /**
      * File metadata.config.
@@ -66,7 +65,7 @@ public class TarReader {
                 TarArchiveInputStream tar = new TarArchiveInputStream(bis)
             ) {
                 TarArchiveEntry entry;
-                while ((entry = (TarArchiveEntry) tar.getNextEntry()) != null) {
+                while ((entry = tar.getNextEntry()) != null) {
                     if (name.equals(entry.getName())) {
                         final ByteArrayOutputStream entrycontent = new ByteArrayOutputStream();
                         int len;

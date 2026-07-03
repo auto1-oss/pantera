@@ -51,7 +51,7 @@ public abstract class FactoryLoader<F, A, C, O> {
      */
     protected FactoryLoader(final Class<A> annot, final Map<String, String> env) {
         this.annot = annot;
-        this.factories = this.init(env);
+        this.factories = this.init(env); // NOPMD ConstructorCallsOverridableMethod - by design: init() reads abstract defPackages()/scanPackagesEnv() supplied by subclasses (StorageFactory, MetadataParserFactory, ...) to discover annotated factory implementations
     }
 
     /**
@@ -118,6 +118,7 @@ public abstract class FactoryLoader<F, A, C, O> {
                                 .eventCategory("configuration")
                                 .eventAction("factory_init")
                                 .eventOutcome("success")
+                                .field("log.source", "application")
                                 .log();
                         } catch (final InstantiationException | IllegalAccessException
                             | InvocationTargetException | NoSuchMethodException err) {

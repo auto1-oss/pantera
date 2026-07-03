@@ -22,7 +22,6 @@ import org.junit.jupiter.api.Test;
  * Tests for {@link BenchmarkStorage#exists(Key)}.
  * @since 1.2.0
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 final class BenchmarkStorageExistsTest {
     @Test
     void existsWhenPresentInLocalAndNotDeleted() {

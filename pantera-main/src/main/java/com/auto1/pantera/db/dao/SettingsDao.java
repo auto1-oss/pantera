@@ -14,6 +14,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.io.StringReader;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -49,17 +50,42 @@ public final class SettingsDao {
         }
     }
 
+    /**
+     * Inserts a new setting only if the key is absent. Returns true if a new
+     * row was created; false if an existing row was kept untouched.
+     *
+     * <p>Differs from {@link #put}: that method upserts (overwrites). Use this
+     * for idempotent boot-time seeding where existing operator-tuned values
+     * must be preserved across restarts and across cluster nodes.
+     */
+    public boolean putIfAbsent(final String key, final JsonObject value, final String actor) {
+        final String sql = String.join(" ",
+            "INSERT INTO settings (key, value, updated_by) VALUES (?, ?::jsonb, ?)",
+            "ON CONFLICT (key) DO NOTHING"
+        );
+        try (Connection conn = this.source.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, key);
+            ps.setString(2, value.toString());
+            ps.setString(3, actor);
+            return ps.executeUpdate() == 1;
+        } catch (final Exception ex) {
+            throw new IllegalStateException("Failed to putIfAbsent setting: " + key, ex);
+        }
+    }
+
     public Optional<JsonObject> get(final String key) {
         try (Connection conn = this.source.getConnection();
              PreparedStatement ps = conn.prepareStatement(
                  "SELECT value FROM settings WHERE key = ?"
              )) {
             ps.setString(1, key);
-            final ResultSet rs = ps.executeQuery();
-            if (rs.next()) {
-                return Optional.of(
-                    Json.createReader(new StringReader(rs.getString("value"))).readObject()
-                );
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return Optional.of(
+                        Json.createReader(new StringReader(rs.getString("value"))).readObject()
+                    );
+                }
             }
             return Optional.empty();
         } catch (final Exception ex) {
@@ -72,8 +98,8 @@ public final class SettingsDao {
         try (Connection conn = this.source.getConnection();
              PreparedStatement ps = conn.prepareStatement(
                  "SELECT key, value FROM settings ORDER BY key"
-             )) {
-            final ResultSet rs = ps.executeQuery();
+             );
+             ResultSet rs = ps.executeQuery()) {
             while (rs.next()) {
                 result.put(
                     rs.getString("key"),
@@ -82,6 +108,26 @@ public final class SettingsDao {
             }
         } catch (final Exception ex) {
             throw new IllegalStateException("Failed to list settings", ex);
+        }
+        return result;
+    }
+
+    public Map<String, JsonObject> getChangedSince(final Instant since) {
+        final Map<String, JsonObject> result = new LinkedHashMap<>();
+        final String sql = "SELECT key, value FROM settings WHERE updated_at > ? ORDER BY key";
+        try (Connection conn = this.source.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setObject(1, java.sql.Timestamp.from(since));
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    result.put(
+                        rs.getString("key"),
+                        Json.createReader(new StringReader(rs.getString("value"))).readObject()
+                    );
+                }
+            }
+        } catch (final Exception ex) {
+            throw new IllegalStateException("Failed to query changed settings", ex);
         }
         return result;
     }

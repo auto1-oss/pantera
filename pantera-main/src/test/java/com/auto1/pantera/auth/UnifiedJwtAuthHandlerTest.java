@@ -28,7 +28,6 @@ import org.junit.jupiter.api.Test;
  * Tests for {@link UnifiedJwtAuthHandler}.
  * @since 2.1.0
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class UnifiedJwtAuthHandlerTest {
 
     /**

@@ -50,7 +50,6 @@ import org.quartz.impl.StdSchedulerFactory;
  * Test for PanteraScheduler.
  * @since 0.30
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class ScriptSchedulerTest {
 
     /**

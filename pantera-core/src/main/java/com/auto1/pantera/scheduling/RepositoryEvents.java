@@ -24,7 +24,7 @@ public final class RepositoryEvents {
     /**
      * Fallback version when none can be inferred.
      */
-    private static final String VERSION = "UNKNOWN";
+    public static final String VERSION = "UNKNOWN";
 
     /**
      * Repository type.
@@ -56,6 +56,35 @@ public final class RepositoryEvents {
     }
 
     /**
+     * Repository type this instance was constructed with.
+     * @return Repository type
+     */
+    public String repoType() {
+        return this.rtype;
+    }
+
+    /**
+     * Repository name this instance was constructed with.
+     * @return Repository name
+     */
+    public String repoName() {
+        return this.rname;
+    }
+
+    /**
+     * Format an artifact name from a storage key, using the same rule
+     * {@link #addUploadEventByKey} and {@link #addDeleteEventByKey} use
+     * internally. Exposed so callers (e.g. {@code SliceUpload}, {@code
+     * SliceDelete}) can build an audit-log call with the exact same {@code
+     * package.name} that will end up in the queued {@link ArtifactEvent}.
+     * @param key Storage key
+     * @return Formatted artifact name
+     */
+    public String artifactName(final Key key) {
+        return this.formatArtifactName(key);
+    }
+
+    /**
      * Adds event to queue. For file/file-proxy repos the version is inferred
      * from the artifact name; for all other types it falls back to "UNKNOWN".
      * @param key Artifact key
@@ -66,7 +95,7 @@ public final class RepositoryEvents {
         final Headers headers) {
         final String aname = formatArtifactName(key);
         final String version = detectFileVersion(this.rtype, aname);
-        this.queue.add(
+        this.queue.add( // ok: unbounded ConcurrentLinkedDeque (ArtifactEvent queue)
             new ArtifactEvent(
                 this.rtype, this.rname, new Login(headers).getValue(),
                 aname, version, size
@@ -81,7 +110,7 @@ public final class RepositoryEvents {
      */
     public void addDeleteEventByKey(final Key key) {
         final String aname = formatArtifactName(key);
-        this.queue.add(
+        this.queue.add( // ok: unbounded ConcurrentLinkedDeque (ArtifactEvent queue)
             new ArtifactEvent(this.rtype, this.rname, aname, RepositoryEvents.VERSION)
         );
     }

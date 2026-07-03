@@ -48,7 +48,6 @@ import java.io.UncheckedIOException;
 public final class YamlPolicyFactory implements PolicyFactory {
 
     @Override
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     public Policy<?> getPolicy(final Config config) {
         final Config sub = config.config("storage");
         long eviction;

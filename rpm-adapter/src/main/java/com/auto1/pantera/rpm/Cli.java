@@ -39,24 +39,17 @@ public final class Cli {
      *
      * @param args Arguments of command line
      */
-    @SuppressWarnings(
-        {
-            "PMD.SystemPrintln",
-            "PMD.AvoidCatchingGenericException",
-            "PMD.AvoidDuplicateLiterals"
-        }
-    )
     public static void main(final String... args) {
         final CliArguments cliargs = new CliArguments(args);
         final RepoConfig cnfg = cliargs.config();
         final NamingPolicy naming = cnfg.naming();
-        System.out.printf("RPM naming-policy=%s\n", naming);
+        System.out.printf("RPM naming-policy=%s\n", naming); // NOPMD SystemPrintln - CLI tool, stdout is the UI
         final Digest digest = cnfg.digest();
-        System.out.printf("RPM digest=%s\n", digest);
+        System.out.printf("RPM digest=%s\n", digest); // NOPMD SystemPrintln - CLI tool, stdout is the UI
         final boolean filelists = cnfg.filelists();
-        System.out.printf("RPM file-lists=%s\n", filelists);
+        System.out.printf("RPM file-lists=%s\n", filelists); // NOPMD SystemPrintln - CLI tool, stdout is the UI
         final Path repository = cliargs.repository();
-        System.out.printf("RPM repository=%s\n", repository);
+        System.out.printf("RPM repository=%s\n", repository); // NOPMD SystemPrintln - CLI tool, stdout is the UI
         try {
             new Cli(
                 new Rpm(
@@ -67,7 +60,7 @@ public final class Cli {
                 )
             ).run();
         } catch (final Exception err) {
-            System.err.printf("RPM failed: %s\n", err.getLocalizedMessage());
+            System.err.printf("RPM failed: %s\n", err.getLocalizedMessage()); // NOPMD SystemPrintln - CLI tool, stdout is the UI
             err.printStackTrace(System.err);
         }
     }

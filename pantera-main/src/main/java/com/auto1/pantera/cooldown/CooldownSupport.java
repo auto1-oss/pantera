@@ -10,10 +10,12 @@
  */
 package com.auto1.pantera.cooldown;
 
-import com.auto1.pantera.cooldown.NoopCooldownService;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownService;
+import com.auto1.pantera.cooldown.cache.CooldownCache;
+import com.auto1.pantera.cooldown.config.CooldownSettings;
+import com.auto1.pantera.cooldown.impl.NoopCooldownService;
 import com.auto1.pantera.cooldown.metadata.CooldownMetadataService;
-import com.auto1.pantera.cooldown.metadata.CooldownMetadataServiceImpl;
+import com.auto1.pantera.cooldown.metadata.MetadataFilterService;
 import com.auto1.pantera.cooldown.metadata.FilteredMetadataCache;
 import com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheConfig;
 import com.auto1.pantera.cooldown.metadata.NoopCooldownMetadataService;
@@ -87,8 +89,12 @@ public final class CooldownSupport {
     }
 
     public static CooldownService create(final Settings settings, final Executor executor) {
+        // Register all adapter bundles (parser/filter/rewriter/detector/responseFactory)
+        // into the global CooldownAdapterRegistry. This is idempotent and safe to call
+        // early -- the registry is a ConcurrentHashMap, and adapters are stateless.
+        CooldownWiring.registerAllAdapters();
         return settings.artifactsDatabase()
-            .map(ds -> {
+            .<CooldownService>map(ds -> {
                 // Load DB-persisted cooldown config and apply over YAML defaults.
                 // This ensures overrides saved via the UI survive container restarts.
                 loadDbCooldownSettings(settings.cooldown(), ds);
@@ -97,6 +103,7 @@ public final class CooldownSupport {
                     .eventCategory("configuration")
                     .eventAction("cooldown_init")
                     .eventOutcome("success")
+                    .field("log.source", "application")
                     .log();
                 final JdbcCooldownService service = new JdbcCooldownService(
                     settings.cooldown(),
@@ -105,7 +112,7 @@ public final class CooldownSupport {
                 );
                 // Initialize metrics from database (async) - loads actual active block counts
                 service.initializeMetrics();
-                return (CooldownService) service;
+                return service;
             })
             .orElseGet(() -> {
                 EcsLogger.warn("com.auto1.pantera.cooldown")
@@ -113,6 +120,7 @@ public final class CooldownSupport {
                     .eventCategory("configuration")
                     .eventAction("cooldown_init")
                     .eventOutcome("failure")
+                    .field("log.source", "application")
                     .log();
                 return NoopCooldownService.INSTANCE;
             });
@@ -151,9 +159,10 @@ public final class CooldownSupport {
                 ", L2OnlyMode=" + metadataCache.isL2OnlyMode())
             .eventCategory("configuration")
             .eventAction("metadata_service_init")
+            .field("log.source", "application")
             .log();
         
-        final CooldownMetadataServiceImpl metadataService = new CooldownMetadataServiceImpl(
+        final MetadataFilterService metadataService = new MetadataFilterService(
             cooldownService,
             settings.cooldown(),
             jdbc.cache(),
@@ -177,20 +186,76 @@ public final class CooldownSupport {
                     .eventOutcome("failure")
                     .field("package.name", artifact)
                     .error(err)
+                    .field("log.source", "application")
                     .log();
             }
+        });
+        // Wire envelope invalidation back into the cooldown service so block
+        // state changes invalidate cached filtered-metadata envelopes eagerly
+        // instead of letting them go stale for up to the L2 TTL (10 minutes).
+        // This covers new blocks (createBlockInDatabase), bulk mark
+        // (markAllBlocked), bulk unmark (unmarkAllBlockedPackage / ForRepo),
+        // and manual archive (archiveAndDelete via expire()).
+        jdbc.setEnvelopeInvalidator(metadataCache);
+        // Publish the cache via a registry so adapter upload paths can
+        // drop stale envelopes after publish without crossing module
+        // boundaries — mirrors NegativeCacheRegistry. The cache key
+        // shape (metadata:repoType:repoName:packageName) means an upload
+        // to local_b also invalidates envelopes for group_a containing
+        // local_b — the registry's invalidateAfterUpload helper handles
+        // the suffix match.
+        com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry.instance()
+            .setSharedCache(metadataCache);
+        // Cross-instance pub/sub fan-out wiring. Without this, peer L1
+        // entries only refresh on per-entry TTL, so an unblock on instance A
+        // takes effect on instance B as much as an hour later. Two channels:
+        // "cooldown-decisions" drops the per-version block decision L1 entry;
+        // "cooldown-envelope" drops the per-package filtered-metadata
+        // envelope L1 entry. Subscribers (registered below) call
+        // Cleanable#invalidate / #invalidateAll on the raw cache instances —
+        // those receive paths do NOT republish, so there's no loop.
+        settings.cacheInvalidationPubSub().ifPresent(bus -> {
+            jdbc.setCacheInvalidationPubSub(bus);
+            bus.register("cooldown-decisions", jdbc.cache());
+            bus.register("cooldown-envelope", metadataCache);
+            EcsLogger.info("com.auto1.pantera.cooldown")
+                .message("Wired cooldown pub/sub fan-out (channels: cooldown-decisions, cooldown-envelope)")
+                .eventCategory("configuration")
+                .eventAction("cooldown_pubsub_wire")
+                .eventOutcome("success")
+                .field("log.source", "application")
+                .log();
         });
         return metadataService;
     }
 
     /**
+     * Extract the CooldownCache from a CooldownService, if it is backed
+     * by JdbcCooldownService. Returns null for NoopCooldownService.
+     *
+     * @param cooldownService The cooldown service
+     * @return CooldownCache or null
+     */
+    public static CooldownCache extractCache(final CooldownService cooldownService) {
+        if (cooldownService instanceof JdbcCooldownService) {
+            return ((JdbcCooldownService) cooldownService).cache();
+        }
+        return null;
+    }
+
+    /**
      * Load cooldown settings from DB and apply to in-memory CooldownSettings.
      * DB settings (saved via the UI) take precedence over YAML defaults.
+     *
+     * <p>Public so the boot wiring's {@code RuntimeSettingsCache} listener can
+     * re-run the full reload on every {@code cooldown} settings write — the
+     * generic {@code PUT /api/v1/settings/cooldown} path only persists to the
+     * DB and never touches the in-memory snapshot.
+     *
      * @param csettings In-memory cooldown settings to update
      * @param ds Database data source
      */
-    @SuppressWarnings("PMD.CognitiveComplexity")
-    private static void loadDbCooldownSettings(
+    public static void loadDbCooldownSettings(
         final CooldownSettings csettings,
         final javax.sql.DataSource ds
     ) {
@@ -221,12 +286,33 @@ public final class CooldownSupport {
                     );
                 }
             }
-            csettings.update(enabled, minAge, overrides);
+            final int historyRetentionDays = cfg.getInt(
+                "history_retention_days", csettings.historyRetentionDays()
+            );
+            final int cleanupBatchLimit = cfg.getInt(
+                "cleanup_batch_limit", csettings.cleanupBatchLimit()
+            );
+            // If out-of-range values are present in the blob, update() throws and
+            // the outer catch logs it as a load failure — YAML defaults apply.
+            csettings.update(
+                enabled, minAge, overrides,
+                historyRetentionDays, cleanupBatchLimit
+            );
+            // Rehydrate SNAPSHOT-policy state. Without these three branches,
+            // values written via the PUT endpoint survive in-memory until the
+            // next restart and then silently disappear. update() above wipes
+            // and rebuilds the maps, so the SNAPSHOT branches must run AFTER.
+            applyDbSnapshotPolicy(csettings, cfg);
+            applyDbRepoNames(csettings, cfg);
+            applyDbLegacyRepoNameSnapshots(csettings, cfg);
             EcsLogger.info("com.auto1.pantera.cooldown")
                 .message("Loaded cooldown settings from database (enabled: "
-                    + enabled + ", overrides: " + overrides.size() + ")")
+                    + enabled + ", overrides: " + overrides.size()
+                    + ", history_retention_days: " + historyRetentionDays
+                    + ", cleanup_batch_limit: " + cleanupBatchLimit + ")")
                 .eventCategory("configuration")
                 .eventAction("cooldown_db_load")
+                .field("log.source", "application")
                 .log();
         } catch (final Exception ex) {
             EcsLogger.warn("com.auto1.pantera.cooldown")
@@ -235,8 +321,111 @@ public final class CooldownSupport {
                 .eventCategory("configuration")
                 .eventAction("cooldown_db_load")
                 .eventOutcome("failure")
+                .error(ex)
+                .field("log.source", "application")
                 .log();
         }
+    }
+
+    /**
+     * Rehydrate the global SNAPSHOT policy from the DB blob's top-level
+     * {@code snapshots} object. Each sub-field is optional — missing fields
+     * propagate as "inherit" so the per-tier defaults apply.
+     */
+    private static void applyDbSnapshotPolicy(
+        final CooldownSettings csettings, final JsonObject cfg
+    ) {
+        if (!cfg.containsKey("snapshots")) {
+            return;
+        }
+        final JsonObject snap = cfg.getJsonObject("snapshots");
+        if (snap == null) {
+            return;
+        }
+        csettings.setSnapshotPolicy(decodeSnapshotPolicy(snap));
+    }
+
+    /**
+     * Rehydrate the unified per-repo block. Each entry may carry a cooldown
+     * override (enabled/age), a SNAPSHOT override (snapshots), or both. The
+     * shape mirrors the wire format used by {@code GET/PUT /api/v1/cooldown/config}.
+     */
+    private static void applyDbRepoNames(
+        final CooldownSettings csettings, final JsonObject cfg
+    ) {
+        if (!cfg.containsKey("repo_names")) {
+            return;
+        }
+        final JsonObject repoNames = cfg.getJsonObject("repo_names");
+        if (repoNames == null) {
+            return;
+        }
+        for (final String repoName : repoNames.keySet()) {
+            final JsonObject body = repoNames.getJsonObject(repoName);
+            if (body == null) {
+                continue;
+            }
+            if (body.containsKey("enabled") || body.containsKey("minimum_allowed_age")) {
+                final boolean repoEnabled = body.getBoolean(
+                    "enabled", csettings.enabled()
+                );
+                final Duration repoAge = body.containsKey("minimum_allowed_age")
+                    ? parseDuration(body.getString("minimum_allowed_age"))
+                    : csettings.minimumAllowedAge();
+                csettings.setRepoNameOverride(repoName, repoEnabled, repoAge);
+            }
+            if (body.containsKey("snapshots")) {
+                csettings.setRepoNameSnapshotOverride(
+                    repoName, decodeSnapshotPolicy(body.getJsonObject("snapshots"))
+                );
+            }
+        }
+    }
+
+    /**
+     * Back-compat path: older PUT blobs may have written a separate
+     * top-level {@code repo_name_snapshots} map. Parse that too so a
+     * pre-upgrade blob still rehydrates correctly.
+     */
+    private static void applyDbLegacyRepoNameSnapshots(
+        final CooldownSettings csettings, final JsonObject cfg
+    ) {
+        if (!cfg.containsKey("repo_name_snapshots")) {
+            return;
+        }
+        final JsonObject legacy = cfg.getJsonObject("repo_name_snapshots");
+        if (legacy == null) {
+            return;
+        }
+        for (final String repoName : legacy.keySet()) {
+            final JsonObject snap = legacy.getJsonObject(repoName);
+            if (snap == null) {
+                continue;
+            }
+            csettings.setRepoNameSnapshotOverride(repoName, decodeSnapshotPolicy(snap));
+        }
+    }
+
+    /**
+     * Decode a SNAPSHOT policy JSON sub-document. Missing fields propagate as
+     * "inherit" so per-tier defaults apply. Mirrors
+     * {@code CooldownHandler#decodeSnapshotPolicy} — kept duplicated here so
+     * the cooldown module does not pull a compile-time dependency on the
+     * pantera-main API layer.
+     */
+    private static CooldownSettings.SnapshotPolicy decodeSnapshotPolicy(final JsonObject json) {
+        if (json == null) {
+            return CooldownSettings.SnapshotPolicy.inherit();
+        }
+        final Boolean snapEnabled;
+        if (json.containsKey("enabled")) {
+            snapEnabled = Boolean.valueOf(json.getBoolean("enabled"));
+        } else {
+            snapEnabled = null;
+        }
+        final Duration snapAge = json.containsKey("minimum_allowed_age")
+            ? parseDuration(json.getString("minimum_allowed_age")) : null;
+        return CooldownSettings.SnapshotPolicy.of(snapEnabled, snapAge);
     }
 
     /**

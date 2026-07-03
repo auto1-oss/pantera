@@ -19,6 +19,7 @@ import com.auto1.pantera.cache.CacheConfig;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import java.time.Duration;
+import java.util.Locale;
 import java.util.Optional;
 
 /**
@@ -138,13 +139,13 @@ public class GuavaFiltersCache implements FiltersCache {
      * @param cause Eviction cause
      */
     private void onEviction(
-        final String key,
-        final Optional<Filters> filters,
+        final String key, // NOPMD UnusedFormalParameter - Caffeine RemovalListener<K,V> contract: receives key/value/cause; only cause is consumed
+        final Optional<Filters> filters, // NOPMD UnusedFormalParameter - Caffeine RemovalListener<K,V> contract: receives key/value/cause; only cause is consumed
         final com.github.benmanes.caffeine.cache.RemovalCause cause
     ) {
         if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
             com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
-                .recordCacheEviction("filters", "l1", cause.toString().toLowerCase());
+                .recordCacheEviction("filters", "l1", cause.toString().toLowerCase(Locale.ROOT));
         }
     }
 }

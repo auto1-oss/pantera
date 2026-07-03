@@ -187,7 +187,6 @@ public final class AuthTest {
         );
     }
 
-    @SuppressWarnings("PMD.UnusedPrivateMethod")
     private static Stream<Arguments> setups() {
         return Stream.of(new Basic(), new Bearer()).flatMap(AuthTest::setups);
     }

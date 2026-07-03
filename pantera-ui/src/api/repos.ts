@@ -1,6 +1,6 @@
 import { getApiClient } from './client'
 import type {
-  PaginatedResponse, CursorResponse, Repository, RepoMember, RepoListItem,
+  PaginatedResponse, CursorResponse, RepoMember, RepoListItem,
   TreeEntry, ArtifactDetail, PullInstructions, StorageAlias,
 } from '@/types'
 
@@ -43,7 +43,11 @@ export async function getMembers(name: string): Promise<RepoMember[]> {
 }
 
 export async function getTree(name: string, params: {
-  path?: string; limit?: number; marker?: string
+  path?: string
+  limit?: number
+  marker?: string
+  sort?: 'name' | 'date' | 'size'
+  sort_dir?: 'asc' | 'desc'
 } = {}, signal?: AbortSignal): Promise<CursorResponse<TreeEntry>> {
   const { data } = await getApiClient().get(`/repositories/${name}/tree`, { params, signal })
   return data
@@ -94,4 +98,42 @@ export async function unblockArtifact(name: string, body: Record<string, unknown
 
 export async function unblockAll(name: string): Promise<void> {
   await getApiClient().post(`/repositories/${name}/cooldown/unblock-all`)
+}
+
+// ---------------------------------------------------------------------------
+// Bulk anonymous-access policy
+// ---------------------------------------------------------------------------
+
+export interface BulkAccessPolicyRequest {
+  selector: {
+    type: 'hosted' | 'proxy' | 'group' | 'all'
+    names?: string[]
+  }
+  anonymous_read?: boolean
+  anonymous_write?: boolean
+}
+
+export interface BulkAccessPolicyResult {
+  updated: Array<{
+    name: string
+    previous: { anonymous_read: boolean; anonymous_write: boolean }
+    current:  { anonymous_read: boolean; anonymous_write: boolean }
+  }>
+  skipped: Array<{ name: string; reason: string }>
+}
+
+/**
+ * POST /api/v1/repositories/access-policy/bulk
+ * Applies an anonymous-access patch to a selector-scoped set of repos.
+ * At least one of anonymous_read / anonymous_write must be present;
+ * omitting a flag leaves it unchanged on each matched repo.
+ */
+export async function bulkUpdateAccessPolicy(
+  body: BulkAccessPolicyRequest,
+): Promise<BulkAccessPolicyResult> {
+  const { data } = await getApiClient().post<BulkAccessPolicyResult>(
+    '/repositories/access-policy/bulk',
+    body,
+  )
+  return data
 }

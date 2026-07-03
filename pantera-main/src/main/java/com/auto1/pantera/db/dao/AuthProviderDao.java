@@ -159,8 +159,8 @@ public final class AuthProviderDao {
     private List<JsonObject> query(final String sql) {
         final List<JsonObject> result = new ArrayList<>();
         try (Connection conn = this.source.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-            final ResultSet rs = ps.executeQuery();
+             PreparedStatement ps = conn.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
             while (rs.next()) {
                 result.add(Json.createObjectBuilder()
                     .add("id", rs.getInt("id"))

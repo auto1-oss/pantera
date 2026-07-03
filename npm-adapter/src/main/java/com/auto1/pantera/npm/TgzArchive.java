@@ -120,7 +120,6 @@ public final class TgzArchive {
          * Read json from tgz input stream.
          * @return Json object from stream
          */
-        @SuppressWarnings("PMD.AssignmentInOperand")
         public JsonObject json() {
             try (
                 InputStream source = this.input;

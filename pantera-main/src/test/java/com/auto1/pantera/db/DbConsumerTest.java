@@ -32,12 +32,6 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  * Record consumer.
  * @since 0.31
  */
-@SuppressWarnings(
-    {
-        "PMD.AvoidDuplicateLiterals", "PMD.TooManyMethods", "PMD.CheckResultSet",
-        "PMD.CloseResource", "PMD.UseUnderscoresInNumericLiterals"
-    }
-)
 @Testcontainers
 class DbConsumerTest {
 

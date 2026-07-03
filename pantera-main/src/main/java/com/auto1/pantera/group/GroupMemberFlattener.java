@@ -111,6 +111,7 @@ public final class GroupMemberFlattener {
             .eventAction("group_flatten")
             .eventOutcome("success")
             .field("repository.name", groupName)
+            .field("log.source", "application")
             .log();
 
         return deduplicated;
@@ -148,6 +149,7 @@ public final class GroupMemberFlattener {
                 .eventCategory("web")
                 .eventAction("group_flatten_recursive")
                 .field("repository.name", repoName)
+                .field("log.source", "application")
                 .log();
 
             // Mark as visited
@@ -168,6 +170,7 @@ public final class GroupMemberFlattener {
                 .eventCategory("web")
                 .eventAction("group_add_leaf")
                 .field("repository.name", repoName)
+                .field("log.source", "application")
                 .log();
             result.add(repoName);
         }
@@ -193,6 +196,7 @@ public final class GroupMemberFlattener {
             .eventAction("group_flatten_deduplicate")
             .eventOutcome("success")
             .field("repository.name", groupName)
+            .field("log.source", "application")
             .log();
 
         return new ArrayList<>(unique);

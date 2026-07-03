@@ -10,7 +10,7 @@
  */
 package com.auto1.pantera.cooldown;
 
-import com.auto1.pantera.cooldown.CooldownReason;
+import com.auto1.pantera.cooldown.api.CooldownReason;
 import java.time.Instant;
 import java.util.Optional;
 
@@ -29,6 +29,7 @@ public final class DbBlockRecord {
     private final Optional<Instant> unblockedAt;
     private final Optional<String> unblockedBy;
     private final Optional<String> installedBy;
+    private final Optional<Instant> releaseDate;
 
     DbBlockRecord(
         final long id,
@@ -43,7 +44,8 @@ public final class DbBlockRecord {
         final Instant blockedUntil,
         final Optional<Instant> unblockedAt,
         final Optional<String> unblockedBy,
-        final Optional<String> installedBy
+        final Optional<String> installedBy,
+        final Optional<Instant> releaseDate
     ) {
         this.id = id;
         this.repoType = repoType;
@@ -58,6 +60,7 @@ public final class DbBlockRecord {
         this.unblockedAt = unblockedAt;
         this.unblockedBy = unblockedBy;
         this.installedBy = installedBy;
+        this.releaseDate = releaseDate;
     }
 
     public long id() {
@@ -110,5 +113,9 @@ public final class DbBlockRecord {
 
     public Optional<String> installedBy() {
         return this.installedBy;
+    }
+
+    public Optional<Instant> releaseDate() {
+        return this.releaseDate;
     }
 }

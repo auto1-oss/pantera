@@ -1,6 +1,5 @@
 repo:
   type: "maven-group"
-  # Existing samples: mvn-local.yaml (name: mvn-local) and proxy.yml (name: proxy)
   members:
-    - groovy
     - maven_proxy
+    - groovy

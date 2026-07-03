@@ -86,7 +86,6 @@ public class NextSafeAvailablePort {
      * @param port The port to check for availability
      * @return If the ports is available
      */
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.OnlyOneReturn"})
     private static boolean available(final int port) {
         try (ServerSocket sersock = new ServerSocket(port);
             DatagramSocket dgrmsock = new DatagramSocket(port)
@@ -98,6 +97,7 @@ public class NextSafeAvailablePort {
             EcsLogger.debug("com.auto1.pantera.npm")
                 .message("Port not available")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
         return false;

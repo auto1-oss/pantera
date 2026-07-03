@@ -53,7 +53,6 @@ public final class UnderLockOperation<T> {
      * @param storage Storage.
      * @return Operation result.
      */
-    @SuppressWarnings("PMD.AvoidCatchingThrowable")
     public CompletionStage<T> perform(final Storage storage) {
         return this.lock.acquire().thenCompose(
             nothing -> {

@@ -209,7 +209,7 @@ public final class EcsLogger {
         }
 
         // Create MapMessage with all fields for structured JSON output
-        final MapMessage mapMessage = new MapMessage(this.fields);
+        final MapMessage<?, Object> mapMessage = new MapMessage<>(this.fields);
 
         // Set the message text
         final String logMessage = this.message != null ? this.message : "Storage event";

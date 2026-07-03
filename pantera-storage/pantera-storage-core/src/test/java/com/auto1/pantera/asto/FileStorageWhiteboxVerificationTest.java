@@ -21,7 +21,6 @@ import org.junit.jupiter.api.io.TempDir;
  *
  * @since 1.14.0
  */
-@SuppressWarnings("PMD.TestClassWithoutTestCases")
 public final class FileStorageWhiteboxVerificationTest extends StorageWhiteboxVerification {
 
     /**

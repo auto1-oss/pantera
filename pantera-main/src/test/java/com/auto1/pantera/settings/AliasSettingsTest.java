@@ -27,7 +27,6 @@ import org.junit.jupiter.params.provider.ValueSource;
  * Test for {@link AliasSettings}.
  * @since 0.28
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class AliasSettingsTest {
 
     /**

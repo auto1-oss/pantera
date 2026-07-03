@@ -93,7 +93,6 @@ public final class ByteBufferTokenizer implements Closeable {
      *
      * @param chunk Next chunk
      */
-    @SuppressWarnings("PMD.AssignmentInOperand")
     public void push(final ByteBuffer chunk) {
         if (this.acc.write(chunk) <= 0) {
             return;
@@ -135,7 +134,6 @@ public final class ByteBufferTokenizer implements Closeable {
     }
 
     @Override
-    @SuppressWarnings("PMD.NullAssignment")
     public void close() {
         this.flush();
         this.acc.close();

@@ -41,6 +41,12 @@ import org.slf4j.LoggerFactory;
  *       existing packages that do not yet have one</li>
  * </ul>
  *
+ * <p>Multiple distinct error sites in this CLI driver — each mode
+ * (npm / maven / pypi-metadata / repo-scan) has its own failure
+ * pathways and they are reported separately so the operator can see
+ * exactly which sub-step failed. See audit/aggressive-items.md
+ * (Tier 4 B7 duplicate-error bucket).
+ *
  * @since 1.20.13
  */
 public final class BackfillCli {
@@ -118,7 +124,6 @@ public final class BackfillCli {
      * @param args Command-line arguments
      * @return Exit code
      */
-    @SuppressWarnings({"PMD.CyclomaticComplexity", "PMD.NPathComplexity"})
     static int run(final String... args) {
         final Options options = buildOptions();
         for (final String arg : args) {
@@ -131,7 +136,12 @@ public final class BackfillCli {
         try {
             cmd = new DefaultParser().parse(options, args);
         } catch (final ParseException ex) {
-            LOG.error("Failed to parse arguments: {}", ex.getMessage());
+            EcsLogger.error("com.auto1.pantera.backfill")
+                .message(String.format("Failed to parse arguments: %s", ex.getMessage()))
+                .field("log.source", "application")
+                .field("event.outcome", "failure")
+                .error(ex)
+                .log();
             printHelp(options);
             return 1;
         }
@@ -152,25 +162,41 @@ public final class BackfillCli {
             cmd.hasOption("type") || cmd.hasOption("path")
                 || cmd.hasOption("repo-name");
         if (hasBulkFlags && hasSingleFlags) {
-            LOG.error(
-                "--config-dir/--storage-root cannot be combined with "
-                    + "--type/--path/--repo-name"
-            );
+            EcsLogger.error("com.auto1.pantera.backfill")
+                .message(
+                    "--config-dir/--storage-root cannot be combined with "
+                        + "--type/--path/--repo-name"
+                )
+                .field("log.source", "application")
+                .field("event.outcome", "failure")
+                .log();
             return 1;
         }
         if (cmd.hasOption("config-dir") && !cmd.hasOption("storage-root")) {
-            LOG.error("--config-dir requires --storage-root");
+            EcsLogger.error("com.auto1.pantera.backfill")
+                .message("--config-dir requires --storage-root")
+                .field("log.source", "application")
+                .field("event.outcome", "failure")
+                .log();
             return 1;
         }
         if (cmd.hasOption("storage-root") && !cmd.hasOption("config-dir")) {
-            LOG.error("--storage-root requires --config-dir");
+            EcsLogger.error("com.auto1.pantera.backfill")
+                .message("--storage-root requires --config-dir")
+                .field("log.source", "application")
+                .field("event.outcome", "failure")
+                .log();
             return 1;
         }
         if (!hasBulkFlags && !hasSingleFlags) {
-            LOG.error(
-                "Either --type/--path/--repo-name or "
-                    + "--config-dir/--storage-root must be provided"
-            );
+            EcsLogger.error("com.auto1.pantera.backfill")
+                .message(
+                    "Either --type/--path/--repo-name or "
+                        + "--config-dir/--storage-root must be provided"
+                )
+                .field("log.source", "application")
+                .field("event.outcome", "failure")
+                .log();
             printHelp(options);
             return 1;
         }
@@ -222,7 +248,6 @@ public final class BackfillCli {
      * @return Exit code
      * @checkstyle ParameterNumberCheck (15 lines)
      */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
     private static int runBulk(
         final String configDirStr,
         final String storageRootStr,
@@ -237,15 +262,31 @@ public final class BackfillCli {
         final Path configDir = Paths.get(configDirStr);
         final Path storageRoot = Paths.get(storageRootStr);
         if (!Files.isDirectory(configDir)) {
-            LOG.error("--config-dir is not a directory: {}", configDirStr);
+            EcsLogger.error("com.auto1.pantera.backfill")
+                .message(String.format(
+                    "--config-dir is not a directory: %s", configDirStr
+                ))
+                .field("log.source", "application")
+                .field("event.outcome", "failure")
+                .log();
             return 1;
         }
         if (!Files.isDirectory(storageRoot)) {
-            LOG.error("--storage-root is not a directory: {}", storageRootStr);
+            EcsLogger.error("com.auto1.pantera.backfill")
+                .message(String.format(
+                    "--storage-root is not a directory: %s", storageRootStr
+                ))
+                .field("log.source", "application")
+                .field("event.outcome", "failure")
+                .log();
             return 1;
         }
         if (!dryRun && (dbUrl == null || dbUrl.isEmpty())) {
-            LOG.error("--db-url is required unless --dry-run is set");
+            EcsLogger.error("com.auto1.pantera.backfill")
+                .message("--db-url is required unless --dry-run is set")
+                .field("log.source", "application")
+                .field("event.outcome", "failure")
+                .log();
             return 1;
         }
         DataSource dataSource = null;
@@ -258,7 +299,12 @@ public final class BackfillCli {
                 owner, batchSize, dryRun, logInterval, System.err
             ).run();
         } catch (final IOException ex) {
-            LOG.error("Bulk backfill failed: {}", ex.getMessage(), ex);
+            EcsLogger.error("com.auto1.pantera.backfill")
+                .message(String.format("Bulk backfill failed: %s", ex.getMessage()))
+                .field("log.source", "application")
+                .field("event.outcome", "failure")
+                .error(ex)
+                .log();
             return 1;
         } finally {
             closeDataSource(dataSource);
@@ -276,8 +322,12 @@ public final class BackfillCli {
         final String dbUrl = cmd.getOptionValue("db-url");
         final boolean dryRun = cmd.hasOption("dry-run");
         if (dbUrl == null || dbUrl.isEmpty()) {
-            LOG.error("--db-url is required for --mode version-repair "
-                + "(reads rows even in --dry-run mode)");
+            EcsLogger.error("com.auto1.pantera.backfill")
+                .message("--db-url is required for --mode version-repair "
+                    + "(reads rows even in --dry-run mode)")
+                .field("log.source", "application")
+                .field("event.outcome", "failure")
+                .log();
             return 1;
         }
         final String table = cmd.getOptionValue("table", "artifacts");
@@ -311,20 +361,30 @@ public final class BackfillCli {
         final boolean dryRun
     ) {
         if (storageRootStr == null || storageRootStr.isEmpty()) {
-            LOG.error(
-                "--storage-root is required for --mode pypi-metadata"
-            );
+            EcsLogger.error("com.auto1.pantera.backfill")
+                .message("--storage-root is required for --mode pypi-metadata")
+                .field("log.source", "application")
+                .field("event.outcome", "failure")
+                .log();
             return 1;
         }
         if (reposStr == null || reposStr.isEmpty()) {
-            LOG.error("--repos is required for --mode pypi-metadata");
+            EcsLogger.error("com.auto1.pantera.backfill")
+                .message("--repos is required for --mode pypi-metadata")
+                .field("log.source", "application")
+                .field("event.outcome", "failure")
+                .log();
             return 1;
         }
         final Path storageRoot = Paths.get(storageRootStr);
         if (!Files.isDirectory(storageRoot)) {
-            LOG.error(
-                "--storage-root is not a directory: {}", storageRootStr
-            );
+            EcsLogger.error("com.auto1.pantera.backfill")
+                .message(String.format(
+                    "--storage-root is not a directory: %s", storageRootStr
+                ))
+                .field("log.source", "application")
+                .field("event.outcome", "failure")
+                .log();
             return 1;
         }
         final String[] repos = reposStr.split(",");
@@ -353,10 +413,15 @@ public final class BackfillCli {
                     repoName, stats[0], stats[1], stats[2]
                 );
             } catch (final IOException ex) {
-                LOG.error(
-                    "PyPI metadata backfill failed for repo {}: {}",
-                    repoName, ex.getMessage(), ex
-                );
+                EcsLogger.error("com.auto1.pantera.backfill")
+                    .message(String.format(
+                        "PyPI metadata backfill failed for repo %s: %s",
+                        repoName, ex.getMessage()
+                    ))
+                    .field("log.source", "application")
+                    .field("event.outcome", "failure")
+                    .error(ex)
+                    .log();
                 return 1;
             }
         }
@@ -384,7 +449,6 @@ public final class BackfillCli {
      * @return Exit code
      * @checkstyle ParameterNumberCheck (15 lines)
      */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
     private static int runSingle(
         final String type,
         final String pathStr,
@@ -398,29 +462,47 @@ public final class BackfillCli {
         final int logInterval
     ) {
         if (type == null || pathStr == null || repoName == null) {
-            LOG.error(
-                "--type, --path, and --repo-name are all required in single-repo mode"
-            );
+            EcsLogger.error("com.auto1.pantera.backfill")
+                .message(
+                    "--type, --path, and --repo-name are all required in "
+                        + "single-repo mode"
+                )
+                .field("log.source", "application")
+                .field("event.outcome", "failure")
+                .log();
             return 1;
         }
         final Path root = Paths.get(pathStr);
         if (!Files.exists(root) || !Files.isDirectory(root)) {
-            LOG.error(
-                "Path does not exist or is not a directory: {}", pathStr
-            );
+            EcsLogger.error("com.auto1.pantera.backfill")
+                .message(String.format(
+                    "Path does not exist or is not a directory: %s", pathStr
+                ))
+                .field("log.source", "application")
+                .field("event.outcome", "failure")
+                .log();
             return 1;
         }
         if (!dryRun && (dbUrl == null || dbUrl.isEmpty())) {
-            LOG.error("--db-url is required unless --dry-run is set");
+            EcsLogger.error("com.auto1.pantera.backfill")
+                .message("--db-url is required unless --dry-run is set")
+                .field("log.source", "application")
+                .field("event.outcome", "failure")
+                .log();
             return 1;
         }
         final Scanner scanner;
         try {
             scanner = ScannerFactory.create(type);
         } catch (final IllegalArgumentException ex) {
-            LOG.error(
-                "Invalid scanner type '{}': {}", type, ex.getMessage()
-            );
+            EcsLogger.error("com.auto1.pantera.backfill")
+                .message(String.format(
+                    "Invalid scanner type '%s': %s", type, ex.getMessage()
+                ))
+                .field("log.source", "application")
+                .field("event.outcome", "failure")
+                .error(ex)
+                .log();
             return 1;
         }
         LOG.info(
@@ -450,7 +532,12 @@ public final class BackfillCli {
                     });
             }
         } catch (final Exception ex) {
-            LOG.error("Backfill failed: {}", ex.getMessage(), ex);
+            EcsLogger.error("com.auto1.pantera.backfill")
+                .message(String.format("Backfill failed: %s", ex.getMessage()))
+                .field("log.source", "application")
+                .field("event.outcome", "failure")
+                .error(ex)
+                .log();
             return 1;
         } finally {
             closeDataSource(dataSource);

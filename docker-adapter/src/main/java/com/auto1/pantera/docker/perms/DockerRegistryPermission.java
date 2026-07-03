@@ -105,8 +105,8 @@ public final class DockerRegistryPermission extends Permission {
      * @return True when implies
      */
     private boolean impliesIgnoreMask(final DockerRegistryPermission perm) {
-        return this.getName().equals(DockerRepositoryPermission.WILDCARD) ||
-                this.getName().equalsIgnoreCase(perm.getName());
+        return DockerRepositoryPermission.WILDCARD.equals(this.getName())
+                || this.getName().equalsIgnoreCase(perm.getName());
     }
 
     /**

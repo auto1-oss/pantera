@@ -27,10 +27,10 @@ SOFTWARE.
   <parent>
     <groupId>com.auto1.pantera</groupId>
     <artifactId>pantera</artifactId>
-    <version>2.1.4</version>
+    <version>2.2.0</version>
   </parent>
   <artifactId>http-client</artifactId>
-  <version>2.1.4</version>
+  <version>2.2.0</version>
   <name>Pantera HTTP client</name>
   <url>https://github.com/auto1-oss/pantera/tree/master/http-client</url>
   <properties>
@@ -40,7 +40,7 @@ SOFTWARE.
     <dependency>
       <groupId>com.auto1.pantera</groupId>
       <artifactId>pantera-core</artifactId>
-      <version>2.1.4</version>
+      <version>2.2.0</version>
     </dependency>
     <!-- Micrometer for Jetty metrics -->
     <dependency>
@@ -58,6 +58,21 @@ SOFTWARE.
     <dependency>
       <groupId>org.eclipse.jetty</groupId>
       <artifactId>jetty-http</artifactId>
+      <version>${jetty.version}</version>
+    </dependency>
+    <!--
+      HTTP/2 client dependencies retained for transitive Jetty plumbing only;
+      Pantera's outbound transport is pure HTTP/1.1. The HTTP/2 deps may be
+      pruned once Jetty's HTTP module tree is fully decoupled.
+    -->
+    <dependency>
+      <groupId>org.eclipse.jetty.http2</groupId>
+      <artifactId>jetty-http2-client</artifactId>
+      <version>${jetty.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.eclipse.jetty.http2</groupId>
+      <artifactId>jetty-http2-client-transport</artifactId>
       <version>${jetty.version}</version>
     </dependency>
     <dependency>
@@ -101,7 +116,7 @@ SOFTWARE.
     <dependency>
       <groupId>com.auto1.pantera</groupId>
       <artifactId>vertx-server</artifactId>
-      <version>2.1.4</version>
+      <version>2.2.0</version>
       <scope>test</scope>
     </dependency>
   </dependencies>

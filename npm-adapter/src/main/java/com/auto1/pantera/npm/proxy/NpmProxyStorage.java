@@ -35,6 +35,30 @@ public interface NpmProxyStorage {
     Completable save(NpmAsset asset);
 
     /**
+     * Phase 12 — stream-through cache write.
+     *
+     * <p>Returns an asset whose {@code dataPublisher} simultaneously delivers
+     * bytes to the caller (typically the HTTP response body) AND accumulates
+     * a copy that is persisted to storage on stream completion. This
+     * eliminates the {@code save → reload} round-trip on the cold-cache
+     * critical path: the client receives the first byte as soon as the
+     * upstream remote delivers it instead of waiting for the entire tarball
+     * to be written and then re-read from disk.
+     *
+     * <p>Default implementation falls back to the legacy
+     * {@code save(asset).andThen(getAsset(path))} chain so test
+     * implementations and adapters that do not yet support stream-through
+     * keep working unchanged.
+     *
+     * @param asset Asset whose data publisher should be tee'd
+     * @return Asset with a tee'd data publisher; the meta save is fired
+     *     immediately, the data save is fired on stream completion
+     */
+    default Maybe<NpmAsset> saveStreamThrough(final NpmAsset asset) {
+        return this.save(asset).andThen(this.getAsset(asset.path()));
+    }
+
+    /**
      * Retrieve NPM package by name.
      * @param name Package name
      * @return NPM package or empty

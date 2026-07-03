@@ -10,9 +10,10 @@
  */
 package com.auto1.pantera.cooldown.metadata;
 
+import com.auto1.pantera.asto.misc.Cleanable;
 import com.auto1.pantera.cache.ValkeyConnection;
 import com.auto1.pantera.cooldown.metrics.CooldownMetrics;
-import com.auto1.pantera.http.trace.MdcPropagation;
+
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.Expiry;
@@ -61,12 +62,13 @@ import java.util.concurrent.TimeUnit;
  *
  * @since 1.0
  */
-public final class FilteredMetadataCache {
+public class FilteredMetadataCache implements Cleanable<String> {
 
     /**
      * Default L1 cache size (number of packages).
+     * Configurable via {@code PANTERA_COOLDOWN_METADATA_L1_SIZE} env var.
      */
-    private static final int DEFAULT_L1_SIZE = 5_000;
+    private static final int DEFAULT_L1_SIZE = resolveDefaultL1Size();
 
     /**
      * Default max TTL when no versions are blocked (24 hours).
@@ -78,6 +80,12 @@ public final class FilteredMetadataCache {
      * Minimum TTL to avoid excessive cache churn (1 minute).
      */
     private static final Duration MIN_TTL = Duration.ofMinutes(1);
+
+    /**
+     * Grace period after logical TTL expiry during which the stale entry
+     * remains in Caffeine to serve stale-while-revalidate responses (H3).
+     */
+    private static final Duration SWR_GRACE = Duration.ofMinutes(5);
 
     /**
      * L1 cache (in-memory) with per-entry dynamic TTL.
@@ -226,23 +234,51 @@ public final class FilteredMetadataCache {
         final String packageName,
         final java.util.function.Supplier<CompletableFuture<CacheEntry>> loader
     ) {
+        return this.getEntry(repoType, repoName, packageName, loader)
+            .thenApply(CacheEntry::data);
+    }
+
+    /**
+     * Same lookup as {@link #get} but resolving the whole {@link CacheEntry},
+     * so the caller can read {@link CacheEntry#blockedVersions()} and emit an
+     * accurate {@code artifact_resolution} audit record for cache-hit serves
+     * — the bytes alone cannot tell "nothing was filtered" apart from
+     * "versions were filtered when this entry was computed".
+     *
+     * @param repoType Repository type
+     * @param repoName Repository name
+     * @param packageName Package name
+     * @param loader Function to compute filtered metadata on cache miss
+     * @return CompletableFuture with the cache entry (L1, promoted-L2, or computed)
+     */
+    public CompletableFuture<CacheEntry> getEntry(
+        final String repoType,
+        final String repoName,
+        final String packageName,
+        final java.util.function.Supplier<CompletableFuture<CacheEntry>> loader
+    ) {
         final String key = cacheKey(repoType, repoName, packageName);
 
         // L1 check - skip in L2-only mode
         if (!this.l2OnlyMode && this.l1Cache != null) {
             final CacheEntry l1Cached = this.l1Cache.getIfPresent(key);
             if (l1Cached != null) {
-                // Check if entry has expired (blockedUntil has passed)
                 if (l1Cached.isExpired()) {
-                    // Entry expired - invalidate and reload
-                    this.l1Cache.invalidate(key);
-                } else {
+                    // Stale-while-revalidate (H3): return stale bytes immediately
+                    // and trigger background re-evaluation so the next caller gets
+                    // fresh data without waiting.
+                    this.triggerBackgroundRevalidation(key, loader);
                     this.l1Hits++;
                     if (CooldownMetrics.isAvailable()) {
-                        CooldownMetrics.getInstance().recordCacheHit("l1");
+                        CooldownMetrics.getInstance().recordCacheHit("l1_swr");
                     }
-                    return CompletableFuture.completedFuture(l1Cached.data());
+                    return CompletableFuture.completedFuture(l1Cached);
                 }
+                this.l1Hits++;
+                if (CooldownMetrics.isAvailable()) {
+                    CooldownMetrics.getInstance().recordCacheHit("l1");
+                }
+                return CompletableFuture.completedFuture(l1Cached);
             }
         }
 
@@ -251,20 +287,22 @@ public final class FilteredMetadataCache {
             return this.l2Connection.async().get(key)
                 .toCompletableFuture()
                 .orTimeout(100, TimeUnit.MILLISECONDS)
-                .exceptionally(MdcPropagation.<Throwable, byte[]>withMdcFunction(err -> null))
-                .thenCompose(MdcPropagation.withMdc(l2Bytes -> {
+                .exceptionally(err -> null)
+                .thenCompose(l2Bytes -> {
                     if (l2Bytes != null) {
                         this.l2Hits++;
                         if (CooldownMetrics.isAvailable()) {
                             CooldownMetrics.getInstance().recordCacheHit("l2");
                         }
-                        // Promote to L1 with remaining TTL from L2 (skip in L2-only mode)
+                        // L2 stores raw bytes only — TTL and blocked-version
+                        // detail do not survive the round trip, so the
+                        // promoted entry carries null blockedVersions
+                        // ("unknown") and L1 TTL.
+                        final CacheEntry entry = new CacheEntry(l2Bytes, Optional.empty(), this.l1Ttl);
                         if (!this.l2OnlyMode && this.l1Cache != null) {
-                            // Note: L2 doesn't store TTL info, so use L1 TTL for promoted entries
-                            final CacheEntry entry = new CacheEntry(l2Bytes, Optional.empty(), this.l1Ttl);
                             this.l1Cache.put(key, entry);
                         }
-                        return CompletableFuture.completedFuture(l2Bytes);
+                        return CompletableFuture.completedFuture(entry);
                     }
                     // Miss - load and cache
                     this.misses++;
@@ -272,7 +310,7 @@ public final class FilteredMetadataCache {
                         CooldownMetrics.getInstance().recordCacheMiss();
                     }
                     return this.loadAndCache(key, loader);
-                }));
+                });
         }
 
         // Single-tier: load and cache
@@ -284,46 +322,67 @@ public final class FilteredMetadataCache {
     }
 
     /**
+     * Trigger background re-evaluation for a stale cache entry (SWR — H3).
+     * Only fires if no revalidation is already in progress for this key.
+     * The caller has already returned stale bytes to the client.
+     */
+    private void triggerBackgroundRevalidation(
+        final String key,
+        final java.util.function.Supplier<CompletableFuture<CacheEntry>> loader
+    ) {
+        if (this.inflight.containsKey(key)) {
+            // Already revalidating — skip duplicate
+            return;
+        }
+        // Fire-and-forget: loadAndCache will update L1 + L2 on completion
+        this.loadAndCache(key, loader);
+    }
+
+    /**
      * Load metadata and cache in both tiers with dynamic TTL.
      * Uses single-flight pattern to prevent stampede.
+     * Registers in inflight BEFORE attaching whenComplete to avoid the
+     * same race condition fixed in CooldownCache (H5).
      */
-    private CompletableFuture<byte[]> loadAndCache(
+    private CompletableFuture<CacheEntry> loadAndCache(
         final String key,
         final java.util.function.Supplier<CompletableFuture<CacheEntry>> loader
     ) {
         // Check if already loading (stampede prevention)
         final CompletableFuture<CacheEntry> existing = this.inflight.get(key);
         if (existing != null) {
-            return existing.thenApply(CacheEntry::data);
+            return existing;
         }
 
-        // Start loading
-        final CompletableFuture<CacheEntry> future = loader.get()
-            .whenComplete(MdcPropagation.withMdcBiConsumer((entry, error) -> {
-                this.inflight.remove(key);
-                if (error == null && entry != null) {
-                    // Cache in L1 with L1 TTL (skip in L2-only mode)
-                    if (!this.l2OnlyMode && this.l1Cache != null) {
-                        // Wrap entry with L1 TTL for proper expiration
-                        final CacheEntry l1Entry = new CacheEntry(
-                            entry.data(),
-                            entry.earliestBlockedUntil(),
-                            this.l1Ttl
-                        );
-                        this.l1Cache.put(key, l1Entry);
-                    }
-                    // Cache in L2 with L2 TTL (use configured l2Ttl, capped by blockedUntil if present)
-                    if (this.l2Connection != null) {
-                        final long ttlSeconds = this.calculateL2Ttl(entry);
-                        if (ttlSeconds > 0) {
-                            this.l2Connection.async().setex(key, ttlSeconds, entry.data());
-                        }
+        // Start loading -- register in inflight BEFORE whenComplete
+        final CompletableFuture<CacheEntry> future = loader.get();
+        this.inflight.put(key, future);
+        future.whenComplete((entry, error) -> {
+            this.inflight.remove(key);
+            if (error == null && entry != null) {
+                // Cache in L1 with L1 TTL (skip in L2-only mode)
+                if (!this.l2OnlyMode && this.l1Cache != null) {
+                    // Wrap entry with L1 TTL for proper expiration, preserving
+                    // the blocked-version detail for cache-hit audit records.
+                    final CacheEntry l1Entry = new CacheEntry(
+                        entry.data(),
+                        entry.earliestBlockedUntil(),
+                        this.l1Ttl,
+                        entry.blockedVersions()
+                    );
+                    this.l1Cache.put(key, l1Entry);
+                }
+                // Cache in L2 with L2 TTL (use configured l2Ttl, capped by blockedUntil if present)
+                if (this.l2Connection != null) {
+                    final long ttlSeconds = this.calculateL2Ttl(entry);
+                    if (ttlSeconds > 0) {
+                        this.l2Connection.async().setex(key, ttlSeconds, entry.data());
                     }
                 }
-            }));
+            }
+        });
 
-        this.inflight.put(key, future);
-        return future.thenApply(CacheEntry::data);
+        return future;
     }
 
     /**
@@ -376,16 +435,65 @@ public final class FilteredMetadataCache {
         // L2: Pattern delete (expensive but rare)
         if (this.l2Connection != null) {
             this.l2Connection.async().keys(prefix + "*")
-                .thenAccept(MdcPropagation.withMdcConsumer(keys -> {
+                .thenAccept(keys -> {
                     if (keys != null && !keys.isEmpty()) {
                         this.l2Connection.async().del(keys.toArray(new String[0]));
                     }
-                }));
+                });
         }
     }
 
     /**
-     * Clear all caches.
+     * Invalidate every cached envelope whose package name matches
+     * {@code packageName}, across every {@code (repoType, repoName)}
+     * combination currently in cache.
+     *
+     * <p>Called by adapter upload paths after a successful publish so
+     * any envelope cached for a group that contains the uploaded-to
+     * local repo (or any other place this package's metadata is
+     * filtered) is dropped — without this, the next metadata request
+     * keeps serving the pre-upload version list for up to the static
+     * cache TTL (default 30 days when no blocks are active).
+     *
+     * <p>Match shape: the cache key is
+     * {@code metadata:{repoType}:{repoName}:{packageName}}, so we
+     * check {@code key.endsWith(":" + packageName)} — exact suffix
+     * match on the package-name segment. Package names that don't
+     * contain colons (the universal case in Pantera-supported
+     * registries) round-trip cleanly.
+     *
+     * @param packageName Canonical package name as the cache stores it.
+     * @return number of L1 entries invalidated (0 if disabled / nothing matched).
+     */
+    public int invalidateByPackageName(final String packageName) {
+        if (packageName == null || packageName.isEmpty()) {
+            return 0;
+        }
+        final String suffix = ":" + packageName;
+        final java.util.List<String> matched = new java.util.ArrayList<>();
+        if (this.l1Cache != null) {
+            for (final String key : this.l1Cache.asMap().keySet()) {
+                if (key.endsWith(suffix)) {
+                    matched.add(key);
+                }
+            }
+            for (final String key : matched) {
+                this.l1Cache.invalidate(key);
+                this.inflight.remove(key);
+            }
+        }
+        if (this.l2Connection != null && !matched.isEmpty()) {
+            this.l2Connection.async().del(matched.toArray(new String[0]));
+        }
+        return matched.size();
+    }
+
+    /**
+     * Clear all caches (L1 and L2). Used on global policy changes such as
+     * cooldown settings updates — without the L2 wipe, peer L1 caches and
+     * the local L1 after restart re-hydrate from stale L2 entries that
+     * predate the policy change. The L2 pattern delete is expensive but
+     * runs at most once per settings update.
      */
     public void clear() {
         if (this.l1Cache != null) {
@@ -395,6 +503,14 @@ public final class FilteredMetadataCache {
         this.l1Hits = 0;
         this.l2Hits = 0;
         this.misses = 0;
+        if (this.l2Connection != null) {
+            this.l2Connection.async().keys("metadata:*")
+                .thenAccept(keys -> {
+                    if (keys != null && !keys.isEmpty()) {
+                        this.l2Connection.async().del(keys.toArray(new String[0]));
+                    }
+                });
+        }
     }
 
     /**
@@ -459,13 +575,57 @@ public final class FilteredMetadataCache {
 
     /**
      * Generate cache key.
+     *
+     * <p>Exposed so {@code JdbcCooldownService} can pass the canonical key
+     * shape into {@link com.auto1.pantera.cache.CacheInvalidationPubSub}
+     * when broadcasting cross-instance invalidations — the subscriber side
+     * calls {@link #invalidate(String)} with the same shape so the L1
+     * envelope entry is dropped on every peer.</p>
+     *
+     * @param repoType Repository type
+     * @param repoName Repository name
+     * @param packageName Package name
+     * @return Canonical L1/L2 cache key
      */
-    private String cacheKey(
+    public static String cacheKey(
         final String repoType,
         final String repoName,
         final String packageName
     ) {
         return String.format("metadata:%s:%s:%s", repoType, repoName, packageName);
+    }
+
+    /**
+     * Drop a single L1 entry by its full canonical key. Receive-side
+     * handler for cross-instance pub/sub fan-out: the originator already
+     * cleared its own L1+L2; peers only need to drop their local L1.
+     *
+     * <p><b>Does not publish and does not delete from L2.</b> Re-publishing
+     * here would create an invalidation loop; the L2 deletion was already
+     * issued by the originator's local mutator path. Double-deleting L2 is
+     * harmless but wasteful, so we skip it.</p>
+     *
+     * @param key Canonical cache key produced by {@link #cacheKey}
+     */
+    @Override
+    public void invalidate(final String key) {
+        if (this.l1Cache != null) {
+            this.l1Cache.invalidate(key);
+        }
+        this.inflight.remove(key);
+    }
+
+    /**
+     * Drop all L1 entries. Receive-side handler for cross-instance pub/sub
+     * fan-out of {@code unblockAll}. Does not publish and does not touch
+     * L2 — see {@link #invalidate(String)} for the rationale.
+     */
+    @Override
+    public void invalidateAll() {
+        if (this.l1Cache != null) {
+            this.l1Cache.invalidateAll();
+        }
+        this.inflight.clear();
     }
 
     /**
@@ -500,7 +660,17 @@ public final class FilteredMetadataCache {
         private final Instant createdAt;
 
         /**
-         * Constructor.
+         * Versions hidden from this listing by cooldown at compute time.
+         * Carried L1-only so a cache-hit serve can still emit an accurate
+         * {@code artifact_resolution} audit record (who saw the listing and
+         * which versions were filtered). {@code null} means "detail unknown"
+         * — the entry was promoted from L2 (Valkey stores raw bytes only)
+         * and the blocked-version list did not survive the round trip.
+         */
+        private final java.util.Set<String> blockedVersions;
+
+        /**
+         * Constructor (blocked-version detail unknown).
          *
          * @param data Filtered metadata bytes
          * @param earliestBlockedUntil Earliest blockedUntil among blocked versions (empty if none blocked)
@@ -511,10 +681,31 @@ public final class FilteredMetadataCache {
             final Optional<Instant> earliestBlockedUntil,
             final Duration maxTtl
         ) {
-            this.data = data;
+            this(data, earliestBlockedUntil, maxTtl, null);
+        }
+
+        /**
+         * Constructor.
+         *
+         * @param data Filtered metadata bytes
+         * @param earliestBlockedUntil Earliest blockedUntil among blocked versions (empty if none blocked)
+         * @param maxTtl Maximum TTL when no versions are blocked
+         * @param blockedVersions Versions hidden by cooldown at compute time;
+         *                        empty set when nothing was filtered; {@code null}
+         *                        when the detail is unknown (L2 promotion)
+         */
+        public CacheEntry(
+            final byte[] data,
+            final Optional<Instant> earliestBlockedUntil,
+            final Duration maxTtl,
+            final java.util.Set<String> blockedVersions
+        ) {
+            this.data = data; // NOPMD ArrayIsStoredDirectly - immutable cache value; defensive copy of filtered metadata bytes is wasteful
             this.earliestBlockedUntil = earliestBlockedUntil;
             this.maxTtl = maxTtl;
             this.createdAt = Instant.now();
+            this.blockedVersions = blockedVersions == null
+                ? null : java.util.Set.copyOf(blockedVersions);
         }
 
         /**
@@ -523,7 +714,7 @@ public final class FilteredMetadataCache {
          * @return Metadata bytes
          */
         public byte[] data() {
-            return this.data;
+            return this.data; // NOPMD MethodReturnsInternalArray - immutable cache value; mirrors the matching ArrayIsStoredDirectly suppression on the ctor; callers treat this as read-only
         }
 
         /**
@@ -533,6 +724,17 @@ public final class FilteredMetadataCache {
          */
         public Optional<Instant> earliestBlockedUntil() {
             return this.earliestBlockedUntil;
+        }
+
+        /**
+         * Versions hidden by cooldown when this entry was computed.
+         *
+         * @return Blocked versions (empty set = nothing filtered), or
+         *         {@code null} when the detail is unknown (entry promoted
+         *         from L2, which stores raw bytes only)
+         */
+        public java.util.Set<String> blockedVersions() {
+            return this.blockedVersions;
         }
 
         /**
@@ -551,31 +753,49 @@ public final class FilteredMetadataCache {
 
         /**
          * Calculate TTL in nanoseconds for Caffeine expiry.
-         * If versions are blocked: TTL = earliestBlockedUntil - now
-         * If no versions blocked: TTL = maxTtl (release dates don't change)
+         * Includes a SWR grace period so the entry stays in Caffeine
+         * beyond its logical expiry, allowing stale-while-revalidate.
+         * Use {@link #isExpired()} for logical expiry checks.
          *
-         * @return TTL in nanoseconds
+         * @return TTL in nanoseconds (logical TTL + SWR grace)
          */
         public long ttlNanos() {
             if (this.earliestBlockedUntil.isPresent()) {
                 final Duration remaining = Duration.between(Instant.now(), this.earliestBlockedUntil.get());
                 if (remaining.isNegative() || remaining.isZero()) {
-                    // Already expired - use minimum TTL
-                    return MIN_TTL.toNanos();
+                    // Already logically expired - keep alive for SWR grace
+                    return SWR_GRACE.toNanos();
                 }
-                return remaining.toNanos();
+                return remaining.plus(SWR_GRACE).toNanos();
             }
-            // No blocked versions - cache for max TTL
-            return this.maxTtl.toNanos();
+            // No blocked versions - cache for max TTL + grace
+            return this.maxTtl.plus(SWR_GRACE).toNanos();
         }
 
         /**
-         * Calculate TTL in seconds for L2 cache.
+         * Calculate logical TTL in seconds for L2 cache (excludes SWR grace).
          *
          * @return TTL in seconds
          */
         public long ttlSeconds() {
-            return Math.max(MIN_TTL.getSeconds(), this.ttlNanos() / 1_000_000_000L);
+            return Math.max(MIN_TTL.getSeconds(), this.logicalTtlNanos() / 1_000_000_000L);
+        }
+
+        /**
+         * Logical TTL in nanoseconds (without SWR grace period).
+         * Used for L2 TTL calculation and tests.
+         *
+         * @return Logical TTL in nanoseconds
+         */
+        private long logicalTtlNanos() {
+            if (this.earliestBlockedUntil.isPresent()) {
+                final Duration remaining = Duration.between(Instant.now(), this.earliestBlockedUntil.get());
+                if (remaining.isNegative() || remaining.isZero()) {
+                    return MIN_TTL.toNanos();
+                }
+                return remaining.toNanos();
+            }
+            return this.maxTtl.toNanos();
         }
 
         /**
@@ -587,12 +807,14 @@ public final class FilteredMetadataCache {
          * @return Cache entry
          */
         public static CacheEntry noBlockedVersions(final byte[] data, final Duration maxTtl) {
-            return new CacheEntry(data, Optional.empty(), maxTtl);
+            return new CacheEntry(data, Optional.empty(), maxTtl, java.util.Set.of());
         }
 
         /**
-         * Create entry for metadata with blocked versions.
-         * TTL is set to expire when the earliest block expires.
+         * Create entry for metadata with blocked versions, detail unknown.
+         * Back-compat variant of
+         * {@link #withBlockedVersions(byte[], Instant, Duration, java.util.Set)}
+         * for callers that do not track which versions were hidden.
          *
          * @param data Filtered metadata bytes
          * @param earliestBlockedUntil When the earliest block expires
@@ -604,7 +826,47 @@ public final class FilteredMetadataCache {
             final Instant earliestBlockedUntil,
             final Duration maxTtl
         ) {
-            return new CacheEntry(data, Optional.of(earliestBlockedUntil), maxTtl);
+            return new CacheEntry(data, Optional.of(earliestBlockedUntil), maxTtl, null);
         }
+
+        /**
+         * Create entry for metadata with blocked versions.
+         * TTL is set to expire when the earliest block expires.
+         *
+         * @param data Filtered metadata bytes
+         * @param earliestBlockedUntil When the earliest block expires
+         * @param maxTtl Maximum TTL (used as fallback)
+         * @param blockedVersions Versions hidden from the listing by cooldown
+         * @return Cache entry
+         */
+        public static CacheEntry withBlockedVersions(
+            final byte[] data,
+            final Instant earliestBlockedUntil,
+            final Duration maxTtl,
+            final java.util.Set<String> blockedVersions
+        ) {
+            return new CacheEntry(data, Optional.of(earliestBlockedUntil), maxTtl, blockedVersions);
+        }
+    }
+
+    /**
+     * Resolve default L1 size from env var or fall back to 50,000 (H4).
+     * Configurable via {@code PANTERA_COOLDOWN_METADATA_L1_SIZE}.
+     *
+     * @return L1 size
+     */
+    private static int resolveDefaultL1Size() {
+        final String env = System.getenv("PANTERA_COOLDOWN_METADATA_L1_SIZE");
+        if (env != null && !env.isEmpty()) {
+            try {
+                final int parsed = Integer.parseInt(env.trim());
+                if (parsed > 0) {
+                    return parsed;
+                }
+            } catch (final NumberFormatException ignored) {
+                // fall through to default
+            }
+        }
+        return 50_000;
     }
 }

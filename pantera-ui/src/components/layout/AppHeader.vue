@@ -107,9 +107,9 @@ function closeTokenDialog() {
       icon="pi pi-bars"
       text
       rounded
-      @click="emit('toggleSidebar')"
       class="mr-3"
       aria-label="Toggle sidebar"
+      @click="emit('toggleSidebar')"
     />
     <div class="flex items-center gap-2.5">
       <img src="/pantera-128.png" alt="Pantera" class="w-8 h-8 rounded-lg" />
@@ -124,12 +124,12 @@ function closeTokenDialog() {
         <Button
           :label="auth.username"
           icon="pi pi-chevron-down"
-          iconPos="right"
+          icon-pos="right"
           text
           size="small"
           class="!text-gray-600 dark:!text-gray-300"
-          @click="toggleMenu"
           aria-haspopup="true"
+          @click="toggleMenu"
         />
         <Menu ref="userMenu" :model="menuItems" :popup="true" />
       </div>
@@ -154,8 +154,8 @@ function closeTokenDialog() {
           <Select
             v-model="tokenExpiryDays"
             :options="expiryOptions"
-            optionLabel="label"
-            optionValue="value"
+            option-label="label"
+            option-value="value"
             class="w-full"
           />
         </div>
@@ -170,8 +170,8 @@ function closeTokenDialog() {
           </p>
         </div>
         <div class="flex items-center gap-2">
-          <InputText :modelValue="generatedToken" readonly class="w-full font-mono text-sm" />
-          <Button icon="pi pi-copy" severity="secondary" @click="copyToken" v-tooltip="'Copy'" />
+          <InputText :model-value="generatedToken" readonly class="w-full font-mono text-sm" />
+          <Button v-tooltip="'Copy'" icon="pi pi-copy" severity="secondary" @click="copyToken" />
         </div>
       </div>
 

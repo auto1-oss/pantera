@@ -28,6 +28,7 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -123,6 +124,7 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
                 this.ttl.toSeconds(), jwtSettings != null ? jwtSettings.expirySeconds() : -1))
             .eventCategory("database")
             .eventAction("init")
+            .field("log.source", "application")
             .log();
         
         // L1: Hot data cache for direct Basic Auth only
@@ -465,6 +467,7 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
                     .eventAction("invalidate_all")
                     .eventOutcome("failure")
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -511,6 +514,7 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
                     .eventOutcome("failure")
                     .field("user.name", username)
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
             }
         }
@@ -520,6 +524,7 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
             .eventAction("invalidate_by_username")
             .eventOutcome("success")
             .field("user.name", username)
+            .field("log.source", "application")
             .log();
     }
 
@@ -530,13 +535,13 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
      * @param cause Eviction cause
      */
     private void onEviction(
-        final String key,
-        final Optional<AuthUser> user,
+        final String key, // NOPMD UnusedFormalParameter - Caffeine RemovalListener<K,V> contract: receives key/value/cause; only cause is consumed
+        final Optional<AuthUser> user, // NOPMD UnusedFormalParameter - Caffeine RemovalListener<K,V> contract: receives key/value/cause; only cause is consumed
         final com.github.benmanes.caffeine.cache.RemovalCause cause
     ) {
         if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
             com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
-                .recordCacheEviction("auth", "l1", cause.toString().toLowerCase());
+                .recordCacheEviction("auth", "l1", cause.toString().toLowerCase(Locale.ROOT));
         }
     }
 }

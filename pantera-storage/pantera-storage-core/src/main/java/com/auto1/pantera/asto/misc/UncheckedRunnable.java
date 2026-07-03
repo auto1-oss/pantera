@@ -40,7 +40,6 @@ public final class UncheckedRunnable implements Runnable {
      * @param <E> An error
      * @return UncheckedRunnable
      */
-    @SuppressWarnings("PMD.ProhibitPublicStaticMethods")
     public static <E extends IOException> UncheckedRunnable newIoRunnable(
         final CheckedRunnable<E> original
     ) {
@@ -48,7 +47,6 @@ public final class UncheckedRunnable implements Runnable {
     }
 
     @Override
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     public void run() {
         try {
             this.original.run();

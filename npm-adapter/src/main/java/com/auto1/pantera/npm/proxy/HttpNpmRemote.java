@@ -12,6 +12,7 @@ package com.auto1.pantera.npm.proxy;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.http.PanteraHttpException;
+import com.auto1.pantera.http.UpstreamCircuitOpenException;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.Slice;
@@ -88,6 +89,7 @@ public final class HttpNpmRemote implements NpmRemote {
                         .eventOutcome("failure")
                         .field("event.reason", "artifact_not_found")
                         .field("package.name", name)
+                        .field("log.source", "application")
                         .log();
                     return Maybe.empty();
                 }
@@ -99,6 +101,7 @@ public final class HttpNpmRemote implements NpmRemote {
                     .eventOutcome("failure")
                     .field("package.name", name)
                     .error(throwable)
+                    .field("log.source", "application")
                     .log();
                 return Maybe.error(throwable);
             }
@@ -129,6 +132,7 @@ public final class HttpNpmRemote implements NpmRemote {
                         .eventOutcome("failure")
                         .field("event.reason", "artifact_not_found")
                         .field("package.path", path)
+                        .field("log.source", "application")
                         .log();
                     return Maybe.empty();
                 }
@@ -140,6 +144,7 @@ public final class HttpNpmRemote implements NpmRemote {
                     .eventOutcome("failure")
                     .field("package.path", path)
                     .error(throwable)
+                    .field("log.source", "application")
                     .log();
                 return Maybe.error(throwable);
             }
@@ -207,11 +212,41 @@ public final class HttpNpmRemote implements NpmRemote {
                     new ImmutablePair<>(response.body(), response.headers())
                 );
             }
+            // A synthesised circuit-open 502 must keep its identity through
+            // the exception funnel — the group resolver treats it as
+            // "member skipped", not as a member failure. Collapsing it into
+            // the generic status exception (as before) convicted healthy
+            // members on the breaker's own fast-fails.
+            final boolean circuitOpen = !response.headers()
+                .values(UpstreamCircuitOpenException.HEADER).isEmpty();
             // Consume error response body to prevent Vert.x request leak
             return response.body().asBytesFuture().thenCompose(ignored ->
-                CompletableFuture.failedFuture(new PanteraHttpException(response.status()))
+                CompletableFuture.failedFuture(
+                    circuitOpen
+                        ? new UpstreamCircuitOpenException(
+                            HttpNpmRemote.retryAfterSeconds(response.headers()))
+                        : new PanteraHttpException(response.status())
+                )
             );
         });
+    }
+
+    /**
+     * Parse {@code Retry-After} (delta-seconds form) from a synthesised
+     * circuit-open response. Returns 0 when absent or unparseable.
+     * @param headers Response headers
+     * @return Retry-After seconds, or 0
+     */
+    private static long retryAfterSeconds(final Headers headers) {
+        final java.util.List<String> values = headers.values("Retry-After");
+        if (values.isEmpty()) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(values.get(0).trim());
+        } catch (final NumberFormatException ignored) {
+            return 0L;
+        }
     }
 
     /**
@@ -295,10 +330,8 @@ public final class HttpNpmRemote implements NpmRemote {
         if (cause instanceof java.util.concurrent.CompletionException && cause.getCause() != null) {
             cause = cause.getCause();
         }
-        if (cause instanceof PanteraHttpException) {
-            return ((PanteraHttpException) cause).status().code() == 304;
-        }
-        return false;
+        return cause instanceof PanteraHttpException
+            && ((PanteraHttpException) cause).status().code() == 304;
     }
 
     private static boolean isNotFoundError(final Throwable throwable) {

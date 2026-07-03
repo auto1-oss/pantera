@@ -24,7 +24,6 @@ import java.util.Iterator;
  *
  * @since 0.12
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class WwwAuthenticateTest {
 
     @Test

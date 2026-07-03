@@ -82,13 +82,13 @@ public final class ComposerStorageCache implements Cache {
                                 if (cacheres.isPresent()) {
                                     rmtorcache = CompletableFuture.completedFuture(cacheres);
                                 } else {
-                                    rmtorcache = this.contentFromRemote(remote, cached, name);
+                                    rmtorcache = this.contentFromRemote(remote, cached);
                                 }
                                 return rmtorcache;
                             }
                         );
                     } else {
-                        res = this.contentFromRemote(remote, cached, name);
+                        res = this.contentFromRemote(remote, cached);
                     }
                     return res;
                 }
@@ -99,11 +99,10 @@ public final class ComposerStorageCache implements Cache {
      * Obtains and caches content from remote in case of existence, empty otherwise.
      * @param remote Remote content
      * @param cached Key for obtaining cached package
-     * @param name Name of cached item (usually like `vendor/package`)
      * @return Content from remote if exists, empty otherwise.
      */
     private CompletableFuture<Optional<? extends Content>> contentFromRemote(
-        final Remote remote, final Key cached, final Key name
+        final Remote remote, final Key cached
     ) {
         return CompletableFuture.supplyAsync(() -> null)
             .thenCombine(

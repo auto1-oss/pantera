@@ -252,7 +252,7 @@ public final class NpmrcAuthSlice implements Slice {
         // AuthUser doesn't have email, use default format
         final String email = user.name() + "@" + DEFAULT_EMAIL_DOMAIN;
 
-        final StringBuilder npmrc = new StringBuilder();
+        final StringBuilder npmrc = new StringBuilder(256);
         
         if (scope.isPresent()) {
             // Scoped configuration - add @ prefix if not present

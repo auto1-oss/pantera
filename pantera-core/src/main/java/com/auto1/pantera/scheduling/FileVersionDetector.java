@@ -108,10 +108,8 @@ public final class FileVersionDetector {
             return false;
         }
         final char first = token.charAt(0);
-        if (Character.isDigit(first)) {
-            return true;
-        }
-        return first == 'v' && token.length() > 1
-            && Character.isDigit(token.charAt(1));
+        return Character.isDigit(first)
+            || first == 'v' && token.length() > 1
+                && Character.isDigit(token.charAt(1));
     }
 }

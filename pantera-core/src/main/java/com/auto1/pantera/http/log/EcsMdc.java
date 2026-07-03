@@ -95,6 +95,18 @@ public final class EcsMdc {
     public static final String PACKAGE_VERSION = "package.version";
 
     /**
+     * ECS {@code transaction.id} — APM root-span identifier scoped to the
+     * inbound request. Mirrors {@link #TRACE_ID} in lifecycle (set once at
+     * request entry, cleared at request end) but is distinct: traces span
+     * many services, transactions are per-service root spans. Seeded from
+     * the active Elastic APM transaction when present; otherwise generated
+     * as a fresh 16-hex id at request entry (root span).
+     *
+     * @since 2.2.0
+     */
+    public static final String TRANSACTION_ID = "transaction.id";
+
+    /**
      * The set of ECS field keys that are owned by MDC (ThreadContext) and must not
      * be duplicated in per-event structured payloads (e.g. {@code MapMessage}).
      *
@@ -104,7 +116,7 @@ public final class EcsMdc {
      */
     public static final Set<String> MDC_OWNED_KEYS = Set.of(
         TRACE_ID, SPAN_ID, PARENT_SPAN_ID, CLIENT_IP, USER_NAME,
-        REPO_TYPE, REPO_NAME, PACKAGE_NAME, PACKAGE_VERSION
+        REPO_TYPE, REPO_NAME, PACKAGE_NAME, PACKAGE_VERSION, TRANSACTION_ID
     );
 
     /**

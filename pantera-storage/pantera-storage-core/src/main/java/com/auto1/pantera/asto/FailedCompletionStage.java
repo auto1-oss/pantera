@@ -37,7 +37,6 @@ public final class FailedCompletionStage<T> implements CompletionStage<T> {
      *
      * @param throwable Failure reason.
      */
-    @SuppressWarnings("PMD.ConstructorOnlyInitializesOrCallOtherConstructors")
     public FailedCompletionStage(final Throwable throwable) {
         final CompletableFuture<T> future = new CompletableFuture<>();
         future.completeExceptionally(throwable);

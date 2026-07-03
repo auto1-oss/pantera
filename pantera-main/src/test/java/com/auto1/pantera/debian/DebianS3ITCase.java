@@ -29,7 +29,6 @@ import org.testcontainers.containers.wait.strategy.AbstractWaitStrategy;
  * @since 0.15
  */
 @EnabledOnOs({OS.LINUX, OS.MAC})
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class DebianS3ITCase {
 
     /**

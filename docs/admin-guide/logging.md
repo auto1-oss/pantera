@@ -30,12 +30,15 @@ All log entries are emitted as single-line JSON objects. Example:
 |-------|-------------|
 | `@timestamp` | ISO-8601 event timestamp |
 | `log.level` | Log level: TRACE, DEBUG, INFO, WARN, ERROR, FATAL |
+| `log.source` | Index-routing hint: `audit`, `http`, or `application` (added v2.2.0) |
 | `message` | Human-readable log message (never raw HTTP request lines) |
 | `service.name` | Always `pantera` |
 | `service.version` | Pantera version |
 | `service.environment` | Deployment environment (development, staging, production) |
 | `logger_name` | Fully qualified Java class/logger name |
 | `process.thread.name` | Thread name |
+
+> **`log.source` (v2.2.0+):** Every `EcsLogger` emission now carries a `log.source` field with one of three values — `audit` for entries from the `artifact.audit` logger and the admin-operation audit pipeline, `http` for access-log entries from `EcsLoggingSlice`, and `application` for everything else. Shipper pipelines can route on this field directly (e.g. send `audit` to a write-once Elastic data stream, `http` to a high-volume daily-rotated index, `application` to a shorter-retention index) without parsing the logger name. The field is **always present** on emissions from Pantera 2.2.0+; absence on older entries can be treated as `application`.
 
 ### Event Fields
 
@@ -162,6 +165,63 @@ Example slow-request query (>5s):
 > **Custom fields:** Fields marked "Custom" above are Pantera-specific extensions under the `package.*` and `repository.*` namespaces. ECS is designed to be extensible — custom fields are fully supported by Elasticsearch and won't conflict with standard ECS mappings.
 
 > **Field naming convention:** All fields follow ECS dot-notation (`namespace.field`). Custom fields use `package.*` for artifact metadata and `repository.*` for repository metadata. Never use bare field names or underscores in field names.
+
+> **ECS-only field policy (v2.2.0+):** Pantera 2.2.0 retires the previous `auto1.*` extension namespace. Every shipped field is either an ECS standard or one of the documented Pantera-namespaced extensions (`package.*`, `repository.*`, `pantera.*`). Renames applied in 2.2.0: `audit.action` → `event.action`, `audit.actor` → `user.name`, `file` → `file.name`, `repository.member` → `member.name`. Dashboards or saved queries that still reference the old names need a search-and-replace.
+
+---
+
+## Trace, Span, and Transaction Correlation
+
+Every log entry on the request path carries three correlation fields:
+
+| Field | Description |
+|-------|-------------|
+| `trace.id` | Inbound-request-scoped identifier. Generated at the edge (`EcsLoggingSlice`) and propagated across every async hop. |
+| `span.id` | The current logical span within the trace (one per slice / DB call / outbound HTTP request). |
+| `transaction.id` | Per-request identifier, populated by `EcsLoggingSlice` (generated if absent — root span). First-class MDC key as of v2.2.0. |
+
+As of v2.2.0 the correlation contract is closed across:
+
+- Vert.x WebClient outbound calls (webhooks).
+- `java.net.http.HttpClient` outbound calls (OSV.dev scanner).
+- Cross-instance pub/sub: `ClusterEventBus` and `CacheInvalidationPubSub` stamp `trace.id` + `span.id` into a versioned envelope (v2 prefix; v1 still parsed for rolling-deploy compatibility).
+- Quartz jobs (`scheduleJob` writes MDC into `JobDataMap`; `TracingJobWrapper` restores it on `Job.execute`).
+- Async cache and metadata refreshes (`SwrMetadataCache`, PyPI `ProxySlice` background refresh, `WebhookDispatcher` retry timer).
+
+Audit-log entries inherit the originating HTTP request's `trace.id` so an artifact upload and its HTTP session join in Kibana under a single value.
+
+---
+
+## Audit Log Immutability and Retention
+
+The `audit_log` table is **write-once as of v2.2.0**. Flyway migration V129 attaches BEFORE UPDATE and BEFORE DELETE triggers that raise `feature_not_supported` on any mutation attempt — a SOC2 / ISO 27001 requirement.
+
+**Operational implications:**
+
+- `UPDATE audit_log SET ...` will fail. Do not script audit-table cleanup with `UPDATE` or `DELETE`.
+- Retention is owned by **partition rotation** (recommended) or `TRUNCATE` (allowed; bypasses the triggers but takes an `ACCESS EXCLUSIVE` lock — schedule for a maintenance window).
+- Backups against `audit_log` are append-only friendly; incremental archives only need the rows beyond `MAX(id)` from the last snapshot.
+
+To rotate retention:
+
+1. Create a monthly partition (`audit_log_YYYY_MM`) ahead of time via a `pg_cron` job.
+2. Detach + drop partitions older than the retention horizon.
+3. Test cases that need to reset the table between cases (`SettingsLayerIntegrationTest`, etc.) should `TRUNCATE`, not `DELETE`.
+
+---
+
+## Swallowed Exceptions Surfaced
+
+Wave D-5d of the v2.2.0 logging audit reclassified 161 sites that previously swallowed exceptions or logged them at the wrong level. Each site is now one of:
+
+| Classification | Behaviour |
+|---|---|
+| Genuinely expected | `// EXPECTED: <reason>` comment, no log. |
+| Cleanup / secondary failure | `DEBUG` with `eventAction("resource_cleanup_failed")`. |
+| Recovered control-flow path | `WARN` with throwable. |
+| Truly swallowed failure | `ERROR` with `.error(ex)` and `event.outcome: failure`. |
+
+**Operators may see a small WARN / ERROR uptick the first 24 hours after the v2.2.0 deploy.** This is intentional — these failures were already happening; they were just invisible. Triage them like any other log signal: `error.type` + `error.message` + the surrounding context. If the rate stays elevated past the first day, treat it as a real signal and escalate.
 
 ---
 

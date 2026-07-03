@@ -19,8 +19,9 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Tests for {@link NegativeCacheConfig#fromYaml(YamlMapping, String)}.
- * Verifies the parameterised sub-key loader used to wire a second negative
- * cache (e.g. {@code group-negative}) without disturbing the singleton.
+ * Verifies the sub-key loader used by {@code RepositorySlices} to parse
+ * {@code meta.caches.repo-negative} (and the deprecated legacy alias
+ * {@code group-negative}).
  *
  * @since 2.1.3
  */
@@ -75,23 +76,4 @@ final class NegativeCacheConfigTest {
         Assertions.assertFalse(cfg.isValkeyEnabled());
     }
 
-    @Test
-    void originalFromYamlStillTargetsNegativeSubKey() throws IOException {
-        // Ensure the no-arg overload is backward-compatible: it must read
-        // ONLY the "negative" section even when other siblings exist.
-        final String yaml = String.join("\n",
-            "caches:",
-            "  negative:",
-            "    ttl: 12h",
-            "    maxSize: 1234",
-            "  group-negative:",
-            "    ttl: 5m",
-            "    maxSize: 99"
-        );
-        final YamlMapping caches = Yaml.createYamlInput(yaml).readYamlMapping()
-            .yamlMapping("caches");
-        final NegativeCacheConfig cfg = NegativeCacheConfig.fromYaml(caches);
-        Assertions.assertEquals(Duration.ofHours(12), cfg.ttl());
-        Assertions.assertEquals(1234, cfg.maxSize());
-    }
 }

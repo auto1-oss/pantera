@@ -18,8 +18,12 @@ global:
 #           # - alertmanager:9093
 
 # Load rules once and periodically evaluate them according to the global 'evaluation_interval'.
-# rule_files:
-#   - "alerts/*.yml"
+# Rules:
+#   - rules/amplification.yml (M1): recording rules + alerts for the
+#     outbound observability foundation. Drives the CI perf-gate (M6) and
+#     production paging on amplification > 1.5 or any sustained 429.
+rule_files:
+  - "rules/*.yml"
 
 # A scrape configuration containing exactly one endpoint to scrape:
 scrape_configs:

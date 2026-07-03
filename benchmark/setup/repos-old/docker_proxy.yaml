@@ -1,7 +1,0 @@
-repo:
-  type: docker-proxy
-  storage:
-    type: fs
-    path: /var/artipie/data
-  remotes:
-    - url: https://registry-1.docker.io

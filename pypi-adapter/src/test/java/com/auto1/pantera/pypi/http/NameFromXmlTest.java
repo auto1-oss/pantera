@@ -22,7 +22,6 @@ import org.junit.jupiter.api.Test;
  * Test for {@link SearchSlice.NameFromXml}.
  * @since 0.7
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public class NameFromXmlTest {
 
     @Test

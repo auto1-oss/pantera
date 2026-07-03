@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.pypi.meta;
 
+import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
@@ -18,7 +19,9 @@ import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Optional;
 
 /**
@@ -100,6 +103,48 @@ class PypiSidecarTest {
             "read should return empty when no sidecar exists",
             result,
             new IsEqual<>(Optional.empty())
+        );
+    }
+
+    @Test
+    void truncatesNanosecondUploadTimeOnRead() {
+        // Simulate a stale sidecar written before PEP 700 enforcement:
+        // 9-digit nanosecond precision AND a +00:00 offset instead of Z.
+        // Both forms are accepted by Instant.parse but produce a
+        // non-compliant Meta.uploadTime() unless we truncate on read.
+        // Regression for the pip parse_links crash seen in datasci
+        // builds (Python 3.9 datetime.fromisoformat rejects >6 digits).
+        final String staleSidecar = "{"
+            + "\"upload-time\":\"2026-03-24T19:38:57.874672722+00:00\","
+            + "\"yanked\":false,"
+            + "\"requires-python\":null,"
+            + "\"yanked-reason\":null,"
+            + "\"dist-info-metadata\":null"
+            + "}";
+        final Key sidecar = PypiSidecar.sidecarKey(ARTIFACT_KEY);
+        this.storage.save(
+            sidecar,
+            new Content.From(staleSidecar.getBytes(StandardCharsets.UTF_8))
+        ).toCompletableFuture().join();
+
+        final PypiSidecar.Meta meta = PypiSidecar.read(this.storage, ARTIFACT_KEY)
+            .join()
+            .orElseThrow(() -> new AssertionError("Sidecar missing after seeding"));
+
+        MatcherAssert.assertThat(
+            "Meta.uploadTime() must be truncated to microsecond precision so "
+                + "Instant.toString() emits ≤6 fractional digits downstream",
+            meta.uploadTime().getNano() % 1_000,
+            new IsEqual<>(0)
+        );
+        MatcherAssert.assertThat(
+            "upload-time must equal the microsecond-truncated form of the "
+                + "stored nanosecond value (drop the last 3 digits, not round)",
+            meta.uploadTime(),
+            new IsEqual<>(
+                Instant.parse("2026-03-24T19:38:57.874672722Z")
+                    .truncatedTo(ChronoUnit.MICROS)
+            )
         );
     }
 

@@ -23,7 +23,7 @@ final class MemberSliceTest {
     @Test
     void reportsOpenCircuitFromRegistry() {
         final AutoBlockRegistry registry = new AutoBlockRegistry(new AutoBlockSettings(
-            1, Duration.ofMinutes(5), Duration.ofMinutes(60)
+            0.5, 1, 30, Duration.ofMinutes(5), Duration.ofMinutes(60)
         ));
         final MemberSlice member = new MemberSlice("test-member", null, registry);
         assertThat(member.isCircuitOpen(), is(false));
@@ -32,13 +32,25 @@ final class MemberSliceTest {
     }
 
     @Test
-    void recordsSuccessViaRegistry() {
+    void recordsSuccessViaRegistry() throws Exception {
+        // Short block window so the test can wait out the block and
+        // exercise the PROBING → ONLINE transition on recordSuccess.
+        // Under the 2.2.0 rate-based design, a stray recordSuccess in
+        // BLOCKED state does NOT immediately close the circuit — the
+        // block window must expire first, then the next success in
+        // PROBING state closes it. This matches industry behaviour
+        // (Hystrix, Resilience4j) and is what makes Fibonacci back-off
+        // useful under genuinely broken upstreams.
         final AutoBlockRegistry registry = new AutoBlockRegistry(new AutoBlockSettings(
-            1, Duration.ofMinutes(5), Duration.ofMinutes(60)
+            0.5, 1, 30, Duration.ofMillis(50), Duration.ofSeconds(30)
         ));
         final MemberSlice member = new MemberSlice("test-member", null, registry);
         registry.recordFailure("test-member");
         assertThat(member.isCircuitOpen(), is(true));
+        // Wait for block to expire → PROBING state.
+        Thread.sleep(80);
+        assertThat("block expired, now probing", member.isCircuitOpen(), is(false));
+        // Probe success in PROBING → CLOSED.
         member.recordSuccess();
         assertThat(member.isCircuitOpen(), is(false));
     }
@@ -46,7 +58,7 @@ final class MemberSliceTest {
     @Test
     void recordsFailureViaRegistry() {
         final AutoBlockRegistry registry = new AutoBlockRegistry(new AutoBlockSettings(
-            2, Duration.ofMinutes(5), Duration.ofMinutes(60)
+            0.5, 2, 30, Duration.ofMinutes(5), Duration.ofMinutes(60)
         ));
         final MemberSlice member = new MemberSlice("test-member", null, registry);
         member.recordFailure();
@@ -58,7 +70,7 @@ final class MemberSliceTest {
     @Test
     void reportsCircuitState() {
         final AutoBlockRegistry registry = new AutoBlockRegistry(new AutoBlockSettings(
-            1, Duration.ofMinutes(5), Duration.ofMinutes(60)
+            0.5, 1, 30, Duration.ofMinutes(5), Duration.ofMinutes(60)
         ));
         final MemberSlice member = new MemberSlice("test-member", null, registry);
         assertThat(member.circuitState(), equalTo("ONLINE"));
@@ -70,7 +82,7 @@ final class MemberSliceTest {
     void sharedRegistryAcrossGroupsReducesSignalFragmentation() {
         // One shared registry for "maven-central" — simulates RepositorySlices.getOrCreateMemberRegistry
         final AutoBlockRegistry sharedRegistry = new AutoBlockRegistry(new AutoBlockSettings(
-            2, Duration.ofMinutes(5), Duration.ofMinutes(60)
+            0.5, 2, 30, Duration.ofMinutes(5), Duration.ofMinutes(60)
         ));
 
         // Two groups both containing "maven-central" — each wraps the same shared registry

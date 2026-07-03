@@ -146,6 +146,17 @@ public final class MemberSlice {
     }
 
     /**
+     * Remaining block seconds while this member's circuit is open;
+     * 0 when not blocked. Feeds the group's Retry-After when every
+     * member is unavailable.
+     *
+     * @return Remaining block seconds, or 0
+     */
+    public long retryAfterSeconds() {
+        return this.registry.blockedRemainingSeconds(this.name);
+    }
+
+    /**
      * Record successful response from this member.
      * Resets circuit breaker state via registry.
      */
@@ -196,6 +207,7 @@ public final class MemberSlice {
             .message(String.format("MemberSlice '%s' rewritePath: %s to %s", this.name, raw, result.uri().getPath()))
             .eventCategory("web")
             .eventAction("path_rewrite")
+            .field("log.source", "application")
             .log();
 
         return result;

@@ -84,14 +84,16 @@ public final class EventsProcessor<T> implements Job {
                 .eventAction("job_stop")
                 .eventOutcome("failure")
                 .field("process.name", key.toString())
+                .field("log.source", "application")
                 .log();
             new StdSchedulerFactory().getScheduler().deleteJob(key);
             EcsLogger.error("com.auto1.pantera.asto")
                 .message("Job stopped")
                 .eventCategory("process")
                 .eventAction("job_stop")
-                .eventOutcome("success")
+                .eventOutcome("failure")
                 .field("process.name", key.toString())
+                .field("log.source", "application")
                 .log();
         } catch (final SchedulerException error) {
             EcsLogger.error("com.auto1.pantera.asto")
@@ -101,6 +103,7 @@ public final class EventsProcessor<T> implements Job {
                 .eventOutcome("failure")
                 .field("process.name", key.toString())
                 .error(error)
+                .field("log.source", "application")
                 .log();
             throw new PanteraException(error);
         }

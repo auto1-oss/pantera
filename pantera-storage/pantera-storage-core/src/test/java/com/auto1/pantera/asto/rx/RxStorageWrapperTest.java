@@ -38,7 +38,6 @@ import java.util.stream.Collectors;
  *
  * @since 1.11
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 final class RxStorageWrapperTest {
 
     /**

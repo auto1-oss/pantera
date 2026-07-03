@@ -81,7 +81,7 @@ public final class OptimizedStorageCache {
     public static CompletableFuture<Content> optimizedValue(final Storage storage, final Key key) {
         try {
             // Check if this is SubStorage wrapping FileStorage
-            if (storage.getClass().getSimpleName().equals("SubStorage")) {
+            if ("SubStorage".equals(storage.getClass().getSimpleName())) {
                 // Extract prefix from SubStorage
                 final java.lang.reflect.Field prefixField = 
                     storage.getClass().getDeclaredField("prefix");
@@ -106,8 +106,10 @@ public final class OptimizedStorageCache {
             if (storage instanceof FileStorage) {
                 return getFileSystemContent((FileStorage) storage, key);
             }
-        } catch (Exception e) {
-            // If unwrapping fails, fall back to standard storage.value()
+        } catch (Exception e) { // NOPMD EmptyCatchBlock - intentional: any reflection/unwrap failure falls through to the standard storage.value() path below
+            // EXPECTED: if reflection-based unwrap fails (e.g. SubStorage
+            // internal layout changes), fall back to the standard
+            // storage.value() path below. Correctness preserved.
         }
         
         // For S3 and others, use standard storage.value()
@@ -181,7 +183,7 @@ public final class OptimizedStorageCache {
         private final org.reactivestreams.Subscriber<? super ByteBuffer> subscriber;
         private final java.nio.file.Path filePath;
         private final long fileSize;
-        private volatile boolean cancelled = false;
+        private volatile boolean cancelled;
         private final AtomicBoolean started = new AtomicBoolean(false);
         private final AtomicBoolean cleanedUp = new AtomicBoolean(false);
         private volatile ByteBuffer directBuffer;
@@ -248,6 +250,7 @@ public final class OptimizedStorageCache {
                                 .field("file.path", filePath.toString())
                                 .field("file.size", fileSize)
                                 .field("http.response.body.bytes", totalRead)
+                                .field("log.source", "application")
                                 .log();
                             cancelled = true;
                             break;
@@ -324,6 +327,7 @@ public final class OptimizedStorageCache {
                         .eventAction("buffer_cleanup")
                         .eventOutcome("failure")
                         .error(ex)
+                        .field("log.source", "application")
                         .log();
                 }
             }

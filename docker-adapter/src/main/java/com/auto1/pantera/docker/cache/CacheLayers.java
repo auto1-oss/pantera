@@ -139,6 +139,7 @@ public final class CacheLayers implements Layers {
                                 .eventAction("blob_get")
                                 .eventOutcome("failure")
                                 .error(error)
+                                .field("log.source", "application")
                                 .log();
                             return Optional.empty();
                         });
@@ -181,7 +182,6 @@ public final class CacheLayers implements Layers {
     /**
      * Record metric safely (only if metrics are enabled).
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
             if (com.auto1.pantera.metrics.PanteraMetrics.isEnabled()) {
@@ -191,6 +191,7 @@ public final class CacheLayers implements Layers {
             EcsLogger.debug("com.auto1.pantera.docker")
                 .message("Failed to record metric")
                 .error(ex)
+                .field("log.source", "application")
                 .log();
         }
     }

@@ -19,7 +19,6 @@ import org.reactivestreams.Publisher;
  * NPM Asset.
  * @since 0.1
  */
-@SuppressWarnings("PMD.AvoidFieldNameMatchingMethodName")
 public final class NpmAsset {
     /**
      * Asset path.
@@ -92,7 +91,6 @@ public final class NpmAsset {
      * NPM asset metadata.
      * @since 0.2
      */
-    @SuppressWarnings("PMD.AvoidDuplicateLiterals")
     public static class Metadata {
         /**
          * Last modified date.

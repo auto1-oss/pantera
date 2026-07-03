@@ -284,7 +284,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(pantera_artifact_download_bytes_total{job=\"pantera\",repo_name=~\"$repo_name\", repo_type=~\"$repo_type\"}[5m])) by (repo_name)",
+          "expr": "sum(rate(pantera_repo_bytes_downloaded_bytes_total{job=\"pantera\",repo_name=~\"$repo_name\", repo_type=~\"$repo_type\"}[5m])) by (repo_name)",
           "legendFormat": "{{repo_name}} - download",
           "range": true,
           "refId": "A"
@@ -295,7 +295,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(pantera_artifact_upload_bytes_total{job=\"pantera\",repo_name=~\"$repo_name\", repo_type=~\"$repo_type\"}[5m])) by (repo_name)",
+          "expr": "sum(rate(pantera_repo_bytes_uploaded_bytes_total{job=\"pantera\",repo_name=~\"$repo_name\", repo_type=~\"$repo_type\"}[5m])) by (repo_name)",
           "legendFormat": "{{repo_name}} - upload",
           "range": true,
           "refId": "B"
@@ -439,6 +439,112 @@
       ],
       "title": "Total Uploads (Last Hour)",
       "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "Size",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "gradientMode": "opacity",
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 9
+      },
+      "id": 6,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max",
+            "last"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(pantera_artifact_size_bytes_sum{job=\"pantera\",repo_name=~\"$repo_name\", repo_type=~\"$repo_type\"}[5m])) by (repo_name, operation) / sum(rate(pantera_artifact_size_bytes_count{job=\"pantera\",repo_name=~\"$repo_name\", repo_type=~\"$repo_type\"}[5m])) by (repo_name, operation)",
+          "legendFormat": "{{repo_name}} - {{operation}} - avg",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "max(pantera_artifact_size_bytes_max{job=\"pantera\",repo_name=~\"$repo_name\", repo_type=~\"$repo_type\"}) by (repo_name, operation)",
+          "legendFormat": "{{repo_name}} - {{operation}} - max",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Artifact size (avg / max)",
+      "type": "timeseries"
     }
   ],
   "refresh": "30s",

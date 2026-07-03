@@ -24,7 +24,6 @@ import org.junit.jupiter.api.io.TempDir;
  * Test for {@link XmlPrimaryMaid}.
  * @since 0.8
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class XmlPrimaryMaidTest {
 
     @Test

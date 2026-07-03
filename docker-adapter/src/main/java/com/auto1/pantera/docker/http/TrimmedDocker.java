@@ -38,12 +38,22 @@ public final class TrimmedDocker implements Docker {
     private final String prefix;
 
     /**
+     * Pre-compiled pattern used by {@link #trim(String)} to match and strip
+     * the configured prefix from a repository name. Hoisted out of the hot
+     * path to avoid re-compiling on every call.
+     */
+    private final Pattern trimPattern;
+
+    /**
      * @param origin Docker origin
      * @param prefix Prefix to cut
      */
     public TrimmedDocker(Docker origin, String prefix) {
         this.origin = origin;
         this.prefix = prefix;
+        this.trimPattern = Pattern.compile(
+            String.format("(?:%s)\\/(.+)", prefix)
+        );
     }
 
     @Override
@@ -77,8 +87,7 @@ public final class TrimmedDocker implements Docker {
      */
     private String trim(String name) {
         if (name != null) {
-            final Pattern pattern = Pattern.compile(String.format("(?:%s)\\/(.+)", this.prefix));
-            final Matcher matcher = pattern.matcher(name);
+            final Matcher matcher = this.trimPattern.matcher(name);
             if (!matcher.matches()) {
                 throw new IllegalArgumentException(
                     String.format(

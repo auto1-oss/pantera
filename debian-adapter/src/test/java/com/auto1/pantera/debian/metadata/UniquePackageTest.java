@@ -30,7 +30,6 @@ import org.junit.jupiter.api.Test;
  * Test for {@link UniquePackage}.
  * @since 0.5
  */
-@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.TooManyMethods"})
 class UniquePackageTest {
 
     /**

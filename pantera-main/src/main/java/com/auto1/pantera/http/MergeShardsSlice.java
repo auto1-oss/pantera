@@ -71,7 +71,16 @@ import java.security.MessageDigest;
  *   "failedPackages": 0
  * }
  * </pre>
- * 
+ *
+ * <p><b>Trace context contract.</b> Trace context (trace.id / span.id /
+ * span.parent.id) is inherited from the {@code EcsLoggingSlice} MDC scope
+ * set at request entry. Any async hop introduced in this slice MUST use
+ * {@code ContextualExecutor.contextualize(...)} (or an equivalent MDC
+ * capture-and-restore) to preserve trace.id across the executor
+ * boundary — without it, log lines emitted from the worker thread
+ * surface in Kibana with no trace correlation back to the originating
+ * request.
+ *
  * @since 1.18.14
  */
 public final class MergeShardsSlice implements Slice {
@@ -187,13 +196,14 @@ public final class MergeShardsSlice implements Slice {
     /**
      * Convert bytes to lowercase hex string.
      */
+    private static final char[] HEX_DIGITS = "0123456789abcdef".toCharArray();
+
     private static String hexLower(final byte[] bytes) {
-        final char[] HEX = "0123456789abcdef".toCharArray();
         final char[] out = new char[bytes.length * 2];
-        for (int i = 0, j = 0; i < bytes.length; i++) {
-            int v = bytes[i] & 0xFF;
-            out[j++] = HEX[v >>> 4];
-            out[j++] = HEX[v & 0x0F];
+        for (int i = 0; i < bytes.length; i++) {
+            final int v = bytes[i] & 0xFF;
+            out[i * 2] = HEX_DIGITS[v >>> 4];
+            out[i * 2 + 1] = HEX_DIGITS[v & 0x0F];
         }
         return new String(out);
     }
@@ -228,6 +238,7 @@ public final class MergeShardsSlice implements Slice {
             .eventCategory("web")
             .eventAction("metadata_merge")
             .field("repository.name", repoName)
+            .field("log.source", "application")
             .log();
 
         // Get repository configuration
@@ -273,7 +284,7 @@ public final class MergeShardsSlice implements Slice {
                     .add("helmChartsUpdated", 0)
                 ).toCompletableFuture();
         } else if ("helm".equals(type)) {
-            merged = mergeHelmShards(storage, baseUrl, repoName)
+            merged = mergeHelmShards(storage, repoName)
                 .thenApply(sum -> Json.createObjectBuilder()
                     .add("type", type)
                     .add("helmChartsUpdated", sum.charts)
@@ -320,6 +331,7 @@ public final class MergeShardsSlice implements Slice {
                 .eventOutcome("failure")
                 .field("repository.name", repoName)
                 .error(error)
+                .field("log.source", "application")
                 .log();
             // Clean up even on failure
             cleanupTempFolders(storage).exceptionally(e -> {
@@ -328,7 +340,8 @@ public final class MergeShardsSlice implements Slice {
                     .eventCategory("web")
                     .eventAction("cleanup")
                     .eventOutcome("failure")
-                    .field("error.message", e.getMessage())
+                    .error(e)
+                    .field("log.source", "application")
                     .log();
                 return null;
             });
@@ -364,7 +377,6 @@ public final class MergeShardsSlice implements Slice {
                     continue;
                 }
                 final String filenameJson = segs[segs.length - 1];
-                final String versionFromPath = segs[segs.length - 2];
                 final String artifactId = segs[segs.length - 3];
                 // Skip if not a .json file
                 if (!filenameJson.endsWith(".json")) {
@@ -403,7 +415,8 @@ public final class MergeShardsSlice implements Slice {
                                 .eventAction("shard_parse")
                                 .eventOutcome("failure")
                                 .field("file.path", p)
-                                .field("error.message", e.getMessage())
+                                .error(e)
+                                .field("log.source", "application")
                                 .log();
                         }
                     })
@@ -414,7 +427,8 @@ public final class MergeShardsSlice implements Slice {
                             .eventAction("shard_read")
                             .eventOutcome("failure")
                             .field("file.path", p)
-                            .field("error.message", e.getMessage())
+                            .error(e)
+                            .field("log.source", "application")
                             .log();
                         return null;
                     });
@@ -443,8 +457,6 @@ public final class MergeShardsSlice implements Slice {
                             artifactId = base;
                         }
                         final Key mdKey = new Key.From(base, "maven-metadata.xml");
-                        // Ensure parent directory path, not file path
-                        final Key parentDir = new Key.From(base);
                         chain = chain.thenCompose(nothing -> storage.exclusively(mdKey, st -> {
                             // Build maven-metadata.xml content inline (avoid nested path issues)
                             final Directives d = new Directives()
@@ -499,7 +511,7 @@ public final class MergeShardsSlice implements Slice {
     /**
      * Merge Helm shards into a unified index.yaml at repository root.
      */
-    private CompletionStage<HelmSummary> mergeHelmShards(final Storage storage, final Optional<String> baseUrl, final String repoName) {
+    private CompletionStage<HelmSummary> mergeHelmShards(final Storage storage, final String repoName) {
         final Key prefix = new Key.From(".meta", "helm", "shards");
         return storage.list(prefix).thenCompose(keys -> {
             final Map<String, List<Key>> byChart = new HashMap<>();
@@ -615,6 +627,7 @@ public final class MergeShardsSlice implements Slice {
                                 .eventAction("async_error")
                                 .eventOutcome("failure")
                                 .error(err)
+                                .field("log.source", "application")
                                 .log();
                             return null;
                         }));
@@ -635,6 +648,7 @@ public final class MergeShardsSlice implements Slice {
                                 .eventAction("async_error")
                                 .eventOutcome("failure")
                                 .error(err)
+                                .field("log.source", "application")
                                 .log();
                             return null;
                         }));
@@ -688,6 +702,7 @@ public final class MergeShardsSlice implements Slice {
             .message("Starting cleanup of temporary folders after merge")
             .eventCategory("web")
             .eventAction("cleanup")
+            .field("log.source", "application")
             .log();
         final List<CompletionStage<Void>> deletions = new ArrayList<>();
 
@@ -697,6 +712,7 @@ public final class MergeShardsSlice implements Slice {
             .eventCategory("web")
             .eventAction("cleanup")
             .field("file.directory", ".import")
+            .field("log.source", "application")
             .log();
         deletions.add(storage.delete(new Key.From(".import"))
             .thenRun(() -> EcsLogger.debug("com.auto1.pantera.http")
@@ -714,6 +730,7 @@ public final class MergeShardsSlice implements Slice {
                     .eventOutcome("failure")
                     .field("file.directory", ".import")
                     .field("error.message", e.getMessage())
+                    .field("log.source", "application")
                     .log();
                 return null;
             }));
@@ -741,6 +758,7 @@ public final class MergeShardsSlice implements Slice {
                     .eventOutcome("failure")
                     .field("file.directory", ".meta")
                     .field("error.message", e.getMessage())
+                    .field("log.source", "application")
                     .log();
                 return null;
             }));

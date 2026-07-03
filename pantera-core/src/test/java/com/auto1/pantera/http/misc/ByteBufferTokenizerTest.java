@@ -29,7 +29,6 @@ import org.junit.jupiter.params.provider.CsvSource;
  *
  * @since 1.0
  */
-@SuppressWarnings("PMD.UseObjectForClearerAPI")
 final class ByteBufferTokenizerTest {
 
     @ParameterizedTest

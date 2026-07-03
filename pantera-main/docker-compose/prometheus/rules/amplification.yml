@@ -1,0 +1,135 @@
+# Pantera 2.2.0 M1 — Outbound observability recording rules + alerts.
+#
+# These rules feed the perf-gate.yml CI workflow (M6) and the production
+# Grafana board "Pantera Outbound Health". Two operationally meaningful
+# series + two alerting rules.
+#
+# References: analysis/03-findings.md finding #8, analysis/plan/v1/PLAN.md
+# milestones M1 and M6.
+
+groups:
+  - name: pantera_outbound
+    interval: 30s
+    rules:
+      # ------------------------------------------------------------------
+      # Recording rule: outbound-to-inbound amplification ratio.
+      #
+      # Numerator: sum of outbound upstream requests over the last 5 min,
+      # per upstream host.
+      # Denominator: foreground client requests handled in the same window
+      # (recorded by pantera.http.requests with the standard outcome label).
+      # We clamp the denominator to >= 1 to avoid divide-by-zero spikes
+      # when no inbound traffic is flowing.
+      #
+      # Healthy proxy: ratio ~ 1.0 (one outbound per cache miss).
+      # Degraded:     ratio > 1.5  → 5 min — something is amplifying.
+      # ------------------------------------------------------------------
+      - record: pantera_upstream_amplification_ratio
+        expr: |
+          sum by (upstream_host) (
+            rate(pantera_upstream_requests_total[5m])
+          )
+          /
+          clamp_min(
+            sum by () (rate(pantera_http_requests_total[5m])),
+            1
+          )
+
+      # ------------------------------------------------------------------
+      # Recording rule: outbound-request-to-unique-artifact ratio.
+      #
+      # See validation strategy in analysis/plan/v1/PLAN.md (Part G item 6).
+      # Counts the cardinality of (foreground) artifact requests over a
+      # window and divides into the outbound request rate. A correctly-
+      # behaved proxy with single-flight in place should hover near 1.0;
+      # >1.2 means we're firing extra upstream calls per artifact.
+      # ------------------------------------------------------------------
+      - record: pantera_request_to_artifact_ratio
+        expr: |
+          sum by (upstream_host) (
+            rate(pantera_upstream_requests_total{caller_tag="foreground"}[5m])
+          )
+          /
+          clamp_min(
+            sum by () (rate(pantera_artifact_downloads_total[5m])),
+            1
+          )
+
+  - name: pantera_outbound_alerts
+    rules:
+      # ------------------------------------------------------------------
+      # Alert: upstream is rate-limiting us (429 response observed).
+      #
+      # Any sustained 429 from a known-throttling upstream is a page-ops
+      # event. The rate limiter (M3) should prevent this from happening
+      # at all — its existence is the load-bearing assumption.
+      # ------------------------------------------------------------------
+      - alert: PanteraUpstream429
+        expr: |
+          sum by (upstream_host, repo_name) (
+            increase(pantera_proxy_429_total[10m])
+          ) > 0
+        for: 5m
+        labels:
+          severity: page
+          team: devops
+        annotations:
+          summary: "Upstream {{ $labels.upstream_host }} is rate-limiting us"
+          description: |
+            pantera_proxy_429_total has incremented for repo
+            {{ $labels.repo_name }} against {{ $labels.upstream_host }} in the
+            last 10 minutes. The rate limiter is allowing more outbound
+            traffic than the upstream tolerates. Drop the per-host token
+            rate, or trace which caller_tag bucket is producing the load
+            via pantera_upstream_requests_total.
+
+      # ------------------------------------------------------------------
+      # Alert: amplification ratio exceeds 1.5 sustained.
+      #
+      # A healthy proxy is ~1.0. The CI perf-gate fails on >1.5; production
+      # paging fires at the same threshold sustained 5 min.
+      # ------------------------------------------------------------------
+      - alert: PanteraAmplificationRatio
+        expr: pantera_upstream_amplification_ratio > 1.5
+        for: 5m
+        labels:
+          severity: page
+          team: devops
+        annotations:
+          summary: "Outbound amplification ratio {{ $value | printf \"%.2f\" }} on {{ $labels.upstream_host }}"
+          description: |
+            The pantera_upstream_amplification_ratio recording rule has
+            exceeded 1.5 sustained for 5 minutes against upstream
+            {{ $labels.upstream_host }}. This typically means a fix has
+            regressed or a new outbound source has been added. Drill into
+            pantera_upstream_requests_total by caller_tag to identify which
+            subsystem is over-fetching.
+
+      # ------------------------------------------------------------------
+      # Alert: self-imposed rate-limit gate stuck closed.
+      #
+      # M3 added the per-host token bucket + 429 gate. Some non-zero rate
+      # of {reason=bucket_empty} is healthy — the limiter is sized below
+      # peak demand on purpose. {reason=gate_closed} sustained > 10 min
+      # means an upstream is still 429-ing us through the gate's
+      # back-off window; the limit may be set too high.
+      # ------------------------------------------------------------------
+      - alert: PanteraOutboundGateStuckClosed
+        expr: |
+          sum by (upstream_host) (
+            increase(pantera_outbound_rate_limited_total{reason="gate_closed"}[10m])
+          ) > 0
+        for: 10m
+        labels:
+          severity: warn
+          team: devops
+        annotations:
+          summary: "429 gate closed > 10 min on {{ $labels.upstream_host }}"
+          description: |
+            Pantera's per-host 429 gate has been closing requests against
+            {{ $labels.upstream_host }} for over 10 minutes. The upstream
+            is still rate-limiting us through the back-off window. Either
+            drop the per-host token rate (PANTERA_RATE_LIMIT_<HOST>) or
+            investigate a non-foreground source via
+            pantera_upstream_requests_total{caller_tag} — there may be a
+            new outbound subsystem we did not anticipate.

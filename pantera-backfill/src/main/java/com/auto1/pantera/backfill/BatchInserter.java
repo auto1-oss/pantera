@@ -157,12 +157,12 @@ public final class BatchInserter implements AutoCloseable {
             } catch (final SQLException ex) {
                 rollback(conn);
                 LOG.warn("Batch insert of {} records failed, falling back to "
-                    + "individual inserts: {}", batch.size(), ex.getMessage());
+                    + "individual inserts: {}", batch.size(), ex.getMessage(), ex);
                 this.insertIndividually(batch);
             }
         } catch (final SQLException ex) {
             LOG.warn("Failed to obtain DB connection for batch of {} records: {}",
-                batch.size(), ex.getMessage());
+                batch.size(), ex.getMessage(), ex);
             this.skippedCount.addAndGet(batch.size());
         }
     }
@@ -238,7 +238,7 @@ public final class BatchInserter implements AutoCloseable {
             this.tableCreated = true;
             LOG.info("Artifacts table and indexes verified/created");
         } catch (final SQLException ex) {
-            LOG.warn("Failed to create artifacts table: {}", ex.getMessage());
+            LOG.warn("Failed to create artifacts table: {}", ex.getMessage(), ex);
         }
     }
 
@@ -259,7 +259,7 @@ public final class BatchInserter implements AutoCloseable {
             } catch (final SQLException ex) {
                 LOG.warn("Individual insert failed for {}/{}:{} — {}",
                     rec.repoName(), rec.name(), rec.version(),
-                    ex.getMessage());
+                    ex.getMessage(), ex);
                 this.skippedCount.incrementAndGet();
             }
         }
@@ -304,7 +304,7 @@ public final class BatchInserter implements AutoCloseable {
         try {
             conn.rollback();
         } catch (final SQLException ex) {
-            LOG.warn("Rollback failed: {}", ex.getMessage());
+            LOG.warn("Rollback failed: {}", ex.getMessage(), ex);
         }
     }
 }

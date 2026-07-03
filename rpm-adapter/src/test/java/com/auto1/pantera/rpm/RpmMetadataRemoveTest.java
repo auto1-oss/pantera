@@ -31,7 +31,6 @@ import org.junit.jupiter.params.provider.CsvSource;
  * Test for {@link RpmMetadata.Remove}.
  * @since 1.4
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class RpmMetadataRemoveTest {
 
     @Test

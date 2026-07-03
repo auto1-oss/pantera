@@ -41,9 +41,11 @@ class JksKeyStore extends YamlBasedKeyStore {
 
     @Override
     public HttpServerOptions secureOptions(final Vertx vertx, final Storage storage) {
-        return new HttpServerOptions()
-            .setSsl(true)
-            .setKeyStoreOptions(this.jksOptions(storage));
+        return TlsHardening.apply(
+            new HttpServerOptions()
+                .setSsl(true)
+                .setKeyStoreOptions(this.jksOptions(storage))
+        );
     }
 
     /**

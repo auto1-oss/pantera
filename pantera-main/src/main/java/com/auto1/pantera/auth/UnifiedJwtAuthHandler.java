@@ -117,6 +117,9 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
             final DecodedJWT decoded = this.verifier.verify(token);
             return TokenType.fromClaim(decoded.getClaim(AuthTokenRest.TYPE).asString());
         } catch (final JWTVerificationException ex) {
+            // EXPECTED: callers handle null as "not a JWT we can read";
+            // every unauthenticated probe lands here, so logging would
+            // flood the auth pipeline with non-actionable noise.
             return null;
         }
     }
@@ -127,12 +130,14 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
      * @param token JWT string
      * @return Authenticated user if valid, empty otherwise
      */
-    @SuppressWarnings("PMD.CyclomaticComplexity")
     private Optional<AuthUser> validate(final String token) {
         final DecodedJWT decoded;
         try {
             decoded = this.verifier.verify(token);
         } catch (final JWTVerificationException ex) {
+            // EXPECTED: signature/expiry/claims failure — return empty
+            // and the caller surfaces 401. Every unauthenticated request
+            // would otherwise log, so we stay silent at this layer.
             return Optional.empty();
         }
         final String sub = decoded.getSubject();
@@ -146,17 +151,17 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
         }
         switch (type) {
             case ACCESS:
-                if (this.blocklist != null) {
-                    if (this.blocklist.isRevokedJti(jti) || this.blocklist.isRevokedUser(sub)) {
-                        EcsLogger.info("com.auto1.pantera.auth")
-                            .message("Access token rejected: blocklisted")
-                            .eventCategory("authentication")
-                            .eventAction("token_validate")
-                            .eventOutcome("failure")
-                            .field("user.name", sub)
-                            .log();
-                        return Optional.empty();
-                    }
+                if (this.blocklist != null
+                    && (this.blocklist.isRevokedJti(jti) || this.blocklist.isRevokedUser(sub))) {
+                    EcsLogger.info("com.auto1.pantera.auth")
+                        .message("Access token rejected: blocklisted")
+                        .eventCategory("authentication")
+                        .eventAction("token_validate")
+                        .eventOutcome("failure")
+                        .field("user.name", sub)
+                        .field("log.source", "application")
+                        .log();
+                    return Optional.empty();
                 }
                 break;
             case REFRESH:
@@ -170,10 +175,13 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
                                 .eventAction("token_validate")
                                 .eventOutcome("failure")
                                 .field("user.name", sub)
+                                .field("log.source", "application")
                                 .log();
                             return Optional.empty();
                         }
                     } catch (final IllegalArgumentException ex) {
+                        // EXPECTED: malformed JTI in token (not a UUID) —
+                        // treat as invalid token, return empty.
                         return Optional.empty();
                     }
                 }
@@ -193,6 +201,7 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
                 .eventAction("token_validate")
                 .eventOutcome("failure")
                 .field("user.name", sub)
+                .field("log.source", "application")
                 .log();
             return Optional.empty();
         }

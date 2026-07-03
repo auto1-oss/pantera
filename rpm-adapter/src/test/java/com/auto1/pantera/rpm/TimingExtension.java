@@ -21,7 +21,6 @@ import org.junit.jupiter.api.extension.ExtensionContext.Store;
  * Junit extension to measure test time execution.
  * @since 1.0
  */
-@SuppressWarnings("PMD.GuardLogStatement")
 public final class TimingExtension implements BeforeTestExecutionCallback,
     AfterTestExecutionCallback {
 

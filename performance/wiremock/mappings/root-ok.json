@@ -1,0 +1,5 @@
+{
+  "priority": 90,
+  "request": { "method": "GET", "urlPattern": "/(m[1-5])?/?" },
+  "response": { "status": 200, "body": "ok" }
+}

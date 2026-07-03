@@ -52,7 +52,6 @@ import org.reactivestreams.Subscriber;
  * @param <R> Result type
  * @since 1.5
  */
-@SuppressWarnings("PMD.CognitiveComplexity")
 public final class StorageValuePipeline<R> {
 
     /**
@@ -370,7 +369,6 @@ public final class StorageValuePipeline<R> {
          * @param count The maximum size of each buffer before it is emitted.
          * @param scheduler Target rx scheduler for execution.
          */
-        @SuppressWarnings("PMD.ConstructorOnlyInitializesOrCallOtherConstructors")
         PublishingOutputStream(
             final long timespan,
             final TimeUnit unit,

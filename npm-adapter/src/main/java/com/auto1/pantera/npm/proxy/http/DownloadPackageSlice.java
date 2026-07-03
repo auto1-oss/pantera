@@ -33,7 +33,6 @@ import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.npm.cooldown.NpmMetadataParser;
 import com.auto1.pantera.npm.cooldown.NpmMetadataFilter;
 import com.auto1.pantera.npm.cooldown.NpmMetadataRewriter;
-import com.auto1.pantera.npm.cooldown.NpmCooldownInspector;
 import com.auto1.pantera.asto.rx.RxFuture;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
@@ -51,6 +50,15 @@ import java.util.stream.StreamSupport;
 
 /**
  * HTTP slice for download package requests.
+ *
+ * <p><b>Trace context contract.</b> Trace context (trace.id / span.id /
+ * span.parent.id) is inherited from the {@code EcsLoggingSlice} MDC scope
+ * set at request entry. Any async hop introduced in this slice MUST use
+ * {@code ContextualExecutor.contextualize(...)} (or an equivalent MDC
+ * capture-and-restore) to preserve trace.id across the executor
+ * boundary — without it, log lines emitted from the worker thread
+ * surface in Kibana with no trace correlation back to the originating
+ * request.
  */
 public final class DownloadPackageSlice implements Slice {
     /**
@@ -124,8 +132,28 @@ public final class DownloadPackageSlice implements Slice {
         this.repoName = repoName;
     }
 
+    /**
+     * Suffix identifying the dist-tag shortcut endpoint
+     * {@code GET /<pkg>/latest}. Older yarn/pnpm/npm versions hit this
+     * directly to fetch only the {@code latest} version's manifest.
+     */
+    private static final String LATEST_SUFFIX = "/latest";
+
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
+        // Phase 10.5 profiler — total npm packument wall time per request.
+        final long entryNs = System.nanoTime();
+        // Captured synchronously (before the body.asBytesFuture() async hop
+        // below) so the artifact.audit resolution record threaded into
+        // CooldownMetadataService reflects THIS request's correlation
+        // context rather than whatever (or nothing) the continuation's
+        // worker thread has bound.
+        com.auto1.pantera.http.log.RequestContextHeaders.bindToMdc(headers);
+        final com.auto1.pantera.audit.AuditContext auditCtx = new com.auto1.pantera.audit.AuditContext(
+            org.slf4j.MDC.get(com.auto1.pantera.http.log.EcsMdc.TRACE_ID),
+            org.slf4j.MDC.get(com.auto1.pantera.http.log.EcsMdc.CLIENT_IP)
+        );
+        final String owner = new com.auto1.pantera.http.headers.Login(headers).getValue();
         // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
         return body.asBytesFuture().thenCompose(ignored -> {
             // P0.1: Check if client requests abbreviated format
@@ -136,18 +164,32 @@ public final class DownloadPackageSlice implements Slice {
 
             // URL-decode package name to handle scoped packages like @authn8%2fmcp-server -> @authn8/mcp-server
             final String rawPath = this.path.value(line.uri().getPath());
-            final String packageName = URLDecoder.decode(rawPath, StandardCharsets.UTF_8);
+            final String rawPackageName = URLDecoder.decode(rawPath, StandardCharsets.UTF_8);
+
+            // DIST-TAG SHORTCUT: GET /<pkg>/latest returns only the latest
+            // version's manifest. Strip the /latest suffix, fetch & filter the
+            // packument, then emit the post-filter latest version's manifest.
+            // Covers v1.21.0+ metadata cooldown gap for clients that resolve
+            // via the shortcut instead of the full packument.
+            if (rawPackageName.endsWith(LATEST_SUFFIX)
+                && rawPackageName.length() > LATEST_SUFFIX.length()) {
+                final String packageName = rawPackageName.substring(
+                    0, rawPackageName.length() - LATEST_SUFFIX.length()
+                );
+                return this.serveLatestManifest(packageName, auditCtx, owner);
+            }
 
             // MEMORY OPTIMIZATION: Use different paths for abbreviated vs full requests
             if (abbreviated) {
                 // FAST PATH: Serve pre-computed abbreviated metadata directly
                 // This avoids loading/parsing full metadata (38MB → 3MB, no JSON parsing)
-                return this.serveAbbreviated(packageName, headers, clientETag);
+                return this.serveAbbreviated(rawPackageName, headers, clientETag, auditCtx, owner);
             } else {
                 // FULL PATH: Load and process full metadata
-                return this.serveFull(packageName, headers, clientETag);
+                return this.serveFull(rawPackageName, headers, clientETag, auditCtx, owner);
             }
-        }).exceptionally(error -> {
+        }).whenComplete((r, e) -> recordPhase("packument_total", entryNs))
+        .exceptionally(error -> {
             // CRITICAL: Convert exceptions to proper HTTP responses to prevent
             // "Parse Error: Expected HTTP/" errors in npm client.
             // Without this, exceptions propagate up and Vert.x closes the connection
@@ -160,8 +202,21 @@ public final class DownloadPackageSlice implements Slice {
                 .eventOutcome("failure")
                 .field("url.path", line.uri().getPath())
                 .error(cause)
+                .field("log.source", "application")
                 .log();
             
+            // A breaker fast-fail keeps its marker so the group resolver
+            // can skip this member without convicting it.
+            if (cause instanceof com.auto1.pantera.http.UpstreamCircuitOpenException circuit) {
+                final ResponseBuilder rb = ResponseBuilder
+                    .from(com.auto1.pantera.http.RsStatus.byCode(502))
+                    .header(com.auto1.pantera.http.UpstreamCircuitOpenException.HEADER, "true")
+                    .jsonBody("{\"error\":\"Upstream circuit breaker is open\"}");
+                if (circuit.retryAfterSeconds() > 0) {
+                    rb.header("Retry-After", Long.toString(circuit.retryAfterSeconds()));
+                }
+                return rb.build();
+            }
             // Check if it's an HTTP exception with a specific status
             if (cause instanceof com.auto1.pantera.http.PanteraHttpException) {
                 final com.auto1.pantera.http.PanteraHttpException httpEx = 
@@ -206,9 +261,14 @@ public final class DownloadPackageSlice implements Slice {
     private CompletableFuture<Response> serveAbbreviated(
         final String packageName,
         final Headers headers,
-        final Optional<String> clientETag
+        final Optional<String> clientETag,
+        final com.auto1.pantera.audit.AuditContext auditCtx,
+        final String owner
     ) {
+        // Phase 10.5: time the metadata-only fetch (drives upstream when cache miss).
+        final long metaNs = System.nanoTime();
         return this.npm.getPackageMetadataOnly(packageName)
+            .doOnEvent((m, e) -> recordPhase("packument_metadata_fetch", metaNs))
             .flatMap(metadata -> {
                 // PERF: Early 304 exit - skip content loading if derived ETag matches
                 if (clientETag.isPresent() && metadata.abbreviatedHash().isPresent()) {
@@ -217,6 +277,13 @@ public final class DownloadPackageSlice implements Slice {
                         metadata.abbreviatedHash().get(), tarballPrefix
                     );
                     if (clientETag.get().equals(derivedEtag)) {
+                        // Taxonomy: a 304 revalidation is still a metadata
+                        // listing view — audit it. The filter never runs on
+                        // this path so the filtered-version detail is unknown.
+                        com.auto1.pantera.audit.AuditLogger.resolutionDetailUnknown(
+                            auditCtx, this.repoType, this.repoName, packageName,
+                            owner, "etag revalidation (304)"
+                        );
                         return io.reactivex.Maybe.just(
                             ResponseBuilder.from(RsStatus.NOT_MODIFIED)
                                 .header("ETag", derivedEtag)
@@ -237,10 +304,16 @@ public final class DownloadPackageSlice implements Slice {
                                 // COOLDOWN: Apply filtering if enabled
                                 if (this.cooldownMetadata != null && this.repoType != null) {
                                     return this.applyAbbreviatedCooldown(
-                                        abbreviatedBytes, packageName, metadata, headers, clientETag
+                                        abbreviatedBytes, packageName, metadata, headers, clientETag,
+                                        auditCtx, owner
                                     );
                                 }
-                                // No cooldown - serve directly
+                                // No cooldown wired - serve directly; still a
+                                // metadata listing view, audit with no filtering.
+                                com.auto1.pantera.audit.AuditLogger.resolution(
+                                    auditCtx, this.repoType, this.repoName, packageName,
+                                    owner, java.util.List.of()
+                                );
                                 return io.reactivex.Maybe.just(
                                     this.buildAbbreviatedResponse(abbreviatedBytes, metadata, headers, clientETag)
                                 );
@@ -260,9 +333,14 @@ public final class DownloadPackageSlice implements Slice {
                                     // Apply cooldown filtering to full metadata too
                                     if (this.cooldownMetadata != null && this.repoType != null) {
                                         return this.applyFullMetadataCooldown(
-                                            rawBytes, packageName, metadata, headers, clientETag
+                                            rawBytes, packageName, metadata, headers, clientETag,
+                                            auditCtx, owner
                                         );
                                     }
+                                    com.auto1.pantera.audit.AuditLogger.resolution(
+                                        auditCtx, this.repoType, this.repoName, packageName,
+                                        owner, java.util.List.of()
+                                    );
                                     return io.reactivex.Maybe.just(
                                         this.buildResponse(rawBytes, metadata, headers, true, clientETag)
                                     );
@@ -289,12 +367,14 @@ public final class DownloadPackageSlice implements Slice {
         final String packageName,
         final com.auto1.pantera.npm.proxy.model.NpmPackage.Metadata metadata,
         final Headers headers,
-        final Optional<String> clientETag
+        final Optional<String> clientETag,
+        final com.auto1.pantera.audit.AuditContext auditCtx,
+        final String owner
     ) {
         // filterMetadata() parses JSON once and extracts release dates via ReleaseDateProvider
         // No need to pre-parse - that would double the parsing overhead
         final CompletableFuture<Response> filterFuture = this.applyFilterAndBuildResponse(
-            abbreviatedBytes, packageName, metadata, headers, clientETag
+            abbreviatedBytes, packageName, metadata, headers, clientETag, auditCtx, owner
         );
         return RxFuture.maybe(filterFuture);
     }
@@ -308,10 +388,10 @@ public final class DownloadPackageSlice implements Slice {
         final String packageName,
         final com.auto1.pantera.npm.proxy.model.NpmPackage.Metadata metadata,
         final Headers headers,
-        final Optional<String> clientETag
+        final Optional<String> clientETag,
+        final com.auto1.pantera.audit.AuditContext auditCtx,
+        final String owner
     ) {
-        // Create inspector for cooldown evaluation - dates are preloaded from metadata
-        final NpmCooldownInspector inspector = new NpmCooldownInspector();
         final CompletableFuture<Response> filterFuture = this.cooldownMetadata.filterMetadata(
             this.repoType,
             this.repoName,
@@ -320,7 +400,8 @@ public final class DownloadPackageSlice implements Slice {
             new NpmMetadataParser(),
             new NpmMetadataFilter(),
             new NpmMetadataRewriter(),
-            Optional.of(inspector)
+            auditCtx,
+            owner
         ).handle((filtered, ex) -> {
             if (ex != null) {
                 Throwable cause = ex;
@@ -331,6 +412,7 @@ public final class DownloadPackageSlice implements Slice {
                             .eventCategory("database")
                             .eventAction("all_versions_blocked")
                             .field("package.name", packageName)
+                            .field("log.source", "application")
                             .log();
                         final String json = String.format(
                             "{\"error\":\"All versions of '%s' are under security cooldown. New packages must wait 7 days before installation.\",\"package\":\"%s\"}",
@@ -348,6 +430,7 @@ public final class DownloadPackageSlice implements Slice {
                     .eventAction("filter_error")
                     .field("package.name", packageName)
                     .error(ex)
+                    .field("log.source", "application")
                     .log();
                 return this.buildResponse(fullBytes, metadata, headers, true, clientETag);
             }
@@ -359,18 +442,18 @@ public final class DownloadPackageSlice implements Slice {
     /**
      * Apply cooldown filtering and build abbreviated response.
      * CooldownMetadataService handles JSON parsing and release date extraction internally.
-     * NpmCooldownInspector is required for cooldown evaluation - release dates are preloaded
-     * from metadata via ReleaseDateProvider, so no remote fetch is needed.
+     * Release dates are sourced from the canonical {@code PublishDateRegistry}
+     * (via {@code RegistryBackedInspector}), populated from upstream metadata.
      */
     private CompletableFuture<Response> applyFilterAndBuildResponse(
         final byte[] abbreviatedBytes,
         final String packageName,
         final com.auto1.pantera.npm.proxy.model.NpmPackage.Metadata metadata,
         final Headers headers,
-        final Optional<String> clientETag
+        final Optional<String> clientETag,
+        final com.auto1.pantera.audit.AuditContext auditCtx,
+        final String owner
     ) {
-        // Create inspector for cooldown evaluation - dates are preloaded from metadata
-        final NpmCooldownInspector inspector = new NpmCooldownInspector();
         return this.cooldownMetadata.filterMetadata(
             this.repoType,
             this.repoName,
@@ -379,7 +462,8 @@ public final class DownloadPackageSlice implements Slice {
             new NpmMetadataParser(),
             new NpmMetadataFilter(),
             new NpmMetadataRewriter(),
-            Optional.of(inspector)
+            auditCtx,
+            owner
         ).handle((filtered, ex) -> {
                 if (ex != null) {
                     Throwable cause = ex;
@@ -390,6 +474,7 @@ public final class DownloadPackageSlice implements Slice {
                                 .eventCategory("database")
                                 .eventAction("all_versions_blocked")
                                 .field("package.name", packageName)
+                                .field("log.source", "application")
                                 .log();
                             final String json = String.format(
                                 "{\"error\":\"All versions of '%s' are under security cooldown. New packages must wait 7 days before installation.\",\"package\":\"%s\"}",
@@ -407,6 +492,7 @@ public final class DownloadPackageSlice implements Slice {
                         .eventAction("filter_error")
                         .field("package.name", packageName)
                         .error(ex)
+                        .field("log.source", "application")
                         .log();
                     return this.buildAbbreviatedResponse(abbreviatedBytes, metadata, headers, clientETag);
                 }
@@ -421,7 +507,9 @@ public final class DownloadPackageSlice implements Slice {
     private CompletableFuture<Response> serveFull(
         final String packageName,
         final Headers headers,
-        final Optional<String> clientETag
+        final Optional<String> clientETag,
+        final com.auto1.pantera.audit.AuditContext auditCtx,
+        final String owner
     ) {
         return this.npm.getPackageMetadataOnly(packageName)
             .flatMap(metadata -> {
@@ -432,6 +520,13 @@ public final class DownloadPackageSlice implements Slice {
                         metadata.contentHash().get(), tarballPrefix
                     );
                     if (clientETag.get().equals(derivedEtag)) {
+                        // Taxonomy: a 304 revalidation is still a metadata
+                        // listing view — audit it. The filter never runs on
+                        // this path so the filtered-version detail is unknown.
+                        com.auto1.pantera.audit.AuditLogger.resolutionDetailUnknown(
+                            auditCtx, this.repoType, this.repoName, packageName,
+                            owner, "etag revalidation (304)"
+                        );
                         return io.reactivex.Maybe.just(
                             ResponseBuilder.from(RsStatus.NOT_MODIFIED)
                                 .header("ETag", derivedEtag)
@@ -449,10 +544,8 @@ public final class DownloadPackageSlice implements Slice {
                         .toMaybe()
                         .flatMap(rawBytes -> {
                             // Apply cooldown filtering if available
-                            // Create inspector for cooldown evaluation - dates are preloaded from metadata
                             if (this.cooldownMetadata != null && this.repoType != null) {
-                                final NpmCooldownInspector inspector = new NpmCooldownInspector();
-                                final CompletableFuture<Response> filterFuture = 
+                                final CompletableFuture<Response> filterFuture =
                                     this.cooldownMetadata.filterMetadata(
                                         this.repoType,
                                         this.repoName,
@@ -461,7 +554,8 @@ public final class DownloadPackageSlice implements Slice {
                                         new NpmMetadataParser(),
                                         new NpmMetadataFilter(),
                                         new NpmMetadataRewriter(),
-                                        Optional.of(inspector)
+                                        auditCtx,
+                                        owner
                                     ).handle((filtered, ex) -> {
                                         if (ex != null) {
                                             Throwable cause = ex;
@@ -472,6 +566,7 @@ public final class DownloadPackageSlice implements Slice {
                                                         .eventCategory("database")
                                                         .eventAction("all_versions_blocked")
                                                         .field("package.name", packageName)
+                                                        .field("log.source", "application")
                                                         .log();
                                                     final String json = String.format(
                                                         "{\"error\":\"All versions of '%s' are under security cooldown. New packages must wait 7 days before installation.\",\"package\":\"%s\"}",
@@ -489,6 +584,7 @@ public final class DownloadPackageSlice implements Slice {
                                                 .eventAction("filter_error")
                                                 .field("package.name", packageName)
                                                 .error(ex)
+                                                .field("log.source", "application")
                                                 .log();
                                             return this.buildResponse(rawBytes, metadata, headers, false, clientETag);
                                         }
@@ -496,6 +592,12 @@ public final class DownloadPackageSlice implements Slice {
                                     });
                                 return RxFuture.maybe(filterFuture);
                             }
+                            // No cooldown wired - serve directly; still a
+                            // metadata listing view, audit with no filtering.
+                            com.auto1.pantera.audit.AuditLogger.resolution(
+                                auditCtx, this.repoType, this.repoName, packageName,
+                                owner, java.util.List.of()
+                            );
                             return io.reactivex.Maybe.just(
                                 this.buildResponse(rawBytes, metadata, headers, false, clientETag)
                             );
@@ -505,6 +607,208 @@ public final class DownloadPackageSlice implements Slice {
             .toSingle(ResponseBuilder.notFound().build())
             .to(SingleInterop.get())
             .toCompletableFuture();
+    }
+
+    /**
+     * Serve the dist-tag shortcut endpoint {@code GET /<pkg>/latest}.
+     *
+     * <p>Fetches the packument, applies cooldown filtering (via the same
+     * pipeline used by the full-packument path), resolves the post-filter
+     * {@code dist-tags.latest}, and returns that version's manifest extracted
+     * from {@code versions[latest]}. Behaviour:</p>
+     *
+     * <ul>
+     *   <li>Upstream latest not blocked &rarr; pass-through (just extract the
+     *       entry from the packument).</li>
+     *   <li>Upstream latest blocked, fallback exists &rarr; post-filter
+     *       {@code dist-tags.latest} points at the highest non-blocked stable
+     *       version by release date; we emit that entry.</li>
+     *   <li>All versions blocked &rarr; {@code MetadataFilterService} throws
+     *       {@link AllVersionsBlockedException}; we map to 404 (npm's
+     *       convention for "version not found" on this endpoint).</li>
+     * </ul>
+     *
+     * <p>No URL rewriting is applied to the manifest body — tarball URLs in
+     * the manifest are preserved as-is from upstream. This matches the
+     * behaviour of the upstream npm registry for this endpoint.</p>
+     */
+    private CompletableFuture<Response> serveLatestManifest(
+        final String packageName,
+        final com.auto1.pantera.audit.AuditContext auditCtx,
+        final String owner
+    ) {
+        if (this.cooldownMetadata == null || this.repoType == null) {
+            // Cooldown disabled: pass-through by fetching packument and
+            // returning its current latest manifest. This keeps behaviour
+            // parity with upstream registry even without filtering.
+            return this.resolveLatestFromRaw(packageName, auditCtx, owner);
+        }
+        return this.npm.getPackageMetadataOnly(packageName)
+            .flatMap(metadata -> this.npm.getPackageContentStream(packageName)
+                .flatMap(contentStream -> {
+                    final long contentSize = contentStream.size().orElse(-1L);
+                    return Concatenation.withSize(contentStream, contentSize)
+                        .single()
+                        .map(buf -> new Remaining(buf).bytes())
+                        .toMaybe()
+                        .flatMap(rawBytes -> io.reactivex.Maybe.just(rawBytes));
+                })
+            )
+            .toSingle(new byte[0])
+            .to(SingleInterop.get())
+            .toCompletableFuture()
+            .thenCompose(rawBytes -> {
+                if (rawBytes.length == 0) {
+                    return CompletableFuture.completedFuture(
+                        ResponseBuilder.notFound()
+                            .jsonBody(String.format(
+                                "{\"error\":\"version not found: latest\",\"package\":\"%s\"}",
+                                packageName
+                            ))
+                            .build()
+                    );
+                }
+                return this.cooldownMetadata.filterMetadata(
+                    this.repoType,
+                    this.repoName,
+                    packageName,
+                    rawBytes,
+                    new NpmMetadataParser(),
+                    new NpmMetadataFilter(),
+                    new NpmMetadataRewriter(),
+                    auditCtx,
+                    owner
+                ).handle((filteredBytes, ex) -> {
+                    if (ex != null) {
+                        Throwable cause = ex;
+                        while (cause != null) {
+                            if (cause instanceof AllVersionsBlockedException) {
+                                EcsLogger.info("com.auto1.pantera.npm")
+                                    .message("All versions blocked by cooldown (latest shortcut)")
+                                    .eventCategory("database")
+                                    .eventAction("all_versions_blocked")
+                                    .field("package.name", packageName)
+                                    .field("log.source", "application")
+                                    .log();
+                                return ResponseBuilder.notFound()
+                                    .jsonBody(String.format(
+                                        "{\"error\":\"version not found: latest\",\"package\":\"%s\"}",
+                                        packageName
+                                    ))
+                                    .build();
+                            }
+                            cause = cause.getCause();
+                        }
+                        EcsLogger.warn("com.auto1.pantera.npm")
+                            .message("Cooldown filter error (latest shortcut) - falling back to raw")
+                            .eventCategory("database")
+                            .eventAction("filter_error")
+                            .field("package.name", packageName)
+                            .error(ex)
+                            .field("log.source", "application")
+                            .log();
+                        return this.buildLatestManifestResponse(rawBytes, packageName);
+                    }
+                    return this.buildLatestManifestResponse(filteredBytes, packageName);
+                });
+            });
+    }
+
+    /**
+     * Cooldown-disabled pass-through for {@code /<pkg>/latest}: fetch the
+     * packument and extract its {@code dist-tags.latest} manifest. Still a
+     * metadata listing view — audited with an empty filtered list.
+     */
+    private CompletableFuture<Response> resolveLatestFromRaw(
+        final String packageName,
+        final com.auto1.pantera.audit.AuditContext auditCtx,
+        final String owner
+    ) {
+        return this.npm.getPackageMetadataOnly(packageName)
+            .flatMap(metadata -> this.npm.getPackageContentStream(packageName)
+                .flatMap(contentStream -> {
+                    final long contentSize = contentStream.size().orElse(-1L);
+                    return Concatenation.withSize(contentStream, contentSize)
+                        .single()
+                        .map(buf -> new Remaining(buf).bytes())
+                        .toMaybe();
+                })
+            )
+            .map(rawBytes -> {
+                com.auto1.pantera.audit.AuditLogger.resolution(
+                    auditCtx, this.repoType, this.repoName, packageName,
+                    owner, java.util.List.of()
+                );
+                return this.buildLatestManifestResponse(rawBytes, packageName);
+            })
+            .toSingle(ResponseBuilder.notFound()
+                .jsonBody(String.format(
+                    "{\"error\":\"version not found: latest\",\"package\":\"%s\"}",
+                    packageName
+                ))
+                .build())
+            .to(SingleInterop.get())
+            .toCompletableFuture();
+    }
+
+    /**
+     * Build a {@code /<pkg>/latest} response from (post-filter) packument
+     * bytes: parse JSON, read {@code dist-tags.latest}, look up the
+     * corresponding entry in {@code versions}, and emit it as the body. Returns
+     * 404 if the packument is malformed, has no {@code latest} tag, or the
+     * referenced version is missing (e.g. all blocked and removed).
+     */
+    private Response buildLatestManifestResponse(
+        final byte[] packumentBytes,
+        final String packageName
+    ) {
+        try {
+            final com.fasterxml.jackson.databind.JsonNode root =
+                new com.fasterxml.jackson.databind.ObjectMapper().readTree(packumentBytes);
+            final com.fasterxml.jackson.databind.JsonNode distTags = root.get("dist-tags");
+            if (distTags == null || !distTags.isObject() || !distTags.has("latest")) {
+                return ResponseBuilder.notFound()
+                    .jsonBody(String.format(
+                        "{\"error\":\"version not found: latest\",\"package\":\"%s\"}",
+                        packageName
+                    ))
+                    .build();
+            }
+            final String latest = distTags.get("latest").asText();
+            final com.fasterxml.jackson.databind.JsonNode versions = root.get("versions");
+            if (versions == null || !versions.has(latest)) {
+                return ResponseBuilder.notFound()
+                    .jsonBody(String.format(
+                        "{\"error\":\"version not found: latest\",\"package\":\"%s\"}",
+                        packageName
+                    ))
+                    .build();
+            }
+            final com.fasterxml.jackson.databind.JsonNode manifest = versions.get(latest);
+            final byte[] body = new com.fasterxml.jackson.databind.ObjectMapper()
+                .writeValueAsBytes(manifest);
+            return ResponseBuilder.ok()
+                .header("Content-Type", "application/json; charset=utf-8")
+                .header("Cache-Control", "public, max-age=300")
+                .body(body)
+                .build();
+        } catch (final java.io.IOException ex) {
+            EcsLogger.warn("com.auto1.pantera.npm")
+                .message("Failed to extract /latest manifest from packument")
+                .eventCategory("web")
+                .eventAction("latest_manifest")
+                .eventOutcome("failure")
+                .field("package.name", packageName)
+                .error(ex)
+                .field("log.source", "application")
+                .log();
+            return ResponseBuilder.notFound()
+                .jsonBody(String.format(
+                    "{\"error\":\"version not found: latest\",\"package\":\"%s\"}",
+                    packageName
+                ))
+                .build();
+        }
     }
 
     /**
@@ -732,6 +1036,21 @@ public final class DownloadPackageSlice implements Slice {
             prefix = this.assetPrefix(host);
         }
         return new ClientContent(data, prefix).value().toString();
+    }
+
+    /**
+     * Phase 10.5 profiler — emit per-phase histogram tagged by repo so the
+     * npm cold-cache wall can be decomposed without bringing
+     * {@link com.auto1.pantera.http.cache.BaseCachedProxySlice} into the
+     * structurally-different npm path. Repo name may be null in legacy
+     * test ctors (no cooldownMetadata wiring) — guard with a label fallback.
+     */
+    private void recordPhase(final String phase, final long startNs) {
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            final String label = this.repoName == null ? "npm_proxy_unknown" : this.repoName;
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
+                .recordProxyPhaseDuration(label, phase, System.nanoTime() - startNs);
+        }
     }
 
     /**

@@ -51,11 +51,6 @@ public enum XmlPackage {
     );
 
     /**
-     * File suffix.
-     */
-    private static final String SUFFIX = ".xml";
-
-    /**
      * Tag name.
      */
     private final String tagname;

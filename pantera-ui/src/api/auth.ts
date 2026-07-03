@@ -101,6 +101,71 @@ export async function updateAuthSettings(settings: Record<string, string>): Prom
   await getApiClient().put('/admin/auth-settings', settings)
 }
 
+// --- Circuit Breaker Settings ---
+
+/**
+ * Shape of the 5 circuit-breaker tunables returned by
+ * GET /admin/circuit-breaker-settings. All values are strings (same
+ * convention as auth-settings); the form parses them to numbers for
+ * validation before submit.
+ */
+export interface CircuitBreakerSettings {
+  circuit_breaker_failure_rate_threshold: string
+  circuit_breaker_minimum_number_of_calls: string
+  circuit_breaker_sliding_window_seconds: string
+  circuit_breaker_initial_block_seconds: string
+  circuit_breaker_max_block_seconds: string
+}
+
+export async function getCircuitBreakerSettings(): Promise<CircuitBreakerSettings> {
+  const { data } = await getApiClient().get<CircuitBreakerSettings>(
+    '/admin/circuit-breaker-settings',
+  )
+  return data
+}
+
+export async function updateCircuitBreakerSettings(
+  settings: Partial<CircuitBreakerSettings>,
+): Promise<void> {
+  await getApiClient().put('/admin/circuit-breaker-settings', settings)
+}
+
+// --- Upstream HTTP Breaker Settings ---
+
+/**
+ * Shape of the 5 upstream-breaker tunables returned by
+ * GET /admin/upstream-breaker-settings. All values are strings (same
+ * convention as circuit-breaker-settings); the form parses them to
+ * numbers for validation before submit.
+ *
+ * NOT the same breaker as {@link CircuitBreakerSettings}: that one is
+ * the GROUP-MEMBER breaker, which blocks a member repository during
+ * group resolution after sustained failures. This one is the OUTBOUND
+ * HTTP-client breaker — it blocks outbound calls per upstream
+ * `scheme://host:port` after sustained 5xx/connection failures and
+ * recovers via a HEAD probe with Fibonacci backoff.
+ */
+export interface UpstreamBreakerSettings {
+  upstream_breaker_failure_rate_threshold: string
+  upstream_breaker_minimum_calls: string
+  upstream_breaker_window_seconds: string
+  upstream_breaker_seed_backoff_seconds: string
+  upstream_breaker_max_backoff_seconds: string
+}
+
+export async function getUpstreamBreakerSettings(): Promise<UpstreamBreakerSettings> {
+  const { data } = await getApiClient().get<UpstreamBreakerSettings>(
+    '/admin/upstream-breaker-settings',
+  )
+  return data
+}
+
+export async function updateUpstreamBreakerSettings(
+  settings: Partial<UpstreamBreakerSettings>,
+): Promise<void> {
+  await getApiClient().put('/admin/upstream-breaker-settings', settings)
+}
+
 export async function revokeAllUserTokens(username: string): Promise<{ revoked_count: number }> {
   const { data } = await getApiClient().post<{ revoked_count: number }>(
     `/admin/revoke-user/${username}`

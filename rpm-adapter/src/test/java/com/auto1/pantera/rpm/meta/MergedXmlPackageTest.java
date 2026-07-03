@@ -32,7 +32,6 @@ import org.junit.jupiter.params.provider.ValueSource;
  * Test for {@link MergedXmlPackage}.
  * @since 1.5
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class MergedXmlPackageTest {
 
     @ParameterizedTest

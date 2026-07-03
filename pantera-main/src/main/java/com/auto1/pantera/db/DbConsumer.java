@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.db;
 
+import com.auto1.pantera.audit.AuditContext;
 import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.trace.TraceContextExecutor;
@@ -39,6 +40,13 @@ import javax.sql.DataSource;
 
 /**
  * Consumer for artifact records which writes the records into db.
+ *
+ * <p>Multiple distinct error sites in this class — distinct failure
+ * modes (batch UPSERT, dead-letter persist, queue back-pressure,
+ * shutdown await). Each is the boundary for its respective retry /
+ * dead-letter decision so the log lines are intentionally separate.
+ * See audit/aggressive-items.md (Tier 4 B7 duplicate-error bucket).
+ *
  * @since 0.31
  */
 public final class DbConsumer implements Consumer<ArtifactEvent> {
@@ -100,7 +108,6 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
      * @param bufferTimeSeconds Buffer time in seconds
      * @param bufferSize Maximum events per batch
      */
-    @SuppressWarnings("PMD.ConstructorOnlyInitializesOrCallOtherConstructors")
     public DbConsumer(final DataSource source, final int bufferTimeSeconds, final int bufferSize) {
         this.source = source;
         this.subject = PublishSubject.create();
@@ -127,38 +134,57 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
     /**
      * Emit ECS audit log for successful artifact publish operations.
      *
-     * <p>Restores the originating HTTP {@code trace.id} captured on the event
-     * (see {@link ArtifactEvent#traceId()}) into MDC for the duration of the
-     * log emission so the audit entry can be correlated to its HTTP request
-     * in Kibana — {@link co.elastic.logging.log4j2.EcsLayout} reads MDC when
-     * serialising the ECS {@code trace.id} field. The prior MDC state of the
-     * DB-consumer thread is saved and restored so pool threads are not
-     * polluted across batches.</p>
+     * <p>{@link AuditLogger} takes {@code trace.id} / {@code client.ip} as
+     * explicit {@link AuditContext} parameters — no MDC read inside
+     * {@code AuditLogger} itself. This method still binds the two fields into
+     * MDC (saved/restored around the call) for the DB-consumer thread: {@code
+     * RxComputationThreadPool} threads are pooled and reused across many
+     * unrelated batches, so a value left over from a previous call's {@code
+     * ctx} would otherwise win over this call's explicit value inside {@link
+     * EcsLogger#field}'s MDC-wins rule (it drops the field() value whenever
+     * {@code ThreadContext} already has that key — correct for the
+     * synchronous single-request case {@code EcsLoggingSlice} was designed
+     * for, but a hazard on a shared thread pool with no request-scoped MDC
+     * lifecycle). Binding this call's own value before invoking {@link
+     * AuditLogger#publish} guarantees the two sources always agree.
      *
      * @param record Artifact event that was persisted
      */
     private static void logArtifactPublish(final ArtifactEvent record) {
         final String priorTraceId = MDC.get(EcsMdc.TRACE_ID);
+        final String priorClientIp = MDC.get(EcsMdc.CLIENT_IP);
         final String eventTraceId = record.traceId();
+        final String eventClientIp = record.clientIp();
         if (eventTraceId != null) {
             MDC.put(EcsMdc.TRACE_ID, eventTraceId);
         }
+        if (eventClientIp != null) {
+            MDC.put(EcsMdc.CLIENT_IP, eventClientIp);
+        }
         try {
             AuditLogger.publish(
-                normalizeRepoName(record.repoName()),
+                new AuditContext(eventTraceId, eventClientIp),
                 record.repoType(),
+                normalizeRepoName(record.repoName()),
                 record.artifactName(),
                 record.artifactVersion(),
                 record.size(),
                 record.owner(),
                 record.releaseDate().orElse(null),
-                record.checksum()
+                record.checksum(),
+                AuditLogger.OUTCOME_SUCCESS,
+                null
             );
         } finally {
             if (priorTraceId != null) {
                 MDC.put(EcsMdc.TRACE_ID, priorTraceId);
             } else if (eventTraceId != null) {
                 MDC.remove(EcsMdc.TRACE_ID);
+            }
+            if (priorClientIp != null) {
+                MDC.put(EcsMdc.CLIENT_IP, priorClientIp);
+            } else if (eventClientIp != null) {
+                MDC.remove(EcsMdc.CLIENT_IP);
             }
         }
     }
@@ -181,6 +207,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                 .message("Subscribed to insert/delete db records")
                 .eventCategory("database")
                 .eventAction("subscription_start")
+                .field("log.source", "application")
                 .log();
         }
 
@@ -211,6 +238,11 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                     "created_date = EXCLUDED.created_date, release_date = EXCLUDED.release_date, " +
                     "owner = EXCLUDED.owner, path_prefix = COALESCE(EXCLUDED.path_prefix, artifacts.path_prefix)"
                 );
+                PreparedStatement publishDate = conn.prepareStatement(
+                    "INSERT INTO artifact_publish_dates (repo_type, name, version, published_at, source) "
+                    + "VALUES (?,?,?,?,'cache_write_event') "
+                    + "ON CONFLICT (repo_type, name, version) DO NOTHING"
+                );
                 PreparedStatement deletev = conn.prepareStatement(
                     "DELETE FROM artifacts WHERE repo_name = ? AND name = ? AND version = ?;"
                 );
@@ -240,6 +272,22 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                             upsert.setString(8, record.owner());
                             upsert.setString(9, record.pathPrefix());
                             upsert.execute();
+                            // Bridge: when the event carries an authoritative release_date,
+                            // mirror it into the canonical artifact_publish_dates lookup so the
+                            // cooldown subsystem has a date for newly-cached artifacts without
+                            // a second upstream HEAD. ON CONFLICT preserves registry-sourced
+                            // rows. Same transaction — artifacts UPSERT rollback also rolls
+                            // back the bridge insert.
+                            if (record.releaseDate().isPresent()) {
+                                publishDate.setString(1, record.repoType());
+                                publishDate.setString(2, record.artifactName());
+                                publishDate.setString(3, record.artifactVersion());
+                                publishDate.setTimestamp(
+                                    4,
+                                    new java.sql.Timestamp(record.releaseDate().get())
+                                );
+                                publishDate.execute();
+                            }
                             conn.releaseSavepoint(sp);
                             logArtifactPublish(record);
                         } else if (record.eventType() == ArtifactEvent.Type.DELETE_VERSION) {
@@ -270,6 +318,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                             .field("repository.name", record.repoName())
                             .field("package.name", record.artifactName())
                             .error(ex)
+                            .field("log.source", "application")
                             .log();
                         errors.add(record);
                     }
@@ -286,6 +335,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                         .eventAction("batch_commit")
                         .eventOutcome("failure")
                         .error(ex)
+                        .field("log.source", "application")
                         .log();
                     final long backoffMs = Math.min(
                         1000L * (1L << (failures - 1)), 8000L
@@ -293,6 +343,10 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                     try {
                         Thread.sleep(backoffMs);
                     } catch (final InterruptedException ie) {
+                        // EXPECTED: shutdown signalled mid-backoff —
+                        // restore interrupt and let the re-queue happen
+                        // (the consumer thread will exit on its own
+                        // shutdown check).
                         Thread.currentThread().interrupt();
                     }
                     sortedEvents.forEach(DbConsumer.this.subject::onNext);
@@ -305,6 +359,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                         .eventAction("batch_dead_letter")
                         .eventOutcome("failure")
                         .error(ex)
+                        .field("log.source", "application")
                         .log();
                     try {
                         final DeadLetterWriter dlWriter = new DeadLetterWriter(
@@ -322,6 +377,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                             .eventAction("dead_letter_write")
                             .eventOutcome("failure")
                             .error(dlError)
+                            .field("log.source", "application")
                             .log();
                     }
                 }
@@ -338,6 +394,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                         .eventCategory("database")
                         .eventAction("event_drop")
                         .eventOutcome("failure")
+                        .field("log.source", "application")
                         .log();
                 }
             }
@@ -351,6 +408,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                 .eventAction("subscription_error")
                 .eventOutcome("failure")
                 .error(error)
+                .field("log.source", "application")
                 .log();
         }
 
@@ -360,6 +418,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                 .message("Subscription cancelled")
                 .eventCategory("database")
                 .eventAction("subscription_complete")
+                .field("log.source", "application")
                 .log();
         }
     }

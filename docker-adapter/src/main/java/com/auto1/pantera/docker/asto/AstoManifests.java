@@ -96,6 +96,7 @@ public final class AstoManifests implements Manifests {
             .eventCategory("web")
             .eventAction("manifest_get")
             .field("container.image.hash.all", ref.digest())
+            .field("log.source", "application")
             .log();
         return this.readLink(ref).thenCompose(
             digestOpt -> digestOpt.map(
@@ -106,6 +107,7 @@ public final class AstoManifests implements Manifests {
                         .eventAction("manifest_get")
                         .field("container.image.hash.all", ref.digest())
                         .field("package.checksum", digest.string())
+                        .field("log.source", "application")
                         .log();
                     return this.blobs.blob(digest)
                         .thenCompose(
@@ -121,6 +123,7 @@ public final class AstoManifests implements Manifests {
                                                 .eventOutcome("success")
                                                 .field("package.checksum", digest.string())
                                                 .field("package.size", bytes.length)
+                                                .field("log.source", "application")
                                                 .log();
                                             return Optional.of(new Manifest(blob.digest(), bytes));
                                         })
@@ -132,6 +135,7 @@ public final class AstoManifests implements Manifests {
                                         .eventAction("manifest_get")
                                         .eventOutcome("failure")
                                         .field("package.checksum", digest.string())
+                                        .field("log.source", "application")
                                         .log();
                                     return CompletableFuture.completedFuture(Optional.empty());
                                 })
@@ -144,6 +148,7 @@ public final class AstoManifests implements Manifests {
                     .eventAction("manifest_get")
                     .eventOutcome("failure")
                     .field("container.image.hash.all", ref.digest())
+                    .field("log.source", "application")
                     .log();
                 return CompletableFuture.completedFuture(Optional.empty());
             })

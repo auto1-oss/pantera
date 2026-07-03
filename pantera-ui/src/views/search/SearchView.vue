@@ -4,10 +4,8 @@ import { search as searchApi } from '@/api/search'
 import { repoTypeIcon, repoTypeColorClass, repoTypeBaseLabel } from '@/utils/repoTypes'
 import RepoTypeBadge from '@/components/common/RepoTypeBadge.vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
-import InputText from 'primevue/inputtext'
 import Button from 'primevue/button'
 import Popover from 'primevue/popover'
-import Tag from 'primevue/tag'
 import Paginator from 'primevue/paginator'
 import type { SearchResult } from '@/types'
 
@@ -160,6 +158,37 @@ function formatSize(bytes: number): string {
   return `${bytes} B`
 }
 
+function formatUploadedAt(iso?: string | null): string {
+  if (!iso) return ''
+  const ts = Date.parse(iso)
+  if (Number.isNaN(ts)) return ''
+  const diffMs = Date.now() - ts
+  const sec = Math.round(diffMs / 1000)
+  if (sec < 60) return `${sec}s ago`
+  const min = Math.round(sec / 60)
+  if (min < 60) return `${min}m ago`
+  const hr = Math.round(min / 60)
+  if (hr < 48) return `${hr}h ago`
+  const day = Math.round(hr / 24)
+  if (day < 30) return `${day}d ago`
+  const mon = Math.round(day / 30)
+  if (mon < 18) return `${mon}mo ago`
+  return `${Math.round(mon / 12)}y ago`
+}
+
+function formatUploadedAtAbsolute(iso?: string | null): string {
+  if (!iso) return ''
+  const ts = Date.parse(iso)
+  if (Number.isNaN(ts)) return ''
+  return new Date(ts).toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
 function normalizePath(path: string): string {
   if (path.includes('/')) return path
   const lastDot = path.lastIndexOf('.')
@@ -259,13 +288,15 @@ const SORT_OPTIONS = [
               <div class="font-semibold text-gray-900 dark:text-white mb-2">Search syntax</div>
               <table class="w-full text-xs">
                 <tbody>
-                  <tr v-for="row in [
-                    ['pydantic', 'Full-text search'],
-                    ['name:pydantic', 'Filter by package name'],
-                    ['version:2.12', 'Filter by version'],
-                    ['repo:pypi-proxy', 'Filter by repository'],
-                    ['type:maven', 'Filter by repo type'],
-                  ]" :key="row[0]" class="border-b border-gray-100 dark:border-gray-800 last:border-0">
+                  <tr
+                    v-for="row in [
+                      ['pydantic', 'Full-text search'],
+                      ['name:pydantic', 'Filter by package name'],
+                      ['version:2.12', 'Filter by version'],
+                      ['repo:pypi-proxy', 'Filter by repository'],
+                      ['type:maven', 'Filter by repo type'],
+                    ]" :key="row[0]" class="border-b border-gray-100 dark:border-gray-800 last:border-0"
+                  >
                     <td class="py-1.5 pr-3 font-mono text-orange-500 whitespace-nowrap">{{ row[0] }}</td>
                     <td class="py-1.5 text-gray-500">{{ row[1] }}</td>
                   </tr>
@@ -400,11 +431,19 @@ const SORT_OPTIONS = [
                 <span class="text-[10px] font-medium px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-500">{{ item.repo_name }}</span>
                 <span v-if="item.version" class="text-[10px] font-medium px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500">v{{ item.version }}</span>
                 <span class="text-xs text-gray-500">{{ formatSize(item.size) }}</span>
+                <span
+                  v-if="item.created_at"
+                  class="text-xs text-gray-500 inline-flex items-center gap-1"
+                  :title="formatUploadedAtAbsolute(item.created_at)"
+                >
+                  <i class="pi pi-clock text-[10px]" />
+                  {{ formatUploadedAt(item.created_at) }}
+                </span>
               </div>
             </div>
 
             <!-- Browse -->
-            <router-link :to="browseUrl(item)" custom v-slot="{ navigate }">
+            <router-link v-slot="{ navigate }" :to="browseUrl(item)" custom>
               <Button
                 icon="pi pi-folder-open"
                 label="Browse"
@@ -421,10 +460,10 @@ const SORT_OPTIONS = [
           <Paginator
             v-if="total > size"
             :rows="size"
-            :totalRecords="total"
+            :total-records="total"
             :first="page * size"
+            :rows-per-page-options="[10, 20, 50]"
             @page="onPageChange"
-            :rowsPerPageOptions="[10, 20, 50]"
           />
         </div>
       </div>

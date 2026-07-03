@@ -13,7 +13,6 @@ package com.auto1.pantera.pypi.http;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
-import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.asto.ext.ContentDigest;
 import com.auto1.pantera.asto.ext.Digests;
 import com.auto1.pantera.asto.ext.KeyLastPart;
@@ -135,9 +134,6 @@ final class SliceIndex implements Slice {
                 if (exists) {
                     return this.storage.value(indexKey).thenApply(
                         content -> {
-                            if (!packageName.isEmpty()) {
-                                AuditLogger.resolution(packageName);
-                            }
                             return ResponseBuilder.ok()
                                 .header("Content-Type", format.contentType() + "; charset=utf-8")
                                 .body(content)
@@ -215,7 +211,7 @@ final class SliceIndex implements Slice {
     private static CompletableFuture<byte[]> drainBody(final Content content) {
         final CompletableFuture<byte[]> future = new CompletableFuture<>();
         content.subscribe(
-            new org.reactivestreams.Subscriber<java.nio.ByteBuffer>() {
+            new org.reactivestreams.Subscriber<>() {
                 private final java.io.ByteArrayOutputStream out =
                     new java.io.ByteArrayOutputStream();
                 @Override
@@ -333,7 +329,6 @@ final class SliceIndex implements Slice {
                         .map(
                             entries -> {
                                 final String json = SimpleJsonRenderer.render(packageName, entries);
-                                AuditLogger.resolution(packageName);
                                 return ResponseBuilder.ok()
                                     .header("Content-Type", SimpleApiFormat.JSON.contentType())
                                     .body(
@@ -410,7 +405,6 @@ final class SliceIndex implements Slice {
                         .collect(StringBuilder::new, StringBuilder::append)
                         .map(
                             resp -> {
-                                AuditLogger.resolution(packageName);
                                 return ResponseBuilder.ok()
                                     .htmlBody(
                                         String.format(

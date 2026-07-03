@@ -13,6 +13,7 @@ package com.auto1.pantera.importer;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.composer.ComposerImportMerge;
 import com.auto1.pantera.http.log.EcsLogger;
+import java.util.Locale;
 
 import java.util.Optional;
 import java.util.concurrent.CompletionStage;
@@ -79,6 +80,7 @@ public final class ComposerImportPostProcessor {
             .eventCategory("web")
             .eventAction("import_post_process")
             .field("repository.name", this.repoName)
+            .field("log.source", "application")
             .log();
 
         final ComposerImportMerge merge = new ComposerImportMerge(
@@ -96,6 +98,7 @@ public final class ComposerImportPostProcessor {
                         .eventOutcome("failure")
                         .field("repository.name", this.repoName)
                         .error(error)
+                        .field("log.source", "application")
                         .log();
                 } else if (result.failedPackages > 0) {
                     EcsLogger.warn("com.auto1.pantera.importer")
@@ -105,6 +108,7 @@ public final class ComposerImportPostProcessor {
                         .eventOutcome("failure")
                         .field("event.reason", "partial_failure")
                         .field("repository.name", this.repoName)
+                        .field("log.source", "application")
                         .log();
                 } else {
                     EcsLogger.info("com.auto1.pantera.importer")
@@ -113,6 +117,7 @@ public final class ComposerImportPostProcessor {
                         .eventAction("import_post_process")
                         .eventOutcome("success")
                         .field("repository.name", this.repoName)
+                        .field("log.source", "application")
                         .log();
                 }
             });
@@ -128,7 +133,7 @@ public final class ComposerImportPostProcessor {
         if (repoType == null) {
             return false;
         }
-        final String type = repoType.toLowerCase();
-        return type.equals("php") || type.equals("composer");
+        final String type = repoType.toLowerCase(Locale.ROOT);
+        return "php".equals(type) || "composer".equals(type);
     }
 }

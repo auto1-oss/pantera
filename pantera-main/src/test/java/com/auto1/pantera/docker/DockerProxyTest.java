@@ -90,11 +90,10 @@ class DockerProxyTest {
             (username, password) -> Optional.empty(),
             token -> java.util.concurrent.CompletableFuture.completedFuture(Optional.empty()),
             Optional.empty(),
-            com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE
+            com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE
         );
     }
 
-    @SuppressWarnings("PMD.UnusedPrivateMethod")
     private static Stream<String> goodConfigs() {
         return Stream.of(
             "repo:\n  type: docker-proxy\n  remotes:\n    - url: registry-1.docker.io",
@@ -124,7 +123,6 @@ class DockerProxyTest {
         );
     }
 
-    @SuppressWarnings("PMD.UnusedPrivateMethod")
     private static Stream<String> badConfigs() {
         return Stream.of(
             "",

@@ -29,7 +29,6 @@ import org.junit.jupiter.params.provider.ValueSource;
  * Test for {@link CachedYamlPolicy.AstoUser}.
  * @since 1.2
  */
-@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.TooManyMethods"})
 class YamlPolicyAstoUserTest {
 
     /**

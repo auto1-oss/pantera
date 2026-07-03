@@ -26,7 +26,6 @@ import org.skyscreamer.jsonassert.JSONAssert;
  * Test for {@link MultiRepodata.Unique}.
  * @since 0.3
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class MultiRepodataUniqueTest {
 
     @ParameterizedTest

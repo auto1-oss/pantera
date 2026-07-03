@@ -28,7 +28,14 @@ import org.slf4j.MDC;
 
 /**
  * Script runner.
- * Job for running script in quartz
+ * Job for running script in quartz.
+ *
+ * <p>Multiple distinct error sites — Quartz Job boundary keeps its
+ * ERROR logs for the retry decision; remaining sites are for the
+ * stopJob helper and force-shutdown paths, each a distinct failure
+ * mode. See audit/aggressive-items.md
+ * (Tier 4 B7 duplicate-error bucket).
+ *
  * @since 0.30
  */
 public final class ScriptRunner implements Job {
@@ -59,6 +66,7 @@ public final class ScriptRunner implements Job {
                         .eventAction("script_execute")
                         .eventOutcome("failure")
                         .error(exc)
+                        .field("log.source", "application")
                         .log();
                 }
             } else {
@@ -67,6 +75,7 @@ public final class ScriptRunner implements Job {
                     .eventCategory("process")
                     .eventAction("script_execute")
                     .eventOutcome("failure")
+                    .field("log.source", "application")
                     .log();
             }
         } finally {
@@ -87,14 +96,17 @@ public final class ScriptRunner implements Job {
                 .eventCategory("process")
                 .eventAction("job_stop")
                 .field("process.name", key.toString())
+                .field("log.source", "application")
+                .field("event.outcome", "failure")
                 .log();
             new StdSchedulerFactory().getScheduler().deleteJob(key);
             EcsLogger.error("com.auto1.pantera.scripting")
                 .message("Job stopped")
                 .eventCategory("process")
                 .eventAction("job_stop")
-                .eventOutcome("success")
+                .eventOutcome("failure")
                 .field("process.name", key.toString())
+                .field("log.source", "application")
                 .log();
         } catch (final SchedulerException error) {
             EcsLogger.error("com.auto1.pantera.scripting")
@@ -104,6 +116,7 @@ public final class ScriptRunner implements Job {
                 .eventOutcome("failure")
                 .field("process.name", key.toString())
                 .error(error)
+                .field("log.source", "application")
                 .log();
             throw new PanteraException(error);
         }

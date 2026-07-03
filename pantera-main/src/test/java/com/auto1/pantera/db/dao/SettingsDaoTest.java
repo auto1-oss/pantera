@@ -98,4 +98,23 @@ class SettingsDaoTest {
         this.dao.delete("temp");
         assertTrue(this.dao.get("temp").isEmpty());
     }
+
+    @Test
+    void putIfAbsentInsertsWhenKeyMissing() throws Exception {
+        boolean inserted = dao.putIfAbsent("zeta",
+            Json.createObjectBuilder().add("value", 1).build(), "test");
+        org.junit.jupiter.api.Assertions.assertTrue(inserted);
+        org.junit.jupiter.api.Assertions.assertEquals(1,
+            dao.get("zeta").orElseThrow().getInt("value"));
+    }
+
+    @Test
+    void putIfAbsentReturnsFalseAndPreservesValueWhenKeyExists() throws Exception {
+        dao.put("zeta", Json.createObjectBuilder().add("value", 1).build(), "first");
+        boolean inserted = dao.putIfAbsent("zeta",
+            Json.createObjectBuilder().add("value", 99).build(), "second");
+        org.junit.jupiter.api.Assertions.assertFalse(inserted);
+        org.junit.jupiter.api.Assertions.assertEquals(1,
+            dao.get("zeta").orElseThrow().getInt("value"));
+    }
 }

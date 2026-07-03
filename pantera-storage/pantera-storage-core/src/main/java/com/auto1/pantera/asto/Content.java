@@ -148,7 +148,7 @@ public interface Content extends Publisher<ByteBuffer> {
      */
     default InputStream asInputStream() throws java.io.IOException {
         final PipedInputStream input = new PipedInputStream(64 * 1024); // 64KB buffer
-        final PipedOutputStream output = new PipedOutputStream(input);
+        final PipedOutputStream output = new PipedOutputStream(input); // NOPMD CloseResource - closed by Flowable.subscribe error/complete callbacks below
         final AtomicBoolean completed = new AtomicBoolean(false);
 
         // Subscribe to content and pipe bytes to output stream
@@ -170,6 +170,7 @@ public interface Content extends Publisher<ByteBuffer> {
                         EcsLogger.debug("com.auto1.pantera.asto")
                             .message("Failed to close piped output stream on error")
                             .error(ex)
+                            .field("log.source", "application")
                             .log();
                     }
                 },
@@ -181,6 +182,7 @@ public interface Content extends Publisher<ByteBuffer> {
                         EcsLogger.debug("com.auto1.pantera.asto")
                             .message("Failed to close piped output stream on completion")
                             .error(ex)
+                            .field("log.source", "application")
                             .log();
                     }
                 }

@@ -27,7 +27,6 @@ import org.junit.jupiter.api.Test;
  * Test for {@link ArtifactsMetadata}.
  * @since 0.5
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 class ArtifactsMetadataTest {
 
     /**

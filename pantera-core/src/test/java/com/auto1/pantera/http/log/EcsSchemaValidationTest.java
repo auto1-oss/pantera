@@ -475,6 +475,55 @@ public final class EcsSchemaValidationTest {
         assertEquals("maven", json.get("repository.type").asText());
     }
 
+    // ---- WI-00 level policy: 404/401/403 → INFO (not WARN) ----
+
+    @Test
+    void notFoundResponsesLogAtInfoNotWarn() {
+        new EcsLogEvent()
+            .httpMethod("GET").httpStatus(com.auto1.pantera.http.RsStatus.NOT_FOUND)
+            .urlPath("/artifactory/libs-release-local/org/x/1.0/x-1.0.pom")
+            .duration(3).log();
+        assertFalse(capture.events.isEmpty());
+        assertEquals(org.apache.logging.log4j.Level.INFO, capture.lastEvent().getLevel(),
+            "404 must log at INFO per WI-00 access-log level policy");
+    }
+
+    @Test
+    void unauthorizedResponsesLogAtInfoNotWarn() {
+        new EcsLogEvent()
+            .httpMethod("GET").httpStatus(com.auto1.pantera.http.RsStatus.UNAUTHORIZED)
+            .urlPath("/artifactory/api/npm/npm_proxy/pkg").duration(2).log();
+        assertEquals(org.apache.logging.log4j.Level.INFO, capture.lastEvent().getLevel(),
+            "401 must log at INFO per WI-00 access-log level policy");
+    }
+
+    @Test
+    void forbiddenResponsesLogAtInfoNotWarn() {
+        new EcsLogEvent()
+            .httpMethod("GET").httpStatus(com.auto1.pantera.http.RsStatus.FORBIDDEN)
+            .urlPath("/artifactory/libs-release-local/secret").duration(1).log();
+        assertEquals(org.apache.logging.log4j.Level.INFO, capture.lastEvent().getLevel(),
+            "403 must log at INFO per WI-00 access-log level policy");
+    }
+
+    @Test
+    void otherFourXxStillLogAtWarn() {
+        new EcsLogEvent()
+            .httpMethod("POST").httpStatus(com.auto1.pantera.http.RsStatus.BAD_REQUEST)
+            .urlPath("/artifactory/api/npm/npm_proxy/pkg").duration(1).log();
+        assertEquals(org.apache.logging.log4j.Level.WARN, capture.lastEvent().getLevel(),
+            "400 remains at WARN — only 401/403/404 downgraded");
+    }
+
+    @Test
+    void fiveXxStillLogAtError() {
+        new EcsLogEvent()
+            .httpMethod("GET").httpStatus(com.auto1.pantera.http.RsStatus.INTERNAL_ERROR)
+            .urlPath("/any").duration(5).log();
+        assertEquals(org.apache.logging.log4j.Level.ERROR, capture.lastEvent().getLevel(),
+            "5xx still ERROR regardless of other policy changes");
+    }
+
     /**
      * Simple appender that collects log events in a list for inspection.
      */

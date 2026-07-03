@@ -104,6 +104,7 @@ public class MapRepositories implements Repositories, AutoCloseable {
                 .message("Repository loading started asynchronously (non-blocking startup)")
                 .eventCategory("configuration")
                 .eventAction("startup")
+                .field("log.source", "application")
                 .log();
         }
         this.watcher.start();
@@ -157,6 +158,7 @@ public class MapRepositories implements Repositories, AutoCloseable {
                             .eventAction("config_load")
                             .eventOutcome("failure")
                             .error(err)
+                            .field("log.source", "application")
                             .log();
                     }
                 }
@@ -180,6 +182,7 @@ public class MapRepositories implements Repositories, AutoCloseable {
             .eventCategory("configuration")
             .eventAction("config_load")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
         return snap;
     }
@@ -220,6 +223,7 @@ public class MapRepositories implements Repositories, AutoCloseable {
             .eventCategory("configuration")
             .eventAction("config_load")
             .eventOutcome("success")
+            .field("log.source", "application")
             .log();
         return snap;
     }
@@ -251,6 +255,7 @@ public class MapRepositories implements Repositories, AutoCloseable {
                             .eventOutcome("failure")
                             .field("file.path", file.name())
                             .error(err)
+                            .field("log.source", "application")
                             .log();
                         return null;
                     }
@@ -263,6 +268,7 @@ public class MapRepositories implements Repositories, AutoCloseable {
                     .eventOutcome("failure")
                     .field("file.path", file.name())
                     .error(err)
+                    .field("log.source", "application")
                     .log();
                 return null;
             });

@@ -33,7 +33,6 @@ import java.util.UUID;
  *
  * @since 0.2
  */
-@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 @DockerClientSupport
 final class DockerSliceS3ITCase {
 

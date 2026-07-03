@@ -179,7 +179,7 @@ final class ComposerScanner implements Scanner {
             JsonReader reader = Json.createReader(input)) {
             json = reader.readObject();
         } catch (final JsonException ex) {
-            LOG.warn("Malformed JSON in {}: {}", jsonPath, ex.getMessage());
+            LOG.warn("Malformed JSON in {}: {}", jsonPath, ex.getMessage(), ex);
             return Stream.empty();
         } catch (final IOException ex) {
             throw new UncheckedIOException(ex);
@@ -249,7 +249,9 @@ final class ComposerScanner implements Scanner {
                             size = Files.size(legacyFile);
                         }
                     } catch (final IOException ignored) {
-                        // keep size = 0
+                        // EXPECTED: keep size = 0; missing/inaccessible
+                        // artifact file just means we backfill the record
+                        // without an authoritative size.
                     }
                 }
                 final String pathPrefix = proxyMode
