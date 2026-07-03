@@ -28,6 +28,10 @@ services:
       - PANTERA_USER_NAME=${PANTERA_USER_NAME}
       - PANTERA_USER_PASS=${PANTERA_USER_PASS}
       - PANTERA_CONFIG=${PANTERA_CONFIG}
+      # Histogram buckets for latency timers — the Grafana quantile panels
+      # (p95/p99) query _bucket series and render nothing without this.
+      # Curated SLO ladders (16-18 buckets), not Micrometer's ~70 auto ones.
+      - PANTERA_METRICS_PERCENTILES_HISTOGRAM=true
       - HOME=/home/
       - AWS_CONFIG_FILE=${AWS_CONFIG_FILE}
       - AWS_SHARED_CREDENTIALS_FILE=${AWS_SHARED_CREDENTIALS_FILE}

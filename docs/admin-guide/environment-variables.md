@@ -50,7 +50,7 @@ All `PANTERA_*` variables can also be set as Java system properties using the lo
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PANTERA_METRICS_MAX_REPOS` | `50` | Maximum distinct `repo_name` label values in metrics before cardinality limiting kicks in. Repositories beyond this limit are aggregated under an "other" label. |
-| `PANTERA_METRICS_PERCENTILES_HISTOGRAM` | `false` | Enable histogram buckets for all Timer metrics. Increases metric cardinality but provides percentile computation in Prometheus. |
+| `PANTERA_METRICS_PERCENTILES_HISTOGRAM` | `false` | Publish histogram buckets for latency timers (curated SLO ladders: 16 buckets/control-plane, 18/transfer with a 20-min tail for large-artifact streams). Adds roughly `buckets+1` series per timer tag combination (~6-10k series per instance under heavy traffic); recording cost on the request path is negligible. Required for Grafana quantile panels. |
 
 ---
 

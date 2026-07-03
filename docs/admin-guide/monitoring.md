@@ -227,7 +227,7 @@ The following alert rules are recommended for production Pantera deployments. Ad
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PANTERA_METRICS_MAX_REPOS` | `50` | Maximum distinct repository names in metrics labels |
-| `PANTERA_METRICS_PERCENTILES_HISTOGRAM` | `false` | Enable percentile histograms (increases cardinality) |
+| `PANTERA_METRICS_PERCENTILES_HISTOGRAM` | `false` | Publish SLO-bucket histograms for latency timers - required for every p95/p99 dashboard panel (they query `_bucket` series and show "No data" without it) |
 
 See [Environment Variables](environment-variables.md) for the complete list.
 

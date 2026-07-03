@@ -1494,7 +1494,7 @@ a Java system property using the lowercase, dot-separated equivalent (e.g.,
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PANTERA_METRICS_MAX_REPOS` | `50` | Maximum distinct `repo_name` label values before cardinality limiting |
-| `PANTERA_METRICS_PERCENTILES_HISTOGRAM` | `false` | Enable histogram buckets for all Timer metrics |
+| `PANTERA_METRICS_PERCENTILES_HISTOGRAM` | `false` | Publish histogram buckets for latency timers using curated SLO ladders (16 buckets for control-plane timers up to 30 s; 18 for transfer timers up to 20 min). Required for the Grafana p95/p99 panels. Bucket shape is fixed at meter creation - changing it needs a restart |
 
 ### 7.5 HTTP Client (Jetty)
 

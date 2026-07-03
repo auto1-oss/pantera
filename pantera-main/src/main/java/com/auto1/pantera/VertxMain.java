@@ -1422,11 +1422,46 @@ public final class VertxMain {
                 )
             );
 
-            // Configure registry to publish histogram buckets for all Timer metrics
-            // Opt-in via PANTERA_METRICS_PERCENTILES_HISTOGRAM env var (default: false)
+            // Histogram buckets for Timer metrics, opt-in via
+            // PANTERA_METRICS_PERCENTILES_HISTOGRAM (default: false).
+            //
+            // Curated SLO ladders instead of percentilesHistogram(true):
+            // Micrometer's auto mode emits ~70 buckets per timer series;
+            // these ladders emit 16-18 spent where the SLOs live. Two
+            // ladders because the timer families measure different things:
+            //
+            //  - TRANSFER timers span full body streaming — a multi-GB
+            //    docker layer to a slow client legitimately runs minutes,
+            //    so the ladder extends to 20 min or p99 clamps at the top
+            //    bucket and lies.
+            //  - CONTROL-PLANE timers (cooldown, phases, cache ops) live
+            //    in the 1-500 ms band and get denser low boundaries; 30 s
+            //    is already pathological there.
+            //
+            // Recording cost is bucket-count-insensitive (binary search +
+            // one lock-free increment, single ns); the cost axis is series
+            // count at scrape/TSDB time (~buckets+1 series per tag combo).
+            // Bucket shapes are fixed at meter creation — changing the
+            // ladders requires a restart, unlike DB-backed settings.
             if (Boolean.parseBoolean(
                 ConfigDefaults.get("PANTERA_METRICS_PERCENTILES_HISTOGRAM", "false")
             )) {
+                final java.util.Set<String> transferTimers = java.util.Set.of(
+                    "pantera.http.request.duration",
+                    "pantera.proxy.request.duration",
+                    "pantera.upstream.request.duration",
+                    "pantera.storage.operation.duration",
+                    "vertx.http.server.response.time"
+                );
+                final double[] transferSlos = slosNanos(
+                    10, 25, 50, 100, 250, 500, 750,
+                    1_000, 2_500, 5_000, 10_000, 20_000, 30_000,
+                    60_000, 120_000, 300_000, 600_000, 1_200_000
+                );
+                final double[] controlSlos = slosNanos(
+                    1, 2.5, 5, 10, 25, 50, 75, 100, 250, 500, 750,
+                    1_000, 2_500, 5_000, 10_000, 30_000
+                );
                 registry.config().meterFilter(
                     new MeterFilter() {
                         @Override
@@ -1436,7 +1471,10 @@ public final class VertxMain {
                         ) {
                             if (id.getType() == Meter.Type.TIMER) {
                                 return DistributionStatisticConfig.builder()
-                                    .percentilesHistogram(true)
+                                    .serviceLevelObjectives(
+                                        transferTimers.contains(id.getName())
+                                            ? transferSlos : controlSlos
+                                    )
                                     .build()
                                     .merge(config);
                             }
@@ -1504,6 +1542,22 @@ public final class VertxMain {
      * hour at startup; the current PID's directory will be created later
      * and is safely beyond that age window.
      */
+    /**
+     * Convert millisecond boundaries to the nanosecond doubles that
+     * {@code DistributionStatisticConfig.serviceLevelObjectives} expects
+     * for Timer meters.
+     *
+     * @param millis Boundary values in milliseconds (fractions allowed).
+     * @return Boundaries in nanoseconds.
+     */
+    private static double[] slosNanos(final double... millis) {
+        final double[] nanos = new double[millis.length];
+        for (int idx = 0; idx < millis.length; idx = idx + 1) {
+            nanos[idx] = millis[idx] * 1_000_000.0;
+        }
+        return nanos;
+    }
+
     private static void cleanupStaleVertxTmpDirs() {
         final String base = System.getProperty("vertx.cacheDirBase",
             System.getProperty("java.io.tmpdir"));
