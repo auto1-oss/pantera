@@ -57,6 +57,14 @@ public final class IniFile {
     }
 
     /**
+     * Initializes object instance with .ini file contents as text.
+     * @param data Contents of the .ini file.
+     */
+    public IniFile(final String data) {
+        this(IniFile.loadEntries(data));
+    }
+
+    /**
      * Initializes object instance with Map of .ini entries.
      * @param entries Map of .ini file entries.
      */
