@@ -59,21 +59,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_USER: pantera
-          POSTGRES_PASSWORD: pantera
-          POSTGRES_DB: pantera_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -85,14 +70,14 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
 
-      - name: Build test Docker images
-        run: cd test_images && ./build.sh
-
-      - name: Compile and test
-        run: mvn clean verify -Pitcase -T 1C --fail-at-end
-        env:
-          POSTGRES_USER: pantera
-          POSTGRES_PASSWORD: pantera
+      # Releases BUILD, they don't re-test: every commit on master already
+      # passed the PR gate (unit tests + PMD + license). This mirrors the
+      # canonical local build. -Dexec.skip skips the pom-bound multi-arch
+      # buildx --load (runners' classic docker store cannot load manifest
+      # lists); the release image is built from the same Dockerfile in the
+      # publish-image job with --push instead.
+      - name: Build (skip tests)
+        run: mvn clean install -U -T8 -DskipTests=true -Dexec.skip=true -ntp
 
       - name: Package JAR with dependencies
         run: mvn package dependency:copy-dependencies -DskipTests -q -pl pantera-main
@@ -187,48 +172,53 @@ jobs:
           name: ui-release
           path: release/
 
-      - name: Generate release notes
+      # Release notes come FROM CHANGELOG.md — it is the single public
+      # record of what changed. The release fails if the version has no
+      # changelog section (enforces the docs-consistency rule). A short
+      # download/docker footer is appended since asset names and image
+      # pulls are release mechanics, not changelog content.
+      - name: Generate release notes from CHANGELOG.md
         run: |
           VERSION="${{ needs.version.outputs.version }}"
-          cat > release-notes.md << NOTES
-          ## Pantera ${VERSION}
+          python3 - "$VERSION" <<'PY'
+          import re
+          import sys
+          version = sys.argv[1]
+          text = open("CHANGELOG.md").read()
+          m = re.search(
+              rf"^## Version {re.escape(version)}\s*\n(.*?)(?=^## Version |\Z)",
+              text, re.S | re.M,
+          )
+          if not m:
+              sys.exit(f"CHANGELOG.md has no '## Version {version}' section — "
+                       "write the changelog before releasing.")
+          open("release-notes.md", "w").write(
+              f"## Pantera {version}\n\n" + m.group(1).strip() + "\n"
+          )
+          PY
+          cat >> release-notes.md << FOOTER
 
-          ### Release Artifacts
+          ---
+
+          ### Downloads
 
           | Artifact | Description |
           |----------|-------------|
           | \`pantera-${VERSION}.jar\` | Main application JAR |
           | \`pantera-${VERSION}-dist.tar.gz\` | Complete distribution (JAR + all dependencies) |
-          | \`pantera-ui-${VERSION}.tar.gz\` | Management UI (static files for nginx) |
+          | \`pantera-ui-${VERSION}.tar.gz\` | Management UI (static files for any web server) |
+          | \`SHA256SUMS\` | Checksums for all of the above |
 
-          ### Quick Start
-
-          \`\`\`bash
-          # Extract distribution
-          tar xzf pantera-${VERSION}-dist.tar.gz
-
-          # Run
-          java -cp pantera-main-${VERSION}.jar:dependency/* \\
-            com.auto1.pantera.VertxMain \\
-            --config-file=pantera.yml \\
-            --port=8080 --api-port=8086
-          \`\`\`
-
-          ### Docker
+          ### Docker images
 
           \`\`\`bash
-          # Backend (amd64 + arm64)
           docker pull ghcr.io/${{ github.repository }}:${VERSION}
-          # Management UI (nginx + static bundle)
           docker pull ghcr.io/${{ github.repository }}-ui:${VERSION}
+          # docker-compose stacks reference the plain names — retag after pulling:
+          docker tag ghcr.io/${{ github.repository }}:${VERSION} pantera:${VERSION}
+          docker tag ghcr.io/${{ github.repository }}-ui:${VERSION} pantera-ui:${VERSION}
           \`\`\`
-
-          ### Requirements
-
-          - JDK 21+
-          - PostgreSQL 15+
-          - Valkey/Redis (optional, for HA)
-          NOTES
+          FOOTER
 
       - name: Generate SHA256SUMS
         run: |

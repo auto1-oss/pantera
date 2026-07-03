@@ -1,7 +1,15 @@
 FROM maven:3.6.3-jdk-11
-ENV REV=19
-ENV DEBIAN_FRONTEND noninteractive
-RUN apt update -y -o APT::Update::Error-Mode=any && apt dist-upgrade -y
+ENV REV=20
+ENV DEBIAN_FRONTEND=noninteractive
+# The base image is Debian Buster, which is EOL: its packages moved off the
+# main mirrors (deb.debian.org / security.debian.org now 404) to
+# archive.debian.org. Point apt there and skip the Release-file expiry check
+# (archived metadata is frozen). This deliberately keeps the maven
+# 3.6.3/JDK-11 client the integration tests were written against; bumping
+# the base image is a separate decision.
+RUN printf 'deb http://archive.debian.org/debian buster main\ndeb http://archive.debian.org/debian-security buster/updates main\n' > /etc/apt/sources.list \
+ && printf 'Acquire::Check-Valid-Until "false";\n' > /etc/apt/apt.conf.d/99archive \
+ && apt update -y -o APT::Update::Error-Mode=any && apt dist-upgrade -y
 RUN apt install -y libxml2-utils # for xmllint
 
 # install pantera test dependencies to maven cache

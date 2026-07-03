@@ -58,3 +58,6 @@ audit/
 benchmark/
 docs/analysis/
 docs/superpowers/
+
+# build.sh runtime staging (created when building the itcase client images)
+test_images/_context/

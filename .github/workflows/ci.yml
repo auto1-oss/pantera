@@ -1,8 +1,10 @@
 name: CI
 
+# PR-gated only: branch protection requires these checks green before a
+# merge, so re-running the identical build on the push to master would be
+# pure waste. Direct pushes to master are blocked by the same protection;
+# workflow_dispatch covers the rare manual verification need.
 on:
-  push:
-    branches: [master, main]
   pull_request:
     branches: [master, main]
   workflow_dispatch:

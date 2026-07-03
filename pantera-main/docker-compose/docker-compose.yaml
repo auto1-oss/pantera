@@ -7,7 +7,9 @@ services:
         condition: service_started
       valkey:
         condition: service_healthy
-    image: pantera:${PANTERA_VERSION}
+    # Defaults to the locally-built image; operators running published
+    # images can set PANTERA_IMAGE=ghcr.io/auto1-oss/pantera (same tag).
+    image: ${PANTERA_IMAGE:-pantera}:${PANTERA_VERSION}
     # PERFORMANCE: Increased from 2 CPUs to 4 for better parallel request handling
     # NPM install with 2300+ packages requires significant parallelism
     cpus: 4
@@ -204,7 +206,8 @@ services:
       - pantera
 
   pantera-ui:
-    image: pantera-ui:${PANTERA_UI_VERSION}
+    # Same override pattern: PANTERA_UI_IMAGE=ghcr.io/auto1-oss/pantera-ui.
+    image: ${PANTERA_UI_IMAGE:-pantera-ui}:${PANTERA_UI_VERSION}
     build:
       context: ../../pantera-ui
       dockerfile: Dockerfile
