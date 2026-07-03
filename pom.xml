@@ -182,7 +182,7 @@ Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
     <dependency>
       <groupId>com.github.jknack</groupId>
       <artifactId>handlebars</artifactId>
-      <version>4.4.0</version>
+      <version>4.5.2</version>
     </dependency>
     <dependency>
       <groupId>org.slf4j</groupId>
