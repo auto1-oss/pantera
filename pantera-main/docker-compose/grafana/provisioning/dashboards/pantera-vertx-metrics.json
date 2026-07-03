@@ -106,7 +106,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(vertx_http_server_requests_total{job=\"pantera-vertx\"}[5m])",
+          "expr": "rate(vertx_http_server_requests_total{job=\"pantera\"}[5m])",
           "legendFormat": "{{method}} {{code}}",
           "refId": "A"
         }
@@ -199,7 +199,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(vertx_http_server_requests_total{job=\"pantera-vertx\",code=~\"4..|5..\"}[5m]) / rate(vertx_http_server_requests_total{job=\"pantera-vertx\"}[5m]) * 100",
+          "expr": "rate(vertx_http_server_requests_total{job=\"pantera\",code=~\"4..|5..\"}[5m]) / rate(vertx_http_server_requests_total{job=\"pantera\"}[5m]) * 100",
           "legendFormat": "Error Rate",
           "refId": "A"
         }
@@ -292,7 +292,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "vertx_http_server_active_requests{job=\"pantera-vertx\"}",
+          "expr": "vertx_http_server_active_requests{job=\"pantera\"}",
           "legendFormat": "Active Requests",
           "refId": "A"
         }
@@ -385,7 +385,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "jvm_memory_used_bytes{job=\"pantera-vertx\"}",
+          "expr": "jvm_memory_used_bytes{job=\"pantera\"}",
           "legendFormat": "{{area}} - {{id}}",
           "refId": "A"
         }
@@ -478,7 +478,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(jvm_gc_pause_seconds_count{job=\"pantera-vertx\"}[5m])",
+          "expr": "rate(jvm_gc_pause_seconds_count{job=\"pantera\"}[5m])",
           "legendFormat": "{{action}} - {{cause}}",
           "refId": "A"
         }
@@ -571,7 +571,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "jvm_threads_live_threads{job=\"pantera-vertx\"}",
+          "expr": "jvm_threads_live_threads{job=\"pantera\"}",
           "legendFormat": "Live Threads",
           "refId": "A"
         },
@@ -580,7 +580,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "jvm_threads_daemon_threads{job=\"pantera-vertx\"}",
+          "expr": "jvm_threads_daemon_threads{job=\"pantera\"}",
           "legendFormat": "Daemon Threads",
           "refId": "B"
         }

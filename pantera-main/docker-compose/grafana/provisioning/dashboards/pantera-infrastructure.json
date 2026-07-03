@@ -27,7 +27,7 @@
       "keepTime": true,
       "tags": [],
       "targetBlank": false,
-      "title": "← Back to Main Overview",
+      "title": "\u2190 Back to Main Overview",
       "tooltip": "Return to main dashboard",
       "type": "link",
       "url": "/d/pantera-main-overview"
@@ -1671,8 +1671,8 @@
                 "uid": "prometheus"
               },
               "editorMode": "code",
-              "expr": "hikaricp_connections_acquire_seconds{job=\"pantera\",pool=\"PanteraDB-Pool\",quantile=\"0.95\"}",
-              "legendFormat": "p95 Acquire Time",
+              "expr": "rate(hikaricp_connections_acquire_seconds_sum{job=\"pantera\",pool=\"PanteraDB-Pool\"}[5m]) / rate(hikaricp_connections_acquire_seconds_count{job=\"pantera\",pool=\"PanteraDB-Pool\"}[5m])",
+              "legendFormat": "acquire avg",
               "range": true,
               "refId": "A"
             },
@@ -1682,8 +1682,8 @@
                 "uid": "prometheus"
               },
               "editorMode": "code",
-              "expr": "hikaricp_connections_acquire_seconds{job=\"pantera\",pool=\"PanteraDB-Pool\",quantile=\"0.99\"}",
-              "legendFormat": "p99 Acquire Time",
+              "expr": "rate(hikaricp_connections_acquire_seconds_sum{job=\"pantera\",pool=\"PanteraDB-Pool\"}[5m]) / rate(hikaricp_connections_acquire_seconds_count{job=\"pantera\",pool=\"PanteraDB-Pool\"}[5m])",
+              "legendFormat": "acquire avg",
               "range": true,
               "refId": "B"
             },
@@ -1693,8 +1693,8 @@
                 "uid": "prometheus"
               },
               "editorMode": "code",
-              "expr": "hikaricp_connections_usage_seconds{job=\"pantera\",pool=\"PanteraDB-Pool\",quantile=\"0.95\"}",
-              "legendFormat": "p95 Usage Time",
+              "expr": "rate(hikaricp_connections_usage_seconds_sum{job=\"pantera\",pool=\"PanteraDB-Pool\"}[5m]) / rate(hikaricp_connections_usage_seconds_count{job=\"pantera\",pool=\"PanteraDB-Pool\"}[5m])",
+              "legendFormat": "usage avg",
               "range": true,
               "refId": "C"
             },
@@ -1704,8 +1704,8 @@
                 "uid": "prometheus"
               },
               "editorMode": "code",
-              "expr": "hikaricp_connections_usage_seconds{job=\"pantera\",pool=\"PanteraDB-Pool\",quantile=\"0.99\"}",
-              "legendFormat": "p99 Usage Time",
+              "expr": "rate(hikaricp_connections_usage_seconds_sum{job=\"pantera\",pool=\"PanteraDB-Pool\"}[5m]) / rate(hikaricp_connections_usage_seconds_count{job=\"pantera\",pool=\"PanteraDB-Pool\"}[5m])",
+              "legendFormat": "usage avg",
               "range": true,
               "refId": "D"
             }
