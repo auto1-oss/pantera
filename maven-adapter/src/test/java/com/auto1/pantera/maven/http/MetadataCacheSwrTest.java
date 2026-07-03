@@ -28,7 +28,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
-import org.hamcrest.number.OrderingComparison;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -70,19 +69,17 @@ final class MetadataCacheSwrTest {
         MatcherAssert.assertThat(calls.get(), new IsEqual<>(1));
         // Advance within the soft TTL: 10 calls, no upstream.
         clock.advance(Duration.ofSeconds(10));
+        // NOTE: the original assertion also bounded each serve at 5 ms of
+        // wall clock. That never proved anything (the fake loader completes
+        // instantly, so even a blocking implementation passes) and flaked on
+        // loaded CI runners. calls == 1 below is the real no-upstream proof.
         for (int idx = 0; idx < 10; idx++) {
-            final long start = System.nanoTime();
             final Optional<Content> served = cache.load(KEY, req -> {
                 calls.incrementAndGet();
                 return CompletableFuture.completedFuture(
                     MetadataFetchResult.modified(BODY, "\"v2\"", "lm-2")
                 );
             }).join();
-            final long elapsed = (System.nanoTime() - start) / 1_000_000L;
-            MatcherAssert.assertThat(
-                "Fresh-window serve must be ≤ 5 ms (was " + elapsed + " ms)",
-                elapsed, OrderingComparison.lessThanOrEqualTo(5L)
-            );
             MatcherAssert.assertThat(
                 "Fresh-window serve must return cached content",
                 served.isPresent(), new IsEqual<>(true)
@@ -99,6 +96,7 @@ final class MetadataCacheSwrTest {
      * cached/fast AND a background refresh fires.
      */
     @Test
+    @org.junit.jupiter.api.Timeout(10)
     void staleWindowServesCachedAndFiresBackgroundRefresh() throws Exception {
         final MutableClock clock = MutableClock.at(Instant.parse("2025-01-01T00:00:00Z"));
         final AtomicInteger calls = new AtomicInteger();
@@ -112,18 +110,26 @@ final class MetadataCacheSwrTest {
         }).join();
         // Move past softTtl into the stale window.
         clock.advance(Duration.ofMillis(100));
-        final long start = System.nanoTime();
+        // The refresh loader parks on this latch. The foreground load()
+        // completing while the loader is still parked is the actual SWR
+        // invariant (serve stale, refresh in background) — unlike the
+        // original ≤5 ms wall-clock bound, which an entirely blocking
+        // implementation also passed (the fake loader completed instantly)
+        // and which flaked on loaded CI runners. If the implementation
+        // regresses to a synchronous refresh, the foreground join() blocks
+        // on the parked loader and the @Timeout fails the test.
+        final CountDownLatch releaseRefresh = new CountDownLatch(1);
         final Optional<Content> served = cache.load(KEY, req -> {
             // This loader is the background refresh.
             calls.incrementAndGet();
             refreshDone.countDown();
+            try {
+                releaseRefresh.await(5, TimeUnit.SECONDS);
+            } catch (final InterruptedException ex) {
+                Thread.currentThread().interrupt();
+            }
             return CompletableFuture.completedFuture(MetadataFetchResult.unmodified());
         }).join();
-        final long elapsed = (System.nanoTime() - start) / 1_000_000L;
-        MatcherAssert.assertThat(
-            "Stale-window foreground response must be ≤ 5 ms",
-            elapsed, OrderingComparison.lessThanOrEqualTo(5L)
-        );
         MatcherAssert.assertThat(
             "Stale-window response carries cached bytes",
             served.isPresent(), new IsEqual<>(true)
@@ -132,6 +138,7 @@ final class MetadataCacheSwrTest {
             "Background refresh fires within 2 s",
             refreshDone.await(2, TimeUnit.SECONDS), new IsEqual<>(true)
         );
+        releaseRefresh.countDown();
         MatcherAssert.assertThat(
             "Exactly one background refresh observed",
             calls.get(), new IsEqual<>(2)
