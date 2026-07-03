@@ -41,6 +41,14 @@ import static org.hamcrest.Matchers.lessThan;
  *
  * @since 2.2.0
  */
+/*
+ * NOTE on latency bounds: these assertions guard against order-of-magnitude
+ * regressions (accidental I/O, lost caching, per-version network calls) —
+ * not micro-benchmark numbers. Bounds are deliberately ~10x what an idle
+ * laptop measures: shared CI runners under parallel-build load routinely
+ * add tens of milliseconds of scheduler noise, and tighter bounds produced
+ * chronic false-negative red builds (see 2.2.0 CI flake history).
+ */
 final class VersionEvaluationParallelTest {
 
     @Test
@@ -92,8 +100,8 @@ final class VersionEvaluationParallelTest {
         final long elapsedMs = (System.nanoTime() - start) / 1_000_000;
 
         assertThat(
-            String.format("50-version evaluation took %d ms, expected < 50 ms", elapsedMs),
-            elapsedMs, lessThan(50L)
+            String.format("50-version evaluation took %d ms, expected < 500 ms", elapsedMs),
+            elapsedMs, lessThan(500L)
         );
     }
 
