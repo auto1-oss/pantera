@@ -205,6 +205,18 @@ public final class DownloadPackageSlice implements Slice {
                 .field("log.source", "application")
                 .log();
             
+            // A breaker fast-fail keeps its marker so the group resolver
+            // can skip this member without convicting it.
+            if (cause instanceof com.auto1.pantera.http.UpstreamCircuitOpenException circuit) {
+                final ResponseBuilder rb = ResponseBuilder
+                    .from(com.auto1.pantera.http.RsStatus.byCode(502))
+                    .header(com.auto1.pantera.http.UpstreamCircuitOpenException.HEADER, "true")
+                    .jsonBody("{\"error\":\"Upstream circuit breaker is open\"}");
+                if (circuit.retryAfterSeconds() > 0) {
+                    rb.header("Retry-After", Long.toString(circuit.retryAfterSeconds()));
+                }
+                return rb.build();
+            }
             // Check if it's an HTTP exception with a specific status
             if (cause instanceof com.auto1.pantera.http.PanteraHttpException) {
                 final com.auto1.pantera.http.PanteraHttpException httpEx = 

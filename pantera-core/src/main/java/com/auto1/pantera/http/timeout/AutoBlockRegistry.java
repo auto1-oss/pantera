@@ -124,6 +124,32 @@ public final class AutoBlockRegistry {
     }
 
     /**
+     * Remaining block time for a BLOCKED remote, rounded up to whole
+     * seconds; 0 when the remote is not currently blocked. Used by the
+     * group resolver to derive an honest {@code Retry-After} when every
+     * member is unavailable.
+     *
+     * @param remoteId Remote identifier
+     * @return Remaining block seconds, or 0
+     */
+    public long blockedRemainingSeconds(final String remoteId) {
+        final WindowState state = this.states.get(remoteId);
+        if (state == null) {
+            return 0L;
+        }
+        synchronized (state) {
+            if (state.status != Status.BLOCKED) {
+                return 0L;
+            }
+            final long remaining = state.blockedUntilMs - System.currentTimeMillis();
+            if (remaining <= 0L) {
+                return 0L;
+            }
+            return (remaining + 999L) / 1000L;
+        }
+    }
+
+    /**
      * Record a failure outcome. May trip the circuit if the configured
      * rate and minimum-volume thresholds are now met within the window.
      */

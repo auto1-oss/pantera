@@ -510,6 +510,144 @@ final class GroupResolverTest {
         assertArrayEquals(payload, resp.body().asBytes());
     }
 
+    // ---- Breaker-cascade fixes: marker skip, 503 terminal, cache-only probe ----
+
+    @Test
+    void circuitMarker502_skipsWithoutConviction_nextMemberServes() {
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of())); // miss
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, circuitOpenSlice("17"));
+        slices.put(PROXY_B, okSlice());
+
+        final GroupResolver resolver = buildResolver(
+            idx, List.of(PROXY_A, PROXY_B), Set.of(PROXY_A, PROXY_B),
+            buildNegativeCache(), slices
+        );
+        final Response resp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+
+        assertEquals(200, resp.status().code(),
+            "A marker-502 member must be skipped and the next member must serve");
+    }
+
+    @Test
+    void allMembersCircuitMarker_returns503RetryAfter_notNegativeCached() {
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of())); // miss
+        final NegativeCache negCache = buildNegativeCache();
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, circuitOpenSlice("17"));
+        slices.put(PROXY_B, circuitOpenSlice("9"));
+
+        final GroupResolver resolver = buildResolver(
+            idx, List.of(PROXY_A, PROXY_B), Set.of(PROXY_A, PROXY_B), negCache, slices
+        );
+        final Response resp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+
+        assertEquals(503, resp.status().code(),
+            "All-members-circuit-open must be 503 (temporarily unavailable), never 404");
+        assertEquals(List.of("17"),
+            resp.headers().values("Retry-After"),
+            "Retry-After must carry the largest hint seen across skipped members");
+        assertFalse(
+            resp.headers().values(
+                com.auto1.pantera.http.UpstreamCircuitOpenException.HEADER
+            ).isEmpty(),
+            "The 503 terminal must carry the circuit-open marker");
+        final com.auto1.pantera.http.cache.NegativeCacheKey negKey =
+            new com.auto1.pantera.http.cache.NegativeCacheKey(
+                GROUP, REPO_TYPE, PARSED_NAME, PARSED_VERSION);
+        assertFalse(negCache.isKnown404(negKey),
+            "Circuit-skip terminal must NOT poison the negative cache");
+    }
+
+    @Test
+    void blockedMember_cacheOnlyProbe_servesWarmCache() {
+        final java.util.concurrent.atomic.AtomicBoolean sawCacheOnly =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+        final Slice blockedSlice = (line, headers, body) -> {
+            final boolean cacheOnly = !headers.values(
+                com.auto1.pantera.http.cache.BaseCachedProxySlice.CACHE_ONLY_HEADER
+            ).isEmpty();
+            sawCacheOnly.set(cacheOnly);
+            if (cacheOnly) {
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.ok().body("warm".getBytes()).build());
+            }
+            return CompletableFuture.completedFuture(
+                ResponseBuilder.from(RsStatus.INTERNAL_ERROR).build());
+        };
+        final GroupResolver resolver = resolverWithBlockedMember(blockedSlice, null);
+        final Response resp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+
+        assertEquals(200, resp.status().code(),
+            "A circuit-open member must still serve from its warm cache");
+        assertTrue(sawCacheOnly.get(),
+            "The probe of a circuit-open member must carry the cache-only header");
+    }
+
+    @Test
+    void blockedMember_cacheOnlyMiss_terminal503WithBlockRemainder() {
+        final NegativeCache negCache = buildNegativeCache();
+        final GroupResolver resolver = resolverWithBlockedMember(notFoundSlice(), negCache);
+        final Response resp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+
+        assertEquals(503, resp.status().code(),
+            "Blocked member with a cold cache must produce 503, not 404");
+        final List<String> retry = resp.headers().values("Retry-After");
+        assertFalse(retry.isEmpty(), "503 must carry Retry-After");
+        assertTrue(Long.parseLong(retry.get(0)) >= 5L,
+            "Retry-After must be at least the 5s floor");
+        final com.auto1.pantera.http.cache.NegativeCacheKey negKey =
+            new com.auto1.pantera.http.cache.NegativeCacheKey(
+                GROUP, REPO_TYPE, PARSED_NAME, PARSED_VERSION);
+        assertFalse(negCache.isKnown404(negKey),
+            "Cache-only miss on a blocked member must NOT poison the negative cache");
+    }
+
+    /**
+     * Build a resolver whose single proxy member has its group-layer
+     * circuit BLOCKED (one failure against a min-calls=1 registry).
+     */
+    private static GroupResolver resolverWithBlockedMember(
+        final Slice slice, final NegativeCache negCache
+    ) {
+        final AutoBlockRegistry registry = new AutoBlockRegistry(
+            new AutoBlockSettings(
+                0.5, 1, 30, Duration.ofSeconds(60), Duration.ofMinutes(5))
+        );
+        registry.recordFailure(PROXY_A);
+        final List<MemberSlice> members = List.of(
+            new MemberSlice(PROXY_A, slice, registry, true)
+        );
+        return new GroupResolver(
+            GROUP,
+            members,
+            Collections.emptyList(),
+            Optional.of(new RecordingIndex(Optional.of(List.of()))),
+            REPO_TYPE,
+            Set.of(PROXY_A),
+            negCache == null ? buildNegativeCache() : negCache,
+            java.util.concurrent.ForkJoinPool.commonPool()
+        );
+    }
+
+    private static Slice circuitOpenSlice(final String retryAfter) {
+        return (line, headers, body) ->
+            CompletableFuture.completedFuture(
+                ResponseBuilder.from(RsStatus.BAD_GATEWAY)
+                    .header(com.auto1.pantera.http.UpstreamCircuitOpenException.HEADER, "true")
+                    .header("Retry-After", retryAfter)
+                    .build()
+            );
+    }
+
     // ---- Helpers ----
 
     private GroupResolver buildResolver(

@@ -15,6 +15,7 @@ import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.UpstreamCircuitOpenException;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.cache.NegativeCache;
@@ -741,6 +742,15 @@ public final class GroupResolver implements Slice {
         // header behaviour of the legacy parallel path.
         return querySequentially(fanoutMembers, line, headers, body, false, artifactName)
             .thenApply(resp -> {
+                if (resp.status().serverError()
+                    && !resp.headers().values(UpstreamCircuitOpenException.HEADER).isEmpty()) {
+                    // Circuit-skip terminal (503 + Retry-After + marker) or a
+                    // member's marked fast-fail: pass through verbatim. It is
+                    // neither an AllProxiesFailed fault (nothing actually
+                    // failed) nor a 404 (nothing said "does not exist"), so
+                    // no fault translation and no negative-cache write.
+                    return resp;
+                }
                 if (resp.status().serverError()) {
                     // Sequential walk reached terminal 5xx: any member 5xx in
                     // the walk -> AllProxiesFailed wrapped through
@@ -855,11 +865,9 @@ public final class GroupResolver implements Slice {
     ) {
         return body.asBytesFuture().thenCompose(requestBytes -> {
             final CompletableFuture<Response> result = new CompletableFuture<>();
-            final java.util.concurrent.atomic.AtomicBoolean anyServerError =
-                new java.util.concurrent.atomic.AtomicBoolean(false);
             tryNextSequentialMember(
                 targeted.iterator(), line, headers, requestBytes,
-                isTargetedLocalRead, anyServerError, result, pinArtifactName
+                isTargetedLocalRead, new WalkState(), result, pinArtifactName
             );
             return result;
         });
@@ -871,13 +879,20 @@ public final class GroupResolver implements Slice {
         final Headers headers,
         final byte[] requestBytes,
         final boolean isTargetedLocalRead,
-        final java.util.concurrent.atomic.AtomicBoolean anyServerError,
+        final WalkState walk,
         final CompletableFuture<Response> result,
         final String pinArtifactName
     ) {
         if (!iter.hasNext()) {
-            if (anyServerError.get()) {
+            if (walk.anyServerError.get()) {
                 result.complete(ResponseBuilder.from(RsStatus.BAD_GATEWAY).build());
+            } else if (walk.skippedOpen.get()) {
+                // At least one member was skipped with its circuit open and
+                // nobody answered — "temporarily unavailable" is the only
+                // honest answer. Returning 404 here poisoned the negative
+                // cache with "does not exist" for artifacts that were merely
+                // unreachable (2.2.0 breaker-cascade RCA).
+                result.complete(this.circuitSkippedTerminal(walk, line));
             } else {
                 result.complete(ResponseBuilder.notFound().build());
             }
@@ -885,18 +900,44 @@ public final class GroupResolver implements Slice {
         }
         final MemberSlice member = iter.next();
         if (!isTargetedLocalRead && member.isCircuitOpen()) {
-            tryNextSequentialMember(iter, line, headers, requestBytes,
-                isTargetedLocalRead, anyServerError, result, pinArtifactName);
+            walk.skippedOpen.set(true);
+            walk.noteRetryAfter(member.retryAfterSeconds());
+            // Circuit-open member: probe its warm cache before moving on
+            // (Nexus-style serve-cached-while-blocked). Cache-only probes
+            // never reach the upstream and record nothing on the member's
+            // health window — a cache hit says nothing about upstream health.
+            queryMemberCacheOnly(member, line, headers, requestBytes)
+                .whenComplete((resp, err) -> {
+                    if (err == null && resp != null && resp.status().success()) {
+                        EcsLogger.info("com.auto1.pantera.group")
+                            .message("Circuit-open member served from warm cache")
+                            .eventCategory("web")
+                            .eventAction("group_member_cache_only_hit")
+                            .eventOutcome("success")
+                            .field("repository.name", this.group)
+                            .field("member.name", member.name())
+                            .field("url.path", line.uri().getPath())
+                            .field("log.source", "application")
+                            .log();
+                        result.complete(resp);
+                        return;
+                    }
+                    if (resp != null) {
+                        drainBody(resp.body());
+                    }
+                    tryNextSequentialMember(iter, line, headers, requestBytes,
+                        isTargetedLocalRead, walk, result, pinArtifactName);
+                });
             return;
         }
         queryMemberDirect(member, line, headers, requestBytes).whenComplete((resp, err) -> {
             if (err != null) {
                 if (!(err instanceof java.util.concurrent.CancellationException)) {
                     member.recordFailure();
-                    anyServerError.set(true);
+                    walk.anyServerError.set(true);
                 }
                 tryNextSequentialMember(iter, line, headers, requestBytes,
-                    isTargetedLocalRead, anyServerError, result, pinArtifactName);
+                    isTargetedLocalRead, walk, result, pinArtifactName);
                 return;
             }
             final RsStatus status = resp.status();
@@ -932,13 +973,36 @@ public final class GroupResolver implements Slice {
                     .field("log.source", "application")
                     .log();
                 tryNextSequentialMember(iter, line, headers, requestBytes,
-                    isTargetedLocalRead, anyServerError, result, pinArtifactName);
+                    isTargetedLocalRead, walk, result, pinArtifactName);
+                return;
+            }
+            // Outbound-breaker fast-fail (X-Pantera-Circuit-Open marker):
+            // the member never failed — the HTTP client's breaker refused
+            // the call locally. Skip WITHOUT recordFailure(): counting
+            // these convicted every member of a group on one upstream 5xx
+            // (breaker-cascade RCA, fabricated-evidence amplification).
+            if (status.serverError() && !resp.headers()
+                .values(UpstreamCircuitOpenException.HEADER).isEmpty()) {
+                drainBody(resp.body());
+                walk.skippedOpen.set(true);
+                walk.noteRetryAfter(parseRetryAfterSeconds(resp));
+                EcsLogger.info("com.auto1.pantera.group")
+                    .message("Member's upstream circuit is open, skipping without conviction")
+                    .eventCategory("network")
+                    .eventAction("group_member_circuit_skip")
+                    .field("repository.name", this.group)
+                    .field("member.name", member.name())
+                    .field("url.path", line.uri().getPath())
+                    .field("log.source", "application")
+                    .log();
+                tryNextSequentialMember(iter, line, headers, requestBytes,
+                    isTargetedLocalRead, walk, result, pinArtifactName);
                 return;
             }
             // Other 4xx or any 5xx -> record failure, cascade.
             drainBody(resp.body());
             member.recordFailure();
-            anyServerError.set(true);
+            walk.anyServerError.set(true);
             EcsLogger.warn("com.auto1.pantera.group")
                 .message("Group member returned non-2xx, trying next")
                 .eventCategory("web")
@@ -951,8 +1015,107 @@ public final class GroupResolver implements Slice {
                 .field("log.source", "application")
                 .log();
             tryNextSequentialMember(iter, line, headers, requestBytes,
-                isTargetedLocalRead, anyServerError, result, pinArtifactName);
+                isTargetedLocalRead, walk, result, pinArtifactName);
         });
+    }
+
+    /**
+     * Cache-only probe of a circuit-open member: the member slice serves a
+     * warm cache entry or answers 404 without contacting its upstream
+     * (honoured by {@code BaseCachedProxySlice}; slices that predate the
+     * header simply do a normal lookup whose fast-fail is then treated as
+     * a skip by the marker branch above).
+     */
+    private CompletableFuture<Response> queryMemberCacheOnly(
+        final MemberSlice member,
+        final RequestLine line,
+        final Headers headers,
+        final byte[] requestBytes
+    ) {
+        final Content memberBody = requestBytes.length > 0
+            ? new Content.From(requestBytes)
+            : Content.EMPTY;
+        final RequestLine rewritten = member.rewritePath(line);
+        final Headers memberHeaders = dropFullPathHeader(headers)
+            .copy()
+            .add(new Header(EcsLoggingSlice.INTERNAL_ROUTING_HEADER, "true"))
+            .add(new Header(
+                com.auto1.pantera.http.cache.BaseCachedProxySlice.CACHE_ONLY_HEADER, "true"
+            ));
+        return member.slice().response(rewritten, memberHeaders, memberBody);
+    }
+
+    /**
+     * Terminal for a walk where at least one member was skipped
+     * circuit-open and nobody answered: 503 + Retry-After + the
+     * circuit-open marker. Deliberately NOT 404 — 404 asserts absence
+     * and gets negative-cached, outliving the outage.
+     */
+    private Response circuitSkippedTerminal(final WalkState walk, final RequestLine line) {
+        final long retry = Math.max(5L, walk.retryAfterHint.get());
+        EcsLogger.warn("com.auto1.pantera.group")
+            .message(
+                "All remaining group members circuit-open — returning 503, Retry-After "
+                    + retry + "s"
+            )
+            .eventCategory("network")
+            .eventAction("group_all_members_circuit_open")
+            .eventOutcome("failure")
+            .field("repository.name", this.group)
+            .field("url.path", line.uri().getPath())
+            .field("log.source", "application")
+            .log();
+        return ResponseBuilder.from(RsStatus.SERVICE_UNAVAILABLE)
+            .header("Retry-After", Long.toString(retry))
+            .header(UpstreamCircuitOpenException.HEADER, "true")
+            .textBody("All group members are temporarily unavailable (upstream circuit open)")
+            .build();
+    }
+
+    /**
+     * Parse a delta-seconds {@code Retry-After} from a member response;
+     * 0 when absent or unparseable.
+     */
+    private static long parseRetryAfterSeconds(final Response resp) {
+        final java.util.List<String> values = resp.headers().values("Retry-After");
+        if (values.isEmpty()) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(values.get(0).trim());
+        } catch (final NumberFormatException ignored) {
+            return 0L;
+        }
+    }
+
+    /**
+     * Mutable state threaded through one sequential member walk:
+     * whether a genuine 5xx/exception was observed, whether any member
+     * was skipped with its circuit open, and the largest Retry-After
+     * hint seen (member block remainder or marker response header).
+     */
+    private static final class WalkState {
+        /** A member genuinely 5xx'd or threw. */
+        private final java.util.concurrent.atomic.AtomicBoolean anyServerError =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
+        /** A member was skipped due to an open circuit (either layer). */
+        private final java.util.concurrent.atomic.AtomicBoolean skippedOpen =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
+        /** Largest Retry-After hint observed, seconds. */
+        private final java.util.concurrent.atomic.AtomicLong retryAfterHint =
+            new java.util.concurrent.atomic.AtomicLong(0L);
+
+        /**
+         * Track the largest positive Retry-After hint.
+         * @param seconds Hint in seconds; ignored when not positive.
+         */
+        void noteRetryAfter(final long seconds) {
+            if (seconds > 0L) {
+                this.retryAfterHint.accumulateAndGet(seconds, Math::max);
+            }
+        }
     }
 
     /**

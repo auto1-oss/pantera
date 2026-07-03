@@ -103,7 +103,15 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
     /**
      * Static circuit-breaker config (seed, cap, trip predicates).
      */
-    private final CircuitBreakerConfig circuitBreakerConfig;
+    /**
+     * Live circuit-breaker configuration source. Defaults to the
+     * hardcoded {@link CircuitBreakerConfig#defaults()}; pantera-main
+     * swaps in the DB-backed admin-settings supplier via
+     * {@link #circuitBreakerConfig(java.util.function.Supplier)}.
+     * Volatile: breakers and slices read through an indirection lambda
+     * so a swap applies immediately to every existing breaker.
+     */
+    private volatile java.util.function.Supplier<CircuitBreakerConfig> circuitBreakerConfig;
 
     /**
      * Clock used by the circuit breaker slice for probe scheduling.
@@ -204,10 +212,13 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
         this.clnt = create(settings, maxConnectionsPerDestination);
         this.acquireTimeoutMillis = settings.connectionAcquireTimeout();
         this.rateLimiter = rateLimiter;
-        this.circuitBreakerConfig = breakerConfig;
+        this.circuitBreakerConfig = () -> breakerConfig;
         this.circuitBreakerClock = clock;
+        // The registry (and every breaker it creates) reads through this
+        // indirection, so circuitBreakerConfig(Supplier) swaps apply to
+        // breakers that already exist.
         this.circuitBreakerRegistry = new UpstreamCircuitBreakerRegistry.Default(
-            breakerConfig, clock
+            () -> this.circuitBreakerConfig.get(), clock
         );
         this.circuitProbeExecutor = Executors.newSingleThreadScheduledExecutor(
             r -> {
@@ -456,6 +467,21 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
      * @param port Port.
      * @return Client slice (rate-limited + circuit-broken for non-loopback hosts).
      */
+    /**
+     * Swap the circuit-breaker configuration source. Called by
+     * pantera-main after the DB layer is up to install the
+     * admin-settings-backed supplier; applies immediately to every
+     * existing and future breaker (they read through an indirection).
+     *
+     * @param supplier Live configuration source; must be non-null and
+     *     must never return null.
+     */
+    public void circuitBreakerConfig(
+        final java.util.function.Supplier<CircuitBreakerConfig> supplier
+    ) {
+        this.circuitBreakerConfig = java.util.Objects.requireNonNull(supplier, "supplier");
+    }
+
     private Slice slice(final boolean secure, final String host, final int port) {
         final JettyClientSlice raw = new JettyClientSlice(
             this.clnt, secure, host, port, this.acquireTimeoutMillis
@@ -463,9 +489,16 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
         if (isLoopback(host)) {
             return raw;
         }
-        final UpstreamCircuitBreaker breaker = this.circuitBreakerRegistry.breakerFor(host);
+        // Breaker keyed by scheme://host:port, NOT bare host: one
+        // hostname can front several registries (different ports /
+        // schemes), and a bare-host key made them share one failure
+        // domain — a 5xx from one took down all of them. The rate
+        // limiter stays host-keyed on purpose: upstream throttles
+        // apply per origin host, not per port.
+        final String breakerKey = (secure ? "https://" : "http://") + host + ':' + port;
+        final UpstreamCircuitBreaker breaker = this.circuitBreakerRegistry.breakerFor(breakerKey);
         final Slice withBreaker = new CircuitBreakingClientSlice(
-            raw, host, breaker, this.circuitBreakerConfig,
+            raw, breakerKey, breaker, () -> this.circuitBreakerConfig.get(),
             this.circuitBreakerClock, this.circuitProbeExecutor
         );
         return new RateLimitedClientSlice(

@@ -228,7 +228,197 @@ final class UpstreamCircuitBreakerTest {
         );
     }
 
+    @Test
+    void singleStray5xxDoesNotTripGatedBreaker() {
+        final TestClock clock = new TestClock(T0);
+        final UpstreamCircuitBreaker breaker = gatedBreaker(clock);
+        for (int i = 0; i < 9; i = i + 1) {
+            breaker.recordSuccess();
+        }
+        final boolean tripped = breaker.recordFailure(500);
+        MatcherAssert.assertThat(
+            "one 500 among nine successes must not trip (rate below threshold)",
+            tripped, new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "breaker stays closed on a stray 5xx",
+            breaker.isOpen(), new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void failuresBelowMinimumCallsDoNotTrip() {
+        final TestClock clock = new TestClock(T0);
+        final UpstreamCircuitBreaker breaker = gatedBreaker(clock);
+        for (int i = 0; i < 9; i = i + 1) {
+            breaker.recordFailure(503);
+        }
+        MatcherAssert.assertThat(
+            "nine failures are below the 10-call minimum — no trip yet",
+            breaker.isOpen(), new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void tripsWhenWindowMeetsVolumeAndRate() {
+        final TestClock clock = new TestClock(T0);
+        final UpstreamCircuitBreaker breaker = gatedBreaker(clock);
+        for (int i = 0; i < 5; i = i + 1) {
+            breaker.recordSuccess();
+        }
+        boolean tripped = false;
+        for (int i = 0; i < 5; i = i + 1) {
+            tripped = breaker.recordFailure(502);
+        }
+        MatcherAssert.assertThat(
+            "5 failures / 10 calls meets the 50% threshold — the last failure trips",
+            tripped, new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "breaker is open after the gate trips",
+            breaker.isOpen(), new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "gated trip uses the 2s seed backoff",
+            breaker.timeRemaining(), new IsEqual<>(Duration.ofSeconds(2))
+        );
+    }
+
+    @Test
+    void failuresOutsideSlidingWindowExpire() {
+        final TestClock clock = new TestClock(T0);
+        final UpstreamCircuitBreaker breaker = gatedBreaker(clock);
+        for (int i = 0; i < 9; i = i + 1) {
+            breaker.recordFailure(500);
+        }
+        clock.advance(Duration.ofSeconds(31));
+        final boolean tripped = breaker.recordFailure(500);
+        MatcherAssert.assertThat(
+            "failures older than the 30s window expired — 1 call in window, no trip",
+            tripped, new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "breaker stays closed when the window is stale",
+            breaker.isOpen(), new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void probeFailureRetripsWithoutVolumeGate() {
+        final TestClock clock = new TestClock(T0);
+        final UpstreamCircuitBreaker breaker = gatedBreaker(clock);
+        for (int i = 0; i < 10; i = i + 1) {
+            breaker.recordFailure(503);
+        }
+        MatcherAssert.assertThat(
+            "10/10 failures trip the gated breaker",
+            breaker.isOpen(), new IsEqual<>(true)
+        );
+        clock.advance(Duration.ofSeconds(3));
+        breaker.probeFailed(503);
+        MatcherAssert.assertThat(
+            "a single failed probe re-trips despite the empty window",
+            breaker.isOpen(), new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "probe re-trip advances tripCount",
+            breaker.tripCount(), new IsEqual<>(2L)
+        );
+    }
+
+    @Test
+    void recordSuccessReportsCloseExactlyOnce() {
+        final TestClock clock = new TestClock(T0);
+        final UpstreamCircuitBreaker breaker = gatedBreaker(clock);
+        for (int i = 0; i < 10; i = i + 1) {
+            breaker.recordFailure(503);
+        }
+        MatcherAssert.assertThat(
+            "first success after a trip reports the close",
+            breaker.recordSuccess(), new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "subsequent successes do not re-report the close",
+            breaker.recordSuccess(), new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void windowIsClearedOnTripSoRecoveryIsNotInstantlyReconvicted() {
+        final TestClock clock = new TestClock(T0);
+        final UpstreamCircuitBreaker breaker = gatedBreaker(clock);
+        for (int i = 0; i < 10; i = i + 1) {
+            breaker.recordFailure(503);
+        }
+        breaker.recordSuccess();
+        final boolean tripped = breaker.recordFailure(500);
+        MatcherAssert.assertThat(
+            "pre-trip failures were cleared — one new failure cannot re-trip",
+            tripped, new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void configSupplierSwapAppliesToExistingBreaker() {
+        final TestClock clock = new TestClock(T0);
+        final java.util.concurrent.atomic.AtomicReference<CircuitBreakerConfig> live =
+            new java.util.concurrent.atomic.AtomicReference<>(CircuitBreakerConfig.defaults());
+        final UpstreamCircuitBreaker breaker = new UpstreamCircuitBreaker(
+            "repo1.maven.org", live::get, clock
+        );
+        breaker.recordFailure(503);
+        MatcherAssert.assertThat(
+            "under defaults (min 10 calls) one failure does not trip",
+            breaker.isOpen(), new IsEqual<>(false)
+        );
+        final CircuitBreakerConfig defaults = CircuitBreakerConfig.defaults();
+        live.set(new CircuitBreakerConfig(
+            Duration.ofSeconds(7),
+            Duration.ofMinutes(60),
+            defaults.shouldTripOnException(),
+            defaults.shouldTripOnStatus(),
+            0.01,
+            1,
+            60
+        ));
+        final boolean tripped = breaker.recordFailure(503);
+        MatcherAssert.assertThat(
+            "after the admin lowers the gate (min 1 call), the SAME breaker trips",
+            tripped, new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "the trip uses the NEW seed backoff (7s), not the construction-time 2s",
+            breaker.timeRemaining(), new IsEqual<>(Duration.ofSeconds(7))
+        );
+    }
+
     private static UpstreamCircuitBreaker newBreaker(final Clock clock) {
+        return new UpstreamCircuitBreaker(
+            "repo1.maven.org",
+            UpstreamCircuitBreakerTest.hairTrigger(),
+            clock
+        );
+    }
+
+    /**
+     * Config with the volume/rate gate collapsed (1 call, 100% rate) and
+     * the pre-gating 30s/60min backoff shape — the state-machine tests
+     * exercise trip windows and transitions, not the gate.
+     */
+    private static CircuitBreakerConfig hairTrigger() {
+        final CircuitBreakerConfig defaults = CircuitBreakerConfig.defaults();
+        return new CircuitBreakerConfig(
+            Duration.ofSeconds(30),
+            Duration.ofMinutes(60),
+            defaults.shouldTripOnException(),
+            defaults.shouldTripOnStatus(),
+            0.01,
+            1,
+            30
+        );
+    }
+
+    private static UpstreamCircuitBreaker gatedBreaker(final Clock clock) {
         return new UpstreamCircuitBreaker(
             "repo1.maven.org",
             CircuitBreakerConfig.defaults(),

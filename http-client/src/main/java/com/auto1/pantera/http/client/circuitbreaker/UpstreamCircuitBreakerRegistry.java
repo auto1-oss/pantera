@@ -47,9 +47,9 @@ public interface UpstreamCircuitBreakerRegistry {
     final class Default implements UpstreamCircuitBreakerRegistry {
 
         /**
-         * Static configuration used to build every breaker.
+         * Live configuration source shared by every breaker.
          */
-        private final CircuitBreakerConfig config;
+        private final java.util.function.Supplier<CircuitBreakerConfig> config;
 
         /**
          * Clock injected into every breaker.
@@ -66,9 +66,21 @@ public interface UpstreamCircuitBreakerRegistry {
          * @param config Configuration applied to every constructed breaker.
          * @param clock  Clock used by every constructed breaker.
          */
-        public Default(final CircuitBreakerConfig config, final Clock clock) {
+        public Default(
+            final java.util.function.Supplier<CircuitBreakerConfig> config,
+            final Clock clock
+        ) {
             this.config = Objects.requireNonNull(config, "config");
             this.clock = Objects.requireNonNull(clock, "clock");
+        }
+
+        /**
+         * Fixed-config convenience constructor (tests).
+         * @param config Immutable configuration for every breaker.
+         * @param clock  Clock injected into every breaker.
+         */
+        public Default(final CircuitBreakerConfig config, final Clock clock) {
+            this(() -> config, clock);
         }
 
         @Override

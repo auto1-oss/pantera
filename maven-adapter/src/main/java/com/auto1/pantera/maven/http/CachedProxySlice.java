@@ -1226,6 +1226,16 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 .textBody("Upstream auth required")
                 .build();
         }
+        // Outbound-breaker fast-fail: keep the marker (and Retry-After)
+        // on the re-synthesised 502 so the group resolver skips this
+        // member instead of convicting it on the breaker's own output.
+        if (err.circuitOpen()) {
+            final ResponseBuilder rb = ResponseBuilder.badGateway()
+                .header(com.auto1.pantera.http.UpstreamCircuitOpenException.HEADER, "true")
+                .textBody("Upstream circuit breaker is open");
+            err.retryAfter().ifPresent(ra -> rb.header("Retry-After", ra));
+            return rb.build();
+        }
         // 5xx and any other unclassified non-2xx — transient,
         // surface as bad-gateway so group fanout retries another member.
         return ResponseBuilder.badGateway()
@@ -1259,7 +1269,10 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                         resp.headers().values("Retry-After");
                     throw new UpstreamHttpException(
                         resp.status().code(),
-                        retryAfter.isEmpty() ? null : retryAfter.get(0)
+                        retryAfter.isEmpty() ? null : retryAfter.get(0),
+                        !resp.headers().values(
+                            com.auto1.pantera.http.UpstreamCircuitOpenException.HEADER
+                        ).isEmpty()
                     );
                 }
                 return new UpstreamBody(
@@ -1315,11 +1328,14 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         private static final long serialVersionUID = 1L;
         private final int status;
         private final String retryAfter;
+        private final boolean circuitOpen;
 
-        UpstreamHttpException(final int status, final String retryAfter) {
+        UpstreamHttpException(final int status, final String retryAfter,
+            final boolean circuitOpen) {
             super("Upstream returned HTTP " + status);
             this.status = status;
             this.retryAfter = retryAfter;
+            this.circuitOpen = circuitOpen;
         }
 
         int status() {
@@ -1328,6 +1344,15 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
 
         Optional<String> retryAfter() {
             return Optional.ofNullable(this.retryAfter);
+        }
+
+        /**
+         * True when the 5xx is the outbound breaker's synthesised
+         * fast-fail (X-Pantera-Circuit-Open marker), not a response the
+         * upstream actually produced.
+         */
+        boolean circuitOpen() {
+            return this.circuitOpen;
         }
     }
 

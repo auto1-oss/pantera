@@ -110,12 +110,23 @@ final class SequentialGroupTraversalTest {
 
     @Test
     void skipsOpenCircuitMemberWithoutUpstreamCall() throws Exception {
-        // First member's circuit is forced open below; the test asserts
-        // its upstream slice is NOT invoked even though it's first in
-        // declared order. The second member serves the response.
-        final AtomicInteger downstreamCalls = new AtomicInteger();
+        // First member's circuit is forced open below. The resolver may
+        // probe it in CACHE-ONLY mode (breaker-cascade fix F5: a blocked
+        // member can still serve its warm cache) but must never invoke it
+        // in normal (upstream-capable) mode. A cold cache answers 404 and
+        // the second member serves the response.
+        final AtomicInteger upstreamModeCalls = new AtomicInteger();
+        final AtomicInteger cacheOnlyCalls = new AtomicInteger();
         final Slice downedMemberSlice = (line, headers, body) -> {
-            downstreamCalls.incrementAndGet();
+            final boolean cacheOnly = !headers.values(
+                com.auto1.pantera.http.cache.BaseCachedProxySlice.CACHE_ONLY_HEADER
+            ).isEmpty();
+            if (cacheOnly) {
+                cacheOnlyCalls.incrementAndGet();
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.notFound().build());
+            }
+            upstreamModeCalls.incrementAndGet();
             return CompletableFuture.completedFuture(ResponseBuilder.ok().build());
         };
         final byte[] payload = "served".getBytes();
@@ -153,8 +164,10 @@ final class SequentialGroupTraversalTest {
         ).join();
         assertEquals(200, resp.status().code());
         assertArrayEquals(payload, resp.body().asBytes());
-        assertEquals(0, downstreamCalls.get(),
-            "downed member's slice must not be called when its circuit is open");
+        assertEquals(0, upstreamModeCalls.get(),
+            "downed member must never be invoked in upstream-capable mode while open");
+        assertEquals(1, cacheOnlyCalls.get(),
+            "downed member gets exactly one cache-only probe while open");
     }
 
     // ===== helpers (mirror GroupResolverTest.buildResolver / buildNegativeCache) =====

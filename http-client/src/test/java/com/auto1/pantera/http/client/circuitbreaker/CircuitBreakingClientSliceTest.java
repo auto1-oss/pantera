@@ -214,10 +214,8 @@ final class CircuitBreakingClientSliceTest {
         // Tiny seed so the test does not actually wait 30s; the probe
         // is scheduled with a Duration relative to the test clock, but
         // the executor uses real wall-clock for the delay computation.
-        final CircuitBreakerConfig config = new CircuitBreakerConfig(
-            Duration.ofMillis(50), Duration.ofMillis(500),
-            CircuitBreakerConfig.defaults().shouldTripOnException(),
-            CircuitBreakerConfig.defaults().shouldTripOnStatus()
+        final CircuitBreakerConfig config = hairTrigger(
+            Duration.ofMillis(50), Duration.ofMillis(500)
         );
         final UpstreamCircuitBreaker breaker = new UpstreamCircuitBreaker(
             "repo1.maven.org", config, clock
@@ -255,10 +253,8 @@ final class CircuitBreakingClientSliceTest {
     @Test
     void failedHeadProbeKeepsBreakerOpenAndSchedulesAnother() throws InterruptedException {
         final TestClock clock = new TestClock(Instant.parse("2026-05-14T12:00:00Z"));
-        final CircuitBreakerConfig config = new CircuitBreakerConfig(
-            Duration.ofMillis(50), Duration.ofMillis(500),
-            CircuitBreakerConfig.defaults().shouldTripOnException(),
-            CircuitBreakerConfig.defaults().shouldTripOnStatus()
+        final CircuitBreakerConfig config = hairTrigger(
+            Duration.ofMillis(50), Duration.ofMillis(500)
         );
         final UpstreamCircuitBreaker breaker = new UpstreamCircuitBreaker(
             "repo1.maven.org", config, clock
@@ -290,9 +286,50 @@ final class CircuitBreakingClientSliceTest {
         );
     }
 
+    @Test
+    void singleStray5xxDoesNotOpenDefaultGatedBreaker() {
+        final TestClock clock = new TestClock(Instant.parse("2026-05-14T12:00:00Z"));
+        final UpstreamCircuitBreaker breaker = new UpstreamCircuitBreaker(
+            "repo1.maven.org", CircuitBreakerConfig.defaults(), clock
+        );
+        final RecordingSlice downstream = new RecordingSlice();
+        downstream.enqueue(ResponseBuilder.from(RsStatus.INTERNAL_ERROR).build());
+        downstream.enqueue(ResponseBuilder.ok().body(Flowable.empty()).build());
+        final CircuitBreakingClientSlice slice = new CircuitBreakingClientSlice(
+            downstream, "repo1.maven.org", breaker,
+            CircuitBreakerConfig.defaults(), clock, this.probeExecutor
+        );
+        slice.response(GET, Headers.EMPTY, Content.EMPTY).join();
+        MatcherAssert.assertThat(
+            "production gate: one 5xx among too few calls must not open the breaker",
+            breaker.isOpen(), new IsEqual<>(false)
+        );
+        final Response second = slice.response(GET, Headers.EMPTY, Content.EMPTY).join();
+        MatcherAssert.assertThat(
+            "the next call still reaches downstream (no fast-fail)",
+            second.status(), new IsEqual<>(RsStatus.OK)
+        );
+    }
+
     private static UpstreamCircuitBreaker newBreaker(final Clock clock) {
         return new UpstreamCircuitBreaker(
-            "repo1.maven.org", CircuitBreakerConfig.defaults(), clock
+            "repo1.maven.org", hairTrigger(Duration.ofSeconds(30), Duration.ofMinutes(60)), clock
+        );
+    }
+
+    /**
+     * Config with the volume/rate gate collapsed to a single call so the
+     * decorator tests keep their one-failure-trips semantics; production
+     * gating itself is covered by {@link UpstreamCircuitBreakerTest}.
+     */
+    private static CircuitBreakerConfig hairTrigger(final Duration seed, final Duration cap) {
+        return new CircuitBreakerConfig(
+            seed, cap,
+            CircuitBreakerConfig.defaults().shouldTripOnException(),
+            CircuitBreakerConfig.defaults().shouldTripOnStatus(),
+            0.01,
+            1,
+            30
         );
     }
 

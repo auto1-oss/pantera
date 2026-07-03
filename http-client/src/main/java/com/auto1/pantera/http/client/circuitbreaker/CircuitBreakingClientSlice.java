@@ -16,6 +16,8 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.UpstreamCircuitOpenException;
+import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import java.time.Clock;
@@ -26,6 +28,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 
 /**
  * Slice decorator that consults a per-host
@@ -70,9 +74,12 @@ public final class CircuitBreakingClientSlice implements Slice {
 
     /**
      * Marker header on synthesised 502 responses — distinguishes a
-     * locally-generated fast-fail from a real upstream 5xx.
+     * locally-generated fast-fail from a real upstream 5xx. The
+     * canonical constant lives in pantera-core
+     * ({@link UpstreamCircuitOpenException#HEADER}) so adapters and the
+     * group resolver share it without depending on this module.
      */
-    public static final String CIRCUIT_OPEN_HEADER = "X-Pantera-Circuit-Open";
+    public static final String CIRCUIT_OPEN_HEADER = UpstreamCircuitOpenException.HEADER;
 
     /**
      * Request line used for HEAD recovery probes against the
@@ -98,11 +105,10 @@ public final class CircuitBreakingClientSlice implements Slice {
     private final UpstreamCircuitBreaker breaker;
 
     /**
-     * Static trip predicates (mirrored from the breaker's config so
-     * we can decide whether a given status / exception trips without
-     * holding the breaker's lock).
+     * Live configuration source (trip predicates read per decision so
+     * DB-backed admin settings apply without rebuild).
      */
-    private final CircuitBreakerConfig config;
+    private final Supplier<CircuitBreakerConfig> config;
 
     /**
      * Clock for deriving probe delays.
@@ -123,6 +129,20 @@ public final class CircuitBreakingClientSlice implements Slice {
     private final AtomicBoolean probeScheduled = new AtomicBoolean(false);
 
     /**
+     * Requests fast-failed since the breaker last opened. Snapshotted
+     * and reset by the recovery log line so operators can size the
+     * client-visible impact of each outage window.
+     */
+    private final AtomicLong fastfails = new AtomicLong();
+
+    /**
+     * Wall-clock instant of the trip that opened the current outage
+     * window; 0 when closed. Only used to report open-duration on
+     * recovery — best-effort, not part of breaker state.
+     */
+    private final AtomicLong openedAtMs = new AtomicLong();
+
+    /**
      * @param delegate      Raw slice this decorator protects.
      * @param host          Upstream host (used for diagnostics).
      * @param breaker       Per-host breaker state.
@@ -135,7 +155,7 @@ public final class CircuitBreakingClientSlice implements Slice {
         final Slice delegate,
         final String host,
         final UpstreamCircuitBreaker breaker,
-        final CircuitBreakerConfig config,
+        final Supplier<CircuitBreakerConfig> config,
         final Clock clock,
         final ScheduledExecutorService probeExecutor
     ) {
@@ -147,12 +167,33 @@ public final class CircuitBreakingClientSlice implements Slice {
         this.probeExecutor = Objects.requireNonNull(probeExecutor, "probeExecutor");
     }
 
+    /**
+     * Fixed-config convenience constructor (tests, DB-less boots).
+     * @param delegate      Raw slice this decorator protects.
+     * @param host          Upstream key (used for diagnostics).
+     * @param breaker       Per-upstream breaker state.
+     * @param config        Immutable configuration.
+     * @param clock         Clock for time-of-day reads.
+     * @param probeExecutor Daemon executor for HEAD probes.
+     */
+    public CircuitBreakingClientSlice(
+        final Slice delegate,
+        final String host,
+        final UpstreamCircuitBreaker breaker,
+        final CircuitBreakerConfig config,
+        final Clock clock,
+        final ScheduledExecutorService probeExecutor
+    ) {
+        this(delegate, host, breaker, () -> config, clock, probeExecutor);
+    }
+
     @Override
     public CompletableFuture<Response> response(
         final RequestLine line, final Headers headers, final Content body
     ) {
         if (this.breaker.isOpen()) {
             this.recordFastfailMetric();
+            this.fastfails.incrementAndGet();
             return CompletableFuture.completedFuture(synthesise502(this.breaker.timeRemaining()));
         }
         return this.delegate.response(line, headers, body).whenComplete(
@@ -186,18 +227,14 @@ public final class CircuitBreakingClientSlice implements Slice {
 
     /**
      * Inspect the delegate's terminal state and decide what to do
-     * about it: trip on qualifying failure, success-record otherwise.
-     * On trip, schedule the next HEAD probe.
+     * about it: window-record a qualifying failure (which may trip the
+     * volume/rate gate), success-record otherwise. On trip, log the
+     * transition and schedule the recovery HEAD probe.
      */
     private void onResponse(final Response response, final Throwable error) {
         if (error != null) {
-            if (this.config.shouldTripOnException().test(error)) {
-                final boolean wasClosed = !this.breaker.isOpen();
-                this.breaker.recordFailure(error);
-                if (wasClosed) {
-                    this.recordTripMetric();
-                }
-                this.scheduleProbe();
+            if (this.breaker.recordFailure(error)) {
+                this.onTripped("exception: " + error.getClass().getSimpleName(), 0);
             }
             return;
         }
@@ -205,15 +242,72 @@ public final class CircuitBreakingClientSlice implements Slice {
             return;
         }
         final int status = response.status().code();
-        if (this.config.shouldTripOnStatus().test(status)) {
-            final boolean wasClosed = !this.breaker.isOpen();
-            this.breaker.recordFailure(status);
-            if (wasClosed) {
-                this.recordTripMetric();
+        if (this.config.get().shouldTripOnStatus().test(status)) {
+            if (this.breaker.recordFailure(status)) {
+                this.onTripped("upstream status " + status, status);
             }
-            this.scheduleProbe();
         } else {
-            this.breaker.recordSuccess();
+            this.onSuccess();
+        }
+    }
+
+    /**
+     * Shared trip bookkeeping: metric, ECS transition log (WARN — an
+     * upstream just got convicted by the failure-rate window), probe
+     * scheduling.
+     *
+     * @param reason Human-readable trip cause for the log line.
+     * @param status Trip status code, or 0 for exception trips.
+     */
+    private void onTripped(final String reason, final int status) {
+        this.recordTripMetric();
+        this.openedAtMs.set(this.clock.millis());
+        final Duration remaining = this.breaker.timeRemaining();
+        final var log = EcsLogger.warn("com.auto1.pantera.http.client.circuitbreaker")
+            .message(String.format(
+                "Upstream circuit breaker OPENED for %s (%s) — blocking outbound calls for %ss, trip #%d",
+                this.host, reason,
+                remaining == null ? "?" : Long.toString(remaining.toSeconds()),
+                this.breaker.tripCount()
+            ))
+            .eventCategory("network")
+            .eventAction("circuit_breaker_trip")
+            .eventOutcome("failure")
+            .field("url.full", this.host)
+            .field("event.reason", reason)
+            .field("log.source", "application");
+        if (status > 0) {
+            log.field("http.response.status_code", status);
+        }
+        log.log();
+        this.scheduleProbe();
+    }
+
+    /**
+     * Success bookkeeping: closes the breaker when a block was set and
+     * logs the recovery exactly once (INFO), including how many
+     * requests fast-failed during the outage window.
+     */
+    private void onSuccess() {
+        if (this.breaker.recordSuccess()) {
+            final long failed = this.fastfails.getAndSet(0L);
+            final long opened = this.openedAtMs.getAndSet(0L);
+            final long openSeconds = opened == 0L
+                ? -1L
+                : Math.max(0L, (this.clock.millis() - opened) / 1000L);
+            EcsLogger.info("com.auto1.pantera.http.client.circuitbreaker")
+                .message(String.format(
+                    "Upstream circuit breaker CLOSED for %s — open %ss, %d request(s) fast-failed while open",
+                    this.host,
+                    openSeconds < 0 ? "?" : Long.toString(openSeconds),
+                    failed
+                ))
+                .eventCategory("network")
+                .eventAction("circuit_breaker_close")
+                .eventOutcome("success")
+                .field("url.full", this.host)
+                .field("log.source", "application")
+                .log();
         }
     }
 
@@ -270,38 +364,67 @@ public final class CircuitBreakingClientSlice implements Slice {
             );
         } catch (final RuntimeException ex) {
             this.probeScheduled.set(false);
-            this.breaker.recordFailure(ex);
+            this.breaker.probeFailed(ex);
+            this.logProbeFailure("probe dispatch failed: " + ex.getClass().getSimpleName());
             this.scheduleProbe();
         }
     }
 
     /**
-     * HEAD probe terminal state. Same trip semantics as a real
-     * outbound call: trip on 5xx / qualifying exception,
-     * success otherwise (including a 404 — that just means "the
-     * upstream is reachable but doesn't have /").
+     * HEAD probe terminal state. A failed probe re-trips
+     * unconditionally (the window gate does not apply to probes — the
+     * breaker already convicted this upstream, and the probe is the
+     * only traffic there is); anything else — including a 404, which
+     * just means "the upstream is reachable but doesn't have /" —
+     * closes the breaker.
      */
     private void onProbeResult(final Response response, final Throwable error) {
         if (error != null) {
-            if (this.config.shouldTripOnException().test(error)) {
-                this.breaker.recordFailure(error);
+            if (this.config.get().shouldTripOnException().test(error)) {
+                this.breaker.probeFailed(error);
+                this.logProbeFailure("exception: " + error.getClass().getSimpleName());
                 this.scheduleProbe();
             } else {
-                this.breaker.recordSuccess();
+                this.onSuccess();
             }
             return;
         }
         if (response == null) {
-            this.breaker.recordSuccess();
+            this.onSuccess();
             return;
         }
         final int status = response.status().code();
-        if (this.config.shouldTripOnStatus().test(status)) {
-            this.breaker.recordFailure(status);
+        if (this.config.get().shouldTripOnStatus().test(status)) {
+            this.breaker.probeFailed(status);
+            this.logProbeFailure("upstream status " + status);
             this.scheduleProbe();
         } else {
-            this.breaker.recordSuccess();
+            this.onSuccess();
         }
+    }
+
+    /**
+     * WARN transition log for a failed recovery probe — the upstream
+     * is still down and the block window just grew along the Fibonacci
+     * schedule.
+     *
+     * @param reason Human-readable probe failure cause.
+     */
+    private void logProbeFailure(final String reason) {
+        final Duration remaining = this.breaker.timeRemaining();
+        EcsLogger.warn("com.auto1.pantera.http.client.circuitbreaker")
+            .message(String.format(
+                "Upstream circuit breaker probe FAILED for %s (%s) — next probe in %ss",
+                this.host, reason,
+                remaining == null ? "?" : Long.toString(remaining.toSeconds())
+            ))
+            .eventCategory("network")
+            .eventAction("circuit_breaker_probe")
+            .eventOutcome("failure")
+            .field("url.full", this.host)
+            .field("event.reason", reason)
+            .field("log.source", "application")
+            .log();
     }
 
     /**

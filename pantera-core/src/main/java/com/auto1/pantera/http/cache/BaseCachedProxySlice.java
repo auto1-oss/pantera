@@ -16,6 +16,7 @@ import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.cache.Cache;
 import com.auto1.pantera.asto.cache.CacheControl;
 import com.auto1.pantera.asto.cache.Remote;
+import com.auto1.pantera.http.slice.EcsLoggingSlice;
 import com.auto1.pantera.audit.AuditContext;
 import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.cooldown.api.CooldownBlock;
@@ -118,6 +119,16 @@ public abstract class BaseCachedProxySlice implements Slice {
     /**
      * Asto cache for artifact storage.
      */
+    /**
+     * Internal request header: serve from cache only, never contact the
+     * upstream. Set by the group resolver when probing a circuit-open
+     * member — a blocked member can still serve bytes it already has
+     * (the Nexus serve-cached-while-auto-blocked behaviour). Honoured
+     * only when {@link EcsLoggingSlice#INTERNAL_ROUTING_HEADER} is also
+     * present, so an external client cannot force cache-only mode.
+     */
+    public static final String CACHE_ONLY_HEADER = "X-Pantera-Cache-Only";
+
     private final Cache cache;
 
     /**
@@ -429,6 +440,14 @@ public abstract class BaseCachedProxySlice implements Slice {
             recordProxyPhase("negative_cache_short_circuit", entryNs);
             return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
         }
+        // Step 1.5: cache-only probe (group resolver, circuit-open member).
+        // Serve a warm cache entry; otherwise 404 WITHOUT touching the
+        // upstream, cooldown, or the dedup gate. The resolver treats the
+        // 404 as "member skipped", never as an authoritative not-found.
+        if (this.isCacheOnly(headers)) {
+            return this.cacheOnlyFlow(line, key, path)
+                .whenComplete((r, e) -> recordProxyPhase("cache_only_probe", entryNs));
+        }
         // Step 2: Pre-process hook (adapter-specific short-circuit)
         final long preProcessNs = System.nanoTime();
         final Optional<CompletableFuture<Response>> pre =
@@ -698,6 +717,48 @@ public abstract class BaseCachedProxySlice implements Slice {
      * #auditAccessResult}. Checksum sidecars are not "the artifact" (see
      * class-level scope note on {@link AuditLogger}) and are excluded.
      */
+    /**
+     * True when the request carries the internal cache-only marker AND
+     * the internal-routing header proving it came from the group
+     * resolver, not an external client.
+     */
+    private boolean isCacheOnly(final Headers headers) {
+        return !headers.find(BaseCachedProxySlice.CACHE_ONLY_HEADER).isEmpty()
+            && !headers.find(EcsLoggingSlice.INTERNAL_ROUTING_HEADER).isEmpty();
+    }
+
+    /**
+     * Cache-only flow: mirror of {@link #cacheFirstFlow}'s hit branch
+     * with the miss branch replaced by an immediate 404. No cooldown,
+     * no dedup, no upstream — the caller is probing whether a
+     * circuit-open member can serve from its warm cache.
+     */
+    private CompletableFuture<Response> cacheOnlyFlow(
+        final RequestLine line,
+        final Key key,
+        final String path
+    ) {
+        if (!this.storageBacked || !this.isCacheable(path)) {
+            return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
+        }
+        final CachedArtifactMetadataStore store = this.metadataStore.orElseThrow();
+        return this.cache.load(key, Remote.EMPTY, CacheControl.Standard.ALWAYS)
+            .thenCompose(cached -> {
+                if (cached.isEmpty()) {
+                    return CompletableFuture.completedFuture(
+                        ResponseBuilder.notFound().build()
+                    );
+                }
+                this.logDebug("Cache-only probe hit", path);
+                return store.load(key).thenApply(meta -> {
+                    final ResponseBuilder builder = ResponseBuilder.ok()
+                        .body(cached.get());
+                    meta.ifPresent(m -> builder.headers(stripContentEncoding(m.headers())));
+                    return this.postProcess(builder.build(), line);
+                }).toCompletableFuture();
+            }).toCompletableFuture();
+    }
+
     private CompletableFuture<Response> cacheFirstFlow(
         final RequestLine line,
         final Headers headers,

@@ -42,6 +42,14 @@ import java.util.function.Predicate;
  *                              connection-lifecycle events.
  * @param shouldTripOnStatus    Returns {@code true} when the given
  *                              HTTP status should trip the breaker.
+ * @param failureRateThreshold  Minimum qualifying-failure rate
+ *                              (0..1] over the sliding window for a
+ *                              trip. A single stray 5xx among healthy
+ *                              traffic must never open the breaker.
+ * @param minimumCalls          Minimum recorded calls in the window
+ *                              before the rate is evaluated at all.
+ * @param windowSeconds         Sliding-window length in seconds over
+ *                              which successes/failures are counted.
  *
  * @since 2.2.0
  */
@@ -49,7 +57,10 @@ public record CircuitBreakerConfig(
     Duration seedBackoff,
     Duration maxBackoff,
     Predicate<Throwable> shouldTripOnException,
-    IntPredicate shouldTripOnStatus
+    IntPredicate shouldTripOnStatus,
+    double failureRateThreshold,
+    int minimumCalls,
+    int windowSeconds
 ) {
 
     /**
@@ -71,21 +82,42 @@ public record CircuitBreakerConfig(
                     + ", max=" + maxBackoff + ")"
             );
         }
+        if (failureRateThreshold <= 0.0 || failureRateThreshold > 1.0) {
+            throw new IllegalArgumentException(
+                "failureRateThreshold must be in (0, 1]: " + failureRateThreshold
+            );
+        }
+        if (minimumCalls < 1) {
+            throw new IllegalArgumentException(
+                "minimumCalls must be >= 1: " + minimumCalls
+            );
+        }
+        if (windowSeconds < 1) {
+            throw new IllegalArgumentException(
+                "windowSeconds must be >= 1: " + windowSeconds
+            );
+        }
     }
 
     /**
-     * Production defaults. 30 s seed, 60 min cap, trip predicate fires
-     * on 5xx only (see {@link #defaultStatusTrip}) and on every
-     * exception except {@link RejectedExecutionException}.
+     * Production defaults. Rate-over-sliding-window trip gating
+     * (50% failures over 30 s, at least 10 calls — mirrors the group
+     * layer's {@code AutoBlockSettings} shape) with a 2 s seed and
+     * 60 min cap. The pre-gating shape (single 5xx, 30 s seed) turned
+     * one stray upstream 500 into a 30-second host-wide fast-fail
+     * window; see the 2.2.0 breaker-cascade RCA.
      *
      * @return Default config instance.
      */
     public static CircuitBreakerConfig defaults() {
         return new CircuitBreakerConfig(
-            Duration.ofSeconds(30),
+            Duration.ofSeconds(2),
             Duration.ofMinutes(60),
             CircuitBreakerConfig::defaultExceptionTrip,
-            CircuitBreakerConfig::defaultStatusTrip
+            CircuitBreakerConfig::defaultStatusTrip,
+            0.5,
+            10,
+            30
         );
     }
 

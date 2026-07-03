@@ -151,6 +151,33 @@ final class CachedProxySliceStatusFidelityTest {
         );
     }
 
+    @Test
+    void circuitOpen502KeepsMarkerAndRetryAfter() {
+        final Slice fastfail = (line, headers, body) ->
+            CompletableFuture.completedFuture(
+                ResponseBuilder.from(RsStatus.BAD_GATEWAY)
+                    .header(
+                        com.auto1.pantera.http.UpstreamCircuitOpenException.HEADER, "true")
+                    .header("Retry-After", "13")
+                    .build()
+            );
+        final Response r = invoke(fastfail);
+        MatcherAssert.assertThat(
+            "circuit-open fast-fail still maps to 502",
+            r.status(), new IsEqual<>(RsStatus.BAD_GATEWAY)
+        );
+        MatcherAssert.assertThat(
+            "the X-Pantera-Circuit-Open marker survives the adapter",
+            r.headers().values(com.auto1.pantera.http.UpstreamCircuitOpenException.HEADER),
+            new IsEqual<>(List.of("true"))
+        );
+        MatcherAssert.assertThat(
+            "Retry-After survives alongside the marker",
+            r.headers().values("Retry-After"),
+            new IsEqual<>(List.of("13"))
+        );
+    }
+
     private static Slice constantResponse(final RsStatus status, final String retryAfter) {
         return (line, headers, body) -> {
             final ResponseBuilder rb = ResponseBuilder.from(status);
