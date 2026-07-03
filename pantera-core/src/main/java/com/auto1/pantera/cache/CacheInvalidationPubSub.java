@@ -109,7 +109,12 @@ public final class CacheInvalidationPubSub implements AutoCloseable {
         this.pubCommands = this.pubConn.async();
         this.caches = new ConcurrentHashMap<>();
         this.subConn.addListener(new Listener());
-        this.subConn.async().subscribe(CacheInvalidationPubSub.CHANNEL);
+        // Synchronous subscribe: block (boot thread only, never the event
+        // loop) until the server acks the subscription. The async variant
+        // returned before the SUBSCRIBE landed, so invalidations broadcast
+        // during this instance's startup window were silently missed —
+        // observed as a lost-message race under CI load.
+        this.subConn.sync().subscribe(CacheInvalidationPubSub.CHANNEL);
         EcsLogger.info("com.auto1.pantera.cache")
             .message("Cache invalidation pub/sub started (instance: "
                 + this.instanceId.substring(0, 8) + ")")
