@@ -101,6 +101,14 @@ public final class RepoMetricsSlice implements Slice {
                             this.repoType,
                             reqBytes
                         );
+                        // pantera.artifact.uploads + pantera.artifact.size.bytes —
+                        // the repository dashboard's upload panels chart these;
+                        // they had no recording call site until now.
+                        MicrometerMetrics.getInstance().recordUpload(
+                            this.repoName,
+                            this.repoType,
+                            reqBytes
+                        );
                     }
                 }
 
@@ -120,6 +128,16 @@ public final class RepoMetricsSlice implements Slice {
                                         RepoMetricsSlice.this.repoType,
                                         respBytes
                                     );
+                                    // Download COUNT only for GET: HEAD carries
+                                    // Content-Length without transferring a body,
+                                    // and upload-method responses are not downloads.
+                                    if ("GET".equals(method)) {
+                                        MicrometerMetrics.getInstance().recordDownload(
+                                            RepoMetricsSlice.this.repoName,
+                                            RepoMetricsSlice.this.repoType,
+                                            respBytes
+                                        );
+                                    }
                                 }
                             } catch (final NumberFormatException ex) {
                                 EcsLogger.debug("com.auto1.pantera.http.slice")

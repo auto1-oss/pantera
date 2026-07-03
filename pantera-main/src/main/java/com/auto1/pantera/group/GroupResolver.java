@@ -906,9 +906,14 @@ public final class GroupResolver implements Slice {
             // (Nexus-style serve-cached-while-blocked). Cache-only probes
             // never reach the upstream and record nothing on the member's
             // health window — a cache hit says nothing about upstream health.
+            final long probeStartMs = System.currentTimeMillis();
             queryMemberCacheOnly(member, line, headers, requestBytes)
                 .whenComplete((resp, err) -> {
                     if (err == null && resp != null && resp.status().success()) {
+                        recordMemberOutcome(
+                            member, "success",
+                            System.currentTimeMillis() - probeStartMs
+                        );
                         EcsLogger.info("com.auto1.pantera.group")
                             .message("Circuit-open member served from warm cache")
                             .eventCategory("web")
@@ -930,11 +935,14 @@ public final class GroupResolver implements Slice {
                 });
             return;
         }
+        final long memberStartMs = System.currentTimeMillis();
         queryMemberDirect(member, line, headers, requestBytes).whenComplete((resp, err) -> {
+            final long memberLatency = System.currentTimeMillis() - memberStartMs;
             if (err != null) {
                 if (!(err instanceof java.util.concurrent.CancellationException)) {
                     member.recordFailure();
                     walk.anyServerError.set(true);
+                    recordMemberOutcome(member, "error", memberLatency);
                 }
                 tryNextSequentialMember(iter, line, headers, requestBytes,
                     isTargetedLocalRead, walk, result, pinArtifactName);
@@ -944,6 +952,7 @@ public final class GroupResolver implements Slice {
             if (status == RsStatus.OK || status == RsStatus.PARTIAL_CONTENT
                 || status == RsStatus.NOT_MODIFIED || status == RsStatus.FORBIDDEN) {
                 member.recordSuccess();
+                recordMemberOutcome(member, "success", memberLatency);
                 // Record the winning member for sibling pinning. NOT_MODIFIED
                 // and FORBIDDEN also count — they confirm authoritative
                 // ownership by this member. The cache TTL keeps the pin
@@ -957,6 +966,7 @@ public final class GroupResolver implements Slice {
             }
             if (status == RsStatus.NOT_FOUND) {
                 drainBody(resp.body());
+                recordMemberOutcome(member, "not_found", memberLatency);
                 // RCA-6 (v2.2.0): make member fallthrough visible. Previously
                 // a maven_proxy 404 silently fell through to groovy with no
                 // log trace at all, which blocked perf diagnosis when the
@@ -986,6 +996,7 @@ public final class GroupResolver implements Slice {
                 drainBody(resp.body());
                 walk.skippedOpen.set(true);
                 walk.noteRetryAfter(parseRetryAfterSeconds(resp));
+                recordMemberOutcome(member, "circuit_open", -1L);
                 EcsLogger.info("com.auto1.pantera.group")
                     .message("Member's upstream circuit is open, skipping without conviction")
                     .eventCategory("network")
@@ -1003,6 +1014,7 @@ public final class GroupResolver implements Slice {
             drainBody(resp.body());
             member.recordFailure();
             walk.anyServerError.set(true);
+            recordMemberOutcome(member, "error", memberLatency);
             EcsLogger.warn("com.auto1.pantera.group")
                 .message("Group member returned non-2xx, trying next")
                 .eventCategory("web")
@@ -1192,6 +1204,30 @@ public final class GroupResolver implements Slice {
     }
 
     // ---- Metrics helpers ----
+
+    /**
+     * Record one member's outcome (and latency when meaningful) on the
+     * pantera.group.member.* meters. These went silent when the parallel
+     * fanout was replaced by the sequential walk in 2.2.0 — the group
+     * dashboard's member panels chart exactly these series.
+     *
+     * @param member    Member that was queried.
+     * @param result    success / not_found / error / circuit_open.
+     * @param latencyMs Wall latency; pass a negative value to skip the
+     *                  latency timer (skips have no meaningful latency).
+     */
+    private void recordMemberOutcome(
+        final MemberSlice member, final String result, final long latencyMs
+    ) {
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
+                .recordGroupMemberRequest(this.group, member.name(), result);
+            if (latencyMs >= 0L) {
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
+                    .recordGroupMemberLatency(this.group, member.name(), result, latencyMs);
+            }
+        }
+    }
 
     private void recordRequestStart() {
         final com.auto1.pantera.metrics.GroupResolverMetrics metrics =
