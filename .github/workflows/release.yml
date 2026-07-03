@@ -172,48 +172,53 @@ jobs:
           name: ui-release
           path: release/
 
-      - name: Generate release notes
+      # Release notes come FROM CHANGELOG.md — it is the single public
+      # record of what changed. The release fails if the version has no
+      # changelog section (enforces the docs-consistency rule). A short
+      # download/docker footer is appended since asset names and image
+      # pulls are release mechanics, not changelog content.
+      - name: Generate release notes from CHANGELOG.md
         run: |
           VERSION="${{ needs.version.outputs.version }}"
-          cat > release-notes.md << NOTES
-          ## Pantera ${VERSION}
+          python3 - "$VERSION" <<'PY'
+          import re
+          import sys
+          version = sys.argv[1]
+          text = open("CHANGELOG.md").read()
+          m = re.search(
+              rf"^## Version {re.escape(version)}\s*\n(.*?)(?=^## Version |\Z)",
+              text, re.S | re.M,
+          )
+          if not m:
+              sys.exit(f"CHANGELOG.md has no '## Version {version}' section — "
+                       "write the changelog before releasing.")
+          open("release-notes.md", "w").write(
+              f"## Pantera {version}\n\n" + m.group(1).strip() + "\n"
+          )
+          PY
+          cat >> release-notes.md << FOOTER
 
-          ### Release Artifacts
+          ---
+
+          ### Downloads
 
           | Artifact | Description |
           |----------|-------------|
           | \`pantera-${VERSION}.jar\` | Main application JAR |
           | \`pantera-${VERSION}-dist.tar.gz\` | Complete distribution (JAR + all dependencies) |
-          | \`pantera-ui-${VERSION}.tar.gz\` | Management UI (static files for nginx) |
+          | \`pantera-ui-${VERSION}.tar.gz\` | Management UI (static files for any web server) |
+          | \`SHA256SUMS\` | Checksums for all of the above |
 
-          ### Quick Start
-
-          \`\`\`bash
-          # Extract distribution
-          tar xzf pantera-${VERSION}-dist.tar.gz
-
-          # Run
-          java -cp pantera-main-${VERSION}.jar:dependency/* \\
-            com.auto1.pantera.VertxMain \\
-            --config-file=pantera.yml \\
-            --port=8080 --api-port=8086
-          \`\`\`
-
-          ### Docker
+          ### Docker images
 
           \`\`\`bash
-          # Backend (amd64 + arm64)
           docker pull ghcr.io/${{ github.repository }}:${VERSION}
-          # Management UI (nginx + static bundle)
           docker pull ghcr.io/${{ github.repository }}-ui:${VERSION}
+          # docker-compose stacks reference the plain names — retag after pulling:
+          docker tag ghcr.io/${{ github.repository }}:${VERSION} pantera:${VERSION}
+          docker tag ghcr.io/${{ github.repository }}-ui:${VERSION} pantera-ui:${VERSION}
           \`\`\`
-
-          ### Requirements
-
-          - JDK 21+
-          - PostgreSQL 15+
-          - Valkey/Redis (optional, for HA)
-          NOTES
+          FOOTER
 
       - name: Generate SHA256SUMS
         run: |
