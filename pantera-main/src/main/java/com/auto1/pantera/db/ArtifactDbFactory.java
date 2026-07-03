@@ -534,7 +534,7 @@ public final class ArtifactDbFactory {
             // Materialized views for dashboard aggregates — sub-millisecond reads vs seq scans.
             // Refreshed externally by pg_cron; see docs/admin-guide/installation.md.
             // NOTE: managed by Flyway V110 + V115. Kept here only as a safety
-            // net for code paths that bypass Flyway (e.g. DbNodeRegistryTest).
+            // net for code paths that bypass Flyway (e.g. tests hitting a bare DB).
             try {
                 statement.executeUpdate(
                     "CREATE MATERIALIZED VIEW IF NOT EXISTS mv_artifact_totals AS "

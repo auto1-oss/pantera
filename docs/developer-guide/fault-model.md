@@ -2,7 +2,7 @@
 
 > **Guide:** Developer Guide | **Section:** Fault Model
 
-Pantera's request pipeline distinguishes between *faults* (typed, expected, translated to a well-defined HTTP status) and *throwables* (untyped, unexpected, classified via `FaultClassifier` fallback). Every slice returning `Result<Response>` produces one or the other -- the only decision point for HTTP status mapping is `FaultTranslator`.
+Pantera's request pipeline distinguishes between *faults* (typed, expected, translated to a well-defined HTTP status) and *throwables* (untyped, unexpected). Every slice returning `Result<Response>` produces one or the other -- the only decision point for HTTP status mapping is `FaultTranslator`.
 
 ---
 
@@ -40,7 +40,6 @@ Behavioral note: a follow-up commit (`abee2ec9`) wrapped `CompletableFuture.supp
 
 1. **Add the record to `Fault.java`.** Keep the field list minimal -- whatever a translator or a classifier needs, nothing more. Example: `UpstreamIntegrity` carries the `algo` string so the header tag can include it.
 2. **Extend `FaultTranslator.translate(...)`.** The switch is exhaustive -- the compiler will reject the build until you add a case. Decide: HTTP status, headers, optional body.
-3. **Extend `FaultClassifier.classify(...)` if the fault has a fallback path.** Not every fault needs one; only add a classifier case if there is a `Throwable` type that should map to the new fault without an explicit emit site. Most new faults don't need this.
 4. **Regression tests.** At minimum, one test that emits the new fault end-to-end through `FaultTranslator` and asserts the response shape, and one exhaustive-switch guard (`FaultTranslatorTest.translatesEveryFaultVariant`).
 5. **Document the new header tag in the user guide.** Append to `docs/user-guide/error-reference.md` so external consumers know what the tag means.
 

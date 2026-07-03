@@ -67,7 +67,7 @@ For auth-related 4xx, see [Troubleshooting](troubleshooting.md).
 
 ## `500` with `X-Pantera-Fault: internal`
 
-**What it means:** Catch-all for anything the fault classifier could not type more specifically. Every `internal` fault is logged on the server side with a full stack trace.
+**What it means:** Catch-all for anything the fault could not be typed to more specifically. Every `internal` fault is logged on the server side with a full stack trace.
 
 **Client action:** Retry once; if it recurs, escalate to your administrator with the request's trace ID (carried in the `X-Request-Id` / `trace.id` field).
 
