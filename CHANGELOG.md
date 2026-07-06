@@ -1,5 +1,12 @@
 # Changelog
 
+## Version 2.2.1
+
+### 🔧 Bug fixes
+
+- **Directory-listing pages render styled again under the hardened security headers.** The 2.2.0 `Content-Security-Policy: default-src 'self'` blocked the browse pages' own inline CSS/JS, leaving listings unstyled with dead sort controls. Browse responses now declare a per-route CSP that allowlists exactly their inline style/script blocks by SHA-256 hash, and the sort controls bind their listeners CSP-compatibly instead of using inline `onclick` attributes.
+  ([@aydasraf](https://github.com/aydasraf))
+
 ## Version 2.2.0
 
 ### ⚠️ Breaking changes
