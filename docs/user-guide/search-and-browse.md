@@ -146,7 +146,7 @@ curl http://pantera-host:8080/bin/
 curl http://pantera-host:8080/bin/releases/v1.0/
 ```
 
-This works for generic file repositories. Maven, npm, and Docker repositories use their own metadata formats for discovery (e.g., `maven-metadata.xml`, npm package index).
+HTML directory listing is available for **hosted (local) repositories** of these types: `file`, `maven`, `gradle`, `npm`, `gem`, `helm`, `rpm`, `php`, `nuget`, and `go` — request a directory-looking path with an `Accept: text/html` header (any browser does this automatically). It is deliberately **not available for proxy repositories** (their storage holds only the subset of upstream artifacts that happens to be cached — a listing would be misleading; use search instead) or for Docker repositories (Docker clients discover content through the registry `/v2/` API, e.g. the tags list endpoint).
 
 ---
 

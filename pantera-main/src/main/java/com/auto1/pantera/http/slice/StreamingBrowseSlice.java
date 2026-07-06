@@ -106,6 +106,9 @@ public final class StreamingBrowseSlice implements Slice {
 
             return ResponseBuilder.ok()
                 .header(ContentType.mime("text/html; charset=utf-8"))
+                // Per-route CSP allowing exactly this page's inline style
+                // block by hash; SecurityHeadersSlice keeps it.
+                .header(BrowsePageCsp.HEADER, BrowsePageCsp.STREAMING_CSP)
                 .body(htmlContent)
                 .build();
         }).exceptionally(throwable -> {
@@ -215,17 +218,14 @@ public final class StreamingBrowseSlice implements Slice {
      * Generate HTML header.
      */
     private static String htmlHeader(final String displayPath) {
+        // The style block is emitted verbatim from BrowsePageCsp so its
+        // bytes match the SHA-256 the response's CSP header allowlists.
         return new StringBuilder()
             .append("<html>\n")
             .append("<head>\n")
             .append("  <meta charset=\"utf-8\">\n")
             .append("  <title>Index of ").append(escapeHtml(displayPath)).append("</title>\n")
-            .append("  <style>\n")
-            .append("    body { font-family: monospace; margin: 20px; }\n")
-            .append("    h1 { font-size: 18px; }\n")
-            .append("    a { display: block; padding: 2px 0; text-decoration: none; }\n")
-            .append("    a:hover { background: #f0f0f0; }\n")
-            .append("  </style>\n")
+            .append("  <style>").append(BrowsePageCsp.STREAMING_STYLE).append("</style>\n")
             .append("</head>\n")
             .append("<body>\n")
             .append("<h1>Index of ").append(escapeHtml(displayPath)).append("</h1>\n")
@@ -241,7 +241,7 @@ public final class StreamingBrowseSlice implements Slice {
         return new StringBuilder()
             .append("</pre>\n")
             .append("<hr>\n")
-            .append("<p style=\"font-size: 12px; color: #666;\">")
+            .append("<p class=\"footer\">")
             .append(count).append(" items</p>\n")
             .append("</body>\n")
             .append("</html>\n")
