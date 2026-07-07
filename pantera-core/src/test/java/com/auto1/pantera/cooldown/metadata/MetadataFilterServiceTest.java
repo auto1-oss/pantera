@@ -1009,6 +1009,70 @@ final class MetadataFilterServiceTest {
         );
     }
 
+    @Test
+    void unblockedUpstreamLatestIsPreservedWhenOtherVersionsBlocked()
+        throws ExecutionException, InterruptedException {
+        // @nx/js in the wild: dist-tags.latest = 23.0.1 (stable, well past the
+        // cooldown window, NOT blocked) while a fresh 23.1.0-beta.7 IS blocked.
+        // Blocking *something* must not drag latest off the author's unblocked
+        // designated latest — neither onto the surviving CI prerelease nor onto
+        // a lower-major backport that merely published more recently.
+        this.cooldownService.blockVersion("nx-pkg", "23.1.0-beta.7");
+        final TestMetadataParser parser = new TestMetadataParser(
+            Arrays.asList(
+                "23.1.0-beta.7", "23.1.0-pr.36127.e594f53", "23.0.1", "22.7.6"
+            ),
+            "23.0.1",
+            true
+        );
+        final TestMetadataFilter filter = new TestMetadataFilter();
+        final TestMetadataRewriter rewriter = new TestMetadataRewriter();
+        this.service.filterMetadata(
+            "npm", "test-repo", "nx-pkg",
+            "raw".getBytes(StandardCharsets.UTF_8),
+            parser, filter, rewriter
+        ).get();
+        assertThat(
+            "the fresh prerelease is blocked",
+            filter.lastBlockedVersions.contains("23.1.0-beta.7"), equalTo(true)
+        );
+        assertThat(
+            "an unblocked upstream latest must be preserved verbatim, not recomputed",
+            filter.lastNewLatest, equalTo("23.0.1")
+        );
+    }
+
+    @Test
+    void fallbackNeverPromotesNewerMajorThanBlockedLatest()
+        throws ExecutionException, InterruptedException {
+        // vue-style: the author keeps latest on the 2.x line (2.7.16) while a
+        // newer 3.x major exists but was never promoted to latest. When the
+        // designated latest is itself cooldown-blocked, the fallback must stay
+        // at-or-below it (2.7.15) — never jump to the 3.x major, and never rank
+        // by publish date.
+        this.cooldownService.blockVersion("vue-pkg", "2.7.16");
+        final TestMetadataParser parser = new TestMetadataParser(
+            Arrays.asList("3.4.0", "2.7.16", "2.7.15"),
+            "2.7.16",
+            true
+        );
+        final TestMetadataFilter filter = new TestMetadataFilter();
+        final TestMetadataRewriter rewriter = new TestMetadataRewriter();
+        this.service.filterMetadata(
+            "npm", "test-repo", "vue-pkg",
+            "raw".getBytes(StandardCharsets.UTF_8),
+            parser, filter, rewriter
+        ).get();
+        assertThat(
+            "the blocked designated latest must be filtered",
+            filter.lastBlockedVersions.contains("2.7.16"), equalTo(true)
+        );
+        assertThat(
+            "fallback must stay on the author's line, never jump to a newer major",
+            filter.lastNewLatest, equalTo("2.7.15")
+        );
+    }
+
     /**
      * Regression: the cooldown request must be attributed to the
      * request-captured owner passed into filterMetadata, NOT to

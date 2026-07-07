@@ -624,31 +624,34 @@ public final class MetadataFilterService implements CooldownMetadataService {
                 // Step 7: Filter metadata
                 T filtered = ctx.filter.filter(ctx.parsed, blockedVersions);
 
-                // Step 8: Recompute latest/release whenever anything is blocked.
-                // Pre-Phase-D the rewrite only fired when <latest> itself was
-                // blocked — leaving <release> pointing at a blocked stable
-                // version even though <latest> was a surviving SNAPSHOT, so
-                // Gradle's latest.release resolution would pick a version it
-                // could not subsequently download. findLatestByReleaseDate
-                // returns the latest non-blocked version regardless of
-                // whether currentLatest itself was blocked.
+                // Step 8: Re-point latest/release whenever anything is blocked.
+                // Rule 1 — respect the author's designated latest when its target
+                // survived filtering: an unblocked upstream latest is kept as-is
+                // (npm's dist-tags.latest, Maven's <latest>). updateLatest is still
+                // invoked so Maven's <release> pointer is recomputed from the
+                // filtered version list even though <latest> is unchanged — the
+                // Phase-D guarantee that a surviving SNAPSHOT <latest> must not
+                // leave <release> pointing at a blocked stable.
+                // Rule 2 — only when the designated latest is itself blocked (or
+                // absent) do we fall back, to the highest unblocked STABLE that
+                // does not EXCEED the designated latest by the format comparator.
+                // That never promotes a newer major the author had not blessed
+                // (latest=2.x while 3.x/4.x exist) and never a prerelease.
                 final Optional<String> currentLatest = ctx.parser.getLatestVersion(ctx.parsed);
-                if (!blockedVersions.isEmpty()) {
-                    final Optional<String> newLatest = this.findLatestByReleaseDate(
-                        ctx.parser, ctx.parsed, ctx.sortedVersions, blockedVersions
-                    );
-                    if (newLatest.isPresent()) {
-                        filtered = ctx.filter.updateLatest(filtered, newLatest.get());
-                        EcsLogger.debug("com.auto1.pantera.cooldown.metadata")
-                            .message(String.format(
-                                "Recomputed latest/release version: %s -> %s",
-                                currentLatest.orElse("(none)"), newLatest.get()))
-                            .eventCategory("database")
-                            .eventAction("metadata_filter")
-                            .field("package.name", ctx.packageName)
-                            .field("log.source", "application")
-                            .log();
-                    }
+                final Optional<String> newLatest = blockedVersions.isEmpty()
+                    ? Optional.empty()
+                    : this.resolveLatest(ctx, blockedVersions, currentLatest);
+                if (newLatest.isPresent()) {
+                    filtered = ctx.filter.updateLatest(filtered, newLatest.get());
+                    EcsLogger.debug("com.auto1.pantera.cooldown.metadata")
+                        .message(String.format(
+                            "Re-pointed latest/release version: %s -> %s",
+                            currentLatest.orElse("(none)"), newLatest.get()))
+                        .eventCategory("database")
+                        .eventAction("metadata_filter")
+                        .field("package.name", ctx.packageName)
+                        .field("log.source", "application")
+                        .log();
                 }
 
                 // Step 9: Rewrite metadata
@@ -839,77 +842,62 @@ public final class MetadataFilterService implements CooldownMetadataService {
     }
 
     /**
-     * Find the most recent unblocked STABLE version by release date.
-     * This respects package author's intent - if they set a lower semver version as latest
-     * (e.g., deprecating a major version branch), we fallback to the next most recently
-     * released STABLE version, not a prerelease.
+     * Resolve the {@code latest}/{@code release} pointer for the filtered
+     * metadata when at least one version was blocked.
      *
-     * @param parser Metadata parser (must implement ReleaseDateProvider)
-     * @param parsed Parsed metadata
-     * @param allVersions All available versions (sorted by semver desc)
-     * @param blockedVersions Set of blocked versions to exclude
-     * @param <T> Metadata type
-     * @return Most recent unblocked stable version by release date, or empty if none found
+     * <p><b>Rule 1</b> — if the upstream-designated latest
+     * ({@code currentLatest}) was NOT blocked, keep it. The package author's
+     * explicit choice is authoritative and must survive cooldown filtering
+     * (e.g. npm keeping {@code dist-tags.latest} on an older major while a
+     * newer major exists). The caller still invokes
+     * {@link MetadataFilter#updateLatest} so Maven's {@code <release>} pointer
+     * is recomputed from the filtered list even though {@code <latest>} is
+     * unchanged.</p>
+     *
+     * <p><b>Rule 2</b> — only when {@code currentLatest} is itself blocked (or
+     * absent) do we recompute. The replacement is the highest unblocked STABLE
+     * version that does not exceed {@code currentLatest} by the format's
+     * version comparator, so a freshly-blocked latest is replaced by an older
+     * release on the same line — never a newer major the author had not
+     * promoted, and never a prerelease. If nothing at-or-below the ceiling
+     * survives, the highest unblocked stable (then any unblocked version) is
+     * used. Ordering is by the per-repo-type comparator, NOT release date: a
+     * backport published after a higher release (nx's {@code 22.7.6} landing
+     * minutes after {@code 23.0.1}) must not win {@code latest} on a timestamp.</p>
+     *
+     * @param ctx Filter context (parser, repo type, sorted versions)
+     * @param blockedVersions Versions removed by cooldown
+     * @param currentLatest The upstream-designated latest, if any
+     * @param <T> Parsed metadata type
+     * @return The version to set as latest, or empty if none can be chosen
      */
-    @SuppressWarnings("unchecked")
-    private <T> Optional<String> findLatestByReleaseDate(
-        final MetadataParser<T> parser,
-        final T parsed,
-        final List<String> allVersions,
-        final Set<String> blockedVersions
+    private <T> Optional<String> resolveLatest(
+        final FilterContext<T> ctx,
+        final Set<String> blockedVersions,
+        final Optional<String> currentLatest
     ) {
-        // Get release dates if parser supports it
-        if (!(parser instanceof ReleaseDateProvider)) {
-            // Fallback to first unblocked STABLE version
-            return allVersions.stream()
-                .filter(ver -> !blockedVersions.contains(ver))
-                .filter(ver -> !parser.prerelease(ver))
-                .findFirst()
-                .or(() -> allVersions.stream()
-                    .filter(ver -> !blockedVersions.contains(ver))
-                    .findFirst()); // If no stable, use any unblocked
+        if (currentLatest.isPresent() && !blockedVersions.contains(currentLatest.get())) {
+            return currentLatest;
         }
-        
-        final ReleaseDateProvider<T> dateProvider = (ReleaseDateProvider<T>) parser;
-        final Map<String, Instant> releaseDates = dateProvider.releaseDates(parsed);
-        
-        if (releaseDates.isEmpty()) {
-            // No release dates available - fallback to first unblocked STABLE version
-            return allVersions.stream()
-                .filter(ver -> !blockedVersions.contains(ver))
-                .filter(ver -> !parser.prerelease(ver))
-                .findFirst()
-                .or(() -> allVersions.stream()
-                    .filter(ver -> !blockedVersions.contains(ver))
-                    .findFirst()); // If no stable, use any unblocked
-        }
-        
-        // Sort unblocked STABLE versions by release date (most recent first)
-        final Optional<String> stableLatest = allVersions.stream()
+        final Comparator<String> comparator = this.versionComparators
+            .getOrDefault(ctx.repoType.toLowerCase(Locale.ROOT), VersionComparators.semver());
+        final List<String> stable = ctx.sortedVersions.stream()
             .filter(ver -> !blockedVersions.contains(ver))
-            .filter(ver -> !parser.prerelease(ver))
-            .filter(ver -> releaseDates.containsKey(ver))
-            .sorted((v1, v2) -> {
-                final Instant d1 = releaseDates.get(v1);
-                final Instant d2 = releaseDates.get(v2);
-                return d2.compareTo(d1); // Descending (most recent first)
-            })
-            .findFirst();
-        
-        if (stableLatest.isPresent()) {
-            return stableLatest;
+            .filter(ver -> !ctx.parser.prerelease(ver))
+            .collect(Collectors.toList());
+        if (currentLatest.isPresent()) {
+            final String ceiling = currentLatest.get();
+            final Optional<String> capped = stable.stream()
+                .filter(ver -> comparator.compare(ver, ceiling) <= 0)
+                .max(comparator);
+            if (capped.isPresent()) {
+                return capped;
+            }
         }
-        
-        // No stable versions - fallback to any unblocked version by release date
-        return allVersions.stream()
-            .filter(ver -> !blockedVersions.contains(ver))
-            .filter(ver -> releaseDates.containsKey(ver))
-            .sorted((v1, v2) -> {
-                final Instant d1 = releaseDates.get(v1);
-                final Instant d2 = releaseDates.get(v2);
-                return d2.compareTo(d1);
-            })
-            .findFirst();
+        return stable.stream().max(comparator).or(() ->
+            ctx.sortedVersions.stream()
+                .filter(ver -> !blockedVersions.contains(ver))
+                .max(comparator));
     }
     
     /**
