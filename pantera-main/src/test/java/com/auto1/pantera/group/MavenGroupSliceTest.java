@@ -553,148 +553,47 @@ public final class MavenGroupSliceTest {
     // Helper classes
 
     /**
-     * Regression (2.2.1): when a HOSTED member wins the walk, the cooldown
-     * metadata filter must NOT run — its versions arrived via authenticated
-     * first-party publishes, and age-gating them quarantined internal
-     * releases for the full cooldown window.
+     * Fix: cooldown is a proxy-repo feature — a group must never run cooldown
+     * or record blocks under its own name. It relays the winning member's
+     * metadata verbatim (each {@code -proxy} member filters its own
+     * {@code maven-metadata.xml} and records blocks under its own identity).
+     * Here the member returns two versions and BOTH must survive in the
+     * group's response, proving the group applied no filtering of its own.
      */
     @Test
-    void hostedWinnerMetadataIsNotCooldownFiltered() throws Exception {
-        final Map<String, Slice> members = new HashMap<>();
-        members.put("hosted-repo", new FakeMetadataSlice(
-            "<?xml version=\"1.0\"?><metadata><groupId>com.auto1</groupId><artifactId>internal</artifactId><versioning><versions><version>9.9.9</version></versions></versioning></metadata>"
-        ));
-        final RecordingFilterService filter = new RecordingFilterService(
-            "<filtered/>".getBytes(StandardCharsets.UTF_8)
-        );
-        final MavenGroupSlice slice = new MavenGroupSlice(
-            new FakeGroupSlice(),
-            "hosted-winner-group",
-            List.of("hosted-repo"),
-            new MapResolver(members),
-            8080,
-            0,
-            new GroupMetadataCache("hosted-winner-group"),
-            filter,
-            "maven-group",
-            java.util.Set.of("some-proxy-member")
-        );
-        final Response response = slice.response(
-            new RequestLine("GET", "/com/auto1/internal-hosted/maven-metadata.xml"),
-            Headers.EMPTY,
-            Content.EMPTY
-        ).get(10, TimeUnit.SECONDS);
-        MatcherAssert.assertThat(
-            "hosted-winner response is OK",
-            response.status(),
-            Matchers.equalTo(RsStatus.OK)
-        );
-        MatcherAssert.assertThat(
-            "first-party version must survive verbatim",
-            new String(response.body().asBytes(), StandardCharsets.UTF_8),
-            Matchers.containsString("<version>9.9.9</version>")
-        );
-        MatcherAssert.assertThat(
-            "cooldown filter must never run on a hosted member's metadata",
-            filter.calls.get(),
-            Matchers.equalTo(0)
-        );
-    }
-
-    /**
-     * Counterpart guard: a PROXY member winning the walk keeps full cooldown
-     * filtering — the winner-aware skip must not weaken upstream protection.
-     */
-    @Test
-    void proxyWinnerMetadataIsCooldownFiltered() throws Exception {
+    void groupRelaysMemberMetadataWithoutRunningCooldown() throws Exception {
         final Map<String, Slice> members = new HashMap<>();
         members.put("central-proxy", new FakeMetadataSlice(
-            "<?xml version=\"1.0\"?><metadata><groupId>com.ext</groupId><artifactId>lib</artifactId><versioning><versions><version>1.0.0</version></versions></versioning></metadata>"
+            "<?xml version=\"1.0\"?><metadata><groupId>com.ext</groupId><artifactId>lib</artifactId><versioning><versions><version>1.0.0</version><version>2.0.0</version></versions></versioning></metadata>"
         ));
-        final byte[] filtered =
-            "<metadata><!-- filtered --></metadata>".getBytes(StandardCharsets.UTF_8);
-        final RecordingFilterService filter = new RecordingFilterService(filtered);
         final MavenGroupSlice slice = new MavenGroupSlice(
             new FakeGroupSlice(),
-            "proxy-winner-group",
+            "relay-group",
             List.of("central-proxy"),
             new MapResolver(members),
             8080,
-            0,
-            new GroupMetadataCache("proxy-winner-group"),
-            filter,
-            "maven-group",
-            java.util.Set.of("central-proxy")
+            0
         );
         final Response response = slice.response(
-            new RequestLine("GET", "/com/ext/lib-proxied/maven-metadata.xml"),
+            new RequestLine("GET", "/com/ext/lib-relay/maven-metadata.xml"),
             Headers.EMPTY,
             Content.EMPTY
         ).get(10, TimeUnit.SECONDS);
         MatcherAssert.assertThat(
-            "proxy-winner response is OK",
+            "response is OK",
             response.status(),
             Matchers.equalTo(RsStatus.OK)
         );
         MatcherAssert.assertThat(
-            "cooldown filter must run exactly once on a proxy member's metadata",
-            filter.calls.get(),
-            Matchers.equalTo(1)
-        );
-        MatcherAssert.assertThat(
-            "the filtered bytes must be what the client receives",
+            "the group must serve the member's metadata verbatim — every version "
+                + "the member returned survives, because cooldown is enforced by the "
+                + "proxy member, not the group",
             new String(response.body().asBytes(), StandardCharsets.UTF_8),
-            Matchers.containsString("filtered")
+            Matchers.allOf(
+                Matchers.containsString("<version>1.0.0</version>"),
+                Matchers.containsString("<version>2.0.0</version>")
+            )
         );
-    }
-
-    /**
-     * Recording cooldown filter fake: counts invocations and substitutes
-     * the metadata bytes so filtering is observable.
-     */
-    private static final class RecordingFilterService
-        implements com.auto1.pantera.cooldown.metadata.CooldownMetadataService {
-
-        private final AtomicInteger calls = new AtomicInteger(0);
-        private final byte[] replacement;
-
-        private RecordingFilterService(final byte[] replacement) {
-            this.replacement = replacement;
-        }
-
-        @Override
-        public <T> CompletableFuture<byte[]> filterMetadata(
-            final String repoType, final String repoName, final String packageName,
-            final byte[] rawMetadata,
-            final com.auto1.pantera.cooldown.metadata.MetadataParser<T> parser,
-            final com.auto1.pantera.cooldown.metadata.MetadataFilter<T> filter,
-            final com.auto1.pantera.cooldown.metadata.MetadataRewriter<T> rewriter
-        ) {
-            this.calls.incrementAndGet();
-            return CompletableFuture.completedFuture(this.replacement);
-        }
-
-        @Override
-        public void invalidate(
-            final String repoType, final String repoName, final String packageName
-        ) {
-            // no cache to invalidate in the recording fake
-        }
-
-        @Override
-        public void invalidateAll(final String repoType, final String repoName) {
-            // no cache to invalidate in the recording fake
-        }
-
-        @Override
-        public void clearAll() {
-            // no cache to clear in the recording fake
-        }
-
-        @Override
-        public String stats() {
-            return "recording(calls=" + this.calls.get() + ")";
-        }
     }
 
     private static final class MapResolver implements SliceResolver {

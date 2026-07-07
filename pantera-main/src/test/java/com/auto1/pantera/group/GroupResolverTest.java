@@ -219,6 +219,33 @@ final class GroupResolverTest {
             "The index must not be queried for a malformed range path");
     }
 
+    @Test
+    void bracketCharactersAreServedNormallyForNonMavenGroupTypes() {
+        // The version-range guard is Maven/Gradle-specific: `[ ] ( )` are only
+        // ever a malformed version range in THAT ecosystem. GroupResolver is
+        // also the shared response() for file/php/npm/gem/go/pypi/docker-group,
+        // where a bracket is a perfectly legitimate file name (e.g. an upload
+        // named "backup[v2].zip"). The guard must not fire outside
+        // maven-group/gradle-group.
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of(HOSTED)));
+        final AtomicInteger hostedCount = new AtomicInteger(0);
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(HOSTED, countingSlice(hostedCount, RsStatus.OK));
+
+        final GroupResolver resolver = buildResolver(
+            idx, List.of(HOSTED), Set.of(), buildNegativeCache(), slices, "file-group"
+        );
+        final String bracketPath = "/reports/backup[v2].zip";
+        final Response resp = resolver.response(
+            new RequestLine("GET", bracketPath), Headers.EMPTY, Content.EMPTY
+        ).join();
+
+        assertEquals(200, resp.status().code(),
+            "A legitimate bracket-containing file name must be served, not rejected as a version range");
+        assertEquals(1, hostedCount.get(),
+            "The member must be queried normally for a file-group request");
+    }
+
     // ---- PATH A: indexMiss_allProxy404_negCachePopulated ----
 
     @Test

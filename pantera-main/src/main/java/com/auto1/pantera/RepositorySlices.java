@@ -976,9 +976,7 @@ public class RepositorySlices {
                             composerDelegate,
                             this::slice, cfg.name(), cfg.members(), port,
                             this.settings.prefixes().prefixes().stream()
-                                .findFirst().orElse(""),
-                            this.cooldownMetadata,
-                            cfg.type()
+                                .findFirst().orElse("")
                         ),
                         authentication(),
                         tokens.auth(),
@@ -991,8 +989,9 @@ public class RepositorySlices {
                 break;
             case "maven-group":
             case "gradle-group":
-                // Maven AND Gradle groups need maven-metadata.xml merge +
-                // cooldown filter on the merged result. Gradle uses the same
+                // Maven AND Gradle groups need maven-metadata.xml merge —
+                // NOT cooldown filtering, which is exclusive to -proxy repos
+                // (see MavenGroupSlice class javadoc). Gradle uses the same
                 // metadata format as Maven, so it routes through the same
                 // slice — previously gradle-group fell into the generic
                 // GroupResolver case which can't merge metadata.
@@ -1018,20 +1017,11 @@ public class RepositorySlices {
                             port,
                             depth,
                             new com.auto1.pantera.group.GroupMetadataCache(cfg.name()),
-                            this.cooldownMetadata,
-                            cfg.type(),
-                            // Direct -proxy members only (nested groups run
-                            // their own winner-aware filter): the cooldown
-                            // metadata filter applies solely when a proxy
-                            // member wins the walk, so first-party artifacts
-                            // published to hosted members are never age-gated.
-                            // Unknown member configs count as proxy (fail
-                            // closed: keep filtering).
-                            cfg.members().stream()
-                                .filter(name -> this.repos.config(name)
-                                    .map(mcfg -> mcfg.type().endsWith("-proxy"))
-                                    .orElse(true))
-                                .collect(java.util.stream.Collectors.toSet())
+                            // Cooldown is NOT applied at the group: each -proxy
+                            // member filters its own maven-metadata.xml and
+                            // records blocks under its own repo identity. The
+                            // group only relays the winning member's bytes.
+                            cfg.type()
                         ),
                         authentication(),
                         tokens.auth(),

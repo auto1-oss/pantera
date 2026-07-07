@@ -110,38 +110,21 @@ public final class ComposerGroupSlice implements Slice {
      * @param port Server port
      * @param globalPrefix Global URL prefix (e.g. "test_prefix"), empty string if none
      */
-    public ComposerGroupSlice(
-        final Slice delegate,
-        final SliceResolver resolver,
-        final String group,
-        final List<String> members,
-        final int port,
-        final String globalPrefix
-    ) {
-        this(delegate, resolver, group, members, port, globalPrefix,
-            com.auto1.pantera.cooldown.metadata.NoopCooldownMetadataService.INSTANCE,
-            "php-group");
-    }
-
     /**
-     * Ctor with cooldown metadata filtering on the merged response.
+     * Constructor.
      *
-     * <p>Composer resolves package versions from {@code packages.json} (or the
-     * {@code provider-includes} indirection used by Satis). Without filtering
-     * the merged document, a hosted member can re-introduce versions that the
-     * proxy member's per-request filter had stripped, and the client would
-     * resolve to a version it cannot subsequently download (403 from the
-     * artifact gate). Symmetric to MavenGroupSlice's filter.
+     * <p>Cooldown is deliberately NOT a group concern here either — it is a
+     * proxy-repo feature (see {@code MavenGroupSlice} class javadoc for the
+     * full rationale). Each {@code -proxy} member filters its own metadata
+     * and records blocks under its own repo identity; this group only relays
+     * a member's already-filtered {@code packages.json}/p2 response.
      *
-     * @param delegate Delegate group slice
+     * @param delegate Delegate group slice (GroupResolver with index/proxy support)
      * @param resolver Slice resolver
      * @param group Group repository name
      * @param members List of member repository names
      * @param port Server port
-     * @param globalPrefix Global URL prefix
-     * @param cooldownMetadata Cooldown metadata filter service (NOOP to disable)
-     * @param repoType Repo type ("php-group" or "file-group")
-     * @checkstyle ParameterNumberCheck (5 lines)
+     * @param globalPrefix Global URL prefix (e.g. "test_prefix"), empty string if none
      */
     public ComposerGroupSlice(
         final Slice delegate,
@@ -149,9 +132,7 @@ public final class ComposerGroupSlice implements Slice {
         final String group,
         final List<String> members,
         final int port,
-        final String globalPrefix,
-        final com.auto1.pantera.cooldown.metadata.CooldownMetadataService cooldownMetadata, // NOPMD UnusedFormalParameter - public API; reserved for upcoming cooldown filtering on merged packages.json
-        final String repoType // NOPMD UnusedFormalParameter - public API; reserved for upcoming cooldown lookups
+        final String globalPrefix
     ) {
         this.delegate = delegate;
         this.resolver = resolver;
