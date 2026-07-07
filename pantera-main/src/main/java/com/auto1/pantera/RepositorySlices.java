@@ -567,6 +567,18 @@ public class RepositorySlices {
     }
 
     /**
+     * Token authentication shared with the routing layer so the bare
+     * {@code /v2/} Docker ping accepts the same Bearer / token-as-password
+     * credentials as the repository-scoped Docker endpoints
+     * ({@code docker login} validates against {@code /v2/}).
+     *
+     * @return Token authentication
+     */
+    public TokenAuthentication tokenAuth() {
+        return this.tokens.auth();
+    }
+
+    /**
      * Shared {@link NegativeCache} bean. The 404 cache is populated by every
      * proxy adapter; this accessor remains so a future observed-coordinate
      * prewarming subsystem (Phase 4c, 2.3.0) can share the same cache without
@@ -994,7 +1006,19 @@ public class RepositorySlices {
                             depth,
                             new com.auto1.pantera.group.GroupMetadataCache(cfg.name()),
                             this.cooldownMetadata,
-                            cfg.type()
+                            cfg.type(),
+                            // Direct -proxy members only (nested groups run
+                            // their own winner-aware filter): the cooldown
+                            // metadata filter applies solely when a proxy
+                            // member wins the walk, so first-party artifacts
+                            // published to hosted members are never age-gated.
+                            // Unknown member configs count as proxy (fail
+                            // closed: keep filtering).
+                            cfg.members().stream()
+                                .filter(name -> this.repos.config(name)
+                                    .map(mcfg -> mcfg.type().endsWith("-proxy"))
+                                    .orElse(true))
+                                .collect(java.util.stream.Collectors.toSet())
                         ),
                         authentication(),
                         tokens.auth(),

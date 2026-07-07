@@ -185,6 +185,17 @@ public final class MavenGroupSlice implements Slice {
     private final String repoType;
 
     /**
+     * Member names whose repo type ends with {@code -proxy}. The cooldown
+     * filter applies only when one of these wins the sequential walk: a
+     * hosted member's metadata lists versions that reached it through an
+     * authenticated, audited publish — a deliberate organisational act, not
+     * an auto-ingested upstream release — so age-gating them would quarantine
+     * first-party artifacts for the full cooldown window. Nested groups are
+     * deliberately NOT in this set: they run their own winner-aware filter.
+     */
+    private final java.util.Set<String> proxyMembers;
+
+    /**
      * Constructor with cooldown metadata filtering.
      *
      * <p>After merging member metadata, the result is run through
@@ -216,6 +227,40 @@ public final class MavenGroupSlice implements Slice {
         final com.auto1.pantera.cooldown.metadata.CooldownMetadataService cooldownMetadata,
         final String repoType
     ) {
+        this(delegate, group, members, resolver, port, depth, cache,
+            cooldownMetadata, repoType, java.util.Set.copyOf(members));
+    }
+
+    /**
+     * Constructor with cooldown metadata filtering and proxy-member
+     * awareness. This is the wiring used in production; the 9-arg overload
+     * treats every member as a proxy (filter always applies) for backward
+     * compatibility.
+     *
+     * @param delegate Delegate group slice
+     * @param group Group repository name
+     * @param members Member repository names
+     * @param resolver Slice resolver
+     * @param port Server port
+     * @param depth Nesting depth
+     * @param cache Group metadata cache to use
+     * @param cooldownMetadata Cooldown metadata filter service (NOOP to disable)
+     * @param repoType Repo type ("maven-group" or "gradle-group")
+     * @param proxyMembers Member names whose repo type is a {@code -proxy}
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public MavenGroupSlice(
+        final Slice delegate,
+        final String group,
+        final List<String> members,
+        final SliceResolver resolver,
+        final int port,
+        final int depth,
+        final GroupMetadataCache cache,
+        final com.auto1.pantera.cooldown.metadata.CooldownMetadataService cooldownMetadata,
+        final String repoType,
+        final java.util.Set<String> proxyMembers
+    ) {
         this.delegate = delegate;
         this.group = group;
         this.members = members;
@@ -225,6 +270,7 @@ public final class MavenGroupSlice implements Slice {
         this.metadataCache = cache;
         this.cooldownMetadata = cooldownMetadata;
         this.repoType = repoType;
+        this.proxyMembers = proxyMembers;
     }
 
     @Override
@@ -484,7 +530,7 @@ public final class MavenGroupSlice implements Slice {
                     return readResponseBody(resp.body())
                         .thenCompose(rawBytes -> {
                             this.recordMemberBodySize(rawBytes.length);
-                            return applyCooldownFilter(path, rawBytes, headers)
+                            return applyCooldownFilter(path, rawBytes, headers, member)
                                 .thenApply(filteredBytes -> {
                                     final long fetchDuration =
                                         System.currentTimeMillis() - fetchStartTime;
@@ -622,7 +668,8 @@ public final class MavenGroupSlice implements Slice {
      * group response).
      */
     private CompletableFuture<byte[]> applyCooldownFilter(
-        final String path, final byte[] mergedBytes, final Headers headers
+        final String path, final byte[] mergedBytes, final Headers headers,
+        final String winner
     ) {
         // NOTE: no NoopCooldownMetadataService short-circuit here — the Noop
         // implementation is a passthrough whose 9-arg default emits the
@@ -643,6 +690,26 @@ public final class MavenGroupSlice implements Slice {
                 this.repoType, this.group, path,
                 new com.auto1.pantera.http.headers.Login(headers).getValue(),
                 "unparseable metadata coordinate (unfiltered merged bytes)"
+            );
+            return CompletableFuture.completedFuture(mergedBytes);
+        }
+        if (!this.proxyMembers.contains(winner)) {
+            // The winning member is hosted (or a nested group, which runs its
+            // own winner-aware filter): its metadata lists versions that got
+            // there via authenticated, audited publishes — first-party
+            // artifacts, not auto-ingested upstream releases. Age-gating them
+            // would quarantine an organisation's own releases for the full
+            // cooldown window (and did — see the 2.2.1 changelog). Serve
+            // verbatim; the audit taxonomy still gets its resolution record.
+            com.auto1.pantera.http.log.RequestContextHeaders.bindToMdc(headers);
+            com.auto1.pantera.audit.AuditLogger.resolutionDetailUnknown(
+                new com.auto1.pantera.audit.AuditContext(
+                    org.slf4j.MDC.get(com.auto1.pantera.http.log.EcsMdc.TRACE_ID),
+                    org.slf4j.MDC.get(com.auto1.pantera.http.log.EcsMdc.CLIENT_IP)
+                ),
+                this.repoType, this.group, pkgOpt.get().replace('/', '.'),
+                new com.auto1.pantera.http.headers.Login(headers).getValue(),
+                "hosted member metadata (cooldown gate not applicable to first-party publishes)"
             );
             return CompletableFuture.completedFuture(mergedBytes);
         }

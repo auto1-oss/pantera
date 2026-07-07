@@ -4,6 +4,10 @@
 
 ### 🔧 Bug fixes
 
+- **First-party artifacts are no longer cooldown-quarantined.** The group-level cooldown metadata filter age-gated every version flowing through Maven/Gradle groups — including releases just published to the organisation's own hosted members, which became unresolvable through the group for the full cooldown window. The filter is now winner-aware: it applies only when a **proxy** member wins the metadata walk; a hosted member's metadata (versions that arrived via authenticated, audited publishes) is served verbatim. Upstream protection is unchanged — proxy-won metadata is filtered exactly as before, and nested groups apply their own winner-aware filter.
+  ([@aydasraf](https://github.com/aydasraf))
+- **`docker login` (and every package manager) accepts API tokens as the Basic password again.** Registry and package-manager clients can only submit credentials via Basic auth, so API tokens arrive as the password — and the 2.2.0 authoritative-provider hardening rejected the token string against the account's password hash before any token-aware provider could validate it, locking token-based CI out of Docker, Maven, npm, and PyPI repositories. Token-shaped Basic passwords are now validated as JWTs first (bound to the claimed username, with full revocation/expiry checks) and fall back to the regular password check, and the bare Docker `/v2/` ping accepts Bearer tokens consistently with all other registry endpoints.
+  ([@aydasraf](https://github.com/aydasraf))
 - **Directory-listing pages render styled again under the hardened security headers.** The 2.2.0 `Content-Security-Policy: default-src 'self'` blocked the browse pages' own inline CSS/JS, leaving listings unstyled with dead sort controls. Browse responses now declare a per-route CSP that allowlists exactly their inline style/script blocks by SHA-256 hash, and the sort controls bind their listeners CSP-compatibly instead of using inline `onclick` attributes.
   ([@aydasraf](https://github.com/aydasraf))
 
