@@ -21,9 +21,29 @@ import java.util.concurrent.CompletionStage;
 
 /**
  * Authentication scheme that supports both Basic and Bearer token authentication.
+ *
+ * <p>Basic credentials whose password is a compact JWT are validated as
+ * tokens first (bound to the supplied username), then fall back to the
+ * regular password check. Docker and other registry clients can only
+ * submit credentials via Basic — the challenge this scheme emits carries
+ * no token-endpoint realm — so API tokens arrive as the Basic password
+ * ({@code docker login -u user -p <api-token>}). Without the token-first
+ * step, an authoritative password provider (e.g. the DB-backed check)
+ * rejects the JWT string outright and blocks fall-through to any
+ * token-aware provider, locking token holders out of every registry
+ * client.
+ *
  * @since 1.18
  */
 public final class CombinedAuthScheme implements AuthScheme {
+
+    /**
+     * Challenge advertised on anonymous and failed authentication.
+     */
+    private static final String CHALLENGE = String.format(
+        "%s realm=\"pantera\", %s realm=\"pantera\"",
+        BasicAuthScheme.NAME, BearerAuthScheme.NAME
+    );
 
     /**
      * Basic authentication.
@@ -66,21 +86,13 @@ public final class CombinedAuthScheme implements AuthScheme {
                         return this.authenticateBearer(auth);
                     }
                     return CompletableFuture.completedFuture(
-                        AuthScheme.result(
-                            AuthUser.ANONYMOUS,
-                            String.format("%s realm=\"pantera\", %s realm=\"pantera\"",
-                                BasicAuthScheme.NAME, BearerAuthScheme.NAME)
-                        )
+                        AuthScheme.result(AuthUser.ANONYMOUS, CombinedAuthScheme.CHALLENGE)
                     );
                 }
             )
             .orElseGet(
                 () -> CompletableFuture.completedFuture(
-                    AuthScheme.result(
-                        AuthUser.ANONYMOUS,
-                        String.format("%s realm=\"pantera\", %s realm=\"pantera\"",
-                            BasicAuthScheme.NAME, BearerAuthScheme.NAME)
-                    )
+                    AuthScheme.result(AuthUser.ANONYMOUS, CombinedAuthScheme.CHALLENGE)
                 )
             );
     }
@@ -88,18 +100,40 @@ public final class CombinedAuthScheme implements AuthScheme {
     /**
      * Authenticate using Basic authentication.
      *
+     * <p>A token-shaped password is validated as a JWT first and must
+     * resolve to the supplied username; anything else (malformed token,
+     * foreign subject, plain password) goes through the regular
+     * password check, so passwords that merely look like a JWT keep
+     * working.
+     *
      * @param auth Authorization header
      * @return Authentication result
      */
     private CompletionStage<AuthScheme.Result> authenticateBasic(final Authorization auth) {
         final Authorization.Basic basic = new Authorization.Basic(auth.credentials());
-        final Optional<AuthUser> user = this.basicAuth.user(basic.username(), basic.password());
-        return CompletableFuture.completedFuture(
-            AuthScheme.result(
-                user,
-                String.format("%s realm=\"pantera\", %s realm=\"pantera\"",
-                    BasicAuthScheme.NAME, BearerAuthScheme.NAME)
-            )
+        final CompletionStage<Optional<AuthUser>> resolved;
+        if (jwtShaped(basic.password())) {
+            resolved = this.tokenAuth.user(basic.password())
+                .exceptionally(err -> Optional.empty())
+                .thenApply(user -> user.filter(usr -> usr.name().equals(basic.username())))
+                .thenApply(
+                    user -> {
+                        final Optional<AuthUser> outcome;
+                        if (user.isPresent()) {
+                            outcome = user;
+                        } else {
+                            outcome = this.basicAuth.user(basic.username(), basic.password());
+                        }
+                        return outcome;
+                    }
+                );
+        } else {
+            resolved = CompletableFuture.completedFuture(
+                this.basicAuth.user(basic.username(), basic.password())
+            );
+        }
+        return resolved.thenApply(
+            user -> AuthScheme.result(user, CombinedAuthScheme.CHALLENGE)
         );
     }
 
@@ -111,12 +145,24 @@ public final class CombinedAuthScheme implements AuthScheme {
      */
     private CompletionStage<AuthScheme.Result> authenticateBearer(final Authorization auth) {
         return this.tokenAuth.user(new Authorization.Bearer(auth.credentials()).token())
-            .thenApply(
-                user -> AuthScheme.result(
-                    user,
-                    String.format("%s realm=\"pantera\", %s realm=\"pantera\"",
-                        BasicAuthScheme.NAME, BearerAuthScheme.NAME)
-                )
-            );
+            .thenApply(user -> AuthScheme.result(user, CombinedAuthScheme.CHALLENGE));
+    }
+
+    /**
+     * Whether a Basic password looks like a compact JWS/JWT: three
+     * dot-separated segments whose header opens with {@code eyJ}
+     * (base64url of {@code {"}). Signature and claims are NOT verified
+     * here — this only decides which validation path runs first.
+     *
+     * @param password Basic password
+     * @return True if the password should be tried as a token
+     */
+    private static boolean jwtShaped(final String password) {
+        boolean shaped = false;
+        if (password != null && password.startsWith("eyJ")) {
+            final String[] parts = password.split("\\.", -1);
+            shaped = parts.length == 3 && !parts[1].isEmpty() && !parts[2].isEmpty();
+        }
+        return shaped;
     }
 }

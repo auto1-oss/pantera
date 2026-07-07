@@ -237,21 +237,63 @@ public final class CombinedAuthzSlice implements Slice {
      */
     private CompletionStage<AuthScheme.Result> authenticateBasic(final Authorization auth) {
         final Authorization.Basic basic = new Authorization.Basic(auth.credentials());
-        // Offload to worker thread to prevent blocking event loop
-        // This is critical for auth providers that make external calls (Okta, Keycloak, etc.)
-        return CompletableFuture.supplyAsync(
-            () -> {
-                final Optional<AuthUser> user = this.basicAuth.user(
-                    basic.username(), basic.password()
+        final CompletionStage<Optional<AuthUser>> resolved;
+        if (CombinedAuthzSlice.jwtShaped(basic.password())) {
+            // Package-manager clients (mvn, npm, pip, …) submit API tokens
+            // as the Basic password. Validate token-shaped passwords as
+            // JWTs first, bound to the claimed username — the DB-backed
+            // password provider would reject the token string
+            // authoritatively and block fall-through (same regression as
+            // docker login, see CombinedAuthScheme#authenticateBasic).
+            resolved = this.tokenAuth.user(basic.password())
+                .exceptionally(err -> Optional.empty())
+                .thenComposeAsync(
+                    user -> {
+                        final Optional<AuthUser> bound = user.filter(
+                            usr -> usr.name().equals(basic.username())
+                        );
+                        if (bound.isPresent()) {
+                            return CompletableFuture.completedFuture(bound);
+                        }
+                        return CompletableFuture.supplyAsync(
+                            () -> this.basicAuth.user(basic.username(), basic.password()),
+                            AUTH_EXECUTOR
+                        );
+                    }
                 );
-                return AuthScheme.result(
-                    user,
-                    String.format("%s realm=\"pantera\", %s realm=\"pantera\"",
-                        BasicAuthScheme.NAME, BearerAuthScheme.NAME)
-                );
-            },
-            AUTH_EXECUTOR
+        } else {
+            // Offload to worker thread to prevent blocking event loop
+            // This is critical for auth providers that make external calls
+            // (Okta, Keycloak, etc.)
+            resolved = CompletableFuture.supplyAsync(
+                () -> this.basicAuth.user(basic.username(), basic.password()),
+                AUTH_EXECUTOR
+            );
+        }
+        return resolved.thenApply(
+            user -> AuthScheme.result(
+                user,
+                String.format("%s realm=\"pantera\", %s realm=\"pantera\"",
+                    BasicAuthScheme.NAME, BearerAuthScheme.NAME)
+            )
         );
+    }
+
+    /**
+     * Whether a Basic password looks like a compact JWS/JWT — mirrors
+     * {@link CombinedAuthScheme}. Signature and claims are NOT verified
+     * here; this only decides which validation path runs first.
+     *
+     * @param password Basic password
+     * @return True if the password should be tried as a token
+     */
+    private static boolean jwtShaped(final String password) {
+        boolean shaped = false;
+        if (password != null && password.startsWith("eyJ")) {
+            final String[] parts = password.split("\\.", -1);
+            shaped = parts.length == 3 && !parts[1].isEmpty() && !parts[2].isEmpty();
+        }
+        return shaped;
     }
 
     /**
