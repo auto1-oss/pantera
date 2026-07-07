@@ -12,6 +12,7 @@ package com.auto1.pantera.http.auth;
 
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.headers.Authorization;
+import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqHeaders;
 
@@ -114,22 +115,37 @@ public final class CombinedAuthScheme implements AuthScheme {
         final CompletionStage<Optional<AuthUser>> resolved;
         if (jwtShaped(basic.password())) {
             resolved = this.tokenAuth.user(basic.password())
-                .exceptionally(err -> Optional.empty())
+                .exceptionally(err -> {
+                    // Infrastructure failure (revocation store unreachable,
+                    // key load error), NOT a normal auth miss — that returns
+                    // an empty Optional without throwing. Log it, then fall
+                    // back to the password check rather than 500.
+                    EcsLogger.warn("com.auto1.pantera.http.auth")
+                        .message("Token validation errored for a Basic-password"
+                            + " token; falling back to password authentication")
+                        .eventCategory("authentication")
+                        .eventAction("token_validate")
+                        .eventOutcome("failure")
+                        .field("user.name", basic.username())
+                        .error(err)
+                        .field("log.source", "application")
+                        .log();
+                    return Optional.empty();
+                })
                 .thenApply(user -> user.filter(usr -> usr.name().equals(basic.username())))
-                .thenApply(
-                    user -> {
-                        final Optional<AuthUser> outcome;
-                        if (user.isPresent()) {
-                            outcome = user;
-                        } else {
-                            outcome = this.basicAuth.user(basic.username(), basic.password());
-                        }
-                        return outcome;
-                    }
+                .thenCompose(
+                    user -> user.isPresent()
+                        ? CompletableFuture.completedFuture(user)
+                        : CompletableFuture.supplyAsync(
+                            () -> this.basicAuth.user(basic.username(), basic.password())
+                        )
                 );
         } else {
-            resolved = CompletableFuture.completedFuture(
-                this.basicAuth.user(basic.username(), basic.password())
+            // Offload the (potentially blocking, DB/IdP-backed) password
+            // check off the calling thread — mirrors BasicAuthScheme. The
+            // /v2/ Docker ping runs this on a Vert.x event-loop thread.
+            resolved = CompletableFuture.supplyAsync(
+                () -> this.basicAuth.user(basic.username(), basic.password())
             );
         }
         return resolved.thenApply(

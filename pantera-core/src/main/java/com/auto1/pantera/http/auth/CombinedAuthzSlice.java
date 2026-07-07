@@ -246,7 +246,21 @@ public final class CombinedAuthzSlice implements Slice {
             // authoritatively and block fall-through (same regression as
             // docker login, see CombinedAuthScheme#authenticateBasic).
             resolved = this.tokenAuth.user(basic.password())
-                .exceptionally(err -> Optional.empty())
+                .exceptionally(err -> {
+                    // Infrastructure failure, not a normal auth miss — log
+                    // before falling back to the password check.
+                    EcsLogger.warn("com.auto1.pantera.http.auth")
+                        .message("Token validation errored for a Basic-password"
+                            + " token; falling back to password authentication")
+                        .eventCategory("authentication")
+                        .eventAction("token_validate")
+                        .eventOutcome("failure")
+                        .field("user.name", basic.username())
+                        .error(err)
+                        .field("log.source", "application")
+                        .log();
+                    return Optional.empty();
+                })
                 .thenComposeAsync(
                     user -> {
                         final Optional<AuthUser> bound = user.filter(

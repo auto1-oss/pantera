@@ -1174,7 +1174,7 @@ public class RepositorySlices {
                     new PathPrefixStripSlice(
                         new com.auto1.pantera.pypi.http.PySlice(
                             cfg.storage(), securityPolicy(), authentication(),
-                            null, cfg.name(), artifactEvents(),
+                            tokens.auth(), cfg.name(), artifactEvents(),
                             this.settings.syncArtifactIndexer()
                         ),
                         "simple"
