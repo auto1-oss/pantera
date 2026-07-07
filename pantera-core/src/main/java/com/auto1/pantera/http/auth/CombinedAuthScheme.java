@@ -15,10 +15,15 @@ import com.auto1.pantera.http.headers.Authorization;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqHeaders;
+import com.auto1.pantera.http.trace.TraceContextExecutor;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Authentication scheme that supports both Basic and Bearer token authentication.
@@ -44,6 +49,30 @@ public final class CombinedAuthScheme implements AuthScheme {
     private static final String CHALLENGE = String.format(
         "%s realm=\"pantera\", %s realm=\"pantera\"",
         BasicAuthScheme.NAME, BearerAuthScheme.NAME
+    );
+
+    /**
+     * Dedicated pool for the blocking DB/IdP password check, isolated from
+     * {@code ForkJoinPool.commonPool()} so a slow IdP (Okta/Keycloak MFA)
+     * can't starve unrelated {@code *Async} work JVM-wide, and wrapped with
+     * {@link TraceContextExecutor} so MDC (trace.id, user) propagates to the
+     * auth threads. Mirrors {@code BasicAuthScheme} and {@code
+     * CombinedAuthzSlice}.
+     */
+    private static final ExecutorService AUTH_EXECUTOR = TraceContextExecutor.wrap(
+        Executors.newCachedThreadPool(
+            new ThreadFactory() {
+                private final AtomicInteger counter = new AtomicInteger(0);
+
+                @Override
+                public Thread newThread(final Runnable runnable) {
+                    final Thread thread = new Thread(runnable);
+                    thread.setName("combined-auth.worker-" + this.counter.incrementAndGet());
+                    thread.setDaemon(true);
+                    return thread;
+                }
+            }
+        )
     );
 
     /**
@@ -137,7 +166,8 @@ public final class CombinedAuthScheme implements AuthScheme {
                     user -> user.isPresent()
                         ? CompletableFuture.completedFuture(user)
                         : CompletableFuture.supplyAsync(
-                            () -> this.basicAuth.user(basic.username(), basic.password())
+                            () -> this.basicAuth.user(basic.username(), basic.password()),
+                            CombinedAuthScheme.AUTH_EXECUTOR
                         )
                 );
         } else {
@@ -145,8 +175,9 @@ public final class CombinedAuthScheme implements AuthScheme {
             // check off the calling thread — mirrors BasicAuthScheme. The
             // /v2/ Docker ping runs this on a Vert.x event-loop thread.
             resolved = CompletableFuture.supplyAsync(
-                () -> this.basicAuth.user(basic.username(), basic.password())
-            );
+                            () -> this.basicAuth.user(basic.username(), basic.password()),
+                            CombinedAuthScheme.AUTH_EXECUTOR
+                        );
         }
         return resolved.thenApply(
             user -> AuthScheme.result(user, CombinedAuthScheme.CHALLENGE)
