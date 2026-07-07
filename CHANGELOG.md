@@ -11,6 +11,11 @@
 - **Directory-listing pages render styled again under the hardened security headers.** The 2.2.0 `Content-Security-Policy: default-src 'self'` blocked the browse pages' own inline CSS/JS, leaving listings unstyled with dead sort controls. Browse responses now declare a per-route CSP that allowlists exactly their inline style/script blocks by SHA-256 hash, and the sort controls bind their listeners CSP-compatibly instead of using inline `onclick` attributes.
   ([@aydasraf](https://github.com/aydasraf))
 
+### 🔒 Security
+
+- **php-proxy repositories now validate credentials.** Requests carrying an `Authorization` header bypassed the deny-by-default anonymous gate (which only challenges credential-less requests) into a chain that never authenticated them — any non-empty credentials could read through a php-proxy. The php-proxy chain now carries the same combined Basic/Bearer authorization wrapper as every other proxy type, with read-permission enforcement.
+  ([@aydasraf](https://github.com/aydasraf))
+
 ## Version 2.2.0
 
 ### ⚠️ Breaking changes

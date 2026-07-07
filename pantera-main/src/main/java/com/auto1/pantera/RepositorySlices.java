@@ -725,18 +725,31 @@ public class RepositorySlices {
             case "php-proxy":
                 clientLease = jettyClientSlices(cfg); // NOPMD CloseResource - lifecycle owned by clientLease (closed in finally/exception handlers)
                 clientSlices = clientLease.client();
+                // CombinedAuthzSliceWrap mirrors go-proxy: without it, any
+                // request carrying ANY Authorization header sailed past the
+                // AnonymousAccessSlice gate (which only challenges requests
+                // with NO credentials) into a chain that never validated
+                // them — php-proxy was effectively unauthenticated.
                 slice = trimPathSlice(
-                    new PathPrefixStripSlice(
-                        new TimeoutSlice(
-                            new ComposerProxy(
-                                clientSlices,
-                                cfg,
-                                settings.artifactMetadata().flatMap(queues -> queues.proxyEventQueues(cfg)),
-                                this.cooldown
+                    new CombinedAuthzSliceWrap(
+                        new PathPrefixStripSlice(
+                            new TimeoutSlice(
+                                new ComposerProxy(
+                                    clientSlices,
+                                    cfg,
+                                    settings.artifactMetadata().flatMap(queues -> queues.proxyEventQueues(cfg)),
+                                    this.cooldown
+                                ),
+                                settings.httpClientSettings().proxyTimeout()
                             ),
-                            settings.httpClientSettings().proxyTimeout()
+                            "direct-dists"
                         ),
-                        "direct-dists"
+                        authentication(),
+                        tokens.auth(),
+                        new OperationControl(
+                            securityPolicy(),
+                            new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                        )
                     )
                 );
                 break;
