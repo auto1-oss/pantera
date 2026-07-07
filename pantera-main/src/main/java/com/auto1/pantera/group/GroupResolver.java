@@ -318,6 +318,36 @@ public final class GroupResolver implements Slice {
             );
         }
 
+        // Reject Maven/Gradle version-range coordinates that leaked into the
+        // artifact path (e.g. a misconfigured dependency requesting
+        // `graphql-utils-[,7.2079-test-1).jar`). The range metacharacters
+        // `[ ] ( )` never appear in a valid Maven/Gradle artifact path, but
+        // GroupResolver is the shared response() for EVERY group type
+        // (npm/gem/go/pypi/docker/file/php-group too) — a file-group upload
+        // can legitimately be named "backup[v2].zip" or "summary(final).pdf".
+        // Scope the guard to Maven/Gradle-shaped groups only, where these
+        // characters are unambiguously a malformed version range. Forwarding
+        // such a request makes upstreams 502 on the unescaped brackets, and
+        // the walk would then recordFailure() against a HEALTHY member —
+        // fabricated evidence that can trip its circuit breaker
+        // (breaker-cascade). Answer 404 here, before any index lookup or
+        // member is touched.
+        final boolean isMavenShaped =
+            "maven-group".equals(this.repoType) || "gradle-group".equals(this.repoType);
+        if (isMavenShaped && containsVersionRangeSyntax(path)) {
+            EcsLogger.debug("com.auto1.pantera.group")
+                .message("Rejected malformed version-range artifact path, returning 404")
+                .eventCategory("web")
+                .eventAction("group_malformed_range_path")
+                .field("repository.name", this.group)
+                .field("url.path", path)
+                .field("log.source", "application")
+                .log();
+            return CompletableFuture.completedFuture(
+                ResponseBuilder.notFound().build()
+            );
+        }
+
         if (this.members.isEmpty()) {
             return CompletableFuture.completedFuture(
                 ResponseBuilder.notFound().build()
@@ -362,6 +392,27 @@ public final class GroupResolver implements Slice {
             .body(buf.body())
             .build()
         ).whenComplete((resp, err) -> recordMetrics(resp, err, requestStartTime));
+    }
+
+    /**
+     * Whether {@code path} carries Maven version-range metacharacters
+     * ({@code [ ] ( )}). Their presence means a version range (e.g.
+     * {@code [,7.2079-test-1)}) leaked into the artifact coordinate — typically
+     * from a misconfigured Gradle dependency — which is never a valid artifact
+     * request. Such paths must not reach members: upstreams 502 on the
+     * unescaped brackets and the walk would convict a healthy member.
+     *
+     * @param path Request path
+     * @return {@code true} if any range metacharacter is present
+     */
+    private static boolean containsVersionRangeSyntax(final String path) {
+        for (int idx = 0; idx < path.length(); idx++) {
+            final char chr = path.charAt(idx);
+            if (chr == '[' || chr == ']' || chr == '(' || chr == ')') {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -967,12 +1018,15 @@ public final class GroupResolver implements Slice {
             if (status == RsStatus.NOT_FOUND) {
                 drainBody(resp.body());
                 recordMemberOutcome(member, "not_found", memberLatency);
-                // RCA-6 (v2.2.0): make member fallthrough visible. Previously
-                // a maven_proxy 404 silently fell through to groovy with no
-                // log trace at all, which blocked perf diagnosis when the
-                // group amplified upstream load by hitting secondary
-                // members for artifacts a primary mirror should own.
-                EcsLogger.info("com.auto1.pantera.group")
+                // RCA-6 (v2.2.0): keep member fall-through investigable. A
+                // maven_proxy 404 silently falling through to groovy once hid
+                // group upstream-amplification during perf diagnosis. Logged at
+                // DEBUG, not INFO: a 404 fall-through is the normal group
+                // cache-miss path and fires on nearly every proxied pull, so it
+                // must not sit in steady-state logs — enable DEBUG on
+                // com.auto1.pantera.group to trace it. Genuine 5xx member
+                // failures remain WARN below.
+                EcsLogger.debug("com.auto1.pantera.group")
                     .message("Group member returned 404, trying next")
                     .eventCategory("web")
                     .eventAction("group_member_fallthrough")

@@ -104,6 +104,7 @@ public final class MainSlice extends Slice.Wrap {
                 RtRule.FALLBACK,
                 new DockerRoutingSlice(
                     settings,
+                    slices.tokenAuth(),
                     new ApiRoutingSlice(
                         new SliceByPath(slices, settings.prefixes()),
                         slices.repositories()

@@ -136,7 +136,8 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      * runs the upstream {@code maven-metadata.xml} bytes through the parser /
      * filter / rewriter chain before returning, so fresh versions inside the
      * admin-configured cooldown window are stripped from {@code <versions>}
-     * and {@code <latest>} / {@code <release>} are rewritten downward. When
+     * and {@code <latest>} / {@code <release>} are re-pointed when their target
+     * was blocked (an unblocked designated latest is preserved). When
      * null (legacy constructors, tests), responses pass through unfiltered —
      * same behaviour as before the metadata filter was wired.
      */
@@ -440,8 +441,9 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      * <p>When {@link #cooldownMetadata} is non-null, the cached upstream XML
      * is run through the parser / filter / rewriter chain before the
      * response is built — fresh versions inside the configured cooldown
-     * window are stripped from {@code <versions>} and {@code <latest>} /
-     * {@code <release>} are rewritten to the newest non-blocked version.
+     * window are stripped from {@code <versions>}; a blocked {@code <latest>} /
+     * {@code <release>} is re-pointed to the newest surviving version (an
+     * unblocked designated latest is preserved).
      * The metadata cache itself stores UNFILTERED upstream bytes so the
      * filter decision re-evaluates per request (cooldown state changes as
      * versions age out of the window — caching filtered output would

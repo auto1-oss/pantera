@@ -567,6 +567,18 @@ public class RepositorySlices {
     }
 
     /**
+     * Token authentication shared with the routing layer so the bare
+     * {@code /v2/} Docker ping accepts the same Bearer / token-as-password
+     * credentials as the repository-scoped Docker endpoints
+     * ({@code docker login} validates against {@code /v2/}).
+     *
+     * @return Token authentication
+     */
+    public TokenAuthentication tokenAuth() {
+        return this.tokens.auth();
+    }
+
+    /**
      * Shared {@link NegativeCache} bean. The 404 cache is populated by every
      * proxy adapter; this accessor remains so a future observed-coordinate
      * prewarming subsystem (Phase 4c, 2.3.0) can share the same cache without
@@ -713,18 +725,31 @@ public class RepositorySlices {
             case "php-proxy":
                 clientLease = jettyClientSlices(cfg); // NOPMD CloseResource - lifecycle owned by clientLease (closed in finally/exception handlers)
                 clientSlices = clientLease.client();
+                // CombinedAuthzSliceWrap mirrors go-proxy: without it, any
+                // request carrying ANY Authorization header sailed past the
+                // AnonymousAccessSlice gate (which only challenges requests
+                // with NO credentials) into a chain that never validated
+                // them — php-proxy was effectively unauthenticated.
                 slice = trimPathSlice(
-                    new PathPrefixStripSlice(
-                        new TimeoutSlice(
-                            new ComposerProxy(
-                                clientSlices,
-                                cfg,
-                                settings.artifactMetadata().flatMap(queues -> queues.proxyEventQueues(cfg)),
-                                this.cooldown
+                    new CombinedAuthzSliceWrap(
+                        new PathPrefixStripSlice(
+                            new TimeoutSlice(
+                                new ComposerProxy(
+                                    clientSlices,
+                                    cfg,
+                                    settings.artifactMetadata().flatMap(queues -> queues.proxyEventQueues(cfg)),
+                                    this.cooldown
+                                ),
+                                settings.httpClientSettings().proxyTimeout()
                             ),
-                            settings.httpClientSettings().proxyTimeout()
+                            "direct-dists"
                         ),
-                        "direct-dists"
+                        authentication(),
+                        tokens.auth(),
+                        new OperationControl(
+                            securityPolicy(),
+                            new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                        )
                     )
                 );
                 break;
@@ -951,9 +976,7 @@ public class RepositorySlices {
                             composerDelegate,
                             this::slice, cfg.name(), cfg.members(), port,
                             this.settings.prefixes().prefixes().stream()
-                                .findFirst().orElse(""),
-                            this.cooldownMetadata,
-                            cfg.type()
+                                .findFirst().orElse("")
                         ),
                         authentication(),
                         tokens.auth(),
@@ -966,8 +989,9 @@ public class RepositorySlices {
                 break;
             case "maven-group":
             case "gradle-group":
-                // Maven AND Gradle groups need maven-metadata.xml merge +
-                // cooldown filter on the merged result. Gradle uses the same
+                // Maven AND Gradle groups need maven-metadata.xml merge —
+                // NOT cooldown filtering, which is exclusive to -proxy repos
+                // (see MavenGroupSlice class javadoc). Gradle uses the same
                 // metadata format as Maven, so it routes through the same
                 // slice — previously gradle-group fell into the generic
                 // GroupResolver case which can't merge metadata.
@@ -993,7 +1017,10 @@ public class RepositorySlices {
                             port,
                             depth,
                             new com.auto1.pantera.group.GroupMetadataCache(cfg.name()),
-                            this.cooldownMetadata,
+                            // Cooldown is NOT applied at the group: each -proxy
+                            // member filters its own maven-metadata.xml and
+                            // records blocks under its own repo identity. The
+                            // group only relays the winning member's bytes.
                             cfg.type()
                         ),
                         authentication(),
@@ -1137,7 +1164,7 @@ public class RepositorySlices {
                     new PathPrefixStripSlice(
                         new com.auto1.pantera.pypi.http.PySlice(
                             cfg.storage(), securityPolicy(), authentication(),
-                            null, cfg.name(), artifactEvents(),
+                            tokens.auth(), cfg.name(), artifactEvents(),
                             this.settings.syncArtifactIndexer()
                         ),
                         "simple"

@@ -11,8 +11,11 @@ import com.auto1.pantera.api.ssl.KeyStore;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.cooldown.config.CooldownSettings;
+import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.auth.TokenAuthentication;
 import com.auto1.pantera.http.headers.Authorization;
+import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.hm.AssertSlice;
 import com.auto1.pantera.http.hm.RqLineHasUri;
 import com.auto1.pantera.http.hm.RsHasHeaders;
@@ -36,6 +39,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import javax.sql.DataSource;
 
 /**
@@ -43,11 +47,25 @@ import javax.sql.DataSource;
  */
 final class DockerRoutingSliceTest {
 
+    /**
+     * A JWT-shaped API token used by the token regression tests.
+     */
+    private static final String API_TOKEN =
+        "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJhbGljZSJ9.c2lnbmF0dXJl";
+
+    /**
+     * Token authentication that rejects everything — for tests where
+     * tokens are irrelevant.
+     */
+    private static final TokenAuthentication NO_TOKENS =
+        token -> CompletableFuture.completedFuture(Optional.empty());
+
     @Test
     void removesDockerPrefix() throws Exception {
         verify(
             new DockerRoutingSlice(
                 new TestSettings(),
+                NO_TOKENS,
                 new AssertSlice(new RqLineHasUri(new RqLineHasUri.HasPath("/foo/bar")))
             ),
             "/v2/foo/bar"
@@ -60,6 +78,7 @@ final class DockerRoutingSliceTest {
         verify(
             new DockerRoutingSlice(
                 new TestSettings(),
+                NO_TOKENS,
                 new AssertSlice(new RqLineHasUri(new RqLineHasUri.HasPath(path)))
             ),
             path
@@ -73,6 +92,7 @@ final class DockerRoutingSliceTest {
         MatcherAssert.assertThat(
             new DockerRoutingSlice(
                 new SettingsWithAuth(new Authentication.Single(username, password)),
+                NO_TOKENS,
                 (line, headers, body) -> {
                     throw new UnsupportedOperationException();
                 }
@@ -93,12 +113,67 @@ final class DockerRoutingSliceTest {
         );
     }
 
+    /**
+     * Regression: {@code docker login} sends API tokens as the Basic
+     * password against {@code /v2/} — the ping must accept a valid token
+     * for the claimed user even when the password check would reject it.
+     */
+    @Test
+    void emptyDockerRequestAcceptsApiTokenAsBasicPassword() {
+        final String username = "alice";
+        MatcherAssert.assertThat(
+            new DockerRoutingSlice(
+                new SettingsWithAuth(new Authentication.Single(username, "real-password")),
+                token -> CompletableFuture.completedFuture(
+                    Optional.of(new AuthUser(username, "token"))
+                        .filter(user -> API_TOKEN.equals(token))
+                ),
+                (line, headers, body) -> {
+                    throw new UnsupportedOperationException();
+                }
+            ),
+            new SliceHasResponse(
+                new RsHasStatus(RsStatus.OK),
+                new RequestLine(RqMethod.GET, "/v2/"),
+                Headers.from(new Authorization.Basic(username, API_TOKEN)),
+                Content.EMPTY
+            )
+        );
+    }
+
+    /**
+     * Regression: the bare {@code /v2/} ping must accept Bearer tokens
+     * exactly like the repository-scoped Docker endpoints do.
+     */
+    @Test
+    void emptyDockerRequestAcceptsBearerToken() {
+        MatcherAssert.assertThat(
+            new DockerRoutingSlice(
+                new SettingsWithAuth(new Authentication.Single("alice", "real-password")),
+                token -> CompletableFuture.completedFuture(
+                    Optional.of(new AuthUser("alice", "token"))
+                        .filter(user -> API_TOKEN.equals(token))
+                ),
+                (line, headers, body) -> {
+                    throw new UnsupportedOperationException();
+                }
+            ),
+            new SliceHasResponse(
+                new RsHasStatus(RsStatus.OK),
+                new RequestLine(RqMethod.GET, "/v2/"),
+                Headers.from(new Header("Authorization", "Bearer " + API_TOKEN)),
+                Content.EMPTY
+            )
+        );
+    }
+
     @Test
     void revertsDockerRequest() throws Exception {
         final String path = "/v2/one/two";
         verify(
             new DockerRoutingSlice(
                 new TestSettings(),
+                NO_TOKENS,
                 new DockerRoutingSlice.Reverted(
                     new AssertSlice(new RqLineHasUri(new RqLineHasUri.HasPath(path)))
                 )

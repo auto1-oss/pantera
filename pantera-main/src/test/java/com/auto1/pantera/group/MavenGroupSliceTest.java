@@ -552,6 +552,50 @@ public final class MavenGroupSliceTest {
 
     // Helper classes
 
+    /**
+     * Fix: cooldown is a proxy-repo feature — a group must never run cooldown
+     * or record blocks under its own name. It relays the winning member's
+     * metadata verbatim (each {@code -proxy} member filters its own
+     * {@code maven-metadata.xml} and records blocks under its own identity).
+     * Here the member returns two versions and BOTH must survive in the
+     * group's response, proving the group applied no filtering of its own.
+     */
+    @Test
+    void groupRelaysMemberMetadataWithoutRunningCooldown() throws Exception {
+        final Map<String, Slice> members = new HashMap<>();
+        members.put("central-proxy", new FakeMetadataSlice(
+            "<?xml version=\"1.0\"?><metadata><groupId>com.ext</groupId><artifactId>lib</artifactId><versioning><versions><version>1.0.0</version><version>2.0.0</version></versions></versioning></metadata>"
+        ));
+        final MavenGroupSlice slice = new MavenGroupSlice(
+            new FakeGroupSlice(),
+            "relay-group",
+            List.of("central-proxy"),
+            new MapResolver(members),
+            8080,
+            0
+        );
+        final Response response = slice.response(
+            new RequestLine("GET", "/com/ext/lib-relay/maven-metadata.xml"),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).get(10, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            "response is OK",
+            response.status(),
+            Matchers.equalTo(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "the group must serve the member's metadata verbatim — every version "
+                + "the member returned survives, because cooldown is enforced by the "
+                + "proxy member, not the group",
+            new String(response.body().asBytes(), StandardCharsets.UTF_8),
+            Matchers.allOf(
+                Matchers.containsString("<version>1.0.0</version>"),
+                Matchers.containsString("<version>2.0.0</version>")
+            )
+        );
+    }
+
     private static final class MapResolver implements SliceResolver {
         private final Map<String, Slice> map;
         private MapResolver(Map<String, Slice> map) { this.map = map; }

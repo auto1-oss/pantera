@@ -14,15 +14,10 @@ import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.headers.Authorization;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqHeaders;
-import com.auto1.pantera.http.trace.TraceContextExecutor;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Basic authentication method.
@@ -41,32 +36,6 @@ public final class BasicAuthScheme implements AuthScheme {
      */
     private static final String CHALLENGE =
         String.format("%s realm=\"pantera\"", BasicAuthScheme.NAME);
-
-    /**
-     * Pool name for metrics identification.
-     */
-    public static final String AUTH_POOL_NAME = "pantera.auth.basic";
-
-    /**
-     * Thread pool for blocking authentication operations.
-     * This offloads potentially slow operations (like Okta MFA) from the event loop.
-     * Pool name: {@value #AUTH_POOL_NAME} (visible in thread dumps and metrics).
-     * Wrapped with TraceContextExecutor to propagate MDC (trace.id, user, etc.) to auth threads.
-     */
-    private static final ExecutorService AUTH_EXECUTOR = TraceContextExecutor.wrap(
-        Executors.newCachedThreadPool(
-            new ThreadFactory() {
-                private final AtomicInteger counter = new AtomicInteger(0);
-                @Override
-                public Thread newThread(final Runnable runnable) {
-                    final Thread thread = new Thread(runnable);
-                    thread.setName(AUTH_POOL_NAME + ".worker-" + counter.incrementAndGet());
-                    thread.setDaemon(true);
-                    return thread;
-                }
-            }
-        )
-    );
 
     /**
      * Authentication.
@@ -98,7 +67,7 @@ public final class BasicAuthScheme implements AuthScheme {
         // This is critical for auth providers that make external calls (Okta, Keycloak, etc.)
         return CompletableFuture.supplyAsync(
             () -> AuthScheme.result(this.user(authHeader.get()), BasicAuthScheme.CHALLENGE),
-            AUTH_EXECUTOR
+            AuthWorkerPool.AUTH_EXECUTOR
         );
     }
 

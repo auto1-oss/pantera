@@ -7,8 +7,10 @@ package com.auto1.pantera.http;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.docker.perms.DockerActions;
 import com.auto1.pantera.docker.perms.DockerRepositoryPermission;
-import com.auto1.pantera.http.auth.BasicAuthzSlice;
+import com.auto1.pantera.http.auth.AuthzSlice;
+import com.auto1.pantera.http.auth.CombinedAuthScheme;
 import com.auto1.pantera.http.auth.OperationControl;
+import com.auto1.pantera.http.auth.TokenAuthentication;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.security.perms.EmptyPermissions;
 import com.auto1.pantera.security.perms.FreePermissions;
@@ -45,12 +47,26 @@ public final class DockerRoutingSlice implements Slice {
     private final Settings settings;
 
     /**
+     * Token authentication for the bare {@code /v2/} ping. Docker clients
+     * validate {@code docker login} against this endpoint, so it must
+     * accept the exact same credential shapes (Bearer and API-token-as-
+     * Basic-password) as the repository-scoped Docker endpoints.
+     */
+    private final TokenAuthentication tokens;
+
+    /**
      * Decorates slice with Docker V2 API routing.
      * @param settings Settings.
+     * @param tokens Token authentication for the {@code /v2/} ping
      * @param origin Origin slice
      */
-    DockerRoutingSlice(final Settings settings, final Slice origin) {
+    DockerRoutingSlice(
+        final Settings settings,
+        final TokenAuthentication tokens,
+        final Slice origin
+    ) {
         this.settings = settings;
+        this.tokens = tokens;
         this.origin = origin;
     }
 
@@ -63,11 +79,13 @@ public final class DockerRoutingSlice implements Slice {
         if (matcher.matches()) {
             final String group = matcher.group(1);
             if (group.isEmpty() || "/".equals(group)) {
-                return new BasicAuthzSlice(
+                return new AuthzSlice(
                     (l, h, b) -> ResponseBuilder.ok()
                         .header("Docker-Distribution-API-Version", "registry/2.0")
                         .completedFuture(),
-                    this.settings.authz().authentication(),
+                    new CombinedAuthScheme(
+                        this.settings.authz().authentication(), this.tokens
+                    ),
                     new OperationControl(
                         user -> user.isAnonymous() ? EmptyPermissions.INSTANCE
                             : FreePermissions.INSTANCE,

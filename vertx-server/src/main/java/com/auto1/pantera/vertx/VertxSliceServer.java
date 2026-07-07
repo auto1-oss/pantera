@@ -169,6 +169,17 @@ public final class VertxSliceServer implements Closeable {
     private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
 
     /**
+     * Whether graceful shutdown has begun rejecting new requests. Package-private
+     * observability hook so tests can poll for this transition deterministically
+     * instead of racing it with a fixed sleep.
+     *
+     * @return True once {@link #stop()} has flagged rejection of new requests
+     */
+    boolean isShuttingDown() {
+        return this.shuttingDown.get();
+    }
+
+    /**
      * Counter of currently in-flight requests.
      */
     private final AtomicInteger inFlightRequests = new AtomicInteger(0);
@@ -353,23 +364,83 @@ public final class VertxSliceServer implements Closeable {
     }
 
     /**
+     * Maximum attempts to bind the listening socket before giving up.
+     * A freshly-released port (e.g. right after a fast restart, or a test
+     * harness probing for a free ephemeral port and then handing it to us)
+     * can still be caught in a brief OS-level TIME_WAIT/SO_REUSEADDR window —
+     * a transient race, not a genuinely occupied port. Retrying the SAME
+     * configured port a few times with a short backoff absorbs that race;
+     * it never silently rebinds to a different port.
+     */
+    private static final int BIND_MAX_ATTEMPTS = 3;
+
+    /**
+     * Backoff between bind attempts.
+     */
+    private static final Duration BIND_RETRY_BACKOFF = Duration.ofMillis(50);
+
+    /**
      * Start the server.
      *
      * @return Port the server is listening on.
      */
     public int start() {
         this.shuttingDown.set(false);
-        HttpServer server = this.vertx.createHttpServer(this.options);
-        server.requestHandler(this.proxyHandler());
-        
-        // Set atomically before blocking - fails if already started
-        if (!this.serverRef.compareAndSet(null, server)) {
-            throw new IllegalStateException("Server was already started");
+        for (int attempt = 1; attempt <= BIND_MAX_ATTEMPTS; attempt++) {
+            final HttpServer server = this.vertx.createHttpServer(this.options);
+            server.requestHandler(this.proxyHandler());
+
+            // Set atomically before blocking - fails if already started
+            if (!this.serverRef.compareAndSet(null, server)) {
+                throw new IllegalStateException("Server was already started");
+            }
+
+            try {
+                // Block OUTSIDE of any lock
+                server.rxListen().blockingGet();
+                return server.actualPort();
+            } catch (final RuntimeException ex) {
+                this.serverRef.compareAndSet(server, null);
+                if (attempt == BIND_MAX_ATTEMPTS || !isBindException(ex)) {
+                    throw ex;
+                }
+                EcsLogger.warn("com.auto1.pantera.vertx")
+                    .message(String.format(
+                        "Bind attempt %d/%d failed transiently, retrying", attempt, BIND_MAX_ATTEMPTS))
+                    .eventCategory("network")
+                    .eventAction("server_bind_retry")
+                    .field("log.source", "application")
+                    .log();
+                try {
+                    Thread.sleep(BIND_RETRY_BACKOFF.toMillis() * attempt);
+                } catch (final InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    ex.addSuppressed(interrupted);
+                    throw ex;
+                }
+            }
         }
-        
-        // Block OUTSIDE of any lock
-        server.rxListen().blockingGet();
-        return server.actualPort();
+        // Unreachable: the loop above always either returns or throws.
+        throw new IllegalStateException("Server failed to bind after " + BIND_MAX_ATTEMPTS + " attempts");
+    }
+
+    /**
+     * Whether {@code ex} (or a cause in its chain) is a {@link java.net.BindException} —
+     * RxJava's {@code blockingGet()} wraps the checked upstream failure in a
+     * {@link RuntimeException}, so the real cause must be unwrapped.
+     *
+     * @param ex Exception thrown by {@code rxListen().blockingGet()}
+     * @return True if a {@link java.net.BindException} is anywhere in the cause chain
+     */
+    private static boolean isBindException(final Throwable ex) {
+        Throwable cause = ex;
+        while (cause != null) {
+            if (cause instanceof java.net.BindException) {
+                return true;
+            }
+            cause = cause.getCause();
+        }
+        return false;
     }
 
     /**

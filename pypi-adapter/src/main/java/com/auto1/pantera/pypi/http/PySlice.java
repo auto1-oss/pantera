@@ -161,9 +161,10 @@ public final class PySlice extends Slice.Wrap {
                         MethodRule.GET,
                         new RtRule.ByPath("(^\\/)|(.*(\\/[a-z0-9\\-]+?\\/?$))")
                     ),
-                    new BasicAuthzSlice(
+                    PySlice.createAuthSlice(
                         new SliceIndex(storage),
                         basicAuth,
+                        tokenAuth,
                         new OperationControl(
                             policy, new AdapterBasicPermission(name, Action.Standard.READ)
                         )
@@ -232,9 +233,10 @@ public final class PySlice extends Slice.Wrap {
                         MethodRule.HEAD,
                         new RtRule.ByPath("(^\\/)|(.*(\\/[a-z0-9\\-]+?\\/?$))")
                     ),
-                    new BasicAuthzSlice(
+                    PySlice.createAuthSlice(
                         new HeadAsGetSlice(new SliceIndex(storage)),
                         basicAuth,
+                        tokenAuth,
                         new OperationControl(
                             policy, new AdapterBasicPermission(name, Action.Standard.READ)
                         )

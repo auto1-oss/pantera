@@ -12,6 +12,7 @@ package com.auto1.pantera.http.auth;
 
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.headers.Authorization;
+import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqHeaders;
 
@@ -21,9 +22,29 @@ import java.util.concurrent.CompletionStage;
 
 /**
  * Authentication scheme that supports both Basic and Bearer token authentication.
+ *
+ * <p>Basic credentials whose password is a compact JWT are validated as
+ * tokens first (bound to the supplied username), then fall back to the
+ * regular password check. Docker and other registry clients can only
+ * submit credentials via Basic — the challenge this scheme emits carries
+ * no token-endpoint realm — so API tokens arrive as the Basic password
+ * ({@code docker login -u user -p <api-token>}). Without the token-first
+ * step, an authoritative password provider (e.g. the DB-backed check)
+ * rejects the JWT string outright and blocks fall-through to any
+ * token-aware provider, locking token holders out of every registry
+ * client.
+ *
  * @since 1.18
  */
 public final class CombinedAuthScheme implements AuthScheme {
+
+    /**
+     * Challenge advertised on anonymous and failed authentication.
+     */
+    private static final String CHALLENGE = String.format(
+        "%s realm=\"pantera\", %s realm=\"pantera\"",
+        BasicAuthScheme.NAME, BearerAuthScheme.NAME
+    );
 
     /**
      * Basic authentication.
@@ -66,21 +87,13 @@ public final class CombinedAuthScheme implements AuthScheme {
                         return this.authenticateBearer(auth);
                     }
                     return CompletableFuture.completedFuture(
-                        AuthScheme.result(
-                            AuthUser.ANONYMOUS,
-                            String.format("%s realm=\"pantera\", %s realm=\"pantera\"",
-                                BasicAuthScheme.NAME, BearerAuthScheme.NAME)
-                        )
+                        AuthScheme.result(AuthUser.ANONYMOUS, CombinedAuthScheme.CHALLENGE)
                     );
                 }
             )
             .orElseGet(
                 () -> CompletableFuture.completedFuture(
-                    AuthScheme.result(
-                        AuthUser.ANONYMOUS,
-                        String.format("%s realm=\"pantera\", %s realm=\"pantera\"",
-                            BasicAuthScheme.NAME, BearerAuthScheme.NAME)
-                    )
+                    AuthScheme.result(AuthUser.ANONYMOUS, CombinedAuthScheme.CHALLENGE)
                 )
             );
     }
@@ -88,18 +101,81 @@ public final class CombinedAuthScheme implements AuthScheme {
     /**
      * Authenticate using Basic authentication.
      *
+     * <p>A token-shaped password is validated as a JWT first and must
+     * resolve to the supplied username; anything else (malformed token,
+     * foreign subject, plain password) goes through the regular
+     * password check, so passwords that merely look like a JWT keep
+     * working.
+     *
      * @param auth Authorization header
      * @return Authentication result
      */
     private CompletionStage<AuthScheme.Result> authenticateBasic(final Authorization auth) {
         final Authorization.Basic basic = new Authorization.Basic(auth.credentials());
-        final Optional<AuthUser> user = this.basicAuth.user(basic.username(), basic.password());
-        return CompletableFuture.completedFuture(
-            AuthScheme.result(
-                user,
-                String.format("%s realm=\"pantera\", %s realm=\"pantera\"",
-                    BasicAuthScheme.NAME, BearerAuthScheme.NAME)
-            )
+        final CompletionStage<Optional<AuthUser>> resolved;
+        if (AuthWorkerPool.jwtShaped(basic.password())) {
+            // Snapshot MDC on the calling (event-loop) thread — tokenAuth.user()
+            // completes on whatever thread the JWT validator's own async chain
+            // lands on (commonPool, not this class's executor), so the
+            // .exceptionally() callback below cannot rely on ThreadLocal MDC
+            // still holding this request's trace.id/client.ip.
+            final java.util.Map<String, String> callerMdc = org.slf4j.MDC.getCopyOfContextMap();
+            resolved = this.tokenAuth.user(basic.password())
+                .exceptionally(err -> {
+                    // Infrastructure failure (revocation store unreachable,
+                    // key load error), NOT a normal auth miss — that returns
+                    // an empty Optional without throwing. Restore the caller's
+                    // MDC snapshot before logging so trace.id/client.ip
+                    // correlate correctly regardless of which thread this
+                    // callback runs on, then fall back to the password check
+                    // rather than 500.
+                    final java.util.Map<String, String> previous =
+                        org.slf4j.MDC.getCopyOfContextMap();
+                    try {
+                        if (callerMdc != null) {
+                            org.slf4j.MDC.setContextMap(callerMdc);
+                        } else {
+                            org.slf4j.MDC.clear();
+                        }
+                        EcsLogger.warn("com.auto1.pantera.http.auth")
+                            .message("Token validation errored for a Basic-password"
+                                + " token; falling back to password authentication")
+                            .eventCategory("authentication")
+                            .eventAction("token_validate")
+                            .eventOutcome("failure")
+                            .field("user.name", basic.username())
+                            .error(err)
+                            .field("log.source", "application")
+                            .log();
+                    } finally {
+                        if (previous != null) {
+                            org.slf4j.MDC.setContextMap(previous);
+                        } else {
+                            org.slf4j.MDC.clear();
+                        }
+                    }
+                    return Optional.empty();
+                })
+                .thenApply(user -> user.filter(usr -> usr.name().equals(basic.username())))
+                .thenCompose(
+                    user -> user.isPresent()
+                        ? CompletableFuture.completedFuture(user)
+                        : CompletableFuture.supplyAsync(
+                            () -> this.basicAuth.user(basic.username(), basic.password()),
+                            AuthWorkerPool.AUTH_EXECUTOR
+                        )
+                );
+        } else {
+            // Offload the (potentially blocking, DB/IdP-backed) password
+            // check off the calling thread — mirrors BasicAuthScheme. The
+            // /v2/ Docker ping runs this on a Vert.x event-loop thread.
+            resolved = CompletableFuture.supplyAsync(
+                            () -> this.basicAuth.user(basic.username(), basic.password()),
+                            AuthWorkerPool.AUTH_EXECUTOR
+                        );
+        }
+        return resolved.thenApply(
+            user -> AuthScheme.result(user, CombinedAuthScheme.CHALLENGE)
         );
     }
 
@@ -111,12 +187,6 @@ public final class CombinedAuthScheme implements AuthScheme {
      */
     private CompletionStage<AuthScheme.Result> authenticateBearer(final Authorization auth) {
         return this.tokenAuth.user(new Authorization.Bearer(auth.credentials()).token())
-            .thenApply(
-                user -> AuthScheme.result(
-                    user,
-                    String.format("%s realm=\"pantera\", %s realm=\"pantera\"",
-                        BasicAuthScheme.NAME, BearerAuthScheme.NAME)
-                )
-            );
+            .thenApply(user -> AuthScheme.result(user, CombinedAuthScheme.CHALLENGE));
     }
 }

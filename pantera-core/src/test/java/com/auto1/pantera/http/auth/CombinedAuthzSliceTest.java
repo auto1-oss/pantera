@@ -80,6 +80,74 @@ class CombinedAuthzSliceTest {
         MatcherAssert.assertThat(origin.wasCalled(), Matchers.is(true));
     }
 
+    /**
+     * Regression: package managers submit API tokens as the Basic
+     * password ({@code mvn}/{@code npm}/{@code pip} credential files).
+     * A valid token bound to the claimed username must authenticate even
+     * though the password chain would reject the token string.
+     */
+    @Test
+    void allowsApiTokenAsBasicPassword() {
+        final String token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.c2lnbmF0dXJl";
+        final TestAuth basicAuth = new TestAuth("user", "pass");
+        final TestTokenAuth tokenAuth = new TestTokenAuth(token, "user");
+        final TestSlice origin = new TestSlice();
+        final CombinedAuthzSlice slice = new CombinedAuthzSlice(
+            origin, basicAuth, tokenAuth,
+            new OperationControl(
+                Policy.FREE, new AdapterBasicPermission("test", Action.Standard.READ)
+            )
+        );
+        final Response response = slice.response(
+            new RequestLine(RqMethod.GET, "/test"),
+            Headers.from(new Authorization.Basic("user", token)),
+            Content.EMPTY
+        ).toCompletableFuture().join();
+        MatcherAssert.assertThat(
+            "a valid API token as the Basic password must authenticate",
+            response.status().code(),
+            Matchers.is(200)
+        );
+        MatcherAssert.assertThat(
+            "the request must reach the origin slice",
+            origin.wasCalled(),
+            Matchers.is(true)
+        );
+    }
+
+    /**
+     * A token belonging to a different user must not authenticate the
+     * claimed username via the Basic-password path.
+     */
+    @Test
+    void deniesForeignApiTokenAsBasicPassword() {
+        final String token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJvdGhlciJ9.c2lnbmF0dXJl";
+        final TestAuth basicAuth = new TestAuth("user", "pass");
+        final TestTokenAuth tokenAuth = new TestTokenAuth(token, "somebody-else");
+        final TestSlice origin = new TestSlice();
+        final CombinedAuthzSlice slice = new CombinedAuthzSlice(
+            origin, basicAuth, tokenAuth,
+            new OperationControl(
+                Policy.FREE, new AdapterBasicPermission("test", Action.Standard.READ)
+            )
+        );
+        final Response response = slice.response(
+            new RequestLine(RqMethod.GET, "/test"),
+            Headers.from(new Authorization.Basic("user", token)),
+            Content.EMPTY
+        ).toCompletableFuture().join();
+        MatcherAssert.assertThat(
+            "another user's token must not authenticate this username",
+            response.status().code(),
+            Matchers.is(401)
+        );
+        MatcherAssert.assertThat(
+            "the request must not reach the origin slice",
+            origin.wasCalled(),
+            Matchers.is(false)
+        );
+    }
+
     @Test
     void deniesInvalidBasicAuth() {
         final TestAuth basicAuth = new TestAuth("user", "pass");

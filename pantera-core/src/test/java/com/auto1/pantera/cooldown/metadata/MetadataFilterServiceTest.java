@@ -12,6 +12,7 @@ package com.auto1.pantera.cooldown.metadata;
 
 import com.auto1.pantera.cooldown.cache.CooldownCache;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
+import com.auto1.pantera.audit.AuditContext;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.api.CooldownResult;
 import com.auto1.pantera.cooldown.api.CooldownService;
@@ -38,7 +39,9 @@ import java.util.concurrent.ForkJoinPool;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.Matchers.is;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -915,6 +918,7 @@ final class MetadataFilterServiceTest {
 
     private static final class TestCooldownService implements CooldownService {
         private final Set<String> blockedVersions = new HashSet<>();
+        private final Set<String> requesters = new java.util.HashSet<>();
 
         void blockVersion(final String pkg, final String version) {
             this.blockedVersions.add(pkg + "@" + version);
@@ -925,6 +929,7 @@ final class MetadataFilterServiceTest {
             final CooldownRequest request,
             final CooldownInspector inspector
         ) {
+            this.requesters.add(request.requestedBy());
             final String key = request.artifact() + "@" + request.version();
             if (this.blockedVersions.contains(key)) {
                 return CompletableFuture.completedFuture(
@@ -973,14 +978,199 @@ final class MetadataFilterServiceTest {
         }
     }
 
+    @Test
+    void semverPrereleaseNeverBecomesLatestWhenRecomputing()
+        throws ExecutionException, InterruptedException {
+        // Regression: nx publishes CI builds like 23.1.0-pr.36127.e594f53.
+        // The keyword heuristic classified the unknown "pr" qualifier as
+        // stable, so when the real latest (23.0.1) was cooldown-blocked the
+        // recompute promoted the CI build to dist-tags.latest. With SemVer
+        // parser semantics, any dash-suffixed version is a prerelease and
+        // the newest surviving STABLE must win.
+        this.cooldownService.blockVersion("nx-pkg", "23.0.1");
+        final TestMetadataParser parser = new TestMetadataParser(
+            Arrays.asList("23.1.0-pr.36127.e594f53", "23.0.1", "22.7.6"),
+            "23.0.1",
+            true
+        );
+        final TestMetadataFilter filter = new TestMetadataFilter();
+        final TestMetadataRewriter rewriter = new TestMetadataRewriter();
+        this.service.filterMetadata(
+            "npm", "test-repo", "nx-pkg",
+            "raw".getBytes(StandardCharsets.UTF_8),
+            parser, filter, rewriter
+        ).get();
+        assertThat(
+            "the fresh stable must be blocked",
+            filter.lastBlockedVersions.contains("23.0.1"), equalTo(true)
+        );
+        assertThat(
+            "latest must be the newest surviving stable, never a dash-suffixed CI build",
+            filter.lastNewLatest, equalTo("22.7.6")
+        );
+    }
+
+    @Test
+    void unblockedUpstreamLatestIsPreservedWhenOtherVersionsBlocked()
+        throws ExecutionException, InterruptedException {
+        // @nx/js in the wild: dist-tags.latest = 23.0.1 (stable, well past the
+        // cooldown window, NOT blocked) while a fresh 23.1.0-beta.7 IS blocked.
+        // Blocking *something* must not drag latest off the author's unblocked
+        // designated latest — neither onto the surviving CI prerelease nor onto
+        // a lower-major backport that merely published more recently.
+        this.cooldownService.blockVersion("nx-pkg", "23.1.0-beta.7");
+        final TestMetadataParser parser = new TestMetadataParser(
+            Arrays.asList(
+                "23.1.0-beta.7", "23.1.0-pr.36127.e594f53", "23.0.1", "22.7.6"
+            ),
+            "23.0.1",
+            true
+        );
+        final TestMetadataFilter filter = new TestMetadataFilter();
+        final TestMetadataRewriter rewriter = new TestMetadataRewriter();
+        this.service.filterMetadata(
+            "npm", "test-repo", "nx-pkg",
+            "raw".getBytes(StandardCharsets.UTF_8),
+            parser, filter, rewriter
+        ).get();
+        assertThat(
+            "the fresh prerelease is blocked",
+            filter.lastBlockedVersions.contains("23.1.0-beta.7"), equalTo(true)
+        );
+        assertThat(
+            "an unblocked upstream latest must be preserved verbatim, not recomputed",
+            filter.lastNewLatest, equalTo("23.0.1")
+        );
+    }
+
+    @Test
+    void fallbackNeverPromotesNewerMajorThanBlockedLatest()
+        throws ExecutionException, InterruptedException {
+        // vue-style: the author keeps latest on the 2.x line (2.7.16) while a
+        // newer 3.x major exists but was never promoted to latest. When the
+        // designated latest is itself cooldown-blocked, the fallback must stay
+        // at-or-below it (2.7.15) — never jump to the 3.x major, and never rank
+        // by publish date.
+        this.cooldownService.blockVersion("vue-pkg", "2.7.16");
+        final TestMetadataParser parser = new TestMetadataParser(
+            Arrays.asList("3.4.0", "2.7.16", "2.7.15"),
+            "2.7.16",
+            true
+        );
+        final TestMetadataFilter filter = new TestMetadataFilter();
+        final TestMetadataRewriter rewriter = new TestMetadataRewriter();
+        this.service.filterMetadata(
+            "npm", "test-repo", "vue-pkg",
+            "raw".getBytes(StandardCharsets.UTF_8),
+            parser, filter, rewriter
+        ).get();
+        assertThat(
+            "the blocked designated latest must be filtered",
+            filter.lastBlockedVersions.contains("2.7.16"), equalTo(true)
+        );
+        assertThat(
+            "fallback must stay on the author's line, never jump to a newer major",
+            filter.lastNewLatest, equalTo("2.7.15")
+        );
+    }
+
+    @Test
+    void resolveLatestNeverCrossesCeilingEvenWithNoFallbackBelowIt()
+        throws ExecutionException, InterruptedException {
+        // Pathological edge case the previous test doesn't cover: the
+        // designated latest (2.7.16) is the ONLY release on its line and gets
+        // freshly blocked, while a newer major (3.4.0) already exists — there
+        // is no same-line fallback at all. The ceiling must still hold: the
+        // fallback must NOT cross into 3.4.0. Leaving latest untouched (a
+        // transient gap that self-corrects once the block expires) is
+        // strictly preferable to advertising a major the author never
+        // promoted as latest.
+        this.cooldownService.blockVersion("vue-first-release-pkg", "2.7.16");
+        final TestMetadataParser parser = new TestMetadataParser(
+            Arrays.asList("3.4.0", "2.7.16"),
+            "2.7.16",
+            true
+        );
+        final TestMetadataFilter filter = new TestMetadataFilter();
+        final TestMetadataRewriter rewriter = new TestMetadataRewriter();
+        this.service.filterMetadata(
+            "npm", "test-repo", "vue-first-release-pkg",
+            "raw".getBytes(StandardCharsets.UTF_8),
+            parser, filter, rewriter
+        ).get();
+        assertThat(
+            "the blocked designated latest must be filtered",
+            filter.lastBlockedVersions.contains("2.7.16"), equalTo(true)
+        );
+        assertThat(
+            "with no fallback surviving at or below the ceiling, latest must be "
+                + "left untouched rather than promoted to a newer, unblessed major",
+            filter.lastNewLatest, nullValue()
+        );
+    }
+
+    /**
+     * Regression: the cooldown request must be attributed to the
+     * request-captured owner passed into filterMetadata, NOT to
+     * {@code MDC.get("user.name")} read on the pipeline's worker thread
+     * (which may be stale or unbound and misattribute the request to a
+     * different user).
+     */
+    @Test
+    void cooldownRequestIsAttributedToPassedOwnerNotMdc()
+        throws ExecutionException, InterruptedException {
+        org.slf4j.MDC.put("user.name", "stale-thread-user");
+        try {
+            this.cooldownService.blockVersion("attrib-pkg", "2.0.0");
+            final TestMetadataParser parser = new TestMetadataParser(
+                Arrays.asList("1.0.0", "2.0.0"), "2.0.0"
+            );
+            this.service.filterMetadata(
+                "npm", "attrib-repo", "attrib-pkg",
+                "raw".getBytes(StandardCharsets.UTF_8),
+                parser, new TestMetadataFilter(), new TestMetadataRewriter(),
+                AuditContext.NONE, "real-request-user"
+            ).get();
+            assertThat(
+                "cooldown request must carry the passed owner, never the thread's MDC user",
+                this.cooldownService.requesters, hasItem("real-request-user")
+            );
+            assertThat(
+                "the stale MDC thread user must never leak into the cooldown attribution",
+                this.cooldownService.requesters.contains("stale-thread-user"),
+                equalTo(false)
+            );
+        } finally {
+            org.slf4j.MDC.remove("user.name");
+        }
+    }
+
     private static final class TestMetadataParser implements MetadataParser<List<String>> {
         private final List<String> versions;
         private final String latest;
+        private final boolean semver;
         int parseCount = 0;
 
         TestMetadataParser(final List<String> versions, final String latest) {
+            this(versions, latest, false);
+        }
+
+        TestMetadataParser(
+            final List<String> versions, final String latest, final boolean semver
+        ) {
             this.versions = versions;
             this.latest = latest;
+            this.semver = semver;
+        }
+
+        @Override
+        public boolean prerelease(final String version) {
+            if (!this.semver) {
+                return MetadataParser.super.prerelease(version);
+            }
+            final String core = version.split("\\+", 2)[0];
+            final int dash = core.indexOf('-');
+            return dash >= 0 && dash < core.length() - 1;
         }
 
         @Override
