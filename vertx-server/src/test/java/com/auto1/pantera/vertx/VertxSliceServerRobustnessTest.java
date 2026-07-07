@@ -102,7 +102,7 @@ final class VertxSliceServerRobustnessTest {
     void requestTimeoutReturns503() throws Exception {
         // Server with 1 second timeout and a slice that takes 5 seconds
         final Duration timeout = Duration.ofSeconds(1);
-        this.server = new VertxSliceServer(
+        this.server = startServer(() -> new VertxSliceServer(
             this.vertx,
             (line, headers, body) -> {
                 // Simulate slow upstream processing
@@ -117,8 +117,7 @@ final class VertxSliceServerRobustnessTest {
             },
             new HttpServerOptions().setPort(this.port),
             timeout
-        );
-        this.server.start();
+        ));
 
         final HttpResponse<Buffer> response = this.client
             .get(this.port, HOST, "/slow")
@@ -139,7 +138,7 @@ final class VertxSliceServerRobustnessTest {
         final AtomicInteger activeRequests = new AtomicInteger(0);
         final AtomicInteger maxConcurrent = new AtomicInteger(0);
         
-        this.server = new VertxSliceServer(
+        this.server = startServer(() -> new VertxSliceServer(
             this.vertx,
             (line, headers, body) -> {
                 final int current = activeRequests.incrementAndGet();
@@ -156,8 +155,7 @@ final class VertxSliceServerRobustnessTest {
                 });
             },
             new HttpServerOptions().setPort(this.port)
-        );
-        this.server.start();
+        ));
 
         final int totalRequests = 100;
         final int concurrency = 20;
@@ -196,7 +194,7 @@ final class VertxSliceServerRobustnessTest {
     void responseBodyErrorTriggersTerminatorFail() throws Exception {
         final RuntimeException bodyError = new RuntimeException("Simulated body stream error");
         
-        this.server = new VertxSliceServer(
+        this.server = startServer(() -> new VertxSliceServer(
             this.vertx,
             (line, headers, body) -> CompletableFuture.completedFuture(
                 ResponseBuilder.ok()
@@ -204,8 +202,7 @@ final class VertxSliceServerRobustnessTest {
                     .build()
             ),
             new HttpServerOptions().setPort(this.port)
-        );
-        this.server.start();
+        ));
 
         final HttpResponse<Buffer> response = this.client
             .get(this.port, HOST, "/body-error")
@@ -225,15 +222,14 @@ final class VertxSliceServerRobustnessTest {
     void sliceExceptionReturns500() throws Exception {
         final AtomicInteger requestCount = new AtomicInteger(0);
         
-        this.server = new VertxSliceServer(
+        this.server = startServer(() -> new VertxSliceServer(
             this.vertx,
             (line, headers, body) -> {
                 requestCount.incrementAndGet();
                 throw new IllegalStateException("Slice processing failed");
             },
             new HttpServerOptions().setPort(this.port)
-        );
-        this.server.start();
+        ));
 
         // Make multiple requests to ensure server stays healthy
         for (int i = 0; i < 10; i++) {
@@ -251,14 +247,13 @@ final class VertxSliceServerRobustnessTest {
     @Test
     @DisplayName("Async slice failure returns 500")
     void asyncSliceFailureReturns500() throws Exception {
-        this.server = new VertxSliceServer(
+        this.server = startServer(() -> new VertxSliceServer(
             this.vertx,
             (line, headers, body) -> CompletableFuture.failedFuture(
                 new RuntimeException("Async processing failed")
             ),
             new HttpServerOptions().setPort(this.port)
-        );
-        this.server.start();
+        ));
 
         final HttpResponse<Buffer> response = this.client
             .get(this.port, HOST, "/async-error")
@@ -271,14 +266,13 @@ final class VertxSliceServerRobustnessTest {
     @Test
     @DisplayName("Empty response body is handled correctly")
     void emptyResponseBodyHandled() throws Exception {
-        this.server = new VertxSliceServer(
+        this.server = startServer(() -> new VertxSliceServer(
             this.vertx,
             (line, headers, body) -> CompletableFuture.completedFuture(
                 ResponseBuilder.ok().build()
             ),
             new HttpServerOptions().setPort(this.port)
-        );
-        this.server.start();
+        ));
 
         final HttpResponse<Buffer> response = this.client
             .get(this.port, HOST, "/empty")
@@ -297,7 +291,7 @@ final class VertxSliceServerRobustnessTest {
         final byte[] chunk = new byte[chunkSize];
         java.util.Arrays.fill(chunk, (byte) 'X');
         
-        this.server = new VertxSliceServer(
+        this.server = startServer(() -> new VertxSliceServer(
             this.vertx,
             (line, headers, body) -> {
                 final Flowable<ByteBuffer> stream = Flowable.range(0, chunkCount)
@@ -310,8 +304,7 @@ final class VertxSliceServerRobustnessTest {
                 );
             },
             new HttpServerOptions().setPort(this.port)
-        );
-        this.server.start();
+        ));
 
         final HttpResponse<Buffer> response = this.client
             .get(this.port, HOST, "/large")
@@ -331,7 +324,7 @@ final class VertxSliceServerRobustnessTest {
     void sequentialRequestsReuseConnections() throws Exception {
         final AtomicInteger requestCount = new AtomicInteger(0);
         
-        this.server = new VertxSliceServer(
+        this.server = startServer(() -> new VertxSliceServer(
             this.vertx,
             (line, headers, body) -> {
                 requestCount.incrementAndGet();
@@ -340,8 +333,7 @@ final class VertxSliceServerRobustnessTest {
                 );
             },
             new HttpServerOptions().setPort(this.port)
-        );
-        this.server.start();
+        ));
 
         final int totalRequests = 50;
         for (int i = 0; i < totalRequests; i++) {
@@ -361,9 +353,9 @@ final class VertxSliceServerRobustnessTest {
     void postRequestWithBodyHandled() throws Exception {
         final AtomicReference<byte[]> receivedBody = new AtomicReference<>();
         
-        this.server = new VertxSliceServer(
+        this.server = startServer(() -> new VertxSliceServer(
             this.vertx,
-            (line, headers, body) -> 
+            (line, headers, body) ->
                 new Content.From(body).asBytesFuture()
                     .thenApply(bytes -> {
                         receivedBody.set(bytes);
@@ -372,8 +364,7 @@ final class VertxSliceServerRobustnessTest {
                             .build();
                     }),
             new HttpServerOptions().setPort(this.port)
-        );
-        this.server.start();
+        ));
 
         final byte[] requestBody = "Hello, Server!".getBytes();
         final HttpResponse<Buffer> response = this.client
@@ -389,14 +380,13 @@ final class VertxSliceServerRobustnessTest {
     @DisplayName("Server handles rapid request/response cycles")
     @Timeout(value = 30, unit = TimeUnit.SECONDS)
     void rapidRequestResponseCycles() throws Exception {
-        this.server = new VertxSliceServer(
+        this.server = startServer(() -> new VertxSliceServer(
             this.vertx,
             (line, headers, body) -> CompletableFuture.completedFuture(
                 ResponseBuilder.ok().textBody("pong").build()
             ),
             new HttpServerOptions().setPort(this.port)
-        );
-        this.server.start();
+        ));
 
         final int totalRequests = 500;
         final long startTime = System.currentTimeMillis();
@@ -427,7 +417,7 @@ final class VertxSliceServerRobustnessTest {
         final int chunkCount = 100;
         final AtomicInteger chunksGenerated = new AtomicInteger(0);
         
-        this.server = new VertxSliceServer(
+        this.server = startServer(() -> new VertxSliceServer(
             this.vertx,
             (line, headers, body) -> {
                 final Flowable<ByteBuffer> stream = Flowable.range(0, chunkCount)
@@ -442,8 +432,7 @@ final class VertxSliceServerRobustnessTest {
                 );
             },
             new HttpServerOptions().setPort(this.port)
-        );
-        this.server.start();
+        ));
 
         // Make request but don't fully consume body (client will still receive it)
         final HttpResponse<Buffer> response = this.client
@@ -461,7 +450,7 @@ final class VertxSliceServerRobustnessTest {
     void serverRecoversAfterErrors() throws Exception {
         final AtomicInteger requestCount = new AtomicInteger(0);
         
-        this.server = new VertxSliceServer(
+        this.server = startServer(() -> new VertxSliceServer(
             this.vertx,
             (line, headers, body) -> {
                 final int count = requestCount.incrementAndGet();
@@ -474,8 +463,7 @@ final class VertxSliceServerRobustnessTest {
                 );
             },
             new HttpServerOptions().setPort(this.port)
-        );
-        this.server.start();
+        ));
 
         int successCount = 0;
         int errorCount = 0;
@@ -544,7 +532,7 @@ final class VertxSliceServerRobustnessTest {
         // on the connection idle timeout — the same model Tomcat/Jetty use.
         final Duration shortTimeout = Duration.ofMillis(500);
 
-        this.server = new VertxSliceServer(
+        this.server = startServer(() -> new VertxSliceServer(
             this.vertx,
             (line, headers, body) -> {
                 // Consume body then delay — simulates slow storage write
@@ -560,8 +548,7 @@ final class VertxSliceServerRobustnessTest {
             },
             new io.vertx.core.http.HttpServerOptions().setPort(this.port),
             shortTimeout
-        );
-        this.server.start();
+        ));
 
         // Body must be larger than DEFAULT_BODY_BUFFER_THRESHOLD (1 MB) to trigger serveWithStream
         final int bodySize = 2 * 1024 * 1024; // 2 MB
@@ -586,5 +573,58 @@ final class VertxSliceServerRobustnessTest {
         try (ServerSocket socket = new ServerSocket(0)) {
             return socket.getLocalPort();
         }
+    }
+
+    /**
+     * Build and start a server via {@code factory}, retrying with a freshly
+     * picked {@link #port} on a transient bind failure.
+     *
+     * <p>{@code findFreePort()} has an inherent probe-then-release race: the
+     * port it returns can be grabbed by ANOTHER test's server in the same JVM
+     * before this test binds to it. {@link VertxSliceServer#start()} already
+     * retries a few times on the SAME port (absorbs the OS-level TIME_WAIT
+     * window), but that cannot help if a live peer test is actually holding
+     * the port for its own duration — only a fresh port re-roll can. This is
+     * the "belt" on top of that "suspenders".
+     *
+     * @param factory Builds a server bound to the current {@link #port}
+     * @return The started server
+     * @throws Exception If binding fails on every attempt
+     */
+    private VertxSliceServer startServer(
+        final java.util.function.Supplier<VertxSliceServer> factory
+    ) throws Exception {
+        final int maxAttempts = 3;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            final VertxSliceServer candidate = factory.get();
+            try {
+                candidate.start();
+                return candidate;
+            } catch (final RuntimeException ex) {
+                candidate.close();
+                if (attempt == maxAttempts || !isBindException(ex)) {
+                    throw ex;
+                }
+                this.port = findFreePort();
+            }
+        }
+        throw new IllegalStateException("unreachable");
+    }
+
+    /**
+     * Whether {@code ex} (or a cause in its chain) is a {@link java.net.BindException}.
+     *
+     * @param ex Exception thrown by {@link VertxSliceServer#start()}
+     * @return True if a {@link java.net.BindException} is anywhere in the cause chain
+     */
+    private static boolean isBindException(final Throwable ex) {
+        Throwable cause = ex;
+        while (cause != null) {
+            if (cause instanceof java.net.BindException) {
+                return true;
+            }
+            cause = cause.getCause();
+        }
+        return false;
     }
 }

@@ -323,15 +323,16 @@ public final class VertxSliceServerTest {
 
     @Test
     public void serverStartsWithHttpServerOptions() throws Exception {
-        final int expected = this.rndPort();
-        final VertxSliceServer srv = new VertxSliceServer(
+        this.port = this.rndPort();
+        final VertxSliceServer srv = this.startServer(() -> new VertxSliceServer(
             this.vertx,
             (line, headers, body) -> CompletableFuture.completedFuture(
                 ResponseBuilder.ok().headers(headers).body(body).build()
             ),
-            new HttpServerOptions().setPort(expected)
-        );
-        MatcherAssert.assertThat(srv.start(), new IsEqual<>(expected));
+            new HttpServerOptions().setPort(this.port)
+        ));
+        this.server = srv;
+        MatcherAssert.assertThat(srv.actualPort(), new IsEqual<>(this.port));
     }
 
     @Test
@@ -359,12 +360,10 @@ public final class VertxSliceServerTest {
                 .body(jarContent)
                 .build()
         );
-        final VertxSliceServer srv = new VertxSliceServer(
+        this.server = this.startServer(() -> new VertxSliceServer(
             this.vertx, slice, this.port,
             java.time.Duration.ofMinutes(1)
-        );
-        srv.start();
-        this.server = srv;
+        ));
         final HttpResponse<Buffer> response = this.client
             .get(this.port, VertxSliceServerTest.HOST, "/artifact.jar")
             .putHeader("Accept-Encoding", "gzip")
@@ -397,12 +396,10 @@ public final class VertxSliceServerTest {
                 .body(gzContent)
                 .build()
         );
-        final VertxSliceServer srv = new VertxSliceServer(
+        this.server = this.startServer(() -> new VertxSliceServer(
             this.vertx, slice, this.port,
             java.time.Duration.ofMinutes(1)
-        );
-        srv.start();
-        this.server = srv;
+        ));
         final HttpResponse<Buffer> response = this.client
             .get(this.port, VertxSliceServerTest.HOST, "/archive.tar.gz")
             .putHeader("Accept-Encoding", "gzip")
@@ -434,11 +431,10 @@ public final class VertxSliceServerTest {
                 ResponseBuilder.ok().textBody("done").build()
             );
         };
-        final VertxSliceServer srv = new VertxSliceServer(
+        final VertxSliceServer srv = this.startServer(() -> new VertxSliceServer(
             this.vertx, slowSlice, this.port,
             java.time.Duration.ofMinutes(1)
-        );
-        srv.start();
+        ));
         this.server = srv;
         // Start a slow request in background
         final CompletableFuture<HttpResponse<Buffer>> responseFuture = CompletableFuture.supplyAsync(() ->
@@ -483,11 +479,10 @@ public final class VertxSliceServerTest {
                 ResponseBuilder.ok().textBody("done").build()
             );
         };
-        final VertxSliceServer srv = new VertxSliceServer(
+        final VertxSliceServer srv = this.startServer(() -> new VertxSliceServer(
             this.vertx, slowSlice, this.port,
             java.time.Duration.ofMinutes(1)
-        );
-        srv.start();
+        ));
         this.server = srv;
         // Start a slow request to keep drain active
         final CompletableFuture<HttpResponse<Buffer>> firstResponse = CompletableFuture.supplyAsync(() ->
@@ -499,8 +494,16 @@ public final class VertxSliceServerTest {
         requestReceived.await(5, java.util.concurrent.TimeUnit.SECONDS);
         // Initiate shutdown in background (will drain for up to 30s)
         final CompletableFuture<Void> shutdownFuture = CompletableFuture.runAsync(() -> srv.stop());
-        // Give the shutdown a moment to set the shuttingDown flag
-        Thread.sleep(200);
+        // Poll for the shuttingDown flag instead of a fixed sleep: under load
+        // (e.g. a parallel reactor build), the runAsync task can be scheduled
+        // later than a fixed sleep accounts for, letting the "new request"
+        // below reach the server before shutdown actually began — a
+        // connection reset instead of the expected 503.
+        final long deadline = System.currentTimeMillis() + 5000;
+        while (!srv.isShuttingDown() && System.currentTimeMillis() < deadline) {
+            Thread.sleep(5);
+        }
+        Assertions.assertTrue(srv.isShuttingDown(), "Server must enter shutdown state within 5s");
         // Try to send a new request - should get 503
         final HttpResponse<Buffer> newResponse = this.client
             .get(this.port, VertxSliceServerTest.HOST, "/new-request")
@@ -581,16 +584,14 @@ public final class VertxSliceServerTest {
                 .subscribe();
             return future;
         };
-        final VertxSliceServer srv = new VertxSliceServer(
+        this.server = this.startServer(() -> new VertxSliceServer(
             this.vertx,
             echoSlice,
             new HttpServerOptions().setPort(this.port),
             java.time.Duration.ofMinutes(1),
             java.time.Duration.ofSeconds(30),
             customThreshold
-        );
-        srv.start();
-        this.server = srv;
+        ));
         // Test 1: Send a small body (< 512 bytes) - should be buffered
         final byte[] smallBody = new byte[256];
         java.util.Arrays.fill(smallBody, (byte) 'A');
@@ -690,12 +691,10 @@ public final class VertxSliceServerTest {
                 .subscribe();
             return future;
         };
-        final VertxSliceServer srv = new VertxSliceServer(
+        this.server = this.startServer(() -> new VertxSliceServer(
             this.vertx, captureSlice, this.port,
             java.time.Duration.ofMinutes(1)
-        );
-        srv.start();
-        this.server = srv;
+        ));
         // Send a chunked request (no Content-Length) using sendStream
         // This simulates: curl -T - -XPUT (piped stdin, chunked transfer)
         final byte[] payload = new byte[4096];
@@ -776,9 +775,7 @@ public final class VertxSliceServerTest {
     }
 
     private void start(final Slice slice) {
-        final VertxSliceServer srv = new VertxSliceServer(this.vertx, slice, this.port);
-        srv.start();
-        this.server = srv;
+        this.server = this.startServer(() -> new VertxSliceServer(this.vertx, slice, this.port));
     }
 
     /**
@@ -791,6 +788,62 @@ public final class VertxSliceServerTest {
         try (ServerSocket socket = new ServerSocket(0)) {
             return socket.getLocalPort();
         }
+    }
+
+    /**
+     * Build and start a server via {@code factory}, retrying with a freshly
+     * picked {@link #port} on a transient bind failure.
+     *
+     * <p>{@code rndPort()} has an inherent probe-then-release race: the port
+     * it returns can be grabbed by ANOTHER test's server in the same JVM
+     * before this test binds to it. {@link VertxSliceServer#start()} already
+     * retries a few times on the SAME port (absorbs the OS-level TIME_WAIT
+     * window), but that cannot help if a live peer test is actually holding
+     * the port for its own duration — only a fresh port re-roll can. This is
+     * the "belt" on top of that "suspenders".
+     *
+     * @param factory Builds a server bound to the current {@link #port}
+     * @return The started server
+     */
+    private VertxSliceServer startServer(
+        final java.util.function.Supplier<VertxSliceServer> factory
+    ) {
+        final int maxAttempts = 3;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            final VertxSliceServer candidate = factory.get();
+            try {
+                candidate.start();
+                return candidate;
+            } catch (final RuntimeException ex) {
+                candidate.close();
+                if (attempt == maxAttempts || !isBindException(ex)) {
+                    throw ex;
+                }
+                try {
+                    this.port = this.rndPort();
+                } catch (final IOException ioe) {
+                    throw new java.io.UncheckedIOException(ioe);
+                }
+            }
+        }
+        throw new IllegalStateException("unreachable");
+    }
+
+    /**
+     * Whether {@code ex} (or a cause in its chain) is a {@link java.net.BindException}.
+     *
+     * @param ex Exception thrown by {@link VertxSliceServer#start()}
+     * @return True if a {@link java.net.BindException} is anywhere in the cause chain
+     */
+    private static boolean isBindException(final Throwable ex) {
+        Throwable cause = ex;
+        while (cause != null) {
+            if (cause instanceof java.net.BindException) {
+                return true;
+            }
+            cause = cause.getCause();
+        }
+        return false;
     }
 
     /**
