@@ -1,21 +1,26 @@
 # Changelog
 
-## Version 2.2.1
+## Version 2.2.2
 
 ### 🔧 Bug fixes
 
-- **npm `dist-tags.latest` is no longer rewritten to arbitrary prerelease builds.** When the cooldown filter recomputed `latest` after blocking versions, prerelease detection used a fixed keyword list (alpha, beta, rc, …), so CI builds with unknown qualifiers — e.g. nx's `23.1.0-pr.36127.e594f53` — were classified as stable and promoted to `latest`, making clients see a prerelease as the newest version. Prerelease semantics are now format-aware: for npm, any dash-suffixed version is a prerelease per SemVer (build metadata `+…` alone is not); Maven keeps the keyword heuristic, where dash suffixes are often classifiers (`-jre`, `-android`), unchanged.
+- **`docker login` (and every package manager) accepts API tokens as the Basic password again.** Registry and package-manager clients can only submit credentials via Basic auth, so API tokens arrive as the password — and the 2.2.0 authoritative-provider hardening rejected the token string against the account's password hash before any token-aware provider could validate it, locking token-based CI out of Docker, Maven, npm, and PyPI repositories. Token-shaped Basic passwords are now validated as JWTs first (bound to the claimed username, with full revocation/expiry checks) and fall back to the regular password check; the bare Docker `/v2/` ping accepts Bearer tokens consistently with all other registry endpoints; and the blocking credential check is kept off the Vert.x event loop.
   ([@aydasraf](https://github.com/aydasraf))
 - **First-party artifacts are no longer cooldown-quarantined.** The group-level cooldown metadata filter age-gated every version flowing through Maven/Gradle groups — including releases just published to the organisation's own hosted members, which became unresolvable through the group for the full cooldown window. The filter is now winner-aware: it applies only when a **proxy** member wins the metadata walk; a hosted member's metadata (versions that arrived via authenticated, audited publishes) is served verbatim. Upstream protection is unchanged — proxy-won metadata is filtered exactly as before, and nested groups apply their own winner-aware filter.
   ([@aydasraf](https://github.com/aydasraf))
-- **`docker login` (and every package manager) accepts API tokens as the Basic password again.** Registry and package-manager clients can only submit credentials via Basic auth, so API tokens arrive as the password — and the 2.2.0 authoritative-provider hardening rejected the token string against the account's password hash before any token-aware provider could validate it, locking token-based CI out of Docker, Maven, npm, and PyPI repositories. Token-shaped Basic passwords are now validated as JWTs first (bound to the claimed username, with full revocation/expiry checks) and fall back to the regular password check, and the bare Docker `/v2/` ping accepts Bearer tokens consistently with all other registry endpoints.
-  ([@aydasraf](https://github.com/aydasraf))
-- **Directory-listing pages render styled again under the hardened security headers.** The 2.2.0 `Content-Security-Policy: default-src 'self'` blocked the browse pages' own inline CSS/JS, leaving listings unstyled with dead sort controls. Browse responses now declare a per-route CSP that allowlists exactly their inline style/script blocks by SHA-256 hash, and the sort controls bind their listeners CSP-compatibly instead of using inline `onclick` attributes.
+- **npm `dist-tags.latest` is no longer rewritten to arbitrary prerelease builds.** When the cooldown filter recomputed `latest` after blocking versions, prerelease detection used a fixed keyword list (alpha, beta, rc, …), so CI builds with unknown qualifiers — e.g. nx's `23.1.0-pr.36127.e594f53` — were classified as stable and promoted to `latest`, making clients see a prerelease as the newest version. Prerelease semantics are now format-aware: for npm, any dash-suffixed version is a prerelease per SemVer (build metadata `+…` alone is not); Maven keeps the keyword heuristic, where dash suffixes are often classifiers (`-jre`, `-android`), unchanged.
   ([@aydasraf](https://github.com/aydasraf))
 
 ### 🔒 Security
 
 - **php-proxy repositories now validate credentials.** Requests carrying an `Authorization` header bypassed the deny-by-default anonymous gate (which only challenges credential-less requests) into a chain that never authenticated them — any non-empty credentials could read through a php-proxy. The php-proxy chain now carries the same combined Basic/Bearer authorization wrapper as every other proxy type, with read-permission enforcement.
+  ([@aydasraf](https://github.com/aydasraf))
+
+## Version 2.2.1
+
+### 🔧 Bug fixes
+
+- **Directory-listing pages render styled again under the hardened security headers.** The 2.2.0 `Content-Security-Policy: default-src 'self'` blocked the browse pages' own inline CSS/JS, leaving listings unstyled with dead sort controls. Browse responses now declare a per-route CSP that allowlists exactly their inline style/script blocks by SHA-256 hash, and the sort controls bind their listeners CSP-compatibly instead of using inline `onclick` attributes.
   ([@aydasraf](https://github.com/aydasraf))
 
 ## Version 2.2.0
