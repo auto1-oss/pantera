@@ -20,7 +20,6 @@ import com.auto1.pantera.cooldown.metrics.CooldownMetrics;
 import com.auto1.pantera.http.log.EcsLogger;
 import java.util.Locale;
 
-import org.slf4j.MDC;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -575,7 +574,8 @@ public final class MetadataFilterService implements CooldownMetadataService {
         final List<CompletableFuture<VersionBlockResult>> futures = ctx.versionsToEvaluate.stream()
             .limit(this.maxVersionsToEvaluate)
             .map(version -> this.evaluateVersion(
-                ctx.repoType, ctx.repoName, ctx.packageName, version, ctx.releaseDates
+                ctx.repoType, ctx.repoName, ctx.packageName, version,
+                ctx.releaseDates, ctx.owner
             ))
             .collect(Collectors.toList());
 
@@ -700,10 +700,15 @@ public final class MetadataFilterService implements CooldownMetadataService {
         final String repoName,
         final String packageName,
         final String version,
-        final Map<String, Instant> releaseDates
+        final Map<String, Instant> releaseDates,
+        final String owner
     ) {
-        // Get real user from MDC (set by auth middleware), fallback to "metadata-filter"
-        String requester = MDC.get("user.name");
+        // Attribute to the request-captured owner (threaded from
+        // filterMetadata via FilterContext), NOT MDC. evaluateVersion runs
+        // on the cooldown pipeline's worker thread, whose MDC may be stale
+        // or unbound — reading user.name there could attribute the cooldown
+        // request to a different request that previously used the thread.
+        String requester = owner;
         if (requester == null || requester.isEmpty()) {
             requester = "metadata-filter";
         }

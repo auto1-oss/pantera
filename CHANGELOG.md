@@ -13,6 +13,8 @@
 
 ### 🔒 Security
 
+- **Cooldown request attribution is no longer read from thread-local MDC.** The metadata filter's per-version cooldown evaluation attributed the requesting user via `MDC.get("user.name")` on a shared pipeline worker thread, which could be stale or unbound and attribute the request to whichever user last used that thread. Attribution now flows from the request-captured owner threaded through the filter context. (The primary `artifact_publish`/`access`/`delete`/`resolution` audit records were already sourced from the request-captured owner and were unaffected — this hardens the secondary cooldown-request attribution.)
+  ([@aydasraf](https://github.com/aydasraf))
 - **php-proxy repositories now validate credentials.** Requests carrying an `Authorization` header bypassed the deny-by-default anonymous gate (which only challenges credential-less requests) into a chain that never authenticated them — any non-empty credentials could read through a php-proxy. The php-proxy chain now carries the same combined Basic/Bearer authorization wrapper as every other proxy type, with read-permission enforcement.
   ([@aydasraf](https://github.com/aydasraf))
 

@@ -12,6 +12,7 @@ package com.auto1.pantera.cooldown.metadata;
 
 import com.auto1.pantera.cooldown.cache.CooldownCache;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
+import com.auto1.pantera.audit.AuditContext;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.api.CooldownResult;
 import com.auto1.pantera.cooldown.api.CooldownService;
@@ -38,6 +39,7 @@ import java.util.concurrent.ForkJoinPool;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.is;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -915,6 +917,7 @@ final class MetadataFilterServiceTest {
 
     private static final class TestCooldownService implements CooldownService {
         private final Set<String> blockedVersions = new HashSet<>();
+        private final Set<String> requesters = new java.util.HashSet<>();
 
         void blockVersion(final String pkg, final String version) {
             this.blockedVersions.add(pkg + "@" + version);
@@ -925,6 +928,7 @@ final class MetadataFilterServiceTest {
             final CooldownRequest request,
             final CooldownInspector inspector
         ) {
+            this.requesters.add(request.requestedBy());
             final String key = request.artifact() + "@" + request.version();
             if (this.blockedVersions.contains(key)) {
                 return CompletableFuture.completedFuture(
@@ -1003,6 +1007,42 @@ final class MetadataFilterServiceTest {
             "latest must be the newest surviving stable, never a dash-suffixed CI build",
             filter.lastNewLatest, equalTo("22.7.6")
         );
+    }
+
+    /**
+     * Regression: the cooldown request must be attributed to the
+     * request-captured owner passed into filterMetadata, NOT to
+     * {@code MDC.get("user.name")} read on the pipeline's worker thread
+     * (which may be stale or unbound and misattribute the request to a
+     * different user).
+     */
+    @Test
+    void cooldownRequestIsAttributedToPassedOwnerNotMdc()
+        throws ExecutionException, InterruptedException {
+        org.slf4j.MDC.put("user.name", "stale-thread-user");
+        try {
+            this.cooldownService.blockVersion("attrib-pkg", "2.0.0");
+            final TestMetadataParser parser = new TestMetadataParser(
+                Arrays.asList("1.0.0", "2.0.0"), "2.0.0"
+            );
+            this.service.filterMetadata(
+                "npm", "attrib-repo", "attrib-pkg",
+                "raw".getBytes(StandardCharsets.UTF_8),
+                parser, new TestMetadataFilter(), new TestMetadataRewriter(),
+                AuditContext.NONE, "real-request-user"
+            ).get();
+            assertThat(
+                "cooldown request must carry the passed owner, never the thread's MDC user",
+                this.cooldownService.requesters, hasItem("real-request-user")
+            );
+            assertThat(
+                "the stale MDC thread user must never leak into the cooldown attribution",
+                this.cooldownService.requesters.contains("stale-thread-user"),
+                equalTo(false)
+            );
+        } finally {
+            org.slf4j.MDC.remove("user.name");
+        }
     }
 
     private static final class TestMetadataParser implements MetadataParser<List<String>> {
