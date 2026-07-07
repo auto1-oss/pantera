@@ -41,6 +41,7 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.Matchers.is;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -1070,6 +1071,41 @@ final class MetadataFilterServiceTest {
         assertThat(
             "fallback must stay on the author's line, never jump to a newer major",
             filter.lastNewLatest, equalTo("2.7.15")
+        );
+    }
+
+    @Test
+    void resolveLatestNeverCrossesCeilingEvenWithNoFallbackBelowIt()
+        throws ExecutionException, InterruptedException {
+        // Pathological edge case the previous test doesn't cover: the
+        // designated latest (2.7.16) is the ONLY release on its line and gets
+        // freshly blocked, while a newer major (3.4.0) already exists — there
+        // is no same-line fallback at all. The ceiling must still hold: the
+        // fallback must NOT cross into 3.4.0. Leaving latest untouched (a
+        // transient gap that self-corrects once the block expires) is
+        // strictly preferable to advertising a major the author never
+        // promoted as latest.
+        this.cooldownService.blockVersion("vue-first-release-pkg", "2.7.16");
+        final TestMetadataParser parser = new TestMetadataParser(
+            Arrays.asList("3.4.0", "2.7.16"),
+            "2.7.16",
+            true
+        );
+        final TestMetadataFilter filter = new TestMetadataFilter();
+        final TestMetadataRewriter rewriter = new TestMetadataRewriter();
+        this.service.filterMetadata(
+            "npm", "test-repo", "vue-first-release-pkg",
+            "raw".getBytes(StandardCharsets.UTF_8),
+            parser, filter, rewriter
+        ).get();
+        assertThat(
+            "the blocked designated latest must be filtered",
+            filter.lastBlockedVersions.contains("2.7.16"), equalTo(true)
+        );
+        assertThat(
+            "with no fallback surviving at or below the ceiling, latest must be "
+                + "left untouched rather than promoted to a newer, unblessed major",
+            filter.lastNewLatest, nullValue()
         );
     }
 

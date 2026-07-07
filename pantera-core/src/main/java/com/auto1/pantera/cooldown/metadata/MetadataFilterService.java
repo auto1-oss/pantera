@@ -859,17 +859,22 @@ public final class MetadataFilterService implements CooldownMetadataService {
      * version that does not exceed {@code currentLatest} by the format's
      * version comparator, so a freshly-blocked latest is replaced by an older
      * release on the same line — never a newer major the author had not
-     * promoted, and never a prerelease. If nothing at-or-below the ceiling
-     * survives, the highest unblocked stable (then any unblocked version) is
-     * used. Ordering is by the per-repo-type comparator, NOT release date: a
-     * backport published after a higher release (nx's {@code 22.7.6} landing
-     * minutes after {@code 23.0.1}) must not win {@code latest} on a timestamp.</p>
+     * promoted, and never a prerelease. The ceiling is absolute: if nothing
+     * unblocked survives at or below it (not even a non-stable version — the
+     * pathological case of a line's only release getting blocked with no
+     * older sibling), the pointer is left untouched (empty) rather than
+     * promoted past a version the author never designated as latest — the
+     * gap self-corrects once the cooldown block expires. Ordering is by the
+     * per-repo-type comparator, NOT release date: a backport published after
+     * a higher release (nx's {@code 22.7.6} landing minutes after
+     * {@code 23.0.1}) must not win {@code latest} on a timestamp.</p>
      *
      * @param ctx Filter context (parser, repo type, sorted versions)
      * @param blockedVersions Versions removed by cooldown
      * @param currentLatest The upstream-designated latest, if any
      * @param <T> Parsed metadata type
      * @return The version to set as latest, or empty if none can be chosen
+     *     without crossing the ceiling
      */
     private <T> Optional<String> resolveLatest(
         final FilterContext<T> ctx,
@@ -886,14 +891,22 @@ public final class MetadataFilterService implements CooldownMetadataService {
             .filter(ver -> !ctx.parser.prerelease(ver))
             .collect(Collectors.toList());
         if (currentLatest.isPresent()) {
+            // Rule 2: bounded strictly by the ceiling in every fallback tier —
+            // unlike the no-ceiling branch below, NEITHER tier here may ever
+            // return a version above currentLatest.
             final String ceiling = currentLatest.get();
-            final Optional<String> capped = stable.stream()
+            final Optional<String> cappedStable = stable.stream()
                 .filter(ver -> comparator.compare(ver, ceiling) <= 0)
                 .max(comparator);
-            if (capped.isPresent()) {
-                return capped;
+            if (cappedStable.isPresent()) {
+                return cappedStable;
             }
+            return ctx.sortedVersions.stream()
+                .filter(ver -> !blockedVersions.contains(ver))
+                .filter(ver -> comparator.compare(ver, ceiling) <= 0)
+                .max(comparator);
         }
+        // No author-designated latest at all — nothing to protect, no ceiling.
         return stable.stream().max(comparator).or(() ->
             ctx.sortedVersions.stream()
                 .filter(ver -> !blockedVersions.contains(ver))
