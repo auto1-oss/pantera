@@ -15,15 +15,10 @@ import com.auto1.pantera.http.headers.Authorization;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqHeaders;
-import com.auto1.pantera.http.trace.TraceContextExecutor;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Authentication scheme that supports both Basic and Bearer token authentication.
@@ -49,30 +44,6 @@ public final class CombinedAuthScheme implements AuthScheme {
     private static final String CHALLENGE = String.format(
         "%s realm=\"pantera\", %s realm=\"pantera\"",
         BasicAuthScheme.NAME, BearerAuthScheme.NAME
-    );
-
-    /**
-     * Dedicated pool for the blocking DB/IdP password check, isolated from
-     * {@code ForkJoinPool.commonPool()} so a slow IdP (Okta/Keycloak MFA)
-     * can't starve unrelated {@code *Async} work JVM-wide, and wrapped with
-     * {@link TraceContextExecutor} so MDC (trace.id, user) propagates to the
-     * auth threads. Mirrors {@code BasicAuthScheme} and {@code
-     * CombinedAuthzSlice}.
-     */
-    private static final ExecutorService AUTH_EXECUTOR = TraceContextExecutor.wrap(
-        Executors.newCachedThreadPool(
-            new ThreadFactory() {
-                private final AtomicInteger counter = new AtomicInteger(0);
-
-                @Override
-                public Thread newThread(final Runnable runnable) {
-                    final Thread thread = new Thread(runnable);
-                    thread.setName("combined-auth.worker-" + this.counter.incrementAndGet());
-                    thread.setDaemon(true);
-                    return thread;
-                }
-            }
-        )
     );
 
     /**
@@ -142,23 +113,47 @@ public final class CombinedAuthScheme implements AuthScheme {
     private CompletionStage<AuthScheme.Result> authenticateBasic(final Authorization auth) {
         final Authorization.Basic basic = new Authorization.Basic(auth.credentials());
         final CompletionStage<Optional<AuthUser>> resolved;
-        if (jwtShaped(basic.password())) {
+        if (AuthWorkerPool.jwtShaped(basic.password())) {
+            // Snapshot MDC on the calling (event-loop) thread — tokenAuth.user()
+            // completes on whatever thread the JWT validator's own async chain
+            // lands on (commonPool, not this class's executor), so the
+            // .exceptionally() callback below cannot rely on ThreadLocal MDC
+            // still holding this request's trace.id/client.ip.
+            final java.util.Map<String, String> callerMdc = org.slf4j.MDC.getCopyOfContextMap();
             resolved = this.tokenAuth.user(basic.password())
                 .exceptionally(err -> {
                     // Infrastructure failure (revocation store unreachable,
                     // key load error), NOT a normal auth miss — that returns
-                    // an empty Optional without throwing. Log it, then fall
-                    // back to the password check rather than 500.
-                    EcsLogger.warn("com.auto1.pantera.http.auth")
-                        .message("Token validation errored for a Basic-password"
-                            + " token; falling back to password authentication")
-                        .eventCategory("authentication")
-                        .eventAction("token_validate")
-                        .eventOutcome("failure")
-                        .field("user.name", basic.username())
-                        .error(err)
-                        .field("log.source", "application")
-                        .log();
+                    // an empty Optional without throwing. Restore the caller's
+                    // MDC snapshot before logging so trace.id/client.ip
+                    // correlate correctly regardless of which thread this
+                    // callback runs on, then fall back to the password check
+                    // rather than 500.
+                    final java.util.Map<String, String> previous =
+                        org.slf4j.MDC.getCopyOfContextMap();
+                    try {
+                        if (callerMdc != null) {
+                            org.slf4j.MDC.setContextMap(callerMdc);
+                        } else {
+                            org.slf4j.MDC.clear();
+                        }
+                        EcsLogger.warn("com.auto1.pantera.http.auth")
+                            .message("Token validation errored for a Basic-password"
+                                + " token; falling back to password authentication")
+                            .eventCategory("authentication")
+                            .eventAction("token_validate")
+                            .eventOutcome("failure")
+                            .field("user.name", basic.username())
+                            .error(err)
+                            .field("log.source", "application")
+                            .log();
+                    } finally {
+                        if (previous != null) {
+                            org.slf4j.MDC.setContextMap(previous);
+                        } else {
+                            org.slf4j.MDC.clear();
+                        }
+                    }
                     return Optional.empty();
                 })
                 .thenApply(user -> user.filter(usr -> usr.name().equals(basic.username())))
@@ -167,7 +162,7 @@ public final class CombinedAuthScheme implements AuthScheme {
                         ? CompletableFuture.completedFuture(user)
                         : CompletableFuture.supplyAsync(
                             () -> this.basicAuth.user(basic.username(), basic.password()),
-                            CombinedAuthScheme.AUTH_EXECUTOR
+                            AuthWorkerPool.AUTH_EXECUTOR
                         )
                 );
         } else {
@@ -176,7 +171,7 @@ public final class CombinedAuthScheme implements AuthScheme {
             // /v2/ Docker ping runs this on a Vert.x event-loop thread.
             resolved = CompletableFuture.supplyAsync(
                             () -> this.basicAuth.user(basic.username(), basic.password()),
-                            CombinedAuthScheme.AUTH_EXECUTOR
+                            AuthWorkerPool.AUTH_EXECUTOR
                         );
         }
         return resolved.thenApply(
@@ -193,23 +188,5 @@ public final class CombinedAuthScheme implements AuthScheme {
     private CompletionStage<AuthScheme.Result> authenticateBearer(final Authorization auth) {
         return this.tokenAuth.user(new Authorization.Bearer(auth.credentials()).token())
             .thenApply(user -> AuthScheme.result(user, CombinedAuthScheme.CHALLENGE));
-    }
-
-    /**
-     * Whether a Basic password looks like a compact JWS/JWT: three
-     * dot-separated segments whose header opens with {@code eyJ}
-     * (base64url of {@code {"}). Signature and claims are NOT verified
-     * here — this only decides which validation path runs first.
-     *
-     * @param password Basic password
-     * @return True if the password should be tried as a token
-     */
-    private static boolean jwtShaped(final String password) {
-        boolean shaped = false;
-        if (password != null && password.startsWith("eyJ")) {
-            final String[] parts = password.split("\\.", -1);
-            shaped = parts.length == 3 && !parts[1].isEmpty() && !parts[2].isEmpty();
-        }
-        return shaped;
     }
 }

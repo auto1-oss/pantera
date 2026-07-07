@@ -21,16 +21,12 @@ import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqHeaders;
-import com.auto1.pantera.http.trace.TraceContextExecutor;
 import org.slf4j.MDC;
 
 import java.util.Optional;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Slice with combined basic and bearer token authentication.
@@ -43,32 +39,6 @@ public final class CombinedAuthzSlice implements Slice {
      * Header for pantera login.
      */
     public static final String LOGIN_HDR = "pantera_login";
-
-    /**
-     * Pool name for metrics identification.
-     */
-    public static final String AUTH_POOL_NAME = "pantera.auth.combined";
-
-    /**
-     * Thread pool for blocking authentication operations.
-     * This offloads potentially slow operations (like Okta MFA) from the event loop.
-     * Pool name: {@value #AUTH_POOL_NAME} (visible in thread dumps and metrics).
-     * Wrapped with TraceContextExecutor to propagate MDC (trace.id, user, etc.) to auth threads.
-     */
-    private static final ExecutorService AUTH_EXECUTOR = TraceContextExecutor.wrap(
-        Executors.newCachedThreadPool(
-            new ThreadFactory() {
-                private final AtomicInteger counter = new AtomicInteger(0);
-                @Override
-                public Thread newThread(final Runnable runnable) {
-                    final Thread thread = new Thread(runnable);
-                    thread.setName(AUTH_POOL_NAME + ".worker-" + counter.incrementAndGet());
-                    thread.setDaemon(true);
-                    return thread;
-                }
-            }
-        )
-    );
 
     /**
      * Origin.
@@ -238,30 +208,58 @@ public final class CombinedAuthzSlice implements Slice {
     private CompletionStage<AuthScheme.Result> authenticateBasic(final Authorization auth) {
         final Authorization.Basic basic = new Authorization.Basic(auth.credentials());
         final CompletionStage<Optional<AuthUser>> resolved;
-        if (CombinedAuthzSlice.jwtShaped(basic.password())) {
+        if (AuthWorkerPool.jwtShaped(basic.password())) {
             // Package-manager clients (mvn, npm, pip, …) submit API tokens
             // as the Basic password. Validate token-shaped passwords as
             // JWTs first, bound to the claimed username — the DB-backed
             // password provider would reject the token string
             // authoritatively and block fall-through (same regression as
             // docker login, see CombinedAuthScheme#authenticateBasic).
+            //
+            // Snapshot MDC on the calling (event-loop) thread — tokenAuth.user()
+            // completes on whatever thread the JWT validator's own async
+            // chain lands on (commonPool, not this class's executor), so the
+            // .exceptionally() callback below cannot rely on ThreadLocal MDC
+            // still holding this request's trace.id/client.ip.
+            final Map<String, String> callerMdc = MDC.getCopyOfContextMap();
             resolved = this.tokenAuth.user(basic.password())
                 .exceptionally(err -> {
-                    // Infrastructure failure, not a normal auth miss — log
-                    // before falling back to the password check.
-                    EcsLogger.warn("com.auto1.pantera.http.auth")
-                        .message("Token validation errored for a Basic-password"
-                            + " token; falling back to password authentication")
-                        .eventCategory("authentication")
-                        .eventAction("token_validate")
-                        .eventOutcome("failure")
-                        .field("user.name", basic.username())
-                        .error(err)
-                        .field("log.source", "application")
-                        .log();
+                    // Infrastructure failure, not a normal auth miss — restore
+                    // the caller's MDC snapshot before logging so trace.id/
+                    // client.ip correlate correctly, then fall back to the
+                    // password check.
+                    final Map<String, String> previous = MDC.getCopyOfContextMap();
+                    try {
+                        if (callerMdc != null) {
+                            MDC.setContextMap(callerMdc);
+                        } else {
+                            MDC.clear();
+                        }
+                        EcsLogger.warn("com.auto1.pantera.http.auth")
+                            .message("Token validation errored for a Basic-password"
+                                + " token; falling back to password authentication")
+                            .eventCategory("authentication")
+                            .eventAction("token_validate")
+                            .eventOutcome("failure")
+                            .field("user.name", basic.username())
+                            .error(err)
+                            .field("log.source", "application")
+                            .log();
+                    } finally {
+                        if (previous != null) {
+                            MDC.setContextMap(previous);
+                        } else {
+                            MDC.clear();
+                        }
+                    }
                     return Optional.empty();
                 })
-                .thenComposeAsync(
+                // Plain thenCompose, not thenComposeAsync: this continuation
+                // only does a cheap filter/check and, when needed, explicitly
+                // dispatches the actual blocking password check to
+                // AUTH_EXECUTOR itself — an extra implicit commonPool hop here
+                // would only add contention for zero benefit.
+                .thenCompose(
                     user -> {
                         final Optional<AuthUser> bound = user.filter(
                             usr -> usr.name().equals(basic.username())
@@ -271,7 +269,7 @@ public final class CombinedAuthzSlice implements Slice {
                         }
                         return CompletableFuture.supplyAsync(
                             () -> this.basicAuth.user(basic.username(), basic.password()),
-                            AUTH_EXECUTOR
+                            AuthWorkerPool.AUTH_EXECUTOR
                         );
                     }
                 );
@@ -281,7 +279,7 @@ public final class CombinedAuthzSlice implements Slice {
             // (Okta, Keycloak, etc.)
             resolved = CompletableFuture.supplyAsync(
                 () -> this.basicAuth.user(basic.username(), basic.password()),
-                AUTH_EXECUTOR
+                AuthWorkerPool.AUTH_EXECUTOR
             );
         }
         return resolved.thenApply(
@@ -291,23 +289,6 @@ public final class CombinedAuthzSlice implements Slice {
                     BasicAuthScheme.NAME, BearerAuthScheme.NAME)
             )
         );
-    }
-
-    /**
-     * Whether a Basic password looks like a compact JWS/JWT — mirrors
-     * {@link CombinedAuthScheme}. Signature and claims are NOT verified
-     * here; this only decides which validation path runs first.
-     *
-     * @param password Basic password
-     * @return True if the password should be tried as a token
-     */
-    private static boolean jwtShaped(final String password) {
-        boolean shaped = false;
-        if (password != null && password.startsWith("eyJ")) {
-            final String[] parts = password.split("\\.", -1);
-            shaped = parts.length == 3 && !parts[1].isEmpty() && !parts[2].isEmpty();
-        }
-        return shaped;
     }
 
     /**
