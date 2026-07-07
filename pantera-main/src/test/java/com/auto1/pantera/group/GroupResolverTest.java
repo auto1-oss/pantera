@@ -182,6 +182,43 @@ final class GroupResolverTest {
             "At least one proxy member must be queried");
     }
 
+    // ---- FIX 5: malformed version-range path rejected before any walk ----
+
+    @Test
+    void versionRangePath_rejected404_withoutTouchingMembersOrIndex() {
+        // A broken Gradle dependency can leak a Maven version RANGE into the
+        // artifact coordinate (e.g. `graphql-utils-[,7.2079-test-1).jar`). The
+        // range metacharacters `[ ] ( )` are never part of a valid artifact
+        // path; forwarding them makes upstreams 502 on the unescaped brackets
+        // and the walk would recordFailure() against a HEALTHY member
+        // (fabricated breaker evidence). The resolver must 404 before the index
+        // lookup or any member is queried.
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of(HOSTED)));
+        final AtomicInteger hostedCount = new AtomicInteger(0);
+        final AtomicInteger proxyCount = new AtomicInteger(0);
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(HOSTED, countingSlice(hostedCount, RsStatus.OK));
+        slices.put(PROXY_A, countingSlice(proxyCount, RsStatus.OK));
+
+        final GroupResolver resolver = buildResolver(
+            idx, List.of(HOSTED, PROXY_A), Set.of(PROXY_A), buildNegativeCache(), slices
+        );
+        final String rangePath =
+            "/test-automation/graphql-utils/[,7.2079-test-1)/graphql-utils-[,7.2079-test-1).jar";
+        final Response resp = resolver.response(
+            new RequestLine("GET", rangePath), Headers.EMPTY, Content.EMPTY
+        ).join();
+
+        assertEquals(404, resp.status().code(),
+            "Malformed version-range path must be rejected with 404");
+        assertEquals(0, hostedCount.get(),
+            "No member may be queried for a malformed range path");
+        assertEquals(0, proxyCount.get(),
+            "No proxy may be queried for a malformed range path");
+        assertTrue(idx.locateByNameCalls.isEmpty(),
+            "The index must not be queried for a malformed range path");
+    }
+
     // ---- PATH A: indexMiss_allProxy404_negCachePopulated ----
 
     @Test

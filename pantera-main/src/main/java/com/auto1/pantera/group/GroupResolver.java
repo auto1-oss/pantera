@@ -318,6 +318,28 @@ public final class GroupResolver implements Slice {
             );
         }
 
+        // Reject Maven/Gradle version-range coordinates that leaked into the
+        // artifact path (e.g. a misconfigured dependency requesting
+        // `graphql-utils-[,7.2079-test-1).jar`). The range metacharacters
+        // `[ ] ( )` never appear in a valid artifact path. Forwarding such a
+        // request makes upstreams 502 on the unescaped brackets, and the walk
+        // would then recordFailure() against a HEALTHY member — fabricated
+        // evidence that can trip its circuit breaker (breaker-cascade). Answer
+        // 404 here, before any index lookup or member is touched.
+        if (containsVersionRangeSyntax(path)) {
+            EcsLogger.debug("com.auto1.pantera.group")
+                .message("Rejected malformed version-range artifact path, returning 404")
+                .eventCategory("web")
+                .eventAction("group_malformed_range_path")
+                .field("repository.name", this.group)
+                .field("url.path", path)
+                .field("log.source", "application")
+                .log();
+            return CompletableFuture.completedFuture(
+                ResponseBuilder.notFound().build()
+            );
+        }
+
         if (this.members.isEmpty()) {
             return CompletableFuture.completedFuture(
                 ResponseBuilder.notFound().build()
@@ -362,6 +384,27 @@ public final class GroupResolver implements Slice {
             .body(buf.body())
             .build()
         ).whenComplete((resp, err) -> recordMetrics(resp, err, requestStartTime));
+    }
+
+    /**
+     * Whether {@code path} carries Maven version-range metacharacters
+     * ({@code [ ] ( )}). Their presence means a version range (e.g.
+     * {@code [,7.2079-test-1)}) leaked into the artifact coordinate — typically
+     * from a misconfigured Gradle dependency — which is never a valid artifact
+     * request. Such paths must not reach members: upstreams 502 on the
+     * unescaped brackets and the walk would convict a healthy member.
+     *
+     * @param path Request path
+     * @return {@code true} if any range metacharacter is present
+     */
+    private static boolean containsVersionRangeSyntax(final String path) {
+        for (int idx = 0; idx < path.length(); idx++) {
+            final char chr = path.charAt(idx);
+            if (chr == '[' || chr == ']' || chr == '(' || chr == ')') {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
