@@ -79,4 +79,26 @@ public interface MetadataParser<T> {
     default Map<String, Instant> extractReleaseDates(T metadata) {
         return Map.of();
     }
+
+    /**
+     * Whether the given version string denotes a prerelease in this
+     * format's versioning semantics. The filter service excludes
+     * prereleases when recomputing the {@code latest} pointer after
+     * blocking versions.
+     *
+     * <p>The default is a keyword heuristic (alpha, beta, rc, snapshot, …)
+     * suited to Maven-style versioning, where a hyphenated suffix is often
+     * a classifier ({@code -jre}, {@code -android}), not a prerelease.
+     * Formats with strict SemVer semantics (npm) MUST override: SemVer
+     * defines ANY dash-suffixed identifier sequence as a prerelease, so a
+     * keyword list silently promotes unknown qualifiers (e.g. nx's
+     * {@code 23.1.0-pr.36127.e594f53} CI builds) to "stable" and they end
+     * up as {@code dist-tags.latest}.
+     *
+     * @param version Version string
+     * @return True if the version is a prerelease
+     */
+    default boolean prerelease(final String version) {
+        return MetadataFilterService.isPrerelease(version);
+    }
 }

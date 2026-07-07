@@ -858,7 +858,7 @@ public final class MetadataFilterService implements CooldownMetadataService {
             // Fallback to first unblocked STABLE version
             return allVersions.stream()
                 .filter(ver -> !blockedVersions.contains(ver))
-                .filter(ver -> !isPrerelease(ver))
+                .filter(ver -> !parser.prerelease(ver))
                 .findFirst()
                 .or(() -> allVersions.stream()
                     .filter(ver -> !blockedVersions.contains(ver))
@@ -872,7 +872,7 @@ public final class MetadataFilterService implements CooldownMetadataService {
             // No release dates available - fallback to first unblocked STABLE version
             return allVersions.stream()
                 .filter(ver -> !blockedVersions.contains(ver))
-                .filter(ver -> !isPrerelease(ver))
+                .filter(ver -> !parser.prerelease(ver))
                 .findFirst()
                 .or(() -> allVersions.stream()
                     .filter(ver -> !blockedVersions.contains(ver))
@@ -882,7 +882,7 @@ public final class MetadataFilterService implements CooldownMetadataService {
         // Sort unblocked STABLE versions by release date (most recent first)
         final Optional<String> stableLatest = allVersions.stream()
             .filter(ver -> !blockedVersions.contains(ver))
-            .filter(ver -> !isPrerelease(ver))
+            .filter(ver -> !parser.prerelease(ver))
             .filter(ver -> releaseDates.containsKey(ver))
             .sorted((v1, v2) -> {
                 final Instant d1 = releaseDates.get(v1);

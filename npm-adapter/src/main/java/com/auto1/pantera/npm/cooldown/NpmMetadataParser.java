@@ -155,4 +155,26 @@ public final class NpmMetadataParser implements MetadataParser<JsonNode>, Releas
         }
         return Optional.empty();
     }
+
+    /**
+     * SemVer semantics: ANY dash-suffixed identifier sequence is a
+     * prerelease ({@code 1.2.3-<identifiers>}), regardless of what the
+     * identifiers are called. The keyword-heuristic default silently
+     * classified unknown qualifiers (nx CI builds like
+     * {@code 23.1.0-pr.36127.e594f53}) as stable, and the cooldown filter
+     * then promoted them to {@code dist-tags.latest}. Build metadata
+     * ({@code +build}) does NOT make a version a prerelease.
+     *
+     * @param version Version string
+     * @return True if the version carries a SemVer prerelease part
+     */
+    @Override
+    public boolean prerelease(final String version) {
+        if (version == null || version.isEmpty()) {
+            return false;
+        }
+        final String core = version.split("\\+", 2)[0];
+        final int dash = core.indexOf('-');
+        return dash >= 0 && dash < core.length() - 1;
+    }
 }

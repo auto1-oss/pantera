@@ -241,4 +241,32 @@ final class NpmMetadataParserTest {
         assertThat(versions, hasSize(500));
         assertThat(dates.size(), equalTo(500));
     }
+
+    @Test
+    void semverPrereleaseDetection() {
+        assertThat(
+            "dash-suffixed CI builds are prereleases regardless of qualifier keyword",
+            this.parser.prerelease("23.1.0-pr.36127.e594f53"), equalTo(true)
+        );
+        assertThat(
+            "classic prerelease qualifiers stay prereleases",
+            this.parser.prerelease("1.0.0-beta.1"), equalTo(true)
+        );
+        assertThat(
+            "prerelease with build metadata is still a prerelease",
+            this.parser.prerelease("1.0.0-rc.1+meta"), equalTo(true)
+        );
+        assertThat(
+            "plain stable versions are not prereleases",
+            this.parser.prerelease("23.0.1"), equalTo(false)
+        );
+        assertThat(
+            "build metadata alone does not make a prerelease",
+            this.parser.prerelease("1.0.0+build.5"), equalTo(false)
+        );
+        assertThat(
+            "empty version is not a prerelease",
+            this.parser.prerelease(""), equalTo(false)
+        );
+    }
 }

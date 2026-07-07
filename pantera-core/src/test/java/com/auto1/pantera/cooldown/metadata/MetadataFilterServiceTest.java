@@ -973,14 +973,64 @@ final class MetadataFilterServiceTest {
         }
     }
 
+    @Test
+    void semverPrereleaseNeverBecomesLatestWhenRecomputing()
+        throws ExecutionException, InterruptedException {
+        // Regression: nx publishes CI builds like 23.1.0-pr.36127.e594f53.
+        // The keyword heuristic classified the unknown "pr" qualifier as
+        // stable, so when the real latest (23.0.1) was cooldown-blocked the
+        // recompute promoted the CI build to dist-tags.latest. With SemVer
+        // parser semantics, any dash-suffixed version is a prerelease and
+        // the newest surviving STABLE must win.
+        this.cooldownService.blockVersion("nx-pkg", "23.0.1");
+        final TestMetadataParser parser = new TestMetadataParser(
+            Arrays.asList("23.1.0-pr.36127.e594f53", "23.0.1", "22.7.6"),
+            "23.0.1",
+            true
+        );
+        final TestMetadataFilter filter = new TestMetadataFilter();
+        final TestMetadataRewriter rewriter = new TestMetadataRewriter();
+        this.service.filterMetadata(
+            "npm", "test-repo", "nx-pkg",
+            "raw".getBytes(StandardCharsets.UTF_8),
+            parser, filter, rewriter
+        ).get();
+        assertThat(
+            "the fresh stable must be blocked",
+            filter.lastBlockedVersions.contains("23.0.1"), equalTo(true)
+        );
+        assertThat(
+            "latest must be the newest surviving stable, never a dash-suffixed CI build",
+            filter.lastNewLatest, equalTo("22.7.6")
+        );
+    }
+
     private static final class TestMetadataParser implements MetadataParser<List<String>> {
         private final List<String> versions;
         private final String latest;
+        private final boolean semver;
         int parseCount = 0;
 
         TestMetadataParser(final List<String> versions, final String latest) {
+            this(versions, latest, false);
+        }
+
+        TestMetadataParser(
+            final List<String> versions, final String latest, final boolean semver
+        ) {
             this.versions = versions;
             this.latest = latest;
+            this.semver = semver;
+        }
+
+        @Override
+        public boolean prerelease(final String version) {
+            if (!this.semver) {
+                return MetadataParser.super.prerelease(version);
+            }
+            final String core = version.split("\\+", 2)[0];
+            final int dash = core.indexOf('-');
+            return dash >= 0 && dash < core.length() - 1;
         }
 
         @Override
