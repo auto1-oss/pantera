@@ -127,6 +127,50 @@ public final class NegativeCacheRegistry {
         }
     }
 
+    /**
+     * Batched counterpart to {@link #invalidateAfterUpload(String, String)}:
+     * clears every negative entry matching ANY of {@code artifactNames} in a
+     * single L1 scan. Used by the async {@code DbConsumer} after a batch of
+     * artifact rows is committed (both hosted publishes and proxy fetch-and-
+     * store), so a package that 404'd before it was cached stops returning a
+     * stale 404 once it lands in the index — closing the proxy-ingestion
+     * invalidation gap that per-adapter hosted upload slices never covered.
+     *
+     * <p>Never throws — cache cleanup must not break the DB-consumer batch.
+     *
+     * @param artifactNames Canonical artifact names just committed
+     *                      (deduplicated by the caller); null/empty → no-op
+     * @return number of L1 entries invalidated on this instance
+     */
+    public int invalidateAfterUploadBatch(final java.util.Collection<String> artifactNames) {
+        if (artifactNames == null || artifactNames.isEmpty()) {
+            return 0;
+        }
+        try {
+            final int count = this.sharedCache().invalidateByArtifactNames(artifactNames);
+            if (count > 0) {
+                com.auto1.pantera.http.log.EcsLogger.info("com.auto1.pantera.cache")
+                    .message("Negative-cache batch-invalidated after ingestion (n=" + count + ")")
+                    .eventCategory("database")
+                    .eventAction("neg_cache_invalidate_on_upload")
+                    .eventOutcome("success")
+                    .field("log.source", "application")
+                    .log();
+            }
+            return count;
+        } catch (final RuntimeException ex) {
+            com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.cache")
+                .message("Negative-cache batch invalidation failed; entries will expire via TTL")
+                .eventCategory("database")
+                .eventAction("neg_cache_invalidate_on_upload")
+                .eventOutcome("failure")
+                .error(ex)
+                .field("log.source", "application")
+                .log();
+            return 0;
+        }
+    }
+
     private static NegativeCache createFallback() {
         return new NegativeCache(new com.auto1.pantera.cache.NegativeCacheConfig());
     }

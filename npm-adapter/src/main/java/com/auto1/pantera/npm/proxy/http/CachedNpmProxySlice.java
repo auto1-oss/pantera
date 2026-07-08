@@ -264,8 +264,15 @@ public final class CachedNpmProxySlice implements Slice {
                 // (e.g. npmjs + a private mirror) can fall back when one
                 // remote rate-limits. The "client_error" metric still fires
                 // for observability.
+                //
+                // Fix 2: this 404 is NOT an authoritative absence — the
+                // artifact may exist and the upstream merely throttled us. Use
+                // the UNVERIFIED signal so handleSignal marks the response and a
+                // fronting group does NOT negative-cache it (which would produce
+                // a long-lived false 404). NOT_FOUND (genuine upstream 404, line
+                // above) stays cacheable.
                 this.recordProxyMetric("client_error", duration);
-                return FetchSignal.NOT_FOUND;
+                return FetchSignal.NOT_FOUND_UNVERIFIED;
             })
             .exceptionally(error -> {
                 final long duration = System.currentTimeMillis() - startTime;
@@ -301,6 +308,15 @@ public final class CachedNpmProxySlice implements Slice {
             case NOT_FOUND:
                 return CompletableFuture.completedFuture(
                     ResponseBuilder.notFound().build()
+                );
+            case NOT_FOUND_UNVERIFIED:
+                // 404 to the client (RaceSlice fall-through contract), but flag
+                // it so a fronting group does not negative-cache a non-
+                // authoritative absence (Fix 2).
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.notFound()
+                        .header(com.auto1.pantera.http.cache.NegativeCache.SKIP_HEADER, "true")
+                        .build()
                 );
             case ERROR:
             default:

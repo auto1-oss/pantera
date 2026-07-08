@@ -394,7 +394,7 @@ public final class YamlSettings implements Settings {
         // fall back to the shared pool so single-pool deployments work unchanged.
         final Optional<DataSource> eventsDs = writeDs.isPresent() ? writeDs : this.artifactsDb;
         this.events = eventsDs.flatMap(
-            db -> YamlSettings.initArtifactsEvents(this.meta(), quartz, db)
+            db -> YamlSettings.initArtifactsEvents(this.meta(), quartz, db, this.artifactIndexCache)
         );
         this.syncIndexer = eventsDs
             .<com.auto1.pantera.index.SyncArtifactIndexer>map(db ->
@@ -993,10 +993,13 @@ public final class YamlSettings implements Settings {
      * @param settings Pantera settings
      * @param quartz Quartz service
      * @param database Artifact database
+     * @param indexCache L1 artifact-index cache for post-commit negative-cache
+     *                   invalidation, or empty when no DB-backed index is wired
      * @return Event queue to gather artifacts events
      */
     private static Optional<MetadataEventQueues> initArtifactsEvents(
-        final YamlMapping settings, final QuartzService quartz, final DataSource database
+        final YamlMapping settings, final QuartzService quartz, final DataSource database,
+        final Optional<ArtifactIndexCache> indexCache
     ) {
         final YamlMapping prop = settings.yamlMapping("artifacts_database");
         if (prop == null) {
@@ -1015,7 +1018,9 @@ public final class YamlSettings implements Settings {
         
         final List<Consumer<ArtifactEvent>> consumers = new ArrayList<>(threads);
         for (int idx = 0; idx < threads; idx = idx + 1) {
-            consumers.add(new DbConsumer(database, bufferTimeSeconds, bufferSize));
+            consumers.add(new DbConsumer(
+                database, bufferTimeSeconds, bufferSize, indexCache
+            ));
         }
         try {
             final Queue<ArtifactEvent> res = quartz.addPeriodicEventsProcessor(interval, consumers);

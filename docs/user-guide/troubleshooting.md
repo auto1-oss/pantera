@@ -54,7 +54,7 @@ If this returns your user info, the token is valid. If it returns 401, generate 
 | Cause | How to Verify | Fix |
 |-------|---------------|-----|
 | Package is in cooldown | Check the Cooldown panel in the UI or `GET /api/v1/cooldown/blocked?search=<name>` | Wait for cooldown to expire or request an admin unblock (see [Cooldown](cooldown.md)) |
-| Package is in the negative cache | The proxy tried upstream before and got a 404 | Wait for the negative cache TTL to expire (default: 24h), or ask admin to clear it |
+| Package version is in the negative cache | A specific version was requested before and upstream returned 404 | The entry clears automatically once that version is fetched or published; otherwise wait for the negative-cache TTL to expire or ask an admin to clear it. Package-level metadata (npm packument, `maven-metadata.xml`, PyPI simple index) is never negatively cached, and a rate-limited upstream (429/403) no longer produces a cached 404. |
 | Wrong repository URL | Verify the URL matches the repository name exactly | Check your client config against the repository list |
 | Upstream registry is down | Check the upstream registry status page | Wait for upstream to recover; cached artifacts remain available |
 

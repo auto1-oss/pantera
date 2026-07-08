@@ -1,5 +1,12 @@
 # Changelog
 
+## Version 2.2.3
+
+### 🔧 Bug fixes
+
+- **Group repositories no longer serve stale `404`s for packages that exist.** A negative-cache entry recorded during a transient window could outlive the artifact becoming available, so `GET /npm_group/<pkg>` (and other group types) kept returning `404` for a package with versions already in the index until the entry was manually invalidated. Three causes are fixed: (1) package-level **metadata** requests (npm packument, `maven-metadata.xml`, PyPI simple index, Go `@latest`) — whose absence is inherently dynamic — are no longer hard-negative-cached, only immutable versioned coordinates are; (2) the **proxy fetch-and-store** path now invalidates the negative caches when an artifact lands in the index (previously only synchronous hosted publishes did, so proxy-ingested artifacts stayed shadowed by a stale `404`); and (3) an npm proxy that launders an upstream rate-limit (`403`/`429`) into a `404` for its multi-remote fall-through now marks that `404` non-authoritative so a fronting group does not cache it. The artifact-index negative tier is invalidated on the same path.
+  ([@aydasraf](https://github.com/aydasraf))
+
 ## Version 2.2.2
 
 ### 🔧 Bug fixes
