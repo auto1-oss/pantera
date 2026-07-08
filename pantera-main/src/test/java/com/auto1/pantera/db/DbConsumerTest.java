@@ -11,6 +11,10 @@
 package com.auto1.pantera.db;
 
 import com.amihaiemil.eoyaml.Yaml;
+import com.auto1.pantera.cache.NegativeCacheConfig;
+import com.auto1.pantera.http.cache.NegativeCache;
+import com.auto1.pantera.http.cache.NegativeCacheKey;
+import com.auto1.pantera.http.cache.NegativeCacheRegistry;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import java.sql.Connection;
 import java.sql.Date;
@@ -68,6 +72,39 @@ class DbConsumerTest {
             stmt.execute("DELETE FROM artifacts");
         } catch (SQLException e) {
             // Ignore cleanup errors
+        }
+    }
+
+    @Test
+    void invalidatesNegativeCacheAfterCommit() throws InterruptedException {
+        // Fix 3: proxy fetch-and-store flows only through the async DbConsumer
+        // (no synchronous upload slice), so this is the ONLY place a stale 404
+        // gets cleared for proxy-ingested artifacts. Seed a negative entry for
+        // a versioned coordinate, ingest that coordinate, and assert the entry
+        // is dropped once the batch commits.
+        final NegativeCache negCache = new NegativeCache(new NegativeCacheConfig());
+        NegativeCacheRegistry.instance().setSharedCache(negCache);
+        try {
+            final NegativeCacheKey stale =
+                new NegativeCacheKey("npm_proxy", "npm-proxy", "lodash", "4.17.21");
+            negCache.cacheNotFound(stale);
+            MatcherAssert.assertThat(
+                "precondition: the stale 404 is cached before ingestion",
+                negCache.isKnown404(stale), new IsEqual<>(true)
+            );
+
+            final DbConsumer consumer = new DbConsumer(this.source);
+            Thread.sleep(1000);
+            consumer.accept(new ArtifactEvent(
+                "npm", "npm_proxy", "system", "lodash", "4.17.21",
+                310669L, System.currentTimeMillis()
+            ));
+
+            Awaitility.await().atMost(10, TimeUnit.SECONDS).until(
+                () -> !negCache.isKnown404(stale)
+            );
+        } finally {
+            NegativeCacheRegistry.instance().clear();
         }
     }
 

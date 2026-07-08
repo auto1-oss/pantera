@@ -14,6 +14,7 @@ import com.auto1.pantera.cache.CacheInvalidationPubSub;
 import com.auto1.pantera.cache.GlobalCacheConfig;
 import com.auto1.pantera.cache.NegativeCacheConfig;
 import com.auto1.pantera.cache.ValkeyConnection;
+import com.auto1.pantera.http.log.EcsLogger;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import io.lettuce.core.ScanArgs;
@@ -34,6 +35,17 @@ import java.util.concurrent.TimeUnit;
  * @since 0.11
  */
 public final class NegativeCache {
+
+    /**
+     * Response header marking a {@code 404} whose absence is NOT authoritative
+     * — e.g. a proxy member laundered an upstream rate-limit / non-404 4xx
+     * ({@code 403}/{@code 429}/{@code 410}) into a {@code 404} so a multi-remote
+     * race can fall through to the next remote. A group MUST NOT negative-cache
+     * such a response: the artifact may well exist and the upstream was merely
+     * throttling. Callers set this header on the synthetic 404; the group's
+     * cache-decision skips {@link #cacheNotFound} when it is present (Fix 2).
+     */
+    public static final String SKIP_HEADER = "X-Pantera-Negative-Cache-Skip";
 
     /**
      * Sentinel value for negative cache (we only care about presence, not value).
@@ -238,6 +250,29 @@ public final class NegativeCache {
         if (!this.enabled) {
             return;
         }
+        // Fix 1: never hard-negative-cache a metadata / version-less request.
+        // An empty artifactVersion means the request targets a package's
+        // dynamic listing (npm packument, maven-metadata.xml, PyPI simple
+        // index, Go @latest) or an unparseable path — NOT an immutable
+        // versioned artifact. A packument's "absence" is transient (a version
+        // can appear upstream at any moment, and a laundered upstream 4xx can
+        // masquerade as a 404), so caching it for the negative TTL produces
+        // long-lived false 404s on packages that exist (the npm_group/<pkg>
+        // regression). Immutable coordinates (non-empty version) are still
+        // cached — if 4.17.21 is genuinely absent it will stay absent.
+        if (key.artifactVersion().isEmpty()) {
+            EcsLogger.debug("com.auto1.pantera.cache")
+                .message("Skipping negative-cache write for version-less "
+                    + "(metadata) request")
+                .eventCategory("database")
+                .eventAction("neg_cache_skip_metadata")
+                .field("repository.name", key.scope())
+                .field("repository.type", key.repoType())
+                .field("package.name", key.artifactName())
+                .field("log.source", "application")
+                .log();
+            return;
+        }
         final String flat = key.flat();
         this.notFoundCache.put(flat, CACHED);
         if (this.twoTier) {
@@ -308,6 +343,61 @@ public final class NegativeCache {
         // given peer might have.
         if (this.pubsub != null) {
             this.pubsub.publish(PUBSUB_CHANNEL, NAME_PREFIX + artifactName);
+        }
+        return matched.size();
+    }
+
+    /**
+     * Invalidate every cached entry whose {@code artifactName} matches ANY of
+     * the supplied names, in a SINGLE pass over L1. This is the batched
+     * counterpart to {@link #invalidateByArtifactName(String)}: the async
+     * {@code DbConsumer} commits up to a few dozen distinct artifact names per
+     * batch, and a separate full L1 scan per name would be O(names × L1) — with
+     * L1 sized up to 200k in production that can exceed the consumer's flush
+     * cadence. One scan matching all names keeps it O(L1) regardless of batch
+     * size. Cross-instance invalidation still publishes one message per name so
+     * the existing peer wire protocol ({@link #NAME_PREFIX}) is unchanged.
+     *
+     * @param names Canonical artifact identifiers just stored (deduplicated by
+     *              the caller); {@code null}/empty is a no-op
+     * @return number of L1 entries invalidated (L2 may have additional)
+     */
+    public int invalidateByArtifactNames(final java.util.Collection<String> names) {
+        if (!this.enabled || names == null || names.isEmpty()) {
+            return 0;
+        }
+        final java.util.Set<String> wanted = new java.util.HashSet<>(names);
+        wanted.remove(null);
+        wanted.remove("");
+        if (wanted.isEmpty()) {
+            return 0;
+        }
+        final java.util.List<String> matched = new java.util.ArrayList<>();
+        for (final String flat : this.notFoundCache.asMap().keySet()) {
+            final NegativeCacheKey nck = NegativeCacheKey.parse(flat);
+            if (nck == null) {
+                continue;
+            }
+            for (final String name : wanted) {
+                if (cachedNameMatchesUploaded(nck.artifactName(), name)) {
+                    matched.add(flat);
+                    break;
+                }
+            }
+        }
+        for (final String flat : matched) {
+            this.notFoundCache.invalidate(flat);
+        }
+        if (this.twoTier && !matched.isEmpty()) {
+            final String[] redisKeys = matched.stream()
+                .map(f -> "negative:" + f)
+                .toArray(String[]::new);
+            this.l2.del(redisKeys);
+        }
+        if (this.pubsub != null) {
+            for (final String name : wanted) {
+                this.pubsub.publish(PUBSUB_CHANNEL, NAME_PREFIX + name);
+            }
         }
         return matched.size();
     }

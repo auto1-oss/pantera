@@ -815,13 +815,31 @@ public final class GroupResolver implements Slice {
                     return FaultTranslator.translate(fault, null);
                 }
                 if (resp.status() == RsStatus.NOT_FOUND) {
-                    this.negativeCache.cacheNotFound(negCacheKey);
-                    EcsLogger.debug("com.auto1.pantera.group")
-                        .message("All proxies returned 404, caching negative result")
-                        .eventCategory("database")
-                        .eventAction("group_negative_cache_populate")
-                        .field("log.source", "application")
-                        .log();
+                    // Fix 2: a member may launder a non-authoritative upstream
+                    // 4xx (rate-limit / 403 / 429 / 410) into a 404 to satisfy
+                    // the multi-remote race contract, marking it with
+                    // NegativeCache.SKIP_HEADER. Do NOT negative-cache such a
+                    // 404 — the artifact may exist and the upstream was merely
+                    // throttling; caching it would produce a long-lived false
+                    // 404. Still return the 404 to the client.
+                    if (resp.headers().values(
+                            com.auto1.pantera.http.cache.NegativeCache.SKIP_HEADER).isEmpty()) {
+                        this.negativeCache.cacheNotFound(negCacheKey);
+                        EcsLogger.debug("com.auto1.pantera.group")
+                            .message("All proxies returned 404, caching negative result")
+                            .eventCategory("database")
+                            .eventAction("group_negative_cache_populate")
+                            .field("log.source", "application")
+                            .log();
+                    } else {
+                        EcsLogger.debug("com.auto1.pantera.group")
+                            .message("Member 404 marked non-authoritative "
+                                + "(upstream throttle); not negative-caching")
+                            .eventCategory("database")
+                            .eventAction("group_negative_cache_skip_unverified")
+                            .field("log.source", "application")
+                            .log();
+                    }
                 }
                 return resp;
             });
@@ -944,6 +962,15 @@ public final class GroupResolver implements Slice {
                 // cache with "does not exist" for artifacts that were merely
                 // unreachable (2.2.0 breaker-cascade RCA).
                 result.complete(this.circuitSkippedTerminal(walk, line));
+            } else if (walk.anyUnverified.get()) {
+                // Fix 2: every member 404'd but at least one 404 was a laundered
+                // upstream throttle, not an authoritative absence. Return 404 but
+                // re-carry the marker so the caller does not negative-cache it.
+                result.complete(
+                    ResponseBuilder.notFound()
+                        .header(com.auto1.pantera.http.cache.NegativeCache.SKIP_HEADER, "true")
+                        .build()
+                );
             } else {
                 result.complete(ResponseBuilder.notFound().build());
             }
@@ -1016,6 +1043,14 @@ public final class GroupResolver implements Slice {
                 return;
             }
             if (status == RsStatus.NOT_FOUND) {
+                // Fix 2: propagate a member's non-authoritative 404 marker
+                // (upstream throttle laundered into a 404) so the terminal 404
+                // synthesized on walk exhaustion re-carries it and the caller
+                // skips negative-caching a possibly-existing artifact.
+                if (!resp.headers().values(
+                        com.auto1.pantera.http.cache.NegativeCache.SKIP_HEADER).isEmpty()) {
+                    walk.anyUnverified.set(true);
+                }
                 drainBody(resp.body());
                 recordMemberOutcome(member, "not_found", memberLatency);
                 // RCA-6 (v2.2.0): keep member fall-through investigable. A
@@ -1167,6 +1202,15 @@ public final class GroupResolver implements Slice {
 
         /** A member was skipped due to an open circuit (either layer). */
         private final java.util.concurrent.atomic.AtomicBoolean skippedOpen =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
+        /**
+         * A member's 404 was marked non-authoritative (upstream throttle
+         * laundered into a 404 via {@link NegativeCache#SKIP_HEADER}). When the
+         * whole walk falls through to a terminal 404, the marker is re-attached
+         * so the caller does NOT negative-cache a possibly-existing artifact.
+         */
+        private final java.util.concurrent.atomic.AtomicBoolean anyUnverified =
             new java.util.concurrent.atomic.AtomicBoolean(false);
 
         /** Largest Retry-After hint observed, seconds. */

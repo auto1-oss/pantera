@@ -182,6 +182,60 @@ final class GroupResolverTest {
             "At least one proxy member must be queried");
     }
 
+    // ---- FIX 2: a rate-limit-laundered 404 must not poison the negative cache ----
+
+    @Test
+    void markedNonAuthoritative404IsNotNegativeCached() {
+        // A proxy member launders an upstream throttle (403/429/410) into a 404
+        // for the multi-remote race, flagging it with NegativeCache.SKIP_HEADER.
+        // The group must serve the 404 but NOT cache it — the artifact may exist
+        // and the upstream was merely throttling; caching would create a
+        // long-lived false 404. JAR_PATH parses to a NON-empty version, so only
+        // the marker (not Fix 1) prevents caching here.
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of())); // index miss
+        final NegativeCache negCache = buildNegativeCache();
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, unverifiedNotFoundSlice());
+
+        final GroupResolver resolver = buildResolver(
+            idx, List.of(PROXY_A), Set.of(PROXY_A), negCache, slices
+        );
+        final Response resp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+
+        assertEquals(404, resp.status().code(),
+            "a marked non-authoritative absence is still returned as 404");
+        final com.auto1.pantera.http.cache.NegativeCacheKey negKey =
+            new com.auto1.pantera.http.cache.NegativeCacheKey(
+                GROUP, REPO_TYPE, PARSED_NAME, PARSED_VERSION);
+        assertFalse(negCache.isKnown404(negKey),
+            "a rate-limit-laundered 404 must NOT be negative-cached");
+    }
+
+    @Test
+    void plainAll404IsStillNegativeCached() {
+        // Counterpart guard: an UNmarked all-members 404 is a genuine absence
+        // and must still be cached (thundering-herd protection preserved).
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of())); // index miss
+        final NegativeCache negCache = buildNegativeCache();
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, notFoundSlice());
+
+        final GroupResolver resolver = buildResolver(
+            idx, List.of(PROXY_A), Set.of(PROXY_A), negCache, slices
+        );
+        resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+
+        final com.auto1.pantera.http.cache.NegativeCacheKey negKey =
+            new com.auto1.pantera.http.cache.NegativeCacheKey(
+                GROUP, REPO_TYPE, PARSED_NAME, PARSED_VERSION);
+        assertTrue(negCache.isKnown404(negKey),
+            "a genuine all-members 404 (unmarked) must still be negative-cached");
+    }
+
     // ---- FIX 5: malformed version-range path rejected before any walk ----
 
     @Test
@@ -773,6 +827,19 @@ final class GroupResolverTest {
     private static Slice notFoundSlice() {
         return (line, headers, body) ->
             CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
+    }
+
+    /**
+     * A member that returns a 404 marked non-authoritative (as the npm proxy
+     * does when it launders an upstream rate-limit / non-404 4xx into a 404 for
+     * the multi-remote race). The group must NOT negative-cache such a 404.
+     */
+    private static Slice unverifiedNotFoundSlice() {
+        return (line, headers, body) ->
+            CompletableFuture.completedFuture(
+                ResponseBuilder.notFound()
+                    .header(com.auto1.pantera.http.cache.NegativeCache.SKIP_HEADER, "true")
+                    .build());
     }
 
     private static Slice staticSlice(final RsStatus status) {
