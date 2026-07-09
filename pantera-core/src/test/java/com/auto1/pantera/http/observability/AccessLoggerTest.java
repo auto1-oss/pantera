@@ -238,6 +238,21 @@ final class AccessLoggerTest {
         MatcherAssert.assertThat(payloadField(evt, "user_agent.device.name"), Matchers.nullValue());
     }
 
+    @Test
+    @DisplayName("http.request.method is emitted when set, omitted when absent (OBS-2)")
+    void httpMethodInPayload() {
+        StructuredLogger.access().forRequest(minimalCtx())
+            .status(405).method("PUT").duration(1L).log();
+        MatcherAssert.assertThat(
+            payloadField(this.capture.last(), "http.request.method"), Matchers.is("PUT")
+        );
+        StructuredLogger.access().forRequest(minimalCtx())
+            .status(200).duration(1L).log();
+        MatcherAssert.assertThat(
+            payloadField(this.capture.last(), "http.request.method"), Matchers.nullValue()
+        );
+    }
+
     // ---- helpers ----
 
     private static RequestContext minimalCtx() {

@@ -39,7 +39,7 @@ public final class LoggingAuth implements Authentication {
         final Optional<AuthUser> res = this.origin.user(username, password);
         if (res.isEmpty()) {
             EcsLogger.warn("com.auto1.pantera.auth")
-                .message("Failed to authenticate user via " + this.origin)
+                .message("Failed to authenticate user")
                 .eventCategory("authentication")
                 .eventAction("login")
                 .eventOutcome("failure")
@@ -56,7 +56,7 @@ public final class LoggingAuth implements Authentication {
             // amplification per build with no diagnostic value. Failures
             // remain at WARN above.
             EcsLogger.debug("com.auto1.pantera.auth")
-                .message("Successfully authenticated user via " + this.origin)
+                .message("Successfully authenticated user")
                 .eventCategory("authentication")
                 .eventAction("login")
                 .eventOutcome("success")

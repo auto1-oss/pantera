@@ -1692,16 +1692,22 @@ public abstract class BaseCachedProxySlice implements Slice {
                 if (!resp.status().success()) {
                     final int code = resp.status().code();
                     if (code == 404) {
-                        if (this.negativeCache != null
-                            && !this.isChecksumSidecar(key.string())) {
-                            final NegativeCacheKey nk = this.negKey(line.uri().getPath());
-                            resp.body().asBytesFuture().thenAccept(
-                                bytes -> this.negativeCache.cacheNotFound(nk)
-                            );
-                        }
                         this.recordProxyMetric("not_found", duration);
-                        return resp.body().asBytesFuture()
-                            .thenApply(bytes -> ResponseBuilder.notFound().build());
+                        // Single drain of the single-subscriber upstream body:
+                        // seed the negative cache AND build the 404 response from
+                        // ONE subscription (mirrors handle404). A second
+                        // asBytesFuture() re-subscribes JettyContentSourcePublisher
+                        // and throws IllegalStateException, which the exceptionally
+                        // funnel collapses into a 502 for every uncacheable-path 404
+                        // (directory listings, Gradle/Ivy version ranges).
+                        return resp.body().asBytesFuture().thenApply(bytes -> {
+                            if (this.negativeCache != null
+                                && !this.isChecksumSidecar(key.string())) {
+                                this.negativeCache.cacheNotFound(
+                                    this.negKey(line.uri().getPath()));
+                            }
+                            return ResponseBuilder.notFound().build();
+                        });
                     }
                     if (code >= 500) {
                         this.trackUpstreamFailure(

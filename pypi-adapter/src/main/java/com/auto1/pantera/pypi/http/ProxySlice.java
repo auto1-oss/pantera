@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.ValueNotFoundException;
 import com.auto1.pantera.asto.cache.Cache;
 import com.auto1.pantera.asto.cache.CacheControl;
 import com.auto1.pantera.asto.cache.FromStorageCache;
@@ -52,6 +53,7 @@ import java.net.URI;
 import java.net.URLConnection;
 import java.nio.charset.StandardCharsets;
 import java.nio.ByteBuffer;
+import java.nio.file.NoSuchFileException;
 import java.util.Arrays;
 import java.time.Instant;
 import java.time.Duration;
@@ -505,18 +507,56 @@ final class ProxySlice implements Slice {
             return this.fetchNonArtifact(
                 line, rqheaders, body, user, key, upstream, remote, remoteSuccess, format
             );
-        }).exceptionally(err -> {
-            EcsLogger.warn("com.auto1.pantera.pypi")
-                .message("Non-artifact request failed")
-                .eventCategory("web")
-                .eventAction("proxy_request")
-                .eventOutcome("failure")
-                .field("url.path", line.uri().getPath())
-                .error(err)
-                .field("log.source", "application")
-                .log();
-            return ResponseBuilder.notFound().build();
-        });
+        }).handle((resp, err) -> {
+            if (err != null && ProxySlice.isVanishedCacheEntry(err)) {
+                // Cache entry evicted between exists() and the cached read
+                // (TOCTOU with DiskCache eviction / rollback). Refetch from
+                // upstream instead of returning a spurious 404 for an index
+                // that still exists upstream.
+                return this.fetchNonArtifact(
+                    line, rqheaders, body, user, key, upstream,
+                    remote, remoteSuccess, format
+                );
+            }
+            if (err != null) {
+                EcsLogger.warn("com.auto1.pantera.pypi")
+                    .message("Non-artifact request failed")
+                    .eventCategory("web")
+                    .eventAction("proxy_request")
+                    .eventOutcome("failure")
+                    .field("url.path", line.uri().getPath())
+                    .error(err)
+                    .field("log.source", "application")
+                    .log();
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.notFound().build()
+                );
+            }
+            return CompletableFuture.completedFuture(resp);
+        }).thenCompose(Function.identity());
+    }
+
+    /**
+     * Whether a storage-read failure is the "entry vanished under us" TOCTOU
+     * family that should trigger an upstream refetch rather than a spurious
+     * 404. Walks the full cause chain because {@code FileStorage.value/metadata}
+     * wrap the underlying {@link NoSuchFileException} inside a
+     * {@link ValueNotFoundException} (itself typically under a
+     * {@code CompletionException}).
+     *
+     * @param err Error from the cached-index read path.
+     * @return {@code true} if any cause is a NoSuchFile / ValueNotFound.
+     */
+    private static boolean isVanishedCacheEntry(final Throwable err) {
+        Throwable cause = err;
+        while (cause != null) {
+            if (cause instanceof NoSuchFileException
+                || cause instanceof ValueNotFoundException) {
+                return true;
+            }
+            cause = cause.getCause();
+        }
+        return false;
     }
 
     /**

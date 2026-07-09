@@ -156,6 +156,7 @@ public final class StructuredLogger {
         private String body;
         private Fault fault;
         private Long durationMs;
+        private String httpMethod;
 
         private AccessAt(final RequestContext rctx) {
             this.ctx = rctx;
@@ -164,6 +165,12 @@ public final class StructuredLogger {
         /** Set {@code http.response.status_code}. */
         public AccessAt status(final int code) {
             this.status = code;
+            return this;
+        }
+
+        /** Set {@code http.request.method} (from the inbound {@code RequestLine}). */
+        public AccessAt method(final String value) {
+            this.httpMethod = value;
             return this;
         }
 
@@ -233,6 +240,9 @@ public final class StructuredLogger {
             payload.put("event.action", "http_request");
             if (this.status != null) {
                 payload.put("http.response.status_code", this.status);
+            }
+            if (this.httpMethod != null) {
+                payload.put("http.request.method", this.httpMethod);
             }
             if (this.durationMs != null) {
                 payload.put("event.duration", this.durationMs);
