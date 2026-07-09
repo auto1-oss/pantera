@@ -13,6 +13,7 @@ package com.auto1.pantera.asto.cache;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.ValueNotFoundException;
 import com.auto1.pantera.asto.rx.RxFuture;
 import com.auto1.pantera.asto.rx.RxStorageWrapper;
 import com.auto1.pantera.asto.log.EcsLogger;
@@ -72,9 +73,14 @@ public final class FromStorageCache implements Cache {
             .onErrorResumeNext(err -> {
                 // TOCTOU: file was deleted between exists() and open().
                 // Treat as a cache miss so switchIfEmpty triggers a fresh upstream fetch.
-                // Only swallow NoSuchFileException (or a wrapped one); all other errors propagate.
-                final boolean isToctou = err instanceof NoSuchFileException
-                    || err.getCause() instanceof NoSuchFileException;
+                // Swallow only the vanished-file family, walking the FULL cause
+                // chain: FileStorage.value/metadata wrap the NoSuchFileException as
+                // ValueNotFoundException -> IOException -> NoSuchFileException
+                // (optionally under a CompletionException). A shallow top-level /
+                // one-level check missed that real production shape and leaked a
+                // spurious error (npm/pypi "No value for key" -> 404). All other
+                // errors propagate.
+                final boolean isToctou = isVanishedEntry(err);
                 if (isToctou) {
                     EcsLogger.warn("com.auto1.pantera.asto.cache")
                         .message("Cache TOCTOU: file vanished between exists and open, falling through to upstream")
@@ -118,6 +124,30 @@ public final class FromStorageCache implements Cache {
                     }
                 )
             ).to(SingleInterop.get());
+    }
+
+    /**
+     * Whether a cache-read error is the "entry vanished under us" family that
+     * must be treated as a cache miss (fall through to upstream) rather than
+     * propagated. Walks the whole cause chain because FileStorage wraps the
+     * underlying {@link NoSuchFileException} inside a
+     * {@link ValueNotFoundException} (itself possibly under a
+     * {@code CompletionException}), so a shallow top-level / one-level check
+     * misses the real production shape.
+     *
+     * @param err Error thrown while validating or reading the cached entry.
+     * @return {@code true} if any cause is a NoSuchFile / ValueNotFound.
+     */
+    private static boolean isVanishedEntry(final Throwable err) {
+        Throwable cause = err;
+        while (cause != null) {
+            if (cause instanceof NoSuchFileException
+                || cause instanceof ValueNotFoundException) {
+                return true;
+            }
+            cause = cause.getCause();
+        }
+        return false;
     }
 
     /**

@@ -218,13 +218,15 @@ public final class EcsLoggingSlice implements Slice {
                     // version, os.name, os.version) and url.query emission
                     // migrate to StructuredLogger.access in a follow-up WI;
                     // the core contract (trace.id, client.ip, user.name,
-                    // url.original, url.path, http.request.method,
-                    // http.response.status_code, event.duration,
-                    // user_agent.original) is covered by RequestContext today.
+                    // url.original, url.path, http.response.status_code,
+                    // event.duration, user_agent.original) is covered by
+                    // RequestContext; http.request.method is passed explicitly
+                    // from the RequestLine below (the record carries no method).
                     final RequestContext rctx = buildRequestContext(
                         span, clientIp, userName, line);
                     StructuredLogger.access().forRequest(rctx)
                         .status(response.status().code())
+                        .method(line.method().value())
                         .duration(duration)
                         .log();
                 }

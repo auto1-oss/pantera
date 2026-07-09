@@ -13,7 +13,9 @@ package com.auto1.pantera.pypi.http;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.FailedCompletionStage;
 import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.ValueNotFoundException;
 import com.auto1.pantera.asto.blocking.BlockingStorage;
 import com.auto1.pantera.asto.cache.Cache;
 import com.auto1.pantera.asto.cache.FromStorageCache;
@@ -39,6 +41,7 @@ import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.slice.SliceSimple;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.NoSuchFileException;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -522,6 +525,59 @@ class ProxySliceTest {
         MatcherAssert.assertThat(
             clients.lastLine().uri().getPath(),
             Matchers.equalTo("/packages/aa/bb/pkg-2.1.0-py3-none-any.whl.metadata")
+        );
+    }
+
+    @Test
+    void nonArtifactRaceRefetchesFromUpstreamInsteadOf404() {
+        // The cached index entry is evicted between exists() and the direct
+        // read (TOCTOU with DiskCache eviction / rollback), so the read throws
+        // ValueNotFoundException. serveNonArtifact must refetch from upstream,
+        // NOT return a spurious 404 for an index that still exists upstream.
+        this.storage = new Storage.Wrap(new InMemoryStorage()) {
+            @Override
+            public CompletableFuture<Boolean> exists(final Key key) {
+                return CompletableFuture.completedFuture(true);
+            }
+
+            @Override
+            public CompletableFuture<Content> value(final Key key) {
+                return CompletableFuture.failedFuture(
+                    new ValueNotFoundException(key, new NoSuchFileException(key.string()))
+                );
+            }
+
+            @Override
+            public CompletableFuture<? extends Meta> metadata(final Key key) {
+                return CompletableFuture.failedFuture(
+                    new ValueNotFoundException(key, new NoSuchFileException(key.string()))
+                );
+            }
+        };
+        final byte[] body = "index-html-body".getBytes(StandardCharsets.UTF_8);
+        final TestClientSlices clients = new TestClientSlices(line ->
+            ResponseBuilder.internalError().build()
+        );
+        MatcherAssert.assertThat(
+            "A vanished cache entry must refetch from upstream, not 404",
+            this.newProxySlice(
+                new SliceSimple(
+                    ResponseBuilder.ok().header(ContentType.mime("text/html"))
+                        .body(body)
+                        .build()
+                ),
+                clients,
+                Optional.of(this.events)
+            ),
+            new SliceHasResponse(
+                Matchers.allOf(
+                    new RsHasStatus(RsStatus.OK),
+                    new RsHasBody(body)
+                ),
+                new RequestLine(RqMethod.GET, "/my-project"),
+                this.authorization,
+                Content.EMPTY
+            )
         );
     }
 

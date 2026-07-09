@@ -1,5 +1,18 @@
 # Changelog
 
+## Version 2.2.4
+
+### 🔧 Bug fixes
+
+- **Maven/Gradle proxy repositories no longer return `502` for directory listings and version-range coordinates.** On the uncacheable-path fetch (`fetchDirect` — taken for directory-style requests with a trailing `/` and Gradle/Ivy dynamic version ranges such as `…/[,7.2084)/…jar`), an upstream `404` subscribed the single-subscriber upstream response body **twice** — once to seed the negative cache, once to build the `404` — throwing `IllegalStateException: JettyContentSourcePublisher is single-subscriber`. The error funnel collapsed that into a `503`, which the group/race layer surfaced to clients as `502`. The body is now drained **once** (mirroring the cache-first `handle404` path): the negative cache is seeded and the `404` returned from a single subscription. This was the single largest source of proxy `502`s in production (present since 2.2.0).
+  ([@aydasraf](https://github.com/aydasraf))
+- **PyPI and npm proxies no longer emit spurious `404`s / errors when a cached entry is evicted mid-read.** An entry present at the `exists()` check could be evicted (DiskCache LRU / rollback) before the value/metadata read, throwing `ValueNotFoundException` (wrapping `IOException` → `NoSuchFileException`). Three fixes: the shared read-through cache's TOCTOU recovery now walks the full cause chain and recognises this wrapped shape (it previously matched only a top-level or one-level `NoSuchFileException`, mislabelling a recovered race as a read failure); the PyPI simple-index path refetches from upstream on such a race instead of returning `404`; and the npm background package-indexer treats it as a benign skip at `DEBUG` rather than `ERROR` (the download had already been served to the client).
+  ([@aydasraf](https://github.com/aydasraf))
+- **Authentication-outcome logs are stable and groupable again.** The `Failed to authenticate user` / `Successfully authenticated user` messages embedded the auth filter-chain's `toString()` — including a per-instance object hashcode — directly in the `message` field, defeating log aggregation across a fleet. The message is now a fixed string; the provider detail remains available in the dedicated `event.provider` field.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Access logs record `http.request.method` on every request.** The field was emitted only on the internal-error path, never on normal responses, so 4xx/5xx access lines (e.g. `405`s) could not be told apart by verb in Kibana. The method is now emitted for all access-log records.
+  ([@aydasraf](https://github.com/aydasraf))
+
 ## Version 2.2.3
 
 ### 🔧 Bug fixes

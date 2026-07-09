@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.ValueNotFoundException;
 import com.auto1.pantera.asto.blocking.BlockingStorage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.asto.test.ContentIs;
@@ -215,6 +216,60 @@ final class FromStorageCacheTest {
             .get();
         MatcherAssert.assertThat(
             "Remote supplier must be called when direct NoSuchFileException is detected",
+            remoteCalled.get(), Matchers.is(true)
+        );
+        MatcherAssert.assertThat(
+            "Result must contain remote content (not empty)",
+            result.isPresent(), Matchers.is(true)
+        );
+        MatcherAssert.assertThat(
+            "Content must match remote data",
+            result.get(), new ContentIs(remoteData)
+        );
+    }
+
+    @Test
+    void toctouValueNotFoundTriggersUpstreamFetch() throws Exception {
+        // FileStorage.value/metadata wrap a vanished file as
+        // ValueNotFoundException -> IOException -> NoSuchFileException — the
+        // exact production shape behind npm/pypi "No value for key". The
+        // recovery predicate must recognise this nested type and classify it as
+        // a recovered TOCTOU (fall through to upstream), not a read failure.
+        final Key key = new Key.From("toctou-valuenotfound");
+        final byte[] remoteData = "remote-vnf".getBytes();
+        final AtomicBoolean remoteCalled = new AtomicBoolean(false);
+        final Storage toctouStorage = new Storage.Wrap(new InMemoryStorage()) {
+            @Override
+            public CompletableFuture<Boolean> exists(final Key k) {
+                return CompletableFuture.completedFuture(true);
+            }
+
+            @Override
+            public CompletableFuture<Content> value(final Key k) {
+                return CompletableFuture.failedFuture(
+                    new ValueNotFoundException(k, new NoSuchFileException(k.string()))
+                );
+            }
+
+            @Override
+            public CompletableFuture<? extends Meta> metadata(final Key k) {
+                return CompletableFuture.failedFuture(
+                    new ValueNotFoundException(k, new NoSuchFileException(k.string()))
+                );
+            }
+        };
+        final Remote remote = () -> {
+            remoteCalled.set(true);
+            return CompletableFuture.completedFuture(
+                Optional.of(new Content.From(remoteData))
+            );
+        };
+        final Optional<? extends Content> result = new FromStorageCache(toctouStorage)
+            .load(key, remote, CacheControl.Standard.ALWAYS)
+            .toCompletableFuture()
+            .get();
+        MatcherAssert.assertThat(
+            "Remote must be fetched when the cached entry vanished (ValueNotFoundException)",
             remoteCalled.get(), Matchers.is(true)
         );
         MatcherAssert.assertThat(
