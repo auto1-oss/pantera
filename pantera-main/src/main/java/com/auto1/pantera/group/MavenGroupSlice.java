@@ -233,8 +233,18 @@ public final class MavenGroupSlice implements Slice {
             return mergeMetadata(line, headers, body, path);
         }
 
-        // Handle checksum requests for merged metadata
-        if ("GET".equals(method) && (path.endsWith("maven-metadata.xml.sha1") || path.endsWith("maven-metadata.xml.md5"))) {
+        // Handle checksum requests for merged metadata. All four sidecars are
+        // computed over the exact bytes the group serves (WS4-maven.10) —
+        // previously only sha1/md5 were recomputed here; sha256/sha512 fell
+        // through to `delegate`, which served a member's OWN sidecar
+        // (possibly a different serialization of the same metadata) and
+        // could mismatch what the group actually served.
+        if ("GET".equals(method) && (
+            path.endsWith("maven-metadata.xml.sha1")
+                || path.endsWith("maven-metadata.xml.md5")
+                || path.endsWith("maven-metadata.xml.sha256")
+                || path.endsWith("maven-metadata.xml.sha512")
+        )) {
             return handleChecksumRequest(line, headers, body, path);
         }
 
@@ -253,7 +263,7 @@ public final class MavenGroupSlice implements Slice {
         final String path
     ) {
         // Determine checksum type
-        final boolean isSha1 = path.endsWith(".sha1");
+        final String algorithm = digestAlgorithm(path);
         final String metadataPath = path.substring(0, path.lastIndexOf('.'));
 
         // Get merged metadata from cache or merge it
@@ -271,7 +281,7 @@ public final class MavenGroupSlice implements Slice {
                         try {
                             // Compute checksum
                             final java.security.MessageDigest digest = java.security.MessageDigest.getInstance(
-                                isSha1 ? "SHA-1" : "MD5"
+                                algorithm
                             );
                             final byte[] checksumBytes = digest.digest(metadataBytes);
 
@@ -299,6 +309,28 @@ public final class MavenGroupSlice implements Slice {
                     });
             })
             .thenCompose(future -> future);
+    }
+
+    /**
+     * Map a {@code maven-metadata.xml} sidecar suffix to its digest
+     * algorithm name (WS4-maven.10 — sha256/sha512 join sha1/md5 as
+     * checksums recomputed over the group's own served bytes).
+     *
+     * @param path Sidecar request path
+     * @return {@link java.security.MessageDigest} algorithm name
+     */
+    private static String digestAlgorithm(final String path) {
+        final String algorithm;
+        if (path.endsWith(".sha1")) {
+            algorithm = "SHA-1";
+        } else if (path.endsWith(".sha256")) {
+            algorithm = "SHA-256";
+        } else if (path.endsWith(".sha512")) {
+            algorithm = "SHA-512";
+        } else {
+            algorithm = "MD5";
+        }
+        return algorithm;
     }
 
     /**

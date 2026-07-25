@@ -20,11 +20,15 @@ import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.rq.RequestLine;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Test;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.HashMap;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -548,6 +552,80 @@ public final class MavenGroupSliceTest {
             body,
             Matchers.containsString("<version>1.0-stale</version>")
         );
+    }
+
+    /**
+     * WS4-maven.10: all four {@code maven-metadata.xml} sidecars
+     * (sha1/md5/sha256/sha512) must validate against the exact bytes the
+     * group serves, not a member's own (possibly differently-serialized)
+     * sidecar. Previously only sha1/md5 were recomputed here; sha256/sha512
+     * fell through to the member's own sidecar.
+     */
+    @Test
+    void allFourGroupChecksumsMatchServedMetadataBytes() throws Exception {
+        final Map<String, Slice> members = new HashMap<>();
+        members.put("repo1", new FakeMetadataSlice(
+            "<?xml version=\"1.0\"?><metadata><groupId>com.test</groupId>"
+                + "<artifactId>checksum</artifactId><versioning><versions>"
+                + "<version>1.0</version></versions></versioning></metadata>"
+        ));
+
+        final MavenGroupSlice slice = new MavenGroupSlice(
+            new FakeGroupSlice(),
+            "checksum-test-group",
+            List.of("repo1"),
+            new MapResolver(members),
+            8080,
+            0
+        );
+
+        final Response metadataResponse = slice.response(
+            new RequestLine("GET", "/com/test/checksum/maven-metadata.xml"),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).get(10, TimeUnit.SECONDS);
+        final byte[] servedBytes = metadataResponse.body().asBytes();
+
+        assertChecksumMatchesServedBytes(slice, "sha1", "SHA-1", servedBytes);
+        assertChecksumMatchesServedBytes(slice, "md5", "MD5", servedBytes);
+        assertChecksumMatchesServedBytes(slice, "sha256", "SHA-256", servedBytes);
+        assertChecksumMatchesServedBytes(slice, "sha512", "SHA-512", servedBytes);
+    }
+
+    /**
+     * Fetch the group's {@code maven-metadata.xml.<ext>} sidecar and assert
+     * it equals the hex digest of {@code servedBytes} under {@code jdkAlg}.
+     *
+     * @param slice Group slice under test
+     * @param ext Sidecar file extension (e.g. {@code "sha256"})
+     * @param jdkAlg JDK {@link MessageDigest} algorithm name (e.g. {@code "SHA-256"})
+     * @param servedBytes The group's served {@code maven-metadata.xml} bytes
+     */
+    private static void assertChecksumMatchesServedBytes(
+        final MavenGroupSlice slice, final String ext, final String jdkAlg, final byte[] servedBytes
+    ) throws Exception {
+        final Response sidecarResponse = slice.response(
+            new RequestLine("GET", "/com/test/checksum/maven-metadata.xml." + ext),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).get(10, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            ext + " sidecar request returns OK",
+            sidecarResponse.status(),
+            new IsEqual<>(RsStatus.OK)
+        );
+        final String expected = digestHex(jdkAlg, servedBytes);
+        final String actual = new String(sidecarResponse.body().asBytes(), StandardCharsets.UTF_8);
+        MatcherAssert.assertThat(
+            ext + " sidecar is the " + jdkAlg + " digest of the exact bytes the group served "
+                + "(not a member's own sidecar)",
+            actual,
+            new IsEqual<>(expected)
+        );
+    }
+
+    private static String digestHex(final String algorithm, final byte[] bytes) throws NoSuchAlgorithmException {
+        return HexFormat.of().formatHex(MessageDigest.getInstance(algorithm).digest(bytes));
     }
 
     // Helper classes

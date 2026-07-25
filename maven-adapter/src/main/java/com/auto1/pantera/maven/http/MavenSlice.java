@@ -49,9 +49,15 @@ public final class MavenSlice extends Slice.Wrap {
      * Supported artifacts extensions. According to
      * <a href="https://maven.apache.org/ref/3.6.3/maven-core/artifact-handlers.html">Artifact
      * handlers</a> by maven-core and <a href="https://maven.apache.org/pom.html">Maven docs</a>.
+     *
+     * <p>{@code maven-plugin} and {@code ejb} are Maven <em>packaging types</em>, not file
+     * suffixes — a {@code maven-plugin}/{@code ejb}-packaged artifact is still physically a
+     * {@code .jar}, so those two tokens never matched anything here and were removed
+     * (WS4-maven.12). {@code rar} is kept: {@code rar}-packaged projects do emit a literal
+     * {@code .rar} file.
      */
     public static final List<String> EXT =
-        List.of("jar", "war", "maven-plugin", "ejb", "ear", "rar", "zip", "aar", "pom");
+        List.of("jar", "war", "ear", "rar", "zip", "aar", "pom");
 
     /**
      * Pattern to obtain artifact name and version from key. The regex DOES NOT match

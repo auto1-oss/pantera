@@ -86,6 +86,7 @@ final class HeadProxySlice implements Slice {
                 meta.read(Meta.OP_SIZE).ifPresent(size ->
                     resp.header("Content-Length", String.valueOf(size))
                 );
+                resp.header(LastModifiedHeader.from(meta));
                 return resp.build();
             }).exceptionally(err -> {
                 EcsLogger.debug("com.auto1.pantera.maven")

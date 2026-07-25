@@ -26,6 +26,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -63,6 +65,41 @@ final class HeadProxySliceCacheFirstTest {
         MatcherAssert.assertThat(
             "zero upstream calls",
             upstreamCalls.get(), new IsEqual<>(0)
+        );
+    }
+
+    @Test
+    @DisplayName("HEAD on a cached jar exposes Last-Modified, agreeing with Content-Length "
+        + "(WS4-maven.9 — fulfils the class javadoc's long-standing promise)")
+    void headHitExposesLastModified() {
+        final String path = "/com/example/lib/1.0/lib-1.0.jar";
+        final byte[] bytes = "cached-jar-bytes".getBytes(StandardCharsets.UTF_8);
+        final InMemoryStorage storage = new InMemoryStorage();
+        storage.save(new Key.From(path.substring(1)), new Content.From(bytes)).join();
+        final Slice upstream = (line, headers, body) -> CompletableFuture.failedFuture(
+            new AssertionError("upstream must not be hit on cache HEAD")
+        );
+        final HeadProxySlice slice = new HeadProxySlice(upstream, Optional.of(storage));
+        final Response resp = slice.response(
+            new RequestLine(RqMethod.HEAD, path), Headers.EMPTY, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "200 OK from local storage", resp.status(), new IsEqual<>(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "Content-Length matches the cached byte length",
+            resp.headers().single("Content-Length").getValue(),
+            new IsEqual<>(String.valueOf(bytes.length))
+        );
+        MatcherAssert.assertThat(
+            "exactly one Last-Modified header is present",
+            resp.headers().values("Last-Modified").size(),
+            new IsEqual<>(1)
+        );
+        MatcherAssert.assertThat(
+            "Last-Modified is a valid RFC 1123 HTTP date",
+            isValidHttpDate(resp.headers().single("Last-Modified").getValue()),
+            new IsEqual<>(true)
         );
     }
 
@@ -107,5 +144,18 @@ final class HeadProxySliceCacheFirstTest {
             "no-storage variant is pure pass-through",
             upstreamCalls.get(), new IsEqual<>(1)
         );
+    }
+
+    /**
+     * @param value Candidate {@code Last-Modified} header value
+     * @return True when the value parses as an RFC 1123 HTTP date
+     */
+    private static boolean isValidHttpDate(final String value) {
+        try {
+            DateTimeFormatter.RFC_1123_DATE_TIME.parse(value);
+            return true;
+        } catch (final DateTimeParseException ex) {
+            return false;
+        }
     }
 }

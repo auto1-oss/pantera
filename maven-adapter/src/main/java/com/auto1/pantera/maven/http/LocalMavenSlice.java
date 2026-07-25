@@ -86,43 +86,51 @@ final class LocalMavenSlice implements Slice {
     private CompletableFuture<Response> artifactResponse(final RqMethod method, final Key artifact) {
         return switch (method) {
             case GET -> storage.exists(artifact)
-                .thenApply(
+                .thenCompose(
                     exists -> {
-                        if (exists) {
-                            // Track download metric
-                            this.recordMetric(() ->
-                                com.auto1.pantera.metrics.PanteraMetrics.instance().download(this.repoName, "maven")
-                            );
-                            // Use storage-specific optimized content retrieval for 100-1000x faster downloads
-                            return StorageArtifactSlice.optimizedValue(storage, artifact)
+                        if (!exists) {
+                            return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
+                        }
+                        // Track download metric
+                        this.recordMetric(() ->
+                            com.auto1.pantera.metrics.PanteraMetrics.instance().download(this.repoName, "maven")
+                        );
+                        // Use storage-specific optimized content retrieval for 100-1000x faster downloads
+                        return storage.metadata(artifact).thenCompose(
+                            meta -> StorageArtifactSlice.optimizedValue(storage, artifact)
                                 .thenCombine(
                                     new RepositoryChecksums(storage).checksums(artifact),
                                     (body, checksums) ->
                                         ResponseBuilder.ok()
                                             .headers(ArtifactHeaders.from(artifact, checksums))
+                                            .header(LastModifiedHeader.from(meta))
                                             .body(body)
                                             .build()
-                                );
-                        }
-                        return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
+                                )
+                        );
                     }
-                ).thenCompose(Function.identity());
-            case HEAD ->
-//                new ArtifactHeadResponse(this.storage, artifact);
-                storage.exists(artifact).thenApply(
+                );
+            case HEAD -> storage.exists(artifact)
+                .thenCompose(
                     exists -> {
-                        if (exists) {
-                            return new RepositoryChecksums(storage)
-                                .checksums(artifact)
-                                .thenApply(
-                                    checksums -> ResponseBuilder.ok()
-                                        .headers(ArtifactHeaders.from(artifact, checksums))
-                                        .build()
-                                );
+                        if (!exists) {
+                            return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
                         }
-                        return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
+                        return storage.metadata(artifact).thenCombine(
+                            new RepositoryChecksums(storage).checksums(artifact),
+                            (meta, checksums) -> {
+                                final ResponseBuilder resp = ResponseBuilder.ok()
+                                    .headers(ArtifactHeaders.from(artifact, checksums))
+                                    .header(LastModifiedHeader.from(meta));
+                                // Omit Content-Length rather than 500 on a backend
+                                // that reports no size (all real backends report it).
+                                meta.read(Meta.OP_SIZE)
+                                    .ifPresent(size -> resp.header(new ContentLength(size)));
+                                return resp.build();
+                            }
+                        );
                     }
-                ).thenCompose(Function.identity());
+                );
             default -> CompletableFuture.completedFuture(ResponseBuilder.methodNotAllowed().build());
         };
     }
