@@ -240,6 +240,49 @@ class WheelSliceTest {
     }
 
     @Test
+    void uploadPersistsPep658MetadataFileAndSidecarDigest()
+        throws IOException, NoSuchAlgorithmException {
+        final String boundary = "pep658-boundary";
+        final String filename = "pantera-sample-0.2.tar";
+        final byte[] body = new TestResource("pypi_repo/pantera-sample-0.2.tar").asBytes();
+        MatcherAssert.assertThat(
+            "Returns CREATED status",
+            new WheelSlice(this.asto, Optional.of(this.queue), "test"),
+            new SliceHasResponse(
+                new RsHasStatus(RsStatus.CREATED),
+                new RequestLine(RqMethod.POST, "/"),
+                Headers.from(
+                    ContentType.mime(String.format("multipart/form-data; boundary=\"%s\"", boundary))
+                ),
+                new Content.From(this.multipartBody(body, boundary, filename))
+            )
+        );
+        final Key metadataKey = new Key.From(
+            "pantera-sample", "0.2", filename + ".metadata"
+        );
+        MatcherAssert.assertThat(
+            "PEP 658 .metadata file must be persisted alongside the artifact",
+            this.asto.exists(metadataKey).join(),
+            new IsEqual<>(true)
+        );
+        final byte[] metadataBytes = this.asto.value(metadataKey).join().asBytes();
+        MatcherAssert.assertThat(
+            "the persisted .metadata bytes must contain the package's core metadata",
+            new String(metadataBytes, StandardCharsets.US_ASCII).contains("Name: pantera-sample")
+        );
+        final String expectedSha256 = WheelSliceTest.sha256Hex(metadataBytes);
+        final com.auto1.pantera.pypi.meta.PypiSidecar.Meta sidecar =
+            com.auto1.pantera.pypi.meta.PypiSidecar.read(
+                this.asto, new Key.From("pantera-sample", "0.2", filename)
+            ).join().orElseThrow(() -> new AssertionError("Sidecar missing after upload"));
+        MatcherAssert.assertThat(
+            "the sidecar dist-info-metadata field must record the .metadata file's own sha256",
+            sidecar.distInfoMetadata(),
+            new IsEqual<>(Optional.of(expectedSha256))
+        );
+    }
+
+    @Test
     void rejectsDuplicateUploadOfSameFilename() throws IOException {
         final String filename = "pantera-sample-0.2.tar";
         final byte[] body = new TestResource("pypi_repo/pantera-sample-0.2.tar").asBytes();

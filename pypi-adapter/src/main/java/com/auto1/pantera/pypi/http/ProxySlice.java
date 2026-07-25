@@ -328,6 +328,22 @@ final class ProxySlice implements Slice {
                 .log();
             return this.jsonHandler.handle(line, user, rqheaders);
         }
+        // WS4-pypi.9: /pypi/<name>/<ver>/json was previously an unfiltered
+        // upstream passthrough (deliberately unmatched by the detector) —
+        // a cooldown-blocked version's metadata leaked straight through.
+        // Route it through the same cooldown filter the package-level
+        // endpoint uses, single-version-scoped.
+        if (this.jsonHandler != null && this.jsonHandler.matchesVersion(path)) {
+            EcsLogger.debug("com.auto1.pantera.pypi")
+                .message("Dispatching /pypi/<pkg>/<ver>/json to cooldown JSON handler")
+                .eventCategory("web")
+                .eventAction("proxy_request")
+                .field("url.path", path)
+                .field("repository.name", this.rname)
+                .field("log.source", "application")
+                .log();
+            return this.jsonHandler.handleVersion(line, user, rqheaders);
+        }
         if (coords.isEmpty() && this.simpleHandler.matches(path)) {
             final boolean clientWantsJson =
                 SimpleApiFormat.fromHeaders(rqheaders) == SimpleApiFormat.JSON;

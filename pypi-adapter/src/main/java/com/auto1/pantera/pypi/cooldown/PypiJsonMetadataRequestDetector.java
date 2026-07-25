@@ -71,9 +71,15 @@ public final class PypiJsonMetadataRequestDetector {
      * {@link #JSON_API_PATTERN} because the outer anchor there already
      * disallows extra segments, but keeping a second guard makes the
      * intent explicit for future readers.
+     *
+     * <p>Group 1 = package name, group 2 = version — used by
+     * {@link #extractVersionCoordinates(String)} so the version-level
+     * JSON endpoint can be routed through its own cooldown filter
+     * ({@code PypiJsonHandler#handleVersion}) instead of proxying
+     * upstream unfiltered.</p>
      */
     private static final Pattern VERSION_JSON_PATTERN = Pattern.compile(
-        "^(?:.*/)?pypi/[^/]+/[^/]+/json/?$",
+        "^(?:.*/)?pypi/([^/]+)/([^/]+)/json/?$",
         Pattern.CASE_INSENSITIVE
     );
 
@@ -114,11 +120,52 @@ public final class PypiJsonMetadataRequestDetector {
     }
 
     /**
+     * Whether the given request path targets the version-specific legacy
+     * JSON endpoint {@code /pypi/<name>/<version>/json}. This endpoint was
+     * previously deliberately unmatched and proxied straight upstream,
+     * which leaked a cooldown-blocked version's metadata (WS4-pypi.9).
+     *
+     * @param path Request path
+     * @return true for {@code /pypi/<name>/<version>/json}, false otherwise
+     */
+    public boolean isVersionMetadataRequest(final String path) {
+        return path != null && !path.isEmpty()
+            && VERSION_JSON_PATTERN.matcher(path).matches();
+    }
+
+    /**
+     * Extract the package name and version from a
+     * {@code /pypi/<name>/<version>/json} path.
+     *
+     * @param path Request path
+     * @return Coordinates if parseable, else empty
+     */
+    public Optional<VersionCoordinates> extractVersionCoordinates(final String path) {
+        if (path == null || path.isEmpty()) {
+            return Optional.empty();
+        }
+        final Matcher matcher = VERSION_JSON_PATTERN.matcher(path);
+        if (!matcher.matches()) {
+            return Optional.empty();
+        }
+        return Optional.of(new VersionCoordinates(matcher.group(1), matcher.group(2)));
+    }
+
+    /**
      * Repository type this detector serves.
      *
      * @return {@code "pypi"}
      */
     public String repoType() {
         return REPO_TYPE;
+    }
+
+    /**
+     * Package name + version parsed from a version-level legacy JSON path.
+     *
+     * @param packageName Raw (unnormalized) package name
+     * @param version Distribution version
+     */
+    public record VersionCoordinates(String packageName, String version) {
     }
 }

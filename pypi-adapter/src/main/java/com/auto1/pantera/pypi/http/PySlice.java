@@ -107,6 +107,32 @@ public final class PySlice extends Slice.Wrap {
     ) {
         super(
             new SliceRoute(
+                // PEP 658 .metadata files. Placed before the general
+                // artifact route below so the ".metadata" suffix match
+                // wins even if that route's extension list ever widens
+                // (today the two patterns don't overlap: the artifact
+                // route requires the string to END in one of the listed
+                // extensions, and "<file>.whl.metadata" ends in
+                // ".metadata", not ".whl").
+                new RtRulePath(
+                    new RtRule.All(
+                        MethodRule.GET,
+                        new RtRule.ByPath(
+                            ".*\\.(whl|tar\\.gz|zip|tar\\.bz2|tar\\.Z|tar|egg)\\.metadata"
+                        )
+                    ),
+                    PySlice.createAuthSlice(
+                        new SliceWithHeaders(
+                            new StorageArtifactSlice(storage),
+                            Headers.from(ContentType.mime("application/octet-stream"))
+                        ),
+                        basicAuth,
+                        tokenAuth,
+                        new OperationControl(
+                            policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                        )
+                    )
+                ),
                 new RtRulePath(
                     new RtRule.All(
                         MethodRule.GET,
@@ -153,6 +179,26 @@ public final class PySlice extends Slice.Wrap {
                         tokenAuth,
                         new OperationControl(
                             policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
+                        )
+                    )
+                ),
+                // Legacy JSON API (poetry / pip-tools): /pypi/<pkg>/json.
+                // Synthesized from the persisted index + sidecars — package
+                // scoped only (version-level legacy JSON is not served
+                // locally; see LegacyJsonSlice javadoc). MUST precede the
+                // SliceIndex catch-all below: "/pypi/<pkg>/json" also
+                // matches that rule's permissive trailing-segment pattern.
+                new RtRulePath(
+                    new RtRule.All(
+                        MethodRule.GET,
+                        new RtRule.ByPath(".*/pypi/[^/]+/json/?$")
+                    ),
+                    PySlice.createAuthSlice(
+                        new LegacyJsonSlice(storage, name),
+                        basicAuth,
+                        tokenAuth,
+                        new OperationControl(
+                            policy, new AdapterBasicPermission(name, Action.Standard.READ)
                         )
                     )
                 ),
@@ -211,6 +257,27 @@ public final class PySlice extends Slice.Wrap {
                     new RtRule.All(
                         MethodRule.HEAD,
                         new RtRule.ByPath(
+                            ".*\\.(whl|tar\\.gz|zip|tar\\.bz2|tar\\.Z|tar|egg)\\.metadata"
+                        )
+                    ),
+                    PySlice.createAuthSlice(
+                        new HeadAsGetSlice(
+                            new SliceWithHeaders(
+                                new StorageArtifactSlice(storage),
+                                Headers.from(ContentType.mime("application/octet-stream"))
+                            )
+                        ),
+                        basicAuth,
+                        tokenAuth,
+                        new OperationControl(
+                            policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                        )
+                    )
+                ),
+                new RtRulePath(
+                    new RtRule.All(
+                        MethodRule.HEAD,
+                        new RtRule.ByPath(
                             ".*\\.(whl|tar\\.gz|zip|tar\\.bz2|tar\\.Z|tar|egg)"
                         )
                     ),
@@ -262,7 +329,7 @@ public final class PySlice extends Slice.Wrap {
      * to the caller. The Content-Length header (if present in the GET
      * response) lets HEAD callers size-check without downloading.</p>
      */
-    private static final class HeadAsGetSlice implements Slice {
+    static final class HeadAsGetSlice implements Slice {
 
         private final Slice origin;
 
