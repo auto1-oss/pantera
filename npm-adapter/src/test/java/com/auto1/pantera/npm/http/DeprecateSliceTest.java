@@ -21,11 +21,13 @@ import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.npm.JsonFromMeta;
+import com.auto1.pantera.npm.PerVersionLayout;
 import java.nio.charset.StandardCharsets;
 import javax.json.Json;
 import javax.json.JsonObjectBuilder;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
+import org.hamcrest.core.IsEqual;
 import org.hamcrest.core.IsNot;
 import org.hamcrest.core.IsNull;
 import org.junit.jupiter.api.BeforeEach;
@@ -224,6 +226,69 @@ class DeprecateSliceTest {
                 new RsHasStatus(RsStatus.NOT_FOUND),
                 new RequestLine(RqMethod.PUT, "/some/project")
             )
+        );
+    }
+
+    /**
+     * Split-brain regression guard (WS4-npm.3): {@code npm deprecate} must
+     * take effect on a package published purely through the per-version
+     * layout — patching the target {@code .versions/<v>.json} file directly,
+     * not a hand-planted {@code meta.json}.
+     */
+    @Test
+    void deprecatesVersionOnPerVersionLayoutPackage() {
+        final Key pkg = new Key.From(DeprecateSliceTest.PROJECT);
+        final PerVersionLayout layout = new PerVersionLayout(this.storage);
+        layout.addVersion(
+            pkg, "1.0.1",
+            Json.createObjectBuilder()
+                .add("name", DeprecateSliceTest.PROJECT).add("version", "1.0.1").build()
+        ).toCompletableFuture().join();
+        layout.addVersion(
+            pkg, "1.0.2",
+            Json.createObjectBuilder()
+                .add("name", DeprecateSliceTest.PROJECT).add("version", "1.0.2").build()
+        ).toCompletableFuture().join();
+        final String msg = "Danger! Do not use!";
+        MatcherAssert.assertThat(
+            "Response status is OK",
+            new DeprecateSlice(this.storage),
+            new SliceHasResponse(
+                new RsHasStatus(RsStatus.OK),
+                new RequestLine(RqMethod.PUT, "/@hello%2fsimple-npm-project"),
+                Headers.EMPTY,
+                new Content.From(
+                    Json.createObjectBuilder()
+                        .add("name", DeprecateSliceTest.PROJECT)
+                        .add(
+                            "versions",
+                            Json.createObjectBuilder().add(
+                                "1.0.2",
+                                Json.createObjectBuilder()
+                                    .add("name", DeprecateSliceTest.PROJECT)
+                                    .add("version", "1.0.2")
+                                    .add(DeprecateSliceTest.FIELD, msg)
+                            )
+                        ).build().toString().getBytes(StandardCharsets.UTF_8)
+                )
+            )
+        );
+        MatcherAssert.assertThat(
+            "No meta.json crutch is written",
+            this.storage.exists(new Key.From(pkg, "meta.json")).join(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "1.0.2 per-version file carries the deprecation message",
+            layout.readVersion(pkg, "1.0.2").toCompletableFuture().join()
+                .getString(DeprecateSliceTest.FIELD),
+            new IsEqual<>(msg)
+        );
+        MatcherAssert.assertThat(
+            "1.0.1 per-version file is untouched",
+            layout.readVersion(pkg, "1.0.1").toCompletableFuture().join()
+                .containsKey(DeprecateSliceTest.FIELD),
+            new IsEqual<>(false)
         );
     }
 

@@ -648,7 +648,7 @@ public class RepositorySlices {
                 slice = browsableTrimPathSlice(
                     new NpmSlice(
                         cfg.url(), cfg.storage(), securityPolicy(), authentication(), tokens.auth(), tokens, cfg.name(), artifactEvents(), true,
-                        this.settings.syncArtifactIndexer()
+                        this.settings.syncArtifactIndexer(), this.settings.artifactIndex()
                     ),
                     cfg.storage()
                 );

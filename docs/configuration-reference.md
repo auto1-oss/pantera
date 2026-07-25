@@ -490,7 +490,6 @@ Each named cache section supports:
 | `artifact-index-positive` | Search-index positive tier (`repos that have this artifact`) | `ArtifactIndexCacheConfig.fromYaml(caches, POSITIVE_SUBKEY)` |
 | `artifact-index-negative` | Search-index 404 sentinels | `ArtifactIndexCacheConfig.fromYaml(caches, NEGATIVE_SUBKEY)` |
 | `auth` | User credential cache | `CachedUsers` via generic `CacheConfig.from()` |
-| `npm-search` | npm package-search index | `InMemoryPackageIndex` via generic `CacheConfig.from()` |
 | `policy-perms` / `policy-users` / `policy-roles` | Authorization policy YAML caches | `CachedYamlPolicy` via generic `CacheConfig.from()` |
 | `filters` | Parsed per-repo filter configurations | `GuavaFiltersCache` via generic `CacheConfig.from()` |
 | `profiles.<name>` | Shared L1/L2 profile referenced by other blocks via `profile:` field | `CacheConfig.fromProfile()` |
@@ -535,18 +534,6 @@ meta:
         l1Ttl: 5m
         l2MaxSize: 100000
         l2Ttl: 5m
-
-    # npm package-search index cache. Read by InMemoryPackageIndex via the
-    # generic CacheConfig factory; see npm-adapter/.../InMemoryPackageIndex.java:112.
-    npm-search:
-      ttl: 24h
-      maxSize: 1000
-      valkey:
-        enabled: true
-        l1MaxSize: 1000
-        l1Ttl: 24h
-        l2MaxSize: 1000000
-        l2Ttl: 72h
 
     # Cooldown-filtered metadata envelope cache. Read by
     # FilteredMetadataCacheConfig.fromYaml; see
@@ -1486,7 +1473,6 @@ a Java system property using the lowercase, dot-separated equivalent (e.g.,
 |----------|---------|-------------|
 | `PANTERA_DEDUP_MAX_AGE_MS` | `300000` | Maximum age of in-flight dedup entries (ms) -- 5 minutes |
 | `PANTERA_DOCKER_CACHE_EXPIRY_HOURS` | `24` | Docker proxy cache entry lifetime (hours) |
-| `PANTERA_NPM_INDEX_TTL_HOURS` | `24` | NPM search index TTL (hours) |
 | `PANTERA_BODY_BUFFER_THRESHOLD` | `1048576` | Request body size threshold (bytes). Below this: buffered in memory. Above: streamed from disk. |
 
 ### 7.4 Metrics

@@ -246,7 +246,6 @@ A conservative estimate: `(concurrent_users * 4) + db_pool + s3_concurrency + 10
 |----------|---------|-------------|
 | `PANTERA_DEDUP_MAX_AGE_MS` | 300000 (5 min) | Max age for in-flight request deduplication entries |
 | `PANTERA_DOCKER_CACHE_EXPIRY_HOURS` | 24 | Docker proxy cache TTL |
-| `PANTERA_NPM_INDEX_TTL_HOURS` | 24 | npm search index cache TTL |
 | `PANTERA_BODY_BUFFER_THRESHOLD` | 1048576 (1 MB) | Body buffer threshold before spilling to disk |
 | `PANTERA_GROUP_DRAIN_PERMITS` | 20 | Concurrent response body drains in group repos |
 | `PANTERA_BUF_ACCUMULATOR_MAX_BYTES` | 104857600 (100 MB) | Max buffer for HTTP header parsing (OOM safety) |

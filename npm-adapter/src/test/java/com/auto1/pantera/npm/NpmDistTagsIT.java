@@ -10,8 +10,10 @@
  */
 package com.auto1.pantera.npm;
 
+import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.fs.FileStorage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.asto.test.TestResource;
 import com.auto1.pantera.http.auth.Authentication;
@@ -23,9 +25,9 @@ import com.auto1.pantera.vertx.VertxSliceServer;
 import com.jcabi.log.Logger;
 import io.vertx.reactivex.core.Vertx;
 import org.hamcrest.MatcherAssert;
+import org.hamcrest.core.IsEqual;
 import org.hamcrest.core.IsNot;
 import org.hamcrest.core.StringContains;
-import org.hamcrest.text.StringContainsInOrder;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -40,14 +42,25 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Arrays;
+
 import java.util.LinkedList;
 
 /**
  * IT for npm dist-tags command.
+ *
+ * <p>Split-brain regression guard (WS4-npm.3, spec &sect;6): every scenario
+ * publishes through a real {@code npm publish} — no hand-planted
+ * {@code meta.json} — proving {@code npm dist-tag ls/add/rm} and
+ * {@code npm publish --tag} work purely off the per-version layout's durable
+ * {@code .dist-tags.json} sidecar.</p>
  */
 @DisabledOnOs(OS.WINDOWS)
 public final class NpmDistTagsIT {
+
+    /**
+     * Test package name (matches the {@code simple-npm-project} fixture).
+     */
+    private static final String PKG = "@hello/simple-npm-project";
 
     @TempDir
     Path tmp;
@@ -73,20 +86,26 @@ public final class NpmDistTagsIT {
     private GenericContainer<?> cntn;
 
     /**
-     * Test storage.
+     * Repository storage (server-side).
      */
-    private Storage storage;
+    private Storage repo;
+
+    /**
+     * Client-side project files storage, bind-mounted into the container.
+     */
+    private Storage data;
 
     @BeforeEach
     void setUp() throws Exception {
-        this.storage = new InMemoryStorage();
+        this.repo = new InMemoryStorage();
+        this.data = new FileStorage(this.tmp);
         this.vertx = Vertx.vertx();
         final int port = new RandomFreePort().value();
         this.url = String.format("http://host.testcontainers.internal:%d", port);
         this.server = new VertxSliceServer(
             this.vertx,
             new LoggingSlice(new NpmSlice(
-                URI.create(this.url).toURL(), this.storage, (Policy<?>) Policy.FREE,
+                URI.create(this.url).toURL(), this.repo, (Policy<?>) Policy.FREE,
                 new Authentication.Single("testuser", "testpassword"),
                 (TokenAuthentication) tkn -> java.util.concurrent.CompletableFuture.completedFuture(java.util.Optional.empty()),
                 "*", java.util.Optional.of(new LinkedList<>())
@@ -115,60 +134,106 @@ public final class NpmDistTagsIT {
     }
 
     @Test
-    void lsDistTagsWorks() throws Exception {
-        final String pkg = "@hello/simple-npm-project";
-        new TestResource("json/dist-tags.json")
-            .saveTo(this.storage, new Key.From(pkg, "meta.json"));
+    void lsDistTagsWorksAfterRealPublish() throws Exception {
+        this.publish("tmp/pkg", "1.0.1");
         MatcherAssert.assertThat(
-            this.exec("npm", "dist-tag", "ls", pkg, "--registry", this.url),
-            new StringContainsInOrder(
-                Arrays.asList(
-                    "latest: 1.0.1",
-                    "previous: 1.0.0"
-                )
-            )
+            "Hosted publish never hand-writes meta.json",
+            this.repo.exists(new Key.From(NpmDistTagsIT.PKG, "meta.json")).join(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            this.exec("npm", "dist-tag", "ls", NpmDistTagsIT.PKG, "--registry", this.url),
+            new StringContains("latest: 1.0.1")
         );
     }
 
     @Test
-    void addDistTagsWorks() throws Exception {
-        final String pkg = "@hello/simple-npm-project";
-        final Key meta = new Key.From(pkg, "meta.json");
-        new TestResource("json/dist-tags.json").saveTo(this.storage, meta);
-        final String tag = "min";
-        final String ver = "0.0.1";
+    void addDistTagsWorksAfterRealPublish() throws Exception {
+        this.publish("tmp/pkg", "1.0.1");
+        final String tag = "beta";
         MatcherAssert.assertThat(
-            "npm dist-tags successful",
+            "npm dist-tag add succeeds",
             this.exec(
-                "npm", "dist-tag", "add", String.format("%s@%s", pkg, ver),
-                tag, "--registry", this.url
+                "npm", "dist-tag", "add",
+                String.format("%s@1.0.1", NpmDistTagsIT.PKG), tag, "--registry", this.url
             ),
-            new StringContains("+min: @hello/simple-npm-project@0.0.1")
+            new StringContains(String.format("+%s: %s@1.0.1", tag, NpmDistTagsIT.PKG))
         );
         MatcherAssert.assertThat(
-            "Meta file was updated",
-            this.storage.value(meta).join().asString(),
-            new StringContainsInOrder(Arrays.asList(tag, ver))
+            "New tag is visible in a subsequent ls, alongside the untouched latest",
+            this.exec("npm", "dist-tag", "ls", NpmDistTagsIT.PKG, "--registry", this.url),
+            new StringContains(String.format("%s: 1.0.1", tag))
         );
     }
 
     @Test
-    void rmDistTagsWorks() throws Exception {
-        final String pkg = "@hello/simple-npm-project";
-        final Key meta = new Key.From(pkg, "meta.json");
-        new TestResource("json/dist-tags.json").saveTo(this.storage, meta);
-        final String tag = "previous";
-        MatcherAssert.assertThat(
-            "npm dist-tags rm successful",
-            this.exec(
-                "npm", "dist-tag", "rm", pkg, tag, "--registry", this.url
-            ),
-            new StringContains(String.format("-%s: @hello/simple-npm-project@1.0.0", tag))
+    void rmDistTagsWorksAfterRealPublish() throws Exception {
+        this.publish("tmp/pkg", "1.0.1");
+        final String tag = "beta";
+        this.exec(
+            "npm", "dist-tag", "add",
+            String.format("%s@1.0.1", NpmDistTagsIT.PKG), tag, "--registry", this.url
         );
         MatcherAssert.assertThat(
-            "Meta file was updated",
-            this.storage.value(meta).join().asString(),
-            new IsNot<>(new StringContainsInOrder(Arrays.asList(tag, "1.0.0")))
+            "npm dist-tag rm succeeds",
+            this.exec("npm", "dist-tag", "rm", NpmDistTagsIT.PKG, tag, "--registry", this.url),
+            new StringContains(String.format("-%s: %s@1.0.1", tag, NpmDistTagsIT.PKG))
+        );
+        MatcherAssert.assertThat(
+            "Removed tag is no longer listed",
+            this.exec("npm", "dist-tag", "ls", NpmDistTagsIT.PKG, "--registry", this.url),
+            new IsNot<>(new StringContains(tag + ":"))
+        );
+    }
+
+    @Test
+    void publishWithCustomTagLeavesLatestUntouched() throws Exception {
+        this.publish("tmp/pkg", "1.0.1");
+        this.publish("tmp/pkg-next", "1.0.2", "--tag", "next");
+        final String tags = this.exec(
+            "npm", "dist-tag", "ls", NpmDistTagsIT.PKG, "--registry", this.url
+        );
+        MatcherAssert.assertThat(
+            "latest is untouched by the --tag next publish (real npm semantics: "
+                + "--tag only ever sets the tag it names)",
+            tags,
+            new StringContains("latest: 1.0.1")
+        );
+        MatcherAssert.assertThat(
+            "next reflects the version published under --tag next",
+            tags,
+            new StringContains("next: 1.0.2")
+        );
+    }
+
+    /**
+     * Publish the {@code simple-npm-project} fixture at a given version,
+     * rewriting its {@code package.json} in place (no {@code npm version}
+     * dependency on npm-CLI-version-specific subcommand support).
+     *
+     * @param path Container-relative path to stage the project under
+     * @param version Version to publish
+     * @param extra Extra {@code npm publish} arguments (e.g. {@code --tag next})
+     * @throws Exception On container exec failure
+     */
+    private void publish(final String path, final String version, final String... extra)
+        throws Exception {
+        new TestResource("simple-npm-project").addFilesTo(this.data, new Key.From(path));
+        final Key pkgJson = new Key.From(path, "package.json");
+        final String rewritten = this.data.value(pkgJson).join().asString()
+            .replace("\"version\": \"1.0.1\"", String.format("\"version\": \"%s\"", version));
+        this.data.save(pkgJson, new Content.From(rewritten.getBytes(StandardCharsets.UTF_8))).join();
+        final java.util.List<String> args = new java.util.ArrayList<>();
+        args.add("npm");
+        args.add("publish");
+        args.add(path);
+        args.add("--registry");
+        args.add(this.url);
+        args.addAll(java.util.Arrays.asList(extra));
+        MatcherAssert.assertThat(
+            "npm publish succeeds",
+            this.exec(args.toArray(new String[0])),
+            new StringContains(String.format("+ %s@%s", NpmDistTagsIT.PKG, version))
         );
     }
 
