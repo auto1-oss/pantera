@@ -76,6 +76,8 @@
   ([@aydasraf](https://github.com/aydasraf))
 - **Composer bounds cooldown evaluation and honours a client's conditional GET.** The Composer repository root (`packages.json`/`repo.json`) now caps per-request cooldown evaluation at the newest 50 versions per package (with a logged truncation) instead of an unbounded fan-out, and Composer proxy metadata now returns a bodiless `304` for a client's own `If-Modified-Since` from the warm cache.
   ([@aydasraf](https://github.com/aydasraf))
+- **`SingleFlight` no longer risks silently rejoining a just-finished load instead of starting a fresh one.** Its in-flight cache entry was invalidated and the caller's returned future completed via two independently-scheduled callbacks with no ordering guarantee between them, so a caller that reacted to its own future completing and immediately issued a new `load()` for the same key could observe the entry still present and rejoin the previous result rather than triggering a new fetch (surfaced as a TTL-refresh flake in the Go metadata-base loader). Invalidation and completion now happen in the same callback, so eviction is guaranteed to precede the caller observing completion.
+  ([@aydasraf](https://github.com/aydasraf))
 
 ### 🔒 Security
 

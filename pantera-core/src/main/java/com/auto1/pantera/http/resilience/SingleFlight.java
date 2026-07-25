@@ -38,7 +38,13 @@ import java.util.function.Supplier;
  *       the same terminal value or exception.</li>
  *   <li><b>Fresh-after-complete.</b> On loader completion (normal or exceptional)
  *       the entry is invalidated so the next {@link #load} for that key triggers
- *       a fresh fetch — the cache holds <em>in-flight</em> state, never results.</li>
+ *       a fresh fetch — the cache holds <em>in-flight</em> state, never results.
+ *       The invalidation runs happens-before each caller's own returned future
+ *       completes (both are done in the same {@code whenCompleteAsync} callback
+ *       per caller), so a caller that reacts to its future completing and
+ *       immediately issues a new {@link #load} for the same key is guaranteed
+ *       to observe the entry already evicted — it cannot silently rejoin the
+ *       just-finished result.</li>
  *   <li><b>Zombie eviction.</b> An entry that never completes is evicted by
  *       Caffeine's {@code expireAfterWrite(inflightTtl)}; the next {@link #load}
  *       starts a fresh loader. Closes A8.</li>
@@ -205,13 +211,24 @@ public final class SingleFlight<K, V> {
                 return wrapped;
             }
         );
-        shared.whenCompleteAsync(
-            (value, err) -> this.cache.synchronous().invalidate(key),
-            this.executor
-        );
         final CompletableFuture<V> forwarded = new CompletableFuture<>();
         shared.whenCompleteAsync(
             (value, err) -> {
+                // Invalidate BEFORE completing `forwarded`, in the same
+                // callback invocation, so that "the next load() for this key
+                // starts a fresh loader" is happens-before "the caller
+                // observed this load()'s completion" — not a race between
+                // two independently-scheduled whenCompleteAsync callbacks.
+                // A caller that reacts to `forwarded` completing (via join,
+                // get, or a chained callback) is guaranteed by the
+                // CompletableFuture memory model to see the cache mutation
+                // performed earlier in this same executor task. Previously
+                // this was two separate whenCompleteAsync registrations on
+                // `shared` with no ordering guarantee between them, so a
+                // caller could observe `forwarded` complete and immediately
+                // issue a fresh load() that silently rejoined the not-yet-
+                // evicted stale entry instead of triggering a new loader.
+                this.cache.synchronous().invalidate(key);
                 if (err != null) {
                     forwarded.completeExceptionally(err);
                 } else {
