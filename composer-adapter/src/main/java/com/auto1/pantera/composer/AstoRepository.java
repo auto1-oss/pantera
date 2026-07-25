@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.composer.http.Archive;
+import com.auto1.pantera.http.cache.DigestComputer;
 
 import javax.json.Json;
 import javax.json.JsonObject;
@@ -23,6 +24,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -132,17 +134,27 @@ public final class AstoRepository implements Repository {
                                     cnt,
                                     compos.toString()
                                         .getBytes(StandardCharsets.UTF_8)
-                                ).thenCompose(arch -> this.asto.save(tmp, arch))
-                                .thenCompose(noth -> this.asto.delete(key))
-                                .thenCompose(noth -> this.asto.move(tmp, key))
-                                .thenCompose(
-                                    noth -> {
-                                        final Package pack = new JsonPackage(this.addDist(compos, key));
-                                        return pack.name().thenCompose(
-                                            name -> this.updatePackages(AstoRepository.ALL_PACKAGES, pack, Optional.empty())
-                                                .thenCompose(ignored -> this.updatePackages(name.key(), pack, Optional.empty()))
-                                        );
-                                    }
+                                ).thenCompose(Content::asBytesFuture)
+                                // WS4-composer.3 / S7 (00-security-integrity-decisions.md):
+                                // compute the SHA-1 of the FINAL archive bytes (the ones
+                                // actually served to clients, post composer.json version
+                                // injection) so downstream Composer clients — including a
+                                // Pantera proxy mirroring this repository — can verify
+                                // dist integrity via the standard dist.shasum claim.
+                                .thenCompose(bytes -> this.asto.save(tmp, new Content.From(bytes))
+                                    .thenCompose(noth -> this.asto.delete(key))
+                                    .thenCompose(noth -> this.asto.move(tmp, key))
+                                    .thenCompose(
+                                        noth -> {
+                                            final Package pack = new JsonPackage(
+                                                this.addDist(compos, key, AstoRepository.sha1Hex(bytes))
+                                            );
+                                            return pack.name().thenCompose(
+                                                name -> this.updatePackages(AstoRepository.ALL_PACKAGES, pack, Optional.empty())
+                                                    .thenCompose(ignored -> this.updatePackages(name.key(), pack, Optional.empty()))
+                                            );
+                                        }
+                                    )
                                 )
                             ).thenCompose(Function.identity())
                     )
@@ -203,19 +215,24 @@ public final class AstoRepository implements Repository {
      * Add `dist` field to composer json.
      * @param compos Composer json file
      * @param path Prefix path for uploading archive (includes extension)
+     * @param shasum SHA-1 hex digest of the final archive bytes served at
+     *  {@code path} (WS4-composer.3 / S7) — the standard Composer
+     *  {@code dist.shasum} integrity claim, verified client-side by
+     *  {@code ArchiveDownloader} and, for a proxy mirroring this
+     *  repository, by {@code ProxyDownloadSlice}.
      * @return Composer json with added `dist` field.
      */
-    private byte[] addDist(final JsonObject compos, final Key path) {
+    private byte[] addDist(final JsonObject compos, final Key path, final String shasum) {
         final String url = this.prefix.orElseThrow(
             () -> new IllegalStateException("Prefix url for `dist` for uploaded archive was empty.")
         ).replaceAll("/$", "");
-        
+
         // Detect archive type from path extension
         final String pathStr = path.string();
-        final String distType = pathStr.endsWith(".tar.gz") || pathStr.endsWith(".tgz") 
-            ? "tar" 
+        final String distType = pathStr.endsWith(".tar.gz") || pathStr.endsWith(".tgz")
+            ? "tar"
             : "zip";
-        
+
         // Build full URL by appending path to base URL
         // Note: URI.resolve() with absolute paths replaces the path, so we concatenate instead
         final String fullUrl;
@@ -226,15 +243,29 @@ public final class AstoRepository implements Repository {
             // Path is relative, ensure proper separation
             fullUrl = url.endsWith("/") ? url + pathStr : url + "/" + pathStr;
         }
-        
+
         return Json.createObjectBuilder(compos).add(
             "dist", Json.createObjectBuilder()
                 .add("url", fullUrl)
                 .add("type", distType)
+                .add("shasum", shasum)
                 .build()
         ).build()
             .toString()
             .getBytes(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * SHA-1 hex digest of the final archive bytes — Composer's
+     * {@code dist.shasum} is verified client-side with
+     * {@code hash_file('sha1', ...)} (see {@code ArchiveDownloader}),
+     * despite the field's historically confusing name.
+     *
+     * @param bytes Final archive bytes (post composer.json version injection)
+     * @return Lowercase hex SHA-1 digest
+     */
+    private static String sha1Hex(final byte[] bytes) {
+        return DigestComputer.compute(bytes, Set.of(DigestComputer.SHA1)).get(DigestComputer.SHA1);
     }
 
     /**
