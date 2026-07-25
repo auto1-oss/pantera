@@ -784,6 +784,193 @@ class UploadSliceTest {
         );
     }
 
+    // ===== H1 fix: verifyPgp primary quarantine (both upload-order bypasses closed) =====
+
+    @Test
+    @DisplayName("H1: with verifyPgp on, a primary is NOT servable in the window between "
+        + "its own PUT and a valid .asc arriving — it only becomes servable once verified")
+    void verifyPgpQuarantinesPrimaryUntilSignatureArrives() throws Exception {
+        final PgpFixture pgp = PgpFixture.generate("quarantine@example.com");
+        final InMemoryKeyringStore keyring = new InMemoryKeyringStore();
+        keyring.addAsciiArmored(pgp.armoredPublicKey());
+        KeyringStoreRegistry.install(keyring);
+
+        final Slice slice = new UploadSlice(
+            this.asto, Optional.empty(), "quarantine", com.auto1.pantera.index.SyncArtifactIndexer.NOOP,
+            new MavenHostedPolicy(true, false)
+        );
+        final Key primaryKey = new Key.From("com/example/q/1.0/q-1.0.jar");
+        final byte[] jar = "jar-bytes".getBytes(StandardCharsets.UTF_8);
+
+        put(slice, "/com/example/q/1.0/q-1.0.jar", jar);
+        MatcherAssert.assertThat(
+            "H1 invariant: an uploaded primary must not be servable before a "
+                + "verified signature commits it",
+            this.asto.exists(primaryKey).join(),
+            Matchers.is(false)
+        );
+        MatcherAssert.assertThat(
+            "the primary must be quarantined (present under the staging namespace) — "
+                + "not silently dropped",
+            this.asto.exists(new Key.From(UploadSlice.STAGING_PREFIX + "/" + primaryKey.string())).join(),
+            Matchers.is(true)
+        );
+
+        put(slice, "/com/example/q/1.0/q-1.0.jar.asc", pgp.signDetached(jar));
+        MatcherAssert.assertThat(
+            "once a verified signature lands, the primary is promoted and becomes servable",
+            this.asto.exists(primaryKey).join(),
+            Matchers.is(true)
+        );
+        MatcherAssert.assertThat(
+            "quarantine copy must be gone after promotion (moved, not copied)",
+            this.asto.exists(new Key.From(UploadSlice.STAGING_PREFIX + "/" + primaryKey.string())).join(),
+            Matchers.is(false)
+        );
+    }
+
+    @Test
+    @DisplayName("H1 bypass (b) closed: a primary uploaded with verifyPgp on, whose .asc "
+        + "never arrives, is never served and never enters maven-metadata.xml")
+    void verifyPgpBypassOmissionPrimaryNeverServedWithoutSignature() {
+        KeyringStoreRegistry.install(new InMemoryKeyringStore());
+        final Slice slice = new UploadSlice(
+            this.asto, Optional.empty(), "omitted", com.auto1.pantera.index.SyncArtifactIndexer.NOOP,
+            new MavenHostedPolicy(true, false)
+        );
+        final byte[] jar = "unsigned-jar-bytes".getBytes(StandardCharsets.UTF_8);
+
+        final Response resp = put(slice, "/com/example/omit/1.0/omit-1.0.jar", jar);
+        MatcherAssert.assertThat(
+            "the primary PUT itself succeeds (client sees 201) — only serving is gated",
+            resp.status(), Matchers.is(RsStatus.CREATED)
+        );
+        MatcherAssert.assertThat(
+            "bypass (b): omitting the .asc entirely must NOT publish the primary",
+            this.asto.exists(new Key.From("com/example/omit/1.0/omit-1.0.jar")).join(),
+            Matchers.is(false)
+        );
+        MatcherAssert.assertThat(
+            "an unverified primary must never reach maven-metadata.xml's <versions>",
+            this.asto.exists(new Key.From("com/example/omit/maven-metadata.xml")).join(),
+            Matchers.is(false)
+        );
+    }
+
+    @Test
+    @DisplayName("H1 bypass (a) closed — attack case: an untrusted .asc uploaded BEFORE the "
+        + "primary does not let a later, unrelated primary upload slip through unverified")
+    void verifyPgpBypassReorderUntrustedSignatureBeforePrimaryNeverPublishes() throws Exception {
+        final PgpFixture attacker = PgpFixture.generate("attacker@example.com");
+        // Empty keyring — the attacker's key is never trusted.
+        KeyringStoreRegistry.install(new InMemoryKeyringStore());
+        final Slice slice = new UploadSlice(
+            this.asto, Optional.empty(), "reorder-attack", com.auto1.pantera.index.SyncArtifactIndexer.NOOP,
+            new MavenHostedPolicy(true, false)
+        );
+        final byte[] maliciousJar = "malicious-jar-bytes".getBytes(StandardCharsets.UTF_8);
+
+        // Reorder bypass: .asc PUT arrives first — under the pre-fix code this
+        // hit the `!primaryExists` branch and was saved unverified.
+        final Response ascResp = put(
+            slice, "/com/example/atk/1.0/atk-1.0.jar.asc", attacker.signDetached(maliciousJar)
+        );
+        MatcherAssert.assertThat(ascResp.status(), Matchers.is(RsStatus.CREATED));
+
+        final Response primaryResp = put(slice, "/com/example/atk/1.0/atk-1.0.jar", maliciousJar);
+        MatcherAssert.assertThat(
+            "the primary upload itself must be rejected once its staged signature fails verification",
+            primaryResp.status(), Matchers.is(RsStatus.FORBIDDEN)
+        );
+        MatcherAssert.assertThat(
+            "bypass (a): the primary must never become servable regardless of upload order",
+            this.asto.exists(new Key.From("com/example/atk/1.0/atk-1.0.jar")).join(),
+            Matchers.is(false)
+        );
+        MatcherAssert.assertThat(
+            ".asc must never become servable either",
+            this.asto.exists(new Key.From("com/example/atk/1.0/atk-1.0.jar.asc")).join(),
+            Matchers.is(false)
+        );
+        MatcherAssert.assertThat(
+            "the quarantined primary must be cleaned up after the rejection",
+            this.asto.exists(new Key.From(UploadSlice.STAGING_PREFIX + "/com/example/atk/1.0/atk-1.0.jar")).join(),
+            Matchers.is(false)
+        );
+    }
+
+    @Test
+    @DisplayName("H1 bypass (a) — legitimate order reversal: a TRUSTED .asc uploaded BEFORE "
+        + "its matching primary still publishes once the primary arrives")
+    void verifyPgpBypassReorderTrustedSignatureBeforePrimaryStillPublishes() throws Exception {
+        final PgpFixture pgp = PgpFixture.generate("early-signer@example.com");
+        final InMemoryKeyringStore keyring = new InMemoryKeyringStore();
+        keyring.addAsciiArmored(pgp.armoredPublicKey());
+        KeyringStoreRegistry.install(keyring);
+        final Slice slice = new UploadSlice(
+            this.asto, Optional.empty(), "reorder-ok", com.auto1.pantera.index.SyncArtifactIndexer.NOOP,
+            new MavenHostedPolicy(true, false)
+        );
+        final byte[] jar = "well-behaved-jar-bytes".getBytes(StandardCharsets.UTF_8);
+
+        final Response ascResp = put(
+            slice, "/com/example/ok/1.0/ok-1.0.jar.asc", pgp.signDetached(jar)
+        );
+        MatcherAssert.assertThat(ascResp.status(), Matchers.is(RsStatus.CREATED));
+        MatcherAssert.assertThat(
+            "no real primary exists yet, so the signature itself is quarantined, not verified in a vacuum",
+            this.asto.exists(new Key.From("com/example/ok/1.0/ok-1.0.jar")).join(),
+            Matchers.is(false)
+        );
+
+        final Response primaryResp = put(slice, "/com/example/ok/1.0/ok-1.0.jar", jar);
+        MatcherAssert.assertThat(primaryResp.status(), Matchers.is(RsStatus.CREATED));
+        MatcherAssert.assertThat(
+            "order must not matter for a genuinely matching, trusted signature",
+            this.asto.exists(new Key.From("com/example/ok/1.0/ok-1.0.jar")).join(),
+            Matchers.is(true)
+        );
+        MatcherAssert.assertThat(
+            this.asto.exists(new Key.From("com/example/ok/1.0/ok-1.0.jar.asc")).join(),
+            Matchers.is(true)
+        );
+        MatcherAssert.assertThat(
+            "checksums must be generated once promoted, exactly like the non-quarantined path",
+            this.asto.exists(new Key.From("com/example/ok/1.0/ok-1.0.jar.sha256")).join(),
+            Matchers.is(true)
+        );
+    }
+
+    @Test
+    @DisplayName("H1: the quarantine namespace itself is not directly addressable through "
+        + "the Maven API — a crafted GET for the staged path is a plain 404, never the bytes")
+    void verifyPgpStagingNamespaceNotDirectlyAddressable() {
+        // Simulates a primary sitting in quarantine (as stagePrimaryForVerification
+        // would leave it) without going through the upload flow, to isolate the
+        // routing guard from the upload logic under test elsewhere in this class.
+        final byte[] staged = "quarantined-bytes-must-not-leak".getBytes(StandardCharsets.UTF_8);
+        this.asto.save(
+            new Key.From(UploadSlice.STAGING_PREFIX + "/com/example/probe/1.0/probe-1.0.jar"),
+            new Content.From(staged)
+        ).join();
+
+        final Slice mavenSlice = new MavenSlice(
+            this.asto, com.auto1.pantera.security.policy.Policy.FREE,
+            (username, password) -> Optional.empty(), null, "probe-repo", Optional.empty()
+        );
+        final Response resp = mavenSlice.response(
+            new RequestLine(
+                RqMethod.GET, "/.pgp-pending/com/example/probe/1.0/probe-1.0.jar"
+            ),
+            Headers.EMPTY, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "a direct request for the staging namespace must 404, never serve the "
+                + "unverified bytes sitting there",
+            resp.status(), Matchers.is(RsStatus.NOT_FOUND)
+        );
+    }
+
     // ===== test fixture helpers =====
 
     private static Response put(final Slice slice, final String path, final byte[] data) {
