@@ -539,18 +539,35 @@ class UploadSliceTest {
     }
 
     @Test
-    @org.junit.jupiter.api.Timeout(60)
+    @org.junit.jupiter.api.Timeout(120)
     @DisplayName("WS4-maven.4: concurrent deploys of different versions for the same GA "
         + "converge — both versions survive a real multi-threaded race")
     void concurrentDeploysOfDifferentVersionsBothSurvive() throws InterruptedException {
-        // No artificial join timeout: on a shared/loaded CI runner the
-        // common ForkJoinPool backing InMemoryStorage's supplyAsync calls
-        // can be contended by unrelated tests running in the same JVM
-        // (CLAUDE.md: never assert absolute wall-clock latency — a bounded
-        // join here would produce a false failure under load, not prove
-        // anything about the metadata regenerator's correctness). The
-        // @Timeout above converts a genuine hang into a deterministic
-        // failure instead.
+        // No artificial join timeout: a bounded join here would produce a
+        // false failure under load, not prove anything about the metadata
+        // regenerator's correctness (CLAUDE.md: never assert absolute
+        // wall-clock latency). The @Timeout above is a pure hang-guard, sized
+        // with real headroom rather than a round number:
+        // MavenMetadataRegenerator retries the per-GA storage lock up to 20
+        // times with a jitter-less exponential backoff (10ms doubling, capped
+        // at 500ms — see MAX_LOCK_RETRIES/RETRY_BASE_DELAY_MS). Because this
+        // test rendezvous's all `versionCount` threads on a latch to force
+        // genuine simultaneity, every one of them proposes its lock at
+        // essentially the same instant, so EVERY round of the retry ladder
+        // collides in lockstep (no jitter to desynchronize them) and the
+        // burst reliably rides the ladder close to its ~7.8s worst case on
+        // an idle machine (measured directly: 15/15 isolated runs landed
+        // in the 7.82-7.90s band, confirmed independent of available
+        // processors/commonPool parallelism via -XX:ActiveProcessorCount).
+        // That means the *typical* case is already within ~8x of the old
+        // 60s bound, not a rare tail — leaving far less than the CLAUDE.md
+        // ≥10x idle-case margin to absorb the extra per-attempt scheduling
+        // latency a real `-T8` reactor build adds on top (delayed-executor
+        // firing and list/write/checksum work all get slower under host-level
+        // CPU oversubscription, which stretches every one of the ~20 rounds,
+        // not just one). 120s (~15x the measured idle baseline) restores a
+        // genuine order-of-magnitude margin while still failing fast on an
+        // actual hang.
         final int versionCount = 5;
         final java.util.concurrent.CountDownLatch ready = new java.util.concurrent.CountDownLatch(versionCount);
         final java.util.concurrent.CountDownLatch go = new java.util.concurrent.CountDownLatch(1);
