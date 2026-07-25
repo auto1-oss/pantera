@@ -145,6 +145,12 @@ export const routes: RouteRecordRaw[] = [
     meta: { requiresAdmin: true },
   },
   {
+    path: '/admin/pgp-keyring',
+    name: 'admin-pgp-keyring',
+    component: () => import('@/views/admin/PgpKeyringView.vue'),
+    meta: { requiresAdmin: true },
+  },
+  {
     path: '/:pathMatch(.*)*',
     name: 'not-found',
     component: () => import('@/views/NotFoundView.vue'),

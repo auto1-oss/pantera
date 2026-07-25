@@ -1,5 +1,5 @@
 import { getApiClient } from './client'
-import type { AuthProvidersResponse, TokenResponse, UserInfo } from '@/types'
+import type { AuthProvidersResponse, PgpKey, TokenResponse, UserInfo } from '@/types'
 
 export async function getProviders(): Promise<AuthProvidersResponse> {
   const { data } = await getApiClient().get<AuthProvidersResponse>('/auth/providers')
@@ -171,4 +171,52 @@ export async function revokeAllUserTokens(username: string): Promise<{ revoked_c
     `/admin/revoke-user/${username}`
   )
   return data
+}
+
+// --- PGP Keyring (WS4-maven.3) ---
+//
+// Trusted public keys the Maven adapter consults to verify artifact
+// signatures when a repo's verifyPgp flag is enabled. All three endpoints
+// require ApiAdminPermission.ADMIN (same authz gate as the settings above),
+// not a role-scoped permission — see AdminAuthHandler#register.
+
+/**
+ * GET /admin/pgp-keys — identity/provenance only, the armored key material
+ * itself is never returned to the UI.
+ */
+export async function listPgpKeys(): Promise<PgpKey[]> {
+  const { data } = await getApiClient().get<{ keys: PgpKey[] }>('/admin/pgp-keys')
+  return data.keys
+}
+
+/** One inserted key id, as echoed by POST /admin/pgp-keys on success. */
+export interface UploadedPgpKeySummary {
+  key_id_hex: string
+  fingerprint: string
+}
+
+/**
+ * POST /admin/pgp-keys — body { public_key_armored, description? }.
+ * An armored block may contain a master key plus sub-keys; the backend
+ * inserts one row per key found and returns all of them (any of them may
+ * be the signer of a future .asc file).
+ */
+export async function uploadPgpKey(
+  publicKeyArmored: string,
+  description?: string,
+): Promise<UploadedPgpKeySummary[]> {
+  const body: Record<string, string> = { public_key_armored: publicKeyArmored }
+  if (description?.trim()) {
+    body.description = description.trim()
+  }
+  const { data } = await getApiClient().post<{ keys: UploadedPgpKeySummary[] }>(
+    '/admin/pgp-keys',
+    body,
+  )
+  return data.keys
+}
+
+/** DELETE /admin/pgp-keys/{keyId} — keyId is the 16-char hex long key id. */
+export async function deletePgpKey(keyIdHex: string): Promise<void> {
+  await getApiClient().delete(`/admin/pgp-keys/${keyIdHex}`)
 }
