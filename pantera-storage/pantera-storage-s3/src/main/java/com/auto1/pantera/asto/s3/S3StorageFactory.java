@@ -153,6 +153,11 @@ public class S3StorageFactory implements StorageFactory {
      * window this implies and {@code docs/configuration-reference.md} for
      * every key.</p>
      *
+     * <p>WS1.4 adds index-driven eviction and hard admission control:
+     * {@code cache.max-disk-bytes} plus the {@code cache.eviction-*}
+     * watermark/policy knobs, each falling back to {@link
+     * CachedBlobStorage.EvictionConfig#defaults()} per field when unset.</p>
+     *
      * @param base Reference {@link BlobStore} cold tier.
      * @param cache {@code cache} config sub-tree.
      * @param path Local disk cache directory.
@@ -168,7 +173,37 @@ public class S3StorageFactory implements StorageFactory {
             Duration.ofMillis(freshnessMillis),
             Duration.ofMillis(negativeMillis),
             writeThrough,
-            this.writeBackConfig(cache)
+            this.writeBackConfig(cache),
+            this.evictionConfig(cache)
+        );
+    }
+
+    /**
+     * Resolves the WS1.4 eviction/admission-control tuning (spec
+     * &sect;3.D) from the {@code cache} config sub-tree; every key falls
+     * back to {@link CachedBlobStorage.EvictionConfig#defaults()} per field
+     * when unset. Units mirror {@code cache.mode: disk}'s {@code
+     * DiskCacheStorage} watermark keys exactly (percentages of {@code
+     * max-disk-bytes}) -- distinct key names ({@code max-disk-bytes} vs
+     * {@code max-bytes}, {@code eviction-*-watermark-percent} vs {@code
+     * *-watermark-percent}) so both modes' keys can coexist unambiguously
+     * under the same {@code cache:} block if a repository is ever migrated
+     * between modes.
+     *
+     * @param cache {@code cache} config sub-tree.
+     * @return Resolved eviction configuration.
+     */
+    private CachedBlobStorage.EvictionConfig evictionConfig(final Config cache) {
+        final CachedBlobStorage.EvictionConfig fallback = CachedBlobStorage.EvictionConfig.defaults();
+        final CachedBlobStorage.EvictionPolicy policy = Optional.ofNullable(cache.string("eviction-policy"))
+            .map(String::toUpperCase)
+            .map(val -> "LFU".equals(val) ? CachedBlobStorage.EvictionPolicy.LFU : CachedBlobStorage.EvictionPolicy.LRU)
+            .orElse(fallback.policy());
+        return new CachedBlobStorage.EvictionConfig(
+            optLong(cache, "max-disk-bytes").orElse(fallback.maxDiskBytes()),
+            optInt(cache, "eviction-high-watermark-percent").orElse(fallback.highWatermarkPercent()),
+            optInt(cache, "eviction-low-watermark-percent").orElse(fallback.lowWatermarkPercent()),
+            policy
         );
     }
 

@@ -22,6 +22,7 @@ import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
@@ -304,6 +305,132 @@ final class StorageIndexTest {
         final Optional<StorageIndex.Entry> rebuilt = index.knownEntry(new Key.From("pre-ws1-2.jar"));
         MatcherAssert.assertThat(rebuilt.get().pendingUpload(), new IsEqual<>(false));
         MatcherAssert.assertThat(index.pendingWriteKeys().isEmpty(), new IsEqual<>(true));
+    }
+
+    // ===== WS1.4 (spec WS1-storage-for-scale.md sect.3.D): lastAccess/hits, =====
+    // ===== running disk-byte counter, eviction candidates, sharded rebuild =====
+
+    @Test
+    void recordAccessBumpsHitsAndRefreshesLastAccessWithoutWallClockSleep() {
+        final MutableClock clock = new MutableClock(Instant.parse("2026-01-01T00:00:00Z"));
+        final StorageIndex index = new StorageIndex(clock);
+        final Key key = new Key.From("hot.jar");
+        index.putPresent(key, 10L, null, null, true);
+        MatcherAssert.assertThat("a freshly-written entry starts at 0 hits", index.knownEntry(key).get().hits(), new IsEqual<>(0L));
+        clock.advance(Duration.ofSeconds(5));
+        index.recordAccess(key);
+        final StorageIndex.Entry afterOneHit = index.knownEntry(key).get();
+        MatcherAssert.assertThat(afterOneHit.hits(), new IsEqual<>(1L));
+        MatcherAssert.assertThat(afterOneHit.lastAccessEpochMilli(), new IsEqual<>(clock.instant().toEpochMilli()));
+        clock.advance(Duration.ofSeconds(5));
+        index.recordAccess(key);
+        final StorageIndex.Entry afterTwoHits = index.knownEntry(key).get();
+        MatcherAssert.assertThat("a second access must bump hits again", afterTwoHits.hits(), new IsEqual<>(2L));
+        MatcherAssert.assertThat(afterTwoHits.lastAccessEpochMilli(), new IsEqual<>(clock.instant().toEpochMilli()));
+    }
+
+    @Test
+    void recordAccessOnUnknownKeyIsANoOp() {
+        final StorageIndex index = new StorageIndex();
+        index.recordAccess(new Key.From("never-written.jar"));
+        MatcherAssert.assertThat(
+            "recordAccess on a key the index has never seen must not create an entry",
+            index.knownEntry(new Key.From("never-written.jar")).isPresent(), new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void diskBytesUsedTracksPutPresentAndRemoveWithoutFilesWalk() {
+        final StorageIndex index = new StorageIndex();
+        MatcherAssert.assertThat(index.diskBytesUsed(), new IsEqual<>(0L));
+        index.putPresent(new Key.From("a.jar"), 100L, null, null, true);
+        MatcherAssert.assertThat(index.diskBytesUsed(), new IsEqual<>(100L));
+        index.putPresent(new Key.From("b.jar"), 250L, null, null, true);
+        MatcherAssert.assertThat(index.diskBytesUsed(), new IsEqual<>(350L));
+        index.remove(new Key.From("a.jar"));
+        MatcherAssert.assertThat(index.diskBytesUsed(), new IsEqual<>(250L));
+        index.remove(new Key.From("b.jar"));
+        MatcherAssert.assertThat(index.diskBytesUsed(), new IsEqual<>(0L));
+    }
+
+    @Test
+    void diskBytesUsedReflectsOverwriteDeltaNotDoubleCounting() {
+        final StorageIndex index = new StorageIndex();
+        final Key key = new Key.From("resized.jar");
+        index.putPresent(key, 100L, null, null, true);
+        MatcherAssert.assertThat(index.diskBytesUsed(), new IsEqual<>(100L));
+        index.putPresent(key, 40L, null, null, true);
+        MatcherAssert.assertThat(
+            "overwriting an existing entry must replace its byte contribution, not add to it",
+            index.diskBytesUsed(), new IsEqual<>(40L)
+        );
+    }
+
+    @Test
+    void diskBytesUsedIgnoresNegativeAndMetadataOnlyEntries() {
+        final StorageIndex index = new StorageIndex();
+        index.putNegative(new Key.From("missing.jar"), Duration.ofMinutes(1));
+        index.putPresent(new Key.From("metadata-only.jar"), 999L, null, null, false);
+        MatcherAssert.assertThat(
+            "a negative entry and a metadata-only (not presentOnDisk) entry occupy zero disk bytes",
+            index.diskBytesUsed(), new IsEqual<>(0L)
+        );
+    }
+
+    @Test
+    void diskBytesUsedTracksPendingWriteAndTransitionToPresent() {
+        final StorageIndex index = new StorageIndex();
+        final Key key = new Key.From("wb.jar");
+        index.putPendingWrite(key, 64L, null, "d");
+        MatcherAssert.assertThat(index.diskBytesUsed(), new IsEqual<>(64L));
+        index.putPresent(key, 64L, "etag", "d", true);
+        MatcherAssert.assertThat(
+            "confirming PENDING_WRITE as PRESENT must not double-count the same bytes",
+            index.diskBytesUsed(), new IsEqual<>(64L)
+        );
+    }
+
+    @Test
+    void evictionCandidatesExcludesPendingUploadNegativeAndMetadataOnlyEntries() {
+        final StorageIndex index = new StorageIndex();
+        index.putPresent(new Key.From("evictable.jar"), 1L, null, null, true);
+        index.putPendingWrite(new Key.From("pending.jar"), 1L, null, null);
+        index.putNegative(new Key.From("missing.jar"), Duration.ofMinutes(1));
+        index.putPresent(new Key.From("metadata-only.jar"), 1L, null, null, false);
+        final List<Map.Entry<Key, StorageIndex.Entry>> candidates = index.evictionCandidates();
+        MatcherAssert.assertThat(
+            "only the plain PRESENT, present-on-disk entry is eviction-eligible",
+            candidates.stream().map(candidate -> candidate.getKey().string()).toList(),
+            new IsEqual<>(List.of("evictable.jar"))
+        );
+    }
+
+    @Test
+    void rebuildFromDiskWithResolverUsesTheSuppliedKeyMapping(@TempDir final Path tmp) throws IOException {
+        // A minimal stand-in for WS1.4's sharded layout (CacheKeyShard lives
+        // in CachedBlobStorage's production wiring; this proves the generic
+        // resolver plumbing in isolation): the on-disk file name has no
+        // relation to the logical key at all, only the resolver does.
+        final Path dataFile = tmp.resolve("opaque-blob-name");
+        Files.write(dataFile, "sharded-bytes".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        final StorageIndex index = new StorageIndex();
+        index.rebuildFromDisk(tmp, path -> Optional.of(new Key.From("logical", "key.jar")));
+        MatcherAssert.assertThat(
+            "the resolver -- not the on-disk file name -- determines the recovered key",
+            index.knownEntry(new Key.From("logical", "key.jar")).isPresent(), new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(index.knownEntry(new Key.From("opaque-blob-name")).isPresent(), new IsEqual<>(false));
+    }
+
+    @Test
+    void rebuildFromDiskWithResolverSkipsFilesTheResolverCannotMap(@TempDir final Path tmp) throws IOException {
+        Files.write(tmp.resolve("unmappable"), "x".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        final StorageIndex index = new StorageIndex();
+        index.rebuildFromDisk(tmp, path -> Optional.empty());
+        MatcherAssert.assertThat(
+            "a file the resolver cannot map to a key must be skipped, not crash the rebuild",
+            index.size(), new IsEqual<>(0)
+        );
     }
 
     /**

@@ -236,12 +236,18 @@ cache:
   [Write-Back (Async Durable Writes)](#write-back-async-durable-writes-cachewrite-through)
   below. `cache.write-through: true` opts a repository back into the
   pre-WS1.2 synchronous behaviour.
-- **No size-based eviction yet.** The disk directory under `cache.path` is not
-  bounded by `max-bytes` in index mode; size-based eviction is a later phase.
-  Size the volume accordingly, or stay on `cache.mode: disk` (which does
-  evict) until eviction lands for index mode. A key with an unconfirmed
-  write-back upload (`PENDING_WRITE`) is never evicted once eviction lands --
-  it is the only durable copy of those bytes until the upload confirms.
+- **Size-bounded with index-driven LRU/LFU eviction** (WS1.4) -- see
+  [Eviction & Admission Control](#eviction--admission-control-cachemax-disk-bytes)
+  below. The disk directory under `cache.path` never exceeds
+  `cache.max-disk-bytes`: a write that would cross it evicts the coldest
+  entries first, synchronously, before the write lands. A key with an
+  unconfirmed write-back upload (`PENDING_WRITE`) is NEVER evicted -- it is
+  the only durable copy of those bytes until the upload confirms.
+- **Cache files are sharded on disk** (WS1.4) -- a 2-level hex fan-out keyed
+  off a hash of the artifact key, not the artifact key's own path structure,
+  so the cache directory never accumulates one huge flat directory. This is
+  purely an internal disk layout detail; it has no config key and no
+  observable effect other than the directory structure under `cache.path`.
 - **`list()` is scoped to what the index has observed** -- the boot-time disk
   scan plus every key written or read since. A repository switched to
   `cache.mode: index` with pre-existing S3 objects that Pantera has never
@@ -313,6 +319,77 @@ request for that key simply re-fetches from upstream). For a hosted-mode
 upload (where the `save()` *is* the client's request), this surfaces as
 `503 Service Unavailable` with a `Retry-After` header at the routes that map
 it (see the REST API reference for exactly which upload routes do today).
+
+### Eviction & Admission Control (`cache.max-disk-bytes`)
+
+Only meaningful under `cache.mode: index` (WS1.4). Keeps the local disk cache
+bounded without ever `Files.walk`-ing the directory to find out how full it
+is: an in-memory running byte counter, updated incrementally on every
+write/evict/remove, answers "how many bytes are cached right now" instantly.
+
+```yaml
+cache:
+  enabled: true
+  mode: index
+  path: /var/pantera/cache/s3
+  max-disk-bytes: 10737418240            # 10 GiB
+  eviction-high-watermark-percent: 90     # proactive eviction starts at 90% full
+  eviction-low-watermark-percent: 80      # proactive eviction stops at 80% full
+  eviction-policy: LRU                    # LRU or LFU
+```
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `max-disk-bytes` | `10737418240` (10 GiB) | Hard bound on total disk-cache bytes. A `save()` that would cross it evicts synchronously first; if it still can't fit (e.g. the content itself exceeds the bound, or everything else is pinned `PENDING_WRITE`) the write is rejected. `<= 0` disables eviction/admission entirely (unbounded). |
+| `eviction-high-watermark-percent` | `90` | Percentage of `max-disk-bytes` at which a write proactively triggers eviction (ahead of the hard bound). |
+| `eviction-low-watermark-percent` | `80` | Percentage of `max-disk-bytes` eviction works down toward once triggered -- evicting further than the immediate write needs, so the cache isn't evicting on almost every subsequent write. |
+| `eviction-policy` | `LRU` | `LRU` (least recently used) or `LFU` (least frequently used) -- same vocabulary and semantics as `cache.mode: disk`'s `eviction-policy`. |
+
+**Hard bound, not just a watermark.** Even if eviction fails to free enough
+space (every other entry happens to be `PENDING_WRITE`), the hard
+`max-disk-bytes` check runs on every single write and rejects rather than
+silently exceeding the bound -- the disk directory never grows past
+`max-disk-bytes`, checked at every write, not just at a periodic sweep.
+
+**`PENDING_WRITE` is never evicted.** An entry with an unconfirmed write-back
+upload is the ONLY durable copy of those bytes (see
+[Write-Back](#write-back-async-durable-writes-cachewrite-through) above) --
+eviction always skips it, regardless of how cold it is or how full the cache
+gets. A repository under sustained write pressure with a very small
+`max-disk-bytes` and a large in-flight write-back queue can therefore see
+disk usage stay above the low watermark indefinitely (bounded from above only
+by `max-disk-bytes` itself, via the hard-bound rejection) until uploads drain.
+
+**Coldness signal (`hits`/`lastAccess`) survives a restart, approximately.**
+Every index entry tracks how many times it has been read and when it was last
+read, driving the LRU/LFU comparison. These are persisted in the same
+per-file `.meta` sidecar as everything else, but only refreshed at the points
+a sidecar is already written for another reason (a confirmed write, or a
+write-back upload confirming) -- NOT on every read. A restart therefore
+recovers each entry's coldness signal "as of its last write", not "as of its
+last read"; a background per-read sidecar rewrite was deliberately avoided
+because it can race a concurrent reader of the same sidecar file (most
+notably another node's or another restart's boot-time disk scan). In
+practice this means freshly-restarted eviction ordering is a reasonable
+approximation, converging back to precise ordering as the process runs.
+
+### Sharded Cache Directories
+
+`cache.mode: index` shards its disk cache directory: each cached file lives
+under a 2-level hex fan-out directory (e.g. `a1/b2/<encoded-key>`) derived
+from a hash of the artifact key, not the artifact key's own path segments.
+This keeps any single directory from growing unbounded regardless of how flat
+a format's own key naming is (many generic/npm uploads, for instance, can
+share a shallow prefix). This is purely an on-disk layout detail: no config
+key controls it, and it has no effect on any API behaviour -- only on what you
+see if you browse `cache.path` directly. The mapping is deterministic and
+reconstructed on every boot from the encoded file name alone (the hash-derived
+directory levels are write-only fan-out, never consulted on read).
+
+**Known limitation:** a percent-encoded key can, in principle, exceed a
+filesystem's typical single-filename length limit (~255 bytes) for an
+unusually long logical key. This mirrors a pre-existing limitation of
+`cache.mode: disk` for deeply nested keys and is not specially handled.
 
 ---
 
