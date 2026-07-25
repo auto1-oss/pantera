@@ -22,6 +22,8 @@
   ([@aydasraf](https://github.com/aydasraf))
 - **Admin UI for the Maven PGP keyring.** A "Maven PGP Keyring" page under the admin console lists, adds (by armored public key), and removes the trusted signing keys that back Maven/Gradle `verifyPgp`, completing the admin surface for that feature.
   ([@aydasraf](https://github.com/aydasraf))
+- **Docker hosted repositories can serve layer blobs via presigned direct-download.** A per-repository `download-mode` (`stream` / `redirect` / `auto`) can issue a `302` to a time-limited presigned S3 URL for `GET /v2/<name>/blobs/<digest>` so the client pulls the layer bytes straight from the object store instead of streaming them through Pantera — removing Pantera from the byte path for cached blobs. It falls back to streaming whenever the object is not yet durably in the store or presigning is not configured, and metadata (manifests, tags) is never redirected. `stream` (the default) preserves the current behaviour for air-gapped clients.
+  ([@aydasraf](https://github.com/aydasraf))
 
 ### ⚡ Performance
 

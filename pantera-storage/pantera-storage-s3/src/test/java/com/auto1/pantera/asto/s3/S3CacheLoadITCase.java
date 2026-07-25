@@ -35,7 +35,6 @@ import org.hamcrest.number.OrderingComparison;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Container;
@@ -139,8 +138,23 @@ final class S3CacheLoadITCase {
     }
 
     @Test
-    void sustainsAtLeast1000ReadsAndWritesPerSecond(@TempDir final Path cacheDir) throws Exception {
+    void sustainsAtLeast1000ReadsAndWritesPerSecond() throws Exception {
+        // Own the cache dir lifecycle explicitly rather than via @TempDir: the
+        // write-back uploader daemon threads keep writing to it after the
+        // measured phases end, which races @TempDir's strict post-test
+        // cleanup. Close the storage (stops the uploader pool) and delete the
+        // tree tolerantly instead.
+        final Path cacheDir = Files.createTempDirectory("ws1-load-cache");
         final Storage storage = new S3StorageFactory().newStorage(this.indexCacheConfig(cacheDir));
+        try {
+            this.measureLoad(storage);
+        } finally {
+            S3CacheLoadITCase.closeQuietly(storage);
+            S3CacheLoadITCase.deleteTreeQuietly(cacheDir);
+        }
+    }
+
+    private void measureLoad(final Storage storage) throws Exception {
         final byte[] payload = new byte[PAYLOAD_BYTES];
         ThreadLocalRandom.current().nextBytes(payload);
 
@@ -267,6 +281,31 @@ final class S3CacheLoadITCase {
 
     private static Key hotKey(final int idx) {
         return new Key.From("bench", "hot", Integer.toString(idx));
+    }
+
+    private static void closeQuietly(final Storage storage) {
+        if (storage instanceof AutoCloseable closeable) {
+            try {
+                closeable.close();
+            } catch (final Exception ignored) {
+                // best-effort: shutting the uploader pool down for cleanup
+            }
+        }
+    }
+
+    private static void deleteTreeQuietly(final Path root) {
+        try (java.util.stream.Stream<Path> walk = Files.walk(root)) {
+            walk.sorted(java.util.Comparator.reverseOrder()).forEach(path -> {
+                try {
+                    Files.deleteIfExists(path);
+                } catch (final java.io.IOException ignored) {
+                    // A write-back daemon may still be writing here; leave any
+                    // straggler for the OS temp sweep rather than fail the test.
+                }
+            });
+        } catch (final java.io.IOException ignored) {
+            // best-effort tree delete
+        }
     }
 
     /** A load operation returning a future the driver awaits. */
