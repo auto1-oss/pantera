@@ -1106,7 +1106,6 @@ public class RepositorySlices {
                 // and deletes are out of scope, CLAUDE.md/WS4-docker.5 §3).
                 final List<String> dockerFlatMembers = flattenMembers(cfg.name());
                 final List<Docker> dockerMemberDockers = new java.util.ArrayList<>();
-                SharedJettyClients.Lease dockerGroupLease = null;
                 for (final String memberName : dockerFlatMembers) {
                     final Optional<RepoConfig> memberCfgOpt = this.repos.config(memberName);
                     if (memberCfgOpt.isEmpty()) {
@@ -1127,12 +1126,12 @@ public class RepositorySlices {
                             )
                         );
                     } else if ("docker-proxy".equals(memberCfg.type())) {
-                        if (dockerGroupLease == null) {
-                            dockerGroupLease = jettyClientSlices(cfg);
+                        if (clientLease == null) {
+                            clientLease = jettyClientSlices(cfg);
                         }
                         dockerMemberDockers.add(
                             DockerProxy.buildDocker(
-                                dockerGroupLease.client(), memberCfg, artifactEvents()
+                                clientLease.client(), memberCfg, artifactEvents()
                             )
                         );
                     } else {
@@ -1145,7 +1144,6 @@ public class RepositorySlices {
                             .log();
                     }
                 }
-                clientLease = dockerGroupLease;
                 if (dockerMemberDockers.isEmpty()) {
                     throw new IllegalStateException(
                         String.format(
