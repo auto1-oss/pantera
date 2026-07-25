@@ -103,6 +103,38 @@ docker push pantera-host:8080/docker-local/myapp:1.0.0
 
 ---
 
+## OCI 1.1 Referrers (cosign, oras, notation, SBOM)
+
+Local (`docker`) repositories index and serve OCI 1.1 referrers, so tools that
+attach signatures, SBOMs, and other artifacts by digest work against a hosted
+repository:
+
+```bash
+# Sign an image and discover the signature via the referrers API
+cosign sign --tlog-upload=false pantera-host:8080/docker-local/myapp:latest
+cosign verify --insecure-ignore-tlog pantera-host:8080/docker-local/myapp:latest
+
+# Attach an arbitrary artifact (e.g. an SBOM) and discover it
+oras attach --artifact-type application/vnd.example.sbom.v1+json \
+    pantera-host:8080/docker-local/myapp:latest ./sbom.json
+oras discover pantera-host:8080/docker-local/myapp:latest
+```
+
+A manifest pushed with an OCI `subject` field is indexed against that subject;
+`GET /v2/<name>/referrers/<digest>` always returns `200` with an OCI Image
+Index (empty when nothing is indexed, per spec). The push response for a
+subject-bearing manifest carries an `OCI-Subject: <digest>` header. Narrow a
+listing with `?artifactType=<type>` — the response then carries an
+`OCI-Filters-Applied: artifactType` header.
+
+**Scope:** referrers are indexed and served for **hosted (`docker`)
+repositories only**. `docker-proxy` and `docker-group` repositories always
+answer with an empty referrers listing — proxying an upstream registry's own
+referrers, and a fallback `sha256-<digest>` tag-schema index for registries
+without the referrers API, are not implemented.
+
+---
+
 ## Multi-Registry Proxy
 
 A single Docker proxy repository can cache images from multiple upstream registries. This is useful when your builds pull from Docker Hub, GCR, Elastic, and Kubernetes registries:

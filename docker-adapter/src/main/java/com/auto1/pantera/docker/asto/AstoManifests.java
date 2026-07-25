@@ -20,15 +20,20 @@ import com.auto1.pantera.docker.Tags;
 import com.auto1.pantera.docker.error.InvalidManifestException;
 import com.auto1.pantera.docker.manifest.Manifest;
 import com.auto1.pantera.docker.manifest.ManifestLayer;
+import com.auto1.pantera.docker.manifest.ReferrerDescriptor;
+import com.auto1.pantera.docker.manifest.Referrers;
 import com.auto1.pantera.docker.misc.Pagination;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.google.common.base.Strings;
 
 import javax.json.JsonException;
 import java.nio.charset.StandardCharsets;
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
@@ -71,6 +76,7 @@ public final class AstoManifests implements Manifests {
                     .thenCompose(
                         manifest -> this.validate(manifest)
                             .thenCompose(nothing -> this.addManifestLinks(ref, manifest.digest()))
+                            .thenCompose(nothing -> this.indexReferrer(manifest))
                             .thenApply(nothing -> manifest)
                     )
             );
@@ -84,8 +90,33 @@ public final class AstoManifests implements Manifests {
                     .thenApply(digest -> new Manifest(digest, bytes))
                     .thenCompose(
                         manifest -> this.addManifestLinks(ref, manifest.digest())
+                            .thenCompose(nothing -> this.indexReferrer(manifest))
                             .thenApply(nothing -> manifest)
                     )
+            );
+    }
+
+    @Override
+    public CompletableFuture<Referrers> referrers(final Digest subject, final Optional<String> artifactType) {
+        final Key root = Layout.referrersRoot(this.name, subject);
+        return this.storage.list(root)
+            .thenCompose(this::readDescriptors)
+            .thenApply(
+                descriptors -> {
+                    final List<ReferrerDescriptor> filtered = artifactType
+                        .map(type -> filterByArtifactType(descriptors, type))
+                        .orElse(descriptors);
+                    EcsLogger.info("com.auto1.pantera.docker")
+                        .message("Referrers listing served (count=" + filtered.size() + ")")
+                        .eventCategory("web")
+                        .eventAction("referrers_serve")
+                        .eventOutcome("success")
+                        .field("repository.name", this.name)
+                        .field("container.image.hash.all", subject.string())
+                        .field("log.source", "application")
+                        .log();
+                    return new Referrers(filtered);
+                }
             );
     }
 
@@ -265,5 +296,82 @@ public final class AstoManifests implements Manifests {
                 return CompletableFuture.completedFuture(Optional.empty());
             }
         );
+    }
+
+    /**
+     * Indexes {@code manifest} against its OCI 1.1 {@code subject}, if
+     * present, so {@code GET .../referrers/<subject-digest>} can find it.
+     * A no-op for ordinary manifests that carry no {@code subject}.
+     *
+     * <p>Not gated on {@link com.auto1.pantera.docker.misc.ImageTag#valid} —
+     * referrer artifacts (signatures, SBOMs) are pushed by digest, never by
+     * tag, unlike the DB-index gate in {@code PushManifestSlice}.
+     *
+     * @param manifest Manifest just written to blob storage.
+     * @return Signal that indexing completed (or that there was nothing to index).
+     */
+    private CompletableFuture<Void> indexReferrer(final Manifest manifest) {
+        return manifest.subject()
+            .map(subject -> this.writeReferrerEntry(subject, manifest))
+            .orElseGet(() -> CompletableFuture.completedFuture(null));
+    }
+
+    /**
+     * Writes the referrer descriptor entry and logs the state transition.
+     *
+     * @param subject Subject digest the manifest refers to.
+     * @param manifest Referring manifest.
+     * @return Signal that the entry is written.
+     */
+    private CompletableFuture<Void> writeReferrerEntry(final Digest subject, final Manifest manifest) {
+        return this.storage.save(
+            Layout.referrer(this.name, subject, manifest.digest()),
+            new Content.From(ReferrerDescriptor.of(manifest).toBytes())
+        ).toCompletableFuture().thenRun(
+            () -> EcsLogger.info("com.auto1.pantera.docker")
+                .message("Referrers index entry written")
+                .eventCategory("web")
+                .eventAction("referrers_index_write")
+                .eventOutcome("success")
+                .field("repository.name", this.name)
+                .field("container.image.hash.all", subject.string())
+                .field("package.checksum", manifest.digest().string())
+                .field("log.source", "application")
+                .log()
+        );
+    }
+
+    /**
+     * Reads every referrer descriptor found under a listed set of keys.
+     *
+     * @param keys Referrer descriptor keys (from {@link Layout#referrersRoot}).
+     * @return Parsed descriptors, in no particular order.
+     */
+    private CompletableFuture<List<ReferrerDescriptor>> readDescriptors(final Collection<Key> keys) {
+        final List<CompletableFuture<ReferrerDescriptor>> futures = keys.stream()
+            .map(
+                key -> this.storage.value(key)
+                    .thenCompose(Content::asBytesFuture)
+                    .thenApply(ReferrerDescriptor::fromBytes)
+                    .toCompletableFuture()
+            )
+            .collect(Collectors.toList());
+        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+            .thenApply(ignored -> futures.stream().map(CompletableFuture::join).collect(Collectors.toList()));
+    }
+
+    /**
+     * Filters descriptors down to those matching the requested artifact type.
+     *
+     * @param descriptors Unfiltered descriptors.
+     * @param artifactType Requested {@code ?artifactType=} value.
+     * @return Matching descriptors.
+     */
+    private static List<ReferrerDescriptor> filterByArtifactType(
+        final List<ReferrerDescriptor> descriptors, final String artifactType
+    ) {
+        return descriptors.stream()
+            .filter(descriptor -> descriptor.artifactType().filter(artifactType::equals).isPresent())
+            .collect(Collectors.toList());
     }
 }

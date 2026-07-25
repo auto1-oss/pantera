@@ -12,6 +12,7 @@ package com.auto1.pantera.docker;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.docker.manifest.Manifest;
+import com.auto1.pantera.docker.manifest.Referrers;
 import com.auto1.pantera.docker.misc.Pagination;
 
 import java.util.Optional;
@@ -58,4 +59,22 @@ public interface Manifests {
      * @return Tags.
      */
     CompletableFuture<Tags> tags(Pagination pagination);
+
+    /**
+     * OCI 1.1 referrers of a subject digest — every manifest indexed with
+     * a {@code subject} pointing at {@code subject} on push.
+     *
+     * <p>Default is an always-empty listing: only a hosted (authoritative)
+     * store indexes referrers on push, so this is the correct answer for
+     * proxy/cache/composite implementations (proxy-through of upstream
+     * referrers is out of scope for 2.3.0 — see WS4-docker.2 §3).
+     *
+     * @param subject Subject digest to look up referrers for.
+     * @param artifactType When present, narrows the listing to referrers
+     *                     whose {@code artifactType} equals this value.
+     * @return Referrers listing, possibly empty.
+     */
+    default CompletableFuture<Referrers> referrers(Digest subject, Optional<String> artifactType) {
+        return CompletableFuture.completedFuture(Referrers.EMPTY);
+    }
 }
