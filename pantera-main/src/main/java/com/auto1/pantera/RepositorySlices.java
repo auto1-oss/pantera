@@ -715,7 +715,8 @@ public class RepositorySlices {
                             tokens.auth(),
                             cfg.name(),
                             artifactEvents(),
-                            this.settings.syncArtifactIndexer()
+                            this.settings.syncArtifactIndexer(),
+                            this.settings.artifactIndex()
                         ),
                         "direct-dists"
                     ),

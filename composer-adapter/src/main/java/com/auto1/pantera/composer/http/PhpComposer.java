@@ -10,17 +10,23 @@
  */
 package com.auto1.pantera.composer.http;
 
+import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.composer.Repository;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.http.auth.BasicAuthzSlice;
 import com.auto1.pantera.http.auth.CombinedAuthzSliceWrap;
 import com.auto1.pantera.http.auth.OperationControl;
 import com.auto1.pantera.http.auth.TokenAuthentication;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.rt.MethodRule;
 import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
+import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.security.perms.Action;
 import com.auto1.pantera.security.perms.AdapterBasicPermission;
@@ -88,6 +94,24 @@ public final class PhpComposer extends Slice.Wrap {
         final Optional<Queue<ArtifactEvent>> events,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
     ) {
+        this(repository, policy, basicAuth, tokenAuth, name, events, syncIndex, ArtifactIndex.NOP);
+    }
+
+    /**
+     * Full ctor with the read-side shared artifact index (WS4-composer.5/.6:
+     * {@code available-packages.json} / {@code packages/list.json}).
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public PhpComposer(
+        final Repository repository,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final ArtifactIndex artifactIndex
+    ) {
         super(
             new SliceRoute(
                 new RtRulePath(
@@ -96,42 +120,80 @@ public final class PhpComposer extends Slice.Wrap {
                             new RtRule.ByPath(PackageMetadataSlice.PACKAGE),
                             new RtRule.ByPath(PackageMetadataSlice.ALL_PACKAGES)
                         ),
-                        MethodRule.GET
+                        new RtRule.Any(MethodRule.GET, MethodRule.HEAD)
                     ),
-                    PhpComposer.createAuthSlice(
-                        new PackageMetadataSlice(repository),
-                        basicAuth,
-                        tokenAuth,
-                        new OperationControl(
-                            policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    PhpComposer.headAware(
+                        PhpComposer.createAuthSlice(
+                            new PackageMetadataSlice(repository),
+                            basicAuth,
+                            tokenAuth,
+                            new OperationControl(
+                                policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                            )
+                        )
+                    )
+                ),
+                new RtRulePath(
+                    new RtRule.All(
+                        new RtRule.ByPath("^/p2/available-packages\\.json$"),
+                        new RtRule.Any(MethodRule.GET, MethodRule.HEAD)
+                    ),
+                    PhpComposer.headAware(
+                        PhpComposer.createAuthSlice(
+                            new ComposerAvailablePackagesSlice(artifactIndex, name),
+                            basicAuth,
+                            tokenAuth,
+                            new OperationControl(
+                                policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                            )
+                        )
+                    )
+                ),
+                new RtRulePath(
+                    new RtRule.All(
+                        new RtRule.ByPath("^/packages/list\\.json$"),
+                        new RtRule.Any(MethodRule.GET, MethodRule.HEAD)
+                    ),
+                    PhpComposer.headAware(
+                        PhpComposer.createAuthSlice(
+                            new ComposerListSlice(artifactIndex, name),
+                            basicAuth,
+                            tokenAuth,
+                            new OperationControl(
+                                policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                            )
                         )
                     )
                 ),
                 new RtRulePath(
                     new RtRule.All(
                         new RtRule.ByPath(Pattern.compile("^/?artifacts/.*\\.(zip|tar\\.gz|tgz)$")),
-                        MethodRule.GET
+                        new RtRule.Any(MethodRule.GET, MethodRule.HEAD)
                     ),
-                    PhpComposer.createAuthSlice(
-                        new DownloadArchiveSlice(repository),
-                        basicAuth,
-                        tokenAuth,
-                        new OperationControl(
-                            policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    PhpComposer.headAware(
+                        PhpComposer.createAuthSlice(
+                            new DownloadArchiveSlice(repository),
+                            basicAuth,
+                            tokenAuth,
+                            new OperationControl(
+                                policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                            )
                         )
                     )
                 ),
                 new RtRulePath(
                     new RtRule.All(
                         new RtRule.ByPath(Pattern.compile("^/.*\\.(zip|tar\\.gz|tgz)$")),
-                        MethodRule.GET
+                        new RtRule.Any(MethodRule.GET, MethodRule.HEAD)
                     ),
-                    PhpComposer.createAuthSlice(
-                        new DownloadArchiveSlice(repository),
-                        basicAuth,
-                        tokenAuth,
-                        new OperationControl(
-                            policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    PhpComposer.headAware(
+                        PhpComposer.createAuthSlice(
+                            new DownloadArchiveSlice(repository),
+                            basicAuth,
+                            tokenAuth,
+                            new OperationControl(
+                                policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                            )
                         )
                     )
                 ),
@@ -165,6 +227,29 @@ public final class PhpComposer extends Slice.Wrap {
                 )
             )
         );
+    }
+
+    /**
+     * Wrap a GET-shaped slice so a {@code HEAD} request resolves exactly as
+     * the equivalent {@code GET} would (status + headers), with the body
+     * dropped (RFC 9110 &sect;9.3.2). {@code GET} requests pass through
+     * unchanged. WS4-composer.8.
+     *
+     * @param origin GET-shaped slice
+     * @return Slice honouring both GET and HEAD
+     */
+    private static Slice headAware(final Slice origin) {
+        return (line, headers, body) -> {
+            if (line.method() != RqMethod.HEAD) {
+                return origin.response(line, headers, body);
+            }
+            final RequestLine asGet = new RequestLine(RqMethod.GET, line.uri(), line.version());
+            return origin.response(asGet, headers, body).thenCompose(resp ->
+                resp.body().asBytesFuture().thenApply(
+                    ignored -> new Response(resp.status(), resp.headers(), Content.EMPTY)
+                )
+            );
+        };
     }
 
     /**
