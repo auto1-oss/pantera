@@ -103,6 +103,88 @@ npm publish --registry http://pantera-host:8080/npm-local
 
 ---
 
+## Dist-Tags & Custom Channels
+
+Every published version gets the `latest` dist-tag by default. To publish to a custom channel (e.g. a beta/next release line) instead:
+
+```bash
+npm publish --tag beta
+```
+
+Manage tags directly:
+
+```bash
+npm dist-tag ls @myorg/my-package
+npm dist-tag add @myorg/my-package@1.2.0-beta.1 beta
+npm dist-tag rm @myorg/my-package beta
+```
+
+Installing from a tag works the same as anywhere else:
+
+```bash
+npm install @myorg/my-package@beta
+```
+
+Dist-tags are persisted durably per package on local repositories, so `dist-tag ls`/`add`/`rm`, `--tag` publishes, and installing by tag all reflect the same state. `npm deprecate` and `npm unpublish <pkg>@<version>` (single-version) are also effective against local repositories: a deprecated version is marked in the packument, and an unpublished version genuinely stops being served.
+
+On proxy repositories, `npm dist-tag ls` and `npm search` are forwarded upstream (read-through, not persisted locally).
+
+---
+
+## Fetching a Single Version
+
+Local repositories serve a specific version's manifest directly, without downloading the whole packument:
+
+```bash
+npm view @myorg/my-package@1.2.0 version
+curl http://pantera-host:8080/npm-local/@myorg/my-package/1.2.0
+curl http://pantera-host:8080/npm-local/@myorg/my-package/latest
+```
+
+`HEAD` requests are also supported on packument and tarball URLs (returns headers only, e.g. `Content-Length`, no body) — useful for existence checks without downloading.
+
+---
+
+## Search
+
+`npm search` (and `GET /-/v1/search`) works against local repositories, indexing every published package, and is forwarded to the upstream registry on proxy repositories:
+
+```bash
+npm search my-package --registry http://pantera-host:8080/npm-local
+```
+
+---
+
+## Audit
+
+`npm audit` and `npm ping` work against Pantera repositories. Local repositories have no vulnerability advisory database of their own, so `npm audit` against a local repository always reports a clean, honest zero-vulnerability result (not a lie — there genuinely is nothing to report locally). Proxy and group repositories forward the audit query upstream so real advisories from the upstream registry are reported.
+
+### Package Signing & `npm audit signatures`
+
+Local repositories sign every published version with the registry's own key (ECDSA P-256, generated automatically on first publish and reused thereafter), the same way the public npm registry signs packages. The public key is served at `GET /-/npm/v1/keys`, so `npm audit signatures` can verify a locally-published package's `dist.signatures` entry against it:
+
+```bash
+npm audit signatures
+```
+
+If you published with `npm publish --provenance`, the provenance/attestation bundle is stored and served back at `GET /-/npm/v1/attestations/<pkg>@<version>` — the bundle itself is verified client-side by the npm CLI/Sigstore tooling, exactly as it would be against any other registry.
+
+---
+
+## Tokens & Profile
+
+On local (non-JWT-only) repositories, `npm token` manages registry-scoped tokens:
+
+```bash
+npm token list
+npm token create
+npm token revoke <id>
+```
+
+`npm profile get` returns the authenticated user's identity. On JWT-authenticated repositories, token management is not available through the npm CLI (JWT tokens are managed through the Pantera UI/API instead) — the endpoint answers with an honest "not available" status rather than silently returning an empty token list.
+
+---
+
 ## Using Group Repositories
 
 A typical npm group combines:

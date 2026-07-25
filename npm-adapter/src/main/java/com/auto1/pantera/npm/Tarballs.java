@@ -85,43 +85,58 @@ public final class Tarballs {
     private static JsonObject updateJson(final JsonObject original, final String prefix) {
         final JsonPatchBuilder builder = Json.createPatchBuilder();
         final Set<String> versions = original.getJsonObject("versions").keySet();
-        // Ensure prefix doesn't end with slash for consistent concatenation
-        final String cleanPrefix = prefix.replaceAll("/$", "");
         for (final String version : versions) {
-            String tarballPath = original.getJsonObject("versions").getJsonObject(version)
+            final String tarballPath = original.getJsonObject("versions").getJsonObject(version)
                 .getJsonObject("dist").getString("tarball");
-            
-            // Strip absolute URL if present (handles already-malformed URLs from old metadata)
-            if (tarballPath.startsWith("http://") || tarballPath.startsWith("https://")) {
-                try {
-                    final java.net.URI uri = new java.net.URI(tarballPath);
-                    tarballPath = uri.getPath();
-                } catch (final java.net.URISyntaxException ex) {
-                    // Fallback: extract path after host
-                    final int pathStart = tarballPath.indexOf('/', tarballPath.indexOf("://") + 3);
-                    if (pathStart > 0) {
-                        tarballPath = tarballPath.substring(pathStart);
-                    }
-                }
-            }
-            
-            // Extract package-relative path using TgzRelativePath
-            // This handles paths like /test_prefix/api/npm/@scope/pkg/-/@scope/pkg-1.0.0.tgz
-            // and extracts just @scope/pkg/-/@scope/pkg-1.0.0.tgz
-            try {
-                tarballPath = new TgzRelativePath(tarballPath).relative();
-            } catch (final com.auto1.pantera.PanteraException ex) { // NOPMD EmptyCatchBlock - intentional: unparseable tarball paths fall through and are used as-is to preserve backward compatibility
-                // If TgzRelativePath can't parse it, use as-is
-                // This preserves backward compatibility
-            }
-            
-            // Ensure tarball path starts with slash
-            final String cleanTarball = tarballPath.startsWith("/") ? tarballPath : "/" + tarballPath;
             builder.add(
                 String.format("/versions/%s/dist/tarball", version),
-                cleanPrefix + cleanTarball
+                Tarballs.rewriteTarball(tarballPath, prefix)
             );
         }
         return builder.build().apply(original);
+    }
+
+    /**
+     * Rewrite a single tarball reference (absolute or relative, however it
+     * was stored) into an absolute URL under the given prefix. Shared by
+     * {@link #updateJson} (full packument, one tarball per version) and
+     * {@link com.auto1.pantera.npm.http.SingleVersionSlice} (one manifest,
+     * a single tarball) so both paths apply the exact same URL-relativizing
+     * rules.
+     *
+     * @param tarballPath The tarball reference as stored (absolute URL or
+     *  path fragment)
+     * @param prefix Absolute URL prefix to rebuild the link under
+     * @return Absolute tarball URL rooted at {@code prefix}
+     */
+    public static String rewriteTarball(final String tarballPath, final String prefix) {
+        // Ensure prefix doesn't end with slash for consistent concatenation
+        final String cleanPrefix = prefix.replaceAll("/$", "");
+        String path = tarballPath;
+        // Strip absolute URL if present (handles already-malformed URLs from old metadata)
+        if (path.startsWith("http://") || path.startsWith("https://")) {
+            try {
+                final java.net.URI uri = new java.net.URI(path);
+                path = uri.getPath();
+            } catch (final java.net.URISyntaxException ex) {
+                // Fallback: extract path after host
+                final int pathStart = path.indexOf('/', path.indexOf("://") + 3);
+                if (pathStart > 0) {
+                    path = path.substring(pathStart);
+                }
+            }
+        }
+        // Extract package-relative path using TgzRelativePath
+        // This handles paths like /test_prefix/api/npm/@scope/pkg/-/@scope/pkg-1.0.0.tgz
+        // and extracts just @scope/pkg/-/@scope/pkg-1.0.0.tgz
+        try {
+            path = new TgzRelativePath(path).relative();
+        } catch (final com.auto1.pantera.PanteraException ex) { // NOPMD EmptyCatchBlock - intentional: unparseable tarball paths fall through and are used as-is to preserve backward compatibility
+            // If TgzRelativePath can't parse it, use as-is
+            // This preserves backward compatibility
+        }
+        // Ensure tarball path starts with slash
+        final String cleanTarball = path.startsWith("/") ? path : "/" + path;
+        return cleanPrefix + cleanTarball;
     }
 }

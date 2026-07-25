@@ -86,6 +86,24 @@ public final class NpmProxySlice implements Slice {
         final CooldownInspector inspector =
             new RegistryBackedInspector(repoType, PublishDateRegistries.instance());
         this.route = new SliceRoute(
+            // Registered BEFORE the packument route (WS4-npm.8): ppath's
+            // pattern matches broadly enough to otherwise swallow these as
+            // a bogus package name and 404 against upstream — no dedicated
+            // route existed for either endpoint.
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.GET,
+                    new RtRule.ByPath(NpmProxySlice.searchPattern(path))
+                ),
+                new LoggingSlice(new UpstreamPassthroughSlice(remote, "search"))
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.GET,
+                    new RtRule.ByPath(NpmProxySlice.distTagsPattern(path))
+                ),
+                new LoggingSlice(new UpstreamPassthroughSlice(remote, "dist-tags"))
+            ),
             new RtRulePath(
                 new RtRule.All(
                     MethodRule.GET,
@@ -163,5 +181,34 @@ public final class NpmProxySlice implements Slice {
             "^(?:%1$s/npm/v1/security/audits(?:/quick)?|%1$s/npm/v1/security/advisories/bulk)$",
             prefixPath
         );
+    }
+
+    /**
+     * Matches {@code GET /-/v1/search} (WS4-npm.8) so the request forwards
+     * to upstream instead of falling through to the packument route.
+     *
+     * @param prefix Repository path prefix (empty for proxy repos — routing
+     *  is handled by repository name at an outer layer)
+     * @return Path pattern
+     */
+    private static String searchPattern(final String prefix) {
+        final String base = (prefix == null || prefix.isEmpty())
+            ? ""
+            : String.format("/%s", java.util.regex.Pattern.quote(prefix));
+        return String.format("^%s/-/v1/search$", base);
+    }
+
+    /**
+     * Matches a dist-tags GET (any package, scoped or not) so {@code npm
+     * dist-tag ls} works through a proxy (WS4-npm.8).
+     *
+     * @param prefix Repository path prefix (empty for proxy repos)
+     * @return Path pattern
+     */
+    private static String distTagsPattern(final String prefix) {
+        final String base = (prefix == null || prefix.isEmpty())
+            ? ""
+            : String.format("/%s", java.util.regex.Pattern.quote(prefix));
+        return String.format("^%s/.+/dist-tags$", base);
     }
 }
