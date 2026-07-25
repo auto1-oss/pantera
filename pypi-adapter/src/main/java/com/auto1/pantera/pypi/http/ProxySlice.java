@@ -300,8 +300,14 @@ final class ProxySlice implements Slice {
         this.simpleHandler = new PypiSimpleHandler(
             simpleUpstream, cooldown, rtype, rname
         );
+        // WS6.3: route the JSON-API resolution surface through the same
+        // cache/storage this repository already uses for the Simple-API
+        // index — TTL-cached, single-flighted, serve-stale-on-outage
+        // (PypiJsonBaseLoader), instead of hitting pypi.org unconditionally
+        // on every /pypi/<pkg>/json request. PypiJsonBaseLoader namespaces
+        // its keys so they never collide with the index cache entries.
         this.jsonHandler = new PypiJsonHandler(
-            jsonApiUpstream, cooldown, rtype, rname
+            jsonApiUpstream, this.cache, this.asyncStorage, cooldown, rtype, rname
         );
     }
 

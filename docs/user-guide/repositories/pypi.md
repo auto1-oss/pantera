@@ -169,6 +169,13 @@ For **proxy** repositories, the version-specific
 requesting a cooldown-blocked version returns `404` instead of leaking
 its metadata through an unfiltered upstream passthrough.
 
+For **proxy** repositories, `/pypi/<package>/json` and
+`/pypi/<package>/<version>/json` are now cached (TTL, single-flighted per
+package) instead of being fetched from pypi.org on every request — a
+pypi.org blip no longer breaks `poetry`/`pip-tools` resolution for a
+package Pantera has already cached; the last-known document is served
+stale until upstream recovers.
+
 ---
 
 ## HEAD Requests
