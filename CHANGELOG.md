@@ -25,6 +25,10 @@
   ([@aydasraf](https://github.com/aydasraf))
 - **`cache.mode: index` writes are acknowledged from local disk, not a synchronous S3 round trip.** `save()` now defaults to async durable write-back: bytes land on disk and are acked immediately, then a bounded pool of background threads uploads to S3 with retry/backoff; a crash before the upload confirms replays it on the next restart from the on-disk index. A saturated write-back queue rejects new writes immediately (before any disk I/O) rather than growing unbounded, and a proxy cache fill degrades gracefully instead of failing the client's already-served read. The prior synchronous behaviour remains available per-repository via `cache.write-through: true`.
   ([@aydasraf](https://github.com/aydasraf))
+- **`cache.mode: index` bounds its disk tier without directory walks.** The index-cache disk tier now tracks its size with an in-memory byte counter and evicts by LRU/LFU against configurable high/low watermarks (`cache.max-disk-bytes`, `cache.eviction-*`) — never exceeding the byte bound and never `Files.walk`-ing to size itself — and shards cache files across a 2-level hex fan-out to avoid huge flat directories.
+  ([@aydasraf](https://github.com/aydasraf))
+- **PyPI's legacy JSON API and Composer's repository root are TTL-cached with serve-stale.** `/pypi/<pkg>/json` and Composer's `packages.json`/`repo.json` root were fetched live on every request; they now go through a TTL cache with single-flight and serve-last-known-good on an upstream outage, so a blip no longer breaks `poetry`/`composer` resolution for already-cached packages.
+  ([@aydasraf](https://github.com/aydasraf))
 
 ### 🔧 Bug fixes
 
@@ -64,6 +68,10 @@
   ([@aydasraf](https://github.com/aydasraf))
 - **Go `@v/list` cooldown evaluation is bounded and module paths are decoded for the audit trail.** `@v/list` now evaluates only the newest 50 versions for cooldown (matching `@latest`), and Go's `!`-escaping (`!burnt!sushi` → `BurntSushi`) is decoded before a module name reaches the database, search index, and audit records, while storage keys stay escaped.
   ([@aydasraf](https://github.com/aydasraf))
+- **npm proxy conditional refresh works, and cooldown-filtered metadata stays coherent.** A dropped upstream `ETag` meant npm's 12h packument TTL refresh silently re-downloaded and re-parsed the full document instead of sending `If-None-Match`; the ETag now round-trips through storage. A warm-cache refresh that pulls genuinely changed content now also invalidates the cooldown-filtered envelope (a newly-published version no longer stays hidden behind the filter cache), and prerelease tarball downloads are no longer mis-keyed (`pkg-1.2.3-beta.1.tgz` resolves to version `1.2.3-beta.1`, not `beta.1`).
+  ([@aydasraf](https://github.com/aydasraf))
+- **Composer bounds cooldown evaluation and honours a client's conditional GET.** The Composer repository root (`packages.json`/`repo.json`) now caps per-request cooldown evaluation at the newest 50 versions per package (with a logged truncation) instead of an unbounded fan-out, and Composer proxy metadata now returns a bodiless `304` for a client's own `If-Modified-Since` from the warm cache.
+  ([@aydasraf](https://github.com/aydasraf))
 
 ### 🔒 Security
 
@@ -77,7 +85,7 @@
   ([@aydasraf](https://github.com/aydasraf))
 - **Authorization and resilience-threshold changes propagate across the cluster.** Role/permission edits and circuit-breaker/bulkhead setting changes previously applied only on the node that served the request (and a continuously-hit permission never expired on peers); they now broadcast to every node with a bounded TTL backstop.
   ([@aydasraf](https://github.com/aydasraf))
-- **Maven/Gradle PGP signature verification and checksum verification are enforced instead of inert.** A per-repository `verifyPgp` flag now verifies `.asc` signatures end-to-end against an admin-managed keyring (`GET/POST/DELETE /api/v1/admin/pgp-keys`) — on proxy fetch (fail-closed, cache entry removed on failure) and on hosted store (rejected, not persisted) — where the verifier was previously dead code with no caller. Hosted checksum sidecars (`.sha1`/`.md5`) are also verified against the stored primary instead of being accepted blind.
+- **Maven/Gradle PGP signature verification and checksum verification are enforced instead of inert.** A per-repository `verifyPgp` flag now verifies `.asc` signatures end-to-end against an admin-managed keyring (`GET/POST/DELETE /api/v1/admin/pgp-keys`): on proxy fetch, fail-closed with the cache entry removed on failure; on hosted store, an uploaded primary is quarantined — unresolvable and excluded from `maven-metadata.xml` — until a matching signature verifies against the trusted keyring, regardless of which of the two is uploaded first, and a primary that never receives a valid signature is never servable. The verifier was previously dead code with no caller. Hosted checksum sidecars (`.sha1`/`.md5`) are also verified against the stored primary instead of being accepted blind.
   ([@aydasraf](https://github.com/aydasraf))
 - **Composer proxied dist archives are verified before caching.** The proxy now computes each downloaded archive's SHA-1 and compares it to the packument's declared `dist.shasum` (matching Composer's own client) before writing it to the cache, rejecting a tampered or corrupted archive with `502` and an empty cache; hosted publish writes `dist.shasum` so a downstream client — including a Pantera proxy mirroring the repository — can verify integrity in turn.
   ([@aydasraf](https://github.com/aydasraf))
