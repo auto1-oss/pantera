@@ -42,6 +42,7 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.not;
 
 /**
  * Integration-style tests for {@link PypiJsonHandler}. Uses an in-memory
@@ -71,6 +72,85 @@ final class PypiJsonHandlerTest {
         assertThat(this.handler.matches("/pypi/foo/json"), is(true));
         assertThat(this.handler.matches("/simple/foo/"), is(false));
         assertThat(this.handler.matches("/pypi/foo/1.0.0/json"), is(false));
+    }
+
+    @Test
+    void matchesVersionPathButNotPackageLevel() {
+        assertThat(this.handler.matchesVersion("/pypi/foo/1.0.0/json"), is(true));
+        assertThat(this.handler.matchesVersion("/pypi/foo/json"), is(false));
+        assertThat(this.handler.matchesVersion("/simple/foo/"), is(false));
+    }
+
+    @Test
+    void handleVersionBlockedReturns404AndDoesNotLeakMetadata() throws Exception {
+        // WS4-pypi.9: before this fix, /pypi/<pkg>/<ver>/json was an
+        // unfiltered upstream passthrough — a cooldown-blocked version's
+        // metadata leaked straight through. It must now 404.
+        this.upstream.put(
+            "/pypi/foo/1.0.0/json",
+            pypiVersionJson("1.0.0", "2024-01-01T00:00:00Z")
+        );
+        this.cooldown.block("1.0.0");
+        final Response resp = this.handler.handleVersion(
+            new RequestLine(RqMethod.GET, "/pypi/foo/1.0.0/json"), "alice", Headers.EMPTY
+        ).get();
+        assertThat(resp.status().code(), equalTo(404));
+        final String body = new String(bodyBytes(resp), StandardCharsets.UTF_8);
+        assertThat(
+            "The blocked version's metadata must not leak into the 404 body",
+            body, is(not(containsString("foo-1.0.0.tar.gz")))
+        );
+    }
+
+    @Test
+    void handleVersionAllowedPassesUpstreamThroughUnfiltered() throws Exception {
+        this.upstream.put(
+            "/pypi/foo/2.0.0/json",
+            pypiVersionJson("2.0.0", "2024-06-01T00:00:00Z")
+        );
+        final Response resp = this.handler.handleVersion(
+            new RequestLine(RqMethod.GET, "/pypi/foo/2.0.0/json"), "alice", Headers.EMPTY
+        ).get();
+        assertThat(resp.status().success(), is(true));
+        final JsonNode root = MAPPER.readTree(bodyBytes(resp));
+        assertThat(root.get("info").get("version").asText(), equalTo("2.0.0"));
+        assertThat(
+            root.get("urls").get(0).get("filename").asText(),
+            equalTo("foo-2.0.0.tar.gz")
+        );
+    }
+
+    @Test
+    void handleVersionUpstream404ForwardedUnchanged() throws Exception {
+        final Response resp = this.handler.handleVersion(
+            new RequestLine(RqMethod.GET, "/pypi/missing/9.9.9/json"), "alice", Headers.EMPTY
+        ).get();
+        assertThat(resp.status().code(), equalTo(404));
+    }
+
+    @Test
+    void handleVersionMalformedUpstreamPassesThrough() throws Exception {
+        this.upstream.put("/pypi/foo/1.0.0/json", "not-json-at-all");
+        final Response resp = this.handler.handleVersion(
+            new RequestLine(RqMethod.GET, "/pypi/foo/1.0.0/json"), "alice", Headers.EMPTY
+        ).get();
+        assertThat(resp.status().success(), is(true));
+        assertThat(
+            new String(bodyBytes(resp), StandardCharsets.UTF_8),
+            equalTo("not-json-at-all")
+        );
+    }
+
+    @Test
+    void handleVersionNormalisesPackageNameBeforeCooldownLookup() throws Exception {
+        this.upstream.put(
+            "/pypi/Foo_Bar/1.0.0/json",
+            pypiVersionJson("1.0.0", "2024-01-01T00:00:00Z")
+        );
+        this.handler.handleVersion(
+            new RequestLine(RqMethod.GET, "/pypi/Foo_Bar/1.0.0/json"), "alice", Headers.EMPTY
+        ).get();
+        assertThat(this.cooldown.lastArtifact(), equalTo("foo-bar"));
     }
 
     @Test
@@ -207,6 +287,20 @@ final class PypiJsonHandlerTest {
             + "\"info\":{\"name\":\"foo\",\"version\":\"" + infoVersion + "\"},"
             + releases
             + ",\"urls\":[" + fileObject(infoVersion) + "]"
+            + "}";
+    }
+
+    /**
+     * Build a minimal version-specific PyPI JSON API response
+     * ({@code /pypi/<name>/<version>/json}): {@code info} for that
+     * version and a single-file {@code urls} array carrying the upload
+     * timestamp the cooldown filter reads.
+     */
+    private static String pypiVersionJson(final String version, final String uploadTimeIso) {
+        return "{"
+            + "\"info\":{\"name\":\"foo\",\"version\":\"" + version + "\"},"
+            + "\"urls\":[{\"filename\":\"foo-" + version + ".tar.gz\","
+            + "\"upload_time_iso_8601\":\"" + uploadTimeIso + "\"}]"
             + "}";
     }
 

@@ -157,6 +157,17 @@ public final class PypiJsonHandler {
     }
 
     /**
+     * Whether this handler should intercept the given path as the
+     * version-specific legacy JSON endpoint.
+     *
+     * @param path Request path
+     * @return true for {@code /pypi/<name>/<version>/json}
+     */
+    public boolean matchesVersion(final String path) {
+        return this.detector.isVersionMetadataRequest(path);
+    }
+
+    /**
      * Handle a JSON-API request with cooldown filtering.
      *
      * @param line Request line
@@ -203,6 +214,155 @@ public final class PypiJsonHandler {
                     this.processUpstream(bytes, pkg, user, ctx)
                 );
             });
+    }
+
+    /**
+     * Handle a version-specific legacy JSON API request
+     * ({@code /pypi/<name>/<version>/json}). Unlike the package-level
+     * endpoint (which lists every release and must filter blocked
+     * versions out of the list), this document describes a single,
+     * already-known version — so the check is a single cooldown
+     * evaluation: blocked → 404 (consistent with the artifact-layer
+     * block, and with {@link #allBlockedResponse}); allowed → the
+     * upstream bytes, unfiltered.
+     *
+     * <p>Before this method existed, {@link PypiJsonMetadataRequestDetector}
+     * deliberately did NOT match this path, so it fell through to an
+     * unfiltered upstream passthrough — a cooldown-blocked version's
+     * metadata leaked straight to the client (WS4-pypi.9).</p>
+     *
+     * @param line Request line
+     * @param user Authenticated user
+     * @param headers Inbound request headers, used to capture the audit
+     *                correlation context before any async hop
+     * @return Future response
+     */
+    public CompletableFuture<Response> handleVersion(
+        final RequestLine line, final String user, final Headers headers
+    ) {
+        RequestContextHeaders.bindToMdc(headers);
+        final AuditContext ctx = new AuditContext(
+            MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP)
+        );
+        final String path = line.uri().getPath();
+        final PypiJsonMetadataRequestDetector.VersionCoordinates coords = this.detector
+            .extractVersionCoordinates(path)
+            .orElseThrow(() -> new IllegalArgumentException(
+                "Not a /pypi/<name>/<version>/json path: " + path
+            ));
+        final String pkg = new com.auto1.pantera.pypi.NormalizedProjectName.Simple(
+            coords.packageName()
+        ).value();
+        final String version = coords.version();
+        return this.upstream.response(line, Headers.EMPTY, Content.EMPTY)
+            .thenCompose(resp -> {
+                if (!resp.status().success()) {
+                    return bodyBytes(resp.body()).thenApply(bytes ->
+                        ResponseBuilder.from(resp.status())
+                            .headers(resp.headers())
+                            .body(bytes)
+                            .build()
+                    );
+                }
+                return bodyBytes(resp.body()).thenCompose(
+                    bytes -> this.filterVersionResponse(bytes, pkg, version, user, ctx)
+                );
+            });
+    }
+
+    /**
+     * Parse the version-specific document (best-effort, for its upload
+     * timestamps only), evaluate cooldown for the single known version,
+     * and either 404 (blocked) or pass the upstream bytes through
+     * unfiltered (allowed / unparseable — fail open on parse failure,
+     * matching the package-level handler's passthrough behavior).
+     */
+    private CompletableFuture<Response> filterVersionResponse(
+        final byte[] upstreamBytes, final String pkg, final String version,
+        final String user, final AuditContext ctx
+    ) {
+        final Instant releaseDate = extractVersionUploadTime(parseQuietly(upstreamBytes, this.mapper));
+        return this.isBlocked(pkg, version, releaseDate, user).thenApply(blocked -> {
+            if (blocked) {
+                AuditLogger.resolution(ctx, this.repoType, this.repoName, pkg, user, List.of(version));
+                return this.blockedVersionResponse(pkg, version);
+            }
+            AuditLogger.resolution(ctx, this.repoType, this.repoName, pkg, user, List.of());
+            return ResponseBuilder.ok()
+                .header("Content-Type", CONTENT_TYPE)
+                .body(upstreamBytes)
+                .build();
+        });
+    }
+
+    /**
+     * Parse a JSON document, returning {@code null} rather than throwing
+     * on malformed input — the caller treats a null result as "release
+     * date unknown" and fails open, matching the package-level handler's
+     * passthrough behavior on unparseable upstream JSON.
+     */
+    private static JsonNode parseQuietly(final byte[] bytes, final ObjectMapper mapper) {
+        final JsonNode result;
+        try {
+            result = mapper.readTree(bytes);
+        } catch (final java.io.IOException ex) {
+            return null;
+        }
+        return result;
+    }
+
+    /**
+     * Earliest {@code upload_time_iso_8601}/{@code upload_time} among the
+     * version-specific document's {@code urls} array (the files for THIS
+     * version) — the release date the cooldown gate evaluates against.
+     * Returns {@code null} when the document is unparseable or carries no
+     * usable timestamp; the cooldown evaluator then falls back to its own
+     * inspector lookup rather than silently allowing.
+     */
+    private static Instant extractVersionUploadTime(final JsonNode root) {
+        if (root == null || !root.has("urls")) {
+            return null;
+        }
+        final JsonNode urls = root.get("urls");
+        if (urls == null || !urls.isArray()) {
+            return null;
+        }
+        Instant earliest = null;
+        for (final JsonNode file : urls) {
+            final Instant uploaded = parseUploadTime(file);
+            if (uploaded != null && (earliest == null || uploaded.isBefore(earliest))) {
+                earliest = uploaded;
+            }
+        }
+        return earliest;
+    }
+
+    /**
+     * 404 response for a cooldown-blocked version-specific JSON request —
+     * consistent with the artifact-layer cooldown block and with
+     * {@link #allBlockedResponse}: metadata for a blocked version must
+     * not leak, and 404 is the convention every legacy-JSON-consuming
+     * tool (pip, poetry, pip-tools) already treats cleanly.
+     */
+    private Response blockedVersionResponse(final String pkg, final String version) {
+        EcsLogger.info("com.auto1.pantera.pypi")
+            .message("/pypi/<pkg>/<ver>/json blocked by cooldown — returning 404")
+            .eventCategory("web")
+            .eventAction("json_filter")
+            .eventOutcome("failure")
+            .field("event.reason", "cooldown_active")
+            .field("repository.name", this.repoName)
+            .field("package.name", pkg)
+            .field("package.version", version)
+            .field("log.source", "application")
+            .log();
+        return ResponseBuilder.notFound()
+            .header("X-Pantera-Cooldown", "blocked")
+            .textBody(
+                "Version '" + version + "' of '" + pkg
+                    + "' is under cooldown; not available."
+            )
+            .build();
     }
 
     /**

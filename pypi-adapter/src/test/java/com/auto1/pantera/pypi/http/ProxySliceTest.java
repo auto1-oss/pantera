@@ -581,6 +581,60 @@ class ProxySliceTest {
         );
     }
 
+    @Test
+    void versionSpecificJsonPathIsRoutedThroughJsonApiUpstreamNotSimpleUpstream() {
+        // WS4-pypi.9: /pypi/<name>/<ver>/json must be dispatched to the
+        // cooldown-aware JSON handler (which talks to jsonApiUpstream),
+        // never fall through to serveNonArtifact (which would talk to
+        // the Simple-API "upstream" and never apply cooldown filtering).
+        final byte[] versionJson = (
+            "{\"info\":{\"name\":\"foo\",\"version\":\"1.0.0\"},"
+                + "\"urls\":[{\"filename\":\"foo-1.0.0.tar.gz\"}]}"
+        ).getBytes(StandardCharsets.UTF_8);
+        final TestClientSlices clients = new TestClientSlices(line ->
+            ResponseBuilder.internalError().build()
+        );
+        final Slice simpleUpstream = (line, headers, body) ->
+            CompletableFuture.completedFuture(
+                ResponseBuilder.internalError()
+                    .textBody("simple-api upstream must not be hit for /pypi/.../json")
+                    .build()
+            );
+        final Slice jsonApiUpstream = (line, headers, body) ->
+            CompletableFuture.completedFuture(
+                ResponseBuilder.ok().body(versionJson).build()
+            );
+        final ProxySlice slice = new ProxySlice(
+            clients,
+            Authenticator.ANONYMOUS,
+            simpleUpstream,
+            this.storage,
+            new FromStorageCache(this.storage),
+            Optional.of(this.events),
+            "my-pypi-proxy",
+            "pypi-proxy",
+            NoopCooldownService.INSTANCE,
+            new com.auto1.pantera.publishdate.RegistryBackedInspector(
+                "pypi", com.auto1.pantera.publishdate.PublishDateRegistries.instance()
+            ),
+            jsonApiUpstream
+        );
+        MatcherAssert.assertThat(
+            "Version-specific JSON path must be served via the JSON API "
+                + "upstream (cooldown-filtered), not the simple-index upstream",
+            slice,
+            new SliceHasResponse(
+                Matchers.allOf(
+                    new RsHasStatus(RsStatus.OK),
+                    new RsHasBody(versionJson)
+                ),
+                new RequestLine(RqMethod.GET, "/pypi/foo/1.0.0/json"),
+                this.authorization,
+                Content.EMPTY
+            )
+        );
+    }
+
     private ProxySlice newProxySlice(
         final Slice upstream,
         final TestClientSlices clients,
