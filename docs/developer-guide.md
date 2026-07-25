@@ -127,9 +127,9 @@ Maven, Gradle (Maven-layout), Docker, NPM, PyPI, Composer (PHP), Helm, Go, Gem (
 | `pantera-main` | Application entry point (`VertxMain`), REST API (`AsyncApiVerticle`), database layer (`ArtifactDbFactory`, `DbConsumer`, `DbManager`), Quartz scheduling, repository wiring (`RepositorySlices`), Flyway migrations, health checks, metrics verticle. |
 | `pantera-core` | Core types: `Slice` interface, `Storage` interface, `Key`, `Content`, `Headers`, `Response`, cache infrastructure (`BaseCachedProxySlice`, `NegativeCache`, `RequestDeduplicator`), `StorageExecutors`, `DispatchedStorage`, security/auth framework. |
 | `pantera-storage` | Parent module for storage implementations. Contains three sub-modules. |
-| `pantera-storage-core` | `Storage` interface definition, `Key`, `Content`, `Meta`, `InMemoryStorage`, `BlockingStorage`, storage test verification harness. |
+| `pantera-storage-core` | `Storage` interface definition, `Key`, `Content`, `Meta`, `InMemoryStorage`, `BlockingStorage`, storage test verification harness, backend-agnostic `BlobStore`/`Presigner` (2.3.0). |
 | `pantera-storage-vertx-file` | Filesystem storage using Vert.x NIO. |
-| `pantera-storage-s3` | AWS S3 storage with `DiskCacheStorage` (LRU/LFU on-disk read-through cache with watermark eviction). |
+| `pantera-storage-s3` | `S3Storage` -- AWS S3 and S3-API-compatible storage (also the reference `BlobStore`/`Presigner` implementation, 2.3.0), with `DiskCacheStorage` (LRU/LFU on-disk read-through cache with watermark eviction). |
 | `vertx-server` | `VertxSliceServer` -- adapts a `Slice` into a Vert.x HTTP server handler. |
 | `http-client` | Jetty-based HTTP client (`JettyClientSlices`) used by proxy adapters to fetch from upstream registries. |
 | `pantera-backfill` | Standalone CLI tool (`BackfillCli`) for bulk re-indexing the `artifacts` database table from storage. |
@@ -225,6 +225,44 @@ Key implementations:
 - `S3Storage` -- AWS SDK v2 async S3 client.
 - `InMemoryStorage` -- ConcurrentHashMap-backed, used in tests.
 - `SubStorage` -- Scopes a storage to a key prefix.
+
+#### 4.2.1 BlobStore / Presigner (2.3.0, WS1.0)
+
+`pantera-storage-core`'s `com.auto1.pantera.asto.blob` package adds a
+backend-agnostic pair of interfaces alongside `Storage`, purely additive --
+`S3Storage` implements both without changing its `Storage` behavior:
+
+```java
+public interface BlobStore {
+    CompletableFuture<Boolean> exists(Key key);
+    CompletableFuture<? extends Meta> head(Key key);
+    CompletableFuture<Content> get(Key key);
+    CompletableFuture<Void> put(Key key, Content content);
+    CompletableFuture<Void> delete(Key key);
+    CompletableFuture<Collection<Key>> list(Key prefix);
+    CompletableFuture<ListResult> list(Key prefix, String delimiter); // default, delegates to list(Key)
+}
+
+public interface Presigner {
+    URI presignGet(Key key, long ttlSeconds); // local signing only, never a network round trip
+}
+```
+
+`BlobStore` is deliberately narrower than `Storage` -- no `move`, no `exclusively`
+locking, both Pantera-level concerns rather than object-store primitives. The
+point is that the local metadata index, disk cache, write-back queue, eviction,
+and presigned-redirect machinery planned for WS1.1+ can be built against
+`BlobStore`/`Presigner` alone and stay backend-agnostic; native GCS/Azure
+implementations (WS1.8) implement the same two interfaces without touching any
+consumer.
+
+`pantera-storage-s3`'s `S3StorageFactory` builds an AWS SDK `S3Presigner`
+alongside the `S3AsyncClient`, sharing the same resolved credentials/region so
+both agree; `S3StorageFactory` is also the base class for
+`S3ExpressStorageFactory`, which overrides only two hooks --
+`defaultPathStyle()` (`false`, S3 Express requires virtual-hosted-style) and
+`defaultStorageClass()` (`EXPRESS_ONEZONE`) -- both still overridable per-repo
+via the ordinary `path-style` / `storage-class` config keys.
 
 ### 4.3 DispatchedStorage
 

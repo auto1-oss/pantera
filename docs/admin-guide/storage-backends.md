@@ -59,6 +59,7 @@ storage:
   region: eu-central-1
   endpoint: https://s3.eu-central-1.amazonaws.com
   path-style: true
+  storage-class: STANDARD_IA   # optional; defaults to the S3 default (STANDARD)
 
   # Multipart upload
   multipart: true
@@ -202,7 +203,7 @@ cache:
 
 ## S3 Express One Zone (type: s3-express)
 
-S3 Express One Zone provides single-digit millisecond read latency for frequently accessed data. Uses the same configuration keys as `s3`.
+S3 Express One Zone provides single-digit millisecond read latency for frequently accessed data. Uses the same configuration keys as `s3` -- `s3-express` is implemented as a thin extension of the `s3` factory that only changes two defaults: `path-style` defaults to `false` (S3 Express One Zone requires virtual-hosted-style access) and `storage-class` defaults to `EXPRESS_ONEZONE`. Both remain overridable if you ever need to.
 
 ```yaml
 storage:
@@ -215,9 +216,11 @@ S3 Express buckets use directory bucket naming (suffix `--<az>--x-s3`). All stan
 
 ---
 
-## MinIO / S3-Compatible Storage
+## S3-API-Compatible Object Stores
 
-Use the S3 storage type with `endpoint` and `path-style: true` for S3-compatible services like MinIO, Ceph, or LocalStack.
+The `s3` storage type talks to any service that speaks the S3 API, not just AWS S3 -- set a custom `endpoint`, the matching `path-style` setting, and backend-appropriate `credentials`. No separate storage type or code path is needed; internally this is the same `BlobStore` reference implementation (`S3Storage`) that backs the `type: s3` factory.
+
+**MinIO** (path-style required):
 
 ```yaml
 storage:
@@ -232,7 +235,84 @@ storage:
     secretAccessKey: minioadmin
 ```
 
-The `path-style: true` setting is required for MinIO and most S3-compatible services that do not support virtual-hosted-style URLs.
+**Cloudflare R2** (virtual-hosted style, account-scoped endpoint):
+
+```yaml
+storage:
+  type: s3
+  bucket: artifacts
+  region: auto
+  endpoint: https://<account-id>.r2.cloudflarestorage.com
+  path-style: false
+  credentials:
+    type: basic
+    accessKeyId: <r2-access-key-id>
+    secretAccessKey: <r2-secret-access-key>
+```
+
+**Backblaze B2** (S3-compatible endpoint, path-style required):
+
+```yaml
+storage:
+  type: s3
+  bucket: artifacts
+  region: us-west-002
+  endpoint: https://s3.us-west-002.backblazeb2.com
+  path-style: true
+  credentials:
+    type: basic
+    accessKeyId: <b2-key-id>
+    secretAccessKey: <b2-application-key>
+```
+
+**Wasabi** (path-style required):
+
+```yaml
+storage:
+  type: s3
+  bucket: artifacts
+  region: eu-central-1
+  endpoint: https://s3.eu-central-1.wasabisys.com
+  path-style: true
+  credentials:
+    type: basic
+    accessKeyId: <wasabi-access-key>
+    secretAccessKey: <wasabi-secret-key>
+```
+
+**Ceph / RADOS Gateway** (path-style required):
+
+```yaml
+storage:
+  type: s3
+  bucket: artifacts
+  region: default
+  endpoint: https://rgw.internal.example.com
+  path-style: true
+  credentials:
+    type: basic
+    accessKeyId: <radosgw-access-key>
+    secretAccessKey: <radosgw-secret-key>
+```
+
+**Google Cloud Storage** (via its S3 interoperability endpoint):
+
+```yaml
+storage:
+  type: s3
+  bucket: artifacts
+  region: auto
+  endpoint: https://storage.googleapis.com
+  path-style: false
+  credentials:
+    type: basic
+    accessKeyId: <gcs-hmac-access-key>
+    secretAccessKey: <gcs-hmac-secret>
+```
+
+`path-style: true` is required for MinIO, Backblaze B2, Wasabi, and Ceph/RADOS Gateway (services that do not support virtual-hosted-style URLs). Cloudflare R2 and GCS's S3-interop endpoint support virtual-hosted style. Consult each provider's docs to confirm; when in doubt, `path-style: true` is the safer default and works everywhere.
+
+Native (non-S3-API) backends -- Google Cloud Storage's own API and Azure Blob Storage -- are a separate, later addition and are not yet available; the S3-interoperability path above is the supported way to use GCS today.
 
 ---
 

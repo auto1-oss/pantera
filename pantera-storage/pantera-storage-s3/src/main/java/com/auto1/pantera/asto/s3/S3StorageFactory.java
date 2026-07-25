@@ -11,6 +11,7 @@
 package com.auto1.pantera.asto.s3;
 
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blob.Presigner;
 import com.auto1.pantera.asto.factory.PanteraStorageFactory;
 import com.auto1.pantera.asto.factory.Config;
 import com.auto1.pantera.asto.factory.StorageFactory;
@@ -36,6 +37,8 @@ import software.amazon.awssdk.services.s3.S3AsyncClient;
 import software.amazon.awssdk.services.s3.S3AsyncClientBuilder;
 import software.amazon.awssdk.services.s3.model.ChecksumAlgorithm;
 import software.amazon.awssdk.services.s3.model.ServerSideEncryption;
+import software.amazon.awssdk.services.s3.model.StorageClass;
+import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 import software.amazon.awssdk.services.sts.StsClient;
 import software.amazon.awssdk.services.sts.StsClientBuilder;
 import software.amazon.awssdk.services.sts.auth.StsAssumeRoleCredentialsProvider;
@@ -43,10 +46,22 @@ import software.amazon.awssdk.services.sts.auth.StsAssumeRoleCredentialsProvider
 /**
  * Factory to create S3 storage.
  *
+ * <p>Also the base for {@link S3ExpressStorageFactory}: S3 Express One Zone only
+ * differs from standard S3 in two defaults (path-style access off, storage class
+ * {@code EXPRESS_ONEZONE}), both exposed as overridable hooks
+ * ({@link #defaultPathStyle()}, {@link #defaultStorageClass()}) so the subclass
+ * carries no duplicated wiring logic (WS1.0 fold, spec &sect;I).</p>
+ *
+ * <p>Config alone -- custom {@code endpoint}, {@code region}, {@code path-style},
+ * and {@code credentials} -- is what makes this factory also cover S3-API-compatible
+ * stores (MinIO, Cloudflare R2, Backblaze B2, Wasabi, Ceph/RADOS Gateway, GCS via its
+ * S3 interoperability endpoint): the AWS SDK client this factory builds speaks the
+ * same wire protocol to all of them.</p>
+ *
  * @since 0.1
  */
 @PanteraStorageFactory("s3")
-public final class S3StorageFactory implements StorageFactory {
+public class S3StorageFactory implements StorageFactory {
     @Override
     public Storage newStorage(final Config cfg) {
         final String bucket = new Config.StrictStorageConfig(cfg).string("bucket");
@@ -86,8 +101,10 @@ public final class S3StorageFactory implements StorageFactory {
         final int pdlChunk = (int) (long) parseSize(cfg, "parallel-download-chunk-size", "parallel-download-chunk-bytes").orElse(8L * 1024 * 1024);
         final int pdlConc = optInt(cfg, "parallel-download-concurrency").orElse(8);
 
+        final String regionStr = cfg.string("region");
+        final Optional<AwsCredentialsProvider> credentials = S3StorageFactory.credentialsProvider(cfg, regionStr);
         final Storage base = new S3Storage(
-            S3StorageFactory.s3Client(cfg),
+            this.s3Client(cfg, credentials, regionStr),
             bucket,
             multipart,
             endpoint(cfg).orElse("def endpoint"),
@@ -97,11 +114,12 @@ public final class S3StorageFactory implements StorageFactory {
             algo,
             sseAlg,
             kmsId,
-            null,  // storage class - null for default STANDARD
+            this.resolveStorageClass(cfg),
             enablePdl,
             pdlThreshold,
             pdlChunk,
-            pdlConc
+            pdlConc,
+            this.presigner(cfg, credentials, regionStr, bucket)
         );
 
         // Optional disk hot cache wrapper
@@ -137,9 +155,16 @@ public final class S3StorageFactory implements StorageFactory {
      * Creates {@link S3AsyncClient} instance based on YAML config.
      *
      * @param cfg Storage config.
+     * @param credentials Resolved credentials provider (shared with the presigner
+     *  so both agree and credential-chain resolution/initialization runs once).
+     * @param regionStr Raw {@code region} config value, or {@code null}.
      * @return Built S3 client.
      */
-    private static S3AsyncClient s3Client(final Config cfg) {
+    private S3AsyncClient s3Client(
+        final Config cfg,
+        final Optional<AwsCredentialsProvider> credentials,
+        final String regionStr
+    ) {
         final S3AsyncClientBuilder builder = S3AsyncClient.builder();
 
         // HTTP client: Netty async
@@ -155,10 +180,10 @@ public final class S3StorageFactory implements StorageFactory {
         final Duration idleMax = Duration.ofMillis(optLong(http, "connection-max-idle-millis").orElse(30_000L));  // Reduced to 30s for faster cleanup
 
         if (maxConc < 64) {
-            java.util.logging.Logger.getLogger(S3StorageFactory.class.getName()).warning(
+            java.util.logging.Logger.getLogger(this.getClass().getName()).warning(
                 String.format(
-                    "S3 max-concurrency=%d is low for production use. Recommend >= 256 for mixed read/write workloads.",
-                    maxConc
+                    "%s max-concurrency=%d is low for production use. Recommend >= 256 for mixed read/write workloads.",
+                    this.getClass().getSimpleName(), maxConc
                 )
             );
         }
@@ -174,17 +199,17 @@ public final class S3StorageFactory implements StorageFactory {
         builder.httpClient(netty);
 
         // Region and endpoint
-        final String regionStr = cfg.string("region");
         Optional.ofNullable(regionStr).ifPresent(val -> builder.region(Region.of(val)));
         endpoint(cfg).ifPresent(val -> builder.endpointOverride(URI.create(val)));
 
-        // S3-specific configuration
-        final boolean pathStyle = !"false".equalsIgnoreCase(cfg.string("path-style"));
+        // S3-specific configuration: path-style vs virtual-hosted-style is what makes
+        // this single client work against MinIO/R2/B2/Wasabi/Ceph/GCS-S3-interop, not
+        // just AWS S3.
         final boolean dualstack = "true".equalsIgnoreCase(cfg.string("dualstack"));
         builder.serviceConfiguration(
             S3Configuration.builder()
                 .dualstackEnabled(dualstack)
-                .pathStyleAccessEnabled(pathStyle)
+                .pathStyleAccessEnabled(this.pathStyle(cfg))
                 .build()
         );
         builder.requestChecksumCalculation(RequestChecksumCalculation.WHEN_REQUIRED);
@@ -197,28 +222,131 @@ public final class S3StorageFactory implements StorageFactory {
                 .build()
         );
 
-        // Credentials
-        setCredentialsProvider(builder, cfg, regionStr);
+        credentials.ifPresent(builder::credentialsProvider);
         return builder.build();
     }
 
     /**
-     * Sets a credentials provider into the passed builder.
+     * Builds the {@link Presigner} for this storage: local SigV4 signing via the AWS
+     * SDK's {@link S3Presigner}, sharing endpoint/region/path-style/credentials with
+     * {@link #s3Client(Config, Optional, String)} so a presigned URL always matches
+     * how this storage itself would address the object.
      *
-     * @param builder Builder.
-     * @param cfg S3 storage configuration.
+     * @param cfg Storage config.
+     * @param credentials Resolved credentials provider, shared with the S3 client.
+     * @param regionStr Raw {@code region} config value, or {@code null}.
+     * @param bucket Bucket name.
+     * @return Presigner backing {@link S3Storage#presignGet(com.auto1.pantera.asto.Key, long)}.
      */
-    private static void setCredentialsProvider(
-        final S3AsyncClientBuilder builder,
+    private Presigner presigner(
+        final Config cfg,
+        final Optional<AwsCredentialsProvider> credentials,
+        final String regionStr,
+        final String bucket
+    ) {
+        final S3Presigner.Builder builder = S3Presigner.builder();
+        Optional.ofNullable(regionStr).ifPresent(val -> builder.region(Region.of(val)));
+        endpoint(cfg).ifPresent(val -> builder.endpointOverride(URI.create(val)));
+        builder.serviceConfiguration(
+            S3Configuration.builder()
+                .dualstackEnabled("true".equalsIgnoreCase(cfg.string("dualstack")))
+                .pathStyleAccessEnabled(this.pathStyle(cfg))
+                .build()
+        );
+        credentials.ifPresent(builder::credentialsProvider);
+        return new S3BlobPresigner(builder.build(), bucket);
+    }
+
+    /**
+     * Resolves path-style-vs-virtual-hosted-style access, honoring an explicit
+     * {@code path-style} config value or falling back to {@link #defaultPathStyle()}.
+     *
+     * @param cfg Storage config.
+     * @return TRUE for path-style access, FALSE for virtual-hosted-style.
+     */
+    private boolean pathStyle(final Config cfg) {
+        final String val = cfg.string("path-style");
+        final boolean result;
+        if (val == null) {
+            result = this.defaultPathStyle();
+        } else if (this.defaultPathStyle()) {
+            result = !"false".equalsIgnoreCase(val);
+        } else {
+            result = "true".equalsIgnoreCase(val);
+        }
+        return result;
+    }
+
+    /**
+     * Default path-style setting when {@code path-style} is not set explicitly.
+     * Standard S3 (and most S3-API-compatible services: MinIO, Ceph, LocalStack)
+     * default to path-style on; {@link S3ExpressStorageFactory} overrides this to
+     * {@code false} -- S3 Express One Zone requires virtual-hosted-style access.
+     *
+     * @return TRUE by default.
+     */
+    protected boolean defaultPathStyle() {
+        return true;
+    }
+
+    /**
+     * Default S3 storage class when {@code storage-class} is not set explicitly.
+     * {@code null} means the S3 default ({@code STANDARD}).
+     * {@link S3ExpressStorageFactory} overrides this to {@code EXPRESS_ONEZONE}.
+     *
+     * @return {@code null} by default.
+     */
+    protected StorageClass defaultStorageClass() {
+        return null;
+    }
+
+    /**
+     * Resolves the S3 storage class: an explicit {@code storage-class} config value
+     * (e.g. {@code STANDARD_IA}, {@code GLACIER}, {@code EXPRESS_ONEZONE}) wins,
+     * otherwise {@link #defaultStorageClass()}.
+     *
+     * @param cfg Storage config.
+     * @return Resolved storage class, or {@code null} for the S3 default.
+     */
+    private StorageClass resolveStorageClass(final Config cfg) {
+        final String val = cfg.string("storage-class");
+        final StorageClass result;
+        if (val == null) {
+            result = this.defaultStorageClass();
+        } else {
+            result = StorageClass.fromValue(val.toUpperCase(Locale.ROOT));
+            if (result == StorageClass.UNKNOWN_TO_SDK_VERSION) {
+                throw new IllegalArgumentException(
+                    String.format("Unsupported S3 storage-class: %s", val)
+                );
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Resolves the credentials provider from {@code credentials} config, or
+     * {@link Optional#empty()} to use the SDK default chain (env vars, instance
+     * profile, etc.) -- resolved once and shared between the S3 client and the
+     * presigner so credential-chain initialization (and any resources it opens)
+     * happens a single time per storage instance.
+     *
+     * @param cfg Storage config.
+     * @param regionStr Raw {@code region} config value, or {@code null}.
+     * @return Resolved provider, or empty for the SDK default chain.
+     */
+    private static Optional<AwsCredentialsProvider> credentialsProvider(
         final Config cfg,
         final String regionStr
     ) {
         final Config credentials = cfg.config("credentials");
+        final Optional<AwsCredentialsProvider> result;
         if (credentials.isEmpty()) {
-            return; // SDK default chain
+            result = Optional.empty();
+        } else {
+            result = Optional.of(resolveCredentials(credentials, regionStr));
         }
-        final AwsCredentialsProvider prov = resolveCredentials(credentials, regionStr);
-        builder.credentialsProvider(prov);
+        return result;
     }
 
     private static AwsCredentialsProvider resolveCredentials(final Config creds, final String regionStr) {

@@ -20,7 +20,10 @@ import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.UnderLockOperation;
 import com.auto1.pantera.asto.ValueNotFoundException;
+import com.auto1.pantera.asto.blob.BlobStore;
+import com.auto1.pantera.asto.blob.Presigner;
 import com.auto1.pantera.asto.lock.storage.StorageLock;
+import java.net.URI;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -56,7 +59,7 @@ import software.amazon.awssdk.services.s3.model.StorageClass;
 /**
  * Storage that holds data in S3 storage.
  * Implements ManagedStorage to properly cleanup S3AsyncClient resources.
- * 
+ *
  * <p><strong>Important:</strong> Always close S3Storage when done to prevent resource leaks:
  * <pre>{@code
  * try (S3Storage storage = new S3Storage(client, bucket, endpoint)) {
@@ -64,10 +67,17 @@ import software.amazon.awssdk.services.s3.model.StorageClass;
  * }
  * }</pre>
  *
+ * <p>Since 2.3.0, {@code S3Storage} is also the reference implementation of the
+ * backend-agnostic {@link BlobStore} and {@link Presigner} contracts (WS1.0 of the
+ * storage-for-scale rebuild) -- purely additive, {@link Storage} behavior is
+ * unchanged. {@link #presignGet(Key, long)} is only available when this instance
+ * was built with a {@link Presigner} (see the extended constructor); instances
+ * built without one throw {@link IllegalStateException} on presign attempts.</p>
+ *
  * @since 0.1
  * On multipart upload failure, abort() is fired in background without blocking save() completion.
  */
-public final class S3Storage implements ManagedStorage {
+public final class S3Storage implements ManagedStorage, BlobStore, Presigner {
 
     /**
      * Minimum content size to consider uploading it as multipart.
@@ -154,6 +164,14 @@ public final class S3Storage implements ManagedStorage {
     private final String id;
 
     /**
+     * Presigner for {@link #presignGet(Key, long)}, or {@code null} when this
+     * instance was built without presign support.
+     *
+     * @since 2.3.0
+     */
+    private final Presigner presigner;
+
+    /**
      * Ctor.
      *
      * @param client S3 client.
@@ -212,7 +230,9 @@ public final class S3Storage implements ManagedStorage {
     }
 
     /**
-     * Ctor with extended options.
+     * Ctor with extended options. No {@link Presigner}: {@link #presignGet(Key, long)}
+     * throws {@link IllegalStateException} on instances built through this
+     * constructor. Use the extended constructor below to enable presigning.
      *
      * @param client S3 client.
      * @param bucket Bucket name.
@@ -247,6 +267,66 @@ public final class S3Storage implements ManagedStorage {
         final int parallelChunk,
         final int parallelConc
     ) {
+        this(
+            client,
+            bucket,
+            multipart,
+            endpoint,
+            minmp,
+            partsize,
+            mpconc,
+            checksum,
+            sse,
+            kms,
+            storageClass,
+            parallelDownload,
+            parallelThreshold,
+            parallelChunk,
+            parallelConc,
+            null
+        );
+    }
+
+    /**
+     * Ctor with extended options and presign support.
+     *
+     * @param client S3 client.
+     * @param bucket Bucket name.
+     * @param multipart Allow multipart uploads.
+     * @param endpoint S3 client endpoint (for identifier only).
+     * @param minmp Multipart threshold in bytes.
+     * @param partsize Multipart part size in bytes.
+     * @param mpconc Multipart upload concurrency.
+     * @param checksum Upload checksum algorithm.
+     * @param sse Server-side encryption type (or null).
+     * @param kms KMS key id (optional, for SSE-KMS).
+     * @param storageClass S3 storage class (or null for default STANDARD).
+     * @param parallelDownload Enable parallel downloads.
+     * @param parallelThreshold Threshold for parallel downloads.
+     * @param parallelChunk Chunk size for parallel downloads.
+     * @param parallelConc Concurrency for parallel downloads.
+     * @param presigner Presigner backing {@link #presignGet(Key, long)}, or
+     *  {@code null} to build an instance without presign support.
+     * @since 2.3.0
+     */
+    public S3Storage(
+        final S3AsyncClient client,
+        final String bucket,
+        final boolean multipart,
+        final String endpoint,
+        final long minmp,
+        final int partsize,
+        final int mpconc,
+        final ChecksumAlgorithm checksum,
+        final ServerSideEncryption sse,
+        final String kms,
+        final StorageClass storageClass,
+        final boolean parallelDownload,
+        final long parallelThreshold,
+        final int parallelChunk,
+        final int parallelConc,
+        final Presigner presigner
+    ) {
         this.client = client;
         this.bucket = bucket;
         this.multipart = multipart;
@@ -262,6 +342,7 @@ public final class S3Storage implements ManagedStorage {
         this.parallelChunk = parallelChunk;
         this.parallelConc = parallelConc;
         this.id = String.format("S3: %s %s", endpoint, this.bucket);
+        this.presigner = presigner;
     }
 
     @Override
@@ -405,7 +486,7 @@ public final class S3Storage implements ManagedStorage {
                 {
                     res = this.putMultipart(key, estimated);
                 } else {
-                    res = this.put(key, estimated);
+                    res = this.putObject(key, estimated);
                 }
                 return res;
             }
@@ -544,6 +625,46 @@ public final class S3Storage implements ManagedStorage {
     public void close() {
         // Close S3 client to release connection pool and netty threads
         this.client.close();
+        if (this.presigner instanceof AutoCloseable) {
+            try {
+                ((AutoCloseable) this.presigner).close();
+            } catch (final Exception err) {
+                throw new PanteraIOException(err);
+            }
+        }
+    }
+
+    // === BlobStore (WS1.0): thin, behavior-preserving delegates to the Storage
+    // operations above -- BlobStore is a narrower, backend-agnostic view of the
+    // same S3 calls, not a second code path. ===
+
+    @Override
+    public CompletableFuture<? extends Meta> head(final Key key) {
+        return this.metadata(key);
+    }
+
+    @Override
+    public CompletableFuture<Content> get(final Key key) {
+        return this.value(key);
+    }
+
+    @Override
+    public CompletableFuture<Void> put(final Key key, final Content content) {
+        return this.save(key, content);
+    }
+
+    // === Presigner (WS1.0): local SigV4 signing, zero S3 round trips. ===
+
+    @Override
+    public URI presignGet(final Key key, final long ttlSeconds) {
+        if (this.presigner == null) {
+            throw new IllegalStateException(
+                "Presigning is not configured for this S3Storage instance; "
+                    + "build it via the extended constructor that accepts a Presigner "
+                    + "(the s3/s3-express storage factories always do)."
+            );
+        }
+        return this.presigner.presignGet(key, ttlSeconds);
     }
 
     /**
@@ -553,7 +674,7 @@ public final class S3Storage implements ManagedStorage {
      * @param content Object content to be uploaded.
      * @return Completion stage which is completed when response received from S3.
      */
-    private CompletableFuture<Void> put(final Key key, final Content content) {
+    private CompletableFuture<Void> putObject(final Key key, final Content content) {
         final PutObjectRequest.Builder req = PutObjectRequest.builder()
             .bucket(this.bucket)
             .key(key.string());

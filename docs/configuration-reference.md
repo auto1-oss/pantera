@@ -1117,8 +1117,11 @@ storage:
 | `bucket` | string | Yes | -- | S3 bucket name |
 | `region` | string | No | SDK default | AWS region (e.g., `eu-west-1`) |
 | `endpoint` | string | No | SDK default | Custom S3-compatible endpoint URL |
-| `path-style` | boolean | No | `true` | Use path-style access (required for MinIO, LocalStack) |
+| `path-style` | boolean | No | `true` | Use path-style access (required for MinIO, Ceph/RADOS Gateway, LocalStack; most S3-API-compatible services) |
 | `dualstack` | boolean | No | `false` | Enable IPv4+IPv6 dualstack endpoints |
+| `storage-class` | string | No | S3 default (`STANDARD`) | S3 storage class for uploaded objects, e.g. `STANDARD_IA`, `INTELLIGENT_TIERING`, `GLACIER`, `EXPRESS_ONEZONE` (any value accepted by the AWS SDK's `StorageClass` enum) |
+
+`endpoint` + `path-style` + `credentials` alone are what make this same storage type work against any S3-API-compatible service -- MinIO, Cloudflare R2, Backblaze B2, Wasabi, Ceph/RADOS Gateway, and GCS via its S3 interoperability endpoint -- not just AWS S3. See [Storage Backends](admin-guide/storage-backends.md#s3-api-compatible-object-stores) for per-service example configs.
 
 #### S3 Credentials
 
@@ -1248,6 +1251,12 @@ storage:
   bucket: my-express-bucket--euw1-az1--x-s3
   region: eu-west-1
 ```
+
+`s3-express` only changes two defaults relative to plain `s3`: `path-style`
+defaults to `false` (S3 Express One Zone requires virtual-hosted-style access) and
+`storage-class` defaults to `EXPRESS_ONEZONE`. Both remain overridable with the
+ordinary `path-style` / `storage-class` keys above; every other `s3` key (HTTP
+tuning, multipart, parallel download, SSE, credentials, `cache`) works identically.
 
 ---
 

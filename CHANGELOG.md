@@ -6,6 +6,8 @@
 
 - **Docker registries support the OCI 1.1 Referrers API.** Pushing a manifest with a `subject` indexes it; `GET /v2/<name>/referrers/<digest>` returns a real OCI image index (with `artifactType` filtering and `OCI-Filters-Applied`), and pushes carry an `OCI-Subject` header — so cosign (OCI mode), notation, `oras attach`/`discover`, and SBOM attachment work against hosted repositories, where the endpoint was previously a permanent empty stub.
   ([@aydasraf](https://github.com/aydasraf))
+- **S3-API-compatible object stores are supported as storage backends.** The S3 backend can now be pointed at MinIO, Cloudflare R2, Backblaze B2, Wasabi, Ceph/RADOS, or GCS's S3-interoperability endpoint via the existing `endpoint`/`region`/`path-style` config, and the object `storage-class` is now configurable (e.g. `EXPRESS_ONEZONE`). Internally the storage layer gains a backend-agnostic `BlobStore`/`Presigner` abstraction that later disk-primary caching and presigned direct-download build on.
+  ([@aydasraf](https://github.com/aydasraf))
 
 ### 🔧 Bug fixes
 
