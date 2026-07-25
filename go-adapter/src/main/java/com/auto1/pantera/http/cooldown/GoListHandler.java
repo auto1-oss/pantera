@@ -347,6 +347,27 @@ public final class GoListHandler {
         final List<String> bounded = sorted.size() > MAX_VERSIONS_TO_EVALUATE
             ? sorted.subList(0, MAX_VERSIONS_TO_EVALUATE)
             : sorted;
+        if (sorted.size() > MAX_VERSIONS_TO_EVALUATE) {
+            // WS5.4: the cap (WS4-go.5) already bounded the fan-out; this
+            // makes the truncation an observable event instead of a silent
+            // drop — an operator investigating "why didn't cooldown block
+            // an old tag" needs to see the cap fired, not guess.
+            EcsLogger.info("com.auto1.pantera.http.cooldown")
+                .message("@v/list cooldown evaluation capped: "
+                    + sorted.size() + " version(s) total, evaluated the newest "
+                    + MAX_VERSIONS_TO_EVALUATE + "; "
+                    + (sorted.size() - MAX_VERSIONS_TO_EVALUATE)
+                    + " oldest version(s) served without an explicit cooldown "
+                    + "evaluation (treated as allowed)")
+                .eventCategory("database")
+                .eventAction("list_filter_eval_cap")
+                .eventOutcome("success")
+                .field("event.reason", "eval_cap_truncated")
+                .field("repository.name", this.repoName)
+                .field("package.name", module)
+                .field("log.source", "application")
+                .log();
+        }
         final List<CompletableFuture<Boolean>> futures = new ArrayList<>(bounded.size());
         for (final String version : bounded) {
             futures.add(this.isBlocked(module, version, user));
