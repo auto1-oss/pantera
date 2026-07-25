@@ -169,6 +169,18 @@ export interface StorageAlias {
   type?: string
 }
 
+// PGP Keyring (WS4-maven.3) — trusted public keys used by the Maven adapter
+// to verify artifact signatures when a repo's verifyPgp flag is enabled.
+// Shape matches GET /admin/pgp-keys ("keys" array); never includes the
+// armored key material, only identity/provenance fields.
+export interface PgpKey {
+  key_id_hex: string
+  fingerprint: string
+  uploaded_by: string
+  uploaded_at: string
+  description?: string | null
+}
+
 // Cooldown
 export interface CooldownRepo {
   name: string
