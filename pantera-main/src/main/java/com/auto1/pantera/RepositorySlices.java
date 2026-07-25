@@ -1035,7 +1035,6 @@ public class RepositorySlices {
             case "gem-group":
             case "go-group":
             case "pypi-group":
-            case "docker-group":
                 final List<String> genericFlatMembers = flattenMembers(cfg.name());
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
@@ -1085,6 +1084,85 @@ public class RepositorySlices {
                         "simple"
                     )
                 );
+                break;
+            case "docker-group":
+                // Unlike the generic groups above (GroupResolver: first-2xx-
+                // wins over each member's own HTTP Slice, no merge), docker
+                // needs tags/list + _catalog to return the UNION across
+                // members. MultiReadDocker already provides that via
+                // JoinedTagsSource/JoinedCatalogSource (WS4-docker.3); build
+                // each member's Docker directly the same way the "docker"/
+                // "docker-proxy" cases below do, and let a normal DockerSlice
+                // route the composite — manifest/blob GET inherit
+                // MultiReadRepo's prioritized first-hit walk (correct for
+                // content-addressed pulls), and PUT/DELETE reject with
+                // UnsupportedOperationException -> 405 (proxy/group writes
+                // and deletes are out of scope, CLAUDE.md/WS4-docker.5 §3).
+                final List<String> dockerFlatMembers = flattenMembers(cfg.name());
+                final List<Docker> dockerMemberDockers = new java.util.ArrayList<>();
+                SharedJettyClients.Lease dockerGroupLease = null;
+                for (final String memberName : dockerFlatMembers) {
+                    final Optional<RepoConfig> memberCfgOpt = this.repos.config(memberName);
+                    if (memberCfgOpt.isEmpty()) {
+                        EcsLogger.warn("com.auto1.pantera")
+                            .message("docker-group member config not found, skipping")
+                            .eventCategory("configuration")
+                            .eventAction("docker_group_member_skip")
+                            .field("repository.name", cfg.name())
+                            .field("log.source", "application")
+                            .log();
+                        continue;
+                    }
+                    final RepoConfig memberCfg = memberCfgOpt.get();
+                    if ("docker".equals(memberCfg.type())) {
+                        dockerMemberDockers.add(
+                            new AstoDocker(
+                                memberCfg.name(), new SubStorage(RegistryRoot.V2, memberCfg.storage())
+                            )
+                        );
+                    } else if ("docker-proxy".equals(memberCfg.type())) {
+                        if (dockerGroupLease == null) {
+                            dockerGroupLease = jettyClientSlices(cfg);
+                        }
+                        dockerMemberDockers.add(
+                            DockerProxy.buildDocker(
+                                dockerGroupLease.client(), memberCfg, artifactEvents()
+                            )
+                        );
+                    } else {
+                        EcsLogger.warn("com.auto1.pantera")
+                            .message("docker-group member has an unsupported type, skipping")
+                            .eventCategory("configuration")
+                            .eventAction("docker_group_member_skip")
+                            .field("repository.name", cfg.name())
+                            .field("log.source", "application")
+                            .log();
+                    }
+                }
+                clientLease = dockerGroupLease;
+                if (dockerMemberDockers.isEmpty()) {
+                    throw new IllegalStateException(
+                        String.format(
+                            "docker-group '%s' has no usable docker/docker-proxy members",
+                            cfg.name()
+                        )
+                    );
+                }
+                final Docker groupDocker = new com.auto1.pantera.docker.composite.MultiReadDocker(
+                    dockerMemberDockers
+                );
+                if (cfg.port().isPresent()) {
+                    slice = new DockerSlice(groupDocker, securityPolicy(),
+                        new CombinedAuthScheme(authentication(), tokens.auth()), artifactEvents(),
+                        this.settings.syncArtifactIndexer());
+                } else {
+                    slice = new DockerRoutingSlice.Reverted(
+                        new DockerSlice(new TrimmedDocker(groupDocker, cfg.name()),
+                            securityPolicy(), new CombinedAuthScheme(authentication(), tokens.auth()),
+                            artifactEvents(),
+                            this.settings.syncArtifactIndexer())
+                    );
+                }
                 break;
             case "docker":
                 final Docker docker = new AstoDocker(

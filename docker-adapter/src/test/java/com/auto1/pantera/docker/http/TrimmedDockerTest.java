@@ -58,6 +58,18 @@ class TrimmedDockerTest {
     };
 
     @Test
+    void registryNameIsTheConfiguredPrefixNotTheOriginName() {
+        // FAKE.registryName() reports "test"; TrimmedDocker must report its
+        // own configured prefix instead — matters once the origin is a
+        // composite (e.g. a docker-group's MultiReadDocker) whose own
+        // registryName() would otherwise leak an arbitrary member's name.
+        MatcherAssert.assertThat(
+            new TrimmedDocker(TrimmedDockerTest.FAKE, "my-group").registryName(),
+            Matchers.is("my-group")
+        );
+    }
+
+    @Test
     void failsIfPrefixNotFound() {
         Assertions.assertThrows(
             IllegalArgumentException.class,
