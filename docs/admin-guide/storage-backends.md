@@ -255,10 +255,10 @@ cache:
   individually accessed (or a future backfill populates the index). This does
   not affect artifact *retrieval* (a `value()`/`exists()` for an unindexed key
   still correctly falls through to S3), only listing/browsing completeness.
-- **Cross-node staleness** beyond `freshness-ttl-millis` is not yet
-  event-driven (no pub/sub invalidation in this phase) -- a write on one node
-  is only guaranteed visible to another node's index once that node's own
-  `freshness-ttl-millis` window elapses.
+- **Cross-node staleness is event-driven** (WS1.5) -- see
+  [Cross-Node Coherence](#cross-node-coherence-ws15) below.
+  `freshness-ttl-millis` remains only the backstop for the window before an
+  invalidation message arrives, or if one is lost.
 
 The `validate-on-read` disk-cache option does not apply in index mode --
 there is nothing to validate against on the hot path by design.
@@ -390,6 +390,61 @@ directory levels are write-only fan-out, never consulted on read).
 filesystem's typical single-filename length limit (~255 bytes) for an
 unusually long logical key. This mirrors a pre-existing limitation of
 `cache.mode: disk` for deeply nested keys and is not specially handled.
+
+### Cross-Node Coherence (WS1.5)
+
+`cache.mode: index` trusts a disk-cached entry for `freshness-ttl-millis`
+without re-validating against S3 (see
+[Index Cache Mode](#index-cache-mode-cachemode-index) above) -- WS1.5 is what
+makes that safe across a multi-node cluster instead of only within one
+process: on a write-through or write-back commit, and on a delete, the owning
+node publishes an invalidation (`key` + content digest + commit time) over a
+new `storage` pub/sub channel, reusing the SAME cross-instance bus (Valkey
+pub/sub) that already carries auth/filters/policy-settings invalidation. A
+peer node that has that key cached locally drops its disk+index entry on
+receipt, so its NEXT access re-resolves the key with a fresh S3 fetch instead
+of serving what it now knows is stale. `freshness-ttl-millis` remains the
+backstop for the window before a message arrives, or if a message never
+arrives at all (e.g. a Valkey outage) -- it does not disappear, its role
+narrows to "worst case", not "only case".
+
+**No configuration required.** There is no `cache.*` key for this -- it is
+wired in automatically wherever `cache.mode: index` is active AND clustering
+(Valkey) is configured, the same condition that already enables the existing
+auth/filters/policy cross-instance invalidation. A single-instance deployment
+(no Valkey) gets a no-op bus: behaviour is identical to a pre-WS1.5 index
+cache, because there are no peers to notify or be notified by.
+
+**What is published, and when:**
+
+| Trigger | Published? | Notes |
+|---|---|---|
+| Write-through `save()` confirms an S3 `PUT` | Yes | Content digest computed on the write is carried as the version marker. |
+| Write-back upload confirms an S3 `PUT` (async) | Yes | Same as above, published once the background uploader confirms `PRESENT`, not when `save()` itself returns. |
+| `delete()` that actually removed a durably-confirmed (`PRESENT`) key | Yes | A tombstone (no digest). |
+| `delete()` of a key that was still `PENDING_WRITE` locally | No | Never confirmed anywhere else, so there is nothing to invalidate on a peer. |
+| Local WS1.4 eviction (disk-cache housekeeping) | No | The object is unchanged in S3; only THIS node's local disk cache shrank. Not a coherence event. |
+
+**Two races handled explicitly, so an operator never sees a spurious
+eviction or a corrupted in-flight upload:**
+
+- **A node's own in-flight write-back upload is never touched by a peer
+  message.** While a key is `PENDING_WRITE` (upload not yet confirmed), an
+  invalidation for that same key from ANY peer is ignored unconditionally --
+  the local disk file is the only durable copy of those bytes until the
+  upload confirms, and the background uploader thread is reading that exact
+  file. Dropping it out from under an in-flight upload would corrupt it.
+- **A delayed/reordered message can never evict a newer local write.** Every
+  invalidation carries the commit time the publishing node recorded for it;
+  a receiver ignores any message whose commit time is not strictly after its
+  OWN local entry's last write. This is what stops a network-delayed message
+  from a node's own earlier (now-superseded) write from wrongly evicting a
+  node's own more recent one.
+
+Multiple repositories with `cache.mode: index` in the same process share ONE
+`storage` channel; each repository's messages carry its own cache-directory
+path as a namespace tag, so a repository never reacts to another
+repository's traffic even though they are multiplexed together.
 
 ---
 

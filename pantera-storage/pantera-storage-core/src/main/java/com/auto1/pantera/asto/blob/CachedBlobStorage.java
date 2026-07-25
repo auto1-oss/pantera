@@ -126,6 +126,24 @@ import java.util.function.Function;
  * (nothing to delete there yet) -- see {@link #delete(Key)}'s javadoc for the
  * narrow accepted race with an in-flight uploader this implies.</p>
  *
+ * <h2>Cross-node coherence (WS1.5, spec &sect;3.E)</h2>
+ * <p>A commit (write-through OR write-back landing durably) or a delete
+ * publishes {@code key + digest + commit-time} on {@link
+ * #invalidationBus} -- {@link StorageInvalidationBus#NOOP} by default (pure
+ * single-instance mode; every existing constructor call site keeps this),
+ * or a real bus wired in by the caller (e.g. {@code S3StorageFactory} reads
+ * one from {@code StorageInvalidationBusRegistry} when clustering is
+ * configured). A peer instance that has this key cached locally drops its
+ * disk+index entry on receipt so the NEXT access re-resolves it -- this is
+ * what lets the "trust the local disk copy for {@code freshnessTtl}, never
+ * inline-HEAD" read path above be safe across nodes: event-driven
+ * invalidation replaces per-read validation, {@code freshnessTtl} remains
+ * only the backstop for the window before a message arrives (or is lost).
+ * See {@link #onPeerInvalidate} for the two races this must not get wrong
+ * (a concurrent local write-back for the same key; a stale message
+ * reordered behind a newer local write) and {@link StorageInvalidationToken}
+ * for the wire format.</p>
+ *
  * @since 2.3.0
  */
 public final class CachedBlobStorage implements Storage, AutoCloseable {
@@ -232,6 +250,23 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
     private volatile CompletableFuture<Void> bootReplayComplete = CompletableFuture.completedFuture(null);
 
     /**
+     * WS1.5 (spec &sect;3.E) cross-node coherence bus. {@link
+     * StorageInvalidationBus#NOOP} for every constructor that does not
+     * receive one explicitly -- preserves pre-WS1.5 behaviour exactly.
+     */
+    private final StorageInvalidationBus invalidationBus;
+
+    /**
+     * WS1.5 namespace this instance's {@link #invalidationBus} messages are
+     * scoped to: {@link #diskRoot}'s string form. Several {@link
+     * CachedBlobStorage} instances (one per repository configured with
+     * {@code cache.mode: index}) can share ONE process-wide bus/channel;
+     * this is how each one ignores every OTHER repository's traffic before
+     * touching its own {@link #index} -- see {@link #onPeerInvalidate}.
+     */
+    private final String invalidationNamespace;
+
+    /**
      * New cached blob storage.
      *
      * <p>Performs a blocking boot-time {@link StorageIndex#rebuildFromDisk}
@@ -253,6 +288,8 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
      *  writeThrough}.
      * @param evictionConfig WS1.4 eviction/admission-control tuning (spec
      *  &sect;3.D): hard disk-bytes bound plus high/low watermarks.
+     * @param invalidationBus WS1.5 cross-node coherence bus (spec &sect;3.E);
+     *  {@code null} is treated identically to {@link StorageInvalidationBus#NOOP}.
      */
     public CachedBlobStorage(
         final BlobStore blobStore,
@@ -261,7 +298,8 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
         final Duration negativeTtl,
         final boolean writeThrough,
         final WriteBackConfig writeBackConfig,
-        final EvictionConfig evictionConfig
+        final EvictionConfig evictionConfig,
+        final StorageInvalidationBus invalidationBus
     ) {
         this.blobStore = blobStore;
         this.disk = new FileStorage(diskRoot);
@@ -272,6 +310,8 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
         this.writeThrough = writeThrough;
         this.writeBackConfig = writeBackConfig;
         this.evictionConfig = evictionConfig;
+        this.invalidationBus = invalidationBus == null ? StorageInvalidationBus.NOOP : invalidationBus;
+        this.invalidationNamespace = diskRoot.toString();
         this.id = "CachedBlobStorage: " + blobStore.identifier();
         try {
             Files.createDirectories(diskRoot);
@@ -287,6 +327,37 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
             this.writeBackUploaders = CachedBlobStorage.newUploaderPool(writeBackConfig.uploaderThreads());
             this.replayPendingWrites();
         }
+        this.invalidationBus.onInvalidate(this::onPeerInvalidate);
+    }
+
+    /**
+     * Convenience constructor for callers that do not (yet) wire a WS1.5
+     * cross-node coherence bus -- delegates with {@link
+     * StorageInvalidationBus#NOOP}, preserving pre-WS1.5 behaviour exactly.
+     *
+     * @param blobStore Durable cold tier.
+     * @param diskRoot Local disk cache directory (created if absent).
+     * @param freshnessTtl How long a confirmed-{@code PRESENT} disk copy is
+     *  trusted without re-validation.
+     * @param negativeTtl How long a confirmed blob-store miss is remembered.
+     * @param writeThrough {@code true} for the pre-WS1.2 synchronous
+     *  write-through save path; {@code false} for WS1.2 async write-back.
+     * @param writeBackConfig Write-back tuning; ignored when {@code writeThrough}.
+     * @param evictionConfig WS1.4 eviction/admission-control tuning.
+     */
+    public CachedBlobStorage(
+        final BlobStore blobStore,
+        final Path diskRoot,
+        final Duration freshnessTtl,
+        final Duration negativeTtl,
+        final boolean writeThrough,
+        final WriteBackConfig writeBackConfig,
+        final EvictionConfig evictionConfig
+    ) {
+        this(
+            blobStore, diskRoot, freshnessTtl, negativeTtl, writeThrough, writeBackConfig, evictionConfig,
+            StorageInvalidationBus.NOOP
+        );
     }
 
     /**
@@ -459,7 +530,19 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
             : this.blobStore.delete(key);
         return removedFromBlobStore
             .thenCompose(ignored -> this.deleteDiskCopyBestEffort(key))
-            .thenRun(() -> this.completeDelete(key));
+            .thenRun(() -> this.completeDelete(key))
+            .thenRun(() -> {
+                // WS1.5 (spec sect 3.E): only publish when this delete
+                // actually removed a durably-confirmed copy. A PENDING_WRITE
+                // key was never seen as PRESENT anywhere else -- publishing a
+                // tombstone for it could wrongly evict an UNRELATED, still
+                // valid PRESENT entry a peer holds for this same key (e.g. a
+                // genuinely older or concurrently-written version this node
+                // never finished uploading).
+                if (!pendingUpload) {
+                    this.publishDeleteInvalidation(key);
+                }
+            });
     }
 
     @Override
@@ -660,7 +743,8 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
     private CompletableFuture<Void> uploadWrittenFile(final Key key, final String digest) {
         return OptimizedStorageCache.optimizedValue(this.disk, this.diskKey(key))
             .thenCompose(body -> this.blobStore.put(key, body))
-            .thenCompose(ignored -> this.finalizeDiskWrite(key, digest));
+            .thenCompose(ignored -> this.finalizeDiskWrite(key, digest))
+            .thenRun(() -> this.publishCommitInvalidation(key));
     }
 
     // === save(): WS1.2 async durable write-back (default) ===
@@ -794,6 +878,7 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
                 .field("file.path", pending.key().string())
                 .field("log.source", "application")
                 .log();
+            this.publishCommitInvalidation(pending.key());
         } else {
             // Rare: the blob-store PUT confirmed the bytes durably, but the
             // local disk.metadata() read to finalize the index entry
@@ -1095,6 +1180,169 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
     private void completeDelete(final Key key) {
         this.index.remove(key);
         this.deleteSidecarBestEffort(key);
+    }
+
+    // === WS1.5: cross-node coherence publish/receive (spec sect 3.E) ===
+
+    /**
+     * Publishes a commit invalidation for {@code key} after a write-through
+     * OR write-back upload lands durably (both funnel here via {@link
+     * #uploadWrittenFile} and {@link #onUploadSuccess} respectively) -- reads
+     * the JUST-updated {@link #index} entry rather than recomputing anything
+     * separately, so the published {@link StorageInvalidationToken} always
+     * reflects EXACTLY what this node itself now believes, never a value
+     * that could race the index write.
+     *
+     * @param key Key that was just committed durably.
+     */
+    private void publishCommitInvalidation(final Key key) {
+        this.index.knownEntry(key).ifPresent(
+            entry -> this.publishInvalidation(key, entry.digest(), entry.lastModifiedEpochMilli())
+        );
+    }
+
+    /**
+     * Publishes a delete tombstone for {@code key} -- see {@link #delete(Key)}'s
+     * call site for why this is only invoked when the delete actually
+     * removed a durably-confirmed blob-store copy.
+     *
+     * @param key Key that was just deleted.
+     */
+    private void publishDeleteInvalidation(final Key key) {
+        this.publishInvalidation(key, null, System.currentTimeMillis());
+    }
+
+    private void publishInvalidation(final Key key, final String digest, final long committedAtEpochMilli) {
+        final String token = new StorageInvalidationToken(this.invalidationNamespace, digest, committedAtEpochMilli).encode();
+        this.invalidationBus.publish(key, token);
+        EcsLogger.debug("com.auto1.pantera.asto.blob")
+            .message("Published cross-node cache invalidation")
+            .eventCategory("file")
+            .eventAction("storage_invalidation_publish")
+            .eventOutcome("success")
+            .field("file.path", key.string())
+            .field("log.source", "application")
+            .log();
+    }
+
+    /**
+     * Invoked when a peer node publishes a cross-node invalidation on {@link
+     * #invalidationBus} (spec &sect;3.E). Registered once, in the
+     * constructor, against EVERY message the bus delivers -- including
+     * messages published by OTHER {@link CachedBlobStorage} instances
+     * sharing the same process-wide bus for a DIFFERENT repository/cache
+     * namespace, which is why the very first check is the {@link
+     * #invalidationNamespace} match: a shared bus multiplexes every repo's
+     * coherence traffic over one channel, so each listener must silently
+     * ignore messages that are not about its OWN local disk-cache directory
+     * before doing anything else.
+     *
+     * <p>Two races this method is specifically responsible for NOT getting
+     * wrong (spec &sect;3.E):</p>
+     * <ul>
+     *   <li><strong>A concurrent local write-back upload for the SAME
+     *   key.</strong> If the local entry is currently {@code PENDING_WRITE},
+     *   this node's own uploader thread may be mid-flight reading THIS EXACT
+     *   disk file to upload it (see {@link #uploadWithRetry}) -- dropping
+     *   the disk file here out from under it would corrupt that in-flight
+     *   upload. The peer's message is ignored unconditionally in this case,
+     *   regardless of what it claims.</li>
+     *   <li><strong>A stale message reordered behind a newer local
+     *   write.</strong> The token's {@code committedAtEpochMilli} is
+     *   compared against the local entry's OWN {@link
+     *   StorageIndex.Entry#lastModifiedEpochMilli()}: a message that is not
+     *   STRICTLY newer than what this node already recorded locally is a
+     *   delayed echo of a write this node has already superseded (by its own
+     *   later write, or by processing a later message first) and must not
+     *   evict a newer local copy. A content digest gives no such ordering
+     *   (two independent writes just have two unrelated hashes), which is
+     *   why {@link StorageInvalidationToken} carries a timestamp instead.</li>
+     * </ul>
+     *
+     * @param key Key a peer committed or deleted.
+     * @param rawToken Encoded {@link StorageInvalidationToken}.
+     */
+    private void onPeerInvalidate(final Key key, final String rawToken) {
+        final Optional<StorageInvalidationToken> parsed = StorageInvalidationToken.decode(rawToken);
+        if (parsed.isEmpty() || !this.invalidationNamespace.equals(parsed.get().namespace())) {
+            return;
+        }
+        final Optional<StorageIndex.Entry> local = this.index.knownEntry(key);
+        if (local.isEmpty()) {
+            return;
+        }
+        final StorageIndex.Entry entry = local.get();
+        final StorageInvalidationToken token = parsed.get();
+        if (entry.pendingUpload()) {
+            this.logInvalidationIgnored(key, "pending_write_in_flight");
+        } else if (token.committedAtEpochMilli() <= entry.lastModifiedEpochMilli()) {
+            this.logInvalidationIgnored(key, "superseded_by_local_write");
+        } else {
+            this.dropLocalEntryBestEffort(key);
+            EcsLogger.info("com.auto1.pantera.asto.blob")
+                .message("Applied cross-node cache invalidation: dropped local disk+index entry")
+                .eventCategory("file")
+                .eventAction("storage_invalidation_apply")
+                .eventOutcome("success")
+                .field("file.path", key.string())
+                .field("log.source", "application")
+                .log();
+        }
+    }
+
+    private void logInvalidationIgnored(final Key key, final String reason) {
+        EcsLogger.debug("com.auto1.pantera.asto.blob")
+            .message("Ignored cross-node cache invalidation: " + reason)
+            .eventCategory("file")
+            .eventAction("storage_invalidation_ignore")
+            .eventOutcome("success")
+            .field("event.reason", reason)
+            .field("file.path", key.string())
+            .field("log.source", "application")
+            .log();
+    }
+
+    /**
+     * Drops {@code key}'s local disk+index entry so the NEXT access
+     * re-resolves it via a fresh cold fill from the blob store (spec
+     * &sect;3.E) -- mirrors {@link #completeDelete(Key)} plus a best-effort
+     * disk cleanup, but is never called from {@link #delete(Key)} itself
+     * (that path already does its own blob-store-first removal).
+     *
+     * <p>Deliberately does NOT reuse {@link #deleteDiskCopyBestEffort(Key)}
+     * (which goes through {@code FileStorage#delete}): that call also
+     * recursively removes now-empty parent directories, all the way up to
+     * the shared {@code .tmp} staging directory {@link
+     * #writeSidecarBestEffort} and every {@code FileStorage#save} use for
+     * atomic writes. An invalidation-drop is, by construction, immediately
+     * followed by exactly the write it would race -- the NEXT access to
+     * this SAME key cold-fills it right back, creating a fresh temp file
+     * under {@code .tmp} at any moment. A raw {@link Files#deleteIfExists}
+     * achieves everything this path needs (the stale bytes are gone, so a
+     * boot-time {@link StorageIndex#rebuildFromDisk} scan can never
+     * resurrect them as a valid entry from bare filesystem attributes)
+     * without ever touching the shared staging directory.</p>
+     *
+     * @param key Key to drop locally.
+     */
+    private void dropLocalEntryBestEffort(final Key key) {
+        this.index.remove(key);
+        this.deleteSidecarBestEffort(key);
+        this.disk.pathFor(this.diskKey(key)).ifPresent(path -> {
+            try {
+                Files.deleteIfExists(path);
+            } catch (final IOException ex) {
+                EcsLogger.debug("com.auto1.pantera.asto.blob")
+                    .message("Best-effort disk cleanup after cross-node invalidation failed")
+                    .eventCategory("file")
+                    .eventAction("storage_invalidation_apply")
+                    .eventOutcome("failure")
+                    .error(ex)
+                    .field("file.path", key.string())
+                    .field("log.source", "application")
+                    .log();
+            }
+        });
     }
 
     // === sidecar persistence (feeds StorageIndex#rebuildFromDisk on boot) ===
