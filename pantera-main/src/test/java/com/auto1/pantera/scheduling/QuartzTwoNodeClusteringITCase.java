@@ -54,7 +54,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  * — so for that pipeline specifically the "no events lost" guarantee is
  * structural (there is no cross-node trigger race to lose events to any
  * more), covered by {@link LocalEventDrainSchedulerTest} and
- * {@code SchedulerDbTest}. This ITCase covers the shared safety net
+ * {@code SchedulerDbITCase}. This ITCase covers the shared safety net
  * ({@link QuartzJob#stopJob}) that still protects the remaining
  * Quartz-scheduled, {@link JobDataRegistry}-dependent per-repository
  * proxy-package-processor jobs.
