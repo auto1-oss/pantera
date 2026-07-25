@@ -90,6 +90,18 @@ public class ResponseBuilder {
         return new ResponseBuilder(RsStatus.METHOD_NOT_ALLOWED);
     }
 
+    /**
+     * {@code 406 Not Acceptable}. Used when none of the representations
+     * this endpoint can serve match the client's {@code Accept} header --
+     * e.g. an OCI/Docker manifest stored under a media type the client
+     * did not list (WS4-docker.7).
+     *
+     * @return Builder for a {@code 406} response.
+     */
+    public static ResponseBuilder notAcceptable() {
+        return new ResponseBuilder(RsStatus.NOT_ACCEPTABLE);
+    }
+
     public static ResponseBuilder badRequest() {
         return new ResponseBuilder(RsStatus.BAD_REQUEST);
     }
@@ -259,6 +271,7 @@ public class ResponseBuilder {
                 case FORBIDDEN -> RSP_FORBIDDEN;
                 case NOT_FOUND -> RSP_NOT_FOUND;
                 case METHOD_NOT_ALLOWED -> RSP_METHOD_NOT_ALLOWED;
+                case NOT_ACCEPTABLE -> RSP_NOT_ACCEPTABLE;
                 case REQUEST_TIMEOUT -> RSP_REQUEST_TIMEOUT;
                 case CONFLICT -> RSP_CONFLICT;
                 case LENGTH_REQUIRED -> RSP_LENGTH_REQUIRED;
@@ -298,6 +311,7 @@ public class ResponseBuilder {
     private final static Response RSP_UNAUTHORIZED = new Response(RsStatus.UNAUTHORIZED, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_FORBIDDEN = new Response(RsStatus.FORBIDDEN, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_METHOD_NOT_ALLOWED = new Response(RsStatus.METHOD_NOT_ALLOWED, Headers.EMPTY, Content.EMPTY);
+    private final static Response RSP_NOT_ACCEPTABLE = new Response(RsStatus.NOT_ACCEPTABLE, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_REQUEST_TIMEOUT = new Response(RsStatus.REQUEST_TIMEOUT, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_CONFLICT = new Response(RsStatus.CONFLICT, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_LENGTH_REQUIRED = new Response(RsStatus.LENGTH_REQUIRED, Headers.EMPTY, Content.EMPTY);

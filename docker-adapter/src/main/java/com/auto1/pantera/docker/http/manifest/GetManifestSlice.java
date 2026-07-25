@@ -13,6 +13,7 @@ package com.auto1.pantera.docker.http.manifest;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.docker.Docker;
 import com.auto1.pantera.docker.error.ManifestError;
+import com.auto1.pantera.docker.error.ManifestNotAcceptableError;
 import com.auto1.pantera.docker.http.DigestHeader;
 import com.auto1.pantera.docker.http.DockerActionSlice;
 import com.auto1.pantera.docker.perms.DockerActions;
@@ -42,6 +43,11 @@ public class GetManifestSlice extends DockerActionSlice {
         // body.asBytesFuture() may complete on a different thread
         // (Vert.x event loop / worker) where MDC is not set.
         final String login = new Login(headers).getValue();
+        // WS4-docker.7: parse the client's Accept header up-front (headers
+        // is a Slice argument, so it survives the async hops below same as
+        // login does). An absent header yields an always-accepting gate,
+        // preserving pre-negotiation behaviour.
+        final ManifestAccept accept = new ManifestAccept(headers);
         // Consume request body to prevent Vert.x resource leak
         return body.asBytesFuture().thenCompose(ignored -> {
             MDC.put("user.name", login);
@@ -57,6 +63,26 @@ public class GetManifestSlice extends DockerActionSlice {
                 .thenApply(
                     manifest -> manifest.map(
                         found -> {
+                            if (!accept.accepts(found.mediaType())) {
+                                com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.docker")
+                                    .message("Manifest media type not acceptable to client")
+                                    .eventCategory("web")
+                                    .eventAction("manifest_get")
+                                    .eventOutcome("failure")
+                                    .field("event.reason", "not_acceptable")
+                                    .field("container.image.name", request.name())
+                                    .field("container.image.tag", request.reference().digest())
+                                    .field("file.type", found.mediaType())
+                                    .field("log.source", "application")
+                                    .log();
+                                return ResponseBuilder.notAcceptable()
+                                    .jsonBody(
+                                        new ManifestNotAcceptableError(
+                                            request.reference(), found.mediaType()
+                                        ).json()
+                                    )
+                                    .build();
+                            }
                             Response response = ResponseBuilder.ok()
                                 .header(ContentType.mime(found.mediaType()))
                                 .header(new DigestHeader(found.digest()))

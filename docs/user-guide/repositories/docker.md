@@ -190,6 +190,45 @@ without the referrers API, are not implemented.
 
 ---
 
+## Manifest Content Negotiation (Accept Header)
+
+`GET`/`HEAD /v2/<name>/manifests/<reference>` honor the client's `Accept`
+header: the stored manifest is served only when its media type is one the
+client declared acceptable, and `406 Not Acceptable` is returned otherwise
+rather than handing back a body the client cannot parse.
+
+```bash
+# A client that only understands the legacy Docker v2 manifest media type,
+# against a tag stored as an OCI image index, gets 406 rather than a body
+# it can't parse:
+curl -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+    https://pantera-host:8080/v2/docker-local/myapp/manifests/latest
+# -> 406 Not Acceptable
+
+# List every media type your tooling actually understands instead:
+curl -H "Accept: application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json" \
+    https://pantera-host:8080/v2/docker-local/myapp/manifests/latest
+```
+
+The four modern media types are negotiated:
+`application/vnd.docker.distribution.manifest.v2+json`,
+`application/vnd.oci.image.manifest.v1+json`,
+`application/vnd.docker.distribution.manifest.list.v2+json`, and
+`application/vnd.oci.image.index.v1+json`. `Accept: */*` and an **absent**
+`Accept` header both serve the stored manifest unconditionally, so this is
+transparent for every mainstream client (`docker`, `containerd`, `skopeo`,
+`oras`, `crane`) — they already send an explicit list covering the type
+they pushed or expect.
+
+**Scope:** applies uniformly across `docker`, `docker-proxy`, and
+`docker-group` repositories — the check runs against whichever manifest
+each mode resolves, right before serving it. Legacy schema1→schema2
+conversion is **not** implemented: a manifest stored outside the four
+modern types above is served as-is when accepted, or 406s — it is never
+transcoded.
+
+---
+
 ## Multi-Registry Proxy
 
 A single Docker proxy repository can cache images from multiple upstream registries. This is useful when your builds pull from Docker Hub, GCR, Elastic, and Kubernetes registries:
@@ -250,6 +289,7 @@ calls are unaffected either way.
 | `EOF` during push | Connection reset, often from proxy/LB | Increase timeouts in Nginx (`proxy_read_timeout 300s`) and set `client_max_body_size 0` |
 | `skopeo delete` / blob `DELETE` returns `405 Method Not Allowed` | Target is a `docker-proxy` or `docker-group` repository | Delete against the hosted (`docker`) repository directly — proxy/group repos are read-through, not authoritative |
 | Chunked push fails with `416 Requested Range Not Satisfiable` | A `PATCH` chunk's `Content-Range` start does not match the bytes already received | Restart the upload (`POST` a new session) — chunks must be sent strictly in order with no gaps or overlaps |
+| `406 Not Acceptable` on a manifest GET/HEAD | Client's `Accept` header does not list the stored manifest's media type | Send the media types your client actually supports, or drop the `Accept` header entirely to get the stored manifest unconditionally |
 | Blob pull times out / connection refused after a `302` | `download-mode: redirect`/`auto` is enabled but the client network cannot reach the object store directly | Ask an admin to set `download-mode: stream` for the repository, or grant the client network route/DNS to the object store endpoint |
 
 ---
