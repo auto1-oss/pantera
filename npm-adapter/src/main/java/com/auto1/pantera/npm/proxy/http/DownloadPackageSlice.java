@@ -270,8 +270,16 @@ public final class DownloadPackageSlice implements Slice {
         return this.npm.getPackageMetadataOnly(packageName)
             .doOnEvent((m, e) -> recordPhase("packument_metadata_fetch", metaNs))
             .flatMap(metadata -> {
-                // PERF: Early 304 exit - skip content loading if derived ETag matches
-                if (clientETag.isPresent() && metadata.abbreviatedHash().isPresent()) {
+                // PERF: Early 304 exit — skip content loading when the derived
+                // ETag matches. Valid ONLY when cooldown filtering is inactive:
+                // the derived ETag folds the immutable upstream hash, which does
+                // not change when a version is blocked/unblocked. With cooldown
+                // active we fall through and let buildAbbreviatedResponse
+                // (filtered=true) compute the ETag from the filtered bytes, so a
+                // block-state change busts the client cache instead of returning
+                // a stale 304.
+                if (!this.cooldownActive() && clientETag.isPresent()
+                    && metadata.abbreviatedHash().isPresent()) {
                     final String tarballPrefix = this.getTarballPrefix(headers);
                     final String derivedEtag = MetadataETag.derive(
                         metadata.abbreviatedHash().get(), tarballPrefix
@@ -315,7 +323,7 @@ public final class DownloadPackageSlice implements Slice {
                                     owner, java.util.List.of()
                                 );
                                 return io.reactivex.Maybe.just(
-                                    this.buildAbbreviatedResponse(abbreviatedBytes, metadata, headers, clientETag)
+                                    this.buildAbbreviatedResponse(abbreviatedBytes, metadata, headers, false, clientETag)
                                 );
                             });
                     })
@@ -342,7 +350,7 @@ public final class DownloadPackageSlice implements Slice {
                                         owner, java.util.List.of()
                                     );
                                     return io.reactivex.Maybe.just(
-                                        this.buildResponse(rawBytes, metadata, headers, true, clientETag)
+                                        this.buildResponse(rawBytes, metadata, headers, true, false, clientETag)
                                     );
                                 });
                         })
@@ -432,9 +440,9 @@ public final class DownloadPackageSlice implements Slice {
                     .error(ex)
                     .field("log.source", "application")
                     .log();
-                return this.buildResponse(fullBytes, metadata, headers, true, clientETag);
+                return this.buildResponse(fullBytes, metadata, headers, true, false, clientETag);
             }
-            return this.buildResponse(filtered, metadata, headers, true, clientETag);
+            return this.buildResponse(filtered, metadata, headers, true, true, clientETag);
         });
         return RxFuture.maybe(filterFuture);
     }
@@ -494,10 +502,10 @@ public final class DownloadPackageSlice implements Slice {
                         .error(ex)
                         .field("log.source", "application")
                         .log();
-                    return this.buildAbbreviatedResponse(abbreviatedBytes, metadata, headers, clientETag);
+                    return this.buildAbbreviatedResponse(abbreviatedBytes, metadata, headers, false, clientETag);
                 }
                 // Success - build response with filtered abbreviated metadata
-                return this.buildAbbreviatedResponse(filtered, metadata, headers, clientETag);
+                return this.buildAbbreviatedResponse(filtered, metadata, headers, true, clientETag);
             });
     }
 
@@ -513,8 +521,14 @@ public final class DownloadPackageSlice implements Slice {
     ) {
         return this.npm.getPackageMetadataOnly(packageName)
             .flatMap(metadata -> {
-                // PERF: Early 304 exit - skip content loading if derived ETag matches
-                if (clientETag.isPresent() && metadata.contentHash().isPresent()) {
+                // PERF: Early 304 exit — skip content loading when the derived
+                // ETag matches. Valid ONLY when cooldown filtering is inactive
+                // (see serveAbbreviated): the derived ETag ignores the filtered
+                // output, so with cooldown active we fall through to
+                // buildResponse (filtered=true) to key the ETag to the served
+                // filtered bytes.
+                if (!this.cooldownActive() && clientETag.isPresent()
+                    && metadata.contentHash().isPresent()) {
                     final String tarballPrefix = this.getTarballPrefix(headers);
                     final String derivedEtag = MetadataETag.derive(
                         metadata.contentHash().get(), tarballPrefix
@@ -586,9 +600,9 @@ public final class DownloadPackageSlice implements Slice {
                                                 .error(ex)
                                                 .field("log.source", "application")
                                                 .log();
-                                            return this.buildResponse(rawBytes, metadata, headers, false, clientETag);
+                                            return this.buildResponse(rawBytes, metadata, headers, false, false, clientETag);
                                         }
-                                        return this.buildResponse(filtered, metadata, headers, false, clientETag);
+                                        return this.buildResponse(filtered, metadata, headers, false, true, clientETag);
                                     });
                                 return RxFuture.maybe(filterFuture);
                             }
@@ -599,7 +613,7 @@ public final class DownloadPackageSlice implements Slice {
                                 owner, java.util.List.of()
                             );
                             return io.reactivex.Maybe.just(
-                                this.buildResponse(rawBytes, metadata, headers, false, clientETag)
+                                this.buildResponse(rawBytes, metadata, headers, false, false, clientETag)
                             );
                         });
                 });
@@ -819,18 +833,17 @@ public final class DownloadPackageSlice implements Slice {
         final byte[] abbreviatedBytes,
         final com.auto1.pantera.npm.proxy.model.NpmPackage.Metadata metadata,
         final Headers headers,
+        final boolean filtered,
         final Optional<String> clientETag
     ) {
         final String tarballPrefix = this.getTarballPrefix(headers);
-        // PERF: Derive ETag from pre-computed hash + prefix (~100 bytes to hash)
-        // instead of SHA-256 of full transformed content (3-5MB). ~1000x faster.
-        final String etag = metadata.abbreviatedHash()
-            .map(hash -> MetadataETag.derive(hash, tarballPrefix))
-            .orElseGet(() -> {
-                final ByteLevelUrlTransformer transformer = new ByteLevelUrlTransformer();
-                final byte[] transformed = transformer.transform(abbreviatedBytes, tarballPrefix);
-                return new MetadataETag(transformed).calculate();
-            });
+        // A filtered body keys its ETag to the served bytes (they change on
+        // block/unblock); a raw body keeps the fast derive() from the stored
+        // abbreviated hash (~100 bytes to hash, ~1000x faster than SHA-256 of
+        // the full 3-5MB content).
+        final String etag = filtered
+            ? this.filteredEtag(abbreviatedBytes, tarballPrefix)
+            : this.rawAbbreviatedEtag(metadata, abbreviatedBytes, tarballPrefix);
         // Check for 304 Not Modified BEFORE URL transformation
         if (clientETag.isPresent() && clientETag.get().equals(etag)) {
             return ResponseBuilder.from(RsStatus.NOT_MODIFIED)
@@ -863,20 +876,19 @@ public final class DownloadPackageSlice implements Slice {
         final com.auto1.pantera.npm.proxy.model.NpmPackage.Metadata metadata,
         final Headers headers,
         final boolean abbreviated,
+        final boolean filtered,
         final Optional<String> clientETag
     ) {
         try {
             final String tarballPrefix = this.getTarballPrefix(headers);
             // For full metadata requests (abbreviated=false), we can skip JSON parsing
             if (!abbreviated) {
-                // PERF: Derive ETag from pre-computed hash + prefix (~100 bytes)
-                // instead of SHA-256 of full transformed content (3-5MB). ~1000x faster.
-                final String etag = metadata.contentHash()
-                    .map(hash -> MetadataETag.derive(hash, tarballPrefix))
-                    .orElseGet(() -> {
-                        final ByteLevelUrlTransformer t = new ByteLevelUrlTransformer();
-                        return new MetadataETag(t.transform(rawBytes, tarballPrefix)).calculate();
-                    });
+                // A filtered body keys its ETag to the served bytes (they change
+                // on block/unblock); a raw body keeps the fast derive() from the
+                // stored upstream hash (~1000x faster than SHA-256 of the body).
+                final String etag = filtered
+                    ? this.filteredEtag(rawBytes, tarballPrefix)
+                    : this.rawFullEtag(metadata, rawBytes, tarballPrefix);
                 if (clientETag.isPresent() && clientETag.get().equals(etag)) {
                     return ResponseBuilder.from(RsStatus.NOT_MODIFIED)
                         .header("ETag", etag)
@@ -986,7 +998,89 @@ public final class DownloadPackageSlice implements Slice {
             .orElse("localhost");
         return this.assetPrefix(host);
     }
-    
+
+    /**
+     * Whether cooldown metadata filtering is wired for this slice. When true,
+     * the served body is the filtered packument (blocked versions removed and
+     * {@code dist-tags.latest} possibly re-pointed), so the ETag must be keyed
+     * to the filtered bytes rather than to the immutable upstream content hash.
+     *
+     * @return true if a {@link CooldownMetadataService} and repo type are set
+     */
+    private boolean cooldownActive() {
+        return this.cooldownMetadata != null && this.repoType != null;
+    }
+
+    /**
+     * ETag for a cooldown-FILTERED body. Keyed to the bytes we actually serve
+     * so it changes the instant a version is blocked or unblocked — which is
+     * exactly what a raw-upstream-hash ETag does NOT do, because filtering
+     * removes versions at serve time without touching the stored upstream
+     * bytes. Without this, a client revalidating with {@code If-None-Match}
+     * gets a stale {@code 304} and never sees a version that just aged out of
+     * (or was released from) cooldown until it clears its own cache. Mirrors
+     * the Maven adapter's served-bytes ETag. Hashes the pre-transform filtered
+     * bytes; the tarball prefix is folded in by {@link MetadataETag#derive} so
+     * the {@code 304} comparison still runs before URL transformation.
+     *
+     * @param servedBytes Pre-transform filtered metadata bytes
+     * @param tarballPrefix Tarball URL prefix that the transform will apply
+     * @return ETag derived from the filtered content
+     */
+    private String filteredEtag(final byte[] servedBytes, final String tarballPrefix) {
+        return MetadataETag.derive(new MetadataETag(servedBytes).calculate(), tarballPrefix);
+    }
+
+    /**
+     * ETag for a RAW full-metadata body — the fast path. Derives from the
+     * immutable upstream content hash (~100 bytes hashed) when present, else
+     * falls back to hashing the transformed bytes. Correct only for bytes that
+     * are byte-for-byte the upstream packument (no cooldown, or a filter-error
+     * fallback that serves unfiltered bytes); use {@link #filteredEtag} for any
+     * body that went through the cooldown filter.
+     *
+     * @param metadata Package metadata carrying the stored content hash
+     * @param rawBytes Raw metadata bytes (fallback hash source)
+     * @param tarballPrefix Tarball URL prefix
+     * @return ETag derived from the stored upstream hash
+     */
+    private String rawFullEtag(
+        final com.auto1.pantera.npm.proxy.model.NpmPackage.Metadata metadata,
+        final byte[] rawBytes,
+        final String tarballPrefix
+    ) {
+        return metadata.contentHash()
+            .map(hash -> MetadataETag.derive(hash, tarballPrefix))
+            .orElseGet(() -> {
+                final ByteLevelUrlTransformer transformer = new ByteLevelUrlTransformer();
+                return new MetadataETag(transformer.transform(rawBytes, tarballPrefix)).calculate();
+            });
+    }
+
+    /**
+     * ETag for a RAW abbreviated-metadata body — the fast path, keyed to the
+     * stored abbreviated content hash. See {@link #rawFullEtag}; use
+     * {@link #filteredEtag} for filtered bodies.
+     *
+     * @param metadata Package metadata carrying the stored abbreviated hash
+     * @param abbreviatedBytes Raw abbreviated bytes (fallback hash source)
+     * @param tarballPrefix Tarball URL prefix
+     * @return ETag derived from the stored abbreviated hash
+     */
+    private String rawAbbreviatedEtag(
+        final com.auto1.pantera.npm.proxy.model.NpmPackage.Metadata metadata,
+        final byte[] abbreviatedBytes,
+        final String tarballPrefix
+    ) {
+        return metadata.abbreviatedHash()
+            .map(hash -> MetadataETag.derive(hash, tarballPrefix))
+            .orElseGet(() -> {
+                final ByteLevelUrlTransformer transformer = new ByteLevelUrlTransformer();
+                final byte[] transformed = transformer.transform(abbreviatedBytes, tarballPrefix);
+                return new MetadataETag(transformed).calculate();
+            });
+    }
+
     /**
      * Check if client requests abbreviated manifest.
      * 
