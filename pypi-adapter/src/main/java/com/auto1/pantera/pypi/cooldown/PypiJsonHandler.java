@@ -12,6 +12,8 @@ package com.auto1.pantera.pypi.cooldown;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Remaining;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.cache.Cache;
 import com.auto1.pantera.audit.AuditContext;
 import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
@@ -88,9 +90,21 @@ public final class PypiJsonHandler {
     private static final String CONTENT_TYPE = "application/json";
 
     /**
-     * Upstream slice (shared with main PyPI proxy).
+     * Upstream slice (shared with main PyPI proxy). Used directly only
+     * when {@link #baseLoader} is absent (no cache/storage configured —
+     * preserves the pre-WS6.3 unconditional-fetch behaviour for callers
+     * that construct this handler without them, e.g. unit tests).
      */
     private final Slice upstream;
+
+    /**
+     * Cache-backed, TTL, single-flighted, serve-stale-on-outage loader
+     * for the JSON-API base document (WS6.3 — brings this resolution
+     * surface under the same contract as Maven metadata / Go
+     * {@code @v/list}). {@code null} when no cache/storage was supplied,
+     * in which case {@link #upstream} is hit directly on every request.
+     */
+    private final PypiJsonBaseLoader baseLoader;
 
     /**
      * Cooldown evaluation service.
@@ -123,7 +137,12 @@ public final class PypiJsonHandler {
     private final ObjectMapper mapper;
 
     /**
-     * Ctor.
+     * Ctor without a resolution-surface cache — the JSON-API document is
+     * fetched from {@code upstream} unconditionally on every request, with
+     * no TTL, single-flighting, or serve-stale-on-outage. Kept for callers
+     * (tests) that have no repository storage to back a cache with; the
+     * cache-backed constructor below is what production wiring
+     * ({@code ProxySlice}) uses.
      *
      * @param upstream Upstream PyPI proxy slice
      * @param cooldown Cooldown evaluation service
@@ -136,13 +155,76 @@ public final class PypiJsonHandler {
         final String repoType,
         final String repoName
     ) {
+        this(upstream, null, null, cooldown, repoType, repoName);
+    }
+
+    /**
+     * Ctor with a cache-backed resolution-surface loader (WS6.3): the
+     * JSON-API base document is TTL-cached, single-flighted, and served
+     * stale on an upstream outage rather than fetched unconditionally on
+     * every request — closing the "public-registry blip breaks resolution
+     * even for cached artifacts" gap for this surface.
+     *
+     * @param upstream Upstream PyPI JSON-API slice
+     * @param cache Storage-backed cache for the base document
+     * @param storage Backing storage (TTL + stale fallback)
+     * @param cooldown Cooldown evaluation service
+     * @param repoType Repository type
+     * @param repoName Repository name
+     */
+    public PypiJsonHandler(
+        final Slice upstream,
+        final Cache cache,
+        final Storage storage,
+        final CooldownService cooldown,
+        final String repoType,
+        final String repoName
+    ) {
         this.upstream = upstream;
+        this.baseLoader = cache == null || storage == null
+            ? null : new PypiJsonBaseLoader(upstream, cache, storage, repoName);
         this.cooldown = cooldown;
         this.repoType = repoType;
         this.repoName = repoName;
         this.detector = new PypiJsonMetadataRequestDetector();
         this.mapper = new ObjectMapper();
         this.filter = new PypiJsonMetadataFilter(this.mapper);
+    }
+
+    /**
+     * Fetch the JSON-API document at {@code line}'s path — through
+     * {@link #baseLoader} when configured (WS6.3: cached, single-flighted,
+     * serve-stale-on-outage), or directly from {@link #upstream} otherwise.
+     * Normalises both paths to a plain {@link Response} so callers
+     * (({@link #handle}, {@link #handleVersion})) don't need to know which
+     * path served it.
+     */
+    private CompletableFuture<Response> fetchUpstream(final RequestLine line) {
+        if (this.baseLoader == null) {
+            return this.upstream.response(line, Headers.EMPTY, Content.EMPTY);
+        }
+        return this.baseLoader.load(line.uri().getPath()).thenApply(outcome -> {
+            if (outcome.isAvailable()) {
+                return ResponseBuilder.ok().body(outcome.body()).build();
+            }
+            final ResponseBuilder unavailable = ResponseBuilder.from(outcome.status())
+                .body(outcome.errorBody());
+            if (outcome.circuitOpen()) {
+                // Preserve the circuit-open marker through this funnel — a
+                // group resolver wrapping this handler must treat a
+                // breaker fast-fail as "member skipped", never "member
+                // failed" (see UpstreamCircuitOpenException).
+                unavailable.header(
+                    com.auto1.pantera.http.UpstreamCircuitOpenException.HEADER, "true"
+                );
+                if (outcome.retryAfterSeconds() > 0) {
+                    unavailable.header(
+                        "Retry-After", Long.toString(outcome.retryAfterSeconds())
+                    );
+                }
+            }
+            return unavailable.build();
+        });
     }
 
     /**
@@ -200,7 +282,7 @@ public final class PypiJsonHandler {
                 () -> new IllegalArgumentException("Not a /pypi/<name>/json path: " + path)
             )
         ).value();
-        return this.upstream.response(line, Headers.EMPTY, Content.EMPTY)
+        return this.fetchUpstream(line)
             .thenCompose(resp -> {
                 if (!resp.status().success()) {
                     return bodyBytes(resp.body()).thenApply(bytes ->
@@ -254,7 +336,7 @@ public final class PypiJsonHandler {
             coords.packageName()
         ).value();
         final String version = coords.version();
-        return this.upstream.response(line, Headers.EMPTY, Content.EMPTY)
+        return this.fetchUpstream(line)
             .thenCompose(resp -> {
                 if (!resp.status().success()) {
                     return bodyBytes(resp.body()).thenApply(bytes ->

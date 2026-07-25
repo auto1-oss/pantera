@@ -1,0 +1,380 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.pypi.cooldown;
+
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Meta;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.cache.Cache;
+import com.auto1.pantera.asto.cache.FromStorageCache;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.rq.RequestLine;
+
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.core.IsEqual;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+
+/**
+ * Tests for {@link PypiJsonBaseLoader} — the WS6.3 TTL-cached,
+ * single-flighted, serve-stale-on-failure loader for the PyPI legacy
+ * JSON API ({@code /pypi/&lt;name&gt;/json}) resolution surface.
+ *
+ * <p>TTL semantics are proven with a fake, controllable {@code updated-at}
+ * timestamp (see {@link FakeMetaStorage}) — never wall-clock, per the
+ * project's testing doctrine. Coalescing is proven with invocation counts
+ * and a completion gate, never a duration bound. Mirrors
+ * {@code GoMetadataBaseLoaderTest} (go-adapter), the reference test for
+ * this loader shape.
+ *
+ * @since 2.3.0
+ */
+final class PypiJsonBaseLoaderTest {
+
+    @Test
+    void warmCacheServesWithoutAnyUpstreamCall() throws Exception {
+        final ScriptedUpstream upstream = new ScriptedUpstream();
+        upstream.put("/pypi/requests/json", "{\"info\":{}}");
+        final Storage storage = new InMemoryStorage();
+        final PypiJsonBaseLoader loader = newLoader(upstream, storage);
+
+        final PypiJsonBaseLoader.Outcome first =
+            loader.load("/pypi/requests/json").get(5, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(first.isAvailable(), new IsEqual<>(true));
+        MatcherAssert.assertThat(
+            new String(first.body(), StandardCharsets.UTF_8),
+            new IsEqual<>("{\"info\":{}}")
+        );
+        final Key key = new Key.From("json-api", "pypi/requests/json");
+        awaitPersisted(storage, key);
+
+        final PypiJsonBaseLoader.Outcome second =
+            loader.load("/pypi/requests/json").get(5, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(second.isAvailable(), new IsEqual<>(true));
+        MatcherAssert.assertThat(second.stale(), new IsEqual<>(false));
+
+        MatcherAssert.assertThat(
+            "second request must be served entirely from cache",
+            upstream.hits("/pypi/requests/json"),
+            new IsEqual<>(1)
+        );
+    }
+
+    @Test
+    void servesStaleCopyWhenUpstreamFailsAfterTtlExpiry() throws Exception {
+        final ScriptedUpstream upstream = new ScriptedUpstream();
+        upstream.put("/pypi/requests/json", "{\"info\":{}}");
+        final FakeMetaStorage storage = new FakeMetaStorage(new InMemoryStorage());
+        final PypiJsonBaseLoader loader = newLoader(upstream, storage);
+        final Key key = new Key.From("json-api", "pypi/requests/json");
+
+        loader.load("/pypi/requests/json").get(5, TimeUnit.SECONDS);
+        awaitPersisted(storage, key);
+        awaitSingleFlightSettled(loader);
+        MatcherAssert.assertThat(upstream.hits("/pypi/requests/json"), new IsEqual<>(1));
+
+        // Force TTL expiry, then take upstream down.
+        storage.stamp(key, Instant.now().minus(13, ChronoUnit.HOURS));
+        upstream.fail(true);
+
+        final PypiJsonBaseLoader.Outcome outcome =
+            loader.load("/pypi/requests/json").get(5, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            "a stale-but-present copy must still be served on upstream failure",
+            outcome.isAvailable(), new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(outcome.stale(), new IsEqual<>(true));
+        MatcherAssert.assertThat(
+            new String(outcome.body(), StandardCharsets.UTF_8),
+            new IsEqual<>("{\"info\":{}}")
+        );
+        MatcherAssert.assertThat(
+            "the expired entry must have triggered exactly one refresh attempt",
+            upstream.hits("/pypi/requests/json"), new IsEqual<>(2)
+        );
+    }
+
+    @Test
+    void refetchesAfterTtlExpiryWhenUpstreamChanged() throws Exception {
+        final ScriptedUpstream upstream = new ScriptedUpstream();
+        upstream.put("/pypi/requests/json", "{\"info\":{\"version\":\"1.0.0\"}}");
+        final FakeMetaStorage storage = new FakeMetaStorage(new InMemoryStorage());
+        final PypiJsonBaseLoader loader = newLoader(upstream, storage);
+        final Key key = new Key.From("json-api", "pypi/requests/json");
+
+        loader.load("/pypi/requests/json").get(5, TimeUnit.SECONDS);
+        awaitPersisted(storage, key);
+        awaitSingleFlightSettled(loader);
+
+        storage.stamp(key, Instant.now().minus(13, ChronoUnit.HOURS));
+        upstream.put("/pypi/requests/json", "{\"info\":{\"version\":\"1.0.1\"}}");
+
+        final PypiJsonBaseLoader.Outcome outcome =
+            loader.load("/pypi/requests/json").get(5, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(outcome.stale(), new IsEqual<>(false));
+        MatcherAssert.assertThat(
+            new String(outcome.body(), StandardCharsets.UTF_8),
+            new IsEqual<>("{\"info\":{\"version\":\"1.0.1\"}}")
+        );
+        MatcherAssert.assertThat(
+            "an entry past its TTL must trigger a fresh upstream fetch",
+            upstream.hits("/pypi/requests/json"), new IsEqual<>(2)
+        );
+    }
+
+    @Test
+    void doesNotRefetchWithinTtl() throws Exception {
+        final ScriptedUpstream upstream = new ScriptedUpstream();
+        upstream.put("/pypi/requests/json", "{\"info\":{}}");
+        final FakeMetaStorage storage = new FakeMetaStorage(new InMemoryStorage());
+        final PypiJsonBaseLoader loader = newLoader(upstream, storage);
+        final Key key = new Key.From("json-api", "pypi/requests/json");
+
+        loader.load("/pypi/requests/json").get(5, TimeUnit.SECONDS);
+        awaitPersisted(storage, key);
+        storage.stamp(key, Instant.now().minus(1, ChronoUnit.HOURS));
+
+        loader.load("/pypi/requests/json").get(5, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            "an entry within its TTL must not trigger a re-fetch",
+            upstream.hits("/pypi/requests/json"), new IsEqual<>(1)
+        );
+    }
+
+    @Test
+    @Timeout(10)
+    void singleFlightCollapsesConcurrentColdMissesToOneUpstreamCall() throws Exception {
+        final ScriptedUpstream upstream = new ScriptedUpstream();
+        upstream.put("/pypi/requests/json", "{\"info\":{}}");
+        final CompletableFuture<Void> gate = new CompletableFuture<>();
+        upstream.gate(gate);
+        final PypiJsonBaseLoader loader = newLoader(upstream, new InMemoryStorage());
+
+        final int concurrency = 8;
+        final List<CompletableFuture<PypiJsonBaseLoader.Outcome>> futures =
+            new ArrayList<>(concurrency);
+        for (int idx = 0; idx < concurrency; idx++) {
+            futures.add(loader.load("/pypi/requests/json"));
+        }
+        // All N callers are now parked behind the leader's single in-flight
+        // fetch (gated below) — proves coalescing, not just "fast enough".
+        gate.complete(null);
+        for (final CompletableFuture<PypiJsonBaseLoader.Outcome> future : futures) {
+            final PypiJsonBaseLoader.Outcome outcome = future.get(5, TimeUnit.SECONDS);
+            MatcherAssert.assertThat(outcome.isAvailable(), new IsEqual<>(true));
+            MatcherAssert.assertThat(
+                new String(outcome.body(), StandardCharsets.UTF_8),
+                new IsEqual<>("{\"info\":{}}")
+            );
+        }
+        MatcherAssert.assertThat(
+            concurrency + " concurrent cold misses must collapse onto one upstream call",
+            upstream.hits("/pypi/requests/json"), new IsEqual<>(1)
+        );
+    }
+
+    @Test
+    void coldMissWithUpstreamFailureForwardsUpstreamStatus() throws Exception {
+        final ScriptedUpstream upstream = new ScriptedUpstream();
+        upstream.fail(true);
+        final PypiJsonBaseLoader loader = newLoader(upstream, new InMemoryStorage());
+
+        final PypiJsonBaseLoader.Outcome outcome =
+            loader.load("/pypi/requests/json").get(5, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(outcome.isAvailable(), new IsEqual<>(false));
+        MatcherAssert.assertThat(outcome.status(), new IsEqual<>(RsStatus.BAD_GATEWAY));
+    }
+
+    /**
+     * A marked circuit-open 502 (the upstream HTTP client's own breaker
+     * fast-failing, per {@code UpstreamCircuitOpenException}) must keep its
+     * marker through this loader — a group resolver wrapping this handler
+     * treats a marked 502 as "member skipped", never "member failed";
+     * collapsing it into a bare status would convict a healthy member on
+     * the breaker's own fast-fail evidence (CLAUDE.md circuit-breaker
+     * invariant).
+     */
+    @Test
+    void coldMissWithCircuitOpenPreservesMarkerAndRetryAfter() throws Exception {
+        final ScriptedUpstream upstream = new ScriptedUpstream();
+        upstream.circuitOpen(true, 30L);
+        final PypiJsonBaseLoader loader = newLoader(upstream, new InMemoryStorage());
+
+        final PypiJsonBaseLoader.Outcome outcome =
+            loader.load("/pypi/requests/json").get(5, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(outcome.isAvailable(), new IsEqual<>(false));
+        MatcherAssert.assertThat(outcome.status(), new IsEqual<>(RsStatus.byCode(502)));
+        MatcherAssert.assertThat(
+            "the circuit-open marker must survive the loader funnel",
+            outcome.circuitOpen(), new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "the breaker's Retry-After must survive the loader funnel",
+            outcome.retryAfterSeconds(), new IsEqual<>(30L)
+        );
+    }
+
+    private static PypiJsonBaseLoader newLoader(final Slice upstream, final Storage storage) {
+        final Cache cache = new FromStorageCache(storage);
+        return new PypiJsonBaseLoader(upstream, cache, storage, "pypi-test");
+    }
+
+    /**
+     * Poll until {@code key} is durably present in {@code storage}. Mirrors
+     * {@code GoMetadataBaseLoaderTest.awaitPersisted} — the stream-through
+     * cache write is not guaranteed durable the instant the caller's future
+     * completes, so poll for the eventual state rather than asserting
+     * instantly, per the project's testing doctrine.
+     */
+    private static void awaitPersisted(final Storage storage, final Key key) throws Exception {
+        final long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!storage.exists(key).get(1, TimeUnit.SECONDS)) {
+            if (System.nanoTime() > deadlineNanos) {
+                throw new AssertionError("Cache entry for " + key.string() + " never persisted");
+            }
+            Thread.sleep(2);
+        }
+    }
+
+    /**
+     * Poll until {@code loader}'s {@code SingleFlight} coalescer has
+     * invalidated its entry for the just-completed request. It invalidates
+     * asynchronously on completion — without this,
+     * a second {@link PypiJsonBaseLoader#load(String)} call issued
+     * immediately after the first can observe the still-cached (not yet
+     * invalidated) first result instead of genuinely re-invoking the loader,
+     * which would make a test's "TTL-expired, upstream now failing" setup
+     * silently ineffective.
+     */
+    private static void awaitSingleFlightSettled(final PypiJsonBaseLoader loader) throws Exception {
+        final long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (loader.inFlightCount() != 0) {
+            if (System.nanoTime() > deadlineNanos) {
+                throw new AssertionError("SingleFlight entry never settled");
+            }
+            Thread.sleep(2);
+        }
+    }
+
+    /**
+     * Storage decorator that lets a test stamp a controllable
+     * {@code updated-at} instant for a given key, overriding whatever
+     * {@link InMemoryStorage#metadata} would otherwise report. This is how
+     * {@code CacheTimeControl} ({@code storage.metadata(item)}-driven) TTL
+     * expiry is exercised deterministically, without any wall-clock sleep.
+     */
+    private static final class FakeMetaStorage extends Storage.Wrap {
+
+        private final Map<String, Instant> stamped = new ConcurrentHashMap<>();
+
+        FakeMetaStorage(final Storage delegate) {
+            super(delegate);
+        }
+
+        void stamp(final Key key, final Instant updatedAt) {
+            this.stamped.put(key.string(), updatedAt);
+        }
+
+        @Override
+        public CompletableFuture<? extends Meta> metadata(final Key key) {
+            final Instant instant = this.stamped.get(key.string());
+            if (instant == null) {
+                return super.metadata(key);
+            }
+            return CompletableFuture.completedFuture(new Meta() {
+                @Override
+                public <T> T read(final ReadOperator<T> opr) {
+                    final Map<String, String> raw = new HashMap<>();
+                    Meta.OP_UPDATED_AT.put(raw, instant);
+                    return opr.take(raw);
+                }
+            });
+        }
+    }
+
+    /** Scripted upstream {@link Slice}: canned bodies, hit counts, an
+     * optional failure mode, and an optional completion gate so tests can
+     * park N concurrent callers behind one in-flight fetch. */
+    private static final class ScriptedUpstream implements Slice {
+
+        private final Map<String, byte[]> bodies = new ConcurrentHashMap<>();
+        private final Map<String, AtomicInteger> hits = new ConcurrentHashMap<>();
+        private volatile CompletableFuture<Void> gate = CompletableFuture.completedFuture(null);
+        private final AtomicBoolean failing = new AtomicBoolean(false);
+        private final AtomicBoolean circuitOpen = new AtomicBoolean(false);
+        private volatile long retryAfterSeconds;
+
+        void put(final String path, final String body) {
+            this.bodies.put(path, body.getBytes(StandardCharsets.UTF_8));
+        }
+
+        void fail(final boolean value) {
+            this.failing.set(value);
+        }
+
+        void circuitOpen(final boolean value, final long retrySeconds) {
+            this.circuitOpen.set(value);
+            this.retryAfterSeconds = retrySeconds;
+        }
+
+        void gate(final CompletableFuture<Void> value) {
+            this.gate = value;
+        }
+
+        int hits(final String path) {
+            final AtomicInteger counter = this.hits.get(path);
+            return counter == null ? 0 : counter.get();
+        }
+
+        @Override
+        public CompletableFuture<Response> response(
+            final RequestLine line, final Headers headers, final Content body
+        ) {
+            final String path = line.uri().getPath();
+            this.hits.computeIfAbsent(path, k -> new AtomicInteger()).incrementAndGet();
+            return this.gate.thenApply(ignored -> {
+                if (this.circuitOpen.get()) {
+                    return ResponseBuilder.from(RsStatus.byCode(502))
+                        .header(com.auto1.pantera.http.UpstreamCircuitOpenException.HEADER, "true")
+                        .header("Retry-After", Long.toString(this.retryAfterSeconds))
+                        .build();
+                }
+                if (this.failing.get()) {
+                    return ResponseBuilder.badGateway().build();
+                }
+                final byte[] content = this.bodies.get(path);
+                if (content == null) {
+                    return ResponseBuilder.notFound().build();
+                }
+                return ResponseBuilder.ok().body(content).build();
+            }).toCompletableFuture();
+        }
+    }
+}
