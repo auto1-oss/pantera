@@ -664,10 +664,13 @@ public final class ProxyCacheWriter {
 
     /**
      * Commit a stream-through artifact: sidecars first, primary last (Track 3
-     * atomic commit order). The bytes are read from the temp file into memory
-     * exactly once and re-used for both the primary save and the {@code onWrite}
-     * callback (Track 4 +sibling-prefetch). Temp file is deleted on success
-     * and on any failure.
+     * atomic commit order). The primary is saved by streaming the temp file
+     * in bounded {@link #CHUNK_SIZE} chunks (see {@link #streamingFileContent})
+     * — WS3.1: the digest was already computed over the tee in
+     * {@link #streamThroughAndCommit}, so this method never needs to
+     * re-materialise the artifact on heap. The temp file itself is the only
+     * thing {@link #fireOnWrite} reads (no in-memory copy exists), and it is
+     * deleted on success and on any failure, after the callback has run.
      */
     private void commitStreamed(
         final Key primaryKey,
@@ -677,21 +680,11 @@ public final class ProxyCacheWriter {
         final RequestContext ctx,
         final CompletableFuture<Result<Void>> outcome
     ) {
-        final byte[] bytes;
-        try {
-            bytes = Files.readAllBytes(tempFile);
-        } catch (final IOException ex) {
-            deleteQuietly(tempFile);
-            outcome.complete(Result.err(new Fault.StorageUnavailable(
-                ex, primaryKey.string()
-            )));
-            return;
-        }
         final boolean hasCallback = this.onWrite != NO_OP_ON_WRITE
             && !CacheWriteCallbackRegistry.instance().isNoOp(this.onWrite);
         this.saveSidecars(primaryKey, sidecars)
             .thenCompose(ignored ->
-                this.cache.save(primaryKey, new Content.From(bytes))
+                this.cache.save(primaryKey, streamingFileContent(tempFile, size))
             )
             .whenComplete((ignored, err) -> {
                 if (err == null) {
@@ -1159,32 +1152,7 @@ public final class ProxyCacheWriter {
                 Result.err(new Fault.StorageUnavailable(ex, primaryKey.string()))
             );
         }
-        final Content primaryContent;
-        try {
-            primaryContent = new Content.From(
-                Optional.of(size),
-                io.reactivex.Flowable.using(
-                    () -> FileChannel.open(tempFile, StandardOpenOption.READ),
-                    chan -> io.reactivex.Flowable.generate(emitter -> {
-                        final ByteBuffer buf = ByteBuffer.allocate(CHUNK_SIZE);
-                        final int read = chan.read(buf);
-                        if (read < 0) {
-                            emitter.onComplete();
-                        } else {
-                            buf.flip();
-                            emitter.onNext(buf);
-                        }
-                    }),
-                    FileChannel::close
-                )
-            );
-        } catch (final RuntimeException ex) {
-            deleteQuietly(tempFile);
-            return CompletableFuture.completedFuture(
-                Result.err(new Fault.StorageUnavailable(ex, primaryKey.string()))
-            );
-        }
-        return this.cache.save(primaryKey, primaryContent)
+        return this.cache.save(primaryKey, streamingFileContent(tempFile, size))
             .thenCompose(ignored -> this.saveSidecars(primaryKey, sidecars))
             .handle((ignored, err) -> {
                 if (err == null) {
@@ -1362,24 +1330,61 @@ public final class ProxyCacheWriter {
     static Content contentFromTempFile(final Path tempFile, final long size) {
         return new Content.From(
             Optional.of(size),
-            io.reactivex.Flowable.using(
+            Flowable.using(
                 () -> FileChannel.open(tempFile, StandardOpenOption.READ),
-                chan -> io.reactivex.Flowable.generate(emitter -> {
-                    final ByteBuffer buf = ByteBuffer.allocate(CHUNK_SIZE);
-                    final int read = chan.read(buf);
-                    if (read < 0) {
-                        emitter.onComplete();
-                    } else {
-                        buf.flip();
-                        emitter.onNext(buf);
-                    }
-                }),
+                ProxyCacheWriter::chunkedReader,
                 chan -> {
                     chan.close();
                     deleteQuietly(tempFile);
                 }
             )
         );
+    }
+
+    /**
+     * Build a bounded-heap {@link Content} that streams {@code file} in
+     * {@link #CHUNK_SIZE} chunks via a {@link FileChannel} opened lazily on
+     * subscription (WS3.1: replaces {@code Files.readAllBytes} on the
+     * {@link #commit} / {@link #commitStreamed} commit paths so a cache
+     * write never materialises the whole artifact on heap). Unlike
+     * {@link #contentFromTempFile}, this variant does NOT own {@code file}'s
+     * lifecycle -- only the channel is closed when the stream terminates;
+     * the caller remains responsible for eventually deleting {@code file}
+     * (both call sites already do, after {@link #fireOnWrite} has run).
+     *
+     * @param file Temp file holding the already-downloaded (and, on the
+     *             stream-through path, already-digested) bytes.
+     * @param size Known size of {@code file}, forwarded as the Content
+     *             length so downstream storages get an exact byte count.
+     * @return A single-subscription streaming {@link Content}.
+     */
+    private static Content streamingFileContent(final Path file, final long size) {
+        return new Content.From(
+            Optional.of(size),
+            Flowable.using(
+                () -> FileChannel.open(file, StandardOpenOption.READ),
+                ProxyCacheWriter::chunkedReader,
+                FileChannel::close
+            )
+        );
+    }
+
+    /**
+     * Read {@code chan} in {@link #CHUNK_SIZE} chunks as a cold
+     * {@link Flowable}, shared by every file-backed {@link Content} builder
+     * in this class.
+     */
+    private static Flowable<ByteBuffer> chunkedReader(final FileChannel chan) {
+        return Flowable.generate(emitter -> {
+            final ByteBuffer buf = ByteBuffer.allocate(CHUNK_SIZE);
+            final int read = chan.read(buf);
+            if (read < 0) {
+                emitter.onComplete();
+            } else {
+                buf.flip();
+                emitter.onNext(buf);
+            }
+        });
     }
 
     /** Construct the sidecar key from a primary key + algo extension. */

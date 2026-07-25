@@ -226,6 +226,19 @@ Key implementations:
 - `InMemoryStorage` -- ConcurrentHashMap-backed, used in tests.
 - `SubStorage` -- Scopes a storage to a key prefix.
 
+**Size-unknown upload streaming (2.3.0, WS3.1).** `S3Storage.save()` needs a
+known content length to decide single-`PutObject` vs multipart before it can
+start uploading. `EstimatedContentCompliment`
+(`pantera-storage-s3/.../asto/s3/EstimatedContentCompliment.java`) makes that
+decision without ever spooling the whole body: when multipart is enabled it
+buffers only up to the multipart threshold (`UnknownSizeProbe`) and, if
+crossed, streams the untouched remainder straight through to the multipart
+uploader with no disk I/O at all; when multipart is disabled (`putObject` is
+the only option, so an exact size is mandatory) it buffers up to a small
+in-memory cap and spills only the excess to a temp file (`KnownSizeProbe`),
+never the whole artifact. Both paths replace the previous unconditional
+whole-body-to-temp-file spool.
+
 #### 4.2.1 BlobStore / Presigner (2.3.0, WS1.0)
 
 `pantera-storage-core`'s `com.auto1.pantera.asto.blob` package adds a
@@ -513,6 +526,8 @@ Abstract base class implementing the shared proxy caching pipeline via template 
 9. **Record metrics** -- per-repo phase histograms, outcome counters.
 
 Adapters override hooks: `isCacheable()`, `buildCooldownRequest()`, `digestAlgorithms()`, `buildArtifactEvent()`, `postProcess()`, `generateSidecars()`.
+
+**Streaming cache-write commit (2.3.0, WS3.1).** `ProxyCacheWriter` (`pantera-core/.../http/cache/ProxyCacheWriter.java`) downloads the upstream body to a local temp file while digesting it in one pass (unchanged). The *commit* step -- handing the already-downloaded, already-verified bytes to `Storage#save` -- streams the temp file back out in bounded 64KB chunks via a lazily-opened `FileChannel` (`ProxyCacheWriter.streamingFileContent`, shared by `commitStreamed` -- the Track 4 stream-through path every adapter's `streamThroughAndCommit` call reaches -- and the buffered Track 3 `commit()` path). Neither method ever calls `Files.readAllBytes` on the artifact; heap use during a save is bounded by the chunk size, not the artifact size. The one exception is the legacy `writeAndVerify`/`VerifiedArtifact.commitAsync()` API (Track 3's predecessor): it still reads the temp file fully into memory in `commitVerified`, deliberately -- the same temp file is concurrently read-and-deleted by the immediate-serve `Content` returned alongside it, and the eager read is what avoids a use-after-delete race between the two. That API has no production caller today (only exercised by `ProxyCacheWriterTest`/`ProxyCacheWriterHookTest`); wiring it up for real traffic would need a reference-counted temp-file lifecycle (shared between the serve-side `Content` and the commit) before it can be switched to streaming safely.
 
 ### 7.2 RequestDeduplicator
 
