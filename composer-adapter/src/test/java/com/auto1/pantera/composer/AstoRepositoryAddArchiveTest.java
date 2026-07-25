@@ -17,15 +17,18 @@ import com.auto1.pantera.asto.blocking.BlockingStorage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.asto.test.TestResource;
 import com.auto1.pantera.composer.http.Archive;
+import com.auto1.pantera.http.cache.DigestComputer;
 import org.cactoos.set.SetOf;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
+import org.hamcrest.core.IsNot;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import javax.json.JsonObject;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Tests for {@link AstoRepository#addArchive(Archive, Content)}.
@@ -97,6 +100,33 @@ final class AstoRepositoryAddArchiveTest {
         Assertions.assertTrue(
             this.storage.exists(new Key.From("artifacts", this.name.full()))
                 .toCompletableFuture().join()
+        );
+    }
+
+    @Test
+    void shouldWriteDistShasumMatchingStoredArchiveBytes() {
+        this.saveZipArchive();
+        final byte[] stored = new BlockingStorage(this.storage)
+            .value(new Key.From("artifacts", this.name.full()));
+        final String expected = DigestComputer.compute(stored, Set.of(DigestComputer.SHA1))
+            .get(DigestComputer.SHA1);
+        final JsonObject p2File = this.storage.value(new Key.From("p2/psr/log.json"))
+            .join()
+            .asJsonObject();
+        final JsonObject dist = p2File.getJsonObject("packages")
+            .getJsonObject("psr/log")
+            .getJsonObject(this.name.version())
+            .getJsonObject("dist");
+        MatcherAssert.assertThat(
+            "dist.shasum matches SHA-1 of the exact archive bytes served at dist.url "
+                + "(Composer's ArchiveDownloader verifies with hash_file('sha1', ...))",
+            dist.getString("shasum"),
+            new IsEqual<>(expected)
+        );
+        MatcherAssert.assertThat(
+            "shasum is non-blank",
+            dist.getString("shasum"),
+            new IsNot<>(new IsEqual<>(""))
         );
     }
 
