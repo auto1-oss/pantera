@@ -239,6 +239,35 @@ public final class MavenMetadataRegenerator {
         final MavenMetadata metadata = new MavenMetadata(base).versions(versions);
         return metadata.save(this.storage, baseKey).thenCompose(
             metadataKey -> new RepositoryChecksums(this.storage).generate(metadataKey)
+                .exceptionally(MavenMetadataRegenerator::ignoreConcurrentReplace)
         );
+    }
+
+    /**
+     * Tolerate a concurrent-burst replacement of {@code maven-metadata.xml}
+     * during the checksum read-back. {@link Storage#exclusively}'s {@code
+     * StorageLock} is a best-effort proposal lock, not a true mutex, so under
+     * a concurrent-deploy burst a peer regeneration can replace the file
+     * between our {@code save()} above and reading it back to checksum it. The
+     * regeneration that ultimately wins the burst writes its own consistent
+     * checksums over its own bytes, so a superseded attempt's checksum step is
+     * correctly a no-op: swallowing the not-found shape here keeps the burst
+     * converging instead of exhausting the retry budget on a benign race
+     * (previously this surfaced as {@code ValueNotFoundException} propagating
+     * out of the regenerator under load). Any other failure is re-propagated
+     * so the {@link #regenerateAttempt} retry loop can act on it.
+     *
+     * @param err Throwable from checksum generation.
+     * @return {@code null} when the metadata was concurrently replaced.
+     */
+    private static Void ignoreConcurrentReplace(final Throwable err) {
+        Throwable cause = err;
+        while (cause != null) {
+            if (cause instanceof com.auto1.pantera.asto.ValueNotFoundException) {
+                return null;
+            }
+            cause = cause.getCause();
+        }
+        throw new java.util.concurrent.CompletionException(err);
     }
 }
