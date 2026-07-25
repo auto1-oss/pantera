@@ -89,6 +89,15 @@ public final class IndexGenerator {
         private final String relativeHref;
         /** Hex SHA-256 of the file content. */
         private final String sha256;
+        /** File size in bytes (PEP 700). */
+        private final long size;
+        /**
+         * Distribution version, derived from the version-folder segment
+         * of the storage layout; {@code null} for the legacy no-version-
+         * folder edge case, which is then excluded from the top-level
+         * {@code versions[]} array (PEP 700).
+         */
+        private final String version;
         /** Sidecar metadata (may be empty for legacy uploads). */
         private final Optional<PypiSidecar.Meta> meta;
 
@@ -96,11 +105,15 @@ public final class IndexGenerator {
             final String filename,
             final String relativeHref,
             final String sha256,
+            final long size,
+            final String version,
             final Optional<PypiSidecar.Meta> meta
         ) {
             this.filename = filename;
             this.relativeHref = relativeHref;
             this.sha256 = sha256;
+            this.size = size;
+            this.version = version;
             this.meta = meta;
         }
     }
@@ -121,14 +134,30 @@ public final class IndexGenerator {
     public CompletableFuture<Void> generate() {
         return RxFuture.single(this.storage.list(this.packageKey))
             .flatMapPublisher(Flowable::fromIterable)
+            // PEP 658 .metadata sidecars live alongside the distribution
+            // file in storage (WS4-pypi.6) but are not themselves a
+            // distribution — storage.list() is a flat/recursive listing,
+            // so without this filter each .metadata file would be
+            // enumerated as a bogus extra "release file".
+            .filter(key -> !isPep658MetadataFile(key))
             .concatMapSingle(
                 key -> RxFuture.single(
                     this.storage.list(key).thenCompose(
-                        subKeys -> {
+                        rawSubKeys -> {
+                            // storage.list() does a raw string-prefix match, so
+                            // re-listing a real file's own key ALSO returns its
+                            // ".metadata" sibling (whose key literally has the
+                            // real file's key as a string prefix) — filter it
+                            // out here too, not just at the outer level above.
+                            final List<Key> subKeys = rawSubKeys.stream()
+                                .filter(k -> !isPep658MetadataFile(k))
+                                .toList();
                             final List<CompletableFuture<Entry>> futures = new ArrayList<>();
                             if (subKeys.isEmpty()) {
-                                // Key is a file directly under the package dir
-                                futures.add(buildEntry(key, new KeyLastPart(key).get()));
+                                // Key is a file directly under the package dir.
+                                // No version folder to derive a version from —
+                                // excluded from the PEP 700 versions[] array.
+                                futures.add(buildEntry(key, new KeyLastPart(key).get(), null));
                             } else {
                                 // Key is a version dir; iterate files
                                 for (final Key subKey : subKeys) {
@@ -138,7 +167,8 @@ public final class IndexGenerator {
                                     final String filename = new KeyLastPart(subKey).get();
                                     futures.add(buildEntry(
                                         subKey,
-                                        String.format("%s/%s", versionPath, filename)
+                                        String.format("%s/%s", versionPath, filename),
+                                        versionPath
                                     ));
                                 }
                             }
@@ -178,19 +208,33 @@ public final class IndexGenerator {
 
     /**
      * Build an {@link Entry} from a storage key by reading the file
-     * content for the SHA-256 digest and the sidecar metadata.
+     * content for the SHA-256 digest, its size, and the sidecar metadata.
+     * @param key Storage key of the distribution file
+     * @param relativeHref Relative href for the HTML anchor / JSON url
+     * @param version Distribution version derived from the storage layout,
+     *                or {@code null} for the no-version-folder edge case
      */
-    private CompletableFuture<Entry> buildEntry(final Key key, final String relativeHref) {
+    private CompletableFuture<Entry> buildEntry(
+        final Key key, final String relativeHref, final String version
+    ) {
         return this.storage.value(key).thenCompose(
             value -> new ContentDigest(value, Digests.SHA256).hex()
         ).thenCompose(
-            hex -> PypiSidecar.read(this.storage, key).thenApply(
-                optMeta -> new Entry(
-                    new KeyLastPart(key).get(),
-                    relativeHref,
-                    hex,
-                    optMeta
-                )
+            hex -> this.storage.metadata(key).thenCompose(
+                fileMeta -> {
+                    final long size = fileMeta.read(com.auto1.pantera.asto.Meta.OP_SIZE)
+                        .map(Long.class::cast).orElse(0L);
+                    return PypiSidecar.read(this.storage, key).thenApply(
+                        optMeta -> new Entry(
+                            new KeyLastPart(key).get(),
+                            relativeHref,
+                            hex,
+                            size,
+                            version,
+                            optMeta
+                        )
+                    );
+                }
             )
         ).toCompletableFuture();
     }
@@ -251,7 +295,9 @@ public final class IndexGenerator {
                 entry.meta.map(PypiSidecar.Meta::uploadTime).orElse(null),
                 entry.meta.map(PypiSidecar.Meta::yanked).orElse(false),
                 entry.meta.flatMap(PypiSidecar.Meta::yankedReason),
-                entry.meta.flatMap(PypiSidecar.Meta::distInfoMetadata)
+                entry.meta.flatMap(PypiSidecar.Meta::distInfoMetadata),
+                entry.size,
+                entry.version
             ));
         }
         return SimpleJsonRenderer.render(packageName, files);
@@ -343,6 +389,17 @@ public final class IndexGenerator {
     }
 
     /**
+     * Whether the given storage key is a PEP 658 {@code .metadata} sidecar
+     * file rather than an actual distribution file.
+     *
+     * @param key Storage key
+     * @return true if the key's last segment ends with {@code .metadata}
+     */
+    static boolean isPep658MetadataFile(final Key key) {
+        return key.string().endsWith(".metadata");
+    }
+
+    /**
      * Builds HTML data-attribute string from sidecar metadata for PEP 503/592/658 compliance.
      *
      * @param meta Sidecar metadata
@@ -361,9 +418,12 @@ public final class IndexGenerator {
             attrs.append(String.format(" data-yanked=\"%s\"", reason));
         }
         if (meta.distInfoMetadata().isPresent()) {
+            // PEP 714 renamed this HTML attribute to data-core-metadata;
+            // data-dist-info-metadata is retained for legacy clients that
+            // haven't picked up the rename yet. Same value, both names.
             attrs.append(String.format(
-                " data-dist-info-metadata=\"sha256=%s\"",
-                meta.distInfoMetadata().get()
+                " data-core-metadata=\"sha256=%s\" data-dist-info-metadata=\"sha256=%s\"",
+                meta.distInfoMetadata().get(), meta.distInfoMetadata().get()
             ));
         }
         return attrs.toString();

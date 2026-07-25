@@ -256,6 +256,10 @@ final class SliceIndex implements Slice {
     ) {
         // Use non-blocking RxFuture.single instead of blocking SingleInterop.fromFuture
         return RxFuture.single(this.storage.list(list))
+            .map(allKeys -> allKeys.stream()
+                .filter(key -> !IndexGenerator.isPep658MetadataFile(key))
+                .toList()
+            )
             .flatMap(keys -> {
                 // Return 404 if package doesn't exist (empty directory)
                 if (keys.isEmpty()) {
@@ -272,23 +276,35 @@ final class SliceIndex implements Slice {
                         .concatMapSingle(
                             key -> RxFuture.single(
                                 this.storage.list(key).thenCompose(
-                                    subKeys -> {
+                                    rawSubKeys -> {
+                                        // storage.list() is a raw string-prefix
+                                        // match: re-listing a real file's own key
+                                        // also returns its ".metadata" sibling
+                                        // (WS4-pypi.6) — filter it out.
+                                        final List<Key> subKeys = rawSubKeys.stream()
+                                            .filter(k -> !IndexGenerator.isPep658MetadataFile(k))
+                                            .toList();
                                         if (subKeys.isEmpty()) {
-                                            // It's a file, not a directory
+                                            // It's a file, not a directory. No version
+                                            // folder to derive a version from.
                                             return this.storage.value(key).thenCompose(
                                                 value -> new ContentDigest(value, Digests.SHA256).hex()
                                             ).thenCompose(
-                                                hex -> PypiSidecar.read(this.storage, key).thenApply(
-                                                    meta -> {
-                                                        final List<SimpleJsonRenderer.FileEntry> result = new ArrayList<>(1);
-                                                        result.add(buildJsonEntry(
-                                                            new KeyLastPart(key).get(),
-                                                            key.string(),
-                                                            hex,
-                                                            meta
-                                                        ));
-                                                        return result;
-                                                    }
+                                                hex -> this.fileSize(key).thenCompose(
+                                                    size -> PypiSidecar.read(this.storage, key).thenApply(
+                                                        meta -> {
+                                                            final List<SimpleJsonRenderer.FileEntry> result = new ArrayList<>(1);
+                                                            result.add(buildJsonEntry(
+                                                                new KeyLastPart(key).get(),
+                                                                key.string(),
+                                                                hex,
+                                                                size,
+                                                                null,
+                                                                meta
+                                                            ));
+                                                            return result;
+                                                        }
+                                                    )
                                                 )
                                             );
                                         } else {
@@ -299,19 +315,23 @@ final class SliceIndex implements Slice {
                                                         this.storage.value(subKey).thenCompose(
                                                             value -> new ContentDigest(value, Digests.SHA256).hex()
                                                         ).thenCompose(
-                                                            hex -> PypiSidecar.read(this.storage, subKey).thenApply(
-                                                                meta -> {
-                                                                    final String versionPath = new KeyLastPart(
-                                                                        new Key.From(subKey.parent().get())
-                                                                    ).get();
-                                                                    final String filename = new KeyLastPart(subKey).get();
-                                                                    return buildJsonEntry(
-                                                                        filename,
-                                                                        String.format("%s/%s", versionPath, filename),
-                                                                        hex,
-                                                                        meta
-                                                                    );
-                                                                }
+                                                            hex -> this.fileSize(subKey).thenCompose(
+                                                                size -> PypiSidecar.read(this.storage, subKey).thenApply(
+                                                                    meta -> {
+                                                                        final String versionPath = new KeyLastPart(
+                                                                            new Key.From(subKey.parent().get())
+                                                                        ).get();
+                                                                        final String filename = new KeyLastPart(subKey).get();
+                                                                        return buildJsonEntry(
+                                                                            filename,
+                                                                            String.format("%s/%s", versionPath, filename),
+                                                                            hex,
+                                                                            size,
+                                                                            versionPath,
+                                                                            meta
+                                                                        );
+                                                                    }
+                                                                )
                                                             )
                                                         )
                                                     )
@@ -345,7 +365,13 @@ final class SliceIndex implements Slice {
                             key -> RxFuture.single(
                                 // Try to list this key as a directory (version folder)
                                 this.storage.list(key).thenCompose(
-                                    subKeys -> {
+                                    rawSubKeys -> {
+                                        // Filter out the ".metadata" sibling that a
+                                        // raw string-prefix list() also returns
+                                        // when re-listing a real file's own key.
+                                        final List<Key> subKeys = rawSubKeys.stream()
+                                            .filter(k -> !IndexGenerator.isPep658MetadataFile(k))
+                                            .toList();
                                         if (subKeys.isEmpty()) {
                                             // It's a file, not a directory - process it directly
                                             return this.storage.value(key).thenCompose(
@@ -435,10 +461,29 @@ final class SliceIndex implements Slice {
             attrs.append(String.format(" data-yanked=\"%s\"", reason));
         }
         if (meta.distInfoMetadata().isPresent()) {
-            attrs.append(String.format(" data-dist-info-metadata=\"sha256=%s\"",
-                meta.distInfoMetadata().get()));
+            // PEP 714 renamed this HTML attribute to data-core-metadata;
+            // data-dist-info-metadata is retained for legacy clients.
+            attrs.append(String.format(
+                " data-core-metadata=\"sha256=%s\" data-dist-info-metadata=\"sha256=%s\"",
+                meta.distInfoMetadata().get(), meta.distInfoMetadata().get()
+            ));
         }
         return attrs.toString();
+    }
+
+    /**
+     * Read a file's size from storage metadata (PEP 700). Falls back to
+     * {@code 0} when the storage backend cannot report size (e.g. some
+     * in-memory test doubles) rather than failing the whole index render.
+     *
+     * @param key Storage key of the file
+     * @return Size in bytes
+     */
+    private CompletableFuture<Long> fileSize(final Key key) {
+        return this.storage.metadata(key).thenApply(
+            meta -> meta.read(com.auto1.pantera.asto.Meta.OP_SIZE)
+                .map(Long.class::cast).orElse(0L)
+        ).toCompletableFuture();
     }
 
     /**
@@ -447,13 +492,19 @@ final class SliceIndex implements Slice {
      * @param filename File name (last path segment)
      * @param url Full URL for the file
      * @param sha256 SHA-256 hex digest
+     * @param size File size in bytes (PEP 700)
+     * @param version Distribution version derived from the storage layout,
+     *                or {@code null} for the no-version-folder edge case
      * @param meta Optional sidecar metadata
      * @return FileEntry for JSON rendering
+     * @checkstyle ParameterNumberCheck (5 lines)
      */
     private static SimpleJsonRenderer.FileEntry buildJsonEntry(
         final String filename,
         final String url,
         final String sha256,
+        final long size,
+        final String version,
         final Optional<PypiSidecar.Meta> meta
     ) {
         final String requiresPython = meta.map(PypiSidecar.Meta::requiresPython).orElse(null);
@@ -462,7 +513,8 @@ final class SliceIndex implements Slice {
         final Optional<String> yankedReason = meta.flatMap(PypiSidecar.Meta::yankedReason);
         final Optional<String> distInfoMetadata = meta.flatMap(PypiSidecar.Meta::distInfoMetadata);
         return new SimpleJsonRenderer.FileEntry(
-            filename, url, sha256, requiresPython, uploadTime, yanked, yankedReason, distInfoMetadata
+            filename, url, sha256, requiresPython, uploadTime, yanked, yankedReason,
+            distInfoMetadata, size, version
         );
     }
 

@@ -129,11 +129,11 @@ final class WheelSlice implements Slice {
         final Key.From key = new Key.From(UUID.randomUUID().toString());
         return this.filePart(iterable, publisher, key).thenCompose(
             uploaded -> this.storage.value(key).thenCompose(
-                val -> new ContentAsStream<PackageInfo>(val).process(
-                    input -> new Metadata.FromArchive(input, uploaded.filename()).read()
+                val -> new ContentAsStream<Metadata.Extracted>(val).process(
+                    input -> new Metadata.FromArchive(input, uploaded.filename()).readWithMetadata()
                 )
             ).thenCompose(
-                info -> this.handleParsed(line, iterable, key, uploaded, info, auditCtx, owner)
+                extracted -> this.handleParsed(line, iterable, key, uploaded, extracted, auditCtx, owner)
             )
         ).handle(
             (response, throwable) -> {
@@ -152,19 +152,19 @@ final class WheelSlice implements Slice {
      * @param headers Request headers
      * @param key Temp key holding the saved content bytes
      * @param uploaded Uploaded file descriptor (filename + declared digest)
-     * @param info Parsed package info
+     * @param extracted Parsed package info plus raw PEP 658 metadata bytes
      * @param auditCtx Request correlation context
      * @param owner Uploading user
      * @return HTTP response
      */
     private CompletionStage<Response> handleParsed(
         final RequestLine line, final Headers headers, final Key key,
-        final UploadedFile uploaded, final PackageInfo info,
+        final UploadedFile uploaded, final Metadata.Extracted extracted,
         final AuditContext auditCtx, final String owner
     ) {
         final CompletionStage<RsStatus> status;
-        if (new ValidFilename(info, uploaded.filename()).valid()) {
-            status = this.persistOrReject(line, headers, key, uploaded, info, auditCtx, owner);
+        if (new ValidFilename(extracted.info(), uploaded.filename()).valid()) {
+            status = this.persistOrReject(line, headers, key, uploaded, extracted, auditCtx, owner);
         } else {
             status = this.storage.delete(key).thenApply(nothing -> RsStatus.BAD_REQUEST);
         }
@@ -178,16 +178,17 @@ final class WheelSlice implements Slice {
      * @param headers Request headers
      * @param key Temp key holding the saved content bytes
      * @param uploaded Uploaded file descriptor (filename + declared digest)
-     * @param info Parsed package info
+     * @param extracted Parsed package info plus raw PEP 658 metadata bytes
      * @param auditCtx Request correlation context
      * @param owner Uploading user
      * @return Resulting HTTP status
      */
     private CompletionStage<RsStatus> persistOrReject(
         final RequestLine line, final Headers headers, final Key key,
-        final UploadedFile uploaded, final PackageInfo info,
+        final UploadedFile uploaded, final Metadata.Extracted extracted,
         final AuditContext auditCtx, final String owner
     ) {
+        final PackageInfo info = extracted.info();
         final String packageName = new NormalizedProjectName.Simple(info.name()).value();
         final Key name = new Key.From(
             new KeyFromPath(line.uri().toString()), packageName, info.version(), uploaded.filename()
@@ -195,7 +196,7 @@ final class WheelSlice implements Slice {
         return this.digestMatches(key, uploaded.declaredSha256()).thenCompose(
             matches -> matches
                 ? this.checkDuplicateAndPersist(
-                    line, headers, key, name, packageName, info, uploaded.filename()
+                    line, headers, key, name, packageName, extracted, uploaded.filename()
                 )
                 : this.rejectChecksumMismatch(key, packageName, info.version(), auditCtx, owner)
         );
@@ -208,12 +209,12 @@ final class WheelSlice implements Slice {
      */
     private CompletionStage<RsStatus> checkDuplicateAndPersist(
         final RequestLine line, final Headers headers, final Key key, final Key name,
-        final String packageName, final PackageInfo info, final String filename
+        final String packageName, final Metadata.Extracted extracted, final String filename
     ) {
         return this.storage.exists(name).thenCompose(
             exists -> exists
-                ? this.rejectDuplicate(key, packageName, info.version(), filename)
-                : this.persistUpload(line, headers, key, name, packageName, info, filename)
+                ? this.rejectDuplicate(key, packageName, extracted.info().version(), filename)
+                : this.persistUpload(line, headers, key, name, packageName, extracted, filename)
         );
     }
 
@@ -279,28 +280,40 @@ final class WheelSlice implements Slice {
     }
 
     /**
-     * Move the verified, non-duplicate upload into place and regenerate the
-     * package/repo indices. This is the original upload-completion pipeline,
-     * unchanged.
+     * Move the verified, non-duplicate upload into place, persist the PEP 658
+     * {@code .metadata} sidecar file, and regenerate the package/repo indices.
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     private CompletionStage<RsStatus> persistUpload(
         final RequestLine line, final Headers headers, final Key key, final Key name,
-        final String packageName, final PackageInfo info, final String filename
+        final String packageName, final Metadata.Extracted extracted, final String filename
     ) {
+        final PackageInfo info = extracted.info();
         CompletionStage<Void> move = this.storage.move(key, name);
         if (this.events.isPresent()) {
             move = move.thenCompose(
                 ignored -> this.putArtifactToQueue(name, info, headers)
             );
         }
-        // Create sidecar metadata for PEP 503/691 compliance
-        move = move.thenCompose(
-            ignored -> PypiSidecar.write(
+        // PEP 658: persist the distribution's core metadata as a sibling
+        // "<file>.metadata" file so it can be served without downloading
+        // the wheel body, then record its sha256 in the sidecar so the
+        // index can advertise data-core-metadata / core-metadata.
+        final Key metadataKey = new Key.From(name.string() + ".metadata");
+        final CompletableFuture<String> metadataSha256 = this.storage.save(
+            metadataKey, new Content.From(extracted.rawMetadata())
+        ).thenCompose(
+            ignored -> this.storage.value(metadataKey)
+        ).thenCompose(
+            value -> new ContentDigest(value, Digests.SHA256).hex()
+        ).toCompletableFuture();
+        move = move.thenCompose(ignored -> metadataSha256).thenCompose(
+            sha256 -> PypiSidecar.write(
                 this.storage,
                 new Key.From(packageName, info.version(), filename),
                 info.requiresPython(),
-                Instant.now().truncatedTo(ChronoUnit.MICROS)
+                Instant.now().truncatedTo(ChronoUnit.MICROS),
+                sha256
             )
         );
         // Regenerate package-level index.html after upload

@@ -156,4 +156,86 @@ class PySliceTest {
         );
     }
 
+    @Test
+    void getServesPep658MetadataFile() {
+        final String key = "my/1.0.0/my-1.0.0-py3-none-any.whl.metadata";
+        final byte[] content = "Metadata-Version: 2.1\nName: my\nVersion: 1.0.0\n".getBytes();
+        this.storage.save(new Key.From(key), new Content.From(content)).join();
+        ResponseAssert.check(
+            this.slice.response(
+                new RequestLine("GET", "/" + key),
+                this.authorization,
+                Content.EMPTY
+            ).join(),
+            RsStatus.OK,
+            content
+        );
+    }
+
+    @Test
+    void headServesPep658MetadataFileWithNoBody() {
+        final String key = "my/1.0.0/my-1.0.0-py3-none-any.whl.metadata";
+        final byte[] content = "Metadata-Version: 2.1\nName: my\nVersion: 1.0.0\n".getBytes();
+        this.storage.save(new Key.From(key), new Content.From(content)).join();
+        final Response resp = this.slice.response(
+            new RequestLine("HEAD", "/" + key),
+            this.authorization,
+            Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(resp.status(), new org.hamcrest.core.IsEqual<>(RsStatus.OK));
+        MatcherAssert.assertThat(
+            "HEAD response body must be empty",
+            resp.body().asBytesFuture().join().length,
+            new org.hamcrest.core.IsEqual<>(0)
+        );
+    }
+
+    @Test
+    void legacyJsonReturns404ForUnknownPackage() {
+        ResponseAssert.check(
+            this.slice.response(
+                new RequestLine("GET", "/pypi/nonexistent/json"),
+                this.authorization,
+                Content.EMPTY
+            ).join(),
+            RsStatus.NOT_FOUND
+        );
+    }
+
+    @Test
+    void legacyJsonResolvesPackageWithVersionsAndFiles() {
+        this.storage.save(
+            new Key.From("mypkg", "1.0.0", "mypkg-1.0.0.tar.gz"),
+            new Content.From("v1".getBytes())
+        ).join();
+        this.storage.save(
+            new Key.From("mypkg", "2.0.0", "mypkg-2.0.0.tar.gz"),
+            new Content.From("v2".getBytes())
+        ).join();
+        final Response resp = this.slice.response(
+            new RequestLine("GET", "/pypi/mypkg/json"),
+            this.authorization,
+            Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(resp.status(), new org.hamcrest.core.IsEqual<>(RsStatus.OK));
+        final String body = resp.body().asString();
+        final javax.json.JsonObject json = javax.json.Json
+            .createReader(new java.io.StringReader(body)).readObject();
+        MatcherAssert.assertThat(
+            "info.version must be the PEP-440-highest version",
+            json.getJsonObject("info").getString("version"),
+            new org.hamcrest.core.IsEqual<>("2.0.0")
+        );
+        MatcherAssert.assertThat(
+            "releases must list every version",
+            json.getJsonObject("releases").containsKey("1.0.0")
+                && json.getJsonObject("releases").containsKey("2.0.0")
+        );
+        MatcherAssert.assertThat(
+            "urls must describe the latest version's file",
+            json.getJsonArray("urls").getJsonObject(0).getString("filename"),
+            new org.hamcrest.core.IsEqual<>("mypkg-2.0.0.tar.gz")
+        );
+    }
+
 }
