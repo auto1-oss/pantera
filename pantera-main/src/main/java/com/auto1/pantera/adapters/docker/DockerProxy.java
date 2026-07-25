@@ -116,6 +116,63 @@ public final class DockerProxy implements Slice {
     }
 
     /**
+     * Builds the read-through {@link Docker} a {@code docker-proxy} repo
+     * serves (remotes unioned via {@link MultiReadDocker}, plus a local
+     * cache tier via {@link ReadWriteDocker} when the repo has storage
+     * configured) — without the HTTP-layer wrapping ({@link DockerSlice},
+     * cooldown, routing, {@link TrimmedDocker} path-prefix stripping) that
+     * {@link #createProxy} adds on top for a standalone repo.
+     *
+     * <p>Exists so a {@code docker-group} member of type {@code
+     * docker-proxy} can be composed directly as a {@link Docker} object
+     * (see {@code RepositorySlices} docker-group wiring) — the group
+     * aggregates member {@link Docker}s in-process via {@link
+     * MultiReadDocker}, mirroring exactly how {@code docker}/{@code
+     * docker-proxy} construct their own {@link Docker}. No {@link
+     * TrimmedDocker} wrap here: that strips a shared-port routing prefix
+     * from the repository name, which is a standalone-repo HTTP concern —
+     * the group already strips its own prefix once at the outer layer, so
+     * member {@code repo(name)} calls receive a plain image name. Also uses
+     * a throwaway {@link DockerProxyCooldownInspector} rather than sharing
+     * one with a {@link DockerProxyCooldownSlice}: cooldown is not
+     * re-applied at the group level (same convention as {@code
+     * MavenGroupSlice} — CLAUDE.md), so nothing outside this method needs
+     * to observe the inspector's state.
+     *
+     * @param client HTTP client for the repo's configured remotes.
+     * @param cfg Repository configuration.
+     * @param events Artifact metadata events queue.
+     * @return Read-through {@link Docker} for the repo.
+     */
+    public static Docker buildDocker(
+        final ClientSlices client,
+        final RepoConfig cfg,
+        final Optional<Queue<ArtifactEvent>> events
+    ) {
+        final DockerProxyCooldownInspector inspector = new DockerProxyCooldownInspector();
+        final var registry = PublishDateRegistries.instance();
+        if (registry instanceof DbPublishDateRegistry dbRegistry) {
+            inspector.setReleaseDateCallback((artifact, version, release) ->
+                dbRegistry.persist("docker", artifact, version, release, "manifest-config"));
+        }
+        final Docker proxies = new MultiReadDocker(
+            cfg.remotes().stream().map(r -> proxy(client, cfg, events, r, inspector))
+                .toList()
+        );
+        return cfg.storageOpt()
+            .<Docker>map(
+                storage -> {
+                    final AstoDocker local = new AstoDocker(
+                        cfg.name(),
+                        new SubStorage(RegistryRoot.V2, storage)
+                    );
+                    return new ReadWriteDocker(new MultiReadDocker(local, proxies), local);
+                }
+            )
+            .orElse(proxies);
+    }
+
+    /**
      * Creates Docker proxy repository slice from configuration.
      *
      * @return Docker proxy slice.

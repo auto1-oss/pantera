@@ -96,6 +96,13 @@ public final class ProxyManifests implements Manifests {
     }
 
     @Override
+    public CompletableFuture<Void> delete(final ManifestReference ref) {
+        // Deletes target the authoritative (local) store only — see
+        // WS4-docker.5 §3. Maps to 405 via ErrorHandlingSlice.
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public CompletableFuture<Optional<Manifest>> get(final ManifestReference ref) {
         final String uri = String.format("/v2/%s/manifests/%s", name, ref.digest());
         EcsLogger.info("com.auto1.pantera.docker.proxy")

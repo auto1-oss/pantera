@@ -5,8 +5,10 @@
 package com.auto1.pantera.docker.http;
 
 import com.auto1.pantera.docker.Docker;
+import com.auto1.pantera.docker.http.blobs.DeleteBlobSlice;
 import com.auto1.pantera.docker.http.blobs.GetBlobsSlice;
 import com.auto1.pantera.docker.http.blobs.HeadBlobsSlice;
+import com.auto1.pantera.docker.http.manifest.DeleteManifestSlice;
 import com.auto1.pantera.docker.http.manifest.GetManifestSlice;
 import com.auto1.pantera.docker.http.manifest.HeadManifestSlice;
 import com.auto1.pantera.docker.http.manifest.PushManifestSlice;
@@ -86,6 +88,9 @@ public final class DockerSlice extends Slice.Wrap {
                         auth(new PushManifestSlice(docker, events.orElse(null), syncIndex),
                             policy, auth)
                     ),
+                    RtRulePath.route(MethodRule.DELETE, PathPatterns.MANIFESTS,
+                        auth(new DeleteManifestSlice(docker), policy, auth)
+                    ),
                     RtRulePath.route(MethodRule.GET, PathPatterns.TAGS,
                         auth(new TagsSlice(docker), policy, auth)
                     ),
@@ -94,6 +99,9 @@ public final class DockerSlice extends Slice.Wrap {
                     ),
                     RtRulePath.route(MethodRule.GET, PathPatterns.BLOBS,
                         auth(new GetBlobsSlice(docker), policy, auth)
+                    ),
+                    RtRulePath.route(MethodRule.DELETE, PathPatterns.BLOBS,
+                        auth(new DeleteBlobSlice(docker), policy, auth)
                     ),
                     RtRulePath.route(MethodRule.POST, PathPatterns.UPLOADS,
                         auth(new PostUploadSlice(docker), policy, auth)

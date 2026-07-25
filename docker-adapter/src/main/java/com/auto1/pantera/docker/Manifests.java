@@ -77,4 +77,29 @@ public interface Manifests {
     default CompletableFuture<Referrers> referrers(Digest subject, Optional<String> artifactType) {
         return CompletableFuture.completedFuture(Referrers.EMPTY);
     }
+
+    /**
+     * Delete manifest by reference (tag or digest).
+     *
+     * <p>Removes the link {@code ref} resolves to, and — when {@code ref}
+     * is not itself the canonical by-digest reference — also the by-digest
+     * link, so nothing is left pointing at a manifest with no remaining
+     * named reference. Other tags that independently reference the same
+     * digest are unaffected (each tag's own link is a separate key). If the
+     * deleted manifest carried an OCI 1.1 {@code subject}, its referrers-index
+     * entry is pruned too, so it stops appearing in {@code oras discover}.
+     *
+     * <p>Fails (does not silently no-op) when {@code ref} does not resolve
+     * to an existing manifest, so the HTTP slice can answer {@code 404
+     * MANIFEST_UNKNOWN} rather than a false {@code 202 Accepted}.
+     *
+     * <p>Does not cascade into deleting the underlying blob — blob GC is
+     * {@link Layers#delete}, a separate operation, since content-addressed
+     * blobs may be referenced by more than one manifest.
+     *
+     * @param ref Manifest reference to delete.
+     * @return Completion signal; fails if {@code ref} does not resolve to
+     *         an existing manifest.
+     */
+    CompletableFuture<Void> delete(ManifestReference ref);
 }

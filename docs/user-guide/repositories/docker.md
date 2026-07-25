@@ -52,6 +52,12 @@ docker login pantera-host:8080
 
 The credentials are stored in `~/.docker/config.json` for subsequent operations.
 
+> Pantera authenticates Docker clients via Basic auth / JWT-as-password on
+> every request — it does not run a separate OCI/Docker bearer
+> token-issuing server (`/token`). This is not a gap: `docker login` /
+> `docker pull` / `docker push` all work as shown above; a dedicated
+> token server is simply not part of the design.
+
 ---
 
 ## Pull Images
@@ -81,6 +87,14 @@ If a Docker group is configured, all pulls go through one URL:
 docker pull pantera-host:8080/docker-group/library/ubuntu:22.04
 ```
 
+`tags/list` and `_catalog` against a group return the **union** of every
+member's tags/repositories (deduplicated) — a tag published to any member is
+visible through the group's listing endpoints. A manifest or blob GET still
+resolves against the **first** member that has it (first-2xx-wins), which is
+the correct behavior for content-addressed pulls. If a member is temporarily
+unreachable, the listing degrades to whatever the remaining members can
+answer rather than failing outright.
+
 ---
 
 ## Push Images
@@ -100,6 +114,47 @@ docker tag myapp:latest pantera-host:8080/docker-local/myapp:1.0.0
 docker push pantera-host:8080/docker-local/myapp:latest
 docker push pantera-host:8080/docker-local/myapp:1.0.0
 ```
+
+---
+
+## Delete Images / Garbage Collection
+
+Local (`docker`) repositories support the standard Distribution-spec delete
+endpoints, so `skopeo delete` and manual cleanup both work:
+
+```bash
+# Resolve the tag to its digest and delete the manifest reference
+skopeo delete docker://pantera-host:8080/docker-local/myapp:1.0.0
+
+# Delete an unreferenced blob directly by digest (registry GC)
+curl -X DELETE -u your-username:your-jwt-token \
+    https://pantera-host:8080/v2/docker-local/myapp/blobs/sha256:<digest>
+```
+
+Deleting a manifest removes the tag/digest reference (and, if it was pushed
+with an OCI `subject`, its referrers-index entry) — it returns `202
+Accepted`. It does **not** delete the underlying blob: blobs are
+content-addressed and may be shared by other manifests, so blob removal is
+the separate `DELETE .../blobs/<digest>` call, matching standard registry GC
+behavior. Deleting a reference or digest that does not exist returns `404`.
+
+**Scope:** delete is wired for **hosted (`docker`) repositories only** —
+`docker-proxy` and `docker-group` reject `DELETE` with `405 Method Not
+Allowed`; deletes always target the authoritative store, never a proxy
+cache or a group.
+
+---
+
+## Chunked Blob Uploads
+
+Clients that push a layer as a sequence of `PATCH` chunks (large-layer
+pushes via `oras`/`skopeo`, rather than Docker/BuildKit's single monolithic
+`PATCH`) are fully supported: each chunk is validated for contiguity against
+its `Content-Range` header and assembled in order before the final `PUT
+?digest=` verifies the assembled bytes against the claimed digest. A
+non-contiguous chunk (one that does not start where the upload actually left
+off) is rejected with `416 Requested Range Not Satisfiable` rather than
+silently accepted out of order.
 
 ---
 
@@ -160,6 +215,8 @@ The proxy tries each configured upstream in order until it finds the requested i
 | Push fails with `500 Internal Server Error` | Large layer upload timeout | Ask admin to increase `proxy_timeout` and check Nginx `client_max_body_size` |
 | Pull is slow for first request | Image being fetched from upstream for the first time | This is expected; subsequent pulls will be fast from cache |
 | `EOF` during push | Connection reset, often from proxy/LB | Increase timeouts in Nginx (`proxy_read_timeout 300s`) and set `client_max_body_size 0` |
+| `skopeo delete` / blob `DELETE` returns `405 Method Not Allowed` | Target is a `docker-proxy` or `docker-group` repository | Delete against the hosted (`docker`) repository directly — proxy/group repos are read-through, not authoritative |
+| Chunked push fails with `416 Requested Range Not Satisfiable` | A `PATCH` chunk's `Content-Range` start does not match the bytes already received | Restart the upload (`POST` a new session) — chunks must be sent strictly in order with no gaps or overlaps |
 
 ---
 

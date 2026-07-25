@@ -100,6 +100,11 @@ final class HeadBlobsSliceTest {
                                 Optional.of(new TestBlob(digest, size))
                             );
                         }
+
+                        @Override
+                        public CompletableFuture<Void> delete(Digest digestRequest) {
+                            throw new UnsupportedOperationException();
+                        }
                     };
                 }
 
@@ -118,6 +123,11 @@ final class HeadBlobsSliceTest {
 
                         @Override
                         public CompletableFuture<Tags> tags(Pagination pagination) {
+                            throw new UnsupportedOperationException();
+                        }
+
+                        @Override
+                        public CompletableFuture<Void> delete(ManifestReference ref) {
                             throw new UnsupportedOperationException();
                         }
                     };

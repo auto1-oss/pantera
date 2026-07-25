@@ -58,7 +58,16 @@ public final class TrimmedDocker implements Docker {
 
     @Override
     public String registryName() {
-        return origin.registryName();
+        // Report the configured prefix, not origin.registryName() — for a
+        // plain "docker"/"docker-proxy" repo these are already the same
+        // value (both derive from the repo's own configured name), so this
+        // is behavior-neutral there. It matters for a "docker-group": the
+        // origin is a MultiReadDocker composed of several MEMBER Dockers,
+        // and MultiReadDocker.registryName() reports whichever member
+        // happens to be first — the wrong name for audit/event logging on
+        // the group itself. The prefix passed in here is always the
+        // group's (or repo's) own configured name, so it is always correct.
+        return this.prefix;
     }
 
     @Override

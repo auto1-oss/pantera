@@ -156,6 +156,11 @@ final class HeadManifestSliceTest {
                         public CompletableFuture<com.auto1.pantera.docker.Tags> tags(Pagination pagination) {
                             throw new UnsupportedOperationException();
                         }
+
+                        @Override
+                        public CompletableFuture<Void> delete(ManifestReference ref) {
+                            throw new UnsupportedOperationException();
+                        }
                     };
                 }
 

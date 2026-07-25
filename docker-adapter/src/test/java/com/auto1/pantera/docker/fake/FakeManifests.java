@@ -50,6 +50,11 @@ public final class FakeManifests implements Manifests {
         return this.mnfs.tags(pagination);
     }
 
+    @Override
+    public CompletableFuture<Void> delete(final ManifestReference ref) {
+        return this.mnfs.delete(ref);
+    }
+
     /**
      * Creates manifests.
      *
