@@ -18,6 +18,10 @@
   ([@aydasraf](https://github.com/aydasraf))
 - **Maven/Gradle release immutability and Range requests.** A per-repository `releaseImmutable` flag rejects re-deploying an existing release version with `409` (SNAPSHOTs are unaffected), and artifact downloads now support HTTP `Range`/`206`/`Accept-Ranges` for resumable and parallel fetches (metadata is never range-served).
   ([@aydasraf](https://github.com/aydasraf))
+- **Cross-node invalidation for the index-accelerated S3 cache.** With `cache.mode: index` in a cluster, a write or delete on one node now event-drives the peers' stale disk-cache entry to drop (over the existing invalidation pub/sub on a dedicated `storage` channel) instead of waiting out `freshness-ttl-millis`; single-instance and non-clustered deployments are unaffected (the coherence bus is a no-op and TTL remains the backstop).
+  ([@aydasraf](https://github.com/aydasraf))
+- **Admin UI for the Maven PGP keyring.** A "Maven PGP Keyring" page under the admin console lists, adds (by armored public key), and removes the trusted signing keys that back Maven/Gradle `verifyPgp`, completing the admin surface for that feature.
+  ([@aydasraf](https://github.com/aydasraf))
 
 ### ⚡ Performance
 
