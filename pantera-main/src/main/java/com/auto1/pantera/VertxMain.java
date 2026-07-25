@@ -354,6 +354,17 @@ public final class VertxMain {
                     .log();
             }
         }
+        // Cross-node disk-cache invalidation (WS1.5): wire the storage
+        // invalidation bus over the same CacheInvalidationPubSub the cluster
+        // already uses (its own "storage" channel), BEFORE RepositorySlices
+        // constructs any CachedBlobStorage — S3StorageFactory reads the active
+        // bus at construction time. Absent Valkey/pub-sub this stays the NOOP
+        // bus and cross-node cache coherence falls back to freshness-ttl expiry.
+        settings.cacheInvalidationPubSub().ifPresent(pubsub ->
+            com.auto1.pantera.asto.blob.StorageInvalidationBusRegistry.install(
+                new com.auto1.pantera.cache.PubSubStorageInvalidationBus(pubsub)
+            )
+        );
         final com.auto1.pantera.auth.JwtTokens jwtTokens = new com.auto1.pantera.auth.JwtTokens(
             rsaKeys.privateKey(), rsaKeys.publicKey(), userTokenDao, null,
             revocationBlocklist, enabledCheck
