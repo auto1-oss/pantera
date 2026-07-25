@@ -10,13 +10,18 @@
  */
 package com.auto1.pantera.api.v1;
 
+import com.auto1.pantera.api.AuthTokenRest;
 import com.auto1.pantera.api.RepositoryName;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.SubStorage;
+import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.pypi.meta.PypiSidecar;
+import com.auto1.pantera.security.perms.Action;
+import com.auto1.pantera.security.perms.AdapterBasicPermission;
+import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.RepoData;
 import com.auto1.pantera.settings.repo.CrudRepoSettings;
 import io.vertx.core.json.JsonObject;
@@ -61,18 +66,28 @@ public final class PypiHandler {
     private final RepoData repoData;
 
     /**
+     * Pantera security policy — required to authorize yank/unyank per repo.
+     */
+    private final Policy<?> policy;
+
+    /**
      * Ctor.
      * @param crs  Repository settings CRUD
      * @param repoData Repository data management
+     * @param policy Pantera security policy
      */
-    public PypiHandler(final CrudRepoSettings crs, final RepoData repoData) {
+    public PypiHandler(final CrudRepoSettings crs, final RepoData repoData,
+        final Policy<?> policy) {
         this.crs = crs;
         this.repoData = repoData;
+        this.policy = policy;
     }
 
     /**
      * Register yank/unyank routes on the router.
-     * Both routes are placed after the JWT filter and therefore protected.
+     * Both routes are placed after the JWT filter (authentication); per-repo
+     * write authorization is enforced inline in the handlers below because
+     * the target repository varies per request ({@code :repo} path param).
      * @param router Vert.x router
      */
     public void register(final Router router) {
@@ -83,6 +98,38 @@ public final class PypiHandler {
     }
 
     /**
+     * Check that the authenticated caller holds write authority on {@code repo}.
+     * On denial, sends 403 and logs the authz-deny transition; caller MUST
+     * return immediately without touching storage.
+     * @param ctx Routing context
+     * @param repo Target repository name (from the {@code :repo} path param)
+     * @param action Action tag for the log ({@code yank}/{@code unyank})
+     * @return True if authorized, false if denied (response already sent)
+     */
+    private boolean authorizeWrite(final RoutingContext ctx, final String repo, final String action) {
+        final boolean allowed = this.policy.getPermissions(
+            new AuthUser(
+                ctx.user().principal().getString(AuthTokenRest.SUB),
+                ctx.user().principal().getString(AuthTokenRest.CONTEXT)
+            )
+        ).implies(new AdapterBasicPermission(repo, Action.Standard.WRITE));
+        if (!allowed) {
+            EcsLogger.warn("com.auto1.pantera.api.v1")
+                .message("PyPI " + action + " denied: insufficient write permission on repository")
+                .eventCategory("web")
+                .eventAction(action)
+                .eventOutcome("failure")
+                .field("event.reason", "forbidden")
+                .field("repository.name", repo)
+                .field("log.source", "application")
+                .log();
+            ApiResponse.sendError(ctx, 403, "FORBIDDEN",
+                "Insufficient permissions to " + action + " repository " + repo);
+        }
+        return allowed;
+    }
+
+    /**
      * POST /api/v1/pypi/:repo/:package/:version/yank.
      * @param ctx Routing context
      */
@@ -90,6 +137,9 @@ public final class PypiHandler {
         final String repo = ctx.pathParam("repo");
         final String pkg = ctx.pathParam("package");
         final String version = ctx.pathParam("version");
+        if (!this.authorizeWrite(ctx, repo, "yank")) {
+            return;
+        }
         final String reason = extractReason(ctx);
         CompletableFuture.<Void>supplyAsync(() -> {
             this.applyYank(repo, pkg, version, reason);
@@ -132,6 +182,9 @@ public final class PypiHandler {
         final String repo = ctx.pathParam("repo");
         final String pkg = ctx.pathParam("package");
         final String version = ctx.pathParam("version");
+        if (!this.authorizeWrite(ctx, repo, "unyank")) {
+            return;
+        }
         CompletableFuture.<Void>supplyAsync(() -> {
             this.applyUnyank(repo, pkg, version);
             return null;

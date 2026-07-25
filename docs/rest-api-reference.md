@@ -1510,6 +1510,63 @@ curl -X DELETE http://localhost:8086/api/v1/repositories/maven-local/packages \
 
 ---
 
+### POST /api/v1/pypi/:repo/:package/:version/yank
+
+Mark a hosted PyPI distribution version as yanked (PEP 592). Iterates every
+distribution file (`.whl`, `.tar.gz`, `.zip`, `.egg`) under
+`{package}/{version}/` in the target repository and flips the sidecar
+`yanked` flag.
+
+**Authentication:** JWT Bearer token required.
+**Authorization:** the caller must hold **write** authority on `:repo`
+(`AdapterBasicPermission(repo, write)`, the same per-repo permission
+`PySlice` enforces on upload) — checked per request because `:repo` varies.
+Denied → `403 FORBIDDEN` and the repository's sidecar is left untouched.
+Unauthenticated → `401 UNAUTHORIZED`.
+
+**Request Body (optional):**
+
+```json
+{
+  "reason": "Broken build, use 1.0.1 instead"
+}
+```
+
+**Response (204):** No content on success.
+**Response (403):** Caller lacks write authority on `:repo`; nothing is mutated.
+
+**curl example:**
+
+```bash
+curl -X POST http://localhost:8086/api/v1/pypi/pypi-local/my-package/1.0.0/yank \
+  -H "Authorization: Bearer eyJhbGciOi..." \
+  -H "Content-Type: application/json" \
+  -d '{"reason": "Broken build"}'
+```
+
+---
+
+### POST /api/v1/pypi/:repo/:package/:version/unyank
+
+Reverse a yank (PEP 592) on a hosted PyPI distribution version. No request body.
+
+**Authentication:** JWT Bearer token required.
+**Authorization:** same per-repo write check as
+[yank](#post-apiv1pypirepopackageversionyank) above — `403 FORBIDDEN` on
+denial without mutating the sidecar; `401 UNAUTHORIZED` if unauthenticated.
+
+**Response (204):** No content on success.
+**Response (403):** Caller lacks write authority on `:repo`; nothing is mutated.
+
+**curl example:**
+
+```bash
+curl -X POST http://localhost:8086/api/v1/pypi/pypi-local/my-package/1.0.0/unyank \
+  -H "Authorization: Bearer eyJhbGciOi..."
+```
+
+---
+
 ## 9. Search
 
 ### GET /api/v1/search

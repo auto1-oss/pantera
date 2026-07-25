@@ -127,7 +127,7 @@ public class AsyncApiTestBase {
 
             @Override
             public Policy<?> policy() {
-                return Policy.FREE;
+                return AsyncApiTestBase.this.testPolicy();
             }
 
             @Override
@@ -183,6 +183,17 @@ public class AsyncApiTestBase {
      */
     final int port() {
         return this.port;
+    }
+
+    /**
+     * Security policy applied to the deployed verticle for this test class.
+     * Defaults to {@link Policy#FREE} (implies every permission) — override
+     * to exercise authorization-denial paths (e.g. a per-repo write check)
+     * without standing up a full DB-backed roles/users fixture.
+     * @return Policy used by {@code PanteraSecurity.policy()}
+     */
+    protected Policy<?> testPolicy() {
+        return Policy.FREE;
     }
 
     /**

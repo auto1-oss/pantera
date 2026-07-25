@@ -109,7 +109,8 @@ twine upload \
 | `SSLError` or certificate errors | pip expects HTTPS by default | Add `trusted-host = pantera-host` to pip.conf or use `--trusted-host` flag |
 | `Could not find a version that satisfies the requirement` | Package not cached in proxy, or wrong index URL | Verify the index-url includes `/simple` at the end |
 | Upload fails with `403 Forbidden` | User lacks write permission on local repo | Contact admin for publish access |
-| Upload fails with `400 Bad Request` | Uploading to a proxy repository | Upload only to a **local** PyPI repository |
+| Upload fails with `400 Bad Request` | Uploading to a proxy repository, or the uploaded bytes don't match twine's declared `sha256_digest` | Upload only to a **local** PyPI repository; if the digest mismatched, re-build and re-upload the distribution |
+| Upload fails with `409 Conflict` | A distribution with this exact filename already exists in the repository (Pantera never silently overwrites) | Bump the version, or re-run with `twine upload --skip-existing` |
 | Package installs old version | pip caching locally | Run with `--no-cache-dir` flag |
 
 ---
