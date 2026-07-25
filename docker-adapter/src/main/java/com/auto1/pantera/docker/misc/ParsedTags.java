@@ -15,6 +15,7 @@ import com.auto1.pantera.docker.Tags;
 
 import javax.json.JsonString;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletionStage;
 
 /**
@@ -40,6 +41,16 @@ public final class ParsedTags implements Tags {
     @Override
     public Content json() {
         return this.origin.json();
+    }
+
+    @Override
+    public boolean hasNext() {
+        return this.origin.hasNext();
+    }
+
+    @Override
+    public Optional<String> nextCursor() {
+        return this.origin.nextCursor();
     }
 
     /**

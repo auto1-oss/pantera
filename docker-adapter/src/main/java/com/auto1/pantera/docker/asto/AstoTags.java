@@ -17,6 +17,7 @@ import com.auto1.pantera.docker.misc.Pagination;
 
 import javax.json.Json;
 import java.util.Collection;
+import java.util.Optional;
 
 /**
  * Asto implementation of {@link Tags}. Tags created from list of keys.
@@ -31,16 +32,9 @@ final class AstoTags implements Tags {
     private final String name;
 
     /**
-     * Tags root key.
+     * Paginated tags page, computed eagerly from the given keys.
      */
-    private final Key root;
-
-    /**
-     * List of keys inside tags root.
-     */
-    private final Collection<Key> keys;
-
-    private final Pagination pagination;
+    private final Pagination.Page page;
 
     /**
      * @param name Image repository name.
@@ -50,9 +44,7 @@ final class AstoTags implements Tags {
      */
     AstoTags(String name, Key root, Collection<Key> keys, Pagination pagination) {
         this.name = name;
-        this.root = root;
-        this.keys = keys;
-        this.pagination = pagination;
+        this.page = pagination.page(new Children(root, keys).names().stream());
     }
 
     @Override
@@ -60,10 +52,20 @@ final class AstoTags implements Tags {
         return new Content.From(
             Json.createObjectBuilder()
                 .add("name", this.name)
-                .add("tags", pagination.apply(new Children(root, keys).names().stream()))
+                .add("tags", this.page.json())
                 .build()
                 .toString()
                 .getBytes()
         );
+    }
+
+    @Override
+    public boolean hasNext() {
+        return this.page.truncated();
+    }
+
+    @Override
+    public Optional<String> nextCursor() {
+        return this.page.cursor();
     }
 }

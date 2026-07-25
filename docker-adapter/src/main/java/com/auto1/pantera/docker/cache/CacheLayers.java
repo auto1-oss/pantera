@@ -99,7 +99,7 @@ public final class CacheLayers implements Layers {
                                 if (blob.isPresent()) {
                                     this.recordProxyMetric("success", duration);
                                     return Optional.<Blob>of(
-                                        new CachingBlob(blob.get(), this.cache)
+                                        new CachingBlob(blob.get(), this.cache, this.repoName)
                                     );
                                 } else {
                                     this.recordProxyMetric("not_found", duration);
@@ -122,7 +122,7 @@ public final class CacheLayers implements Layers {
                             if (blob.isPresent()) {
                                 this.recordProxyMetric("success", duration);
                                 return Optional.<Blob>of(
-                                    new CachingBlob(blob.get(), this.cache)
+                                    new CachingBlob(blob.get(), this.cache, this.repoName)
                                 );
                             } else {
                                 this.recordProxyMetric("not_found", duration);

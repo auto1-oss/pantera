@@ -13,6 +13,8 @@ package com.auto1.pantera.docker.misc;
 import com.google.common.base.Splitter;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
+import org.hamcrest.core.IsEqual;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import wtf.g4s8.hamcrest.json.JsonContains;
@@ -21,6 +23,7 @@ import wtf.g4s8.hamcrest.json.JsonValueIs;
 import wtf.g4s8.hamcrest.json.StringIsJson;
 
 import java.util.Arrays;
+import java.util.Optional;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
@@ -28,6 +31,23 @@ import java.util.stream.StreamSupport;
  * Tests for {@link TagsPage}.
  */
 final class TagsPageTest {
+
+    @Test
+    void reportsNextPageWhenTruncated() {
+        final TagsPage page = new TagsPage(
+            "my-alpine", Arrays.asList("3", "1", "2", "4", "5"), Pagination.from(null, 2)
+        );
+        MatcherAssert.assertThat(page.hasNext(), new IsEqual<>(true));
+        MatcherAssert.assertThat(page.nextCursor(), new IsEqual<>(Optional.of("2")));
+    }
+
+    @Test
+    void reportsNoNextPageWhenNotTruncated() {
+        final TagsPage page = new TagsPage(
+            "my-alpine", Arrays.asList("1", "2"), Pagination.from(null, 5)
+        );
+        MatcherAssert.assertThat(page.hasNext(), new IsEqual<>(false));
+    }
 
     @ParameterizedTest
     @CsvSource({

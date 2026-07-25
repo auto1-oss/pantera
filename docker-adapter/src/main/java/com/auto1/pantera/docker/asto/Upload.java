@@ -25,6 +25,7 @@ import com.auto1.pantera.http.slice.ContentWithSize;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -154,37 +155,75 @@ public final class Upload {
 
     /**
      * Puts uploaded data to {@link Layers} creating a {@link Blob} with specified {@link Digest}.
-     * If upload data mismatch provided digest then error occurs and operation does not complete.
+     * The claimed {@code digest} is explicitly compared against the digest actually computed
+     * for the uploaded bytes (recorded in the staged chunk's key at {@link #append(Content)}
+     * time) — a mismatch fails with an explicit {@link InvalidDigestException} (OCI/Distribution
+     * {@code DIGEST_INVALID}) carrying both values, rather than surfacing only implicitly as a
+     * chunk-key lookup miss.
      *
      * @param layers Target layers.
-     * @param digest Expected blob digest.
+     * @param digest Client-claimed blob digest.
      * @return Created blob.
      */
     public CompletableFuture<Void> putTo(final Layers layers, final Digest digest) {
-        final Key source = this.chunk(digest);
-        return this.storage.exists(source)
-            .thenCompose(
-                exists -> {
-                    if (exists) {
-                        return layers.put(
-                            new BlobSource() {
-                                @Override
-                                public Digest digest() {
-                                    return digest;
-                                }
-
-                                @Override
-                                public CompletableFuture<Void> saveTo(Storage asto, Key key) {
-                                    return asto.move(source, key);
-                                }
-                            }
-                        ).thenCompose(
-                            blob -> this.delete()
-                        );
-                    }
-                    return CompletableFuture.failedFuture(new InvalidDigestException(digest.toString()));
+        return this.chunks().thenCompose(
+            chunks -> {
+                if (chunks.isEmpty()) {
+                    return CompletableFuture.failedFuture(
+                        new InvalidDigestException(
+                            String.format("no uploaded data found for digest: %s", digest)
+                        )
+                    );
                 }
-            );
+                final Key source = chunks.iterator().next();
+                final Optional<Digest> computed = Upload.chunkDigest(source);
+                if (computed.isEmpty() || !computed.get().string().equals(digest.string())) {
+                    return CompletableFuture.failedFuture(
+                        new InvalidDigestException(
+                            String.format(
+                                "calculated: %s expected: %s",
+                                computed.map(Digest::string).orElse("unknown"), digest.string()
+                            )
+                        )
+                    );
+                }
+                return layers.put(
+                    new BlobSource() {
+                        @Override
+                        public Digest digest() {
+                            return digest;
+                        }
+
+                        @Override
+                        public CompletableFuture<Void> saveTo(Storage asto, Key key) {
+                            return asto.move(source, key);
+                        }
+                    }
+                ).thenCompose(
+                    blob -> this.delete()
+                );
+            }
+        );
+    }
+
+    /**
+     * Recovers the digest actually computed for a staged chunk from its storage key
+     * (built as {@code <alg>_<hex>} by {@link #chunk(Digest)} / {@link #append(Content)}),
+     * avoiding a redundant re-hash of the (potentially large) blob bytes.
+     *
+     * @param key Staged chunk key.
+     * @return Computed digest, empty if the key does not encode one.
+     */
+    private static Optional<Digest> chunkDigest(final Key key) {
+        final List<String> parts = key.parts();
+        final String name = parts.get(parts.size() - 1);
+        final int sep = name.indexOf('_');
+        if (sep < 0) {
+            return Optional.empty();
+        }
+        return Optional.of(
+            new Digest.FromString(name.substring(0, sep) + ':' + name.substring(sep + 1))
+        );
     }
 
     public CompletableFuture<Void> putTo(

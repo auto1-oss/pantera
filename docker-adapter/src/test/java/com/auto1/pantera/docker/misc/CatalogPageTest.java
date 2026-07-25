@@ -12,7 +12,9 @@ package com.auto1.pantera.docker.misc;
 
 import com.google.common.base.Splitter;
 import org.hamcrest.MatcherAssert;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import wtf.g4s8.hamcrest.json.JsonContains;
@@ -21,6 +23,7 @@ import wtf.g4s8.hamcrest.json.JsonValueIs;
 
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Optional;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
@@ -37,6 +40,19 @@ final class CatalogPageTest {
     @BeforeEach
     void setUp() {
         this.names = Arrays.asList("3", "1", "2", "4", "5", "4");
+    }
+
+    @Test
+    void reportsNextPageWhenTruncated() {
+        final CatalogPage page = new CatalogPage(this.names, Pagination.from(null, 2));
+        MatcherAssert.assertThat(page.hasNext(), new IsEqual<>(true));
+        MatcherAssert.assertThat(page.nextCursor(), new IsEqual<>(Optional.of("2")));
+    }
+
+    @Test
+    void reportsNoNextPageWhenNotTruncated() {
+        final CatalogPage page = new CatalogPage(this.names, Pagination.from(null, 5));
+        MatcherAssert.assertThat(page.hasNext(), new IsEqual<>(false));
     }
 
     @ParameterizedTest

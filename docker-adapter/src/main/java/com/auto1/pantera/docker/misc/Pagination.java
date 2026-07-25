@@ -18,6 +18,8 @@ import javax.json.Json;
 import javax.json.JsonArrayBuilder;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.util.List;
+import java.util.Optional;
 import java.util.stream.Stream;
 
 /**
@@ -46,14 +48,38 @@ public record Pagination(String last, int limit) {
         );
     }
 
-    public JsonArrayBuilder apply(Stream<String> stream) {
-        final JsonArrayBuilder res = Json.createArrayBuilder();
-        stream.filter(this::lessThan)
-            .sorted()
-            .distinct()
-            .limit(this.limit())
-            .forEach(res::add);
-        return res;
+    /**
+     * Applies pagination to a stream of values, reporting whether the result was
+     * truncated (more entries exist beyond this page) and the cursor to resume
+     * pagination from — used to emit a {@code Link: rel="next"} header on
+     * {@code tags/list} and {@code _catalog} when a page does not contain the
+     * full result set (Docker Distribution spec pagination).
+     *
+     * @param stream Values to paginate.
+     * @return Paginated page: JSON array, truncation flag, and resume cursor.
+     */
+    public Page page(Stream<String> stream) {
+        final List<String> filtered = stream.filter(this::lessThan).sorted().distinct().toList();
+        final boolean truncated = filtered.size() > this.limit;
+        final List<String> slice = truncated ? filtered.subList(0, this.limit) : filtered;
+        final JsonArrayBuilder json = Json.createArrayBuilder();
+        slice.forEach(json::add);
+        return new Page(
+            json,
+            truncated,
+            slice.isEmpty() ? Optional.empty() : Optional.of(slice.get(slice.size() - 1))
+        );
+    }
+
+    /**
+     * Result of {@link #page(Stream)}: the current page's JSON array, whether more
+     * entries exist beyond it, and the cursor (last value on this page) to resume from.
+     *
+     * @param json JSON array of the current page's values.
+     * @param truncated True when more entries exist beyond this page.
+     * @param cursor Last value on this page, empty when the page itself is empty.
+     */
+    public record Page(JsonArrayBuilder json, boolean truncated, Optional<String> cursor) {
     }
 
     /**

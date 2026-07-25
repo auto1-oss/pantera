@@ -18,6 +18,7 @@ import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.docker.Blob;
 import com.auto1.pantera.docker.Digest;
 import com.auto1.pantera.docker.Layers;
+import com.auto1.pantera.docker.error.InvalidDigestException;
 import io.reactivex.Flowable;
 import org.hamcrest.Description;
 import org.hamcrest.MatcherAssert;
@@ -26,6 +27,7 @@ import org.hamcrest.TypeSafeMatcher;
 import org.hamcrest.collection.IsEmptyCollection;
 import org.hamcrest.core.IsEqual;
 import org.hamcrest.core.IsInstanceOf;
+import org.hamcrest.core.StringContains;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -147,6 +149,71 @@ class UploadTest {
             this.storage.list(this.upload.root()).get(),
             new IsEmptyCollection<>()
         );
+    }
+
+    /**
+     * WS4-docker.9: a claimed digest that does not match the digest actually computed
+     * for the uploaded bytes must fail explicitly with {@code DIGEST_INVALID}, carrying
+     * both the calculated and expected digests — not an opaque chunk-key-miss.
+     */
+    @Test
+    void shouldFailWithDigestInvalidOnClaimedVsComputedMismatch() {
+        this.upload.start().toCompletableFuture().join();
+        final byte[] chunk = "some bytes".getBytes();
+        this.upload.append(new Content.From(chunk)).toCompletableFuture().join();
+        final Digest claimed = new Digest.Sha256(
+            "0000000000000000000000000000000000000000000000000000000000000000"
+        );
+        final Throwable cause = Assertions.assertThrows(
+            CompletionException.class,
+            () -> this.upload.putTo(new CapturePutLayers(), claimed)
+                .toCompletableFuture().join()
+        ).getCause();
+        MatcherAssert.assertThat(
+            "Rejection must be a DockerError InvalidDigestException",
+            cause, new IsInstanceOf(InvalidDigestException.class)
+        );
+        final InvalidDigestException digestError = (InvalidDigestException) cause;
+        MatcherAssert.assertThat(digestError.code(), new IsEqual<>("DIGEST_INVALID"));
+        final String hash = new Digest.Sha256(chunk).hex();
+        MatcherAssert.assertThat(
+            "Message must carry the actually-computed digest",
+            digestError.getMessage(), new StringContains(hash)
+        );
+        MatcherAssert.assertThat(
+            "Message must carry the claimed digest",
+            digestError.getMessage(), new StringContains(claimed.hex())
+        );
+        MatcherAssert.assertThat(
+            "A rejected PUT must not consume the staged upload chunk",
+            this.storage.list(this.upload.root()).toCompletableFuture().join().isEmpty(),
+            new IsEqual<>(false)
+        );
+    }
+
+    /**
+     * WS4-docker.9 regression: a matching claimed digest still succeeds via the same
+     * explicit-verify path (single-chunk push).
+     */
+    @Test
+    void shouldSucceedWithMatchingDigest() {
+        this.upload.start().toCompletableFuture().join();
+        final byte[] chunk = "matching content".getBytes();
+        this.upload.append(new Content.From(chunk)).toCompletableFuture().join();
+        final CapturePutLayers layers = new CapturePutLayers();
+        this.upload.putTo(layers, new Digest.Sha256(chunk)).toCompletableFuture().join();
+        MatcherAssert.assertThat(layers.content(), new IsEqual<>(chunk));
+    }
+
+    @Test
+    void shouldFailWithDigestInvalidWhenNothingUploaded() {
+        this.upload.start().toCompletableFuture().join();
+        final Throwable cause = Assertions.assertThrows(
+            CompletionException.class,
+            () -> this.upload.putTo(new CapturePutLayers(), new Digest.Sha256("anything"))
+                .toCompletableFuture().join()
+        ).getCause();
+        MatcherAssert.assertThat(cause, new IsInstanceOf(InvalidDigestException.class));
     }
 
     /**

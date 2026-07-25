@@ -12,6 +12,8 @@ package com.auto1.pantera.docker;
 
 import com.auto1.pantera.asto.Content;
 
+import java.util.Optional;
+
 /**
  * Docker repositories catalog.
  */
@@ -23,4 +25,25 @@ public interface Catalog {
      * @return Catalog in JSON format.
      */
     Content json();
+
+    /**
+     * Whether more repositories exist beyond this page (pagination was truncated).
+     * Implementations that don't produce a bounded page (proxy pass-through,
+     * generic wrappers) default to {@code false}.
+     *
+     * @return True when a further page is available.
+     */
+    default boolean hasNext() {
+        return false;
+    }
+
+    /**
+     * Cursor (last repository name on this page) to resume pagination from via the
+     * {@code last} query parameter. Present only when {@link #hasNext()} is {@code true}.
+     *
+     * @return Last repository name of the current page.
+     */
+    default Optional<String> nextCursor() {
+        return Optional.empty();
+    }
 }

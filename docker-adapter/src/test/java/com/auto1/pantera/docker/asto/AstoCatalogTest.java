@@ -14,7 +14,9 @@ import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.docker.misc.Pagination;
 import com.google.common.base.Splitter;
 import org.hamcrest.MatcherAssert;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import wtf.g4s8.hamcrest.json.JsonContains;
@@ -22,6 +24,7 @@ import wtf.g4s8.hamcrest.json.JsonHas;
 import wtf.g4s8.hamcrest.json.JsonValueIs;
 
 import java.util.Collection;
+import java.util.Optional;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
@@ -41,6 +44,23 @@ final class AstoCatalogTest {
         this.keys = Stream.of("foo/my-alpine", "foo/test", "foo/bar", "foo/busybox")
             .map(Key.From::new)
             .collect(Collectors.toList());
+    }
+
+    @Test
+    void reportsNextPageWhenTruncated() {
+        final AstoCatalog catalog = new AstoCatalog(
+            new Key.From("foo"), this.keys, Pagination.from(null, 2)
+        );
+        MatcherAssert.assertThat(catalog.hasNext(), new IsEqual<>(true));
+        MatcherAssert.assertThat(catalog.nextCursor(), new IsEqual<>(Optional.of("busybox")));
+    }
+
+    @Test
+    void reportsNoNextPageWhenNotTruncated() {
+        final AstoCatalog catalog = new AstoCatalog(
+            new Key.From("foo"), this.keys, Pagination.from(null, 4)
+        );
+        MatcherAssert.assertThat(catalog.hasNext(), new IsEqual<>(false));
     }
 
     @ParameterizedTest

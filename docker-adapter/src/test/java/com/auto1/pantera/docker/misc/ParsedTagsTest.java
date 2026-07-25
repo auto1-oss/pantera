@@ -11,6 +11,7 @@
 package com.auto1.pantera.docker.misc;
 
 import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.docker.Tags;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.hamcrest.collection.IsEmptyCollection;
@@ -21,11 +22,49 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.ArrayList;
+import java.util.Optional;
 
 /**
  * Test for {@link ParsedTags}.
  */
 class ParsedTagsTest {
+
+    @Test
+    void forwardsHasNextAndCursorFromOrigin() {
+        final Tags origin = new Tags() {
+            @Override
+            public Content json() {
+                return new Content.From("{}".getBytes());
+            }
+
+            @Override
+            public boolean hasNext() {
+                return true;
+            }
+
+            @Override
+            public Optional<String> nextCursor() {
+                return Optional.of("v2");
+            }
+        };
+        final ParsedTags parsed = new ParsedTags(origin);
+        MatcherAssert.assertThat(
+            "hasNext() must forward to origin", parsed.hasNext(), new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "nextCursor() must forward to origin",
+            parsed.nextCursor(), new IsEqual<>(Optional.of("v2"))
+        );
+    }
+
+    @Test
+    void defaultsToNoNextPageWhenOriginDoesNot() {
+        final ParsedTags parsed = new ParsedTags(
+            () -> new Content.From("{}".getBytes())
+        );
+        MatcherAssert.assertThat(parsed.hasNext(), new IsEqual<>(false));
+        MatcherAssert.assertThat(parsed.nextCursor(), new IsEqual<>(Optional.empty()));
+    }
 
     @Test
     void parsesTags() {
