@@ -110,11 +110,18 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
         final String fullHash = new MetadataETag(fullContent).calculate();
         final String abbrevHash = abbreviatedContent.length > 0
             ? new MetadataETag(abbreviatedContent).calculate() : null;
+        // WS6.1: thread the upstream ETag through so NpmProxy.conditionalRefresh
+        // (gated on metadata.upstreamEtag().isPresent()) actually has something
+        // to send as If-None-Match. Before this fix the 4-arg Metadata ctor
+        // below dropped it on every save, so the conditional-request path was
+        // permanently dead — every 12h TTL boundary re-downloaded and
+        // re-parsed the full packument even when upstream hadn't changed it.
         final NpmPackage.Metadata enrichedMeta = new NpmPackage.Metadata(
             pkg.meta().lastModified(),
             pkg.meta().lastRefreshed(),
             fullHash,
-            abbrevHash
+            abbrevHash,
+            pkg.meta().upstreamEtag().orElse(null)
         );
         return Completable.concatArray(
             this.storage.save(
