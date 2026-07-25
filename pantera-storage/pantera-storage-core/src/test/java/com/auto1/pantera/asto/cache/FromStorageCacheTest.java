@@ -62,6 +62,35 @@ final class FromStorageCacheTest {
     }
 
     @Test
+    void doesNotInvokeRemoteOnCacheHit() throws Exception {
+        // Regression test for the eager-remote.get()-on-every-call bug: remote.get()
+        // was a plain method-call argument to switchIfEmpty, so it fired even when
+        // the cache-hit chain above it was going to satisfy the request -- a
+        // side-effecting Remote (e.g. an upstream HTTP fetch) ran needlessly on
+        // every hit. Proven via invocation count, per CLAUDE.md doctrine, not
+        // wall-clock timing.
+        final Key key = new Key.From("key-lazy-hit");
+        final byte[] data = "cached-bytes".getBytes();
+        new BlockingStorage(this.storage).save(key, data);
+        final AtomicInteger remoteCalls = new AtomicInteger();
+        final Remote remote = () -> {
+            remoteCalls.incrementAndGet();
+            return CompletableFuture.completedFuture(
+                Optional.of(new Content.From("should-not-be-used".getBytes()))
+            );
+        };
+        final Optional<? extends Content> result = new FromStorageCache(this.storage)
+            .load(key, remote, CacheControl.Standard.ALWAYS)
+            .toCompletableFuture()
+            .get();
+        MatcherAssert.assertThat(
+            "Remote must not be invoked when the cache already has the value",
+            remoteCalls.get(), Matchers.is(0)
+        );
+        MatcherAssert.assertThat(result.get(), new ContentIs(data));
+    }
+
+    @Test
     void savesToCacheFromRemote() throws Exception {
         final Key key = new Key.From("key2");
         final byte[] data = "hello2".getBytes();
