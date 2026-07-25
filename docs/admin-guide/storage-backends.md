@@ -199,6 +199,61 @@ cache:
 
 **Sizing recommendation:** Set `max-bytes` to fit your hot working set (the artifacts accessed most frequently in a typical build cycle). For most teams, 10-50 GB is sufficient.
 
+### Index Cache Mode (`cache.mode: index`)
+
+`cache.mode: index` opts a storage into the WS1.1 index-accelerated cache
+(`CachedBlobStorage`) instead of the disk cache above. The difference is the
+hit path: the disk cache (`cache.mode: disk`, the default) still issues 1-2
+synchronous S3 HEADs on every cache hit to check existence and validate the
+cached copy against S3; index mode never does. An in-memory `StorageIndex`,
+hydrated once at boot by scanning the cache directory's `.meta` sidecars,
+answers `exists`/`metadata`/`list` from memory with zero S3 round trips, and a
+disk-served read is a pure local file read with no inline S3 call at all. A
+disk copy is trusted for `freshness-ttl-millis` before it would need
+re-validation; a confirmed-absent key is remembered for `negative-ttl-millis`
+so a repeated lookup for a key that doesn't exist doesn't re-hit S3 either.
+Concurrent requests for the same not-yet-cached key are coalesced into a
+single S3 fetch.
+
+```yaml
+cache:
+  enabled: true
+  mode: index
+  path: /var/pantera/cache/s3
+  freshness-ttl-millis: 300000     # 5 min -- how long a disk copy is trusted
+  negative-ttl-millis: 30000       # 30 sec -- how long a confirmed miss is remembered
+```
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `mode` | `disk` | `disk` (existing `DiskCacheStorage`) or `index` (`CachedBlobStorage`) |
+| `freshness-ttl-millis` | `300000` (5 min) | How long a disk-cached entry is trusted without S3 re-validation |
+| `negative-ttl-millis` | `30000` (30 sec) | How long a confirmed S3 miss is cached to avoid repeat lookups |
+
+**What's different from the disk cache:**
+
+- **Writes are still synchronous write-through** in this phase: `save()` writes
+  to disk, uploads to S3, then updates the index, all before the caller's
+  write is acknowledged. Asynchronous durable write-back is a later phase.
+- **No size-based eviction yet.** The disk directory under `cache.path` is not
+  bounded by `max-bytes` in index mode; size-based eviction is a later phase.
+  Size the volume accordingly, or stay on `cache.mode: disk` (which does
+  evict) until eviction lands for index mode.
+- **`list()` is scoped to what the index has observed** -- the boot-time disk
+  scan plus every key written or read since. A repository switched to
+  `cache.mode: index` with pre-existing S3 objects that Pantera has never
+  locally touched will not show those objects in a listing until they are
+  individually accessed (or a future backfill populates the index). This does
+  not affect artifact *retrieval* (a `value()`/`exists()` for an unindexed key
+  still correctly falls through to S3), only listing/browsing completeness.
+- **Cross-node staleness** beyond `freshness-ttl-millis` is not yet
+  event-driven (no pub/sub invalidation in this phase) -- a write on one node
+  is only guaranteed visible to another node's index once that node's own
+  `freshness-ttl-millis` window elapses.
+
+The `validate-on-read` disk-cache option does not apply in index mode --
+there is nothing to validate against on the hot path by design.
+
 ---
 
 ## S3 Express One Zone (type: s3-express)

@@ -38,6 +38,7 @@ routing patterns.
    - [Amazon S3 (s3)](#32-amazon-s3-s3)
    - [S3 Express One Zone (s3-express)](#33-s3-express-one-zone-s3-express)
    - [Disk Hot Cache for S3](#34-disk-hot-cache-for-s3)
+   - [Index Cache Mode for S3](#35-index-cache-mode-for-s3)
 4. [Storage Aliases (_storages.yaml)](#4-storage-aliases-_storagesyaml)
 5. [User Files](#5-user-files)
 6. [Role / Permission Files](#6-role--permission-files)
@@ -1264,17 +1265,21 @@ tuning, multipart, parallel download, SSE, credentials, `cache`) works identical
 
 Any S3 storage can be wrapped with a local disk cache to avoid repeated S3 fetches
 for hot artifacts. Configure the `cache` section within the S3 storage block.
+`mode` selects the implementation; the remaining keys in this table apply to
+the default `mode: disk`. See [3.5](#35-index-cache-mode-for-s3) for the
+`mode: index` keys.
 
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
 | `enabled` | boolean | Yes | -- | Must be `true` to activate |
+| `mode` | string | No | `disk` | `disk` (`DiskCacheStorage`) or `index` (`CachedBlobStorage`, see 3.5) |
 | `path` | string | Yes | -- | Local filesystem path for cache files |
-| `max-bytes` | long | No | `10737418240` (10 GiB) | Maximum cache size in bytes |
-| `high-watermark-percent` | int | No | `90` | Cache eviction starts at this percentage |
-| `low-watermark-percent` | int | No | `80` | Eviction stops when cache drops to this percentage |
-| `cleanup-interval-millis` | long | No | `300000` (5 min) | How often to run eviction |
-| `eviction-policy` | string | No | `LRU` | Eviction policy: `LRU` or `LFU` |
-| `validate-on-read` | boolean | No | `true` | Validate cache integrity on every read |
+| `max-bytes` | long | No | `10737418240` (10 GiB) | Maximum cache size in bytes (`mode: disk` only) |
+| `high-watermark-percent` | int | No | `90` | Cache eviction starts at this percentage (`mode: disk` only) |
+| `low-watermark-percent` | int | No | `80` | Eviction stops when cache drops to this percentage (`mode: disk` only) |
+| `cleanup-interval-millis` | long | No | `300000` (5 min) | How often to run eviction (`mode: disk` only) |
+| `eviction-policy` | string | No | `LRU` | Eviction policy: `LRU` or `LFU` (`mode: disk` only) |
+| `validate-on-read` | boolean | No | `true` | Validate cache integrity on every read (`mode: disk` only) |
 
 ```yaml
 storage:
@@ -1290,6 +1295,36 @@ storage:
     cleanup-interval-millis: 300000
     eviction-policy: LRU
     validate-on-read: true
+```
+
+### 3.5 Index Cache Mode for S3
+
+`cache.mode: index` (opt-in; `mode: disk` remains the default) routes through
+`CachedBlobStorage`: an in-memory index answers `exists`/`metadata`/`list`
+with zero S3 round trips, and a disk-served read never issues an inline S3
+HEAD. See `docs/admin-guide/storage-backends.md#index-cache-mode-cachemode-index`
+for the full behavioral write-up (including current limitations: no
+size-based eviction and index-scoped `list()` completeness in this phase).
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `enabled` | boolean | Yes | -- | Must be `true` to activate |
+| `mode` | string | Yes | -- | Must be `index` |
+| `path` | string | Yes | -- | Local filesystem path for cache files |
+| `freshness-ttl-millis` | long | No | `300000` (5 min) | How long a disk-cached entry is trusted without S3 re-validation |
+| `negative-ttl-millis` | long | No | `30000` (30 sec) | How long a confirmed S3 miss is cached |
+
+```yaml
+storage:
+  type: s3
+  bucket: my-artifacts
+  region: eu-west-1
+  cache:
+    enabled: true
+    mode: index
+    path: /var/pantera/cache/s3
+    freshness-ttl-millis: 300000
+    negative-ttl-millis: 30000
 ```
 
 ---

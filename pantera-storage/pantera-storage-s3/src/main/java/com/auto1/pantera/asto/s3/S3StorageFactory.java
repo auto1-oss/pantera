@@ -11,6 +11,8 @@
 package com.auto1.pantera.asto.s3;
 
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blob.BlobStore;
+import com.auto1.pantera.asto.blob.CachedBlobStorage;
 import com.auto1.pantera.asto.blob.Presigner;
 import com.auto1.pantera.asto.factory.PanteraStorageFactory;
 import com.auto1.pantera.asto.factory.Config;
@@ -103,7 +105,7 @@ public class S3StorageFactory implements StorageFactory {
 
         final String regionStr = cfg.string("region");
         final Optional<AwsCredentialsProvider> credentials = S3StorageFactory.credentialsProvider(cfg, regionStr);
-        final Storage base = new S3Storage(
+        final S3Storage base = new S3Storage(
             this.s3Client(cfg, credentials, regionStr),
             bucket,
             multipart,
@@ -122,33 +124,74 @@ public class S3StorageFactory implements StorageFactory {
             this.presigner(cfg, credentials, regionStr, bucket)
         );
 
-        // Optional disk hot cache wrapper
+        // Optional hot cache wrapper -- disk-only (default, cache.mode: disk) or
+        // WS1.1's index-accelerated CachedBlobStorage (cache.mode: index, opt-in).
         final Config cache = cfg.config("cache");
         if (!cache.isEmpty() && "true".equalsIgnoreCase(cache.string("enabled"))) {
             final java.nio.file.Path path = java.nio.file.Paths.get(
                 Optional.ofNullable(cache.string("path")).orElseThrow(() -> new IllegalArgumentException("cache.path is required when cache.enabled=true"))
             );
-            final long max = optLong(cache, "max-bytes").orElse(10L * 1024 * 1024 * 1024); // 10GiB default
-            final int high = optInt(cache, "high-watermark-percent").orElse(90);
-            final int low = optInt(cache, "low-watermark-percent").orElse(80);
-            final long every = optLong(cache, "cleanup-interval-millis").orElse(300_000L);
-            final boolean validate = !"false".equalsIgnoreCase(cache.string("validate-on-read"));
-            final DiskCacheStorage.Policy pol = Optional.ofNullable(cache.string("eviction-policy"))
-                .map(String::toUpperCase)
-                .map(val -> "LFU".equals(val) ? DiskCacheStorage.Policy.LFU : DiskCacheStorage.Policy.LRU)
-                .orElse(DiskCacheStorage.Policy.LRU);
-            return new DiskCacheStorage(
-                base,
-                path,
-                max,
-                pol,
-                every,
-                high,
-                low,
-                validate
-            );
+            if ("index".equalsIgnoreCase(cache.string("mode"))) {
+                return this.cachedBlobStorage(base, cache, path);
+            }
+            return this.diskCacheStorage(base, cache, path);
         }
         return base;
+    }
+
+    /**
+     * Builds the WS1.1 index-accelerated cache wrapper ({@code cache.mode:
+     * index}): a local {@link StorageIndex} answers exists/metadata/list with
+     * zero blob-store round trips and a disk tier serves hits directly, in
+     * place of {@code DiskCacheStorage}'s per-hit HEAD validation.
+     *
+     * @param base Reference {@link BlobStore} cold tier.
+     * @param cache {@code cache} config sub-tree.
+     * @param path Local disk cache directory.
+     * @return Configured {@link CachedBlobStorage}.
+     */
+    private Storage cachedBlobStorage(final BlobStore base, final Config cache, final java.nio.file.Path path) {
+        final long freshnessMillis = optLong(cache, "freshness-ttl-millis").orElse(300_000L);
+        final long negativeMillis = optLong(cache, "negative-ttl-millis").orElse(30_000L);
+        return new CachedBlobStorage(
+            base,
+            path,
+            Duration.ofMillis(freshnessMillis),
+            Duration.ofMillis(negativeMillis)
+        );
+    }
+
+    /**
+     * Builds the default disk hot-cache wrapper ({@code cache.mode: disk},
+     * the implicit default when {@code mode} is unset) -- unchanged from prior
+     * releases so existing repositories are unaffected until they opt into
+     * {@code cache.mode: index}.
+     *
+     * @param base Delegate storage.
+     * @param cache {@code cache} config sub-tree.
+     * @param path Local disk cache directory.
+     * @return Configured {@link DiskCacheStorage}.
+     */
+    private Storage diskCacheStorage(final Storage base, final Config cache, final java.nio.file.Path path) {
+        final long max = optLong(cache, "max-bytes").orElse(10L * 1024 * 1024 * 1024); // 10GiB default
+        final int high = optInt(cache, "high-watermark-percent").orElse(90);
+        final int low = optInt(cache, "low-watermark-percent").orElse(80);
+        final long every = optLong(cache, "cleanup-interval-millis").orElse(300_000L);
+        final boolean validate = !"false".equalsIgnoreCase(cache.string("validate-on-read"));
+        final DiskCacheStorage.Policy pol = Optional.ofNullable(cache.string("eviction-policy"))
+            .map(String::toUpperCase)
+            .map(val -> "LFU".equals(val) ? DiskCacheStorage.Policy.LFU : DiskCacheStorage.Policy.LRU)
+            .orElse(DiskCacheStorage.Policy.LRU);
+        return new DiskCacheStorage(
+            base,
+            path,
+            max,
+            pol,
+            every,
+            high,
+            low,
+            validate
+        );
     }
 
     /**

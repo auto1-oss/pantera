@@ -9,6 +9,11 @@
 - **S3-API-compatible object stores are supported as storage backends.** The S3 backend can now be pointed at MinIO, Cloudflare R2, Backblaze B2, Wasabi, Ceph/RADOS, or GCS's S3-interoperability endpoint via the existing `endpoint`/`region`/`path-style` config, and the object `storage-class` is now configurable (e.g. `EXPRESS_ONEZONE`). Internally the storage layer gains a backend-agnostic `BlobStore`/`Presigner` abstraction that later disk-primary caching and presigned direct-download build on.
   ([@aydasraf](https://github.com/aydasraf))
 
+### ⚡ Performance
+
+- **An opt-in index-accelerated S3 cache eliminates the per-hit S3 HEAD.** The existing disk cache (`DiskCacheStorage`) pays 1-2 synchronous S3 HEADs on every cache hit for existence/validation. A new `cache.mode: index` (opt-in per storage, default remains unchanged) routes through `CachedBlobStorage`: an in-memory `StorageIndex`, hydrated on boot from a scan of the disk cache, answers `exists`/`metadata`/`list` entirely from memory, and a disk-served `value()` hit never contacts the blob store at all. Concurrent cold-miss requests for the same key are single-flighted into exactly one blob-store `GET`/`HEAD` instead of one per caller.
+  ([@aydasraf](https://github.com/aydasraf))
+
 ### 🔧 Bug fixes
 
 - **npm cooldown no longer hides an unblocked version behind a stale `304`.** With cooldown active the packument `ETag` was derived from the immutable upstream metadata hash, so a client that had cached the filtered packument kept revalidating to `304` and never saw a version that had aged out of, or been manually released from, cooldown until it cleared its own cache. The `ETag` is now computed from the filtered bytes actually served (matching the Maven adapter) and the raw-hash early-`304` is skipped while cooldown is active. Maven, PyPI, and Docker were unaffected.
@@ -34,6 +39,8 @@
 - **Go dependency resolution survives upstream outages.** `@v/list` and `@latest` were fetched live on every request and never cached, so `go get`/`go list -m -versions` failed on any upstream blip even for fully-cached modules; they are now read through a TTL cache that serves the last-known-good result when upstream is unreachable.
   ([@aydasraf](https://github.com/aydasraf))
 - **Clustered deployments no longer lose artifact-event data.** Under clustered Quartz a node firing another node's artifact-events job deleted it from the shared store, silently losing `artifact_publish` audit records and search-index rows for ingested artifacts; the per-node event drain no longer runs through the cluster-shared scheduler and the self-deleting job behaviour is removed.
+  ([@aydasraf](https://github.com/aydasraf))
+- **The proxy cache no longer fetches upstream on a cache hit.** `FromStorageCache` evaluated its upstream-fetch supplier eagerly while building the reactive chain, so a side-effecting remote fetch fired on every `load()` call regardless of whether the cache was going to satisfy the request from disk; the fetch is now deferred and only runs on a confirmed miss.
   ([@aydasraf](https://github.com/aydasraf))
 
 ### 🔒 Security
