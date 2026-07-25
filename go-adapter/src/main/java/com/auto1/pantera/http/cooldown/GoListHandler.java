@@ -16,6 +16,7 @@ import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.metadata.MetadataParseException;
+import com.auto1.pantera.cooldown.metadata.VersionComparators;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
@@ -28,6 +29,7 @@ import org.slf4j.MDC;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -81,6 +83,19 @@ public final class GoListHandler {
      * upstream ambiguity being forwarded to the client.
      */
     private static final String CONTENT_TYPE = "text/plain; charset=utf-8";
+
+    /**
+     * Max versions to evaluate for cooldown per request (WS4-go.5). MVS
+     * resolution can surface hundreds of published versions in a single
+     * {@code @v/list}; cooldown only ever targets recent releases, so
+     * evaluating every one of them unbounded (unlike {@link
+     * GoLatestHandler}, which already caps at this same constant) wastes
+     * cooldown-service calls without changing the outcome for old
+     * versions. Candidates beyond the cap are treated as not-blocked and
+     * still served — only the *evaluation* fan-out is bounded, never the
+     * served list.
+     */
+    private static final int MAX_VERSIONS_TO_EVALUATE = 50;
 
     /**
      * TTL-cached, single-flighted loader for the {@code @v/list} base
@@ -314,24 +329,34 @@ public final class GoListHandler {
     }
 
     /**
-     * Evaluate every candidate against cooldown and collect the blocked
-     * set. Evaluation errors are treated as "not blocked" so a transient
-     * inspector failure cannot cascade to denying every list response.
+     * Evaluate the newest {@link #MAX_VERSIONS_TO_EVALUATE} candidates
+     * (by {@link VersionComparators#semver()}) against cooldown and
+     * collect the blocked set (WS4-go.5). Candidates beyond the cap are
+     * never evaluated and therefore never added to the blocked set — the
+     * caller still serves them, since cooldown targets recent releases
+     * and older versions pass through as allowed. Evaluation errors are
+     * treated as "not blocked" so a transient inspector failure cannot
+     * cascade to denying every list response.
      */
     private CompletableFuture<Set<String>> blockedVersions(
         final String module, final List<String> candidates, final String user
     ) {
-        final List<CompletableFuture<Boolean>> futures =
-            new ArrayList<>(candidates.size());
-        for (final String version : candidates) {
+        final List<String> sorted = new ArrayList<>(candidates);
+        final Comparator<String> semverDesc = VersionComparators.semver().reversed();
+        sorted.sort(semverDesc);
+        final List<String> bounded = sorted.size() > MAX_VERSIONS_TO_EVALUATE
+            ? sorted.subList(0, MAX_VERSIONS_TO_EVALUATE)
+            : sorted;
+        final List<CompletableFuture<Boolean>> futures = new ArrayList<>(bounded.size());
+        for (final String version : bounded) {
             futures.add(this.isBlocked(module, version, user));
         }
         return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
             .thenApply(ignored -> {
                 final Set<String> blocked = new HashSet<>();
-                for (int idx = 0; idx < candidates.size(); idx++) {
+                for (int idx = 0; idx < bounded.size(); idx++) {
                     if (futures.get(idx).join()) {
-                        blocked.add(candidates.get(idx));
+                        blocked.add(bounded.get(idx));
                     }
                 }
                 return blocked;

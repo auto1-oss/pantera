@@ -168,7 +168,8 @@ export PANTERA_TOKEN=$(curl -s -X POST http://pantera-host:8086/api/v1/auth/toke
 | Issue | Fix |
 |-------|-----|
 | `proxyconnect tcp: tls: first record does not look like a TLS handshake` | Set `GOINSECURE=pantera-host:8080` |
-| `verifying module: checksum mismatch` | Set `GOPRIVATE=<module-prefix>` for internal modules (preferred), or `GOSUMDB=off` as a blunt escape hatch |
+| `verifying module: checksum mismatch` | `go-proxy` proxies checksum-database (`sumdb`) lookups, so `GOSUMDB` should stay at its default. For internal/private modules with no public sumdb entry, set `GOPRIVATE=<module-prefix>` (preferred), or `GOSUMDB=off` as a blunt escape hatch |
+| `404` fetching `/sumdb/...` | Only a `go-proxy` repository has an upstream checksum database to proxy to — `go` (local) and `go-group` repositories 404 it honestly |
 
 ### Helm
 

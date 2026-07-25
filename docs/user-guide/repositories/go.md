@@ -20,17 +20,18 @@ Set the `GOPROXY` environment variable to route module fetches through Pantera:
 
 ```bash
 export GOPROXY="http://your-username:your-jwt-token@pantera-host:8080/go-proxy,direct"
-export GOSUMDB=off
 export GOINSECURE="pantera-host:8080"
 ```
+
+Leave `GOSUMDB` at its default (`sum.golang.org`) — a `go-proxy` repository proxies `/sumdb/*` checksum-database requests to the same upstream(s) it fetches modules from (`lookup`/`tile` responses are cached immutably, `supported` is probed live), so clients keep full checksum verification **and** stay offline-safe for any module they have already fetched once. There is no need to disable it.
 
 | Variable | Purpose |
 |----------|---------|
 | `GOPROXY` | Routes module fetches through Pantera; falls back to `direct` if not found |
-| `GOSUMDB` | Set to `off` to disable Go checksum-database verification globally (blunt escape hatch); prefer `GOPRIVATE` below when only specific module prefixes need it |
+| `GOSUMDB` | Leave unset/default — Pantera proxies sumdb lookups, so verification stays on. Only set to `off` as a blunt global escape hatch (see [Common Issues](#common-issues)); prefer `GOPRIVATE` for specific module prefixes |
 | `GOINSECURE` | Allows HTTP (non-HTTPS) for the Pantera host |
 
-For internal/private modules that are never published to the public Go checksum database, scope the exemption instead of disabling verification globally:
+For internal/private modules that are never published to the public Go checksum database (and therefore have no `sumdb` entry to look up), scope the exemption instead of disabling verification globally:
 
 ```bash
 export GOPRIVATE="git.internal.example.com/*"
@@ -45,7 +46,6 @@ Add the exports to your shell profile (`~/.bashrc`, `~/.zshrc`, or equivalent) f
 ```bash
 # Pantera Go proxy
 export GOPROXY="http://your-username:your-jwt-token@pantera-host:8080/go-proxy,direct"
-export GOSUMDB=off
 export GOINSECURE="pantera-host:8080"
 ```
 
@@ -57,7 +57,6 @@ In CI/CD pipelines, set the environment variables as secrets:
 # GitHub Actions example
 env:
   GOPROXY: "http://${{ secrets.PANTERA_USER }}:${{ secrets.PANTERA_TOKEN }}@pantera-host:8080/go-proxy,direct"
-  GOSUMDB: "off"
   GOINSECURE: "pantera-host:8080"
 ```
 
@@ -80,6 +79,8 @@ The proxy caches downloaded modules locally. Subsequent fetches from any develop
 ## Go Proxy (`go-proxy`)
 
 A `go-proxy` repository caches modules from an upstream Go module proxy (typically `https://proxy.golang.org`) on first request, then serves subsequent requests from the local cache. Cached bytes survive upstream outages and are shared across all clients pointing at the same Pantera host. Version resolution (`go get`, `go list -m -versions`, and bare `go get <module>`) is cached too — up to a 12-hour freshness window, refreshed in the background on the next request past that window — so it keeps working against a cached module even while the upstream proxy is unreachable, falling back to the last-known version list if a refresh attempt fails.
+
+Checksum-database (`sumdb`) requests (`/sumdb/<name>/supported|lookup|tile`) are proxied to the same upstream(s), per the standard GOPROXY-protocol convention. `lookup` and `tile` responses are content-addressed and cached immutably (once cached, served forever with no upstream call — offline-safe for any module already fetched); `supported` is a lightweight live probe, never cached. This is what lets `GOSUMDB` stay at its default instead of being disabled. `/sumdb/*` is only meaningful on a `go-proxy` — a `go` (local/hosted) or `go-group` repository has no upstream checksum database to proxy to and returns a plain `404` for it (scope pure-local modules out of sumdb entirely with `GOPRIVATE` instead, see [Configure GOPROXY](#configure-goproxy)).
 
 **When to use**
 
@@ -135,8 +136,9 @@ Clients set `GOPROXY` to the group URL (`http://pantera-host:8080/go-group`); Pa
 | `410 Gone` | Module not found upstream and cached as absent | Clear the negative cache; ask admin to check proxy config |
 | `401 Unauthorized` | Token missing or expired | Regenerate the JWT token and update `GOPROXY` |
 | `proxyconnect tcp: tls: first record does not look like a TLS handshake` | Go trying HTTPS on an HTTP endpoint | Set `GOINSECURE=pantera-host:8080` |
-| `verifying module: checksum mismatch` | Sum database mismatch for proxied module | Set `GOPRIVATE=<module-prefix>` for the affected internal modules (preferred), or `GOSUMDB=off` as a blunt global escape hatch |
+| `verifying module: checksum mismatch` | Rare: the proxied upstream's sumdb genuinely disagrees with the module bytes, or the module is internal/private and was never published to a public checksum database | For internal/private modules, set `GOPRIVATE=<module-prefix>` (preferred — scopes the exemption); `GOSUMDB=off` as a blunt global escape hatch otherwise. `go-proxy` proxies `/sumdb/*` itself, so this is not needed just to make `go get` work |
 | `go: module not found` with `direct` fallback | Module is genuinely missing | Verify the module path and version exist upstream |
+| `404` on `/sumdb/<name>/...` | Requested against a `go` (local/hosted) or `go-group` repository | Point `GOPROXY` at a `go-proxy` repository instead — only proxies have an upstream checksum database to forward to |
 
 ---
 

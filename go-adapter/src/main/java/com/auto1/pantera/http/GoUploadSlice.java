@@ -216,9 +216,13 @@ final class GoUploadSlice implements Slice {
         return this.storage.metadata(key)
             .thenApply(meta -> meta.read(Meta.OP_SIZE).orElseThrow())
             .thenCompose(size -> {
+                // WS4-go.6: decode Go's `!`-escaping before the DB/index/
+                // audit trail sees it — the storage key (already written
+                // above under `key`) stays escaped since that is what
+                // `go get` requests and expects served back.
                 final ArtifactEvent event = new ArtifactEvent(
                     REPO_TYPE, this.repo, owner(headers),
-                    module, version, size
+                    unescapeModulePath(module), version, size
                 );
                 this.events.ifPresent(
                     queue -> queue.add( // ok: unbounded ConcurrentLinkedDeque
@@ -227,6 +231,32 @@ final class GoUploadSlice implements Slice {
                 );
                 return this.syncIndex.recordSync(event);
             });
+    }
+
+    /**
+     * Decode Go's module-path escaping (WS4-go.6): an uppercase letter is
+     * encoded upstream/on-disk as {@code !} followed by its lowercase
+     * form, e.g. {@code github.com/!burnt!sushi/toml} for {@code
+     * github.com/BurntSushi/toml}. Only the DB/index/audit trail should
+     * see the human-readable form.
+     *
+     * @param escaped Module path as it appears on the wire / storage key
+     * @return Decoded module path
+     */
+    private static String unescapeModulePath(final String escaped) {
+        final StringBuilder decoded = new StringBuilder(escaped.length());
+        int idx = 0;
+        while (idx < escaped.length()) {
+            final char current = escaped.charAt(idx);
+            if (current == '!' && idx + 1 < escaped.length()) {
+                decoded.append(Character.toUpperCase(escaped.charAt(idx + 1)));
+                idx += 2;
+            } else {
+                decoded.append(current);
+                idx += 1;
+            }
+        }
+        return decoded.toString();
     }
 
     /**

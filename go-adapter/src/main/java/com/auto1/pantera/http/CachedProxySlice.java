@@ -80,10 +80,17 @@ import java.util.stream.StreamSupport;
  * previously fetched does not exist upstream, and even where a server
  * happened to answer it, an {@code h1:} dirhash is not a zip-byte
  * digest anyway. Genuine archive integrity (verifying the downloaded
- * bytes' {@code h1:} dirhash against the Go checksum database) returns
- * once the sumdb proxy lands (WS4-go). {@code *.info} and {@code *.mod}
- * paths have no upstream sidecars either and are handled by the legacy
- * {@code fetchThroughCache} flow unchanged.
+ * bytes' {@code h1:} dirhash against the Go checksum database) is a
+ * deferred follow-on that depends on the sumdb proxy below. {@code
+ * *.info} and {@code *.mod} paths have no upstream sidecars either and
+ * are handled by the legacy {@code fetchThroughCache} flow unchanged.
+ *
+ * <p>{@code /sumdb/&lt;name&gt;/...} checksum-database requests are
+ * proxied by {@link GoSumdbHandler} (S6, WS4-go.4): {@code lookup}/
+ * {@code tile} are cached immutably (content-addressed, never expire),
+ * {@code supported} is probed live. This lets clients keep {@code
+ * GOSUMDB} verification on and offline-safe for a previously-seen
+ * module instead of disabling it.</p>
  *
  * @since 1.0
  */
@@ -193,6 +200,14 @@ final class CachedProxySlice implements Slice {
     private final GoListHandler listHandler;
 
     /**
+     * {@code /sumdb/} checksum-database proxy handler (S6, WS4-go.4):
+     * proxies {@code lookup}/{@code tile} through the immutable cache
+     * and {@code supported} via a live probe, so clients can keep
+     * {@code GOSUMDB} verification on instead of disabling it.
+     */
+    private final GoSumdbHandler sumdbHandler;
+
+    /**
      * Wraps origin slice with caching layer and default 12h metadata TTL.
      *
      * @param client Client slice
@@ -243,6 +258,7 @@ final class CachedProxySlice implements Slice {
         this.listHandler = new GoListHandler(
             baseLoader, cooldown, inspector, rtype, rname
         );
+        this.sumdbHandler = new GoSumdbHandler(client, cache, rname);
         // Register this repo's backing storage so a hosted "go" publish
         // inside a go-group can evict the cached base documents here —
         // see GoUploadSlice's post-upload invalidation.
@@ -302,6 +318,21 @@ final class CachedProxySlice implements Slice {
                 .field("log.source", "application")
                 .log();
             return this.listHandler.handle(line, headers, user);
+        }
+        // sumdb proxy (S6, WS4-go.4): intercept before the generic
+        // fetchThroughCache fall-through so /sumdb/ requests are proxied
+        // + immutably cached instead of falling through as an accidental,
+        // unbounded "artifact" cached under the raw request path.
+        if (this.sumdbHandler.matches(path)) {
+            EcsLogger.debug("com.auto1.pantera.http")
+                .message("Handling /sumdb/ via checksum-database proxy handler")
+                .eventCategory("web")
+                .eventAction("proxy_request")
+                .field("url.path", path)
+                .field("repository.name", this.rname)
+                .field("log.source", "application")
+                .log();
+            return this.sumdbHandler.handle(line);
         }
         final Key key = new KeyFromPath(path);
         final Matcher matcher = ARTIFACT.matcher(key.string());
