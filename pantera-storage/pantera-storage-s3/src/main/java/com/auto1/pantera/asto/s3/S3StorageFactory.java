@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.blob.BlobStore;
 import com.auto1.pantera.asto.blob.CachedBlobStorage;
 import com.auto1.pantera.asto.blob.Presigner;
+import com.auto1.pantera.asto.blob.StorageInvalidationBusRegistry;
 import com.auto1.pantera.asto.factory.PanteraStorageFactory;
 import com.auto1.pantera.asto.factory.Config;
 import com.auto1.pantera.asto.factory.StorageFactory;
@@ -158,6 +159,15 @@ public class S3StorageFactory implements StorageFactory {
      * watermark/policy knobs, each falling back to {@link
      * CachedBlobStorage.EvictionConfig#defaults()} per field when unset.</p>
      *
+     * <p>WS1.5 adds cross-node coherence: {@link
+     * StorageInvalidationBusRegistry#active()} resolves to the real,
+     * Valkey-backed bus {@code pantera-main} installs at boot when
+     * clustering is configured, or to {@code StorageInvalidationBus.NOOP}
+     * otherwise (single-instance boots) -- this factory cannot depend on
+     * {@code pantera-core} directly (see the registry's own javadoc), so it
+     * reads the active bus from this static, cross-module seam rather than
+     * receiving it as an argument.</p>
+     *
      * @param base Reference {@link BlobStore} cold tier.
      * @param cache {@code cache} config sub-tree.
      * @param path Local disk cache directory.
@@ -174,7 +184,8 @@ public class S3StorageFactory implements StorageFactory {
             Duration.ofMillis(negativeMillis),
             writeThrough,
             this.writeBackConfig(cache),
-            this.evictionConfig(cache)
+            this.evictionConfig(cache),
+            StorageInvalidationBusRegistry.active()
         );
     }
 
