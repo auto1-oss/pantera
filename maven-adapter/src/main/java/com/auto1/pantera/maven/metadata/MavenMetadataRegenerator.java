@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import org.xembly.Directives;
 
@@ -143,9 +144,20 @@ public final class MavenMetadataRegenerator {
             if (attempt >= MAX_LOCK_RETRIES) {
                 return CompletableFuture.<Void>failedFuture(err);
             }
-            final long delay = Math.min(
+            final long cap = Math.min(
                 RETRY_MAX_DELAY_MS, RETRY_BASE_DELAY_MS * (1L << Math.min(attempt, 20))
             );
+            // Full jitter over [1, cap]. A burst of same-GA regenerations
+            // rendezvouses and loses the proposal lock in lockstep; a
+            // jitter-less exponential backoff then keeps every contender
+            // colliding on every retry round, so a fraction of concurrent
+            // bursts exhaust the whole retry budget with ZERO winners -- and
+            // then maven-metadata.xml is never written and versions are lost,
+            // which is exactly what this retry exists to prevent. Randomizing
+            // the entire delay desynchronizes the contenders so one eventually
+            // retries alone, wins the proposal lock, and (re-listing storage)
+            // captures every already-committed version.
+            final long delay = ThreadLocalRandom.current().nextLong(1L, cap + 1L);
             return CompletableFuture.supplyAsync(
                 () -> null,
                 CompletableFuture.delayedExecutor(delay, TimeUnit.MILLISECONDS)
