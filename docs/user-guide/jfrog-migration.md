@@ -438,7 +438,7 @@ See the full [Helm guide](repositories/helm.md) for more details.
 ```diff
 - export GOPROXY="https://artifactory.example.com/artifactory/api/go/go-virtual,direct"
 + export GOPROXY="https://your-username:your-jwt-token@pantera.example.com:8080/go-proxy,direct"
-+ export GONOSUMCHECK="*"
++ export GOSUMDB=off
 + export GOINSECURE="pantera.example.com:8080"  # only if not using HTTPS
 ```
 

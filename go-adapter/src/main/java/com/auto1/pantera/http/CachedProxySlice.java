@@ -39,7 +39,6 @@ import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
-import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.slice.KeyFromPath;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -48,9 +47,7 @@ import org.apache.commons.codec.DecoderException;
 import org.apache.commons.codec.binary.Hex;
 import org.slf4j.MDC;
 
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.Collections;
@@ -66,7 +63,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
-import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.StreamSupport;
@@ -75,12 +71,18 @@ import java.util.stream.StreamSupport;
  * Go proxy slice with cache support.
  *
  * <p>Primary artifact writes (the {@code *.zip} module archives) flow
- * through {@link ProxyCacheWriter} so the Go checksum-database SHA-256
- * sidecar is verified against the downloaded bytes before anything
- * lands in the cache — giving the Go adapter the same primary+sidecar
- * integrity guarantee the Maven adapter received in WI-07 (§9.5).
- * {@code *.info} and {@code *.mod} paths have no upstream sidecars and
- * are handled by the legacy {@code fetchThroughCache} flow unchanged.
+ * through {@link ProxyCacheWriter}, which streams the upstream body to
+ * the client and the on-disk cache in a single pass and single-flights
+ * concurrent cold fetches. There is <strong>no zip integrity
+ * verification</strong>: the GOPROXY protocol defines no checksum
+ * sidecar for module archives — the {@code .ziphash} path this class
+ * previously fetched does not exist upstream, and even where a server
+ * happened to answer it, an {@code h1:} dirhash is not a zip-byte
+ * digest anyway. Genuine archive integrity (verifying the downloaded
+ * bytes' {@code h1:} dirhash against the Go checksum database) returns
+ * once the sumdb proxy lands (WS4-go). {@code *.info} and {@code *.mod}
+ * paths have no upstream sidecars either and are handled by the legacy
+ * {@code fetchThroughCache} flow unchanged.
  *
  * @since 1.0
  */
@@ -152,10 +154,11 @@ final class CachedProxySlice implements Slice {
 
     /**
      * Single-source-of-truth cache writer introduced by WI-07 (§9.5 of the
-     * v2.2 target architecture). Fetches the primary {@code *.zip} + the
-     * Go checksum SHA-256 sidecar in one coupled batch, verifies the
-     * declared claim against the bytes we just downloaded, and atomically
-     * commits the pair. Null when {@link #storage} is empty.
+     * v2.2 target architecture). Streams the primary {@code *.zip} to the
+     * client and the on-disk cache in a single pass and commits it
+     * atomically. No sidecar is fetched or verified — the GOPROXY
+     * protocol has no checksum sidecar for module archives; see the
+     * class javadoc. Null when {@link #storage} is empty.
      */
     private final ProxyCacheWriter cacheWriter;
 
@@ -528,9 +531,9 @@ final class CachedProxySlice implements Slice {
         final AtomicReference<Headers> rshdr,
         final AuditContext ctx
     ) {
-        // WI-07 §9.5 — integrity-verified atomic primary+sidecar write for
-        // Go module archives. Only *.zip has an upstream .ziphash (SHA-256)
-        // sidecar; *.info / *.mod have no sidecars and fall through to the
+        // WI-07 §9.5 — atomic stream-through cache write for Go module
+        // archives. No sidecar is fetched or verified (see class javadoc);
+        // *.info / *.mod have no sidecars either and fall through to the
         // legacy flow. Runs only when we have a file-backed storage.
         if (this.cacheWriter != null
             && this.storage.isPresent()
@@ -992,9 +995,6 @@ final class CachedProxySlice implements Slice {
             this.rname,
             key.string()
         );
-        final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> sidecars =
-            new EnumMap<>(ChecksumAlgo.class);
-        sidecars.put(ChecksumAlgo.SHA256, () -> this.fetchSidecar(line, ".ziphash"));
         return this.client.response(line, Headers.EMPTY, Content.EMPTY)
             .thenCompose(resp -> {
                 if (!resp.status().success()) {
@@ -1028,11 +1028,11 @@ final class CachedProxySlice implements Slice {
                     key.string(),
                     resp.body().size(),
                     resp.body(),
-                    sidecars,
-                    // Go's only sidecar is .ziphash (SHA-256), which lives
-                    // in NON_BLOCKING_DEFAULT; pass an empty non-blocking
-                    // set so the verification keeps the cache empty on
-                    // mismatch.
+                    // No sidecar: the GOPROXY protocol has no checksum
+                    // file for module archives (see class javadoc). An
+                    // empty map disables sidecar verification entirely —
+                    // the write commits as soon as the stream completes.
+                    new EnumMap<>(ChecksumAlgo.class),
                     Collections.emptySet(),
                     ctx
                 ).toCompletableFuture().thenApply(result -> {
@@ -1106,31 +1106,6 @@ final class CachedProxySlice implements Slice {
                     .textBody("Upstream temporarily unavailable")
                     .build();
             });
-    }
-
-    /**
-     * Fetch a sidecar for the primary at {@code line}. Returns
-     * {@link Optional#empty()} for 4xx/5xx and I/O errors so the writer
-     * treats the sidecar as absent and a transient sidecar failure never
-     * blocks the primary write.
-     */
-    private CompletionStage<Optional<InputStream>> fetchSidecar(
-        final RequestLine primary, final String extension
-    ) {
-        final String sidecarPath = primary.uri().getPath() + extension;
-        final RequestLine sidecarLine = new RequestLine(RqMethod.GET, sidecarPath);
-        return this.client.response(sidecarLine, Headers.EMPTY, Content.EMPTY)
-            .thenCompose(resp -> {
-                if (!resp.status().success()) {
-                    return resp.body().asBytesFuture()
-                        .thenApply(ignored -> Optional.<InputStream>empty());
-                }
-                return resp.body().asBytesFuture()
-                    .thenApply(bytes -> Optional.<InputStream>of(
-                        new ByteArrayInputStream(bytes)
-                    ));
-            })
-            .exceptionally(ignored -> Optional.<InputStream>empty());
     }
 
     /**

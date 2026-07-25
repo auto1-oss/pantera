@@ -20,15 +20,23 @@ Set the `GOPROXY` environment variable to route module fetches through Pantera:
 
 ```bash
 export GOPROXY="http://your-username:your-jwt-token@pantera-host:8080/go-proxy,direct"
-export GONOSUMCHECK="*"
+export GOSUMDB=off
 export GOINSECURE="pantera-host:8080"
 ```
 
 | Variable | Purpose |
 |----------|---------|
 | `GOPROXY` | Routes module fetches through Pantera; falls back to `direct` if not found |
-| `GONOSUMCHECK` | Skips checksum database verification (needed for private modules) |
+| `GOSUMDB` | Set to `off` to disable Go checksum-database verification globally (blunt escape hatch); prefer `GOPRIVATE` below when only specific module prefixes need it |
 | `GOINSECURE` | Allows HTTP (non-HTTPS) for the Pantera host |
+
+For internal/private modules that are never published to the public Go checksum database, scope the exemption instead of disabling verification globally:
+
+```bash
+export GOPRIVATE="git.internal.example.com/*"
+```
+
+`GOPRIVATE` disables sum-database and proxy lookups only for module paths matching the prefix, leaving checksum verification intact for every other module.
 
 ### Shell Profile
 
@@ -37,7 +45,7 @@ Add the exports to your shell profile (`~/.bashrc`, `~/.zshrc`, or equivalent) f
 ```bash
 # Pantera Go proxy
 export GOPROXY="http://your-username:your-jwt-token@pantera-host:8080/go-proxy,direct"
-export GONOSUMCHECK="*"
+export GOSUMDB=off
 export GOINSECURE="pantera-host:8080"
 ```
 
@@ -49,7 +57,7 @@ In CI/CD pipelines, set the environment variables as secrets:
 # GitHub Actions example
 env:
   GOPROXY: "http://${{ secrets.PANTERA_USER }}:${{ secrets.PANTERA_TOKEN }}@pantera-host:8080/go-proxy,direct"
-  GONOSUMCHECK: "*"
+  GOSUMDB: "off"
   GOINSECURE: "pantera-host:8080"
 ```
 
@@ -127,7 +135,7 @@ Clients set `GOPROXY` to the group URL (`http://pantera-host:8080/go-group`); Pa
 | `410 Gone` | Module not found upstream and cached as absent | Clear the negative cache; ask admin to check proxy config |
 | `401 Unauthorized` | Token missing or expired | Regenerate the JWT token and update `GOPROXY` |
 | `proxyconnect tcp: tls: first record does not look like a TLS handshake` | Go trying HTTPS on an HTTP endpoint | Set `GOINSECURE=pantera-host:8080` |
-| `verifying module: checksum mismatch` | Sum database mismatch for proxied module | Set `GONOSUMCHECK=*` or `GONOSUMDB=*` |
+| `verifying module: checksum mismatch` | Sum database mismatch for proxied module | Set `GOPRIVATE=<module-prefix>` for the affected internal modules (preferred), or `GOSUMDB=off` as a blunt global escape hatch |
 | `go: module not found` with `direct` fallback | Module is genuinely missing | Verify the module path and version exist upstream |
 
 ---

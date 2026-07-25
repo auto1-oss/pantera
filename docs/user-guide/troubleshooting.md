@@ -168,7 +168,7 @@ export PANTERA_TOKEN=$(curl -s -X POST http://pantera-host:8086/api/v1/auth/toke
 | Issue | Fix |
 |-------|-----|
 | `proxyconnect tcp: tls: first record does not look like a TLS handshake` | Set `GOINSECURE=pantera-host:8080` |
-| `verifying module: checksum mismatch` | Set `GONOSUMCHECK=*` |
+| `verifying module: checksum mismatch` | Set `GOPRIVATE=<module-prefix>` for internal modules (preferred), or `GOSUMDB=off` as a blunt escape hatch |
 
 ### Helm
 
