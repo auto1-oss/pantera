@@ -15,9 +15,12 @@ import com.auto1.pantera.api.RepositoryName;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.SubStorage;
+import com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry;
 import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.http.cache.NegativeCacheRegistry;
 import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.pypi.http.IndexGenerator;
 import com.auto1.pantera.pypi.meta.PypiSidecar;
 import com.auto1.pantera.security.perms.Action;
 import com.auto1.pantera.security.perms.AdapterBasicPermission;
@@ -43,7 +46,13 @@ import java.util.concurrent.CompletableFuture;
  *
  * <p>Both endpoints iterate over all distribution files ({@code .whl}, {@code .tar.gz},
  * {@code .zip}, {@code .egg}) stored under {@code {package}/{version}/} in the
- * repository and apply the corresponding {@link PypiSidecar} operation.</p>
+ * repository and apply the corresponding {@link PypiSidecar} operation. The
+ * sidecar is the single source of truth for yank status; once it changes,
+ * the persisted package index ({@code .pypi/{package}/{package}.html} and
+ * {@code .json}, written by {@link IndexGenerator} at upload time) is
+ * regenerated and the negative / filtered-metadata caches are invalidated
+ * so the change is visible to pip/uv on the very next request — without a
+ * re-upload.</p>
  *
  * @since 2.1.0
  */
@@ -235,6 +244,7 @@ public final class PypiHandler {
             futures.add(PypiSidecar.yank(scoped, file, reason));
         }
         CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+        this.regenerateServedIndex(scoped, repo, pkg, files.size());
     }
 
     /**
@@ -252,6 +262,66 @@ public final class PypiHandler {
             futures.add(PypiSidecar.unyank(scoped, file));
         }
         CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+        this.regenerateServedIndex(scoped, repo, pkg, files.size());
+    }
+
+    /**
+     * Regenerate the persisted package index (PEP 503 HTML + PEP 691 JSON)
+     * from the just-updated sidecars and invalidate the read caches, so a
+     * yank/unyank is visible to the next pip/uv resolution without a
+     * re-upload.
+     *
+     * <p>The pypi adapter's index-serving slice serves
+     * {@code .pypi/{package}/{package}.html}/{@code .json} verbatim once
+     * they exist — those files are frozen at whatever state
+     * {@link IndexGenerator} last wrote them in (upload time), so without
+     * this regeneration a yank/unyank would flip only the sidecar and the
+     * served index would keep advertising {@code yanked:false} forever.
+     * This mirrors the exact regeneration the upload path already
+     * performs.</p>
+     *
+     * <p>No-op if no distribution file's sidecar actually changed (e.g. a
+     * yank/unyank of a nonexistent package or version) — regenerating in
+     * that case would persist a phantom empty index for a package that
+     * was never uploaded.</p>
+     *
+     * @param scoped Repo-scoped storage
+     * @param repo Repository name, for logging only
+     * @param pkg Package name (matches the on-storage package directory)
+     * @param changedFiles Number of distribution files whose sidecar changed
+     */
+    private void regenerateServedIndex(final Storage scoped, final String repo,
+        final String pkg, final int changedFiles) {
+        if (changedFiles == 0) {
+            return;
+        }
+        try {
+            new IndexGenerator(scoped, new Key.From(pkg), "").generate().join();
+        } catch (final RuntimeException ex) {
+            EcsLogger.error("com.auto1.pantera.api.v1")
+                .message("PyPI served index regeneration failed after yank/unyank; "
+                    + "sidecar changed but the served index is now stale")
+                .eventCategory("web")
+                .eventAction("index_regenerate")
+                .eventOutcome("failure")
+                .field("repository.name", repo)
+                .field("package.name", pkg)
+                .error(ex)
+                .field("log.source", "application")
+                .log();
+            throw ex;
+        }
+        NegativeCacheRegistry.instance().invalidateAfterUpload("pypi", pkg);
+        FilteredMetadataCacheRegistry.instance().invalidateAfterUpload("pypi", pkg);
+        EcsLogger.info("com.auto1.pantera.api.v1")
+            .message("PyPI served index regenerated after yank/unyank")
+            .eventCategory("web")
+            .eventAction("index_regenerate")
+            .eventOutcome("success")
+            .field("repository.name", repo)
+            .field("package.name", pkg)
+            .field("log.source", "application")
+            .log();
     }
 
     /**

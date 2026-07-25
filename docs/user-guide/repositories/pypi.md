@@ -101,6 +101,31 @@ twine upload \
 
 ---
 
+## Yanking a Release (PEP 592)
+
+Hosted PyPI repositories support yanking a version so pip/uv skip it during
+dependency resolution, without deleting the distribution files:
+
+```bash
+# Yank a version (optionally with a reason)
+curl -X POST http://pantera-host:8080/api/v1/pypi/<repo>/<package>/<version>/yank \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"reason": "broken build"}'
+
+# Reverse it
+curl -X POST http://pantera-host:8080/api/v1/pypi/<repo>/<package>/<version>/unyank \
+  -H "Authorization: Bearer <token>"
+```
+
+The served `/simple/<package>/` index is regenerated immediately, so the
+change is visible on the next request — no re-upload needed. Behavior
+matches PEP 592: `pip install <package>` (no version pin) skips a yanked
+version, while `pip install <package>==<version>` still installs it and
+prints a yank warning.
+
+---
+
 ## Common Issues
 
 | Symptom | Cause | Fix |
