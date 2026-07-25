@@ -8,6 +8,16 @@
   ([@aydasraf](https://github.com/aydasraf))
 - **S3-API-compatible object stores are supported as storage backends.** The S3 backend can now be pointed at MinIO, Cloudflare R2, Backblaze B2, Wasabi, Ceph/RADOS, or GCS's S3-interoperability endpoint via the existing `endpoint`/`region`/`path-style` config, and the object `storage-class` is now configurable (e.g. `EXPRESS_ONEZONE`). Internally the storage layer gains a backend-agnostic `BlobStore`/`Presigner` abstraction that later disk-primary caching and presigned direct-download build on.
   ([@aydasraf](https://github.com/aydasraf))
+- **Docker hosted repositories support image deletion, group aggregation, and chunked uploads.** `DELETE` of a manifest and of a blob now works (enabling image cleanup, GC, and `skopeo delete`), a `docker-group` aggregates `tags/list` and `_catalog` across all members instead of returning only the first member's view, and multi-chunk `PATCH` blob uploads are honoured so chunked pushers such as `oras` and `skopeo` no longer fail on the second chunk.
+  ([@aydasraf](https://github.com/aydasraf))
+- **npm local repositories sign published packages and store provenance.** Published versions are signed with the registry's own ECDSA key, served at `GET /-/npm/v1/keys` so `npm audit signatures` verifies, and `npm publish --provenance` attestation bundles are stored and served at `GET /-/npm/v1/attestations/<spec>` instead of being silently dropped; `npm token` (list/create/revoke), `npm profile get`, and single-version requests (`GET /<pkg>/<version>` and `/<pkg>/latest`) also work against local repositories.
+  ([@aydasraf](https://github.com/aydasraf))
+- **PyPI gains the modern simple-API metadata surface.** Hosted uploads now persist and serve a PEP 658 `.metadata` file (so `--require-hashes` and metadata-only resolvers avoid downloading the wheel body); the PEP 691 JSON index carries a top-level `versions[]` array and per-file `size` (PEP 700); the PEP 714 `core-metadata` key is emitted; the legacy `/pypi/<pkg>/json` API is served for poetry/pip-tools; and `Accept` negotiation honours RFC 9110 q-values and the `latest+json`/`latest+html` aliases.
+  ([@aydasraf](https://github.com/aydasraf))
+- **The Go proxy forwards checksum-database (`sumdb`) lookups upstream, so `go get` can keep verification on.** `/sumdb/*` lookups and tiles are proxied (and cached, offline-safe once warm) through a `go-proxy` repository, so `GOSUMDB` no longer has to be disabled; local `go` and `go-group` repositories answer it with an honest `404`.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Maven/Gradle release immutability and Range requests.** A per-repository `releaseImmutable` flag rejects re-deploying an existing release version with `409` (SNAPSHOTs are unaffected), and artifact downloads now support HTTP `Range`/`206`/`Accept-Ranges` for resumable and parallel fetches (metadata is never range-served).
+  ([@aydasraf](https://github.com/aydasraf))
 
 ### ⚡ Performance
 
@@ -44,6 +54,16 @@
   ([@aydasraf](https://github.com/aydasraf))
 - **The proxy cache no longer fetches upstream on a cache hit.** `FromStorageCache` evaluated its upstream-fetch supplier eagerly while building the reactive chain, so a side-effecting remote fetch fired on every `load()` call regardless of whether the cache was going to satisfy the request from disk; the fetch is now deferred and only runs on a confirmed miss.
   ([@aydasraf](https://github.com/aydasraf))
+- **Hosted `maven-metadata.xml` no longer drops versions under concurrent deploys, and Maven conditional/validator headers match local mode.** A burst of concurrent `mvn deploy`/`gradle publish` to the same coordinates could lose versions from the regenerated metadata; regeneration now takes a per-GA lock with bounded retry so it converges with zero lost versions. `If-None-Match` is honoured (`304`) for local and proxy-cache-hit artifacts, and proxy artifact responses now carry the full `ETag`/`Content-Type`/`Content-Disposition`/`X-Checksum-*`/`Accept-Ranges` set that local mode already returned.
+  ([@aydasraf](https://github.com/aydasraf))
+- **npm `ping`, `GET /npm`, `HEAD`, and proxied `search`/`dist-tag ls` work, and `npm audit` is honest.** `GET /-/ping` and `GET /npm` returned empty stubs; `HEAD` was unsupported on packument/tarball routes; `/-/v1/search` and dist-tag listing `404`ed through **proxy** repositories; and the local audit endpoint leaked its request body and returned the wrong shape. All now behave correctly (audit returns a real zero-vulnerability report / empty bulk-advisory object as appropriate).
+  ([@aydasraf](https://github.com/aydasraf))
+- **Composer catalog endpoints and `HEAD` no longer `404`.** `available-packages.json` and `packages/list.json` (backing `composer show -a` / `composer search`) are now served for local, hosted, and proxy repositories; concurrent cold fetches of the same dist archive single-flight to one upstream call; metadata revalidation issues a conditional `If-Modified-Since` (a `304` skips re-transfer and re-parse); and `HEAD` mirrors `GET` on metadata, dist, and catalog surfaces.
+  ([@aydasraf](https://github.com/aydasraf))
+- **PyPI proxy no longer drops `data-yanked` or leaks blocked-version metadata.** Proxied `/simple/<pkg>/` now carries `data-yanked` through the cooldown-filter pipeline to pip (previously dropped for every proxied package), and `/pypi/<pkg>/<version>/json` is cooldown-filtered instead of forwarded as an unfiltered upstream passthrough.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Go `@v/list` cooldown evaluation is bounded and module paths are decoded for the audit trail.** `@v/list` now evaluates only the newest 50 versions for cooldown (matching `@latest`), and Go's `!`-escaping (`!burnt!sushi` → `BurntSushi`) is decoded before a module name reaches the database, search index, and audit records, while storage keys stay escaped.
+  ([@aydasraf](https://github.com/aydasraf))
 
 ### 🔒 Security
 
@@ -56,6 +76,10 @@
 - **Token revocation survives a node restart in a cluster.** On the Valkey path a node that booted after a revocation re-honoured the already-revoked, unexpired token; revocations are now database-durable, hydrated on boot, reconciled on a short poll, and the pub/sub broadcast carries the token's real remaining lifetime.
   ([@aydasraf](https://github.com/aydasraf))
 - **Authorization and resilience-threshold changes propagate across the cluster.** Role/permission edits and circuit-breaker/bulkhead setting changes previously applied only on the node that served the request (and a continuously-hit permission never expired on peers); they now broadcast to every node with a bounded TTL backstop.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Maven/Gradle PGP signature verification and checksum verification are enforced instead of inert.** A per-repository `verifyPgp` flag now verifies `.asc` signatures end-to-end against an admin-managed keyring (`GET/POST/DELETE /api/v1/admin/pgp-keys`) — on proxy fetch (fail-closed, cache entry removed on failure) and on hosted store (rejected, not persisted) — where the verifier was previously dead code with no caller. Hosted checksum sidecars (`.sha1`/`.md5`) are also verified against the stored primary instead of being accepted blind.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Composer proxied dist archives are verified before caching.** The proxy now computes each downloaded archive's SHA-1 and compares it to the packument's declared `dist.shasum` (matching Composer's own client) before writing it to the cache, rejecting a tampered or corrupted archive with `502` and an empty cache; hosted publish writes `dist.shasum` so a downstream client — including a Pantera proxy mirroring the repository — can verify integrity in turn.
   ([@aydasraf](https://github.com/aydasraf))
 
 ## Version 2.2.4
