@@ -18,14 +18,12 @@ import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.quartz.JobExecutionContext;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.mockito.Mockito.mock;
 
 /**
  * Test for {@link GoProxyPackageProcessor}.
@@ -74,8 +72,7 @@ class GoProxyPackageProcessorTest {
         );
 
         // Act: Process the queue
-        final JobExecutionContext context = mock(JobExecutionContext.class);
-        this.processor.execute(context);
+        this.processor.run();
 
         // Assert: Verify artifact event was created
         assertEquals(1, this.events.size(), "Should have one artifact event");
@@ -108,8 +105,7 @@ class GoProxyPackageProcessorTest {
             new ProxyArtifactEvent(eventKey, "go_proxy", "testuser", Optional.empty())
         );
 
-        final JobExecutionContext context = mock(JobExecutionContext.class);
-        this.processor.execute(context);
+        this.processor.run();
 
         assertEquals(1, this.events.size(), "Should have one artifact event");
         final ArtifactEvent event = this.events.poll();
@@ -151,8 +147,7 @@ class GoProxyPackageProcessorTest {
         );
 
         // Act
-        final JobExecutionContext context = mock(JobExecutionContext.class);
-        this.processor.execute(context);
+        this.processor.run();
 
         // Assert: No events should be created yet (no .zip file), and event remains queued
         assertEquals(0, this.events.size(), "Should have no events without .zip file");
@@ -186,8 +181,7 @@ class GoProxyPackageProcessorTest {
         }
 
         // Act
-        final JobExecutionContext context = mock(JobExecutionContext.class);
-        this.processor.execute(context);
+        this.processor.run();
 
         // Assert
         assertEquals(3, this.events.size(), "Should have three artifact events");

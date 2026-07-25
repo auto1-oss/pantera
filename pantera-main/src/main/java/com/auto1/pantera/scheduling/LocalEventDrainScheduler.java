@@ -26,24 +26,34 @@ import java.util.function.Consumer;
 import org.slf4j.MDC;
 
 /**
- * Per-node periodic drain of a node-local {@link Queue} into one or more
- * {@link Consumer}s, on a dedicated {@link ScheduledExecutorService} — mirrors
- * {@code RuntimeSettingsCache}'s own timer.
+ * Per-node periodic scheduler on a dedicated {@link ScheduledExecutorService}
+ * — mirrors {@code RuntimeSettingsCache}'s own timer. Two shapes share the
+ * one seam:
+ * <ul>
+ *   <li>Drain a node-local {@link Queue} into one or more {@link Consumer}s
+ *       ({@link #LocalEventDrainScheduler(Queue, List, int)}).</li>
+ *   <li>Run arbitrary per-node {@link Runnable} ticks directly
+ *       ({@link #LocalEventDrainScheduler(List, int)}) — used where the task
+ *       already owns its own internal batch-draining logic (the proxy
+ *       package-processors; see {@code MetadataEventQueues}, WS2.2b fix).</li>
+ * </ul>
  * <p>
  * Node-local in-memory work — like draining this JVM's artifact-events queue
- * into its {@code DbConsumer} batchers — must never be scheduled through
- * Quartz's cluster-shared JDBC job store: clustered Quartz does not pin
- * repeating triggers to the node that registered them, so another node
- * acquiring the trigger finds nothing in its own {@link JobDataRegistry} and,
- * before 2.3.0, self-destructed the shared job entry — permanently orphaning
- * the owning node's queue (lost {@code artifact_publish} audit records and
+ * into its {@code DbConsumer} batchers, or a per-repository proxy queue into
+ * search-index/audit events — must never be scheduled through Quartz's
+ * cluster-shared JDBC job store: clustered Quartz does not pin repeating
+ * triggers to the node that registered them, so another node acquiring the
+ * trigger finds nothing in its own {@link JobDataRegistry} and, before
+ * 2.3.0, self-destructed the shared job entry — permanently orphaning the
+ * owning node's queue (lost {@code artifact_publish} audit records and
  * search-index rows; see the WS2.2 fix). This class replaces
  * {@code QuartzService.addPeriodicEventsProcessor}/{@link EventsProcessor}
- * for that specific pipeline. A dedicated per-node executor guarantees the
- * drain always runs on, and only on, the node that owns the queue —
- * regardless of RAM or JDBC-clustered Quartz mode.
+ * for the artifact-events pipeline, and — as of the WS2.2b fix — the
+ * per-repository proxy-package-processor jobs too. A dedicated per-node
+ * executor guarantees the work always runs on, and only on, the node that
+ * owns the queue — regardless of RAM or JDBC-clustered Quartz mode.
  *
- * @param <T> Queue element type
+ * @param <T> Queue element type (unused by the {@link Runnable}-based shape)
  * @since 2.3.0
  */
 public final class LocalEventDrainScheduler<T> implements AutoCloseable {
@@ -84,21 +94,35 @@ public final class LocalEventDrainScheduler<T> implements AutoCloseable {
     public LocalEventDrainScheduler(
         final Queue<T> queue, final List<Consumer<T>> consumers, final int intervalSeconds
     ) {
+        this(LocalEventDrainScheduler.toTasks(queue, consumers), intervalSeconds);
+    }
+
+    /**
+     * Ctor. Schedules each of {@code periodicTasks} at a fixed rate on a
+     * dedicated per-node executor, starting immediately. Each task is
+     * responsible for its own internal work (e.g. draining a batch off a
+     * queue it closed over) — this ctor only supplies the per-node
+     * scheduling, MDC trace stamping, and the never-cancel-on-exception
+     * guard.
+     * @param periodicTasks One scheduled worker per task
+     * @param intervalSeconds Fixed-rate interval, in seconds
+     */
+    public LocalEventDrainScheduler(final List<Runnable> periodicTasks, final int intervalSeconds) {
         final int poolId = LocalEventDrainScheduler.POOL_COUNTER.incrementAndGet();
         this.executor = Executors.newScheduledThreadPool(
-            Math.max(1, consumers.size()), LocalEventDrainScheduler.threadFactory(poolId)
+            Math.max(1, periodicTasks.size()), LocalEventDrainScheduler.threadFactory(poolId)
         );
-        this.tasks = new ArrayList<>(consumers.size());
-        for (final Consumer<T> consumer : consumers) {
+        this.tasks = new ArrayList<>(periodicTasks.size());
+        for (final Runnable task : periodicTasks) {
             this.tasks.add(
                 this.executor.scheduleAtFixedRate(
-                    () -> LocalEventDrainScheduler.drain(queue, consumer),
+                    () -> LocalEventDrainScheduler.runTick(task),
                     intervalSeconds, intervalSeconds, TimeUnit.SECONDS
                 )
             );
         }
         EcsLogger.info("com.auto1.pantera.scheduling")
-            .message("Local event drain scheduler started (workers=" + consumers.size()
+            .message("Local per-node scheduler started (workers=" + periodicTasks.size()
                 + ", interval_seconds=" + intervalSeconds + ")")
             .eventCategory("process")
             .eventAction("event_drain_start")
@@ -131,42 +155,41 @@ public final class LocalEventDrainScheduler<T> implements AutoCloseable {
     }
 
     /**
-     * Drain everything currently in {@code queue} through {@code action},
-     * retrying each item up to {@link #MAX_RETRY} times on
-     * {@link EventProcessingError} before dropping it (logged). Never lets an
-     * exception escape: {@link ScheduledExecutorService#scheduleAtFixedRate}
-     * permanently cancels future executions of a task whose Runnable throws.
-     * @param queue Queue to drain
-     * @param action Consumer to forward each item to
-     * @param <T> Element type
+     * Wrap {@code queue}/{@code consumers} pairs into one drain
+     * {@link Runnable} per consumer, all polling the same {@code queue}.
+     * @param queue Node-local queue to drain
+     * @param consumers One drain worker per consumer
+     * @param <T> Queue element type
+     * @return One drain task per consumer
      */
-    private static <T> void drain(final Queue<T> queue, final Consumer<T> action) {
+    private static <T> List<Runnable> toTasks(
+        final Queue<T> queue, final List<Consumer<T>> consumers
+    ) {
+        final List<Runnable> result = new ArrayList<>(consumers.size());
+        for (final Consumer<T> consumer : consumers) {
+            result.add(() -> LocalEventDrainScheduler.drain(queue, consumer));
+        }
+        return result;
+    }
+
+    /**
+     * Run one scheduled tick of {@code task}, stamping a fresh MDC trace/span
+     * context and never letting an exception escape:
+     * {@link ScheduledExecutorService#scheduleAtFixedRate} permanently
+     * cancels future executions of a task whose Runnable throws.
+     * @param task Tick body to run
+     */
+    private static void runTick(final Runnable task) {
         MDC.put(EcsMdc.TRACE_ID, SpanContext.generateHex16());
         MDC.put(EcsMdc.SPAN_ID, SpanContext.generateHex16());
         try {
-            int processed = 0;
-            T item = queue.poll();
-            while (item != null) {
-                if (LocalEventDrainScheduler.processWithRetry(action, item)) {
-                    processed += 1;
-                }
-                item = queue.poll();
-            }
-            if (processed > 0) {
-                EcsLogger.debug("com.auto1.pantera.scheduling")
-                    .message("Processed " + processed + " elements from queue")
-                    .eventCategory("process")
-                    .eventAction("event_process")
-                    .eventOutcome("success")
-                    .field("log.source", "application")
-                    .log();
-            }
+            task.run();
         } catch (final RuntimeException ex) {
             // EXPECTED guard: a Runnable that escapes with an exception
             // silently cancels all future fixed-rate executions on this
-            // task — never let one bad tick permanently stop the drain.
+            // task — never let one bad tick permanently stop the schedule.
             EcsLogger.error("com.auto1.pantera.scheduling")
-                .message("Unexpected error draining event queue; drain continues on next tick")
+                .message("Unexpected error in per-node periodic task; execution continues on next tick")
                 .eventCategory("process")
                 .eventAction("event_process")
                 .eventOutcome("failure")
@@ -176,6 +199,36 @@ public final class LocalEventDrainScheduler<T> implements AutoCloseable {
         } finally {
             MDC.remove(EcsMdc.TRACE_ID);
             MDC.remove(EcsMdc.SPAN_ID);
+        }
+    }
+
+    /**
+     * Drain everything currently in {@code queue} through {@code action},
+     * retrying each item up to {@link #MAX_RETRY} times on
+     * {@link EventProcessingError} before dropping it (logged). Runs inside
+     * {@link #runTick(Runnable)}, which supplies the MDC stamping and the
+     * escape-exception guard.
+     * @param queue Queue to drain
+     * @param action Consumer to forward each item to
+     * @param <T> Element type
+     */
+    private static <T> void drain(final Queue<T> queue, final Consumer<T> action) {
+        int processed = 0;
+        T item = queue.poll();
+        while (item != null) {
+            if (LocalEventDrainScheduler.processWithRetry(action, item)) {
+                processed += 1;
+            }
+            item = queue.poll();
+        }
+        if (processed > 0) {
+            EcsLogger.debug("com.auto1.pantera.scheduling")
+                .message("Processed " + processed + " elements from queue")
+                .eventCategory("process")
+                .eventAction("event_process")
+                .eventOutcome("success")
+                .field("log.source", "application")
+                .log();
         }
     }
 
