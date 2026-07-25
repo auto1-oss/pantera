@@ -33,6 +33,8 @@
   ([@aydasraf](https://github.com/aydasraf))
 - **PyPI's legacy JSON API and Composer's repository root are TTL-cached with serve-stale.** `/pypi/<pkg>/json` and Composer's `packages.json`/`repo.json` root were fetched live on every request; they now go through a TTL cache with single-flight and serve-last-known-good on an upstream outage, so a blip no longer breaks `poetry`/`composer` resolution for already-cached packages.
   ([@aydasraf](https://github.com/aydasraf))
+- **Proxy cache commits and S3 size-unknown uploads stream instead of buffering whole artifacts on heap.** The proxy cache-write commit path read the fully-downloaded temp artifact back into the JVM heap before caching it, and the S3 size-unknown-upload path spooled the whole body to a temp file then re-read it — both scale heap with artifact size and are an OOM vector under sustained load. The commit now streams the temp file out in bounded chunks, and the S3 upload buffers only up to the multipart threshold before streaming the remainder, with integrity verification and rollback-on-partial-failure preserved.
+  ([@aydasraf](https://github.com/aydasraf))
 
 ### 🔧 Bug fixes
 
