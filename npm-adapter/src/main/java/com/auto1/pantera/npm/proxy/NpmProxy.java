@@ -95,17 +95,22 @@ public class NpmProxy {
 
     /**
      * Optional packument-write hook fired after a successful packument save
-     * (cache miss → upstream fetch → persist {@code <name>/meta.json}).
-     * Receives the package name so the consumer can fire a
-     * {@link com.auto1.pantera.http.cache.CacheWriteEvent} keyed at the
-     * packument file (Phase 13 speculative packument prefetch).
+     * — a genuine cache-miss fetch ({@code remotePackageAndSave}) or a
+     * conditional stale-while-revalidate refresh whose ETag came back
+     * changed ({@code conditionalRefresh}). NOT fired on a 304 (unchanged)
+     * refresh, which only touches the refresh timestamp. Receives the
+     * package name.
      *
-     * <p>The packument waterfall is the dominant cold-cache npm bottleneck
-     * (Phase 12.5: 8.45s of 12.9s wall = 65%). This hook lets the
-     * prefetch dispatcher parse the packument JSON, identify direct-dep
-     * package names, and dispatch packument GETs for those deps so that
-     * by the time {@code npm install} walks the tree the metadata is
-     * already warm.</p>
+     * <p>Originally added for Phase 13 speculative packument prefetch
+     * (deleted in M2, see {@code NpmProxyAdapter}); production wiring now
+     * uses it to invalidate the cooldown {@code FilteredMetadataCache}
+     * envelope for the package (WS5.2, 2.3.0) — a background refresh that
+     * pulls a changed upstream packument must drop any envelope filtered
+     * from the stale bytes, or a newly-published version stays invisible
+     * behind the envelope's own TTL (up to 24h) on top of the packument
+     * TTL. The hook surface stays generic (just the package name) so any
+     * future consumer — prefetch or otherwise — can reuse it without
+     * another constructor change.</p>
      *
      * <p>Default is a no-op so existing constructors and tests stay
      * unchanged.</p>
@@ -508,7 +513,18 @@ public class NpmProxy {
                     // Try conditional request with If-None-Match
                     return ((HttpNpmRemote) this.remote)
                         .loadPackageConditional(name, metadata.upstreamEtag().get())
-                        .flatMap(pkg -> this.storage.save(pkg).andThen(Maybe.just(Boolean.TRUE)))
+                        .flatMap(pkg -> this.storage.save(pkg)
+                            // WS5.2: the ETag differed, so upstream genuinely
+                            // changed the packument (new version published,
+                            // dist-tag moved, ...). Fire the same hook
+                            // remotePackageAndSave fires on a full refresh —
+                            // without it, this (the common warm-cache SWR
+                            // path) silently skipped invalidating any
+                            // filtered-metadata envelope cached from the
+                            // stale content, hiding the new version behind
+                            // the envelope's own TTL.
+                            .doOnComplete(() -> this.firePackumentWriteHook(pkg.name()))
+                            .andThen(Maybe.just(Boolean.TRUE)))
                         .switchIfEmpty(Maybe.defer(() -> {
                             // 304 Not Modified — just update refresh timestamp
                             final NpmPackage.Metadata updated = new NpmPackage.Metadata(

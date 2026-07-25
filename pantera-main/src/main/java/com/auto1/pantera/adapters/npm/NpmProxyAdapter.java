@@ -80,12 +80,17 @@ public final class NpmProxyAdapter implements Slice {
                     );
                     
                     // Create NpmProxy for this remote with 12h metadata TTL.
-                    // The cache-write and packument hooks are passed as null:
-                    // their only previous consumer was the speculative prefetch
+                    // The cache-write hook is passed as null: its only
+                    // previous consumer was the speculative prefetch
                     // subsystem, deleted wholesale in M2 (analysis/plan/v1/PLAN.md).
-                    // The hook surface on NpmProxy is retained so a future
-                    // observed-coordinate prewarming feature (Phase 4c, 2.3.0)
-                    // can wire in without redesigning the adapter.
+                    // The packument-write hook IS wired (WS5.2, 2.3.0):
+                    // every genuine packument save (cold fetch or a
+                    // stale-while-revalidate refresh whose ETag came back
+                    // changed) drops the cooldown FilteredMetadataCache
+                    // envelope for the package so a version published
+                    // upstream during a background refresh is visible on
+                    // the next request instead of waiting out the
+                    // envelope's own TTL on top of the packument TTL.
                     final Storage npmStorage = asto.orElseThrow(
                         () -> new IllegalStateException(
                             "npm-proxy requires storage to be set"
@@ -102,12 +107,16 @@ public final class NpmProxyAdapter implements Slice {
                                     .recordProxyPhaseDuration(repoName, phase, durationNs);
                             }
                         };
+                    final java.util.function.Consumer<String> packumentWriteHook = name ->
+                        com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry
+                            .instance()
+                            .invalidateAfterProxyRefresh(cfg.type(), name);
                     final NpmProxy npmProxy = new NpmProxy(
                         npmStorage,
                         remoteSlice,
                         NpmProxy.DEFAULT_METADATA_TTL,
                         null,
-                        null,
+                        packumentWriteHook,
                         phaseRecorder
                     );
                     

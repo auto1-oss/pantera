@@ -17,6 +17,7 @@ import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.metadata.MetadataParseException;
+import com.auto1.pantera.cooldown.metadata.VersionComparators;
 import com.auto1.pantera.composer.http.proxy.MetadataUrlRewriter;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
@@ -35,8 +36,10 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -416,25 +419,42 @@ public final class ComposerRootPackagesHandler {
     }
 
     /**
+     * Maximum versions evaluated per package (WS5.4). A Satis snapshot
+     * root can inline hundreds of versions for a single package;
+     * cooldown only ever targets recent releases, so evaluating every
+     * one of them unbounded wastes cooldown-service calls for a large
+     * root without changing the outcome for old versions. Mirrors
+     * {@code MetadataFilterService.DEFAULT_MAX_VERSIONS} and the Go
+     * {@code @v/list} cap (WS4-go.5, {@code GoListHandler}). Versions
+     * beyond the cap are treated as not-blocked and still served — only
+     * the *evaluation* fan-out is bounded, never the served list.
+     */
+    private static final int MAX_VERSIONS_TO_EVALUATE_PER_PACKAGE = 50;
+
+    /**
      * Evaluate every candidate (pkg, version) against cooldown in
-     * parallel; return a {@code pkg -> blocked-versions} map.
+     * parallel; return a {@code pkg -> blocked-versions} map. Fan-out is
+     * capped per package at {@link #MAX_VERSIONS_TO_EVALUATE_PER_PACKAGE}
+     * via {@link #boundPerPackage}.
      */
     private CompletableFuture<Map<String, Set<String>>> blockedVersions(
         final List<ComposerRootPackagesFilter.PackageVersion> candidates,
         final String user
     ) {
+        final List<ComposerRootPackagesFilter.PackageVersion> bounded =
+            this.boundPerPackage(candidates);
         final List<CompletableFuture<Boolean>> futures =
-            new ArrayList<>(candidates.size());
-        for (final ComposerRootPackagesFilter.PackageVersion pv : candidates) {
+            new ArrayList<>(bounded.size());
+        for (final ComposerRootPackagesFilter.PackageVersion pv : bounded) {
             futures.add(this.isBlocked(pv.pkg(), pv.version(), pv.releaseDate(), user));
         }
         return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
             .thenApply(ignored -> {
                 final Map<String, Set<String>> blocked = new HashMap<>();
-                for (int idx = 0; idx < candidates.size(); idx++) {
+                for (int idx = 0; idx < bounded.size(); idx++) {
                     if (futures.get(idx).join()) {
                         final ComposerRootPackagesFilter.PackageVersion pv =
-                            candidates.get(idx);
+                            bounded.get(idx);
                         blocked
                             .computeIfAbsent(pv.pkg(), k -> new HashSet<>())
                             .add(pv.version());
@@ -442,6 +462,66 @@ public final class ComposerRootPackagesHandler {
                 }
                 return blocked;
             });
+    }
+
+    /**
+     * Group {@code candidates} by package and cap each package's
+     * evaluation fan-out at {@link #MAX_VERSIONS_TO_EVALUATE_PER_PACKAGE}
+     * newest entries — newest by release date (falling back to semver
+     * ordering when a version's date is unknown), matching {@code
+     * MetadataFilterService}'s bounded-evaluation model (WS5.4). Logs
+     * once per request when any package's fan-out was truncated, so the
+     * cap firing is an observable event rather than a silent drop.
+     *
+     * @param candidates Every {@code (pkg, version)} pair extracted from
+     *                   the root document.
+     * @return The subset actually submitted for cooldown evaluation.
+     */
+    private List<ComposerRootPackagesFilter.PackageVersion> boundPerPackage(
+        final List<ComposerRootPackagesFilter.PackageVersion> candidates
+    ) {
+        final Map<String, List<ComposerRootPackagesFilter.PackageVersion>> byPackage =
+            new LinkedHashMap<>();
+        for (final ComposerRootPackagesFilter.PackageVersion pv : candidates) {
+            byPackage.computeIfAbsent(pv.pkg(), k -> new ArrayList<>()).add(pv);
+        }
+        final Comparator<ComposerRootPackagesFilter.PackageVersion> newestFirst =
+            Comparator.<ComposerRootPackagesFilter.PackageVersion, Instant>comparing(
+                pv -> pv.releaseDate().orElse(Instant.EPOCH)
+            ).reversed().thenComparing(
+                ComposerRootPackagesFilter.PackageVersion::version,
+                VersionComparators.semver().reversed()
+            );
+        final List<ComposerRootPackagesFilter.PackageVersion> bounded =
+            new ArrayList<>(candidates.size());
+        int truncatedPackages = 0;
+        int droppedVersions = 0;
+        for (final List<ComposerRootPackagesFilter.PackageVersion> versions : byPackage.values()) {
+            if (versions.size() <= MAX_VERSIONS_TO_EVALUATE_PER_PACKAGE) {
+                bounded.addAll(versions);
+                continue;
+            }
+            versions.sort(newestFirst);
+            bounded.addAll(versions.subList(0, MAX_VERSIONS_TO_EVALUATE_PER_PACKAGE));
+            truncatedPackages++;
+            droppedVersions += versions.size() - MAX_VERSIONS_TO_EVALUATE_PER_PACKAGE;
+        }
+        if (truncatedPackages > 0) {
+            EcsLogger.info("com.auto1.pantera.composer")
+                .message("Root packages cooldown evaluation capped: "
+                    + truncatedPackages + " package(s) exceeded "
+                    + MAX_VERSIONS_TO_EVALUATE_PER_PACKAGE + " inline versions, "
+                    + droppedVersions + " oldest version(s) served without an "
+                    + "explicit cooldown evaluation (treated as allowed)")
+                .eventCategory("database")
+                .eventAction("root_filter_eval_cap")
+                .eventOutcome("success")
+                .field("event.reason", "eval_cap_truncated")
+                .field("repository.name", this.repoName)
+                .field("log.source", "application")
+                .log();
+        }
+        return bounded;
     }
 
     /**

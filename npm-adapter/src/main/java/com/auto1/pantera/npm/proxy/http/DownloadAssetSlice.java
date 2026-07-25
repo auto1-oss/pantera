@@ -444,12 +444,8 @@ public final class DownloadAssetSlice implements Slice {
             return Optional.empty();
         }
         final String base = file.substring(0, file.length() - 4);
-        final int dash = base.lastIndexOf('-');
-        if (dash < 0) {
-            return Optional.empty();
-        }
-        final String version = base.substring(dash + 1);
-        if (version.isEmpty()) {
+        final String version = versionFromBase(base, pkg);
+        if (version == null || version.isEmpty()) {
             return Optional.empty();
         }
         final String user = new Login(headers).getValue();
@@ -463,5 +459,40 @@ public final class DownloadAssetSlice implements Slice {
                 Instant.now()
             )
         );
+    }
+
+    /**
+     * Split the tarball basename (filename without {@code .tgz}) into the
+     * version suffix, anchored on the KNOWN package name rather than
+     * {@code lastIndexOf('-')}. A prerelease tarball such as
+     * {@code pkg-1.2.3-beta.1.tgz} has a dash inside the version itself, so
+     * the naive last-dash split previously yielded {@code beta.1} instead of
+     * {@code 1.2.3-beta.1} — the cooldown lookup then keyed on the wrong
+     * version and could block/allow the wrong release entirely (WS5.3).
+     *
+     * <p>The tarball filename never carries the npm scope (a scoped
+     * package's tarball is {@code @scope/name/-/name-1.2.3.tgz}), so the
+     * anchor is the package's bare (unscoped) name — the final path segment
+     * of {@code pkg}.
+     *
+     * @param base Tarball filename with the {@code .tgz} suffix stripped
+     * @param pkg Package name exactly as parsed from before the
+     *     {@code /-/} separator (may be scoped, e.g. {@code @scope/name})
+     * @return the version suffix, or {@code null} if {@code base} does not
+     *     start with the expected {@code <bareName>-} prefix and no
+     *     trailing dash exists to fall back on
+     */
+    private static String versionFromBase(final String base, final String pkg) {
+        final int scopeSep = pkg.lastIndexOf('/');
+        final String bareName = scopeSep >= 0 ? pkg.substring(scopeSep + 1) : pkg;
+        final String anchor = bareName + "-";
+        if (base.startsWith(anchor)) {
+            return base.substring(anchor.length());
+        }
+        // Fallback for the (unexpected) case where the tarball filename
+        // doesn't start with the package name the URL already told us —
+        // best effort on the last dash rather than failing closed.
+        final int dash = base.lastIndexOf('-');
+        return dash < 0 ? null : base.substring(dash + 1);
     }
 }
