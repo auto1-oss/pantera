@@ -59,6 +59,11 @@ public final class FullTagsManifests implements Manifests {
         return CompletableFuture.completedFuture(this.tags);
     }
 
+    @Override
+    public CompletableFuture<Void> delete(final ManifestReference ref) {
+        throw new UnsupportedOperationException();
+    }
+
     /**
      * Get captured `from` argument.
      *

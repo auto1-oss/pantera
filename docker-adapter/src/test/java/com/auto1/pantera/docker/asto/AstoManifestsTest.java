@@ -223,6 +223,66 @@ final class AstoManifestsTest {
         );
     }
 
+    @Test
+    @Timeout(5)
+    void shouldFailDeletingUnknownReference() {
+        final CompletionStage<Void> future = this.manifests.delete(ManifestReference.fromTag("nope"));
+        final CompletionException exception = Assertions.assertThrows(
+            CompletionException.class,
+            () -> future.toCompletableFuture().join()
+        );
+        MatcherAssert.assertThat(
+            "Deleting a reference that was never pushed fails rather than silently no-op-ing",
+            exception.getCause(),
+            new IsInstanceOf(
+                com.auto1.pantera.docker.error.DockerReferenceNotFoundException.class
+            )
+        );
+    }
+
+    @Test
+    @Timeout(5)
+    void shouldRemoveBothLinksWhenDeletingByTag() {
+        final Digest config = this.blobs.put(new TrustedBlobSource("del-config".getBytes())).join();
+        final Digest layer = this.blobs.put(new TrustedBlobSource("del-layer".getBytes())).join();
+        final ManifestReference tagRef = ManifestReference.fromTag("del-tag");
+        final Manifest pushed = this.manifests.put(
+            tagRef, new Content.From(this.getJsonBytes(config, layer, "my-type"))
+        ).join();
+        final ManifestReference digestRef = ManifestReference.from(pushed.digest());
+        this.manifests.delete(tagRef).join();
+        MatcherAssert.assertThat(
+            "The deleted tag no longer resolves",
+            this.manifests.get(tagRef).join().isPresent(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "The by-digest link created by the same push is also removed",
+            this.manifests.get(digestRef).join().isPresent(),
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    @Timeout(5)
+    void shouldPruneReferrerEntryWhenDeletingSubjectBearingManifest() {
+        final Digest subject = new Digest.FromString("sha256:" + "4".repeat(64));
+        final Manifest referrer = this.putWithSubject(
+            "prune-tag", subject, "application/vnd.example.sig.v1+json"
+        );
+        MatcherAssert.assertThat(
+            "Referrer indexed before delete",
+            this.manifests.referrers(subject, Optional.empty()).join().size(),
+            new IsEqual<>(1)
+        );
+        this.manifests.delete(ManifestReference.from(referrer.digest())).join();
+        MatcherAssert.assertThat(
+            "Referrer entry pruned once the referring manifest is deleted",
+            this.manifests.referrers(subject, Optional.empty()).join().size(),
+            new IsEqual<>(0)
+        );
+    }
+
     private byte[] manifest(final ManifestReference ref) {
         return this.manifests.get(ref)
             .thenApply(res -> res.orElseThrow().content())

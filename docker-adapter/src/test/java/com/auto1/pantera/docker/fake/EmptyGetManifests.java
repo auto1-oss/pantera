@@ -39,4 +39,9 @@ public final class EmptyGetManifests implements Manifests {
     public CompletableFuture<Tags> tags(Pagination pagination) {
         throw new UnsupportedOperationException();
     }
+
+    @Override
+    public CompletableFuture<Void> delete(final ManifestReference ref) {
+        throw new UnsupportedOperationException();
+    }
 }

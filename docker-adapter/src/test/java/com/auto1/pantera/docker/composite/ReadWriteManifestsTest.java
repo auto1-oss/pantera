@@ -112,6 +112,11 @@ final class ReadWriteManifestsTest {
             throw new UnsupportedOperationException();
         }
 
+        @Override
+        public CompletableFuture<Void> delete(ManifestReference ref) {
+            throw new UnsupportedOperationException();
+        }
+
         public ManifestReference ref() {
             return this.refcheck;
         }
@@ -148,6 +153,11 @@ final class ReadWriteManifestsTest {
 
         @Override
         public CompletableFuture<Tags> tags(Pagination pagination) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public CompletableFuture<Void> delete(ManifestReference ref) {
             throw new UnsupportedOperationException();
         }
 

@@ -342,6 +342,10 @@ final class CachingBlobTest {
         public CompletableFuture<Optional<Blob>> get(final Digest digest) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
+        @Override
+        public CompletableFuture<Void> delete(final Digest digest) {
+            throw new UnsupportedOperationException();
+        }
     }
 
     /**
@@ -362,6 +366,10 @@ final class CachingBlobTest {
         @Override
         public CompletableFuture<Optional<Blob>> get(final Digest digest) {
             return CompletableFuture.completedFuture(Optional.empty());
+        }
+        @Override
+        public CompletableFuture<Void> delete(final Digest digest) {
+            throw new UnsupportedOperationException();
         }
     }
 
@@ -397,6 +405,10 @@ final class CachingBlobTest {
         public CompletableFuture<Optional<Blob>> get(final Digest digest) {
             throw new UnsupportedOperationException();
         }
+        @Override
+        public CompletableFuture<Void> delete(final Digest digest) {
+            throw new UnsupportedOperationException();
+        }
     }
 
     /**
@@ -425,6 +437,10 @@ final class CachingBlobTest {
         @Override
         public CompletableFuture<Optional<Blob>> get(final Digest digest) {
             return CompletableFuture.completedFuture(Optional.empty());
+        }
+        @Override
+        public CompletableFuture<Void> delete(final Digest digest) {
+            throw new UnsupportedOperationException();
         }
     }
 }

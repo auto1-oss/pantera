@@ -52,6 +52,11 @@ public final class FakeLayers implements Layers {
         return this.layers.get(digest);
     }
 
+    @Override
+    public CompletableFuture<Void> delete(final Digest digest) {
+        return this.layers.delete(digest);
+    }
+
     /**
      * Creates layers.
      *

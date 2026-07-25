@@ -16,12 +16,16 @@ import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.docker.Digest;
+import com.auto1.pantera.docker.error.DockerReferenceNotFoundException;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
+import org.hamcrest.core.IsInstanceOf;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 import java.util.Collection;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
 
@@ -43,6 +47,41 @@ final class BlobsTest {
         blobs.put(new TrustedBlobSource(new Content.From(bytes), digest))
             .toCompletableFuture().join();
         MatcherAssert.assertThat(storage.saves, new IsEqual<>(1));
+    }
+
+    @Test
+    void shouldDeleteExistingBlob() {
+        final byte[] bytes = new byte[]{0x04, 0x05};
+        final Digest digest = new Digest.Sha256(
+            "164edec1d0211f624fed0cbca9d4f9400b0e491c43742af2c5b0abebf0c990d1"
+        );
+        final Blobs blobs = new Blobs(new InMemoryStorage());
+        blobs.put(new TrustedBlobSource(new Content.From(bytes), digest))
+            .toCompletableFuture().join();
+        blobs.delete(digest).toCompletableFuture().join();
+        MatcherAssert.assertThat(
+            "Blob is gone after delete",
+            blobs.blob(digest).join().isPresent(),
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void shouldFailDeletingMissingBlob() {
+        final Digest digest = new Digest.Sha256(
+            "274edec1d0211f624fed0cbca9d4f9400b0e491c43742af2c5b0abebf0c990d2"
+        );
+        final Blobs blobs = new Blobs(new InMemoryStorage());
+        final CompletionStage<Void> future = blobs.delete(digest);
+        final CompletionException exception = Assertions.assertThrows(
+            CompletionException.class,
+            () -> future.toCompletableFuture().join()
+        );
+        MatcherAssert.assertThat(
+            "Deleting a digest that was never stored fails rather than silently no-op-ing",
+            exception.getCause(),
+            new IsInstanceOf(DockerReferenceNotFoundException.class)
+        );
     }
 
     /**

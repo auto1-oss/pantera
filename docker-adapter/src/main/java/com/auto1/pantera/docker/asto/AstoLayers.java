@@ -52,4 +52,9 @@ public final class AstoLayers implements Layers {
     public CompletableFuture<Optional<Blob>> get(final Digest digest) {
         return this.blobs.blob(digest);
     }
+
+    @Override
+    public CompletableFuture<Void> delete(final Digest digest) {
+        return this.blobs.delete(digest);
+    }
 }

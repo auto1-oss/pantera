@@ -154,6 +154,11 @@ final class HeadManifestSliceMdcTest {
                         ) {
                             throw new UnsupportedOperationException();
                         }
+
+                        @Override
+                        public CompletableFuture<Void> delete(final ManifestReference mref) {
+                            throw new UnsupportedOperationException();
+                        }
                     };
                 }
 
