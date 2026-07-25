@@ -79,7 +79,7 @@ The proxy caches downloaded modules locally. Subsequent fetches from any develop
 
 ## Go Proxy (`go-proxy`)
 
-A `go-proxy` repository caches modules from an upstream Go module proxy (typically `https://proxy.golang.org`) on first request, then serves subsequent requests from the local cache. Cached bytes survive upstream outages and are shared across all clients pointing at the same Pantera host.
+A `go-proxy` repository caches modules from an upstream Go module proxy (typically `https://proxy.golang.org`) on first request, then serves subsequent requests from the local cache. Cached bytes survive upstream outages and are shared across all clients pointing at the same Pantera host. Version resolution (`go get`, `go list -m -versions`, and bare `go get <module>`) is cached too — up to a 12-hour freshness window, refreshed in the background on the next request past that window — so it keeps working against a cached module even while the upstream proxy is unreachable, falling back to the last-known version list if a refresh attempt fails.
 
 **When to use**
 

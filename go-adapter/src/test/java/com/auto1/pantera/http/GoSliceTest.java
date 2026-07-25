@@ -213,6 +213,61 @@ class GoSliceTest {
     }
 
     @Test
+    void uploadInvalidatesRegisteredGoProxyMetadataBaseCache() throws Exception {
+        // WS4-go.2: a hosted publish inside a go-group must not stay hidden
+        // behind a sibling go-proxy member's 12h @v/list / @latest TTL cache.
+        // GoMetadataCacheRegistry is the process-wide bridge between the
+        // hosted repo's storage (used here) and the proxy repo's storage
+        // (simulated below via a direct registration, matching what
+        // CachedProxySlice does at construction).
+        final Storage storage = new InMemoryStorage();
+        final GoSlice slice = new GoSlice(
+            storage,
+            new PolicyByUsername(USER.getKey()),
+            new Authentication.Single(USER.getKey(), USER.getValue()),
+            "go-repo",
+            Optional.empty()
+        );
+        final Storage proxyStorage = new InMemoryStorage();
+        GoMetadataCacheRegistry.instance().register("go-proxy-repo", proxyStorage);
+        try {
+            final Key list = new Key.From("example.com/hello/@v/list");
+            final Key latest = new Key.From("example.com/hello/@latest");
+            proxyStorage.save(
+                list, new Content.From("v1.2.2\n".getBytes(StandardCharsets.UTF_8))
+            ).toCompletableFuture().join();
+            proxyStorage.save(
+                latest,
+                new Content.From("{\"Version\":\"v1.2.2\"}".getBytes(StandardCharsets.UTF_8))
+            ).toCompletableFuture().join();
+
+            final Response response = slice.response(
+                new RequestLine("PUT", "example.com/hello/@v/v1.2.3.zip"),
+                Headers.from(
+                    new Authorization.Basic(USER.getKey(), USER.getValue())
+                ),
+                new Content.From("zip-content".getBytes(StandardCharsets.UTF_8))
+            ).toCompletableFuture().get();
+            MatcherAssert.assertThat(response, new RsHasStatus(RsStatus.CREATED));
+
+            MatcherAssert.assertThat(
+                "go-proxy's cached @v/list must be evicted so the newly "
+                    + "published version is not hidden for the cache TTL",
+                proxyStorage.exists(list).toCompletableFuture().join(),
+                new IsEqual<>(false)
+            );
+            MatcherAssert.assertThat(
+                "go-proxy's cached @latest must be evicted so the newly "
+                    + "published version is not hidden for the cache TTL",
+                proxyStorage.exists(latest).toCompletableFuture().join(),
+                new IsEqual<>(false)
+            );
+        } finally {
+            GoMetadataCacheRegistry.instance().clear();
+        }
+    }
+
+    @Test
     void stripsMetadataPropertiesFromFilename() throws Exception {
         // Test that semicolon-separated metadata properties are stripped from the filename
         // to avoid exceeding filesystem filename length limits (typically 255 bytes)

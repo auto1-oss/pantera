@@ -171,15 +171,19 @@ final class GoUploadSlice implements Slice {
             // (or its parent paths, e.g. Go's parent-path probing) BEFORE
             // we tell the client the upload succeeded. Otherwise an earlier
             // probe-against-group that cached a 404 keeps shadowing the
-            // newly-published artifact and `go get` returns 404.
-            extra = extra.whenComplete((ignored, error) -> {
-                if (error == null) {
-                    NegativeCacheRegistry.instance()
-                        .invalidateAfterUpload("go-proxy", module);
-                    com.auto1.pantera.cooldown.metadata
-                        .FilteredMetadataCacheRegistry.instance()
-                        .invalidateAfterUpload("go-proxy", module);
-                }
+            // newly-published artifact and `go get` returns 404. Also evict
+            // any go-proxy member's cached @v/list / @latest base document
+            // for this module (WS4-go.2) — a hosted publish inside a
+            // go-group must not stay hidden behind the proxy's 12h TTL.
+            extra = extra.thenCompose(ignored -> {
+                NegativeCacheRegistry.instance()
+                    .invalidateAfterUpload("go-proxy", module);
+                com.auto1.pantera.cooldown.metadata
+                    .FilteredMetadataCacheRegistry.instance()
+                    .invalidateAfterUpload("go-proxy", module);
+                return GoMetadataCacheRegistry.instance()
+                    .invalidateAfterUpload(module)
+                    .exceptionally(err -> null);
             });
         } else {
             extra = stored;

@@ -11,6 +11,10 @@
 package com.auto1.pantera.http.cooldown;
 
 import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.cache.Cache;
+import com.auto1.pantera.asto.cache.FromStorageCache;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.cooldown.api.CooldownBlock;
 import com.auto1.pantera.cooldown.api.CooldownDependency;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
@@ -66,6 +70,7 @@ final class GoLatestHandlerTest {
     private ScriptedSlice upstream;
     private ScriptedCooldown cooldown;
     private CooldownInspector inspector;
+    private GoMetadataBaseLoader baseLoader;
     private GoLatestHandler handler;
 
     @BeforeEach
@@ -73,8 +78,21 @@ final class GoLatestHandlerTest {
         this.upstream = new ScriptedSlice();
         this.cooldown = new ScriptedCooldown();
         this.inspector = new NullInspector();
+        this.baseLoader = newBaseLoader(this.upstream);
         this.handler = new GoLatestHandler(
-            this.upstream, this.cooldown, this.inspector, "go-proxy", "go-test"
+            this.baseLoader, this.cooldown, this.inspector, "go-proxy", "go-test"
+        );
+    }
+
+    /**
+     * New loader over a fresh {@link InMemoryStorage}-backed cache, so
+     * each test starts with a cold, empty base-document cache.
+     */
+    private static GoMetadataBaseLoader newBaseLoader(final Slice upstream) {
+        final Storage storage = new InMemoryStorage();
+        final Cache cache = new FromStorageCache(storage);
+        return new GoMetadataBaseLoader(
+            upstream, cache, Optional.of(storage), "go-test"
         );
     }
 
@@ -269,6 +287,61 @@ final class GoLatestHandlerTest {
         );
     }
 
+    @Test
+    void cooldownAppliedAfterWarmupRewritesWithoutExtraLatestUpstreamCall() throws Exception {
+        // WS4-go.2: @latest's base document is cached unfiltered; cooldown
+        // is re-evaluated on every request. Pre-warm both @latest and its
+        // @v/list fallback sibling (sharing the same loader/cache), then
+        // block the version — the rewrite must not re-fetch either base.
+        final String path = "/github.com/foo/bar/@latest";
+        final String listPath = "/github.com/foo/bar/@v/list";
+        this.upstream.put(path, latestJson("v1.2.3", "2024-05-12T00:00:00Z"));
+        this.upstream.put(listPath, "v1.2.0\nv1.2.1\nv1.2.2\nv1.2.3\n");
+
+        this.handler.handle(
+            new RequestLine(RqMethod.GET, path), com.auto1.pantera.http.Headers.EMPTY, "alice"
+        ).get();
+        // Warm the sibling @v/list base too via the shared loader.
+        this.baseLoader.load(listPath, "github.com/foo/bar").get();
+        assertThat(this.upstream.hits(path), equalTo(1));
+        assertThat(this.upstream.hits(listPath), equalTo(1));
+
+        this.cooldown.block("v1.2.3");
+        final Response resp = this.handler.handle(
+            new RequestLine(RqMethod.GET, path), com.auto1.pantera.http.Headers.EMPTY, "alice"
+        ).get();
+        final JsonNode node = MAPPER.readTree(bodyToBytes(resp));
+        assertThat(node.get("Version").asText(), equalTo("v1.2.2"));
+        assertThat(
+            "both base documents must be served from cache, not re-fetched",
+            this.upstream.hits(path), equalTo(1)
+        );
+        assertThat(
+            "both base documents must be served from cache, not re-fetched",
+            this.upstream.hits(listPath), equalTo(1)
+        );
+    }
+
+    @Test
+    void servesWarmCachedLatestWhenUpstreamGoesDown() throws Exception {
+        // WS4-go.2 tentpole: a cached @latest must survive an upstream
+        // outage instead of hard-failing bare "go get <module>".
+        final String path = "/github.com/foo/bar/@latest";
+        this.upstream.put(path, latestJson("v1.2.3", "2024-05-12T00:00:00Z"));
+
+        this.handler.handle(
+            new RequestLine(RqMethod.GET, path), com.auto1.pantera.http.Headers.EMPTY, "alice"
+        ).get();
+
+        this.upstream.fail(true);
+        final Response resp = this.handler.handle(
+            new RequestLine(RqMethod.GET, path), com.auto1.pantera.http.Headers.EMPTY, "alice"
+        ).get();
+        assertThat(resp.status().success(), is(true));
+        final JsonNode node = MAPPER.readTree(bodyToBytes(resp));
+        assertThat(node.get("Version").asText(), equalTo("v1.2.3"));
+    }
+
     // ===== Helpers =====
 
     private static String latestJson(final String version, final String time) {
@@ -286,10 +359,15 @@ final class GoLatestHandlerTest {
     private static final class ScriptedSlice implements Slice {
         private final Map<String, byte[]> script = new HashMap<>();
         private final Map<String, AtomicInteger> hits = new HashMap<>();
+        private volatile boolean failing;
 
         void put(final String path, final String body) {
             this.script.put(path, body.getBytes(StandardCharsets.UTF_8));
             this.hits.put(path, new AtomicInteger(0));
+        }
+
+        void fail(final boolean value) {
+            this.failing = value;
         }
 
         int hits(final String path) {
@@ -302,11 +380,16 @@ final class GoLatestHandlerTest {
             final RequestLine line, final Headers headers, final Content body
         ) {
             final String path = line.uri().getPath();
-            final byte[] content = this.script.get(path);
             final AtomicInteger counter = this.hits.computeIfAbsent(
                 path, k -> new AtomicInteger(0)
             );
             counter.incrementAndGet();
+            if (this.failing) {
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.badGateway().build()
+                );
+            }
+            final byte[] content = this.script.get(path);
             if (content == null) {
                 return CompletableFuture.completedFuture(
                     ResponseBuilder.notFound().build()

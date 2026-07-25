@@ -10,8 +10,6 @@
  */
 package com.auto1.pantera.http.cooldown;
 
-import com.auto1.pantera.asto.Content;
-import com.auto1.pantera.asto.Remaining;
 import com.auto1.pantera.audit.AuditContext;
 import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
@@ -22,19 +20,12 @@ import com.auto1.pantera.cooldown.metadata.VersionComparators;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
-import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.rq.RequestLine;
-import com.auto1.pantera.http.rq.RqMethod;
-import hu.akarnokd.rxjava2.interop.SingleInterop;
-import io.reactivex.Flowable;
 import org.slf4j.MDC;
 
-import java.io.ByteArrayOutputStream;
-import java.io.UncheckedIOException;
-import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -50,15 +41,20 @@ import java.util.concurrent.CompletableFuture;
  * {@code /@v/list}. The flow is:</p>
  *
  * <ol>
- *   <li>Fetch {@code /@latest} from upstream.</li>
+ *   <li>Resolve the raw {@code /@latest} base document via
+ *       {@link GoMetadataBaseLoader} (WS4-go.2): TTL-cached, offline-safe
+ *       on a warm module, single-flighted on a cold miss, cooldown
+ *       re-evaluated per request over the cached base.</li>
  *   <li>Parse the JSON into {@link GoLatestInfo}. If malformed, pass the
- *       upstream bytes through unchanged — we never break clients on
+ *       base bytes through unchanged — we never break clients on
  *       upstream weirdness.</li>
  *   <li>Check the {@code Version} against cooldown. If not blocked,
- *       return the upstream response unchanged.</li>
- *   <li>If blocked, fetch the sibling {@code /@v/list}, evaluate every
- *       version against cooldown, and pick the highest non-blocked one
- *       under the same semver-ish ordering the Go toolchain uses
+ *       return the base document unchanged.</li>
+ *   <li>If blocked, resolve the sibling {@code /@v/list} base (through
+ *       the same loader, sharing its cache entry and single-flight gate
+ *       with {@link GoListHandler}), evaluate every version against
+ *       cooldown, and pick the highest non-blocked one under the same
+ *       semver-ish ordering the Go toolchain uses
  *       ({@link VersionComparators#semver()}, which handles {@code v}
  *       prefix and tolerates pseudo-versions).</li>
  *   <li>Rewrite the {@code @latest} JSON with the fallback version,
@@ -70,10 +66,6 @@ import java.util.concurrent.CompletableFuture;
  *       block response produced by
  *       {@link GoCooldownResponseFactory}.</li>
  * </ol>
- *
- * <p>The handler reuses the same upstream {@link Slice} the proxy already
- * uses for artifact fetches — cache/auth/resilience layers therefore apply
- * to the list fallback too.</p>
  *
  * @since 2.2.0
  */
@@ -87,11 +79,12 @@ public final class GoLatestHandler {
     private static final int MAX_VERSIONS_TO_EVALUATE = 50;
 
     /**
-     * Upstream slice, shared with the main Go proxy. Using the same
-     * slice means the list-fallback fetch picks up the same auth /
-     * cache layers and avoids divergent behaviour.
+     * TTL-cached, single-flighted loader for the {@code @latest} base
+     * document — and, via the same instance, the sibling {@code @v/list}
+     * fallback fetch, so both share one cache entry and one single-flight
+     * gate per module (WS4-go.2).
      */
-    private final Slice upstream;
+    private final GoMetadataBaseLoader baseLoader;
 
     /**
      * Cooldown service for block evaluation.
@@ -136,20 +129,20 @@ public final class GoLatestHandler {
     /**
      * Constructor.
      *
-     * @param upstream Upstream Go module proxy slice
+     * @param baseLoader TTL-cached, single-flighted base-document loader
      * @param cooldown Cooldown evaluation service
      * @param inspector Cooldown inspector for release-date lookups
      * @param repoType Repository type identifier (e.g. {@code "go"})
      * @param repoName Repository name
      */
     public GoLatestHandler(
-        final Slice upstream,
+        final GoMetadataBaseLoader baseLoader,
         final CooldownService cooldown,
         final CooldownInspector inspector,
         final String repoType,
         final String repoName
     ) {
-        this.upstream = upstream;
+        this.baseLoader = baseLoader;
         this.cooldown = cooldown;
         this.inspector = inspector;
         this.repoType = repoType;
@@ -191,30 +184,26 @@ public final class GoLatestHandler {
         final String module = this.detector.extractPackageName(path).orElseThrow(
             () -> new IllegalArgumentException("Not a @latest path: " + path)
         );
-        return this.upstream.response(line, Headers.EMPTY, Content.EMPTY)
-            .thenCompose(resp -> {
-                if (!resp.status().success()) {
-                    // Non-200 from upstream — forward body and status, no rewrite.
-                    return bodyBytes(resp.body()).thenApply(bytes ->
-                        ResponseBuilder.from(resp.status())
-                            .headers(resp.headers())
-                            .body(bytes)
-                            .build()
-                    );
-                }
-                return bodyBytes(resp.body()).thenCompose(bytes ->
-                    this.processUpstream(bytes, resp.headers(), module, user, ctx)
+        return this.baseLoader.load(path, module).thenCompose(outcome -> {
+            if (!outcome.isAvailable()) {
+                // Nothing cached anywhere and upstream failed / returned
+                // non-2xx — forward its status + body unchanged, no rewrite.
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.from(outcome.status())
+                        .body(outcome.errorBody())
+                        .build()
                 );
-            });
+            }
+            return this.processUpstream(outcome.body(), module, user, ctx);
+        });
     }
 
     /**
-     * Process a successful upstream response: pass-through when allowed,
+     * Process the resolved base document: pass-through when allowed,
      * rewrite when the version is blocked, 403 when nothing resolves.
      */
     private CompletableFuture<Response> processUpstream(
         final byte[] upstreamBytes,
-        final Headers upstreamHeaders,
         final String module,
         final String user,
         final AuditContext ctx
@@ -241,7 +230,7 @@ public final class GoLatestHandler {
             );
             return CompletableFuture.completedFuture(
                 ResponseBuilder.ok()
-                    .headers(upstreamHeaders)
+                    .header("Content-Type", this.rewriter.contentType())
                     .body(upstreamBytes)
                     .build()
             );
@@ -251,7 +240,7 @@ public final class GoLatestHandler {
                 AuditLogger.resolution(ctx, this.repoType, this.repoName, module, user, null);
                 return CompletableFuture.completedFuture(
                     ResponseBuilder.ok()
-                        .headers(upstreamHeaders)
+                        .header("Content-Type", this.rewriter.contentType())
                         .body(upstreamBytes)
                         .build()
                 );
@@ -283,15 +272,14 @@ public final class GoLatestHandler {
         final AuditContext ctx
     ) {
         final String listPath = "/" + module + "/@v/list";
-        final RequestLine listLine = new RequestLine(RqMethod.GET, listPath);
-        return this.upstream.response(listLine, Headers.EMPTY, Content.EMPTY)
-            .thenCompose(listResp -> {
-                if (!listResp.status().success()) {
-                    // List fetch failed — consume body and fall through to 403.
-                    return bodyBytes(listResp.body()).thenApply(b -> List.<String>of());
-                }
-                return bodyBytes(listResp.body()).thenApply(this::parseVersionList);
-            })
+        return this.baseLoader.load(listPath, module)
+            .thenApply(outcome -> outcome.isAvailable()
+                // Shares the @v/list base cache + single-flight gate with
+                // GoListHandler: a warm list needs no extra upstream call
+                // here, and a cold miss coalesces with any concurrent
+                // GoListHandler request for the same module.
+                ? this.parseVersionList(outcome.body())
+                : List.<String>of())
             .thenCompose(candidates -> this.pickHighestNonBlocked(candidates, module, user))
             .thenApply(pickedOpt -> {
                 if (pickedOpt.isEmpty()) {
@@ -450,27 +438,6 @@ public final class GoLatestHandler {
                     .log();
                 return false;
             });
-    }
-
-    /**
-     * Drain a reactive-streams body to a byte array.
-     */
-    private static CompletableFuture<byte[]> bodyBytes(
-        final org.reactivestreams.Publisher<ByteBuffer> body
-    ) {
-        return Flowable.fromPublisher(body)
-            .reduce(new ByteArrayOutputStream(), (stream, buffer) -> {
-                try {
-                    stream.write(new Remaining(buffer).bytes());
-                    return stream;
-                } catch (final java.io.IOException error) {
-                    throw new UncheckedIOException(error);
-                }
-            })
-            .map(ByteArrayOutputStream::toByteArray)
-            .onErrorReturnItem(new byte[0])
-            .to(SingleInterop.get())
-            .toCompletableFuture();
     }
 
 }

@@ -10,8 +10,6 @@
  */
 package com.auto1.pantera.http.cooldown;
 
-import com.auto1.pantera.asto.Content;
-import com.auto1.pantera.asto.Remaining;
 import com.auto1.pantera.audit.AuditContext;
 import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
@@ -21,18 +19,12 @@ import com.auto1.pantera.cooldown.metadata.MetadataParseException;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
-import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.rq.RequestLine;
 import org.slf4j.MDC;
-import hu.akarnokd.rxjava2.interop.SingleInterop;
-import io.reactivex.Flowable;
 
-import java.io.ByteArrayOutputStream;
-import java.io.UncheckedIOException;
-import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -56,18 +48,24 @@ import java.util.concurrent.CompletableFuture;
  *
  * <p>The flow mirrors {@link GoLatestHandler}:</p>
  * <ol>
- *   <li>Fetch {@code /@v/list} from upstream via the shared slice.</li>
- *   <li>On non-2xx, forward status + body unchanged — never transform
- *       upstream errors.</li>
+ *   <li>Resolve the raw {@code /@v/list} base document via
+ *       {@link GoMetadataBaseLoader} (WS4-go.2): TTL-cached, offline-safe
+ *       on a warm module, single-flighted on a cold miss. Cooldown state
+ *       changes independently of the list, so every request re-runs the
+ *       filter below over the (cached) base — only the base fetch itself
+ *       is cached.</li>
+ *   <li>When nothing is available anywhere (upstream failed / returned
+ *       non-2xx and no cached copy exists), forward that status + body
+ *       unchanged — never transform upstream errors.</li>
  *   <li>Parse the newline-delimited body via {@link GoMetadataParser}. If
- *       parsing fails, pass the upstream bytes through unchanged.</li>
+ *       parsing fails, pass the base bytes through unchanged.</li>
  *   <li>Evaluate every parsed version against cooldown and collect the
  *       blocked set; hand that set plus the parsed list to
  *       {@link GoMetadataFilter#filter(List, Set)}.</li>
  *   <li>Re-serialise as newline-separated plain text (matching the
  *       wire format Go clients expect) and return 200 with
  *       {@code text/plain; charset=utf-8}. Trailing newline is
- *       preserved when the upstream body had one.</li>
+ *       preserved when the base body had one.</li>
  *   <li>If every version is blocked, return 403 with a Go-client-parseable
  *       text body, matching the convention used by
  *       {@link GoCooldownResponseFactory} and {@link GoLatestHandler}.</li>
@@ -85,10 +83,11 @@ public final class GoListHandler {
     private static final String CONTENT_TYPE = "text/plain; charset=utf-8";
 
     /**
-     * Upstream slice, shared with the main Go proxy so cache / auth /
-     * resilience layers apply to the list fetch the same way.
+     * TTL-cached, single-flighted loader for the {@code @v/list} base
+     * document (WS4-go.2). Resolves the raw, unfiltered upstream body
+     * through the shared {@code Cache}, offline-safe on a warm module.
      */
-    private final Slice upstream;
+    private final GoMetadataBaseLoader baseLoader;
 
     /**
      * Cooldown service for per-version block evaluation.
@@ -128,20 +127,20 @@ public final class GoListHandler {
     /**
      * Constructor.
      *
-     * @param upstream Upstream Go module proxy slice
+     * @param baseLoader TTL-cached, single-flighted base-document loader
      * @param cooldown Cooldown evaluation service
      * @param inspector Cooldown inspector for release-date lookups
      * @param repoType Repository type identifier (e.g. {@code "go"})
      * @param repoName Repository name
      */
     public GoListHandler(
-        final Slice upstream,
+        final GoMetadataBaseLoader baseLoader,
         final CooldownService cooldown,
         final CooldownInspector inspector,
         final String repoType,
         final String repoName
     ) {
-        this.upstream = upstream;
+        this.baseLoader = baseLoader;
         this.cooldown = cooldown;
         this.inspector = inspector;
         this.repoType = repoType;
@@ -182,31 +181,27 @@ public final class GoListHandler {
         final String module = this.detector.extractPackageName(path).orElseThrow(
             () -> new IllegalArgumentException("Not a @v/list path: " + path)
         );
-        return this.upstream.response(line, Headers.EMPTY, Content.EMPTY)
-            .thenCompose(resp -> {
-                if (!resp.status().success()) {
-                    // Non-2xx from upstream — forward status + body, no filtering.
-                    return bodyBytes(resp.body()).thenApply(bytes ->
-                        ResponseBuilder.from(resp.status())
-                            .headers(resp.headers())
-                            .body(bytes)
-                            .build()
-                    );
-                }
-                return bodyBytes(resp.body()).thenCompose(bytes ->
-                    this.processUpstream(bytes, resp.headers(), module, user, ctx)
+        return this.baseLoader.load(path, module).thenCompose(outcome -> {
+            if (!outcome.isAvailable()) {
+                // Nothing cached anywhere and upstream failed / returned
+                // non-2xx — forward its status + body unchanged, no filtering.
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.from(outcome.status())
+                        .body(outcome.errorBody())
+                        .build()
                 );
-            });
+            }
+            return this.processUpstream(outcome.body(), module, user, ctx);
+        });
     }
 
     /**
-     * Process a successful upstream response: parse, evaluate, filter,
-     * and re-serialise. Falls back to pass-through on parse failure and
-     * to 403 when every parsed version is blocked.
+     * Process the resolved base document: parse, evaluate, filter, and
+     * re-serialise. Falls back to pass-through on parse failure and to
+     * 403 when every parsed version is blocked.
      */
     private CompletableFuture<Response> processUpstream(
         final byte[] upstreamBytes,
-        final Headers upstreamHeaders,
         final String module,
         final String user,
         final AuditContext ctx
@@ -233,7 +228,7 @@ public final class GoListHandler {
             );
             return CompletableFuture.completedFuture(
                 ResponseBuilder.ok()
-                    .headers(upstreamHeaders)
+                    .header("Content-Type", CONTENT_TYPE)
                     .body(upstreamBytes)
                     .build()
             );
@@ -245,7 +240,7 @@ public final class GoListHandler {
             AuditLogger.resolution(ctx, this.repoType, this.repoName, module, user, List.of());
             return CompletableFuture.completedFuture(
                 ResponseBuilder.ok()
-                    .headers(upstreamHeaders)
+                    .header("Content-Type", CONTENT_TYPE)
                     .body(upstreamBytes)
                     .build()
             );
@@ -256,7 +251,7 @@ public final class GoListHandler {
                 // unchanged so any trailing newline / ordering is preserved.
                 AuditLogger.resolution(ctx, this.repoType, this.repoName, module, user, null);
                 return ResponseBuilder.ok()
-                    .headers(upstreamHeaders)
+                    .header("Content-Type", CONTENT_TYPE)
                     .body(upstreamBytes)
                     .build();
             }
@@ -404,28 +399,6 @@ public final class GoListHandler {
     private static boolean endsWithNewline(final byte[] bytes) {
         return bytes != null && bytes.length > 0
             && bytes[bytes.length - 1] == (byte) '\n';
-    }
-
-    /**
-     * Drain a reactive-streams body to a byte array. Mirrors the helper
-     * in {@link GoLatestHandler}.
-     */
-    private static CompletableFuture<byte[]> bodyBytes(
-        final org.reactivestreams.Publisher<ByteBuffer> body
-    ) {
-        return Flowable.fromPublisher(body)
-            .reduce(new ByteArrayOutputStream(), (stream, buffer) -> {
-                try {
-                    stream.write(new Remaining(buffer).bytes());
-                    return stream;
-                } catch (final java.io.IOException error) {
-                    throw new UncheckedIOException(error);
-                }
-            })
-            .map(ByteArrayOutputStream::toByteArray)
-            .onErrorReturnItem(new byte[0])
-            .to(SingleInterop.get())
-            .toCompletableFuture();
     }
 
 }

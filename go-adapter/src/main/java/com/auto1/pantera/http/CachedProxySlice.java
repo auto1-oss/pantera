@@ -30,6 +30,7 @@ import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.cooldown.GoLatestHandler;
 import com.auto1.pantera.http.cooldown.GoListHandler;
+import com.auto1.pantera.http.cooldown.GoMetadataBaseLoader;
 import com.auto1.pantera.http.context.RequestContext;
 import com.auto1.pantera.http.fault.Fault;
 import com.auto1.pantera.http.fault.Fault.ChecksumAlgo;
@@ -229,12 +230,23 @@ final class CachedProxySlice implements Slice {
             10_000,
             ContextualExecutor.contextualize(ForkJoinPool.commonPool())
         );
+        // WS4-go.2: shared TTL-cached, single-flighted base-document loader
+        // for @v/list / @latest — one instance per repo so both handlers
+        // (and GoLatestHandler's sibling @v/list fallback lookup) coalesce
+        // onto the same cache entry and single-flight gate.
+        final GoMetadataBaseLoader baseLoader = new GoMetadataBaseLoader(
+            client, cache, storage, rname
+        );
         this.latestHandler = new GoLatestHandler(
-            client, cooldown, inspector, rtype, rname
+            baseLoader, cooldown, inspector, rtype, rname
         );
         this.listHandler = new GoListHandler(
-            client, cooldown, inspector, rtype, rname
+            baseLoader, cooldown, inspector, rtype, rname
         );
+        // Register this repo's backing storage so a hosted "go" publish
+        // inside a go-group can evict the cached base documents here —
+        // see GoUploadSlice's post-upload invalidation.
+        storage.ifPresent(sto -> GoMetadataCacheRegistry.instance().register(rname, sto));
     }
 
     @Override
@@ -600,7 +612,7 @@ final class CachedProxySlice implements Slice {
                         return promise;
                     }
                 ),
-                this.cacheControlFor(key, head.orElse(Headers.EMPTY))
+                this.cacheControlFor(head.orElse(Headers.EMPTY))
             )).handle(
                 (content, throwable) -> {
                     if (throwable == null && content.isPresent()) {
@@ -825,40 +837,22 @@ final class CachedProxySlice implements Slice {
     }
 
     /**
-     * Determine cache control strategy for the given key.
-     * Uses TTL-based control for metadata paths (list, @latest),
-     * checksum-based control for artifacts.
+     * Determine cache control strategy for the given key. Only reached
+     * for artifact paths ({@code .info}/{@code .mod}) — {@code @v/list}
+     * and {@code @latest} are intercepted earlier in {@link #response}
+     * and cached by {@link GoMetadataBaseLoader}, the single owner of
+     * metadata caching (WS4-go.2).
      *
-     * @param key Cache key
      * @param head Headers from HEAD request
      * @return Cache control strategy
      */
-    private CacheControl cacheControlFor(final Key key, final Headers head) {
-        final String path = key.string();
-        // Metadata paths need TTL-based expiration to pick up new versions
-        if (this.isMetadataPath(path)) {
-            return this.storage
-                .<CacheControl>map(sto -> new CacheTimeControl(sto))
-                .orElse(CacheControl.Standard.ALWAYS);
-        }
-        // Artifacts use checksum-based validation
+    private CacheControl cacheControlFor(final Headers head) {
         return new CacheControl.All(
             StreamSupport.stream(head.spliterator(), false)
                 .map(Header::new)
                 .map(CachedProxySlice::checksumControl)
                 .toList()
         );
-    }
-
-    /**
-     * Check if path is a metadata path that needs TTL-based caching.
-     * Metadata paths: @v/list (version list), @latest (latest version info)
-     *
-     * @param path Request path
-     * @return true if metadata path
-     */
-    private boolean isMetadataPath(final String path) {
-        return path.endsWith("/@v/list") || path.endsWith("/@latest");
     }
 
     private static CacheControl checksumControl(final Header header) {
