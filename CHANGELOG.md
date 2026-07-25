@@ -1,5 +1,31 @@
 # Changelog
 
+## Version 2.3.0
+
+### 🔧 Bug fixes
+
+- **npm cooldown no longer hides an unblocked version behind a stale `304`.** With cooldown active the packument `ETag` was derived from the immutable upstream metadata hash, so a client that had cached the filtered packument kept revalidating to `304` and never saw a version that had aged out of, or been manually released from, cooldown until it cleared its own cache. The `ETag` is now computed from the filtered bytes actually served (matching the Maven adapter) and the raw-hash early-`304` is skipped while cooldown is active. Maven, PyPI, and Docker were unaffected.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Go hosted `@latest` resolves the correct version.** It selected the greatest `.info` filename by lexicographic string order (and compared the whole storage key, not the version), so `v0.9.0` outranked `v0.10.0`; it now selects by the format's semver comparator.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Maven `HEAD` responses carry `Content-Length` and `Last-Modified`, and group metadata checksums match the served bytes.** Local artifact `HEAD` omitted `Content-Length` and the proxy cache-hit `HEAD` omitted the `Last-Modified` it advertised; group `maven-metadata.xml` `.sha256`/`.sha512` fell through to a member's own (possibly differently-serialized) sidecar and could disagree with the bytes the group actually served. All four checksums are now recomputed over the served metadata.
+  ([@aydasraf](https://github.com/aydasraf))
+- **PyPI twine uploads are validated.** The client-declared `sha256_digest` is verified against the uploaded bytes (rejected with `checksum_mismatch`), and re-uploading an existing distribution filename is rejected with `409` instead of silently overwriting.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Docker pagination and digest errors are spec-correct.** `tags/list` and `_catalog` emit a `Link: …; rel="next"` header when the result is truncated (paginating clients no longer see only the first page); a `PUT`-by-digest whose bytes don't match fails with an explicit `DIGEST_INVALID`; and cancelling a blob upload returns `204`.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Go documentation no longer recommends a no-op flag.** `GONOSUMCHECK`/`GONOSUMDB` were removed from Go after 1.12; the guidance is now `GOSUMDB=off` (or scoped `GOPRIVATE`) for private modules.
+  ([@aydasraf](https://github.com/aydasraf))
+
+### 🔒 Security
+
+- **PyPI yank/unyank now enforces per-repository authorization.** The endpoints were authenticated but not authorized, so any valid token could yank any repository; they now require write permission on the target repository and deny with `403` (fail-closed, no mutation).
+  ([@aydasraf](https://github.com/aydasraf))
+- **Docker proxy repositories verify cached blob integrity.** A corrupt or truncated upstream blob could be written to the on-disk cache and re-served under a digest it did not match; the cache-store path now re-hashes the streamed bytes and rejects a mismatch, while the client still receives and independently verifies the tee'd bytes.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Removed a non-functional Go archive integrity claim.** The Go proxy fetched a `.ziphash` sidecar that the GOPROXY protocol does not define and that could never verify a module archive, so the tree no longer implies a guarantee it did not provide; genuine archive verification will land with the Go checksum-database proxy.
+  ([@aydasraf](https://github.com/aydasraf))
+
 ## Version 2.2.4
 
 ### 🔧 Bug fixes
