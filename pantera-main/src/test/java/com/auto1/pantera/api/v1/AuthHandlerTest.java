@@ -115,6 +115,20 @@ class AuthHandlerTest extends AsyncApiTestBase {
      * permanent token regardless of the admin toggle — the dropdown-
      * hiding in the UI was the only guard. Regression pin for that
      * bypass.
+     *
+     * <p>Uses a generous, explicit await timeout rather than the base
+     * class's default 5s: {@code generateTokenEndpoint} reads
+     * {@code api_token_allow_permanent} via synchronous JDBC directly on
+     * the Vert.x event loop (unlike its sibling handlers, which dispatch
+     * through {@code HandlerExecutor}), and this test additionally writes
+     * that same setting through the shared, Testcontainers-reused Postgres
+     * just before the request. Under a `-T8` reactor build that shared
+     * container can be contended by unrelated modules' test JVMs, so the
+     * blocking read can occasionally take longer than 5s — this previously
+     * surfaced as a flaky {@code TimeoutException}, not a real rejection
+     * failure (the 400/PERMANENT_TOKENS_DISABLED assertions below are
+     * unchanged). 30s is a pure hang-guard: it costs nothing when the
+     * request is fast, which is the common case.
      */
     @Test
     void generateTokenRejectsPermanentWhenAllowPermanentDisabled(final Vertx vertx,
@@ -123,7 +137,7 @@ class AuthHandlerTest extends AsyncApiTestBase {
         final JsonObject body = new JsonObject()
             .put("expiry_days", 0)
             .put("label", "bypass-attempt");
-        request(vertx, ctx, HttpMethod.POST, "/api/v1/auth/token/generate", body, TEST_TOKEN,
+        request(vertx, ctx, HttpMethod.POST, "/api/v1/auth/token/generate", body, TEST_TOKEN, 30L,
             res -> {
                 assertThat(res.statusCode(), is(400));
                 final JsonObject json = res.bodyAsJsonObject();
