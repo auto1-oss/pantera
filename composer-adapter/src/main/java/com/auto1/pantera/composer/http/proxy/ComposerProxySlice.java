@@ -315,8 +315,15 @@ public class ComposerProxySlice implements Slice {
         // uses {@code evaluateWithKnownDate} which skips inspector lookup
         // entirely. Mirrors the npm/PyPI packument-inline pattern landed
         // in {@code dbdde1736}.
+        // WS6.3: route the root aggregation surface through the same
+        // cache/storage this repository already uses for per-package
+        // metadata — TTL-cached, single-flighted, serve-stale-on-outage
+        // (ComposerRootBaseLoader), instead of hitting the upstream
+        // unconditionally on every /packages.json or /repo.json request.
+        // ComposerRootBaseLoader namespaces its keys so they never collide
+        // with the per-package cache entries.
         this.rootHandler = new ComposerRootPackagesHandler(
-            rawRemote, cooldown, rtype, rname, baseUrl
+            rawRemote, cache, repository.storage(), cooldown, rtype, rname, baseUrl
         );
         this.packageHandler = new ComposerPackageMetadataHandler(
             cachedProxy, cooldown, rtype, rname

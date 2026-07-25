@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.cache.Cache;
+import com.auto1.pantera.asto.cache.FromRemoteCache;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.composer.AstoRepository;
 import com.auto1.pantera.http.Headers;
@@ -26,12 +27,14 @@ import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -46,6 +49,124 @@ final class CachedProxySliceConditionalGetTest {
     private static final String PACKAGE_PATH = "/p2/vendor/package.json";
 
     private static final String PACKAGE_NAME = "vendor/package";
+
+    /**
+     * WS6.2 — served-side half of the conditional-request contract: a
+     * client that already holds the exact cached representation (its
+     * {@code If-Modified-Since} matches the {@code Last-Modified} captured
+     * on the original fetch) gets a bodiless {@code 304} straight off the
+     * warm cache — no upstream call at all.
+     *
+     * <p>Uses a real {@link FromRemoteCache} (not {@link Cache#NOP}): only
+     * a real cache actually persists the merged/rewritten packument under
+     * the plain {@code name} storage key that {@code checkCacheFirst}
+     * probes on a subsequent request — with {@code Cache.NOP} every
+     * request unconditionally re-enters {@code fetchThroughCache}, which
+     * would defeat the point of this test (proving a warm-cache hit takes
+     * no second upstream call).
+     */
+    @Test
+    @Timeout(10)
+    void clientConditionalGetOnWarmCacheReturns304WithoutUpstreamCall() throws Exception {
+        final Storage storage = new InMemoryStorage();
+        final ConditionalUpstream upstream = new ConditionalUpstream();
+        final CachedProxySlice slice = new CachedProxySlice(
+            upstream, new AstoRepository(storage), new FromRemoteCache(storage),
+            Optional.empty(), "composer-proxy-test", "http://localhost:8080"
+        );
+        // Warm the cache — one unconditional upstream fetch captures
+        // Last-Modified into lastModifiedStore and (via FromRemoteCache's
+        // background tee) persists the merged packument under the plain
+        // "vendor/package" storage key.
+        final Response first = slice.response(
+            new RequestLine(RqMethod.GET, PACKAGE_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        Assertions.assertEquals(RsStatus.OK, first.status(), "initial fetch succeeds");
+        Assertions.assertEquals(1, upstream.calls(), "one upstream call to warm the cache");
+        // FromRemoteCache's storage save is a fire-and-forget background
+        // tee — wait for it to land before probing for a warm-cache hit.
+        awaitPersisted(storage, new Key.From(PACKAGE_NAME));
+
+        // A client conditional GET carrying the exact captured Last-Modified
+        // must be served straight from the warm cache as a 304 — no
+        // additional upstream call.
+        final Response conditional = slice.response(
+            new RequestLine(RqMethod.GET, PACKAGE_PATH),
+            Headers.from("If-Modified-Since", LAST_MODIFIED),
+            Content.EMPTY
+        ).join();
+        Assertions.assertEquals(
+            RsStatus.NOT_MODIFIED, conditional.status(),
+            "client If-Modified-Since matching the cached Last-Modified yields 304"
+        );
+        Assertions.assertEquals(
+            1, upstream.calls(),
+            "served from the warm cache — no upstream call for the client's conditional GET"
+        );
+        Assertions.assertEquals(
+            0, conditional.body().asBytesFuture().join().length,
+            "304 response body is empty"
+        );
+        final List<Header> lastModifiedHeaders = conditional.headers().find("Last-Modified");
+        Assertions.assertEquals(
+            1, lastModifiedHeaders.size(), "304 response carries a Last-Modified header"
+        );
+        Assertions.assertEquals(
+            LAST_MODIFIED, lastModifiedHeaders.getFirst().getValue(),
+            "304 Last-Modified echoes the cached value"
+        );
+    }
+
+    /**
+     * A client whose {@code If-Modified-Since} is older than the cached
+     * {@code Last-Modified} (i.e. the client's copy really is stale) must
+     * get the full {@code 200} body, not a 304.
+     */
+    @Test
+    @Timeout(10)
+    void clientConditionalGetWithOlderDateGetsFullBody() throws Exception {
+        final Storage storage = new InMemoryStorage();
+        final ConditionalUpstream upstream = new ConditionalUpstream();
+        final CachedProxySlice slice = new CachedProxySlice(
+            upstream, new AstoRepository(storage), new FromRemoteCache(storage),
+            Optional.empty(), "composer-proxy-test", "http://localhost:8080"
+        );
+        slice.response(
+            new RequestLine(RqMethod.GET, PACKAGE_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        awaitPersisted(storage, new Key.From(PACKAGE_NAME));
+
+        final Response conditional = slice.response(
+            new RequestLine(RqMethod.GET, PACKAGE_PATH),
+            Headers.from("If-Modified-Since", "Wed, 21 Oct 2010 07:28:00 GMT"),
+            Content.EMPTY
+        ).join();
+        Assertions.assertEquals(
+            RsStatus.OK, conditional.status(),
+            "an older client If-Modified-Since does not suppress the body"
+        );
+        Assertions.assertTrue(
+            conditional.body().asBytesFuture().join().length > 0,
+            "full body is served when the client's copy predates the cached Last-Modified"
+        );
+    }
+
+    /**
+     * Poll until {@code key} is durably present in {@code storage}.
+     * {@link FromRemoteCache} tees bytes to the caller while saving a copy
+     * in the background, so the write is not guaranteed durable the
+     * instant the caller's future completes — poll for the eventual state
+     * rather than asserting instantly, per the project's testing doctrine.
+     */
+    private static void awaitPersisted(final Storage storage, final Key key) throws Exception {
+        final long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!storage.exists(key).get(1, TimeUnit.SECONDS)) {
+            if (System.nanoTime() > deadlineNanos) {
+                throw new AssertionError("Cache entry for " + key.string() + " never persisted");
+            }
+            Thread.sleep(2);
+        }
+    }
 
     @Test
     void notModifiedSkipsMergeAndLeavesCacheUnchanged() {

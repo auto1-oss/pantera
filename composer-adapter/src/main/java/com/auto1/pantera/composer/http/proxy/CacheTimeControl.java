@@ -25,8 +25,14 @@ import java.util.concurrent.CompletionStage;
 
 /**
  * Check if saved item is expired by comparing time value.
+ *
+ * <p>Public (WS6.3) so other Composer packages — e.g.
+ * {@code com.auto1.pantera.composer.cooldown.ComposerRootBaseLoader} —
+ * can reuse the same TTL mechanism instead of hand-rolling a second one;
+ * mirrors the already-public {@code CacheTimeControl} in the go-adapter
+ * and pypi-adapter modules.
  */
-final class CacheTimeControl implements CacheControl {
+public final class CacheTimeControl implements CacheControl {
     /**
      * Name to file which contains info about cached items (e.g. when an item was saved).
      */
@@ -46,7 +52,7 @@ final class CacheTimeControl implements CacheControl {
      * Ctor with default value for time of expiration (12 hours).
      * @param storage Storage
      */
-    CacheTimeControl(final Storage storage) {
+    public CacheTimeControl(final Storage storage) {
         this(storage, Duration.ofHours(12));
     }
 
@@ -55,7 +61,7 @@ final class CacheTimeControl implements CacheControl {
      * @param storage Storage
      * @param expiration Time after which cached items are not valid
      */
-    CacheTimeControl(final Storage storage, final Duration expiration) {
+    public CacheTimeControl(final Storage storage, final Duration expiration) {
         this.storage = storage;
         this.expiration = expiration;
     }

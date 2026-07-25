@@ -187,7 +187,7 @@ final class CachedProxySlice implements Slice {
 
             // Check cache FIRST before any network calls — offline mode
             // serves cached content even when upstream is unreachable.
-            return this.checkCacheFirst(line, name);
+            return this.checkCacheFirst(line, headers, name);
         });
     }
 
@@ -196,11 +196,14 @@ final class CachedProxySlice implements Slice {
      * metadata is served even when the upstream is unavailable.
      *
      * @param line Request line
+     * @param headers Inbound request headers (read for client
+     *  {@code If-Modified-Since} on the served response — WS6.2)
      * @param name Package name
      * @return Response future
      */
     private CompletableFuture<Response> checkCacheFirst(
         final RequestLine line,
+        final Headers headers,
         final String name
     ) {
         // Check storage cache FIRST before any network calls
@@ -226,14 +229,14 @@ final class CachedProxySlice implements Slice {
                         if (!fresh) {
                             this.backgroundRefresh(line, name);
                         }
-                        return this.serveCachedMetadata(bytes);
+                        return this.serveCachedMetadata(line, headers, bytes);
                     });
                 });
             }
             // Cache MISS - fetch through cache. Per-version cooldown is
             // owned by ComposerPackageMetadataHandler / ComposerRootPackagesHandler;
             // CachedProxySlice's job is pure cache + URL-rewrite + integrity.
-            return this.fetchThroughCache(line, name);
+            return this.fetchThroughCache(line, headers, name);
         }).toCompletableFuture();
     }
 
@@ -241,17 +244,92 @@ final class CachedProxySlice implements Slice {
      * Serve cached metadata bytes: rewrite URLs (idempotent — already
      * rewritten at write time), build response.
      *
+     * @param line Request line (path is the {@link #lastModifiedStore} key)
+     * @param headers Inbound request headers (client conditional GET)
      * @param bytes Cached metadata bytes
      * @return Response future
      */
-    private CompletableFuture<Response> serveCachedMetadata(final byte[] bytes) {
+    private CompletableFuture<Response> serveCachedMetadata(
+        final RequestLine line, final Headers headers, final byte[] bytes
+    ) {
         final byte[] rewritten = this.rewriteMetadata(bytes);
         return CompletableFuture.completedFuture(
-            ResponseBuilder.ok()
-                .header("Content-Type", "application/json")
-                .body(new Content.From(rewritten))
-                .build()
+            this.buildMetadataResponse(line, headers, rewritten)
         );
+    }
+
+    /**
+     * Build the served metadata response — the served-side half of the
+     * conditional-request contract (WS6.2; {@link #revalidateOrRefresh} is
+     * the upstream-facing half). Emits the upstream {@code Last-Modified}
+     * captured for this path in {@link #lastModifiedStore} (populated in
+     * {@link #packageFromRemote}) and, when the client sent its own
+     * {@code If-Modified-Since} matching or newer than that value, returns
+     * a bodiless {@code 304} instead of re-transferring the packument.
+     * Falls back to a plain {@code 200} with no {@code Last-Modified}
+     * header when nothing has been captured for this path yet (a cold
+     * cache entry written before this fix, or one populated by a path this
+     * JVM instance never itself fetched — {@link #lastModifiedStore} is an
+     * in-memory, per-instance map, matching the existing scope of the
+     * upstream-side conditional store).
+     *
+     * @param line Request line (path is the {@link #lastModifiedStore} key)
+     * @param headers Inbound request headers
+     * @param bytes Response body (already rewritten)
+     * @return 200 OK with body, or 304 Not Modified with no body
+     */
+    private Response buildMetadataResponse(
+        final RequestLine line, final Headers headers, final byte[] bytes
+    ) {
+        final String stored = this.lastModifiedStore.get(line.uri().getPath());
+        if (stored != null) {
+            final java.util.List<String> clientSince =
+                new com.auto1.pantera.http.rq.RqHeaders(headers, "If-Modified-Since");
+            if (!clientSince.isEmpty() && notModifiedSince(stored, clientSince.get(0))) {
+                EcsLogger.info("com.auto1.pantera.composer")
+                    .message("Client conditional GET matched cached Last-Modified — 304")
+                    .eventCategory("web")
+                    .eventAction("conditional_get")
+                    .eventOutcome("success")
+                    .field("url.path", line.uri().getPath())
+                    .field("log.source", "application")
+                    .log();
+                return ResponseBuilder.from(RsStatus.NOT_MODIFIED)
+                    .header("Last-Modified", stored)
+                    .build();
+            }
+        }
+        final ResponseBuilder builder = ResponseBuilder.ok()
+            .header("Content-Type", "application/json")
+            .body(new Content.From(bytes));
+        if (stored != null) {
+            builder.header("Last-Modified", stored);
+        }
+        return builder.build();
+    }
+
+    /**
+     * Compare two RFC 1123 HTTP-dates: true when {@code stored} (the
+     * resource's captured Last-Modified instant) is at or before
+     * {@code clientSince} (the client's {@code If-Modified-Since} instant)
+     * — i.e. the resource has not changed since the client last saw it.
+     * Unparseable dates fail open to "modified" (a full 200) rather than
+     * risk a false 304 masking real content.
+     *
+     * @param stored Captured upstream Last-Modified (RFC 1123)
+     * @param clientSince Client's If-Modified-Since header value (RFC 1123)
+     * @return true if the resource is not modified since clientSince
+     */
+    private static boolean notModifiedSince(final String stored, final String clientSince) {
+        try {
+            final Instant storedInstant =
+                Instant.from(DateTimeFormatter.RFC_1123_DATE_TIME.parse(stored));
+            final Instant clientInstant =
+                Instant.from(DateTimeFormatter.RFC_1123_DATE_TIME.parse(clientSince));
+            return !storedInstant.isAfter(clientInstant);
+        } catch (final DateTimeParseException ex) {
+            return false;
+        }
     }
 
     /**
@@ -317,7 +395,10 @@ final class CachedProxySlice implements Slice {
     ) {
         final String stored = this.lastModifiedStore.get(line.uri().getPath());
         if (stored == null) {
-            return this.fetchThroughCache(line, name);
+            // Background revalidation has no live client waiting — no
+            // client conditional headers to honour on the (discarded)
+            // returned response.
+            return this.fetchThroughCache(line, Headers.EMPTY, name);
         }
         return this.remote.response(
             line, Headers.from("If-Modified-Since", stored), Content.EMPTY
@@ -331,7 +412,7 @@ final class CachedProxySlice implements Slice {
             // not to honour If-Modified-Since) — drain this response and
             // fall through to the authoritative merge/rewrite/save path.
             return response.body().asBytesFuture().thenCompose(
-                ignored -> this.fetchThroughCache(line, name)
+                ignored -> this.fetchThroughCache(line, Headers.EMPTY, name)
             );
         }).exceptionally(err -> {
             EcsLogger.warn("com.auto1.pantera.composer")
@@ -380,11 +461,14 @@ final class CachedProxySlice implements Slice {
      * Fetch package through cache.
      *
      * @param line Request line
+     * @param headers Inbound request headers (client conditional GET on
+     *  the served response — WS6.2)
      * @param name Package name
      * @return Response future
      */
     private CompletableFuture<Response> fetchThroughCache(
         final RequestLine line,
+        final Headers headers,
         final String name
     ) {
         // Package name for merge: strip ~dev suffix since Packagist JSON uses base name
@@ -449,10 +533,7 @@ final class CachedProxySlice implements Slice {
                             .field("package.name", metadataKey.string())
                             .field("log.source", "application")
                             .log();
-                        return ResponseBuilder.ok()
-                            .header("Content-Type", "application/json")
-                            .body(new Content.From(bytes))
-                            .build();
+                        return this.buildMetadataResponse(line, headers, bytes);
                     });
             });
         }).exceptionally(throwable -> {

@@ -93,6 +93,8 @@ composer show -a
 ### Conditional Requests and HEAD
 
 - A proxy repository issues a conditional `If-Modified-Since` request when revalidating already-cached package metadata; a `304` from the upstream is served from cache without re-transferring or re-parsing the metadata body.
+- Package metadata responses (`/p2/<vendor>/<pkg>.json`, `/packages/<vendor>/<pkg>.json`) carry a `Last-Modified` header once Pantera has captured one from the upstream. A client sending its own `If-Modified-Since` matching that value gets a bodiless `304` straight from the warm cache — no upstream call at all.
+- The repository root (`/packages.json`, `/repo.json`) is now cached (TTL, single-flighted) instead of being fetched from the upstream on every request — an upstream blip no longer breaks `composer require` root resolution; the last-known root is served stale until the upstream recovers.
 - `HEAD` is supported everywhere `GET` is — package metadata, dist archives, and the catalog surfaces above — returning the same status and headers as the equivalent `GET`, with no body.
 
 ---

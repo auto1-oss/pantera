@@ -12,6 +12,8 @@ package com.auto1.pantera.composer.cooldown;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Remaining;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.cache.Cache;
 import com.auto1.pantera.audit.AuditContext;
 import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
@@ -129,9 +131,21 @@ public final class ComposerRootPackagesHandler {
      * Root aggregation must fetch the genuine upstream document (there
      * is no per-package name to route through the metadata-merge cache
      * path); rewriting happens in this handler via
-     * {@link MetadataUrlRewriter#rewriteRoot}.
+     * {@link MetadataUrlRewriter#rewriteRoot}. Used directly only when
+     * {@link #baseLoader} is absent (no cache/storage configured —
+     * preserves the pre-WS6.3 unconditional-fetch behaviour for callers,
+     * e.g. unit tests, that construct this handler without them).
      */
     private final Slice upstream;
+
+    /**
+     * Cache-backed, TTL, single-flighted, serve-stale-on-outage loader for
+     * the root document (WS6.3 — brings this resolution surface under the
+     * same contract as Maven metadata / Go {@code @v/list} / the PyPI JSON
+     * API). {@code null} when no cache/storage was supplied, in which case
+     * {@link #upstream} is hit directly on every request.
+     */
+    private final ComposerRootBaseLoader baseLoader;
 
     /**
      * Cooldown evaluation service.
@@ -185,7 +199,12 @@ public final class ComposerRootPackagesHandler {
     }
 
     /**
-     * Full ctor.
+     * Full ctor without a resolution-surface cache — the root document is
+     * fetched from {@code upstream} unconditionally on every request, with
+     * no TTL, single-flighting, or serve-stale-on-outage. Kept for callers
+     * (tests) that have no repository storage to back a cache with; the
+     * cache-backed constructor below is what production wiring
+     * ({@code ComposerProxySlice}) uses.
      *
      * @param upstream Upstream Composer proxy slice (raw remote)
      * @param cooldown Cooldown evaluation service
@@ -200,13 +219,77 @@ public final class ComposerRootPackagesHandler {
         final String repoName,
         final String baseUrl
     ) {
+        this(upstream, null, null, cooldown, repoType, repoName, baseUrl);
+    }
+
+    /**
+     * Full ctor with a cache-backed resolution-surface loader (WS6.3): the
+     * root document is TTL-cached, single-flighted, and served stale on an
+     * upstream outage rather than fetched unconditionally on every
+     * request.
+     *
+     * @param upstream Upstream Composer root slice (raw remote)
+     * @param cache Storage-backed cache for the root document
+     * @param storage Backing storage (TTL + stale fallback)
+     * @param cooldown Cooldown evaluation service
+     * @param repoType Repository type (e.g. {@code "php"})
+     * @param repoName Repository name
+     * @param baseUrl Pantera-local base URL to rewrite root URLs to
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public ComposerRootPackagesHandler(
+        final Slice upstream,
+        final Cache cache,
+        final Storage storage,
+        final CooldownService cooldown,
+        final String repoType,
+        final String repoName,
+        final String baseUrl
+    ) {
         this.upstream = upstream;
+        this.baseLoader = cache == null || storage == null
+            ? null : new ComposerRootBaseLoader(upstream, cache, storage, repoName);
         this.cooldown = cooldown;
         this.repoType = repoType;
         this.repoName = repoName;
         this.baseUrl = baseUrl;
         this.detector = new ComposerRootPackagesRequestDetector();
         this.filter = new ComposerRootPackagesFilter();
+    }
+
+    /**
+     * Fetch the root document at {@code line}'s path — through
+     * {@link #baseLoader} when configured (WS6.3: cached, single-flighted,
+     * serve-stale-on-outage), or directly from {@link #upstream} otherwise.
+     * Normalises both paths to a plain {@link Response} so {@link #handle}
+     * doesn't need to know which path served it.
+     */
+    private CompletableFuture<Response> fetchUpstream(final RequestLine line) {
+        if (this.baseLoader == null) {
+            return this.upstream.response(line, Headers.EMPTY, Content.EMPTY);
+        }
+        return this.baseLoader.load(line.uri().getPath()).thenApply(outcome -> {
+            if (outcome.isAvailable()) {
+                return ResponseBuilder.ok().body(outcome.body()).build();
+            }
+            final ResponseBuilder unavailable = ResponseBuilder.from(outcome.status())
+                .body(outcome.errorBody());
+            if (outcome.circuitOpen()) {
+                // Preserve the circuit-open marker through this funnel — a
+                // group resolver wrapping this handler must treat a
+                // breaker fast-fail as "member skipped", never "member
+                // failed" (see UpstreamCircuitOpenException).
+                unavailable.header(
+                    com.auto1.pantera.http.UpstreamCircuitOpenException.HEADER, "true"
+                );
+                if (outcome.retryAfterSeconds() > 0) {
+                    unavailable.header(
+                        "Retry-After", Long.toString(outcome.retryAfterSeconds())
+                    );
+                }
+            }
+            return unavailable.build();
+        });
     }
 
     /**
@@ -230,7 +313,7 @@ public final class ComposerRootPackagesHandler {
     public CompletableFuture<Response> handle(
         final RequestLine line, final String user, final AuditContext auditCtx
     ) {
-        return this.upstream.response(line, Headers.EMPTY, Content.EMPTY)
+        return this.fetchUpstream(line)
             .thenCompose(resp -> {
                 if (!resp.status().success()) {
                     return bodyBytes(resp.body()).thenApply(bytes ->
