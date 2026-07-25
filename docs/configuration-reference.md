@@ -1331,8 +1331,9 @@ storage:
 `CachedBlobStorage`: an in-memory index answers `exists`/`metadata`/`list`
 with zero S3 round trips, and a disk-served read never issues an inline S3
 HEAD. See `docs/admin-guide/storage-backends.md#index-cache-mode-cachemode-index`
-for the full behavioral write-up (including current limitations: no
-size-based eviction and index-scoped `list()` completeness in this phase).
+for the full behavioral write-up (including the current limitation:
+index-scoped `list()` completeness in this phase). Eviction and admission
+control are covered separately in section 3.7 below.
 
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
@@ -1392,6 +1393,44 @@ storage:
     write-back-max-backoff-millis: 30000
     write-back-retry-after-seconds: 5
 ```
+
+### 3.7 Eviction & Admission Control for S3 Index Mode
+
+Only meaningful under `cache.mode: index`. Keeps the disk cache bounded via an
+in-memory running byte counter (never a directory walk) plus LRU/LFU
+eviction; a write that would cross `max-disk-bytes` evicts synchronously
+first and is rejected if it still cannot fit. A `PENDING_WRITE` entry (an
+unconfirmed write-back upload) is never selected for eviction. See
+`docs/admin-guide/storage-backends.md#eviction--admission-control-cachemax-disk-bytes`
+for the full write-up (watermark semantics, the `PENDING_WRITE` durability
+interaction, and the sidecar coldness-signal persistence trade-off).
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `max-disk-bytes` | long | No | `10737418240` (10 GiB) | Hard bound on total disk-cache bytes; `<= 0` disables eviction/admission (unbounded) |
+| `eviction-high-watermark-percent` | int | No | `90` | Percentage of `max-disk-bytes` at which a write proactively triggers eviction |
+| `eviction-low-watermark-percent` | int | No | `80` | Percentage of `max-disk-bytes` eviction works down toward once triggered |
+| `eviction-policy` | string | No | `LRU` | `LRU` or `LFU` -- same vocabulary as `cache.mode: disk`'s `eviction-policy` |
+
+```yaml
+storage:
+  type: s3
+  bucket: my-artifacts
+  region: eu-west-1
+  cache:
+    enabled: true
+    mode: index
+    path: /var/pantera/cache/s3
+    max-disk-bytes: 10737418240
+    eviction-high-watermark-percent: 90
+    eviction-low-watermark-percent: 80
+    eviction-policy: LRU
+```
+
+Cache files under `cache.mode: index` are also sharded on disk (a 2-level hex
+fan-out keyed off a hash of the artifact key) to avoid one huge flat cache
+directory. This has no config key -- it is always on for `cache.mode: index`
+and is purely an on-disk layout detail with no observable API effect.
 
 ---
 

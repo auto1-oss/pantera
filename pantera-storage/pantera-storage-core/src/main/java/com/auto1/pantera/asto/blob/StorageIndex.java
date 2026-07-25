@@ -28,6 +28,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Function;
 import java.util.stream.Stream;
 
 /**
@@ -68,16 +70,29 @@ public final class StorageIndex {
 
     /**
      * Name of the staging directory {@link CachedBlobStorage} (via {@code
-     * FileStorage}) uses for atomic writes; entries under it are in-flight
-     * temp files, never a materialized cache entry, and must be skipped by
-     * the boot scan.
+     * FileStorage}, and directly for its own atomic sidecar rewrites) uses
+     * for in-flight temp files; entries under any directory with this name
+     * are never a materialized cache entry and must be skipped by the boot
+     * scan. Package-visible so {@link CachedBlobStorage} can stage its own
+     * temp files under the identical exclusion rule rather than duplicating
+     * the literal.
      */
-    private static final String STAGING_DIR = ".tmp";
+    static final String STAGING_DIR = ".tmp";
 
     /**
      * The index itself: key string -&gt; entry.
      */
     private final ConcurrentHashMap<String, Entry> entries = new ConcurrentHashMap<>();
+
+    /**
+     * Running total of bytes occupied by every currently {@link
+     * Entry#presentOnDisk()} entry, maintained incrementally on every {@link
+     * #putPresent}/{@link #putPendingWrite}/{@link #putNegative}/{@link
+     * #remove} -- WS1.4 (spec &sect;3.D): the eviction/admission-control path
+     * must never {@code Files.walk} the cache directory to answer "how many
+     * bytes are on disk right now".
+     */
+    private final AtomicLong diskBytes = new AtomicLong();
 
     /**
      * Clock, injected for deterministic tests (fast-forwardable fake clock
@@ -161,10 +176,7 @@ public final class StorageIndex {
         final String digest,
         final boolean presentOnDisk
     ) {
-        this.entries.put(
-            key.string(),
-            Entry.present(size, etag, digest, this.clock.millis(), presentOnDisk)
-        );
+        this.put(key, Entry.present(size, etag, digest, this.clock.millis(), presentOnDisk));
     }
 
     /**
@@ -188,10 +200,7 @@ public final class StorageIndex {
         final String etag,
         final String digest
     ) {
-        this.entries.put(
-            key.string(),
-            Entry.pendingWrite(size, etag, digest, this.clock.millis())
-        );
+        this.put(key, Entry.pendingWrite(size, etag, digest, this.clock.millis()));
     }
 
     /**
@@ -202,7 +211,83 @@ public final class StorageIndex {
      * @param negativeTtl How long to remember the miss.
      */
     public void putNegative(final Key key, final Duration negativeTtl) {
-        this.entries.put(key.string(), Entry.negative(this.clock.millis() + negativeTtl.toMillis()));
+        this.put(key, Entry.negative(this.clock.millis() + negativeTtl.toMillis()));
+    }
+
+    /**
+     * Records a cache hit against an already-known entry: bumps {@link
+     * Entry#hits()} and refreshes {@link Entry#lastAccessEpochMilli()} to
+     * now, used by the WS1.4 LRU/LFU eviction policy to identify the coldest
+     * candidates. A no-op if {@code key} is not currently known (e.g. it was
+     * concurrently evicted) -- callers must not depend on this having any
+     * observable effect.
+     *
+     * @param key Key that was just served from disk.
+     */
+    public void recordAccess(final Key key) {
+        this.entries.computeIfPresent(key.string(), (raw, current) -> current.touched(this.clock.millis()));
+    }
+
+    /**
+     * Current running total of bytes occupied by every {@link
+     * Entry#presentOnDisk()} entry -- maintained incrementally, never derived
+     * from a directory walk (WS1.4, spec &sect;3.D).
+     *
+     * @return Disk bytes currently accounted for by this index.
+     */
+    public long diskBytesUsed() {
+        return this.diskBytes.get();
+    }
+
+    /**
+     * Entries eligible for WS1.4 eviction: known-positive, present on the
+     * local disk tier, and NOT {@link Entry#pendingUpload()} -- a {@code
+     * PENDING_WRITE} entry is the only durable copy of its bytes and must
+     * never be selected as an eviction candidate (spec &sect;3.D, acceptance
+     * #5). Callers sort this by their chosen policy (LRU: {@link
+     * Entry#lastAccessEpochMilli()}; LFU: {@link Entry#hits()}) themselves --
+     * this index does not embed a policy opinion.
+     *
+     * @return Mutable list of key/entry pairs eligible for eviction.
+     */
+    public List<Map.Entry<Key, Entry>> evictionCandidates() {
+        final List<Map.Entry<Key, Entry>> candidates = new ArrayList<>();
+        for (final Map.Entry<String, Entry> candidate : this.entries.entrySet()) {
+            final Entry entry = candidate.getValue();
+            if (!entry.negative() && entry.presentOnDisk() && !entry.pendingUpload()) {
+                candidates.add(Map.entry(new Key.From(candidate.getKey()), entry));
+            }
+        }
+        return candidates;
+    }
+
+    /**
+     * Inserts or overwrites {@code key}'s entry and keeps {@link
+     * #diskBytes} consistent with the byte-accounting delta this implies.
+     *
+     * @param key Key.
+     * @param updated New entry.
+     */
+    private void put(final Key key, final Entry updated) {
+        final Entry previous = this.entries.put(key.string(), updated);
+        this.trackDiskBytes(previous, updated);
+    }
+
+    /**
+     * Adjusts {@link #diskBytes} for a key transitioning from {@code
+     * previous} to {@code updated} (either may be {@code null}, meaning "no
+     * entry"). Only {@link Entry#presentOnDisk()} entries contribute their
+     * {@link Entry#size()} to the running total.
+     *
+     * @param previous Prior entry, or {@code null} if there was none.
+     * @param updated New entry, or {@code null} if the key was removed.
+     */
+    private void trackDiskBytes(final Entry previous, final Entry updated) {
+        final long before = previous != null && previous.presentOnDisk() ? previous.size() : 0L;
+        final long after = updated != null && updated.presentOnDisk() ? updated.size() : 0L;
+        if (before != after) {
+            this.diskBytes.addAndGet(after - before);
+        }
     }
 
     /**
@@ -231,7 +316,8 @@ public final class StorageIndex {
      * @param key Key.
      */
     public void remove(final Key key) {
-        this.entries.remove(key.string());
+        final Entry previous = this.entries.remove(key.string());
+        this.trackDiskBytes(previous, null);
     }
 
     /**
@@ -310,13 +396,36 @@ public final class StorageIndex {
      * @param root Cache namespace root directory.
      */
     public void rebuildFromDisk(final Path root) {
+        this.rebuildFromDisk(
+            root,
+            dataFile -> Optional.of(new Key.From(root.relativize(dataFile).toString().replace('\\', '/')))
+        );
+    }
+
+    /**
+     * Boot-time rehydration variant for a disk layout that does not map a
+     * key directly to its relative path (WS1.4 &sect;3.D sharded cache
+     * directories: a 2-level hex fan-out derived from a hash of the key,
+     * with the original key recoverable only by decoding the leaf file
+     * name). {@code keyResolver} is the single source of truth for that
+     * mapping -- see {@code CacheKeyShard} in {@code CachedBlobStorage},
+     * which supplies it for the sharded layout. A file the resolver cannot
+     * map back to a key ({@link Optional#empty()}) is skipped: self-healing
+     * (a subsequent cold fill repopulates it) rather than aborting the whole
+     * rebuild.
+     *
+     * @param root Cache namespace root directory.
+     * @param keyResolver Recovers the original key from a discovered data
+     *  file's path; {@link Optional#empty()} skips the file.
+     */
+    public void rebuildFromDisk(final Path root, final Function<Path, Optional<Key>> keyResolver) {
         if (!Files.exists(root)) {
             return;
         }
         try (Stream<Path> walk = Files.walk(root)) {
             walk.filter(Files::isRegularFile)
                 .filter(StorageIndex::isCacheableDataFile)
-                .forEach(dataFile -> this.hydrateFromDataFile(root, dataFile));
+                .forEach(dataFile -> keyResolver.apply(dataFile).ifPresent(key -> this.hydrateFromDataFile(dataFile, key)));
         } catch (final IOException ex) {
             EcsLogger.warn("com.auto1.pantera.asto.blob")
                 .message("StorageIndex boot rebuild: failed to walk cache directory")
@@ -339,12 +448,11 @@ public final class StorageIndex {
             .log();
     }
 
-    private void hydrateFromDataFile(final Path root, final Path dataFile) {
+    private void hydrateFromDataFile(final Path dataFile, final Key key) {
         final Path sidecar = Path.of(dataFile + StorageIndex.SIDECAR_SUFFIX);
         final Optional<Sidecar> parsed = Files.exists(sidecar)
             ? Sidecar.read(sidecar)
             : Optional.empty();
-        final String relKey = root.relativize(dataFile).toString().replace('\\', '/');
         final long size = parsed.map(Sidecar::size).orElseGet(() -> StorageIndex.safeSize(dataFile));
         final long lastModified = parsed.map(Sidecar::lastModifiedEpochMilli)
             .orElseGet(() -> StorageIndex.safeLastModified(dataFile));
@@ -354,12 +462,13 @@ public final class StorageIndex {
         // Sidecar.read defaults it to false, i.e. PRESENT, preserving the
         // pre-WS1.2 meaning of every existing sidecar on disk.
         final boolean pendingUpload = parsed.map(Sidecar::pendingUpload).orElse(false);
-        this.entries.put(
-            relKey,
-            pendingUpload
-                ? Entry.pendingWrite(size, etag, digest, lastModified)
-                : Entry.present(size, etag, digest, lastModified, true)
-        );
+        // A sidecar written before WS1.4 has no lastAccess/hits keys either
+        // -- default lastAccess to lastModified (the write time) and hits
+        // to 0, i.e. "never read since written", the same non-committal
+        // default a fresh Entry.present/pendingWrite would carry.
+        final long lastAccess = parsed.map(Sidecar::lastAccessEpochMilli).orElse(lastModified);
+        final long hits = parsed.map(Sidecar::hits).orElse(0L);
+        this.put(key, new Entry(size, etag, digest, lastModified, true, false, 0L, pendingUpload, lastAccess, hits));
     }
 
     private static boolean isCacheableDataFile(final Path path) {
@@ -434,6 +543,13 @@ public final class StorageIndex {
      *  entry -- bytes are durable on disk but the write-back upload to the
      *  blob store has not yet been confirmed. Always {@code false} for
      *  negative entries.
+     * @param lastAccessEpochMilli WS1.4 (spec &sect;3.D): when this entry was
+     *  last served from the disk tier (defaults to {@code
+     *  lastModifiedEpochMilli} at write time); feeds the LRU eviction policy.
+     *  Meaningless for negative entries.
+     * @param hits WS1.4: number of times this entry has been served from the
+     *  disk tier since it was written (starts at 0); feeds the LFU eviction
+     *  policy. Meaningless for negative entries.
      * @since 2.3.0
      */
     public record Entry(
@@ -444,7 +560,9 @@ public final class StorageIndex {
         boolean presentOnDisk,
         boolean negative,
         long negativeUntilEpochMilli,
-        boolean pendingUpload
+        boolean pendingUpload,
+        long lastAccessEpochMilli,
+        long hits
     ) {
         /**
          * Build a positive, durably-confirmed entry ({@code s3State=PRESENT}).
@@ -463,7 +581,7 @@ public final class StorageIndex {
             final long lastModifiedEpochMilli,
             final boolean presentOnDisk
         ) {
-            return new Entry(size, etag, digest, lastModifiedEpochMilli, presentOnDisk, false, 0L, false);
+            return new Entry(size, etag, digest, lastModifiedEpochMilli, presentOnDisk, false, 0L, false, lastModifiedEpochMilli, 0L);
         }
 
         /**
@@ -486,7 +604,7 @@ public final class StorageIndex {
             final String digest,
             final long lastModifiedEpochMilli
         ) {
-            return new Entry(size, etag, digest, lastModifiedEpochMilli, true, false, 0L, true);
+            return new Entry(size, etag, digest, lastModifiedEpochMilli, true, false, 0L, true, lastModifiedEpochMilli, 0L);
         }
 
         /**
@@ -497,7 +615,26 @@ public final class StorageIndex {
          * @return New negative entry.
          */
         public static Entry negative(final long negativeUntilEpochMilli) {
-            return new Entry(0L, null, null, 0L, false, true, negativeUntilEpochMilli, false);
+            return new Entry(0L, null, null, 0L, false, true, negativeUntilEpochMilli, false, 0L, 0L);
+        }
+
+        /**
+         * Returns a copy of this entry with {@link #hits()} incremented and
+         * {@link #lastAccessEpochMilli()} refreshed to {@code
+         * nowEpochMilli} -- WS1.4's LRU/LFU coldness signal, updated on every
+         * disk-served read ({@link StorageIndex#recordAccess(Key)}). All
+         * other fields (including {@link #pendingUpload()}/{@link
+         * #negative()}) are preserved verbatim: a read never changes what
+         * state an entry is in, only how "warm" it is.
+         *
+         * @param nowEpochMilli Access timestamp.
+         * @return Updated entry.
+         */
+        Entry touched(final long nowEpochMilli) {
+            return new Entry(
+                this.size, this.etag, this.digest, this.lastModifiedEpochMilli, this.presentOnDisk,
+                this.negative, this.negativeUntilEpochMilli, this.pendingUpload, nowEpochMilli, this.hits + 1
+            );
         }
     }
 
@@ -512,19 +649,32 @@ public final class StorageIndex {
      *
      * @since 2.3.0
      */
-    record Sidecar(long size, String etag, String digest, long lastModifiedEpochMilli, boolean pendingUpload) {
+    record Sidecar(
+        long size,
+        String etag,
+        String digest,
+        long lastModifiedEpochMilli,
+        boolean pendingUpload,
+        long lastAccessEpochMilli,
+        long hits
+    ) {
 
         private static final String KEY_SIZE = "size";
         private static final String KEY_ETAG = "etag";
         private static final String KEY_DIGEST = "digest";
         private static final String KEY_LAST_MODIFIED = "lastModified";
         private static final String KEY_PENDING_UPLOAD = "pendingUpload";
+        private static final String KEY_LAST_ACCESS = "lastAccess";
+        private static final String KEY_HITS = "hits";
 
         /**
          * Persist an entry's sidecar next to its data file. Carries {@link
          * Entry#pendingUpload()} so a restart before the WS1.2 write-back
          * upload confirms can recover the {@code PENDING_WRITE} state via
-         * {@link #rebuildFromDisk} and re-enqueue it.
+         * {@link #rebuildFromDisk} and re-enqueue it, and {@link
+         * Entry#lastAccessEpochMilli()}/{@link Entry#hits()} (WS1.4) so a
+         * restart preserves LRU/LFU eviction-coldness ordering instead of
+         * resetting every entry to "never read" on boot.
          *
          * @param sidecarPath Path to write (data file path + {@code .meta}).
          * @param entry Entry to persist.
@@ -541,6 +691,8 @@ public final class StorageIndex {
             }
             props.setProperty(KEY_LAST_MODIFIED, Long.toString(entry.lastModifiedEpochMilli()));
             props.setProperty(KEY_PENDING_UPLOAD, Boolean.toString(entry.pendingUpload()));
+            props.setProperty(KEY_LAST_ACCESS, Long.toString(entry.lastAccessEpochMilli()));
+            props.setProperty(KEY_HITS, Long.toString(entry.hits()));
             try (OutputStream out = Files.newOutputStream(sidecarPath)) {
                 props.store(out, "pantera CachedBlobStorage index sidecar");
             }
@@ -551,7 +703,11 @@ public final class StorageIndex {
          * written before WS1.2 has no {@code pendingUpload} key at all --
          * {@link Boolean#parseBoolean} on a missing/absent value defaults to
          * {@code false} (i.e. {@code PRESENT}), preserving the pre-WS1.2
-         * meaning of every sidecar already on disk.
+         * meaning of every sidecar already on disk. Likewise, a sidecar
+         * written before WS1.4 has no {@code lastAccess}/{@code hits} keys --
+         * {@code lastAccess} defaults to the sidecar's own {@code
+         * lastModified} (the write time, i.e. "never read since written")
+         * and {@code hits} defaults to {@code 0}.
          *
          * @param sidecarPath Sidecar file path.
          * @return Parsed sidecar, or empty if unreadable/corrupt.
@@ -561,13 +717,16 @@ public final class StorageIndex {
             try (InputStream in = Files.newInputStream(sidecarPath)) {
                 final Properties props = new Properties();
                 props.load(in);
+                final String lastModifiedRaw = props.getProperty(KEY_LAST_MODIFIED, "0");
                 result = Optional.of(
                     new Sidecar(
                         Long.parseLong(props.getProperty(KEY_SIZE, "0")),
                         props.getProperty(KEY_ETAG),
                         props.getProperty(KEY_DIGEST),
-                        Long.parseLong(props.getProperty(KEY_LAST_MODIFIED, "0")),
-                        Boolean.parseBoolean(props.getProperty(KEY_PENDING_UPLOAD, "false"))
+                        Long.parseLong(lastModifiedRaw),
+                        Boolean.parseBoolean(props.getProperty(KEY_PENDING_UPLOAD, "false")),
+                        Long.parseLong(props.getProperty(KEY_LAST_ACCESS, lastModifiedRaw)),
+                        Long.parseLong(props.getProperty(KEY_HITS, "0"))
                     )
                 );
             } catch (final IOException | NumberFormatException ex) {

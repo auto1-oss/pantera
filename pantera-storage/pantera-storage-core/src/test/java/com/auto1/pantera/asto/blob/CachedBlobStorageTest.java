@@ -324,8 +324,9 @@ final class CachedBlobStorageTest {
         final WriteBackSaturatedException saturated = (WriteBackSaturatedException) wrapped.getCause();
         MatcherAssert.assertThat(saturated.retryAfterSeconds(), new IsEqual<>(7L));
         MatcherAssert.assertThat(
-            "admission is checked BEFORE any disk write -- the rejected key must never reach disk",
-            Files.exists(tmp.resolve("c.jar")), new IsEqual<>(false)
+            "admission is checked BEFORE any disk write -- the rejected key must never reach disk"
+                + " (checked at its sharded on-disk path -- WS1.4 CacheKeyShard, not the legacy literal path)",
+            Files.exists(tmp.resolve(CacheKeyShard.toDiskKey(rejected).string())), new IsEqual<>(false)
         );
     }
 
@@ -336,7 +337,8 @@ final class CachedBlobStorageTest {
         final CountDownLatch release = new CountDownLatch(1);
         fake.gatePut(entered, release);
         final CachedBlobStorage storage = new CachedBlobStorage(
-            fake, tmp, FRESHNESS_TTL, NEGATIVE_TTL, true, CachedBlobStorage.WriteBackConfig.defaults()
+            fake, tmp, FRESHNESS_TTL, NEGATIVE_TTL, true,
+            CachedBlobStorage.WriteBackConfig.defaults(), CachedBlobStorage.EvictionConfig.defaults()
         );
         final Key key = new Key.From("sync.jar");
 
@@ -416,9 +418,184 @@ final class CachedBlobStorageTest {
         MatcherAssert.assertThat(wrapped.getCause(), new IsInstanceOf(WriteBackSaturatedException.class));
     }
 
+    // ===== WS1.4 eviction + admission control tests (spec WS1-storage-for-scale.md sect.3.D) =====
+
+    @Test
+    void admissionBoundKeepsActualOnDiskBytesWithinTheConfiguredMaxAcrossAWriteFlood(@TempDir final Path tmp)
+        throws IOException {
+        // A durable PENDING_WRITE entry -- seeded directly on disk exactly as
+        // a crashed-before-drain write-back would leave it -- must survive
+        // the entire flood untouched: it is the ONLY durable copy of its
+        // bytes (acceptance #5, second half).
+        final byte[] pendingBytes = "still-uploading".getBytes(StandardCharsets.UTF_8);
+        CachedBlobStorageTest.seedPendingWriteOnDisk(tmp, "pending.jar", pendingBytes);
+        final Key pendingKey = new Key.From("pending.jar");
+
+        final long maxDiskBytes = 500L;
+        final CachedBlobStorage.EvictionConfig eviction =
+            new CachedBlobStorage.EvictionConfig(maxDiskBytes, 90, 80, CachedBlobStorage.EvictionPolicy.LRU);
+        final RecordingBlobStore fake = new RecordingBlobStore();
+        // Write-through: each save()'s future completes only once the entry
+        // is fully PRESENT (eviction-eligible), keeping the flood's
+        // bookkeeping deterministic without any background upload race.
+        final CachedBlobStorage storage = new CachedBlobStorage(
+            fake, tmp, FRESHNESS_TTL, NEGATIVE_TTL, true, CachedBlobStorage.WriteBackConfig.defaults(), eviction
+        );
+
+        for (int i = 0; i < 40; i++) {
+            final byte[] payload = ("flood-payload-" + i).getBytes(StandardCharsets.UTF_8);
+            storage.save(new Key.From("flood-" + i + ".jar"), new Content.From(payload)).join();
+            MatcherAssert.assertThat(
+                "on-disk bytes must never exceed cache.max-disk-bytes, checked after every single write in the flood",
+                CachedBlobStorageTest.actualOnDiskBytes(tmp) <= maxDiskBytes, new IsEqual<>(true)
+            );
+        }
+
+        MatcherAssert.assertThat(
+            "the index's own running counter must agree with the real on-disk byte total",
+            storage.diskBytesUsed(), new IsEqual<>(CachedBlobStorageTest.actualOnDiskBytes(tmp))
+        );
+        MatcherAssert.assertThat(
+            "a PENDING_WRITE entry must never be evicted, however aggressive the flood",
+            storage.isPendingWrite(pendingKey), new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "the PENDING_WRITE entry's disk file must physically survive the flood",
+            Files.exists(tmp.resolve(CacheKeyShard.toDiskKey(pendingKey).string())), new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void watermarkEvictionEvictsTheColdestLfuEntriesFirstDownTowardTheLowWatermark(@TempDir final Path tmp) {
+        // LFU, driven entirely by invocation counts (CLAUDE.md doctrine --
+        // never assert wall-clock): five keys are written, then value()'d a
+        // strictly descending number of times (k1: 5 hits ... k5: 1 hit) so
+        // coldness ordering is unambiguous. A sixth write then crosses the
+        // high watermark and must evict the coldest keys first, down toward
+        // the low watermark, leaving the hottest keys untouched.
+        final CachedBlobStorage.EvictionConfig eviction =
+            new CachedBlobStorage.EvictionConfig(1000L, 80, 40, CachedBlobStorage.EvictionPolicy.LFU);
+        final RecordingBlobStore fake = new RecordingBlobStore();
+        final CachedBlobStorage storage = new CachedBlobStorage(
+            fake, tmp, FRESHNESS_TTL, NEGATIVE_TTL, true, CachedBlobStorage.WriteBackConfig.defaults(), eviction
+        );
+        final byte[] payload = new byte[150];
+        for (int i = 1; i <= 5; i++) {
+            storage.save(new Key.From("k" + i + ".jar"), new Content.From(payload)).join();
+        }
+        // k1 -> 5 hits (hottest) ... k5 -> 1 hit (coldest).
+        for (int i = 1; i <= 5; i++) {
+            for (int hit = 0; hit < 6 - i; hit++) {
+                storage.value(new Key.From("k" + i + ".jar")).join();
+            }
+        }
+        MatcherAssert.assertThat(
+            "sanity check: five 150-byte entries fit comfortably under the 800-byte high watermark",
+            storage.diskBytesUsed(), new IsEqual<>(750L)
+        );
+
+        // Crosses the high watermark (750 + 150 = 900 > 800): triggers
+        // eviction toward the low watermark (400).
+        storage.save(new Key.From("k6.jar"), new Content.From(payload)).join();
+
+        // Eviction is LOCAL-DISK-CACHE housekeeping, not deletion -- every
+        // key was already durably write-through'd to the blob store, so
+        // exists()/value() stay true for an evicted key too (a cold re-fill
+        // would serve it). isCachedOnDisk() is the accessor that reflects
+        // eviction specifically.
+        MatcherAssert.assertThat("k5 (coldest, 1 hit) must be evicted first", storage.isCachedOnDisk(new Key.From("k5.jar")), new IsEqual<>(false));
+        MatcherAssert.assertThat("k4 (2nd coldest, 2 hits) must be evicted next", storage.isCachedOnDisk(new Key.From("k4.jar")), new IsEqual<>(false));
+        MatcherAssert.assertThat("k3 (3rd coldest, 3 hits) must be evicted to reach the low watermark", storage.isCachedOnDisk(new Key.From("k3.jar")), new IsEqual<>(false));
+        MatcherAssert.assertThat("k2 (4 hits) is warm enough to survive", storage.isCachedOnDisk(new Key.From("k2.jar")), new IsEqual<>(true));
+        MatcherAssert.assertThat("k1 (hottest, 5 hits) must never be evicted", storage.isCachedOnDisk(new Key.From("k1.jar")), new IsEqual<>(true));
+        MatcherAssert.assertThat("k6 (just written) must be cached on disk", storage.isCachedOnDisk(new Key.From("k6.jar")), new IsEqual<>(true));
+        MatcherAssert.assertThat(
+            "final usage: k1 + k2 + k6 = 450 bytes (evicted down to the 400-byte low watermark, then admitted k6)",
+            storage.diskBytesUsed(), new IsEqual<>(450L)
+        );
+    }
+
+    @Test
+    void shardedCacheDirRoundTripsWriteBootRebuildRead(@TempDir final Path tmp) {
+        final RecordingBlobStore fake = new RecordingBlobStore();
+        final CachedBlobStorage first = CachedBlobStorageTest.storage(fake, tmp);
+        final int keyCount = 25;
+        for (int i = 0; i < keyCount; i++) {
+            final byte[] data = ("sharded-content-" + i).getBytes(StandardCharsets.UTF_8);
+            first.save(new Key.From("group" + i, "artifact-" + i, "file-" + i + ".jar"), new Content.From(data)).join();
+        }
+        MatcherAssert.assertThat(
+            "a 2-level hex fan-out must not collapse every key into one flat directory",
+            CachedBlobStorageTest.topLevelShardDirCount(tmp) > 1, new IsEqual<>(true)
+        );
+
+        // Drop the in-memory index entirely: re-instantiate over the SAME
+        // sharded directory with a FRESH RecordingBlobStore (no shared
+        // in-memory state) -- exists()/value() must be correct purely from
+        // StorageIndex#rebuildFromDisk decoding CacheKeyShard's leaf names.
+        final CachedBlobStorage rebuilt = CachedBlobStorageTest.storage(new RecordingBlobStore(), tmp);
+        for (int i = 0; i < keyCount; i++) {
+            final Key key = new Key.From("group" + i, "artifact-" + i, "file-" + i + ".jar");
+            final byte[] expected = ("sharded-content-" + i).getBytes(StandardCharsets.UTF_8);
+            MatcherAssert.assertThat(
+                "exists() must be correct purely from the sharded boot rebuild for key " + key,
+                rebuilt.exists(key).join(), new IsEqual<>(true)
+            );
+            MatcherAssert.assertThat(
+                "value() must serve the correct bytes purely from the sharded boot rebuild for key " + key,
+                rebuilt.value(key).join().asBytesFuture().join(), new IsEqual<>(expected)
+            );
+        }
+    }
+
+    /**
+     * Ground-truth on-disk byte total via a real directory walk -- used only
+     * to VERIFY the admission bound against reality; production code never
+     * does this (the whole point of {@link StorageIndex}'s running counter).
+     * Excludes {@code .meta} sidecars and the {@code .tmp} staging directory,
+     * mirroring {@code StorageIndex}'s own boot-scan filtering.
+     */
+    private static long actualOnDiskBytes(final Path root) throws IOException {
+        try (java.util.stream.Stream<Path> walk = Files.walk(root)) {
+            return walk
+                .filter(Files::isRegularFile)
+                .filter(path -> !path.getFileName().toString().endsWith(StorageIndex.SIDECAR_SUFFIX))
+                .filter(path -> {
+                    final Path parent = path.getParent();
+                    return parent == null || !".tmp".equals(parent.getFileName().toString());
+                })
+                .mapToLong(path -> {
+                    try {
+                        return Files.size(path);
+                    } catch (final IOException ex) {
+                        throw new java.io.UncheckedIOException(ex);
+                    }
+                })
+                .sum();
+        }
+    }
+
+    /**
+     * Counts distinct first-level shard directories directly under {@code
+     * root} -- used only to sanity-check that {@code CacheKeyShard}'s hex
+     * fan-out actually fans out (as opposed to accidentally collapsing every
+     * key into a single directory).
+     */
+    private static long topLevelShardDirCount(final Path root) {
+        try (java.util.stream.Stream<Path> children = Files.list(root)) {
+            return children.filter(Files::isDirectory).filter(path -> !".tmp".equals(path.getFileName().toString())).count();
+        } catch (final IOException ex) {
+            throw new java.io.UncheckedIOException(ex);
+        }
+    }
+
     private static void seedPendingWriteOnDisk(final Path root, final String name, final byte[] data)
         throws IOException {
-        final Path dataFile = root.resolve(name);
+        // Written at the sharded on-disk path (WS1.4 CacheKeyShard), the
+        // exact same layout CachedBlobStorage itself uses, so the boot-time
+        // StorageIndex#rebuildFromDisk scan recovers it.
+        final Path dataFile = root.resolve(CacheKeyShard.toDiskKey(new Key.From(name)).string());
+        Files.createDirectories(dataFile.getParent());
         Files.write(dataFile, data);
         StorageIndex.Sidecar.write(
             Path.of(dataFile + StorageIndex.SIDECAR_SUFFIX),
@@ -433,7 +610,18 @@ final class CachedBlobStorageTest {
     private static CachedBlobStorage writeBackStorage(
         final RecordingBlobStore fake, final Path tmp, final CachedBlobStorage.WriteBackConfig config
     ) {
-        return new CachedBlobStorage(fake, tmp, FRESHNESS_TTL, NEGATIVE_TTL, false, config);
+        return new CachedBlobStorage(
+            fake, tmp, FRESHNESS_TTL, NEGATIVE_TTL, false, config, CachedBlobStorage.EvictionConfig.defaults()
+        );
+    }
+
+    private static CachedBlobStorage writeBackStorage(
+        final RecordingBlobStore fake,
+        final Path tmp,
+        final CachedBlobStorage.WriteBackConfig config,
+        final CachedBlobStorage.EvictionConfig evictionConfig
+    ) {
+        return new CachedBlobStorage(fake, tmp, FRESHNESS_TTL, NEGATIVE_TTL, false, config, evictionConfig);
     }
 
     /**

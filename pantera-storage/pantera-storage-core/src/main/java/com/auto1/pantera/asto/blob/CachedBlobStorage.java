@@ -28,13 +28,16 @@ import com.auto1.pantera.asto.log.EcsLogger;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
@@ -140,6 +143,15 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
     private final FileStorage disk;
 
     /**
+     * Root of {@link #disk}'s cache directory -- kept alongside {@link
+     * #disk} so {@link #writeSidecarBestEffort} can stage its atomic-move
+     * temp files under the SAME top-level {@code .tmp} directory {@link
+     * FileStorage#save} already uses for its own atomic writes, rather than
+     * creating a proliferation of per-shard-leaf {@code .tmp} directories.
+     */
+    private final Path diskRoot;
+
+    /**
      * In-memory metadata index.
      */
     private final StorageIndex index;
@@ -204,6 +216,12 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
     private final ExecutorService writeBackUploaders;
 
     /**
+     * WS1.4 eviction/admission-control tuning (spec &sect;3.D). Consulted on
+     * every {@link #save} before any disk write.
+     */
+    private final EvictionConfig evictionConfig;
+
+    /**
      * Completes once boot replay (if any) has fully drained: every {@code
      * PENDING_WRITE} entry recovered on boot has reached a terminal upload
      * outcome. Assigned once by {@link #replayPendingWrites()}; stays the
@@ -233,6 +251,8 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
      *  WS1.2 async durable write-back.
      * @param writeBackConfig Write-back tuning; ignored when {@code
      *  writeThrough}.
+     * @param evictionConfig WS1.4 eviction/admission-control tuning (spec
+     *  &sect;3.D): hard disk-bytes bound plus high/low watermarks.
      */
     public CachedBlobStorage(
         final BlobStore blobStore,
@@ -240,22 +260,25 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
         final Duration freshnessTtl,
         final Duration negativeTtl,
         final boolean writeThrough,
-        final WriteBackConfig writeBackConfig
+        final WriteBackConfig writeBackConfig,
+        final EvictionConfig evictionConfig
     ) {
         this.blobStore = blobStore;
         this.disk = new FileStorage(diskRoot);
+        this.diskRoot = diskRoot;
         this.index = new StorageIndex();
         this.freshnessTtl = freshnessTtl;
         this.negativeTtl = negativeTtl;
         this.writeThrough = writeThrough;
         this.writeBackConfig = writeBackConfig;
+        this.evictionConfig = evictionConfig;
         this.id = "CachedBlobStorage: " + blobStore.identifier();
         try {
             Files.createDirectories(diskRoot);
         } catch (final IOException err) {
             throw new PanteraIOException(err);
         }
-        this.index.rebuildFromDisk(diskRoot);
+        this.index.rebuildFromDisk(diskRoot, dataFile -> CacheKeyShard.fromDiskPath(diskRoot, dataFile));
         if (writeThrough) {
             this.writeBackAdmission = null;
             this.writeBackUploaders = null;
@@ -285,7 +308,7 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
         final Duration freshnessTtl,
         final Duration negativeTtl
     ) {
-        this(blobStore, diskRoot, freshnessTtl, negativeTtl, true, WriteBackConfig.defaults());
+        this(blobStore, diskRoot, freshnessTtl, negativeTtl, true, WriteBackConfig.defaults(), EvictionConfig.defaults());
     }
 
     /**
@@ -310,6 +333,22 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
      */
     boolean isPendingWrite(final Key key) {
         return this.index.knownEntry(key).map(StorageIndex.Entry::pendingUpload).orElse(false);
+    }
+
+    /**
+     * Test/observability accessor: whether {@code key} is currently cached
+     * on the LOCAL disk tier -- distinct from {@link #exists(Key)}, which is
+     * also {@code true} for a key durably confirmed in the blob store but
+     * since evicted from the local disk cache (eviction is a local-cache
+     * housekeeping concern, never a deletion of the durable copy). Used to
+     * assert WS1.4 eviction outcomes without conflating "evicted from disk"
+     * with "no longer exists at all". Package-visible only.
+     *
+     * @param key Key.
+     * @return {@code true} iff the index holds a present-on-disk entry for {@code key}.
+     */
+    boolean isCachedOnDisk(final Key key) {
+        return this.index.knownEntry(key).map(StorageIndex.Entry::presentOnDisk).orElse(false);
     }
 
     /**
@@ -341,6 +380,17 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
             available = this.writeBackAdmission.availablePermits();
         }
         return available;
+    }
+
+    /**
+     * Current running total of bytes occupied by the disk tier, per the
+     * in-memory {@link StorageIndex} counter -- never a directory walk (WS1.4,
+     * spec &sect;3.D). Package-visible: test/observability accessor.
+     *
+     * @return Disk bytes currently accounted for.
+     */
+    long diskBytesUsed() {
+        return this.index.diskBytesUsed();
     }
 
     @Override
@@ -429,7 +479,22 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
     public Optional<Path> pathFor(final Key key) {
         return this.index.knownEntry(key)
             .filter(entry -> !entry.negative() && entry.presentOnDisk())
-            .flatMap(entry -> this.disk.pathFor(key));
+            .flatMap(entry -> this.disk.pathFor(this.diskKey(key)));
+    }
+
+    /**
+     * Translates a logical key to the sharded on-disk key that actually
+     * addresses {@link #disk} -- the single choke point every disk-facing
+     * call in this class goes through, so the write path (here), the read
+     * path, sidecar persistence, and eviction can never drift into
+     * addressing the disk tier with two different mappings for the same
+     * logical key (spec &sect;3.D).
+     *
+     * @param key Logical key.
+     * @return Physical (sharded) key for {@link #disk}.
+     */
+    private Key diskKey(final Key key) {
+        return CacheKeyShard.toDiskKey(key);
     }
 
     @Override
@@ -484,14 +549,33 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
     }
 
     private CompletableFuture<Void> persistFetchedContent(final Key key, final Content content) {
-        return this.disk.save(key, content).thenCompose(ignored -> this.finalizeDiskWrite(key, null));
+        return this.disk.save(this.diskKey(key), content).thenCompose(ignored -> this.finalizeDiskWrite(key, null));
     }
 
     private CompletableFuture<Content> readFromDisk(final Key key) {
-        return OptimizedStorageCache.optimizedValue(this.disk, key).handle(
-            (content, err) -> err == null
-                ? CompletableFuture.completedFuture(content)
-                : this.recoverVanishedDiskEntry(key, err)
+        return OptimizedStorageCache.optimizedValue(this.disk, this.diskKey(key)).handle(
+            (content, err) -> {
+                final CompletableFuture<Content> result;
+                if (err == null) {
+                    // WS1.4: record the disk hit for the LRU/LFU eviction
+                    // policy -- in-memory only (spec sect 3.D). Deliberately
+                    // NOT also persisted to the sidecar here: a per-read
+                    // background sidecar rewrite would race any concurrent
+                    // reader of the SAME sidecar (most notably another
+                    // instance's StorageIndex#rebuildFromDisk boot scan),
+                    // and race @TempDir cleanup in tests. hits/lastAccess
+                    // ARE still persisted -- at the existing write-time
+                    // sidecar writes (finalizeDiskWrite/enqueuePendingWrite)
+                    // -- so a restart recovers "coldness as of last write",
+                    // a documented, acceptable trade-off versus "coldness as
+                    // of last read" (see docs/admin-guide/storage-backends.md).
+                    this.index.recordAccess(key);
+                    result = CompletableFuture.completedFuture(content);
+                } else {
+                    result = this.recoverVanishedDiskEntry(key, err);
+                }
+                return result;
+            }
         ).thenCompose(Function.identity());
     }
 
@@ -548,12 +632,12 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
     // === save(): shared digest + disk-size helpers ===
 
     private CompletableFuture<String> digestWrittenFile(final Key key) {
-        return OptimizedStorageCache.optimizedValue(this.disk, key)
+        return OptimizedStorageCache.optimizedValue(this.disk, this.diskKey(key))
             .thenCompose(body -> new ContentDigest(body, Digests.SHA256).hex().toCompletableFuture());
     }
 
     private CompletableFuture<Long> diskSize(final Key key) {
-        return this.disk.metadata(key).thenApply(meta -> new MetaCommon(meta).size());
+        return this.disk.metadata(this.diskKey(key)).thenApply(meta -> new MetaCommon(meta).size());
     }
 
     private CompletableFuture<Void> finalizeDiskWrite(final Key key, final String digest) {
@@ -567,13 +651,14 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
     // === save(): write-through opt-out (pre-WS1.2 behaviour, verbatim) ===
 
     private CompletableFuture<Void> saveWriteThrough(final Key key, final Content content) {
-        return this.disk.save(key, content)
+        return this.admitWrite(key, content.size().orElse(0L))
+            .thenCompose(ignored -> this.disk.save(this.diskKey(key), content))
             .thenCompose(ignored -> this.digestWrittenFile(key))
             .thenCompose(digest -> this.uploadWrittenFile(key, digest));
     }
 
     private CompletableFuture<Void> uploadWrittenFile(final Key key, final String digest) {
-        return OptimizedStorageCache.optimizedValue(this.disk, key)
+        return OptimizedStorageCache.optimizedValue(this.disk, this.diskKey(key))
             .thenCompose(body -> this.blobStore.put(key, body))
             .thenCompose(ignored -> this.finalizeDiskWrite(key, digest));
     }
@@ -591,7 +676,8 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
         if (!this.writeBackAdmission.tryAcquire()) {
             return this.rejectSaturated(key);
         }
-        return this.disk.save(key, content)
+        return this.admitWrite(key, content.size().orElse(0L))
+            .thenCompose(ignored -> this.disk.save(this.diskKey(key), content))
             .thenCompose(ignored -> this.digestWrittenFile(key))
             .thenCompose(digest -> this.enqueuePendingWrite(key, digest))
             .whenComplete((ignored, err) -> {
@@ -670,7 +756,7 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
         Throwable lastError = null;
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
-                final Content body = OptimizedStorageCache.optimizedValue(this.disk, pending.key()).join();
+                final Content body = OptimizedStorageCache.optimizedValue(this.disk, this.diskKey(pending.key())).join();
                 this.blobStore.put(pending.key(), body).join();
                 this.onUploadSuccess(pending);
                 return;
@@ -797,6 +883,150 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
         this.bootReplayComplete = all;
     }
 
+    // === WS1.4: index-driven eviction + hard admission control (spec sect 3.D) ===
+
+    /**
+     * Hard admission control, checked BEFORE any disk write (mirroring the
+     * write-back {@link #writeBackAdmission} gate's discipline): if the
+     * incoming write would push disk usage past {@link
+     * EvictionConfig#highWatermarkBytes()}, evict the coldest eligible
+     * candidates first -- proactively down to {@link
+     * EvictionConfig#lowWatermarkBytes()} (or exactly as far as needed to
+     * admit this write, whichever is less aggressive) -- then re-check the
+     * HARD bound ({@link EvictionConfig#maxDiskBytes()}) and reject with
+     * {@link CacheAdmissionRejectedException} if it still would not fit
+     * (e.g. the content itself exceeds the bound, or every other entry is
+     * pinned {@code PENDING_WRITE}). {@code incomingBytes} of {@code 0}
+     * (unknown-size content) skips the pre-write check entirely -- eviction
+     * still happens on the NEXT write once the actual size is reflected in
+     * the running counter, a documented limitation for size-unknown streams.
+     *
+     * @param key Key about to be written (for the rejection message only).
+     * @param incomingBytes Size of the content about to be written, or
+     *  {@code 0} if unknown.
+     * @return Future completing once admission is granted; fails with
+     *  {@link CacheAdmissionRejectedException} otherwise.
+     */
+    private CompletableFuture<Void> admitWrite(final Key key, final long incomingBytes) {
+        final CompletableFuture<Void> result;
+        if (this.evictionConfig.maxDiskBytes() <= 0 || incomingBytes <= 0) {
+            result = CompletableFuture.completedFuture(null);
+        } else {
+            final long projected = this.index.diskBytesUsed() + incomingBytes;
+            final CompletableFuture<Void> afterEviction = projected > this.evictionConfig.highWatermarkBytes()
+                ? this.evictDownTo(Math.min(
+                    this.evictionConfig.lowWatermarkBytes(),
+                    this.evictionConfig.maxDiskBytes() - incomingBytes
+                ))
+                : CompletableFuture.completedFuture(null);
+            result = afterEviction.thenCompose(ignored -> this.enforceHardBound(key, incomingBytes));
+        }
+        return result;
+    }
+
+    private CompletableFuture<Void> enforceHardBound(final Key key, final long incomingBytes) {
+        final CompletableFuture<Void> result;
+        if (this.index.diskBytesUsed() + incomingBytes > this.evictionConfig.maxDiskBytes()) {
+            result = CompletableFuture.failedFuture(
+                new CacheAdmissionRejectedException(key.string(), incomingBytes, this.evictionConfig.maxDiskBytes())
+            );
+        } else {
+            result = CompletableFuture.completedFuture(null);
+        }
+        return result;
+    }
+
+    /**
+     * Evicts the coldest eligible candidates (by {@link #evictionConfig}'s
+     * policy) one at a time, sequentially, until {@link
+     * StorageIndex#diskBytesUsed()} is at or below {@code targetBytes} or
+     * there are no more eligible candidates (every remaining entry is
+     * {@code PENDING_WRITE} and therefore never selected -- acceptance #5's
+     * second half). Sequential rather than parallel: simplicity over
+     * eviction throughput, matching this cache tier's "best-effort
+     * accelerator, not the hot path" role.
+     *
+     * @param targetBytes Stop evicting once usage is at or below this.
+     * @return Future completing once no further eviction is possible or needed.
+     */
+    private CompletableFuture<Void> evictDownTo(final long targetBytes) {
+        CompletableFuture<Void> chain = CompletableFuture.completedFuture(null);
+        if (this.index.diskBytesUsed() > targetBytes) {
+            final List<Map.Entry<Key, StorageIndex.Entry>> candidates = this.index.evictionCandidates();
+            candidates.sort(this.evictionComparator());
+            for (final Map.Entry<Key, StorageIndex.Entry> candidate : candidates) {
+                chain = chain.thenCompose(ignored -> this.evictOneIfStillOverTarget(candidate.getKey(), targetBytes));
+            }
+        }
+        return chain;
+    }
+
+    private CompletableFuture<Void> evictOneIfStillOverTarget(final Key key, final long targetBytes) {
+        return this.index.diskBytesUsed() > targetBytes
+            ? this.evictEntry(key)
+            : CompletableFuture.completedFuture(null);
+    }
+
+    /**
+     * Coldest-first comparator per {@link EvictionConfig#policy()}: LRU
+     * orders by {@link StorageIndex.Entry#lastAccessEpochMilli()} ascending
+     * (oldest access first); LFU orders by {@link
+     * StorageIndex.Entry#hits()} ascending, breaking ties by {@code
+     * lastAccessEpochMilli} -- the same tie-break {@code DiskCacheStorage}
+     * used for parity.
+     *
+     * @return Comparator ordering the coldest candidate first.
+     */
+    private Comparator<Map.Entry<Key, StorageIndex.Entry>> evictionComparator() {
+        final Comparator<Map.Entry<Key, StorageIndex.Entry>> comparator;
+        if (this.evictionConfig.policy() == EvictionPolicy.LFU) {
+            comparator = Comparator.<Map.Entry<Key, StorageIndex.Entry>>comparingLong(candidate -> candidate.getValue().hits())
+                .thenComparingLong(candidate -> candidate.getValue().lastAccessEpochMilli());
+        } else {
+            comparator = Comparator.comparingLong(candidate -> candidate.getValue().lastAccessEpochMilli());
+        }
+        return comparator;
+    }
+
+    /**
+     * Evicts a single entry: removes it from the index FIRST (so a
+     * concurrent {@link #value} for this key sees "unknown" and cold-fills
+     * cleanly from the blob store, rather than racing a vanishing disk file
+     * through the {@link #recoverVanishedDiskEntry} TOCTOU path), then
+     * best-effort deletes its disk file and sidecar.
+     *
+     * <p><strong>Accepted narrow race</strong> (same disclosure style as
+     * {@link #delete(Key)}'s javadoc): if a concurrent cold-fill for this
+     * exact key lands a fresh file between this method's index removal and
+     * its disk delete, that fresh file can be deleted here too, forcing one
+     * extra cold-fill on the next read. This cache tier is a best-effort
+     * accelerator, not the source of truth (the blob store is), so this is
+     * accepted rather than engineered around.</p>
+     *
+     * @param key Key to evict.
+     * @return Future completing once the disk file and sidecar are removed
+     *  (or confirmed absent).
+     */
+    private CompletableFuture<Void> evictEntry(final Key key) {
+        this.index.remove(key);
+        this.deleteSidecarBestEffort(key);
+        final Key onDisk = this.diskKey(key);
+        return this.disk.exists(onDisk)
+            .thenCompose(present -> present ? this.disk.delete(onDisk) : CompletableFuture.completedFuture(null))
+            .exceptionally(err -> {
+                EcsLogger.debug("com.auto1.pantera.asto.blob")
+                    .message("Best-effort eviction delete failed; index entry is already dropped")
+                    .eventCategory("file")
+                    .eventAction("cache_eviction")
+                    .eventOutcome("failure")
+                    .error(CachedBlobStorage.rootCause(err))
+                    .field("file.path", key.string())
+                    .field("log.source", "application")
+                    .log();
+                return null;
+            });
+    }
+
     private static ExecutorService newUploaderPool(final int threads) {
         final AtomicInteger counter = new AtomicInteger();
         final ThreadFactory factory = runnable -> {
@@ -856,8 +1086,9 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
     // === delete() ===
 
     private CompletableFuture<Void> deleteDiskCopyBestEffort(final Key key) {
-        return this.disk.exists(key).thenCompose(
-            present -> present ? this.disk.delete(key) : CompletableFuture.completedFuture(null)
+        final Key onDisk = this.diskKey(key);
+        return this.disk.exists(onDisk).thenCompose(
+            present -> present ? this.disk.delete(onDisk) : CompletableFuture.completedFuture(null)
         );
     }
 
@@ -868,12 +1099,37 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
 
     // === sidecar persistence (feeds StorageIndex#rebuildFromDisk on boot) ===
 
+    /**
+     * Writes {@code entry}'s sidecar via a temp-file-then-atomic-move,
+     * exactly like {@link FileStorage}'s own data-file writes -- NOT a
+     * direct in-place {@code Properties.store}. This matters because {@link
+     * #persistAccessSidecarBestEffort} fires a sidecar rewrite on every
+     * disk-served read, fully concurrently with any other reader of that
+     * same key (including another node's or another instance's {@link
+     * StorageIndex#rebuildFromDisk} boot scan); an in-place write truncates
+     * the file before rewriting it, so a concurrent reader can observe a
+     * momentarily-empty/corrupt sidecar and silently fall back to zeroed
+     * defaults (the exact failure mode this method exists to rule out).
+     *
+     * @param key Logical key.
+     * @param entry Entry to persist.
+     */
     private void writeSidecarBestEffort(final Key key, final StorageIndex.Entry entry) {
-        this.disk.pathFor(key).ifPresent(dataPath -> {
+        this.disk.pathFor(this.diskKey(key)).ifPresent(dataPath -> {
             final Path sidecar = Path.of(dataPath + StorageIndex.SIDECAR_SUFFIX);
+            // Staged under the SAME top-level ".tmp" directory FileStorage#save
+            // already uses -- the identical name StorageIndex#rebuildFromDisk's
+            // boot scan already excludes (isCacheableDataFile), so an
+            // in-flight temp file can never be misread as a cache data file
+            // even if a walk catches it mid-write.
+            final Path tmpDir = this.diskRoot.resolve(StorageIndex.STAGING_DIR);
+            final Path tmp = tmpDir.resolve(UUID.randomUUID().toString());
             try {
-                StorageIndex.Sidecar.write(sidecar, entry);
+                Files.createDirectories(tmpDir);
+                StorageIndex.Sidecar.write(tmp, entry);
+                Files.move(tmp, sidecar, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
             } catch (final IOException ex) {
+                CachedBlobStorage.deleteQuietly(tmp);
                 EcsLogger.debug("com.auto1.pantera.asto.blob")
                     .message("Failed to write index sidecar; entry remains valid in memory until restart")
                     .eventCategory("file")
@@ -887,8 +1143,16 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
         });
     }
 
+    private static void deleteQuietly(final Path path) {
+        try {
+            Files.deleteIfExists(path);
+        } catch (final IOException ex) { // NOPMD EmptyCatchBlock - best-effort cleanup of a failed sidecar temp file
+            // EXPECTED: cleanup of an already-failed write; nothing more to do.
+        }
+    }
+
     private void deleteSidecarBestEffort(final Key key) {
-        this.disk.pathFor(key).ifPresent(dataPath -> {
+        this.disk.pathFor(this.diskKey(key)).ifPresent(dataPath -> {
             final Path sidecar = Path.of(dataPath + StorageIndex.SIDECAR_SUFFIX);
             try {
                 Files.deleteIfExists(sidecar);
@@ -1004,6 +1268,87 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
          */
         public static WriteBackConfig defaults() {
             return new WriteBackConfig(1024, 4, 5, 500L, 30_000L, 5L);
+        }
+    }
+
+    /**
+     * Coldness policy for WS1.4 eviction candidate ordering (spec &sect;3.D)
+     * -- mirrors {@code DiskCacheStorage.Policy} for parity between the two
+     * cache modes.
+     *
+     * @since 2.3.0
+     */
+    public enum EvictionPolicy {
+        /**
+         * Evict the entry least recently accessed first.
+         */
+        LRU,
+        /**
+         * Evict the entry accessed the fewest times first (ties broken by
+         * least-recently-accessed).
+         */
+        LFU
+    }
+
+    /**
+     * Tuning knobs for the WS1.4 index-driven eviction and hard admission
+     * control (spec &sect;3.D) -- mirrored by {@code S3StorageFactory}'s
+     * {@code cache.max-disk-bytes}/{@code cache.eviction-*} config keys,
+     * which fall back to {@link #defaults()} per field when unset. Units and
+     * high/low-watermark semantics mirror {@code DiskCacheStorage} exactly,
+     * so an operator already familiar with disk-cache-mode tuning does not
+     * need to learn a new vocabulary for index-cache mode.
+     *
+     * @param maxDiskBytes Hard bound on total disk-tier bytes. {@link #save}
+     *  never lets this be exceeded: it evicts synchronously first and
+     *  rejects with {@link CacheAdmissionRejectedException} if it still
+     *  cannot fit. {@code <= 0} disables eviction/admission entirely (the
+     *  disk directory is unbounded).
+     * @param highWatermarkPercent Percentage of {@link #maxDiskBytes} at
+     *  which a write proactively triggers eviction (before the hard bound is
+     *  actually reached).
+     * @param lowWatermarkPercent Percentage of {@link #maxDiskBytes} eviction
+     *  targets when triggered -- evicting further than the immediate write
+     *  requires, to avoid evicting on almost every subsequent write.
+     * @param policy Coldest-candidate-first ordering: {@link
+     *  EvictionPolicy#LRU} or {@link EvictionPolicy#LFU}.
+     * @since 2.3.0
+     */
+    public record EvictionConfig(
+        long maxDiskBytes,
+        int highWatermarkPercent,
+        int lowWatermarkPercent,
+        EvictionPolicy policy
+    ) {
+        /**
+         * Hardcoded defaults, mirrored by {@code S3StorageFactory} when a
+         * {@code cache.max-disk-bytes}/{@code cache.eviction-*} key is unset
+         * -- the same 10 GiB / 90% / 80% / LRU defaults {@code
+         * DiskCacheStorage} uses.
+         *
+         * @return Default eviction configuration.
+         */
+        public static EvictionConfig defaults() {
+            return new EvictionConfig(10L * 1024 * 1024 * 1024, 90, 80, EvictionPolicy.LRU);
+        }
+
+        /**
+         * Disk-bytes threshold at which a write proactively triggers
+         * eviction.
+         *
+         * @return {@link #maxDiskBytes} * {@link #highWatermarkPercent} / 100.
+         */
+        public long highWatermarkBytes() {
+            return this.maxDiskBytes * this.highWatermarkPercent / 100L;
+        }
+
+        /**
+         * Disk-bytes target eviction proactively works down to once triggered.
+         *
+         * @return {@link #maxDiskBytes} * {@link #lowWatermarkPercent} / 100.
+         */
+        public long lowWatermarkBytes() {
+            return this.maxDiskBytes * this.lowWatermarkPercent / 100L;
         }
     }
 }
