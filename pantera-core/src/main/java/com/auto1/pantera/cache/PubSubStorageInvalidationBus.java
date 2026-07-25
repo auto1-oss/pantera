@@ -15,6 +15,7 @@ import com.auto1.pantera.asto.blob.StorageInvalidationBus;
 import com.auto1.pantera.asto.blob.StorageInvalidationListener;
 import com.auto1.pantera.asto.misc.Cleanable;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.metrics.MicrometerMetrics;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -93,6 +94,9 @@ public final class PubSubStorageInvalidationBus implements StorageInvalidationBu
             PubSubStorageInvalidationBus.CHANNEL,
             PubSubStorageInvalidationBus.encode(key, versionToken)
         );
+        if (MicrometerMetrics.isInitialized()) {
+            MicrometerMetrics.getInstance().recordStorageInvalidation("published", "published");
+        }
         EcsLogger.debug("com.auto1.pantera.cache")
             .message("Published storage cross-node invalidation")
             .eventCategory("database")
@@ -110,6 +114,9 @@ public final class PubSubStorageInvalidationBus implements StorageInvalidationBu
     private void dispatch(final String wireMessage) {
         final int sep = wireMessage.indexOf(PubSubStorageInvalidationBus.KEY_TOKEN_SEPARATOR);
         if (sep < 0) {
+            if (MicrometerMetrics.isInitialized()) {
+                MicrometerMetrics.getInstance().recordStorageInvalidation("received", "malformed");
+            }
             EcsLogger.warn("com.auto1.pantera.cache")
                 .message("Malformed storage invalidation message received; dropping")
                 .eventCategory("database")
@@ -121,6 +128,9 @@ public final class PubSubStorageInvalidationBus implements StorageInvalidationBu
         }
         final Key key = new Key.From(wireMessage.substring(0, sep));
         final String token = wireMessage.substring(sep + 1);
+        if (MicrometerMetrics.isInitialized()) {
+            MicrometerMetrics.getInstance().recordStorageInvalidation("received", "ok");
+        }
         EcsLogger.debug("com.auto1.pantera.cache")
             .message("Received storage cross-node invalidation")
             .eventCategory("database")

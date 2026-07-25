@@ -13,6 +13,7 @@ package com.auto1.pantera.asto.s3;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.blob.BlobStore;
 import com.auto1.pantera.asto.blob.CachedBlobStorage;
+import com.auto1.pantera.asto.blob.MeteredBlobStore;
 import com.auto1.pantera.asto.blob.Presigner;
 import com.auto1.pantera.asto.blob.StorageInvalidationBusRegistry;
 import com.auto1.pantera.asto.factory.PanteraStorageFactory;
@@ -133,7 +134,14 @@ public class S3StorageFactory implements StorageFactory {
                 Optional.ofNullable(cache.string("path")).orElseThrow(() -> new IllegalArgumentException("cache.path is required when cache.enabled=true"))
             );
             if ("index".equalsIgnoreCase(cache.string("mode"))) {
-                return this.cachedBlobStorage(base, cache, path);
+                // WS1.6 (spec sect 3.G): meter the blob-store tier itself --
+                // scoped to cache.mode: index, the only mode that reaches
+                // BlobStore's own get/head/put/delete/list surface (cache.mode:
+                // disk and the no-cache fallback below still talk to `base`
+                // through the Storage interface, unmetered, exactly preserving
+                // the "no MicrometerStorage on the hot Storage surface"
+                // decision RepoConfig documents).
+                return this.cachedBlobStorage(new MeteredBlobStore(base), cache, path);
             }
             return this.diskCacheStorage(base, cache, path);
         }

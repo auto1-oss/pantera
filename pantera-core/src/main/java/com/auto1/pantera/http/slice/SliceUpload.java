@@ -14,13 +14,17 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blob.WriteBackSaturatedException;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.fault.Fault;
+import com.auto1.pantera.http.fault.FaultTranslator;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.scheduling.RepositoryEvents;
 
+import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
@@ -118,6 +122,52 @@ public final class SliceUpload implements Slice {
             com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry.instance()
                 .invalidateAfterUpload("file", key.string());
             return ResponseBuilder.created().build();
-        });
+        }).exceptionally(SliceUpload::translateOrRethrow);
+    }
+
+    /**
+     * WS1.6 (spec {@code WS1-storage-for-scale.md} &sect;3.C, the
+     * WS1.2-deferred hosted-upload backpressure): a hosted upload IS the
+     * client's request (unlike a proxy cache fill, which is already served
+     * and merely skips the cache write on saturation -- see {@code
+     * ProxyCacheWriter#rollbackAfterPartialFailure}), so a saturated
+     * write-back queue must surface as {@code 503 Service Unavailable} +
+     * {@code Retry-After} rather than the generic 500 an unhandled {@link
+     * java.util.concurrent.CompletionException} would otherwise produce.
+     * Reuses {@link FaultTranslator}'s existing {@link Fault.Overload}
+     * policy (the same central 503+{@code Retry-After}+{@code
+     * X-Pantera-Fault} translation and logging every other overload source
+     * in the codebase goes through) rather than hand-rolling a response
+     * here. Any OTHER failure is rethrown unchanged, preserving this
+     * class's prior behaviour exactly.
+     *
+     * @param err Failure from the upload chain (typically a {@link
+     *  java.util.concurrent.CompletionException}).
+     * @return A translated 503 response for a write-back saturation; never
+     *  returns otherwise (rethrows instead).
+     */
+    private static Response translateOrRethrow(final Throwable err) {
+        final Optional<WriteBackSaturatedException> saturated = SliceUpload.writeBackSaturation(err);
+        if (saturated.isPresent()) {
+            return FaultTranslator.translate(
+                new Fault.Overload("write_back_queue", Duration.ofSeconds(saturated.get().retryAfterSeconds())),
+                null
+            );
+        }
+        if (err instanceof RuntimeException runtimeErr) {
+            throw runtimeErr;
+        }
+        throw new java.util.concurrent.CompletionException(err);
+    }
+
+    private static Optional<WriteBackSaturatedException> writeBackSaturation(final Throwable err) {
+        Throwable cause = err;
+        while (cause != null) {
+            if (cause instanceof WriteBackSaturatedException saturated) {
+                return Optional.of(saturated);
+            }
+            cause = cause.getCause();
+        }
+        return Optional.empty();
     }
 }

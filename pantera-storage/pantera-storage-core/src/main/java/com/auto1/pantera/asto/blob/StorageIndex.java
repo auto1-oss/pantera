@@ -311,6 +311,32 @@ public final class StorageIndex {
     }
 
     /**
+     * WS1.6 (spec &sect;3.G): age of the longest-outstanding {@code
+     * PENDING_WRITE} entry -- the "write-back oldest-pending-age" metric.
+     * Iterates the same {@code pendingUpload} entries {@link
+     * #pendingWriteKeys()} does, but computes the age directly rather than
+     * requiring a second {@link #knownEntry(Key)} lookup per key.
+     *
+     * @param nowEpochMilli Caller-supplied "now" (a metrics binder's poll
+     *  time), so this stays testable without wall-clock coupling.
+     * @return Milliseconds since the oldest still-{@code PENDING_WRITE}
+     *  entry's disk write completed, or {@code 0} if none are pending.
+     */
+    public long oldestPendingWriteAgeMillis(final long nowEpochMilli) {
+        long oldest = 0L;
+        for (final Map.Entry<String, Entry> candidate : this.entries.entrySet()) {
+            final Entry entry = candidate.getValue();
+            if (entry.pendingUpload()) {
+                final long age = nowEpochMilli - entry.lastModifiedEpochMilli();
+                if (age > oldest) {
+                    oldest = age;
+                }
+            }
+        }
+        return oldest;
+    }
+
+    /**
      * Drop any entry for {@code key} (e.g. on delete or local eviction).
      *
      * @param key Key.

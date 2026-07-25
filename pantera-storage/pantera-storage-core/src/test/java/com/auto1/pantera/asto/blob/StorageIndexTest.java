@@ -268,6 +268,43 @@ final class StorageIndexTest {
     }
 
     @Test
+    void oldestPendingWriteAgeMillisIsZeroWhenNothingIsPending() {
+        final StorageIndex index = new StorageIndex();
+        index.putPresent(new Key.From("confirmed.jar"), 1L, null, null, true);
+        MatcherAssert.assertThat(index.oldestPendingWriteAgeMillis(System.currentTimeMillis()), new IsEqual<>(0L));
+    }
+
+    @Test
+    void oldestPendingWriteAgeMillisReturnsTheLongestOutstandingPendingWritesAge() {
+        // WS1.6 (spec sect 3.G): caller-supplied "now" keeps this test free
+        // of wall-clock coupling (CLAUDE.md doctrine) -- the index's OWN
+        // clock (injected here, deterministic) stamps each entry's
+        // lastModifiedEpochMilli at the moment it was written.
+        final MutableClock clock = new MutableClock(Instant.ofEpochMilli(1_000L));
+        final StorageIndex index = new StorageIndex(clock);
+        index.putPendingWrite(new Key.From("older.jar"), 1L, null, null);
+        clock.advance(Duration.ofMillis(500));
+        index.putPendingWrite(new Key.From("newer.jar"), 1L, null, null);
+
+        final long now = clock.millis() + 2_500L;
+        MatcherAssert.assertThat(
+            "the OLDEST still-pending entry (older.jar, written at 1000) drives the age, not the newest",
+            index.oldestPendingWriteAgeMillis(now), new IsEqual<>(3_000L)
+        );
+    }
+
+    @Test
+    void oldestPendingWriteAgeMillisIgnoresAPendingEntryOnceConfirmedPresent() {
+        final MutableClock clock = new MutableClock(Instant.ofEpochMilli(1_000L));
+        final StorageIndex index = new StorageIndex(clock);
+        final Key key = new Key.From("confirmed-later.jar");
+        index.putPendingWrite(key, 1L, null, null);
+        clock.advance(Duration.ofMillis(10_000L));
+        index.putPresent(key, 1L, null, null, true);
+        MatcherAssert.assertThat(index.oldestPendingWriteAgeMillis(clock.millis()), new IsEqual<>(0L));
+    }
+
+    @Test
     void rebuildFromDiskRecoversPendingWriteStateFromSidecar(@TempDir final Path tmp) throws IOException {
         final Path dataFile = tmp.resolve("uploading.jar");
         Files.write(dataFile, "not-yet-uploaded".getBytes(java.nio.charset.StandardCharsets.UTF_8));
