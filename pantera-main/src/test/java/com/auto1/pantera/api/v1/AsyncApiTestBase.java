@@ -69,9 +69,17 @@ public class AsyncApiTestBase {
     private static HikariDataSource sharedDs;
 
     /**
-     * Test timeout in seconds.
+     * Per-request timeout, in seconds. This is a hang-detector, NOT a latency
+     * assertion (CLAUDE.md): these Vert.x API tests share one server + rate
+     * limiter + pool across a class and run under a {@code -T8} reactor where
+     * a request that normally completes in well under a second can be starved
+     * far longer by sibling JVMs. Set generously (~30x the idle latency) so
+     * contention slowness is never a false failure, while a genuinely hung
+     * request still fails deterministically. Bumped from 5s after
+     * {@code SearchHandlerTest}/{@code AuthHandlerTest} flaked with
+     * {@code TimeoutException} under load.
      */
-    static final long TEST_TIMEOUT = Duration.ofSeconds(5).toSeconds();
+    static final long TEST_TIMEOUT = Duration.ofSeconds(30).toSeconds();
 
     /**
      * Service host.
