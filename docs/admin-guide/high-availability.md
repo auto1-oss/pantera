@@ -279,14 +279,17 @@ Quartz does not pin a repeating trigger to the node that scheduled it — any
 node's scheduler thread can acquire and fire it. Work that depends on
 in-memory state only one node actually has (a queue, a connection, an
 in-flight object) is scheduled on that node's own dedicated timer instead —
-for example, the artifact-events queue that feeds the search index and
+the artifact-events queue that feeds the search index and
 `artifact_publish` audit records is drained by a per-node scheduler, never
-by a clustered Quartz job. A small number of per-repository proxy
-background jobs still use the clustered store with a node-local registry
-lookup; if a node's scheduler thread acquires a trigger whose data isn't in
-its own registry, it skips that firing (logged) rather than deleting the
-job — the owning node's next acquisition of the same trigger processes
-normally.
+by a clustered Quartz job. Each proxy repository's package-processor
+(Maven/Gradle, npm, PyPI, Go, Composer — the post-fetch step that indexes a
+cached artifact and emits its `artifact_publish` audit record) is scheduled
+the same way as of 2.3.0: a per-node timer drains only the queue the local
+node itself populated, so a node's proxy indexing never depends on another
+node's scheduler thread acquiring the right firing. (Prior releases routed
+this through the clustered store with a node-local registry lookup, which
+could leave a repository's queue under-drained if firings kept landing on
+nodes without that registry entry.)
 
 ---
 

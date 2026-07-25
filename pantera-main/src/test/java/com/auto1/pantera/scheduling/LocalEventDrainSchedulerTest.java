@@ -20,6 +20,7 @@ import java.util.function.Consumer;
 import org.awaitility.Awaitility;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -166,6 +167,62 @@ final class LocalEventDrainSchedulerTest {
             "A closed scheduler must not keep draining items added afterward",
             consumer.count.get(),
             Matchers.is(countAtClose)
+        );
+        this.scheduler = null;
+    }
+
+    @Test
+    @Timeout(10)
+    void runsEachRunnableTaskPeriodicallyOnItsOwnPerNodeExecutor() {
+        // The Runnable-based ctor is the seam the proxy package-processors
+        // (MetadataEventQueues, WS2.2b fix) schedule through instead of the
+        // cluster-shared Quartz job store: each task owns its own internal
+        // batch-draining logic, so this ctor only needs to prove the tasks
+        // actually run periodically, not drain a queue itself.
+        final AtomicInteger first = new AtomicInteger();
+        final AtomicInteger second = new AtomicInteger();
+        final Runnable firstTask = first::incrementAndGet;
+        final Runnable secondTask = second::incrementAndGet;
+        this.scheduler = new LocalEventDrainScheduler<>(List.of(firstTask, secondTask), 1);
+        Awaitility.await().atMost(10, TimeUnit.SECONDS)
+            .until(() -> first.get() >= 2 && second.get() >= 2);
+        MatcherAssert.assertThat(
+            "Both tasks must have ticked at least twice",
+            first.get() >= 2 && second.get() >= 2,
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    @Timeout(10)
+    void anExceptionInARunnableTaskDoesNotStopFutureTicks() {
+        final AtomicInteger calls = new AtomicInteger();
+        final Runnable task = () -> {
+            if (calls.getAndIncrement() == 0) {
+                throw new IllegalStateException("boom");
+            }
+        };
+        this.scheduler = new LocalEventDrainScheduler<>(List.of(task), 1);
+        Awaitility.await().atMost(10, TimeUnit.SECONDS).until(() -> calls.get() >= 2);
+    }
+
+    @Test
+    @Timeout(10)
+    void closeStopsFurtherRunnableTicks() {
+        final AtomicInteger calls = new AtomicInteger();
+        final Runnable task = calls::incrementAndGet;
+        this.scheduler = new LocalEventDrainScheduler<>(List.of(task), 1);
+        Awaitility.await().atMost(10, TimeUnit.SECONDS).until(() -> calls.get() >= 1);
+        this.scheduler.close();
+        final int countAtClose = calls.get();
+        // Regression guard, not a latency assertion: see closeStopsFurtherDraining above.
+        Awaitility.await()
+            .pollDelay(1, TimeUnit.SECONDS)
+            .atMost(3, TimeUnit.SECONDS)
+            .until(() -> calls.get() == countAtClose);
+        MatcherAssert.assertThat(
+            "A closed scheduler must not keep ticking Runnable tasks",
+            calls.get(), new IsEqual<>(countAtClose)
         );
         this.scheduler = null;
     }

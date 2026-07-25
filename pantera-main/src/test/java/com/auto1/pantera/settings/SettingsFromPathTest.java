@@ -11,7 +11,6 @@
 package com.auto1.pantera.settings;
 
 import com.amihaiemil.eoyaml.Yaml;
-import com.auto1.pantera.scheduling.QuartzService;
 import com.google.common.io.Files;
 import java.io.IOException;
 import java.nio.file.Path;
@@ -40,7 +39,7 @@ class SettingsFromPathTest {
             ).build().toString().getBytes(),
             stng.toFile()
         );
-        final Settings settings = new SettingsFromPath(stng).find(new QuartzService());
+        final Settings settings = new SettingsFromPath(stng).find();
         MatcherAssert.assertThat(
             settings,
             new IsInstanceOf(YamlSettings.class)

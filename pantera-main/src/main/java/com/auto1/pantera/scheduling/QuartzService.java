@@ -66,10 +66,28 @@ public final class QuartzService {
      * entries died with the JVM that created them, and nothing will ever
      * schedule under this group again. Safe to purge once, on JDBC boot,
      * instead of the blanket {@code scheduler.clear()} this replaces (that
-     * call wiped every node's jobs, including live cron and in-flight
-     * per-repository proxy-package-processor jobs).
+     * call wiped every node's jobs, including live cron jobs).
      */
     private static final String STALE_EVENTS_JOB_GROUP = "EventsProcessor";
+
+    /**
+     * Job group names the pre-2.3.0 clustered per-repository
+     * proxy-package-processor pipeline used (each is a
+     * {@code *ProxyPackageProcessor.class.getSimpleName()}, matching the
+     * job group {@link #schedulePeriodicJob(int, int, Class, JobDataMap)}
+     * derives from the job class). As of the WS2.2b fix, this pipeline runs
+     * on a per-node {@code LocalEventDrainScheduler} instead — same
+     * rationale as {@link #STALE_EVENTS_JOB_GROUP} — so QRTZ_* rows
+     * surviving under these groups from a pre-fix deployment are orphaned
+     * and, worse, reference job classes that no longer implement
+     * {@code org.quartz.Job} at all: leaving them would make Quartz fail to
+     * instantiate the job on the next misfire-driven or clustered-recovery
+     * firing attempt. Purged once, on JDBC boot, same as the events group.
+     */
+    private static final String[] STALE_PROXY_PROCESSOR_JOB_GROUPS = {
+        "GoProxyPackageProcessor", "MavenProxyPackageProcessor", "NpmProxyPackageProcessor",
+        "PyProxyPackageProcessor", "ComposerProxyPackageProcessor",
+    };
 
     /**
      * Quartz scheduler.
@@ -127,11 +145,14 @@ public final class QuartzService {
             this.scheduler = factory.getScheduler();
             this.clustered = true;
             // 4. Purge stale rows left by a pre-2.3.0 deployment's clustered
-            // events-drain jobs — see STALE_EVENTS_JOB_GROUP. Scoped purge,
-            // not a blanket clear(): a blanket clear() would also delete
-            // live cron jobs and any node's in-flight per-repository
-            // proxy-package-processor jobs on every boot.
+            // events-drain jobs — see STALE_EVENTS_JOB_GROUP — and, as of
+            // the WS2.2b fix, a pre-fix deployment's clustered per-repository
+            // proxy-package-processor jobs too. Scoped purge, not a blanket
+            // clear(): a blanket clear() would also delete live cron jobs.
             this.purgeStaleJobGroup(QuartzService.STALE_EVENTS_JOB_GROUP);
+            for (final String group : QuartzService.STALE_PROXY_PROCESSOR_JOB_GROUPS) {
+                this.purgeStaleJobGroup(group);
+            }
             this.addShutdownHook();
             EcsLogger.info("com.auto1.pantera.scheduling")
                 .message("Quartz JDBC clustering enabled (scheduler: "

@@ -42,7 +42,6 @@ import com.auto1.pantera.http.client.HttpClientSettings;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.scheduling.LocalEventDrainScheduler;
 import com.auto1.pantera.scheduling.MetadataEventQueues;
-import com.auto1.pantera.scheduling.QuartzService;
 import com.auto1.pantera.settings.cache.PanteraCaches;
 import com.auto1.pantera.settings.cache.CachedUsers;
 import com.auto1.pantera.settings.cache.GuavaFiltersCache;
@@ -268,10 +267,9 @@ public final class YamlSettings implements Settings {
      * Ctor.
      * @param content YAML file content.
      * @param path Path to the folder with yaml settings file
-     * @param quartz Quartz service
      */
-    public YamlSettings(final YamlMapping content, final Path path, final QuartzService quartz) {
-        this(content, path, quartz, Optional.empty());
+    public YamlSettings(final YamlMapping content, final Path path) {
+        this(content, path, Optional.empty());
     }
 
     /**
@@ -283,25 +281,23 @@ public final class YamlSettings implements Settings {
      *
      * @param content YAML file content.
      * @param path Path to the folder with yaml settings file
-     * @param quartz Quartz service
      * @param shared Pre-created DataSource to reuse, or empty to create a new one
      * @since 1.20.13
      */
     public YamlSettings(final YamlMapping content, final Path path,
-        final QuartzService quartz, final Optional<DataSource> shared) {
-        this(content, path, quartz, shared, Optional.empty());
+        final Optional<DataSource> shared) {
+        this(content, path, shared, Optional.empty());
     }
 
     /**
      * Ctor with separate write pool for DbConsumer.
      * @param content Yaml settings content
      * @param path Path to settings file
-     * @param quartz Quartz service
      * @param shared Pre-created API DataSource (auth, admin, Quartz)
      * @param writeDs Dedicated write pool for DbConsumer (empty = use shared)
      */
     public YamlSettings(final YamlMapping content, final Path path,
-        final QuartzService quartz, final Optional<DataSource> shared,
+        final Optional<DataSource> shared,
         final Optional<DataSource> writeDs) {
         // Config file can be pantera.yaml or pantera.yml
         this.configFilePath = YamlSettings.findConfigFile(path);
@@ -427,7 +423,7 @@ public final class YamlSettings implements Settings {
         // fall back to the shared pool so single-pool deployments work unchanged.
         final Optional<DataSource> eventsDs = writeDs.isPresent() ? writeDs : this.artifactsDb;
         final Optional<ArtifactsEventsWiring> eventsWiring = eventsDs.flatMap(
-            db -> YamlSettings.initArtifactsEvents(this.meta(), quartz, db, this.artifactIndexCache)
+            db -> YamlSettings.initArtifactsEvents(this.meta(), db, this.artifactIndexCache)
         );
         this.events = eventsWiring.map(ArtifactsEventsWiring::queues);
         this.eventsDrainScheduler = eventsWiring.map(ArtifactsEventsWiring::drain).orElse(null);
@@ -1057,25 +1053,25 @@ public final class YamlSettings implements Settings {
     /**
      * Initialize the node-local artifact-events queue, its per-node drain
      * scheduler, and the {@link MetadataEventQueues} instance that wraps it
-     * (also used for per-repository proxy-package-processor queues, which
-     * remain Quartz-scheduled — unrelated to this drain).
+     * (also used for per-repository proxy-package-processor queues, which as
+     * of the WS2.2b fix are scheduled the same way — node-local, never
+     * Quartz).
      * <p>
-     * The drain never goes through Quartz: clustered Quartz does not pin a
-     * repeating trigger to the node that scheduled it, so draining this
+     * Neither drain goes through Quartz: clustered Quartz does not pin a
+     * repeating trigger to the node that scheduled it, so draining a
      * node-local queue through the cluster-shared job store risked another
      * node acquiring the trigger, finding nothing to resolve, and (pre-2.3.0)
-     * deleting the shared job — permanently orphaning this queue. See
-     * {@link LocalEventDrainScheduler} (WS2.2, 2.3.0).
+     * deleting the shared job — permanently orphaning the owning node's
+     * queue. See {@link LocalEventDrainScheduler} (WS2.2 artifact-events fix,
+     * WS2.2b proxy-package-processor fix, both 2.3.0).
      * @param settings Pantera settings
-     * @param quartz Quartz service (still used by {@link MetadataEventQueues}
-     *               for per-repository proxy-package-processor jobs)
      * @param database Artifact database
      * @param indexCache L1 artifact-index cache for post-commit negative-cache
      *                   invalidation, or empty when no DB-backed index is wired
      * @return Wiring holder, or empty when {@code artifacts_database} is not configured
      */
     private static Optional<ArtifactsEventsWiring> initArtifactsEvents(
-        final YamlMapping settings, final QuartzService quartz, final DataSource database,
+        final YamlMapping settings, final DataSource database,
         final Optional<ArtifactIndexCache> indexCache
     ) {
         final YamlMapping prop = settings.yamlMapping("artifacts_database");
@@ -1103,7 +1099,7 @@ public final class YamlSettings implements Settings {
         final LocalEventDrainScheduler<ArtifactEvent> drain =
             new LocalEventDrainScheduler<>(queue, consumers, interval);
         return Optional.of(
-            new ArtifactsEventsWiring(new MetadataEventQueues(queue, quartz), drain)
+            new ArtifactsEventsWiring(new MetadataEventQueues(queue), drain)
         );
     }
 

@@ -245,7 +245,7 @@ public final class VertxMain {
             writeDs = Optional.empty();
             quartz = new QuartzService();
         }
-        this.settings = new SettingsFromPath(this.config).find(quartz, sharedDs, writeDs);
+        this.settings = new SettingsFromPath(this.config).find(sharedDs, writeDs);
         // Apply logging configuration from YAML settings
         if (settings.logging().configured()) {
             settings.logging().apply();
