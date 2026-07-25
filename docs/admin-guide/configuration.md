@@ -262,9 +262,6 @@ meta:
     maven-metadata:
       ttl: 24h
       maxSize: 1000
-    npm-search:
-      ttl: 24h
-      maxSize: 1000
     cooldown-metadata:
       ttl: 30d
       maxSize: 1000

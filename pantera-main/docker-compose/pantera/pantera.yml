@@ -191,13 +191,3 @@ meta:
     filters:
       ttl: 5m
       maxSize: 2000
-
-    npm-search:
-      ttl: 6h
-      maxSize: 5000
-      valkey:
-        enabled: true
-        l1MaxSize: 2000
-        l1Ttl: 1h
-        l2MaxSize: 30000
-        l2Ttl: 12h

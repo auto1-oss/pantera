@@ -29,12 +29,12 @@ import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
 import com.auto1.pantera.http.slice.StorageArtifactSlice;
 import com.auto1.pantera.http.slice.SliceSimple;
+import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.npm.http.auth.AddUserSlice;
 import com.auto1.pantera.npm.http.auth.PanteraAddUserSlice;
 import com.auto1.pantera.npm.http.auth.NpmTokenAuthentication;
 import com.auto1.pantera.npm.http.auth.WhoAmISlice;
 import com.auto1.pantera.npm.http.search.SearchSlice;
-import com.auto1.pantera.npm.http.search.InMemoryPackageIndex;
 import com.auto1.pantera.npm.repository.StorageUserRepository;
 import com.auto1.pantera.npm.repository.StorageTokenRepository;
 import com.auto1.pantera.npm.security.BCryptPasswordHasher;
@@ -123,9 +123,9 @@ public final class NpmSlice implements Slice {
         final Optional<Queue<ArtifactEvent>> events
     ) {
         this(base, storage, policy, basicAuth, tokenAuth, name, events, false, null,
-            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP);
     }
-    
+
     /**
      * Ctor with JWT-only option.
      * @param base Base URL.
@@ -148,7 +148,7 @@ public final class NpmSlice implements Slice {
         final boolean jwtOnly
     ) {
         this(base, storage, policy, basicAuth, tokenAuth, name, events, jwtOnly, null,
-            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP);
     }
 
     /**
@@ -176,11 +176,11 @@ public final class NpmSlice implements Slice {
         final boolean jwtOnly
     ) {
         this(base, storage, policy, basicAuth, tokenAuth, name, events, jwtOnly, tokens,
-            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP);
     }
 
     /**
-     * Ctor with synchronous artifact-index writer for read-after-write consistency.
+     * Ctor with synchronous artifact-index writer and the shared search index.
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     public NpmSlice(
@@ -193,10 +193,11 @@ public final class NpmSlice implements Slice {
         final String name,
         final Optional<Queue<ArtifactEvent>> events,
         final boolean jwtOnly,
-        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final ArtifactIndex artifactIndex
     ) {
         this(base, storage, policy, basicAuth, tokenAuth, name, events, jwtOnly, tokens,
-            syncIndex);
+            syncIndex, artifactIndex);
     }
 
     /**
@@ -210,6 +211,9 @@ public final class NpmSlice implements Slice {
      * @param events Events queue.
      * @param jwtOnly Use JWT-only mode.
      * @param tokens Token service (optional).
+     * @param syncIndex Synchronous artifact-index writer.
+     * @param artifactIndex Shared search index backing {@code /-/v1/search}.
+     * @checkstyle ParameterNumberCheck (5 lines)
      */
     private NpmSlice(
         final URL base,
@@ -221,7 +225,8 @@ public final class NpmSlice implements Slice {
         final Optional<Queue<ArtifactEvent>> events,
         final boolean jwtOnly,
         final Tokens tokens,
-        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final ArtifactIndex artifactIndex
     ) {
         this.tokens = tokens;
         final TokenAuthentication npmTokenAuth = jwtOnly
@@ -462,7 +467,7 @@ public final class NpmSlice implements Slice {
                     new RtRule.ByPath(".*/-/v1/search")
                 ),
                 NpmSlice.createAuthSlice(
-                    new SearchSlice(storage, new InMemoryPackageIndex()),
+                    new SearchSlice(artifactIndex, name),
                     basicAuth,
                     npmTokenAuth,
                     new OperationControl(

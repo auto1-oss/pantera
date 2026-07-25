@@ -19,12 +19,19 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.npm.PackageNameFromUrl;
+import com.auto1.pantera.npm.PerVersionLayout;
 
 import java.util.concurrent.CompletableFuture;
 
 /**
- * Returns value of the `dist-tags` field from package `meta.json`.
+ * Returns value of the `dist-tags` field for a package.
  * Request line to this slice looks like /-/package/@hello%2fsimple-npm-project/dist-tags.
+ *
+ * <p>Reads from the per-version layout's durable dist-tags sidecar
+ * ({@code <pkg>/.dist-tags.json}, merged with the computed {@code latest} by
+ * {@link PerVersionLayout#generateMetaJson(Key)}) for packages published
+ * through the current write path. Falls back to a legacy {@code meta.json}
+ * lookup for packages that predate the per-version layout.</p>
  */
 public final class GetDistTagsSlice implements Slice {
 
@@ -47,21 +54,45 @@ public final class GetDistTagsSlice implements Slice {
         final String pkg = new PackageNameFromUrl(
             line.toString().replace("/dist-tags", "").replace("/-/package", "")
         ).value();
-        final Key key = new Key.From(pkg, "meta.json");
+        final Key packageKey = new Key.From(pkg);
+        final PerVersionLayout layout = new PerVersionLayout(this.storage);
         // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
         return body.asBytesFuture().thenCompose(ignored ->
-            this.storage.exists(key).thenCompose(
-                exists -> {
-                    if (exists) {
-                        return this.storage.value(key)
-                            .thenCompose(Content::asJsonObjectFuture)
-                            .thenApply(json -> ResponseBuilder.ok()
-                                .jsonBody(json.getJsonObject("dist-tags"))
-                                .build());
+            layout.hasVersions(packageKey).thenCompose(
+                hasVersions -> {
+                    if (hasVersions) {
+                        return layout.generateMetaJson(packageKey).thenApply(
+                            meta -> ResponseBuilder.ok()
+                                .jsonBody(meta.getJsonObject("dist-tags"))
+                                .build()
+                        );
                     }
-                    return ResponseBuilder.notFound().completedFuture();
+                    return this.legacyDistTags(pkg);
                 }
             )
+        );
+    }
+
+    /**
+     * Legacy fallback for packages published before the per-version layout
+     * existed: read {@code dist-tags} straight from a genuine {@code meta.json}.
+     *
+     * @param pkg Package name
+     * @return Completion stage with the response
+     */
+    private CompletableFuture<Response> legacyDistTags(final String pkg) {
+        final Key key = new Key.From(pkg, "meta.json");
+        return this.storage.exists(key).thenCompose(
+            exists -> {
+                if (exists) {
+                    return this.storage.value(key)
+                        .thenCompose(Content::asJsonObjectFuture)
+                        .thenApply(json -> ResponseBuilder.ok()
+                            .jsonBody(json.getJsonObject("dist-tags"))
+                            .build());
+                }
+                return ResponseBuilder.notFound().completedFuture();
+            }
         );
     }
 }

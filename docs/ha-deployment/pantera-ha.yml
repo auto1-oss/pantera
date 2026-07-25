@@ -139,16 +139,6 @@ meta:
         l2MaxSize: 1000000
         l2Ttl: 72h
 
-    npm-search:
-      ttl: 24h
-      maxSize: 1000
-      valkey:
-        enabled: true
-        l1MaxSize: 1000
-        l1Ttl: 24h
-        l2MaxSize: 1000000
-        l2Ttl: 72h
-
   # Cooldown configuration for supply chain security
   cooldown:
     enabled: false

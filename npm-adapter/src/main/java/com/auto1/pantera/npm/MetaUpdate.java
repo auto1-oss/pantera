@@ -73,24 +73,45 @@ public interface MetaUpdate {
                     new IllegalArgumentException("No version found in package JSON")
                 );
             }
-            
+
             // Extract version-specific metadata from the "versions" field
             final JsonObject versionData;
-            if (this.json.containsKey("versions") 
+            if (this.json.containsKey("versions")
                 && this.json.getJsonObject("versions").containsKey(version)) {
                 versionData = this.json.getJsonObject("versions").getJsonObject(version);
             } else {
                 // Fallback: use the entire JSON if it doesn't have versions structure
                 versionData = this.json;
             }
-            
+
             // Use per-version layout - no locking needed!
             // Each version writes to its own file
             final PerVersionLayout layout = new PerVersionLayout(storage);
             return layout.addVersion(prefix, version, versionData)
+                .thenCompose(ignored -> layout.mergeDistTags(prefix, this.extractDistTags(version)))
                 .toCompletableFuture();
         }
-        
+
+        /**
+         * Extract the dist-tags the npm CLI asked to be set as part of this
+         * publish. A normal {@code npm publish} sends
+         * {@code {"latest": "<version>"}}; {@code npm publish --tag beta}
+         * sends only {@code {"beta": "<version>"}}. When the payload carries no
+         * dist-tags at all (non-standard client), default to tagging the
+         * published version as {@code latest} so the package remains
+         * installable.
+         *
+         * @param version Version just published, used as the fallback target
+         * @return Tag-&gt;version map to persist into the sidecar
+         */
+        private JsonObject extractDistTags(final String version) {
+            if (this.json.containsKey("dist-tags")
+                && !this.json.getJsonObject("dist-tags").isEmpty()) {
+                return this.json.getJsonObject("dist-tags");
+            }
+            return Json.createObjectBuilder().add("latest", version).build();
+        }
+
         /**
          * Extract version from JSON.
          * Tries multiple locations where version might be specified.

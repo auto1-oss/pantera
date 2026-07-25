@@ -86,6 +86,67 @@ final class MetaUpdateByJsonTest {
         );
     }
 
+    /**
+     * Split-brain regression guard (WS4-npm.3): a {@code npm publish --tag beta}
+     * payload carries only {@code {"beta": "<version>"}} in its top-level
+     * {@code dist-tags} — that must land in the durable sidecar, and
+     * {@code latest} must be left alone (it was never requested).
+     */
+    @Test
+    void persistsCustomDistTagFromPublishPayloadWithoutTouchingLatest() {
+        final Key prefix = new Key.From("@hello/beta-project");
+        final JsonObject uploaded = Json.createObjectBuilder()
+            .add("name", "@hello/beta-project")
+            .add(
+                "dist-tags",
+                Json.createObjectBuilder().add("beta", "1.0.0-beta.1")
+            )
+            .add(
+                "versions",
+                Json.createObjectBuilder().add(
+                    "1.0.0-beta.1",
+                    Json.createObjectBuilder()
+                        .add("name", "@hello/beta-project")
+                        .add("version", "1.0.0-beta.1")
+                )
+            )
+            .build();
+        new MetaUpdate.ByJson(uploaded).update(prefix, this.asto).join();
+        final JsonObject tags = new PerVersionLayout(this.asto).readDistTags(prefix)
+            .toCompletableFuture().join();
+        MatcherAssert.assertThat(
+            "beta tag persisted verbatim from the publish payload",
+            tags.getString("beta"),
+            new IsEqual<>("1.0.0-beta.1")
+        );
+        MatcherAssert.assertThat(
+            "latest was never requested by this publish and stays absent",
+            tags.containsKey("latest"),
+            new IsEqual<>(false)
+        );
+    }
+
+    /**
+     * A publish payload with no {@code dist-tags} field at all (non-standard
+     * client) must still leave the package installable — default to tagging
+     * the published version as {@code latest}.
+     */
+    @Test
+    void defaultsToLatestWhenPublishPayloadHasNoDistTags() {
+        final Key prefix = new Key.From("@hello/no-tags-project");
+        final JsonObject uploaded = Json.createObjectBuilder()
+            .add("name", "@hello/no-tags-project")
+            .add("version", "1.0.0")
+            .build();
+        new MetaUpdate.ByJson(uploaded).update(prefix, this.asto).join();
+        MatcherAssert.assertThat(
+            "latest defaults to the published version",
+            new PerVersionLayout(this.asto).readDistTags(prefix)
+                .toCompletableFuture().join().getString("latest"),
+            new IsEqual<>("1.0.0")
+        );
+    }
+
     private JsonObject cliMeta() {
         return Json.createReader(
             new TestResource("json/cli_publish.json").asInputStream()
