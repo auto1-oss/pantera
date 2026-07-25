@@ -71,6 +71,23 @@ public final class MavenSlice extends Slice.Wrap {
     );
 
     /**
+     * H1 fix: {@link UploadSlice#STAGING_PREFIX} is a plain {@code Storage}
+     * key namespace, not an access-controlled one — without this guard a
+     * request whose path directly addresses {@code /.pgp-pending/<...>}
+     * would reach {@link LocalMavenSlice} (GET/HEAD) or {@link UploadSlice}
+     * (PUT) exactly like any other path, defeating the quarantine: a
+     * not-yet-signature-verified primary could be read straight out of
+     * staging, or a client could plant/overwrite bytes inside it directly.
+     * Matched against the full request path with a literal path-segment
+     * boundary on both sides, so a real artifact whose name merely
+     * <em>contains</em> {@code .pgp-pending} as a substring (not as its own
+     * path segment) is unaffected.
+     */
+    private static final Pattern STAGING_PATH_GUARD = Pattern.compile(
+        ".*/" + Pattern.quote(UploadSlice.STAGING_PREFIX) + "/.*"
+    );
+
+    /**
      * Private ctor since Pantera doesn't know about `Identities` implementation.
      * @param storage The storage.
      * @param policy Access policy.
@@ -180,6 +197,14 @@ public final class MavenSlice extends Slice.Wrap {
         final MavenHostedPolicy hostedPolicy
     ) {
         return new SliceRoute(
+            // H1 fix — must stay first: see STAGING_PATH_GUARD. Matched
+            // before auth so a probe of the quarantine namespace gets an
+            // identical 404 whether or not the caller can authenticate,
+            // same as any other nonexistent path.
+            new RtRulePath(
+                new RtRule.ByPath(STAGING_PATH_GUARD),
+                new SliceSimple(ResponseBuilder.notFound().build())
+            ),
             new RtRulePath(
                 new RtRule.Any(
                     MethodRule.GET, MethodRule.HEAD

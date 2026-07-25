@@ -21,6 +21,7 @@ import com.auto1.pantera.asto.cache.Cache;
 import com.auto1.pantera.asto.cache.FromStorageCache;
 import com.auto1.pantera.asto.ext.KeyLastPart;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.impl.NoopCooldownService;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
@@ -528,6 +529,70 @@ class ProxySliceTest {
         );
     }
 
+    // ===== M1 fix: PEP 658 .metadata sidecars must honour cooldown =====
+
+    @Test
+    void metadataSidecarBlockedByCooldownReturns404BeforeFetching() {
+        final TestClientSlices clients = new TestClientSlices(line ->
+            ResponseBuilder.ok()
+                .body("must-not-be-served".getBytes(StandardCharsets.UTF_8))
+                .build()
+        );
+        final ProxySlice slice = this.newProxySliceWithCooldown(
+            clients, new VersionBlockingCooldownService("sample-pkg", "9.9.9")
+        );
+        final Response response = slice.response(
+            new RequestLine(
+                RqMethod.GET, "/packages/aa/bb/sample_pkg-9.9.9-py3-none-any.whl.metadata"
+            ),
+            this.authorization,
+            Content.EMPTY
+        ).toCompletableFuture().join();
+        MatcherAssert.assertThat(
+            "a cooldown-blocked version's PEP 658 .metadata must 404",
+            response.status(), Matchers.is(RsStatus.NOT_FOUND)
+        );
+        Assertions.assertFalse(
+            clients.invoked(),
+            "the cooldown gate must reject BEFORE any upstream fetch/serve is attempted"
+        );
+    }
+
+    @Test
+    void metadataSidecarAllowedByCooldownServesNormally() {
+        final byte[] metadataBody =
+            "Metadata-Version: 2.1\nName: sample-pkg\n".getBytes(StandardCharsets.UTF_8);
+        final TestClientSlices clients = new TestClientSlices(line ->
+            ResponseBuilder.ok().body(metadataBody).build()
+        );
+        // Same slice, same blocked version as above — proves the gate is
+        // version-specific, not a blanket .metadata block.
+        final ProxySlice slice = this.newProxySliceWithCooldown(
+            clients, new VersionBlockingCooldownService("sample-pkg", "9.9.9")
+        );
+        final Response response = slice.response(
+            new RequestLine(
+                RqMethod.GET, "/packages/aa/bb/sample_pkg-1.0.0-py3-none-any.whl.metadata"
+            ),
+            this.authorization,
+            Content.EMPTY
+        ).toCompletableFuture().join();
+        MatcherAssert.assertThat(
+            "an unblocked version's .metadata must still serve normally",
+            response.status(), Matchers.is(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            new String(
+                response.body().asBytesFuture().toCompletableFuture().join(),
+                StandardCharsets.UTF_8
+            ),
+            Matchers.equalTo(new String(metadataBody, StandardCharsets.UTF_8))
+        );
+        Assertions.assertTrue(
+            clients.invoked(), "an allowed .metadata request must still reach upstream"
+        );
+    }
+
     @Test
     void nonArtifactRaceRefetchesFromUpstreamInsteadOf404() {
         // The cached index entry is evicted between exists() and the direct
@@ -674,6 +739,96 @@ class ProxySliceTest {
                 com.auto1.pantera.http.ResponseBuilder.notFound().build()
             )
         );
+    }
+
+    /**
+     * A {@link ProxySlice} wired with a caller-supplied {@link CooldownService}
+     * instead of {@link NoopCooldownService#INSTANCE} — used by the M1
+     * {@code .metadata} cooldown-gating tests, which need a service that can
+     * actually block a specific (artifact, version) pair.
+     */
+    private ProxySlice newProxySliceWithCooldown(
+        final TestClientSlices clients, final CooldownService cooldown
+    ) {
+        return new ProxySlice(
+            clients,
+            Authenticator.ANONYMOUS,
+            new SliceSimple(ResponseBuilder.notFound().build()),
+            this.storage,
+            new FromStorageCache(this.storage),
+            Optional.of(this.events),
+            "my-pypi-proxy",
+            "pypi-proxy",
+            cooldown,
+            new com.auto1.pantera.publishdate.RegistryBackedInspector(
+                "pypi", com.auto1.pantera.publishdate.PublishDateRegistries.instance()
+            ),
+            (line, headers, body) -> CompletableFuture.completedFuture(
+                ResponseBuilder.notFound().build()
+            )
+        );
+    }
+
+    /**
+     * Blocks exactly one (artifact, version) pair, allows everything else —
+     * proves the M1 {@code .metadata} gate is version-specific, not a
+     * blanket block on every {@code .metadata} request.
+     */
+    private static final class VersionBlockingCooldownService implements CooldownService {
+
+        private final String blockedArtifact;
+        private final String blockedVersion;
+
+        VersionBlockingCooldownService(final String blockedArtifact, final String blockedVersion) {
+            this.blockedArtifact = blockedArtifact;
+            this.blockedVersion = blockedVersion;
+        }
+
+        @Override
+        public CompletableFuture<com.auto1.pantera.cooldown.api.CooldownResult> evaluate(
+            final com.auto1.pantera.cooldown.api.CooldownRequest request,
+            final com.auto1.pantera.cooldown.api.CooldownInspector inspector
+        ) {
+            if (this.blockedArtifact.equals(request.artifact())
+                && this.blockedVersion.equals(request.version())) {
+                return CompletableFuture.completedFuture(
+                    com.auto1.pantera.cooldown.api.CooldownResult.blocked(
+                        new com.auto1.pantera.cooldown.api.CooldownBlock(
+                            request.repoType(), request.repoName(),
+                            request.artifact(), request.version(),
+                            com.auto1.pantera.cooldown.api.CooldownReason.FRESH_RELEASE,
+                            Instant.now(), Instant.now().plusSeconds(60),
+                            java.util.List.of()
+                        )
+                    )
+                );
+            }
+            return CompletableFuture.completedFuture(
+                com.auto1.pantera.cooldown.api.CooldownResult.allowed()
+            );
+        }
+
+        @Override
+        public CompletableFuture<Void> unblock(
+            final String repoType, final String repoName,
+            final String artifact, final String version, final String actor
+        ) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletableFuture<Void> unblockAll(
+            final String repoType, final String repoName, final String actor
+        ) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletableFuture<java.util.List<com.auto1.pantera.cooldown.api.CooldownBlock>> activeBlocks(
+            final String repoType, final String repoName
+        ) {
+            return CompletableFuture.completedFuture(java.util.Collections.emptyList());
+        }
     }
 
     private static Cache cacheFailing() {

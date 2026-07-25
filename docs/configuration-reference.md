@@ -1014,7 +1014,7 @@ repo:
 
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
-| `verifyPgp` | bool | No | `false` | Applies to `local` **and** `proxy` modes. When `true`, a detached `.asc`/`.sig` signature is verified against the admin-managed PGP keyring (`/api/v1/admin/pgp-keys`) before the primary artifact is committed to cache (proxy) or acknowledged (hosted store). An empty keyring rejects every signed artifact — enabling this without uploading trusted keys blocks all signed fetches/uploads (fail-closed by design, never fail-open). |
+| `verifyPgp` | bool | No | `false` | Applies to `local` **and** `proxy` modes. When `true`, a detached `.asc`/`.sig` signature is verified against the admin-managed PGP keyring (`/api/v1/admin/pgp-keys`) before the primary artifact is trusted. `proxy` mode: verified before the fetched artifact is committed to cache. `local` (hosted) mode: an uploaded primary's own `PUT` always returns `201 Created`, but the artifact is quarantined (not resolvable by any client, excluded from `maven-metadata.xml`) until a matching signature verifies — regardless of whether the primary or its signature is uploaded first. A primary that never gets a valid signature is never servable. An empty keyring rejects every signed artifact — enabling this without uploading trusted keys blocks all signed fetches/uploads (fail-closed by design, never fail-open). |
 | `releaseImmutable` | bool | No | `false` | `local` mode only. When `true`, redeploying an existing non-SNAPSHOT (release) coordinate is rejected with `409 Conflict` instead of silently overwriting it. SNAPSHOT redeploys are always allowed regardless of this setting. |
 
 ```yaml
