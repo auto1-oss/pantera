@@ -112,6 +112,8 @@ public final class MavenSlice extends Slice.Wrap {
 
     /**
      * Ctor with synchronous index writer for read-after-write consistency.
+     * Uses {@link MavenHostedPolicy#DEFAULT} (no PGP verify, no release
+     * immutability) — byte-identical to pre-2.3.0 hosted-write behaviour.
      * @param storage The storage.
      * @param policy Access policy.
      * @param basicAuth Basic authentication.
@@ -130,9 +132,35 @@ public final class MavenSlice extends Slice.Wrap {
         final Optional<Queue<ArtifactEvent>> events,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
     ) {
+        this(storage, policy, basicAuth, tokenAuth, name, events, syncIndex, MavenHostedPolicy.DEFAULT);
+    }
+
+    /**
+     * Ctor with synchronous index writer AND hosted-write policy
+     * (WS4-maven.2/.6 — PGP verify, release immutability).
+     * @param storage The storage.
+     * @param policy Access policy.
+     * @param basicAuth Basic authentication.
+     * @param tokenAuth Token authentication.
+     * @param name Repository name
+     * @param events Artifact events
+     * @param syncIndex Synchronous artifact-index writer
+     * @param hostedPolicy Hosted-write policy (verifyPgp / releaseImmutable)
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public MavenSlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final MavenHostedPolicy hostedPolicy
+    ) {
         super(
             MavenSlice.createSliceRoute(
-                storage, policy, basicAuth, tokenAuth, name, events, syncIndex
+                storage, policy, basicAuth, tokenAuth, name, events, syncIndex, hostedPolicy
             )
         );
     }
@@ -148,7 +176,8 @@ public final class MavenSlice extends Slice.Wrap {
         final TokenAuthentication tokenAuth,
         final String name,
         final Optional<Queue<ArtifactEvent>> events,
-        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final MavenHostedPolicy hostedPolicy
     ) {
         return new SliceRoute(
             new RtRulePath(
@@ -170,7 +199,7 @@ public final class MavenSlice extends Slice.Wrap {
                     new RtRule.ByPath(".*SNAPSHOT.*")
                 ),
                 MavenSlice.createAuthSlice(
-                    new UploadSlice(storage, events, name, syncIndex),
+                    new UploadSlice(storage, events, name, syncIndex, hostedPolicy),
                     basicAuth,
                     tokenAuth,
                     new OperationControl(
@@ -181,7 +210,7 @@ public final class MavenSlice extends Slice.Wrap {
             new RtRulePath(
                 MethodRule.PUT,
                 MavenSlice.createAuthSlice(
-                    new UploadSlice(storage, events, name, syncIndex),
+                    new UploadSlice(storage, events, name, syncIndex, hostedPolicy),
                     basicAuth,
                     tokenAuth,
                     new OperationControl(

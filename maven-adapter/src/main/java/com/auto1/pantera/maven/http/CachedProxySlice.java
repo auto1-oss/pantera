@@ -32,13 +32,19 @@ import com.auto1.pantera.http.context.RequestContext;
 import com.auto1.pantera.http.fault.Fault;
 import com.auto1.pantera.http.fault.Fault.ChecksumAlgo;
 import com.auto1.pantera.http.fault.Result;
+import com.auto1.pantera.http.headers.ContentLength;
+import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.slice.RangeSlice;
+import com.auto1.pantera.maven.asto.RepositoryChecksums;
 import com.auto1.pantera.maven.cooldown.MavenMetadataFilter;
 import com.auto1.pantera.maven.cooldown.MavenMetadataParser;
 import com.auto1.pantera.maven.cooldown.MavenMetadataRequestDetector;
 import com.auto1.pantera.maven.cooldown.MavenMetadataRewriter;
+import com.auto1.pantera.maven.security.KeyringStoreRegistry;
+import com.auto1.pantera.maven.security.PgpVerifier;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 
@@ -63,6 +69,7 @@ import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -153,6 +160,14 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         new PerInputFilteredMetadataCache();
 
     /**
+     * WS4-maven.1/.2: per-repo {@code verifyPgp} flag. When {@code false}
+     * (default, byte-identical to pre-2.3.0 behaviour) {@link #fetchSidecar}
+     * is never asked for {@code .asc} and {@link KeyringStoreRegistry} is
+     * never consulted — no keyring lookups occur at all.
+     */
+    private final boolean verifyPgp;
+
+    /**
      * Constructor with full configuration (no metadata filtering).
      * Delegates to the overload below with {@code cooldownMetadata=null}; used
      * by legacy callers and tests that do not need filter behaviour.
@@ -218,6 +233,50 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         final MetadataCache metadataCache,
         final CooldownMetadataService cooldownMetadata
     ) {
+        this(
+            client, cache, events, repoName, upstreamUrl, repoType,
+            cooldownService, cooldownInspector, storage, config, metadataCache,
+            cooldownMetadata, false
+        );
+    }
+
+    /**
+     * Constructor with metadata filter AND PGP verification (WS4-maven.1/.2).
+     * The single field-initializing constructor — every other overload
+     * delegates here.
+     * @param client Upstream remote slice
+     * @param cache Asto cache for artifact storage
+     * @param events Event queue for proxy artifact events
+     * @param repoName Repository name
+     * @param upstreamUrl Upstream base URL
+     * @param repoType Repository type
+     * @param cooldownService Cooldown service
+     * @param cooldownInspector Cooldown inspector
+     * @param storage Optional local storage
+     * @param config Unified proxy cache configuration
+     * @param metadataCache Maven metadata cache
+     * @param cooldownMetadata Cooldown metadata filter service, or null to
+     *                         disable filtering on this slice
+     * @param verifyPgp Whether to verify {@code .asc} signatures against the
+     *                  admin-managed keyring before committing a fetched
+     *                  primary to cache
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    CachedProxySlice(
+        final Slice client,
+        final Cache cache,
+        final Optional<Queue<ProxyArtifactEvent>> events,
+        final String repoName,
+        final String upstreamUrl,
+        final String repoType,
+        final CooldownService cooldownService,
+        final CooldownInspector cooldownInspector,
+        final Optional<Storage> storage,
+        final ProxyCacheConfig config,
+        final MetadataCache metadataCache,
+        final CooldownMetadataService cooldownMetadata,
+        final boolean verifyPgp
+    ) {
         super(
             client, cache, repoName, repoType, upstreamUrl,
             storage, events, config, cooldownService, cooldownInspector
@@ -241,6 +300,7 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
             repoName
         );
         this.cooldownMetadata = cooldownMetadata;
+        this.verifyPgp = verifyPgp;
     }
 
     /**
@@ -300,7 +360,19 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         // takes effect on the next miss; the admin's tool for blocking an
         // already-cached version is cache eviction.
         if (!isChecksumSidecar(path) && isPrimaryArtifact(path)) {
-            return Optional.of(this.verifyAndServePrimary(line, headers, key, path));
+            // WS4-maven.11: wrap the whole primary-serve pipeline in
+            // RangeSlice so a Range request is honoured whichever branch
+            // (cache hit / cache().load() hit / fresh-fetch commit)
+            // produces the 200 — RangeSlice only needs Content-Length on
+            // that response's headers (added in each branch below) and a
+            // no-Range request passes straight through unmodified, so this
+            // is a no-op when the client never asks for a range.
+            return Optional.of(
+                new RangeSlice(
+                    (rangeLine, rangeHeaders, rangeBody) ->
+                        this.verifyAndServePrimary(line, headers, key, path)
+                ).response(line, headers, Content.EMPTY)
+            );
         }
         return Optional.empty();
     }
@@ -880,13 +952,15 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 com.auto1.pantera.asto.cache.CacheControl.Standard.ALWAYS
             ).thenCompose(opt -> {
                 if (opt.isPresent()) {
-                    this.auditPrimaryAccess(
-                        auditCtx, path, headers, opt.get().size().orElse(0L),
-                        com.auto1.pantera.audit.AuditLogger.OUTCOME_SUCCESS, null
-                    );
-                    return CompletableFuture.completedFuture(
-                        ResponseBuilder.ok().body(opt.get()).build()
-                    );
+                    return this.serveArtifactWithHeaders(
+                        storage, key, headers, () -> CompletableFuture.completedFuture(opt.get())
+                    ).thenApply(resp -> {
+                        this.auditPrimaryAccess(
+                            auditCtx, path, headers, contentLength(resp),
+                            com.auto1.pantera.audit.AuditLogger.OUTCOME_SUCCESS, null
+                        );
+                        return resp;
+                    });
                 }
                 // M4 (analysis/plan/v1/PLAN.md): concurrent clients for the
                 // same uncached primary must collapse to one upstream call.
@@ -998,6 +1072,16 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> sidecars =
             new EnumMap<>(ChecksumAlgo.class);
         sidecars.put(ChecksumAlgo.SHA1, () -> sha1Inflight);
+        // WS4-maven.2: fetch `.asc` in parallel with the primary + sha1 —
+        // ONLY when verifyPgp is enabled for this repo, so a disabled repo
+        // never issues the extra upstream call (byte-identical to pre-2.3.0
+        // when off). Verified AFTER commit, against the bytes storage just
+        // wrote — see the PGP note on the Result.Ok branch below for the
+        // accepted streaming trade-off this mirrors from the existing sha1
+        // verify-after-stream design.
+        final Optional<CompletionStage<Optional<InputStream>>> ascInflight = this.verifyPgp
+            ? Optional.of(this.fetchSidecar(line, inboundHeaders, ".asc"))
+            : Optional.empty();
         return this.fetchPrimaryBody(line, inboundHeaders).toCompletableFuture().thenCompose(body ->
             this.cooldownAtHeaders(inboundHeaders, path, body).thenCompose(blockResp -> {
                 if (blockResp.isPresent()) {
@@ -1050,6 +1134,39 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 // upstream.
                 artifact.verificationOutcome()
                     .whenComplete((r2, e2) -> singleFlightGate.complete(null));
+                // WS4-maven.2: once the sha1-verified primary is committed,
+                // additionally verify its `.asc` signature against the
+                // keyring and roll back (delete) the commit on failure —
+                // fire-and-forget, same posture as the rollback-after-
+                // partial-failure elsewhere in the cache-write pipeline
+                // (CLAUDE.md). PGP trade-off note: this FIRST requester's
+                // response (built below) has already started streaming
+                // `artifact.body()` to the client by the time this
+                // resolves — identical to the existing sha1 verify-after-
+                // stream trade-off this class has shipped since Track 4.
+                // What this DOES guarantee: a tampered/unsigned/untrusted
+                // primary is never left in the cache, so every subsequent
+                // request re-fetches and re-evaluates cleanly.
+                if (this.verifyPgp) {
+                    ascInflight.ifPresent(asc -> artifact.verificationOutcome()
+                        .thenCompose(outcome -> outcome instanceof Result.Ok
+                            ? this.verifyPgpAfterCommit(key, asc, auditCtx, path, inboundHeaders)
+                            : CompletableFuture.<Void>completedFuture(null))
+                        .exceptionally(pgpErr -> {
+                            EcsLogger.warn("com.auto1.pantera.maven.http")
+                                .message("Post-commit PGP verification failed unexpectedly; "
+                                    + "primary left as sha1-verified-only")
+                                .eventCategory("file")
+                                .eventAction("pgp_verification_failed")
+                                .eventOutcome("failure")
+                                .field("repository.name", this.repoName())
+                                .field("url.path", path)
+                                .error(pgpErr)
+                                .field("log.source", "application")
+                                .log();
+                            return null;
+                        }));
+                }
                 // Track 5 Phase 1B: pass the upstream response headers (carrying
                 // Last-Modified) through to buildArtifactEvent so the DB
                 // consumer records the true upstream publish date for this
@@ -1075,7 +1192,22 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                     auditCtx, path, inboundHeaders, artifact.body().size().orElse(0L),
                     com.auto1.pantera.audit.AuditLogger.OUTCOME_SUCCESS, null
                 );
-                return ResponseBuilder.ok().body(artifact.body()).build();
+                // WS4-maven.8 (partial): Content-Type/Disposition/Accept-Ranges
+                // and Content-Length (when upstream advertised one) so a cold
+                // fetch already carries most of local mode's header set. No
+                // ETag here — the sha1 isn't known synchronously (verification
+                // completes after this response is returned, streaming); the
+                // NEXT request for this now-cached artifact gets the full set
+                // including ETag via serveFromCache/cache().load().
+                final ResponseBuilder freshResp = ResponseBuilder.ok()
+                    .header(ArtifactHeaders.contentType(key))
+                    .header(ArtifactHeaders.contentDisposition(key))
+                    .header("Accept-Ranges", "bytes")
+                    .header("Last-Modified", httpDate(Instant.now()));
+                artifact.body().size().ifPresent(
+                    size -> freshResp.header(new com.auto1.pantera.http.headers.ContentLength(size))
+                );
+                return freshResp.body(artifact.body()).build();
             });
             })
         ).exceptionally(err -> {
@@ -1386,23 +1518,209 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
     }
 
     /**
+     * WS4-maven.2: verify the {@code .asc} signature fetched alongside the
+     * primary against the bytes storage just committed (sha1-verified).
+     * Per the 00-security-integrity-decisions.md/S4 policy, a missing
+     * signature is treated the same as a failed one when {@code verifyPgp}
+     * is enabled (Maven-Central-tier semantics — reject unless verified).
+     *
+     * @param key Primary artifact key (already committed to storage)
+     * @param ascInflight The {@code .asc} fetch kicked off alongside the primary
+     * @param auditCtx Request correlation context
+     * @param path Request path (for logging)
+     * @param inboundHeaders Inbound request headers (for the access audit owner)
+     * @return Completion stage, resolved once verification (and any rollback
+     *         delete) finishes
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    private CompletionStage<Void> verifyPgpAfterCommit(
+        final Key key, final CompletionStage<Optional<InputStream>> ascInflight,
+        final com.auto1.pantera.audit.AuditContext auditCtx, final String path,
+        final Headers inboundHeaders
+    ) {
+        final Storage storage = this.rawStorage.orElseThrow();
+        return ascInflight.thenCompose(ascOpt ->
+            storage.value(key).thenCompose(Content::asBytesFuture).thenCompose(primaryBytes -> {
+                final byte[] ascBytes = ascOpt.map(CachedProxySlice::readAllQuietly).orElse(null);
+                final PgpVerifier.Result result = new PgpVerifier(KeyringStoreRegistry.active())
+                    .verify(primaryBytes, ascBytes);
+                if (result == PgpVerifier.Result.VERIFIED) {
+                    return CompletableFuture.<Void>completedFuture(null);
+                }
+                return this.rejectPgpCommit(key, result, auditCtx, path, inboundHeaders);
+            })
+        );
+    }
+
+    /**
+     * Roll back a PGP-verification failure: log the state transition, emit
+     * the {@code artifact_access} failure audit, and best-effort delete the
+     * primary plus its checksum/signature sidecars so the cache does not
+     * keep serving what just failed verification.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    private CompletionStage<Void> rejectPgpCommit(
+        final Key key, final PgpVerifier.Result result,
+        final com.auto1.pantera.audit.AuditContext auditCtx, final String path,
+        final Headers inboundHeaders
+    ) {
+        EcsLogger.warn("com.auto1.pantera.maven.http")
+            .message("PGP verification failed for cached primary (" + result
+                + "); removing from cache")
+            .eventCategory("file")
+            .eventAction("pgp_verification_failed")
+            .eventOutcome("failure")
+            .field("repository.name", this.repoName())
+            .field("url.path", path)
+            .field("event.reason", result.name())
+            .field("log.source", "application")
+            .log();
+        this.auditPrimaryAccess(
+            auditCtx, path, inboundHeaders, 0L,
+            com.auto1.pantera.audit.AuditLogger.OUTCOME_FAILURE,
+            com.auto1.pantera.audit.AuditLogger.REASON_CHECKSUM_MISMATCH
+        );
+        final Storage storage = this.rawStorage.orElseThrow();
+        return storage.delete(key)
+            .exceptionally(ignored -> null)
+            .thenCompose(ignored -> deleteSidecarsQuietly(storage, key));
+    }
+
+    /**
+     * Best-effort delete of every checksum/signature sidecar for a primary
+     * key. Used to fully unpublish a primary that failed post-commit PGP
+     * verification. Missing sidecars and delete failures are swallowed —
+     * this is cleanup, not a correctness-critical path.
+     */
+    private static CompletionStage<Void> deleteSidecarsQuietly(final Storage storage, final Key key) {
+        CompletableFuture<Void> chain = CompletableFuture.completedFuture(null);
+        for (final String ext : List.of(".sha1", ".sha256", ".md5", ".sha512", ".asc")) {
+            final Key sidecarKey = new Key.From(key.string() + ext);
+            chain = chain.thenCompose(
+                ignored -> storage.exists(sidecarKey).thenCompose(
+                    exists -> exists
+                        ? storage.delete(sidecarKey).exceptionally(ignored2 -> null)
+                        : CompletableFuture.<Void>completedFuture(null)
+                )
+            );
+        }
+        return chain;
+    }
+
+    /**
+     * Read an already-buffered {@link InputStream} (produced by
+     * {@link #fetchSidecar}, which wraps fully-collected bytes in a
+     * {@link java.io.ByteArrayInputStream}) fully into a byte array.
+     * @param in Stream to drain
+     * @return All bytes, or an empty array if the stream could not be read
+     *         — {@link PgpVerifier#verify} treats an empty array the same
+     *         as a missing signature, so this is not a silent data loss
+     */
+    private static byte[] readAllQuietly(final InputStream in) {
+        try (InputStream stream = in) {
+            return stream.readAllBytes();
+        } catch (final IOException ex) {
+            return new byte[0];
+        }
+    }
+
+    /**
      * Serve the primary from storage after a successful atomic write, or on
      * a plain cache hit. Emits an {@code AuditLogger#access} success event —
      * the artifact was already published the first time it was cached, so
-     * this is a read, not a publish.
+     * this is a read, not a publish. Carries the same validator/content
+     * headers as local mode (WS4-maven.8) and honours {@code If-None-Match}
+     * (WS4-maven.7) — checked BEFORE the body is read from storage, so a
+     * revalidation never pays for an unnecessary read.
      */
     private CompletableFuture<Response> serveFromCache(
         final Storage storage, final Key key,
         final com.auto1.pantera.audit.AuditContext auditCtx,
         final String path, final Headers headers
     ) {
-        return storage.value(key).thenApply(content -> {
-            this.auditPrimaryAccess(
-                auditCtx, path, headers, content.size().orElse(0L),
-                com.auto1.pantera.audit.AuditLogger.OUTCOME_SUCCESS, null
-            );
-            return ResponseBuilder.ok().body(content).build();
+        return this.serveArtifactWithHeaders(storage, key, headers, () -> storage.value(key))
+            .thenApply(resp -> {
+                this.auditPrimaryAccess(
+                    auditCtx, path, headers, contentLength(resp),
+                    com.auto1.pantera.audit.AuditLogger.OUTCOME_SUCCESS, null
+                );
+                return resp;
+            });
+    }
+
+    /**
+     * Shared cache-hit response builder for {@link #serveFromCache} and the
+     * {@code cache().load()} hit branch in {@link #verifyAndServePrimary}:
+     * builds the sha1 {@code ETag} + {@code Last-Modified} from storage,
+     * returns 304 on a matching {@code If-None-Match} without ever invoking
+     * {@code contentSupplier}, and otherwise attaches the full local-mode
+     * header set ({@link ArtifactHeaders}, {@code Accept-Ranges},
+     * {@code Content-Length} when known) to the 200.
+     *
+     * @param storage Raw storage backing this proxy's cache
+     * @param key Artifact key
+     * @param headers Inbound request headers (read for {@code If-None-Match})
+     * @param contentSupplier Lazily supplies the body — invoked only when a
+     *                        200 (not 304) will be served
+     * @return Response future
+     */
+    private CompletableFuture<Response> serveArtifactWithHeaders(
+        final Storage storage, final Key key, final Headers headers,
+        final Supplier<CompletionStage<Content>> contentSupplier
+    ) {
+        return storage.exists(key).thenCompose(existsInStorage -> {
+            if (!existsInStorage) {
+                // The artifact came back from the abstract Cache but is not
+                // (or not yet) present in raw storage under this key — there
+                // is nothing to read metadata/checksums from. Serve the
+                // bytes we have without the enhanced validator headers
+                // rather than fail the request. In production `cache()` is
+                // always backed by the same storage `rawStorage` wraps
+                // (FromStorageCache), so this is a defensive fallback for a
+                // cache implementation that is genuinely storage-independent
+                // (e.g. a test double), not the steady-state path.
+                return contentSupplier.get().thenApply(
+                    content -> ResponseBuilder.ok().body(content).build()
+                ).toCompletableFuture();
+            }
+            return storage.metadata(key).thenCombine(
+                new RepositoryChecksums(storage).checksums(key),
+                (meta, checksums) -> {
+                    final String etag = checksums.get("sha1");
+                    final Header lastModified = LastModifiedHeader.from(meta);
+                    if (ArtifactConditionalGet.matches(headers, etag)) {
+                        return CompletableFuture.completedFuture(
+                            ArtifactConditionalGet.notModified(etag, lastModified)
+                        );
+                    }
+                    return contentSupplier.get().thenApply(content -> {
+                        final ResponseBuilder resp = ResponseBuilder.ok()
+                            .headers(ArtifactHeaders.from(key, checksums))
+                            .header(lastModified)
+                            .header("Accept-Ranges", "bytes");
+                        content.size().ifPresent(size -> resp.header(new ContentLength(size)));
+                        return resp.body(content).build();
+                    }).toCompletableFuture();
+                }
+            ).thenCompose(Function.identity());
         });
+    }
+
+    /**
+     * @param resp Response built by {@link #serveArtifactWithHeaders}
+     * @return {@code Content-Length} when present in the response headers
+     *         (200 case), 0 otherwise (304 — no body, nothing transferred)
+     */
+    private static long contentLength(final Response resp) {
+        final List<String> values = resp.headers().values("Content-Length");
+        if (values.isEmpty()) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(values.get(0));
+        } catch (final NumberFormatException ex) {
+            return 0L;
+        }
     }
 
     /**

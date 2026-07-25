@@ -2373,6 +2373,103 @@ curl -X POST http://localhost:8086/api/v1/admin/revoke-user/jdoe \
 
 ---
 
+### GET /api/v1/admin/pgp-keys
+
+List trusted PGP public keys registered for Maven/Gradle `.asc` signature verification (WS4-maven.3). Never returns the armored key material — identity/provenance fields only.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_role_permissions:read`
+
+**Response (200):**
+
+```json
+{
+  "keys": [
+    {
+      "key_id_hex": "DEADBEEF12345678",
+      "fingerprint": "0123456789ABCDEF0123456789ABCDEF01234567",
+      "uploaded_by": "admin",
+      "uploaded_at": "2026-07-25T10:00:00Z",
+      "description": "Release signing key"
+    }
+  ]
+}
+```
+
+**curl example:**
+
+```bash
+curl http://localhost:8086/api/v1/admin/pgp-keys \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+---
+
+### POST /api/v1/admin/pgp-keys
+
+Upload an ASCII-armored PGP public key block. The block may contain a master key plus sub-keys — one row is registered per key found, since a `.asc` signature may be produced by any of them. Repos with `verifyPgp: true` (see `configuration-reference.md`) consult this keyring on every proxy fetch and hosted store; the in-process cache is invalidated immediately so the very next verification sees the new key.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_role_permissions:update`
+
+**Request Body:**
+
+```json
+{
+  "public_key_armored": "-----BEGIN PGP PUBLIC KEY BLOCK-----\n...\n-----END PGP PUBLIC KEY BLOCK-----",
+  "description": "Release signing key"
+}
+```
+
+**Response (201):**
+
+```json
+{
+  "keys": [
+    {"key_id_hex": "DEADBEEF12345678", "fingerprint": "0123456789ABCDEF0123456789ABCDEF01234567"}
+  ]
+}
+```
+
+**Response (400):** malformed or empty `public_key_armored`.
+
+**curl example:**
+
+```bash
+curl -X POST http://localhost:8086/api/v1/admin/pgp-keys \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"public_key_armored\": \"$(cat signer-public-key.asc | sed 's/"/\\"/g')\"}"
+```
+
+---
+
+### DELETE /api/v1/admin/pgp-keys/:keyId
+
+Remove a trusted key by its 16-char hex long key id. The in-process cache is invalidated immediately, so the next verification of that signer returns `UNTRUSTED_KEY`.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_role_permissions:update`
+
+**Path Parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `keyId` | 16-char uppercase hex long key id (the `key_id_hex` from the list response) |
+
+**Response (204):** no body.
+
+**Response (404):** no key with that id.
+
+**curl example:**
+
+```bash
+curl -X DELETE http://localhost:8086/api/v1/admin/pgp-keys/DEADBEEF12345678 \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+---
+
 ## 14. Dashboard
 
 Dashboard endpoints provide aggregated statistics for the Pantera UI. Responses are served from a 30-second in-memory cache.
