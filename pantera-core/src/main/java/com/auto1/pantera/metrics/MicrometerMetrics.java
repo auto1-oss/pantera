@@ -453,6 +453,38 @@ public final class MicrometerMetrics {
             .increment();
     }
 
+    /**
+     * Record a WS1.7 (spec &sect;3.B2) presigned-direct-download serving
+     * decision for one redirect-eligible byte-object GET (Docker blob GET is
+     * the first wired route -- see docker-adapter's {@code GetBlobsSlice}).
+     * Emits {@code pantera_storage_download_decision_total{repo_name,
+     * decision}} -- both dashboards WS7 wants come from this one counter:
+     * the "presign issuance rate" is the rate of {@code decision="redirect"},
+     * and the "redirect-vs-stream ratio" is {@code redirect} vs {@code
+     * stream}'s relative share. Never recorded for metadata routes -- those
+     * are never wired to reach this call at all.
+     *
+     * @param repoName Bounded repo name ({@code RepoNameMeterFilter} caps
+     *  cardinality).
+     * @param decision {@code "redirect"} (a presigned {@code 302} was
+     *  issued) or {@code "stream"} (bytes were served through Pantera --
+     *  either the repo's configured {@code download-mode} is {@code
+     *  stream}, or a {@code redirect}/{@code auto} attempt fell back because
+     *  the object was not durably present or presigning was not configured).
+     * @since 2.3.0
+     */
+    public void recordDownloadDecision(final String repoName, final String decision) {
+        Counter.builder("pantera.storage.download.decision")
+            .description("WS1.7 presigned-direct-download serving decision per redirect-eligible "
+                + "byte GET: \"redirect\" (302 to a presigned URL, zero blob-store round trip on "
+                + "Pantera's side) or \"stream\" (bytes served through Pantera -- explicit stream "
+                + "mode, or a redirect/auto fallback). Feeds both the redirect-vs-stream ratio and "
+                + "the presign issuance rate panels.")
+            .tags("repo_name", repoName, "decision", decision)
+            .register(registry)
+            .increment();
+    }
+
     // ========== Proxy & Upstream Metrics ==========
 
     public void recordProxyRequest(String repoName, String upstream, String result, long durationMs) {

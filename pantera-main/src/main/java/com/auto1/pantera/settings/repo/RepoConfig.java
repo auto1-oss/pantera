@@ -17,9 +17,12 @@ import com.amihaiemil.eoyaml.YamlSequence;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.SubStorage;
+import com.auto1.pantera.asto.blob.DownloadMode;
+import com.auto1.pantera.asto.blob.DownloadPolicy;
 import com.auto1.pantera.cache.StoragesCache;
 import com.auto1.pantera.http.client.HttpClientSettings;
 import com.auto1.pantera.http.client.RemoteConfig;
+import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.settings.StorageByAlias;
 import com.google.common.base.Strings;
 
@@ -30,9 +33,11 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.Set;
 import java.util.stream.Stream;
 
 /**
@@ -363,6 +368,68 @@ public final class RepoConfig {
      */
     public boolean releaseImmutable() {
         return Boolean.parseBoolean(this.repoYaml().string("releaseImmutable"));
+    }
+
+    /**
+     * Recognized {@code download-mode} values, used only to distinguish "not
+     * configured" from "configured but unrecognized" for the warning logged
+     * by {@link #downloadMode()} -- the parse itself ({@link
+     * DownloadMode#from}) already defaults either case to {@link
+     * DownloadMode#STREAM}.
+     */
+    private static final Set<String> VALID_DOWNLOAD_MODES = Set.of("redirect", "stream", "auto");
+
+    /**
+     * WS1.7 (spec {@code WS1-storage-for-scale.md} &sect;3.B2): this repo's
+     * presigned-direct-download mode for redirect-eligible immutable byte
+     * routes (Docker blob GET is the first wired case -- see
+     * docker-adapter's {@code AstoDocker}). Default {@link
+     * DownloadMode#STREAM}: byte-identical to pre-2.3.0 behaviour until an
+     * operator opts in. Never applies to metadata routes -- those are never
+     * wired to consult this at all, regardless of value.
+     *
+     * @return Configured download mode, defaulting to {@link
+     *  DownloadMode#STREAM}.
+     */
+    public DownloadMode downloadMode() {
+        final Optional<String> raw = this.stringOpt("download-mode");
+        raw.filter(val -> !VALID_DOWNLOAD_MODES.contains(val.trim().toLowerCase(Locale.ROOT)))
+            .ifPresent(val -> EcsLogger.warn("com.auto1.pantera.settings")
+                .message("Unrecognized download-mode '" + val + "' for repo '" + this.name
+                    + "'; defaulting to stream")
+                .eventCategory("configuration")
+                .eventAction("repo_config_invalid_value")
+                .eventOutcome("failure")
+                .field("repository.name", this.name)
+                .field("log.source", "application")
+                .log());
+        return DownloadMode.from(raw.orElse(null));
+    }
+
+    /**
+     * WS1.7: this repo's presigned-URL validity window, in seconds. Falls
+     * back to {@link DownloadPolicy#DEFAULT_PRESIGN_TTL_SECONDS} when unset
+     * or non-positive.
+     *
+     * @return Configured (or default) presign TTL, in seconds.
+     */
+    public long presignTtlSeconds() {
+        return this.stringOpt("presign-ttl-seconds")
+            .map(Long::parseLong)
+            .filter(val -> val > 0)
+            .orElse(DownloadPolicy.DEFAULT_PRESIGN_TTL_SECONDS);
+    }
+
+    /**
+     * WS1.7: this repo's resolved download policy -- {@link #downloadMode()}
+     * plus {@link #presignTtlSeconds()} -- ready to hand to a serving-side
+     * {@code Docker}/route implementation that has opted into redirect
+     * eligibility.
+     *
+     * @return Resolved download policy.
+     */
+    public DownloadPolicy downloadPolicy() {
+        return new DownloadPolicy(this.downloadMode(), this.presignTtlSeconds());
     }
 
     /**

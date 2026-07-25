@@ -11,6 +11,8 @@
 package com.auto1.pantera.docker.http;
 
 import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.blob.DownloadMode;
+import com.auto1.pantera.asto.blob.DownloadPolicy;
 import com.auto1.pantera.docker.Catalog;
 import com.auto1.pantera.docker.Docker;
 import com.auto1.pantera.docker.Layers;
@@ -21,6 +23,7 @@ import com.auto1.pantera.docker.fake.FakeCatalogDocker;
 import com.auto1.pantera.docker.misc.Pagination;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -66,6 +69,40 @@ class TrimmedDockerTest {
         MatcherAssert.assertThat(
             new TrimmedDocker(TrimmedDockerTest.FAKE, "my-group").registryName(),
             Matchers.is("my-group")
+        );
+    }
+
+    @Test
+    void downloadPolicyDelegatesToOrigin() {
+        // WS1.7: TrimmedDocker wraps AstoDocker for the shared-port routing
+        // path (RepositorySlices, when cfg.port() is absent) -- without
+        // forwarding downloadPolicy(), every repo served through that path
+        // would silently lose its configured download-mode.
+        final DownloadPolicy configured = new DownloadPolicy(DownloadMode.REDIRECT, 900L);
+        final Docker origin = new Docker() {
+            @Override
+            public String registryName() {
+                return "test";
+            }
+
+            @Override
+            public Repo repo(final String name) {
+                return new FakeRepo(name);
+            }
+
+            @Override
+            public CompletableFuture<Catalog> catalog(final Pagination pagination) {
+                throw new UnsupportedOperationException();
+            }
+
+            @Override
+            public DownloadPolicy downloadPolicy() {
+                return configured;
+            }
+        };
+        MatcherAssert.assertThat(
+            new TrimmedDocker(origin, "my-repo").downloadPolicy(),
+            new IsEqual<>(configured)
         );
     }
 

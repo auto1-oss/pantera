@@ -40,6 +40,8 @@ routing patterns.
    - [Disk Hot Cache for S3](#34-disk-hot-cache-for-s3)
    - [Index Cache Mode for S3](#35-index-cache-mode-for-s3)
    - [Write-Back (Async Durable Writes) for S3](#36-write-back-async-durable-writes-for-s3)
+   - [Eviction & Admission Control for S3 Index Mode](#37-eviction--admission-control-for-s3-index-mode)
+   - [Presigned Direct-Download (WS1.7)](#38-presigned-direct-download-ws17)
 4. [Storage Aliases (_storages.yaml)](#4-storage-aliases-_storagesyaml)
 5. [User Files](#5-user-files)
 6. [Role / Permission Files](#6-role--permission-files)
@@ -1431,6 +1433,35 @@ Cache files under `cache.mode: index` are also sharded on disk (a 2-level hex
 fan-out keyed off a hash of the artifact key) to avoid one huge flat cache
 directory. This has no config key -- it is always on for `cache.mode: index`
 and is purely an on-disk layout detail with no observable API effect.
+
+---
+
+### 3.8 Presigned Direct-Download (WS1.7)
+
+**Repo-level keys** (set on the `repo:` block, not `storage:` -- a
+repository's byte-serving policy is independent of which storage alias backs
+it). Only affects redirect-eligible byte routes; metadata is never
+redirected regardless of value. Wired today for hosted `docker` repositories
+(blob GET) only -- see
+`docs/admin-guide/storage-backends.md#presigned-direct-download-ws17` for the
+full write-up (fallback semantics, client-reachability/air-gap guidance, the
+off-Pantera-metrics observability trade-off, and which routes are wired).
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `download-mode` | string | No | `stream` | `stream`\|`redirect`\|`auto`. An unrecognized value logs a warning and defaults to `stream`. |
+| `presign-ttl-seconds` | long | No | `600` | Presigned URL validity window, in seconds; ignored when `download-mode: stream`. |
+
+```yaml
+repo:
+  type: docker
+  download-mode: redirect
+  presign-ttl-seconds: 600
+  storage:
+    type: s3
+    bucket: my-docker-bucket
+    region: us-east-1
+```
 
 ---
 

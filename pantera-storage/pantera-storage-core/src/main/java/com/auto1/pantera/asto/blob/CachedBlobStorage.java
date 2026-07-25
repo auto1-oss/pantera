@@ -436,6 +436,48 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
     }
 
     /**
+     * WS1.7 (spec &sect;3.B2): presigner for this cache's underlying {@link
+     * #blobStore}, if the configured backend currently supports issuing one
+     * ({@code blobStore} implements {@link Presigner} AND {@link
+     * Presigner#isPresignConfigured()}). Package-visible: consulted only by
+     * {@link PresignResolver}, which lives in this same package specifically
+     * so callers outside {@code pantera-storage-core} go through it rather
+     * than reaching into this class directly.
+     *
+     * @return Presigner, or empty if this cache's backend does not support
+     *  presigning right now -- a caller MUST fall back to streaming.
+     */
+    Optional<Presigner> presigner() {
+        final Optional<Presigner> result;
+        if (this.blobStore instanceof Presigner presigner && presigner.isPresignConfigured()) {
+            result = Optional.of(presigner);
+        } else {
+            result = Optional.empty();
+        }
+        return result;
+    }
+
+    /**
+     * WS1.7 (spec &sect;3.B2): whether {@code key} is confirmed durably
+     * present in the blob store right now -- {@code s3State == PRESENT}, NOT
+     * {@code PENDING_WRITE} (bytes durable on local disk only, the WS1.2
+     * write-back upload not yet confirmed) and not unknown/negative. A
+     * presigned redirect must never be issued for a {@code PENDING_WRITE}
+     * key: the presigned URL addresses the blob store directly, and the
+     * object does not exist there yet -- the client would follow the
+     * redirect straight into a 404. Pure in-memory index lookup, zero
+     * blob-store contact either way.
+     *
+     * @param key Key to check.
+     * @return {@code true} iff durably confirmed present in the blob store.
+     */
+    boolean isDurablyPresent(final Key key) {
+        return this.index.knownEntry(key)
+            .filter(entry -> !entry.negative() && !entry.pendingUpload())
+            .isPresent();
+    }
+
+    /**
      * Test-only barrier: a future that completes once boot replay has fully
      * drained (all recovered {@code PENDING_WRITE} uploads reached a terminal
      * outcome, permit bookkeeping included). Package-visible only.

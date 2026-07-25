@@ -46,4 +46,23 @@ public interface Presigner {
      *  credentials/region needed to sign locally.
      */
     URI presignGet(Key key, long ttlSeconds);
+
+    /**
+     * Whether this instance is actually able to sign right now (WS1.7, spec
+     * {@code WS1-storage-for-scale.md} &sect;3.B2) -- lets a caller decide
+     * whether to attempt {@link #presignGet(Key, long)} at all without
+     * relying on catching {@link IllegalStateException} as control flow.
+     * {@code true} by default; an implementation built without the
+     * credentials/region/endpoint needed to sign (e.g. {@link
+     * com.auto1.pantera.asto.s3.S3Storage} constructed via the short
+     * constructor that skips presign support) overrides this to {@code
+     * false}, and a caller MUST then fall back to streaming rather than
+     * calling {@link #presignGet(Key, long)}.
+     *
+     * @return {@code true} iff {@link #presignGet(Key, long)} can be called
+     *  safely right now.
+     */
+    default boolean isPresignConfigured() {
+        return true;
+    }
 }
