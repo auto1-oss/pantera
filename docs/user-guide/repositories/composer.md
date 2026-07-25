@@ -36,6 +36,12 @@ Add Pantera as a Composer repository in your project's `composer.json`:
 
 Set `secure-http` to `false` only if your Pantera instance does not use HTTPS.
 
+### Using a Standalone Proxy Repository
+
+A `php-proxy` repository also works with no `local` member fronting it — point `composer.json` at it directly (`http://pantera-host:8080/php-proxy`) and `composer install`/`composer update`/`composer require` bootstrap normally from an empty cache.
+
+Every URL Pantera's Composer repository root advertises (`metadata-url`, `search`, `list`, `security-advisories`, etc.) is rewritten to point back at Pantera itself — Composer never resolves directly against the upstream (e.g. Packagist), so cache, cooldown, and authentication stay enforced on every request the client makes.
+
 ### Configure Authentication
 
 Create or edit `~/.composer/auth.json`:

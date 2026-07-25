@@ -53,6 +53,8 @@ final class ComposerRootPackagesHandlerTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
+    private static final String BASE_URL = "https://pantera.example/php_proxy";
+
     private ScriptedSlice upstream;
     private ScriptedCooldown cooldown;
     private ComposerRootPackagesHandler handler;
@@ -62,7 +64,7 @@ final class ComposerRootPackagesHandlerTest {
         this.upstream = new ScriptedSlice();
         this.cooldown = new ScriptedCooldown();
         this.handler = new ComposerRootPackagesHandler(
-            this.upstream, this.cooldown, "php", "composer-test"
+            this.upstream, this.cooldown, "php", "composer-test", BASE_URL
         );
     }
 
@@ -80,9 +82,9 @@ final class ComposerRootPackagesHandlerTest {
         final String body = """
             {
               "packages": [],
-              "providers-url": "/p/%package%$%hash%.json",
-              "metadata-url": "/p2/%package%.json",
-              "notify-batch": "/downloads/"
+              "providers-url": "https://repo.packagist.org/p/%package%$%hash%.json",
+              "metadata-url": "https://repo.packagist.org/p2/%package%.json",
+              "notify-batch": "https://packagist.org/downloads/"
             }
             """;
         this.upstream.put("/packages.json", body);
@@ -94,9 +96,16 @@ final class ComposerRootPackagesHandlerTest {
         ).get();
         assertThat(resp.status().success(), is(true));
         final JsonNode node = MAPPER.readTree(bodyToBytes(resp));
+        // Top-level URLs are rewritten to Pantera-local — the client is
+        // never handed a URL that escapes straight to the upstream host.
         assertThat(node.get("metadata-url").asText(),
-            equalTo("/p2/%package%.json"));
-        assertThat(node.get("notify-batch").asText(), equalTo("/downloads/"));
+            equalTo(BASE_URL + "/p2/%package%.json"));
+        assertThat(node.get("providers-url").asText(),
+            equalTo(BASE_URL + "/p2/%package%.json"));
+        // notify-batch is dropped outright — no publish callback escapes.
+        assertThat(node.has("notify-batch"), is(false));
+        final String raw = new String(bodyToBytes(resp), StandardCharsets.UTF_8);
+        assertThat(raw.contains("packagist.org"), is(false));
     }
 
     @Test
@@ -130,8 +139,8 @@ final class ComposerRootPackagesHandlerTest {
             node.get("packages").get("acme/bar").has("3.0.0"),
             is(true)
         );
-        // Top-level metadata preserved.
-        assertThat(node.get("notify-batch").asText(), equalTo("/downloads/"));
+        // notify-batch is dropped outright, not just left unrewritten.
+        assertThat(node.has("notify-batch"), is(false));
     }
 
     @Test
@@ -282,7 +291,95 @@ final class ComposerRootPackagesHandlerTest {
         final JsonNode node = MAPPER.readTree(bodyToBytes(resp));
         assertThat(node.get("packages").size(), equalTo(0));
         assertThat(node.get("metadata-url").asText(),
-            equalTo("/p2/%package%.json"));
+            equalTo(BASE_URL + "/p2/%package%.json"));
+    }
+
+    @Test
+    void standaloneBootstrapReturns200NotFourOhFour() throws Exception {
+        // WS4-composer.1: a standalone php-proxy (no local member) pointed
+        // at a packagist-shaped upstream must bootstrap `composer install`
+        // — the root must answer 200, never 404, with a Pantera-local
+        // metadata-url a client can actually follow.
+        final String body = """
+            {
+              "packages": [],
+              "notify": "https://packagist.org/downloads/%package%",
+              "notify-batch": "https://packagist.org/downloads/",
+              "providers-url": "https://repo.packagist.org/p/%package%$%hash%.json",
+              "list": "https://packagist.org/packages/list.json",
+              "search": "https://packagist.org/search.json?q=%query%&type=%type%",
+              "metadata-url": "https://repo.packagist.org/p2/%package%.json",
+              "available-packages-url": "https://packagist.org/packages/list.json?fields[]=name",
+              "security-advisories": {
+                "metadata": true,
+                "api-url": "https://packagist.org/api/security-advisories/"
+              }
+            }
+            """;
+        this.upstream.put("/packages.json", body);
+        final Response resp = this.handler.handle(
+            new RequestLine(RqMethod.GET, "/packages.json"),
+            "alice", com.auto1.pantera.audit.AuditContext.NONE
+        ).get();
+        assertThat("Root bootstrap must not 404", resp.status().code(), equalTo(200));
+        final JsonNode node = MAPPER.readTree(bodyToBytes(resp));
+        assertThat(
+            "metadata-url rewritten to Pantera-local",
+            node.get("metadata-url").asText(), equalTo(BASE_URL + "/p2/%package%.json")
+        );
+        assertThat(
+            "providers-url rewritten to Pantera-local",
+            node.get("providers-url").asText(), equalTo(BASE_URL + "/p2/%package%.json")
+        );
+        assertThat(
+            "available-packages-url rewritten to Pantera-local",
+            node.get("available-packages-url").asText(),
+            equalTo(BASE_URL + "/p2/available-packages.json")
+        );
+        assertThat(
+            "search rewritten to Pantera-local list.json with Packagist query shape",
+            node.get("search").asText(),
+            equalTo(BASE_URL + "/packages/list.json?q=%query%&type=%type%")
+        );
+        assertThat(
+            "list rewritten to Pantera-local",
+            node.get("list").asText(), equalTo(BASE_URL + "/packages/list.json")
+        );
+        assertThat(
+            "security-advisories.api-url rewritten to Pantera-local",
+            node.get("security-advisories").get("api-url").asText(),
+            equalTo(BASE_URL + "/api/security-advisories/")
+        );
+        assertThat(
+            "security-advisories.metadata preserved",
+            node.get("security-advisories").get("metadata").asBoolean(), is(true)
+        );
+        assertThat("notify dropped", node.has("notify"), is(false));
+        assertThat("notify-batch dropped", node.has("notify-batch"), is(false));
+        // Deep check: no field value anywhere in the served root leaks the
+        // upstream host — this is the whole-workstream acceptance bar.
+        final String raw = new String(bodyToBytes(resp), StandardCharsets.UTF_8);
+        assertThat(raw.contains("packagist.org"), is(false));
+    }
+
+    @Test
+    void dropsUnrecognisedAbsoluteUrlField() throws Exception {
+        // Fail-closed: a top-level field this rewriter has no specific
+        // handling for is dropped when it looks like an absolute URL,
+        // rather than being passed through verbatim.
+        final String body = """
+            {
+              "packages": [],
+              "providers-lazy-url": "https://repo.packagist.org/p2/%package%.json"
+            }
+            """;
+        this.upstream.put("/packages.json", body);
+        final Response resp = this.handler.handle(
+            new RequestLine(RqMethod.GET, "/packages.json"),
+            "alice", com.auto1.pantera.audit.AuditContext.NONE
+        ).get();
+        final JsonNode node = MAPPER.readTree(bodyToBytes(resp));
+        assertThat(node.has("providers-lazy-url"), is(false));
     }
 
     // ===== Helpers =====

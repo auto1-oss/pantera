@@ -102,6 +102,76 @@ public final class ComposerGroupSliceTest {
     }
 
     @Test
+    void packagesJsonRewritesEveryTopLevelUrlFieldNoLeak() throws Exception {
+        // WS4-composer.2 (group leak): search / list / notify-batch /
+        // security-advisories / available-packages-url must be rewritten
+        // (or dropped) the same way the proxy root handler does —
+        // mergePackagesJson previously copied them verbatim, letting a
+        // client follow any of them straight to the member's upstream.
+        final Map<String, Slice> members = new HashMap<>();
+        members.put("repo1", jsonOk(
+            "{\"packages\":{\"vendor/pkg1\":{\"1.0\":{\"name\":\"vendor/pkg1\","
+                + "\"version\":\"1.0\"}}},"
+                + "\"metadata-url\":\"https://upstream.example/p2/%package%.json\","
+                + "\"notify\":\"https://upstream.example/downloads/%package%\","
+                + "\"notify-batch\":\"https://upstream.example/downloads/\","
+                + "\"list\":\"https://upstream.example/packages/list.json\","
+                + "\"search\":\"https://upstream.example/search.json?q=%query%&type=%type%\","
+                + "\"available-packages-url\":\"https://upstream.example/p2/available-packages.json\","
+                + "\"security-advisories\":{\"metadata\":true,"
+                + "\"api-url\":\"https://upstream.example/api/security-advisories/\"}}"
+        ));
+
+        final ComposerGroupSlice slice = new ComposerGroupSlice(
+            new FakeDelegate(),
+            new MapResolver(members),
+            "php-group",
+            List.of("repo1"),
+            8080,
+            ""
+        );
+
+        final Response resp = slice.response(
+            new RequestLine("GET", "/packages.json"),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).get(10, TimeUnit.SECONDS);
+
+        final String body = new String(resp.body().asBytes(), StandardCharsets.UTF_8);
+        MatcherAssert.assertThat(
+            "list rewritten to the group basePath",
+            body, Matchers.containsString("/php-group/packages/list.json")
+        );
+        MatcherAssert.assertThat(
+            "search rewritten to the group basePath with Packagist query shape",
+            body,
+            Matchers.containsString(
+                "/php-group/packages/list.json?q=%query%&type=%type%"
+            )
+        );
+        MatcherAssert.assertThat(
+            "available-packages-url rewritten to the group basePath",
+            body, Matchers.containsString("/php-group/p2/available-packages.json")
+        );
+        MatcherAssert.assertThat(
+            "security-advisories.api-url rewritten to the group basePath",
+            body, Matchers.containsString("/php-group/api/security-advisories/")
+        );
+        MatcherAssert.assertThat(
+            "notify dropped outright",
+            body, Matchers.not(Matchers.containsString("\"notify\""))
+        );
+        MatcherAssert.assertThat(
+            "notify-batch dropped outright",
+            body, Matchers.not(Matchers.containsString("notify-batch"))
+        );
+        MatcherAssert.assertThat(
+            "No field value leaks the member's upstream host",
+            body, Matchers.not(Matchers.containsString("upstream.example"))
+        );
+    }
+
+    @Test
     void packagesJsonFallsThroughOn404() throws Exception {
         final AtomicInteger m1Calls = new AtomicInteger(0);
         final AtomicInteger m2Calls = new AtomicInteger(0);
