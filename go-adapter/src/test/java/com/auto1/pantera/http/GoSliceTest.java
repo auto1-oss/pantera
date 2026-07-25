@@ -137,6 +137,22 @@ class GoSliceTest {
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
+    void sumdbHasNoRouteOnLocalRepo(final boolean anonymous) throws Exception {
+        // WS4-go.4: a "go" (hosted/local) repository has no upstream to
+        // proxy sumdb requests to, so /sumdb/ must honestly 404 rather
+        // than being served or accidentally cached as an artifact.
+        final String path = "sumdb/sum.golang.org/supported";
+        MatcherAssert.assertThat(
+            this.slice(GoSliceTest.storage("unrelated/key", "unrelated"), anonymous),
+            new SliceHasResponse(
+                anonymous ? unauthorized() : new RsHasStatus(RsStatus.NOT_FOUND),
+                GoSliceTest.line(path), this.headers(anonymous), Content.EMPTY
+            )
+        );
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
     void returnsLatest(final boolean anonymous) throws Exception {
         final String body = "{\"Version\":\"1.1\",\"Time\":\"2020-01-24T00:54:14Z\"}";
         MatcherAssert.assertThat(
@@ -209,6 +225,46 @@ class GoSliceTest {
         org.junit.jupiter.api.Assertions.assertTrue(
             versions.contains("v1.2.3"),
             "List file should contain uploaded version"
+        );
+    }
+
+    @Test
+    void uploadDecodesEscapedModuleNameForArtifactEventButNotStorageKey() throws Exception {
+        // WS4-go.6: Go escapes uppercase as `!` + lowercase on the wire and
+        // in the storage key ("BurntSushi" -> "!burnt!sushi"); the
+        // ArtifactEvent (DB/index/audit) must show the decoded, human
+        // readable form, while the storage key stays escaped — that is
+        // what `go get` requests and expects served back.
+        final Storage storage = new InMemoryStorage();
+        final Queue<ArtifactEvent> events = new ConcurrentLinkedQueue<>();
+        final GoSlice slice = new GoSlice(
+            storage,
+            new PolicyByUsername(USER.getKey()),
+            new Authentication.Single(USER.getKey(), USER.getValue()),
+            "go-repo",
+            Optional.of(events)
+        );
+        final byte[] data = "zip-content".getBytes(StandardCharsets.UTF_8);
+        final String escapedPath = "github.com/!burnt!sushi/toml/@v/v1.0.0.zip";
+        final Response response = slice.response(
+            new RequestLine("PUT", escapedPath),
+            Headers.from(
+                new Authorization.Basic(USER.getKey(), USER.getValue())
+            ),
+            new Content.From(data)
+        ).toCompletableFuture().get();
+        MatcherAssert.assertThat(response, new RsHasStatus(RsStatus.CREATED));
+        // Storage key MUST stay escaped — this is what the client requests.
+        final Key escapedKey = new KeyFromPath(escapedPath);
+        org.junit.jupiter.api.Assertions.assertTrue(
+            storage.exists(escapedKey).toCompletableFuture().join(),
+            "escaped storage key must be used unchanged"
+        );
+        final ArtifactEvent event = events.poll();
+        org.junit.jupiter.api.Assertions.assertNotNull(event, "Artifact event should be recorded");
+        MatcherAssert.assertThat(
+            event.artifactName(),
+            new IsEqual<>("github.com/BurntSushi/toml")
         );
     }
 

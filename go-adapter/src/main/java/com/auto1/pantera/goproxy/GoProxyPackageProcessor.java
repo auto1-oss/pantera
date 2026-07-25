@@ -206,6 +206,12 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                     final String owner = event.ownerLogin();
                     final long created = System.currentTimeMillis();
                     final Long release = event.releaseMillis().orElse(null);
+                    // WS4-go.6: decode Go's `!`-escaping (uppercase encoded as
+                    // `!` + lowercase, e.g. "!burnt!sushi" -> "BurntSushi")
+                    // before this reaches the DB/index/audit trail. The
+                    // storage key (zipKey, above) stays escaped — that is
+                    // what the client requested and what serving must match.
+                    final String decodedModule = unescapeModulePath(coords.module());
 
                     this.events.add(
                         new ArtifactEvent(
@@ -214,7 +220,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                             owner == null || owner.isBlank()
                                 ? ArtifactEvent.DEF_OWNER
                                 : owner,
-                            coords.module(),
+                            decodedModule,
                             coords.version(),
                             size.get(),
                             created,
@@ -228,7 +234,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                         .eventCategory("web")
                         .eventAction("proxy_processor")
                         .eventOutcome("success")
-                        .field("package.name", coords.module())
+                        .field("package.name", decodedModule)
                         .field("package.version", coords.version())
                         .field("repository.name", event.repoName())
                         .field("package.size", size.get())
@@ -253,10 +259,38 @@ public final class GoProxyPackageProcessor extends QuartzJob {
 
 
     /**
+     * Decode Go's module-path escaping (WS4-go.6): an uppercase letter is
+     * encoded upstream as {@code !} followed by its lowercase form, e.g.
+     * {@code github.com/!burnt!sushi/toml} for {@code
+     * github.com/BurntSushi/toml}. Only the DB/index/audit trail should
+     * see the human-readable form — the storage key must stay escaped
+     * because that is what {@code go get} actually requests and expects
+     * to be served back.
+     *
+     * @param escaped Module path as it appears on the wire / storage key
+     * @return Decoded module path
+     */
+    private static String unescapeModulePath(final String escaped) {
+        final StringBuilder decoded = new StringBuilder(escaped.length());
+        int idx = 0;
+        while (idx < escaped.length()) {
+            final char current = escaped.charAt(idx);
+            if (current == '!' && idx + 1 < escaped.length()) {
+                decoded.append(Character.toUpperCase(escaped.charAt(idx + 1)));
+                idx += 2;
+            } else {
+                decoded.append(current);
+                idx += 1;
+            }
+        }
+        return decoded.toString();
+    }
+
+    /**
      * Parse module coordinates from Go module event key.
      * Expected format: module/path/@v/version (without 'v' prefix)
      * Example: github.com/google/uuid/@v/1.3.0
-     * 
+     *
      * @param key Artifact key
      * @return Module coordinates or null if parsing fails
      */

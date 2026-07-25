@@ -88,6 +88,43 @@ class GoProxyPackageProcessorTest {
     }
 
     @Test
+    void decodesEscapedModuleNameForArtifactEventButNotStorageKey() {
+        // WS4-go.6: Go escapes uppercase as `!` + lowercase on the wire
+        // (github.com/BurntSushi/toml -> github.com/!burnt!sushi/toml);
+        // the recorded ArtifactEvent (DB/index/audit) must show the
+        // decoded form while the storage/event key (asserted via the
+        // zip existence check below) stays escaped.
+        final String escapedModule = "github.com/!burnt!sushi/toml";
+        final String version = "1.0.0";
+        final Key eventKey = new Key.From(escapedModule + "/@v/" + version);
+        final Key zipKey = new Key.From(escapedModule, "@v", "v" + version + ".zip");
+
+        this.storage.save(
+            zipKey,
+            new Content.From("module content".getBytes(StandardCharsets.UTF_8))
+        ).join();
+
+        this.packages.add(
+            new ProxyArtifactEvent(eventKey, "go_proxy", "testuser", Optional.empty())
+        );
+
+        final JobExecutionContext context = mock(JobExecutionContext.class);
+        this.processor.execute(context);
+
+        assertEquals(1, this.events.size(), "Should have one artifact event");
+        final ArtifactEvent event = this.events.poll();
+        assertEquals(
+            "github.com/BurntSushi/toml", event.artifactName(),
+            "package.name must be decoded for DB/index/audit"
+        );
+        assertEquals(version, event.artifactVersion());
+        assertEquals(
+            eventKey.string(), event.pathPrefix(),
+            "recorded path prefix (storage key) must stay escaped"
+        );
+    }
+
+    @Test
     void skipsNonZipFiles() {
         // Arrange: Create .info and .mod files (not .zip)
         final String modulePath = "github.com/example/module";

@@ -319,6 +319,40 @@ final class GoListHandlerTest {
     }
 
     @Test
+    void boundsCooldownEvaluationButServesEveryNonBlockedVersion() throws Exception {
+        // WS4-go.5: a 500-version list must cap cooldown-service calls at
+        // MAX_VERSIONS_TO_EVALUATE (50, mirroring GoLatestHandler) while
+        // still serving every non-blocked version — including versions
+        // far outside the cap, which are never evaluated and therefore
+        // never blocked.
+        final String path = "/github.com/foo/bar/@v/list";
+        final StringBuilder body = new StringBuilder();
+        for (int minor = 0; minor < 500; minor++) {
+            body.append("v0.").append(minor).append(".0\n");
+        }
+        this.upstream.put(path, body.toString());
+        final Response resp = this.handler.handle(
+            new RequestLine(RqMethod.GET, path), Headers.EMPTY, "alice"
+        ).get();
+        assertThat(resp.status().success(), new org.hamcrest.core.Is<>(new org.hamcrest.core.IsEqual<>(true)));
+        assertThat(
+            "cooldown evaluation must be bounded at the shared cap",
+            this.cooldown.evaluateCalls(), new org.hamcrest.core.IsEqual<>(50)
+        );
+        final String out = new String(bodyToBytes(resp), StandardCharsets.UTF_8);
+        final Set<String> served = new HashSet<>(List.of(out.split("\n")));
+        for (int minor = 0; minor < 500; minor++) {
+            assertThat(
+                "every non-blocked version must still be served, capped or not",
+                served,
+                new org.hamcrest.core.IsIterableContaining<>(
+                    new org.hamcrest.core.IsEqual<>("v0." + minor + ".0")
+                )
+            );
+        }
+    }
+
+    @Test
     void servesWarmCachedListWhenUpstreamGoesDown() throws Exception {
         // WS4-go.2 tentpole: a cached @v/list must survive an upstream
         // outage instead of hard-failing "go list -m -versions".
@@ -403,6 +437,7 @@ final class GoListHandlerTest {
     /** Scripted {@link CooldownService}: flags listed versions as blocked. */
     private static final class ScriptedCooldown implements CooldownService {
         private final Set<String> blocked = new HashSet<>();
+        private final AtomicInteger evaluateCalls = new AtomicInteger(0);
 
         void block(final String... versions) {
             for (final String v : versions) {
@@ -410,10 +445,20 @@ final class GoListHandlerTest {
             }
         }
 
+        /**
+         * @return number of times {@link #evaluate} has been invoked —
+         *         proves the WS4-go.5 cooldown-fan-out bound by
+         *         invocation count, never wall-clock.
+         */
+        int evaluateCalls() {
+            return this.evaluateCalls.get();
+        }
+
         @Override
         public CompletableFuture<CooldownResult> evaluate(
             final CooldownRequest request, final CooldownInspector inspector
         ) {
+            this.evaluateCalls.incrementAndGet();
             if (!this.blocked.contains(request.version())) {
                 return CompletableFuture.completedFuture(CooldownResult.allowed());
             }
