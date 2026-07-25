@@ -227,6 +227,14 @@ public final class NpmSlice implements Slice {
             : new NpmTokenAuthentication(new StorageTokenRepository(storage), tokenAuth);
 
         this.route = new SliceRoute(
+            // SECURITY: reserved internal keys (the registry signing keypair,
+            // user/token records) live in this same repository Storage; block
+            // them from the raw content routes here, first, before any content
+            // route or auth can serve them. See ReservedKeyGuardSlice.
+            new RtRulePath(
+                new RtRule.ByPath(ReservedKeyGuardSlice.RESERVED_PATH),
+                new ReservedKeyGuardSlice()
+            ),
             new RtRulePath(
                 new RtRule.All(
                     MethodRule.GET,
