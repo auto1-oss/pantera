@@ -2,6 +2,11 @@
 
 ## Version 2.3.0
 
+### 🌟 New features
+
+- **Docker registries support the OCI 1.1 Referrers API.** Pushing a manifest with a `subject` indexes it; `GET /v2/<name>/referrers/<digest>` returns a real OCI image index (with `artifactType` filtering and `OCI-Filters-Applied`), and pushes carry an `OCI-Subject` header — so cosign (OCI mode), notation, `oras attach`/`discover`, and SBOM attachment work against hosted repositories, where the endpoint was previously a permanent empty stub.
+  ([@aydasraf](https://github.com/aydasraf))
+
 ### 🔧 Bug fixes
 
 - **npm cooldown no longer hides an unblocked version behind a stale `304`.** With cooldown active the packument `ETag` was derived from the immutable upstream metadata hash, so a client that had cached the filtered packument kept revalidating to `304` and never saw a version that had aged out of, or been manually released from, cooldown until it cleared its own cache. The `ETag` is now computed from the filtered bytes actually served (matching the Maven adapter) and the raw-hash early-`304` is skipped while cooldown is active. Maven, PyPI, and Docker were unaffected.
@@ -16,6 +21,18 @@
   ([@aydasraf](https://github.com/aydasraf))
 - **Go documentation no longer recommends a no-op flag.** `GONOSUMCHECK`/`GONOSUMDB` were removed from Go after 1.12; the guidance is now `GOSUMDB=off` (or scoped `GOPRIVATE`) for private modules.
   ([@aydasraf](https://github.com/aydasraf))
+- **npm `dist-tag`, `deprecate`, and single-version `unpublish` work for published packages.** They read a `meta.json` that `npm publish` never wrote, so they returned `404` for every published package and custom dist-tags were dropped; dist-tags now persist in a durable sidecar that the served packument merges over the computed `latest`, and unpublish genuinely removes the version.
+  ([@aydasraf](https://github.com/aydasraf))
+- **`npm search` returns real results.** `/-/v1/search` was backed by an in-memory index that was never populated (always empty); it now queries the shared artifact index that every publish writes to.
+  ([@aydasraf](https://github.com/aydasraf))
+- **A standalone Composer proxy repository bootstraps `composer install` again and no longer leaks upstream URLs.** The proxy root `/packages.json` returned `404`, and where it did serve it passed the upstream `metadata-url`/`search`/`list`/`security-advisories` URLs through verbatim so clients bypassed Pantera's cache, cooldown, and auth. The root is now served correctly and every top-level URL is rewritten back to Pantera.
+  ([@aydasraf](https://github.com/aydasraf))
+- **PyPI yank/unyank is visible to clients.** Flipping a release's yank status now regenerates the served simple index, so pip/uv see `data-yanked` on the next request instead of only after a re-upload.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Go dependency resolution survives upstream outages.** `@v/list` and `@latest` were fetched live on every request and never cached, so `go get`/`go list -m -versions` failed on any upstream blip even for fully-cached modules; they are now read through a TTL cache that serves the last-known-good result when upstream is unreachable.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Clustered deployments no longer lose artifact-event data.** Under clustered Quartz a node firing another node's artifact-events job deleted it from the shared store, silently losing `artifact_publish` audit records and search-index rows for ingested artifacts; the per-node event drain no longer runs through the cluster-shared scheduler and the self-deleting job behaviour is removed.
+  ([@aydasraf](https://github.com/aydasraf))
 
 ### 🔒 Security
 
@@ -24,6 +41,10 @@
 - **Docker proxy repositories verify cached blob integrity.** A corrupt or truncated upstream blob could be written to the on-disk cache and re-served under a digest it did not match; the cache-store path now re-hashes the streamed bytes and rejects a mismatch, while the client still receives and independently verifies the tee'd bytes.
   ([@aydasraf](https://github.com/aydasraf))
 - **Removed a non-functional Go archive integrity claim.** The Go proxy fetched a `.ziphash` sidecar that the GOPROXY protocol does not define and that could never verify a module archive, so the tree no longer implies a guarantee it did not provide; genuine archive verification will land with the Go checksum-database proxy.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Token revocation survives a node restart in a cluster.** On the Valkey path a node that booted after a revocation re-honoured the already-revoked, unexpired token; revocations are now database-durable, hydrated on boot, reconciled on a short poll, and the pub/sub broadcast carries the token's real remaining lifetime.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Authorization and resilience-threshold changes propagate across the cluster.** Role/permission edits and circuit-breaker/bulkhead setting changes previously applied only on the node that served the request (and a continuously-hit permission never expired on peers); they now broadcast to every node with a bounded TTL backstop.
   ([@aydasraf](https://github.com/aydasraf))
 
 ## Version 2.2.4
