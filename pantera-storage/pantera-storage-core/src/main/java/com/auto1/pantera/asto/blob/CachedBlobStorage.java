@@ -267,6 +267,18 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
     private final String invalidationNamespace;
 
     /**
+     * WS1.6 (spec &sect;3.G) cache-tier metrics seam -- read ONCE at
+     * construction from {@link CachedBlobStorageMetricsRegistry}, mirroring
+     * exactly how {@link #invalidationBus} is resolved by this class's
+     * caller from {@link StorageInvalidationBusRegistry}. {@link
+     * CachedBlobStorageMetrics#NOOP} until {@code pantera-main} installs the
+     * real implementation before any repository builds a {@link
+     * CachedBlobStorage} -- every call site below is then a no-op, so this
+     * never changes behaviour for a boot that never enables metrics.
+     */
+    private final CachedBlobStorageMetrics metrics = CachedBlobStorageMetricsRegistry.active();
+
+    /**
      * New cached blob storage.
      *
      * <p>Performs a blocking boot-time {@link StorageIndex#rebuildFromDisk}
@@ -328,6 +340,7 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
             this.replayPendingWrites();
         }
         this.invalidationBus.onInvalidate(this::onPeerInvalidate);
+        this.metrics.bind(this);
     }
 
     /**
@@ -456,12 +469,91 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
     /**
      * Current running total of bytes occupied by the disk tier, per the
      * in-memory {@link StorageIndex} counter -- never a directory walk (WS1.4,
-     * spec &sect;3.D). Package-visible: test/observability accessor.
+     * spec &sect;3.D). Public since WS1.6: read by the {@link
+     * CachedBlobStorageMetrics#bind} gauge registration (this was the
+     * anticipated "future metrics" use {@link StorageIndex#size()}'s own
+     * javadoc already called out).
      *
      * @return Disk bytes currently accounted for.
      */
-    long diskBytesUsed() {
+    public long diskBytesUsed() {
         return this.index.diskBytesUsed();
+    }
+
+    /**
+     * WS1.4 hard bound on total disk-tier bytes (spec &sect;3.D) -- the
+     * denominator a "disk bytes used vs max" gauge pairs with {@link
+     * #diskBytesUsed()}. {@code <= 0} means eviction/admission is disabled
+     * (unbounded), exactly as {@link EvictionConfig#maxDiskBytes()} documents.
+     *
+     * @return Configured hard bound, in bytes.
+     * @since 2.3.0
+     */
+    public long maxDiskBytes() {
+        return this.evictionConfig.maxDiskBytes();
+    }
+
+    /**
+     * WS1.6 (spec &sect;3.G) write-back queue-depth gauge: the number of
+     * write-back admissions currently outstanding (enqueued or retrying),
+     * derived from {@link #writeBackAdmission}'s consumed permits. Always
+     * {@code 0} in write-through mode (no admission gate is constructed).
+     *
+     * @return Current write-back queue depth.
+     * @since 2.3.0
+     */
+    public int writeBackQueueDepth() {
+        final int depth;
+        if (this.writeBackAdmission == null) {
+            depth = 0;
+        } else {
+            depth = this.writeBackConfig.queueCapacity() - this.writeBackAdmission.availablePermits();
+        }
+        return depth;
+    }
+
+    /**
+     * High-water mark {@link #writeBackQueueDepth()} is measured against --
+     * the denominator a "write-back queue depth vs capacity" gauge pairs
+     * with. {@code 0} in write-through mode.
+     *
+     * @return Configured write-back queue capacity, or {@code 0} if write-through.
+     * @since 2.3.0
+     */
+    public int writeBackQueueCapacity() {
+        return this.writeBackAdmission == null ? 0 : this.writeBackConfig.queueCapacity();
+    }
+
+    /**
+     * WS1.6 (spec &sect;3.G) write-back oldest-pending-age gauge: how long
+     * the longest-outstanding {@code PENDING_WRITE} entry has been waiting
+     * for its upload to confirm, right now.
+     *
+     * @return Milliseconds since the oldest still-pending write's disk write
+     *  completed, or {@code 0} if nothing is pending.
+     * @since 2.3.0
+     */
+    public long oldestPendingWriteAgeMillis() {
+        return this.index.oldestPendingWriteAgeMillis(System.currentTimeMillis());
+    }
+
+    /**
+     * Stable identity for this cache instance's metrics: the local disk
+     * cache directory it owns (same value as {@link #invalidationNamespace}).
+     * Used -- NOT a repository name -- as the gauge tag a WS1.6 metrics
+     * binder registers with, because a single {@link CachedBlobStorage}
+     * instance can serve more than one repository when they share a storage
+     * alias (see {@code StoragesCache}, which caches storage instances by
+     * config identity): the gauge describes the state of THIS cache, not of
+     * any one repository. Bounded in practice by the number of distinct
+     * {@code cache.path} values an operator configures -- the same order of
+     * magnitude as the repo count {@code RepoNameMeterFilter} caps.
+     *
+     * @return This cache's disk-root path, as a string.
+     * @since 2.3.0
+     */
+    public String cacheId() {
+        return this.diskRoot.toString();
     }
 
     @Override
@@ -494,8 +586,14 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
     @Override
     public CompletableFuture<Content> value(final Key key) {
         return this.index.freshEntry(key, this.freshnessTtl)
-            .<CompletableFuture<Content>>map(entry -> this.readFromDisk(key))
-            .orElseGet(() -> this.coldFillThenRead(key));
+            .<CompletableFuture<Content>>map(entry -> {
+                this.metrics.recordDiskHit();
+                return this.readFromDisk(key);
+            })
+            .orElseGet(() -> {
+                this.metrics.recordDiskMiss();
+                return this.coldFillThenRead(key);
+            });
     }
 
     @Override
@@ -1093,7 +1191,9 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
      *  (or confirmed absent).
      */
     private CompletableFuture<Void> evictEntry(final Key key) {
+        final long bytes = this.index.knownEntry(key).map(StorageIndex.Entry::size).orElse(0L);
         this.index.remove(key);
+        this.metrics.recordEvictionBytes(bytes);
         this.deleteSidecarBestEffort(key);
         final Key onDisk = this.diskKey(key);
         return this.disk.exists(onDisk)
@@ -1269,16 +1369,20 @@ public final class CachedBlobStorage implements Storage, AutoCloseable {
         }
         final Optional<StorageIndex.Entry> local = this.index.knownEntry(key);
         if (local.isEmpty()) {
+            this.metrics.recordInvalidationIgnored("not_cached");
             return;
         }
         final StorageIndex.Entry entry = local.get();
         final StorageInvalidationToken token = parsed.get();
         if (entry.pendingUpload()) {
+            this.metrics.recordInvalidationIgnored("pending_write_in_flight");
             this.logInvalidationIgnored(key, "pending_write_in_flight");
         } else if (token.committedAtEpochMilli() <= entry.lastModifiedEpochMilli()) {
+            this.metrics.recordInvalidationIgnored("superseded_by_local_write");
             this.logInvalidationIgnored(key, "superseded_by_local_write");
         } else {
             this.dropLocalEntryBestEffort(key);
+            this.metrics.recordInvalidationApplied();
             EcsLogger.info("com.auto1.pantera.asto.blob")
                 .message("Applied cross-node cache invalidation: dropped local disk+index entry")
                 .eventCategory("file")

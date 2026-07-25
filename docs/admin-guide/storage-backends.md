@@ -446,6 +446,77 @@ Multiple repositories with `cache.mode: index` in the same process share ONE
 path as a namespace tag, so a repository never reacts to another
 repository's traffic even though they are multiplexed together.
 
+### Metrics (WS1.6)
+
+`cache.mode: index` is fully instrumented -- reversing the historical "no
+per-S3-op metrics" gap (`RepoConfig` never wraps the outer `Storage` surface
+in a generic metrics decorator, deliberately, to keep the WS1.1 hit path
+free of per-call overhead; these metrics instead meter the ACTUAL blob-store
+tier and the cache's own internal state, one layer below).
+
+**Blob-store tier** (`MeteredBlobStore`, wraps the reference `BlobStore`
+before `CachedBlobStorage` ever sees it -- so a disk hit records ZERO of
+these, by design):
+
+| Metric | Type | Tags | Notes |
+|---|---|---|---|
+| `pantera_storage_blobstore_requests_total` | Counter | `backend`, `operation`, `outcome` | `backend` &isin; `s3`\|`gcs`\|`azure`\|`other` (bounded, code-defined); `operation` &isin; `exists`\|`head`\|`get`\|`put`\|`delete`\|`list`; `outcome` &isin; `success`\|`throttled`\|`error` (throttled = a best-effort match on the failure's class name/message for known rate-limit signals: `SlowDown`, `TooManyRequests`, `RequestLimitExceeded`, `429`, `503`). |
+| `pantera_storage_blobstore_request_duration_seconds` | Timer | same as above | Transfer SLO ladder (up to 20 min) under `PANTERA_METRICS_PERCENTILES_HISTOGRAM=true` -- GET/PUT can stream a full artifact body. |
+
+**Cache tier** (`CachedBlobStorage`'s own disk/write-back/invalidation state):
+
+| Metric | Type | Tags | Notes |
+|---|---|---|---|
+| `pantera_cache_requests_total{cache_type="blob_disk",cache_tier="disk",result}` | Counter | `result` &isin; `hit`\|`miss` | Reuses the existing generic cache-hit/miss family; `blob_disk` is a NEW, dedicated `cache_type` (distinct from `storage`, the L1 `StoragesCache` Guava cache of *Storage instances*). |
+| `pantera_storage_cache_disk_bytes_used` | Gauge | `cache` | Bytes currently on the local disk tier. |
+| `pantera_storage_cache_disk_bytes_max` | Gauge | `cache` | Configured `cache.max-disk-bytes` (0/absent if unbounded). |
+| `pantera_cache_eviction_bytes_total{cache_type="blob_disk",cache_tier="disk"}` | Counter | -- | Bytes freed by WS1.4 eviction; chart `rate()` for an eviction-bytes/sec panel. |
+| `pantera_storage_cache_writeback_queue_depth` | Gauge | `cache` | Write-back admissions currently outstanding (enqueued or retrying); 0 in `write-through` mode. |
+| `pantera_storage_cache_writeback_queue_capacity` | Gauge | `cache` | Configured `cache.write-back-queue-capacity`; 0 in `write-through` mode. |
+| `pantera_storage_cache_writeback_oldest_pending_age_seconds` | Gauge | `cache` | Age of the longest-outstanding `PENDING_WRITE` upload; 0 if nothing is pending. |
+| `pantera_storage_invalidation_total{stage,outcome}` | Counter | `stage` &isin; `published`\|`received`\|`applied`; `outcome` is stage-specific (`received`: `ok`\|`malformed`; `applied`: `applied`\|`ignored_pending_write`\|`ignored_superseded_by_local_write`\|`ignored_not_cached`) | The WS1.5 cross-node coherence lifecycle: `published`/`received` are recorded by the pub/sub bus itself; `applied` is recorded by `CachedBlobStorage`'s own accept/ignore decision. |
+
+The `cache` tag on the four gauges above is the cache's own disk-cache
+directory path (`cache.path`), NOT a repository name: a single
+`CachedBlobStorage` instance can serve more than one repository when they
+share a storage alias (see `StoragesCache`, which caches storage instances
+by config identity), so these gauges describe the state of the CACHE, not
+of any one repository. In practice this is bounded by the number of
+distinct `cache.path` values an operator configures -- the same order of
+magnitude as the repo count `RepoNameMeterFilter` caps.
+
+All of the above are guarded by `MicrometerMetrics.isInitialized()` --
+recording is a no-op with metrics disabled, and the gauges are simply never
+registered.
+
+### Hosted-Read Slice (WS1.6)
+
+A hosted (non-proxy) GET against a `cache.mode: index` repository is served
+by `IndexBackedArtifactSlice`, not the generic `exists()`-then-`value()`
+slice every other backend uses. The generic slice's two calls are each an
+independent `StorageIndex` consult -- on a cold key this meant a `HEAD`
+(from `exists()`) immediately followed by a `GET` (from `value()`), and on
+a warm key, a second redundant index lookup. `IndexBackedArtifactSlice`
+calls `value()` directly and derives "not found" from the resulting
+exception, so a cold-but-present key now costs exactly one blob-store `GET`
+and a 404 costs exactly one failed `GET` attempt -- never a `HEAD` first.
+`DiskCacheStorage`- and plain-`S3Storage`-backed repositories are
+unaffected -- they keep the existing generic slice exactly as before.
+
+### Hosted-Upload Backpressure (WS1.6)
+
+A hosted upload's `save()` failing with a write-back queue saturation
+(`WriteBackSaturatedException`, see
+[Write-Back](#write-back-async-durable-writes-cachewrite-through) above) now
+surfaces as `503 Service Unavailable` with a `Retry-After` header (via the
+same `X-Pantera-Fault: overload:write_back_queue` translation every other
+overload source in Pantera uses) instead of a generic `500`. This is wired
+at the single shared upload seam (`SliceUpload`, used by the generic files
+format and Conan) -- Docker, Maven, npm, Go, and Hex.pm each have their own
+dedicated upload slice and do not yet carry this mapping; a hosted upload to
+one of those formats against a saturated `cache.mode: index` write-back
+queue still surfaces a generic `500` today.
+
 ---
 
 ## S3 Express One Zone (type: s3-express)

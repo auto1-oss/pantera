@@ -59,10 +59,22 @@ public final class RepoConfig {
         Storage storage = null;
         YamlNode storageNode = repoYaml.value("storage");
         if (storageNode != null) {
-            // Direct storage without wrappers:
-            // - No MicrometerStorage (metrics overhead, bypassed by optimized slices)
+            // Direct storage without wrappers at THIS layer:
+            // - No generic MicrometerStorage/LoggingStorage decorator around
+            //   the outer Storage surface (exists/value/save/list/...) --
+            //   that would re-add per-call overhead on the exact hot path
+            //   WS1.1 built CachedBlobStorage's index to avoid (a metrics
+            //   wrapper here cannot tell a zero-round-trip disk hit from a
+            //   genuine blob-store call, so it would only add cost, not signal).
             // - No LoggingStorage (already bypassed, 2-50% overhead on writes)
-            // Request-level logging and metrics still active via Vert.x HTTP
+            // Request-level logging and metrics still active via Vert.x HTTP.
+            // WS1.6 instead meters the ACTUAL blob-store tier (S3 GET/HEAD/
+            // PUT/DELETE/LIST count+latency+error/throttle) one layer lower,
+            // in S3StorageFactory (MeteredBlobStore wraps the reference
+            // BlobStore before CachedBlobStorage/cache.mode:index ever sees
+            // it) plus CachedBlobStorage's own cache-tier gauges/counters
+            // (disk hit ratio, eviction bytes, write-back queue depth) --
+            // see docs/admin-guide/storage-backends.md.
             storage = new SubStorage(prefix, storage(cache, aliases, storageNode));
         }
 

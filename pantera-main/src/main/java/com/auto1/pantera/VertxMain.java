@@ -1556,6 +1556,10 @@ public final class VertxMain {
                     "pantera.proxy.request.duration",
                     "pantera.upstream.request.duration",
                     "pantera.storage.operation.duration",
+                    // WS1.6 (spec sect 3.G): blob-store GET/HEAD/PUT/DELETE/LIST
+                    // calls stream full artifact bodies on GET/PUT, same
+                    // rationale as the other transfer timers above.
+                    "pantera.storage.blobstore.request.duration",
                     "vertx.http.server.response.time"
                 );
                 final double[] transferSlos = slosNanos(
@@ -1601,6 +1605,17 @@ public final class VertxMain {
 
             // Initialize storage metrics recorder
             com.auto1.pantera.metrics.StorageMetricsRecorder.initialize();
+
+            // WS1.6 (spec sect 3.G): install the BlobStore-tier op recorder and
+            // the CachedBlobStorage cache-tier gauge binder BEFORE startRepos()
+            // constructs any repository storage — mirrors the WS1.5
+            // StorageInvalidationBusRegistry.install() ordering requirement
+            // (this method runs at VertxMain construction, well before
+            // startRepos()). A DB-less/metrics-disabled boot never observes a
+            // behaviour change: every recording call above stays guarded by
+            // MicrometerMetrics.isInitialized().
+            com.auto1.pantera.metrics.BlobStoreMetricsRecorder.initialize();
+            com.auto1.pantera.metrics.CachedBlobStorageMetricsBinder.install();
 
             if (mctx.jvm()) {
                 new ClassLoaderMetrics().bindTo(registry);
