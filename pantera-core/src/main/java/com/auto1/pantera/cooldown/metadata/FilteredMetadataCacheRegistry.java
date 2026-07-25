@@ -87,6 +87,39 @@ public final class FilteredMetadataCacheRegistry {
      * @return number of L1 entries invalidated on this instance.
      */
     public int invalidateAfterUpload(final String repoType, final String packageName) {
+        return this.invalidate(repoType, packageName, "upload", "envelope_invalidate_on_upload");
+    }
+
+    /**
+     * Invalidate every cached cooldown-filtered envelope whose package name
+     * matches {@code packageName} after a **proxy** refresh — a stale-while-
+     * revalidate background fetch (or any other post-cache-write path) that
+     * pulled a genuinely-changed upstream packument/index. Without this call
+     * a version published upstream stays hidden behind the previously
+     * cached filtered envelope until its static TTL expires (WS5.2):
+     * publish-date registries and cooldown decisions age, but the
+     * MATERIALISED filtered bytes do not until told to.
+     *
+     * <p>Same mechanics as {@link #invalidateAfterUpload(String, String)} —
+     * matches on the package-name segment of the cache key, published on
+     * {@code CacheInvalidationPubSub} so peer nodes drop their L1 too — the
+     * only difference is the log action, kept distinct so operators can
+     * tell "an upload changed this" from "a proxy refresh changed this" in
+     * the ECS log stream.
+     *
+     * @param repoType Repository type of the refreshed proxy, for logging only.
+     * @param packageName Canonical package name as the cache stores it.
+     *                    {@code null} or empty → no-op.
+     * @return number of L1 entries invalidated on this instance.
+     */
+    public int invalidateAfterProxyRefresh(final String repoType, final String packageName) {
+        return this.invalidate(repoType, packageName, "refresh", "envelope_invalidate_on_refresh");
+    }
+
+    private int invalidate(
+        final String repoType, final String packageName,
+        final String verb, final String eventAction
+    ) {
         if (packageName == null || packageName.isEmpty()) {
             return 0;
         }
@@ -98,9 +131,9 @@ public final class FilteredMetadataCacheRegistry {
             final int count = cache.invalidateByPackageName(packageName);
             if (count > 0) {
                 com.auto1.pantera.http.log.EcsLogger.info("com.auto1.pantera.cooldown.metadata")
-                    .message("Filtered-metadata envelope invalidated after upload (n=" + count + ")")
+                    .message("Filtered-metadata envelope invalidated after " + verb + " (n=" + count + ")")
                     .eventCategory("database")
-                    .eventAction("envelope_invalidate_on_upload")
+                    .eventAction(eventAction)
                     .eventOutcome("success")
                     .field("package.name", packageName)
                     .field("repository.type", repoType == null ? "unknown" : repoType)
@@ -112,7 +145,7 @@ public final class FilteredMetadataCacheRegistry {
             com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.cooldown.metadata")
                 .message("Filtered-metadata envelope invalidation failed; entry will expire via TTL")
                 .eventCategory("database")
-                .eventAction("envelope_invalidate_on_upload")
+                .eventAction(eventAction)
                 .eventOutcome("failure")
                 .field("package.name", packageName)
                 .field("repository.type", repoType == null ? "unknown" : repoType)
