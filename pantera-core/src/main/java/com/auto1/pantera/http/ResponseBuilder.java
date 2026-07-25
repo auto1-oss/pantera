@@ -52,6 +52,20 @@ public class ResponseBuilder {
         return new ResponseBuilder(RsStatus.MOVED_PERMANENTLY);
     }
 
+    /**
+     * {@code 302 Found}. WS1.7's presigned direct-download redirect (spec
+     * {@code WS1-storage-for-scale.md} &sect;3.B2) uses this -- a temporary,
+     * cacheable-by-neither-party redirect to a time-limited presigned URL,
+     * distinct from both {@link #movedPermanently()} ({@code 301}, permanent)
+     * and {@link #temporaryRedirect()} ({@code 307}, method-preserving --
+     * unnecessary here since presigned redirects are always answering a GET).
+     *
+     * @return Builder for a {@code 302} response.
+     */
+    public static ResponseBuilder found() {
+        return new ResponseBuilder(RsStatus.MOVED_TEMPORARILY);
+    }
+
     public static ResponseBuilder notFound() {
         return new ResponseBuilder(RsStatus.NOT_FOUND);
     }

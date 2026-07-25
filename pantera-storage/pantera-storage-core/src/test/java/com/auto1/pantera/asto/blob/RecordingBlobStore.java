@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.ValueNotFoundException;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -23,6 +24,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -36,9 +38,16 @@ import java.util.concurrent.atomic.AtomicInteger;
  * concurrent callers deterministically around a single {@link #get(Key)}
  * invocation (latches, not wall-clock sleeps -- CLAUDE.md testing doctrine).</p>
  *
+ * <p>Also a {@link Presigner} fake (WS1.7): configured to sign by default
+ * ({@link #isPresignConfigured()} {@code true}), toggleable via {@link
+ * #presignConfigured(boolean)} to exercise the "presign not configured"
+ * fallback, and counts {@link #presignGet(Key, long)} invocations so a test
+ * can assert local signing never touches {@link #objects} / bumps any of
+ * the blob-store call counters above.</p>
+ *
  * @since 2.3.0
  */
-final class RecordingBlobStore implements BlobStore {
+final class RecordingBlobStore implements BlobStore, Presigner {
 
     /**
      * In-memory object store: key -&gt; bytes.
@@ -51,6 +60,20 @@ final class RecordingBlobStore implements BlobStore {
     private final AtomicInteger putCalls = new AtomicInteger();
     private final AtomicInteger deleteCalls = new AtomicInteger();
     private final AtomicInteger listCalls = new AtomicInteger();
+
+    /**
+     * WS1.7: number of local {@link #presignGet(Key, long)} signings --
+     * never a blob-store round trip, tracked separately from the counters
+     * above so a test can assert a redirect issued exactly one signing and
+     * zero real {@code BlobStore} calls.
+     */
+    private final AtomicInteger presignCalls = new AtomicInteger();
+
+    /**
+     * WS1.7: whether {@link #presignGet(Key, long)} is currently "configured"
+     * -- defaults to {@code true}.
+     */
+    private final AtomicBoolean presignConfigured = new AtomicBoolean(true);
 
     /**
      * Counted down the moment a {@link #get(Key)} invocation actually starts
@@ -139,6 +162,32 @@ final class RecordingBlobStore implements BlobStore {
 
     int listCalls() {
         return this.listCalls.get();
+    }
+
+    /**
+     * WS1.7: toggles {@link #isPresignConfigured()} -- {@code true} (the
+     * default) simulates a backend with presign credentials/region
+     * configured, {@code false} simulates one built without them.
+     *
+     * @param configured New value.
+     */
+    void presignConfigured(final boolean configured) {
+        this.presignConfigured.set(configured);
+    }
+
+    int presignCalls() {
+        return this.presignCalls.get();
+    }
+
+    @Override
+    public boolean isPresignConfigured() {
+        return this.presignConfigured.get();
+    }
+
+    @Override
+    public URI presignGet(final Key key, final long ttlSeconds) {
+        this.presignCalls.incrementAndGet();
+        return URI.create("https://blob-store.example.test/" + key.string() + "?ttl=" + ttlSeconds);
     }
 
     @Override

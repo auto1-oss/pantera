@@ -668,6 +668,19 @@ public final class S3Storage implements ManagedStorage, BlobStore, Presigner {
     }
 
     /**
+     * WS1.7 (spec &sect;3.B2): {@code false} when this instance was built
+     * without a {@link Presigner} (the short constructor) -- lets a caller
+     * (e.g. {@code CachedBlobStorage#presigner()}) decide whether to attempt
+     * a redirect at all instead of catching {@link IllegalStateException}.
+     *
+     * @return {@code true} iff {@link #presignGet(Key, long)} can be called.
+     */
+    @Override
+    public boolean isPresignConfigured() {
+        return this.presigner != null;
+    }
+
+    /**
      * Uploads content using put request.
      *
      * @param key Object key.

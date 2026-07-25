@@ -67,6 +67,31 @@ public final class SubStorage implements Storage {
         );
     }
 
+    /**
+     * The origin storage this instance prefixes calls onto (WS1.7, spec
+     * {@code WS1-storage-for-scale.md} &sect;3.B2) -- exposed so {@code
+     * PresignResolver} can unwrap nested {@code SubStorage} layers (a repo's
+     * storage is typically {@code SubStorage(repoPrefix, SubStorage(v2Prefix,
+     * &lt;alias storage&gt;))}) to reach the underlying {@link
+     * com.auto1.pantera.asto.blob.CachedBlobStorage} a presigned redirect
+     * needs, accumulating {@link #prefix()} along the way.
+     *
+     * @return Origin storage.
+     */
+    public Storage origin() {
+        return this.origin;
+    }
+
+    /**
+     * The prefix every key passed to this instance is resolved against
+     * before reaching {@link #origin()}.
+     *
+     * @return Prefix key.
+     */
+    public Key prefix() {
+        return this.prefix;
+    }
+
     @Override
     public CompletableFuture<Boolean> exists(final Key key) {
         return this.origin.exists(new PrefixedKed(this.prefix, key));

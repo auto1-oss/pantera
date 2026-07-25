@@ -15,6 +15,7 @@ import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.ListResult;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.metrics.BlobStoreMetricsCollector;
+import java.net.URI;
 import java.util.Collection;
 import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
@@ -45,9 +46,20 @@ import java.util.concurrent.CompletableFuture;
  * other backend-specific exception type, so it works unchanged for a future
  * native GCS/Azure {@link BlobStore} (WS1.8).</p>
  *
+ * <p>Also transparently forwards {@link Presigner} (WS1.7, spec &sect;3.B2)
+ * when {@link #delegate} implements it: {@code S3StorageFactory} wraps the
+ * reference {@code S3Storage} -- itself a {@link Presigner} -- in this
+ * decorator BEFORE handing it to {@link CachedBlobStorage}, so without this
+ * forwarding {@link CachedBlobStorage#presigner()} would never see past the
+ * decorator's own type and every {@code cache.mode: index} redirect would
+ * silently fall back to streaming. Signing itself is never timed/counted
+ * here -- it is local cryptographic work, not a blob-store round trip, so it
+ * carries none of the latency/throttle signal this decorator otherwise
+ * exists to capture.</p>
+ *
  * @since 2.3.0
  */
-public final class MeteredBlobStore implements BlobStore, AutoCloseable {
+public final class MeteredBlobStore implements BlobStore, Presigner, AutoCloseable {
 
     /**
      * Delegate this decorator times and counts calls against.
@@ -115,6 +127,24 @@ public final class MeteredBlobStore implements BlobStore, AutoCloseable {
         if (this.delegate instanceof AutoCloseable) {
             ((AutoCloseable) this.delegate).close();
         }
+    }
+
+    // === Presigner (WS1.7): transparent forwarding, see class javadoc. ===
+
+    @Override
+    public boolean isPresignConfigured() {
+        return this.delegate instanceof Presigner presigner && presigner.isPresignConfigured();
+    }
+
+    @Override
+    public URI presignGet(final Key key, final long ttlSeconds) {
+        if (!(this.delegate instanceof Presigner presigner)) {
+            throw new IllegalStateException(
+                "Presigning is not configured: the wrapped BlobStore ("
+                    + this.delegate.getClass().getSimpleName() + ") does not implement Presigner."
+            );
+        }
+        return presigner.presignGet(key, ttlSeconds);
     }
 
     /**
