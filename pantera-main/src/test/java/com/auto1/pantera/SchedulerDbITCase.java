@@ -38,10 +38,22 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  * "queue -&gt; drain -&gt; DbConsumer -&gt; Postgres" pipeline (WS2.2, 2.3.0).
  * No longer goes through {@link com.auto1.pantera.scheduling.QuartzService}:
  * that Quartz-based drain was the pipeline WS2.2 replaced.
+ *
+ * <p>Runs as an ITCase ({@code mvn verify -Pitcase}), not part of the
+ * default {@code mvn test} run: it exercises the real JDBC path end-to-end
+ * (1000 rows through {@link DbConsumer} into a genuine Postgres instance),
+ * so it needs Docker and is materially slower than the surefire unit
+ * budget. It was previously a plain {@code *Test.java} (surefire/unit
+ * phase) starting its own TestContainers Postgres — that both required
+ * Docker in the unit phase and added multi-JVM container contention under
+ * {@code mvn -T8}, which is the class of flake this move eliminates. The
+ * assertions are unchanged from the original unit test, only relocated to
+ * the correct phase.</p>
+ *
  * @since 0.31
  */
 @Testcontainers
-public final class SchedulerDbTest {
+final class SchedulerDbITCase {
 
     /**
      * PostgreSQL test container.
