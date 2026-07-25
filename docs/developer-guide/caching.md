@@ -127,3 +127,4 @@ These caches exist in production but their tuning is fixed at compile-time or dr
 - [Admin: Cache Configuration](../admin-guide/cache-configuration.md) -- Operator-facing reference: configurable knobs only.
 - [Admin: Valkey Setup](../admin-guide/valkey-setup.md) -- L2 server-side requirements.
 - [Fault Model](fault-model.md) -- How cache failures map to faults (they don't, by construction).
+- [Upstream Revalidation Contract](upstream-revalidation.md) -- A different concern: TTL + conditional GET + serve-stale for proxied *upstream metadata* (Maven `MetadataCache`, Go/PyPI resolution-surface loaders), not the in-process/cluster caches this page covers.
