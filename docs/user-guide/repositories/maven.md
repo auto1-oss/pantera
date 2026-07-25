@@ -136,6 +136,23 @@ Your mirror URL points to the group, and Pantera resolves from the right source 
 
 ---
 
+## Caching, Resumable Downloads, and Signed Artifacts
+
+**Conditional re-resolves.** A warm artifact (local repositories, and proxy artifacts already cached from a prior fetch) is served with an `ETag` and `Last-Modified`. A client re-checking an unchanged artifact (a conditional GET with `If-None-Match`) gets back a `304 Not Modified` with no body instead of re-downloading it — most HTTP clients, including Maven's transport layer, do this automatically once they've cached a resource with validators.
+
+**Resumable / parallel downloads.** Artifact GETs (never `maven-metadata.xml` or checksum sidecars) advertise `Accept-Ranges: bytes` and honour `Range: bytes=start-end` requests with `206 Partial Content`. Download managers and multi-connection clients can resume an interrupted transfer or fetch a large artifact over several concurrent ranges.
+
+**Immutable releases.** When an administrator has enabled `releaseImmutable` on a local repository, redeploying an already-published, non-SNAPSHOT (release) coordinate is rejected with `409 Conflict` — the existing artifact is left untouched. SNAPSHOT redeploys are always allowed. If you need to publish a corrected build, bump the version instead of overwriting the release.
+
+**Signed artifacts (`.asc`).** When an administrator has enabled `verifyPgp` on a repository, a `.asc`/`.sig` signature is verified against the admin-managed keyring before the artifact is trusted:
+
+- Sign your artifact as usual with the `maven-gpg-plugin` (or `gpg --detach-sign -a`) so `mvn deploy`/`gradle publish` uploads the `.asc` alongside the primary.
+- Ask your administrator to register your public key via the admin PGP keyring (`POST /api/v1/admin/pgp-keys`) *before* you deploy — an unrecognised signer, a tampered artifact, or a missing signature (when `verifyPgp` is on) is rejected.
+- On a hosted deploy, a rejected signature removes the artifact that was just uploaded (nothing is left half-published) and returns `403 Forbidden` for the signature upload itself.
+- On a proxy fetch, `verifyPgp` requires Maven-Central-tier semantics: every proxied artifact must carry a signature that verifies against a trusted key, or the proxy fetch fails.
+
+---
+
 ## Common Issues
 
 | Symptom | Cause | Fix |
@@ -146,6 +163,9 @@ Your mirror URL points to the group, and Pantera resolves from the right source 
 | Dependencies resolve but deploys fail | User lacks `write` permission on the target repository | Contact your administrator to grant write access |
 | `Return code is: 405` on deploy | Deploying to a proxy or group repository | Deploy only to a **local** repository |
 | Checksum verification failure | Corrupted cache | Ask admin to delete the cached artifact and retry |
+| `409 Conflict` on deploy | Repository has `releaseImmutable` enabled and this release version already exists | Bump the version; release coordinates are immutable once published |
+| `403 Forbidden` on deploy of a `.asc`/`.sig` file | Repository has `verifyPgp` enabled and the signature failed verification (wrong key, tampered artifact, or signer not registered) | Confirm you signed with the key registered by your administrator, and that the artifact wasn't modified after signing |
+| `403 Forbidden` / rejected fetch from a proxy | Repository has `verifyPgp` enabled and the upstream artifact has no verifiable signature | Ask your administrator whether `verifyPgp` should be enabled for this upstream (Maven Central does not sign every artifact type) |
 | SNAPSHOT not updating | Maven caches SNAPSHOT metadata locally | Run with `-U` flag: `mvn install -U` |
 
 ---

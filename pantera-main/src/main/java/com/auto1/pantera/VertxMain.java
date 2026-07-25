@@ -378,6 +378,17 @@ public final class VertxMain {
                 new com.auto1.pantera.db.dao.AuthSettingsDao(ds)
             )
         );
+        // WS4-maven.1: install the JDBC-backed PGP keyring store so any repo
+        // with `verifyPgp: true` (parsed by RepositorySlices below) consults
+        // admin-uploaded trusted keys. DB-less boots (tests, embedded) never
+        // install anything — KeyringStoreRegistry.active() then degrades to
+        // an always-empty store, which is the documented fail-closed
+        // behaviour for "verifyPgp enabled without any uploaded keys".
+        sharedDs.ifPresent(ds ->
+            com.auto1.pantera.maven.security.KeyringStoreRegistry.install(
+                new com.auto1.pantera.maven.security.JdbcKeyringStore(ds)
+            )
+        );
         // WS2.3 (2.3.0): broadcast breaker/bulkhead settings-loader
         // invalidation cross-node. Previously loader.invalidate() (called
         // by AdminAuthHandler after a PUT) only ever updated the receiving

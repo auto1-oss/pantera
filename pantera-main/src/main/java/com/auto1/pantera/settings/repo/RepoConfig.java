@@ -326,6 +326,34 @@ public final class RepoConfig {
     }
 
     /**
+     * Maven/Gradle {@code .asc} PGP signature verification (WS4-maven.1).
+     * When {@code true}, a proxy fetch or hosted store of a primary artifact
+     * with a detached signature is verified against the admin-managed
+     * {@code pgp_keyring} before the primary is cached/persisted; an empty
+     * keyring rejects every signed artifact (fail-closed). Default
+     * {@code false} — byte-identical to pre-2.3.0 behaviour, no keyring
+     * lookups occur.
+     *
+     * @return True when {@code .asc} verification is required for this repo
+     */
+    public boolean verifyPgp() {
+        return Boolean.parseBoolean(this.repoYaml().string("verifyPgp"));
+    }
+
+    /**
+     * Release-redeploy immutability (WS4-maven.6). When {@code true}, a
+     * hosted deploy that would overwrite an existing non-SNAPSHOT primary
+     * artifact is rejected with 409 Conflict instead of silently
+     * overwriting it. SNAPSHOT redeploys are always allowed regardless of
+     * this setting. Default {@code false} (legacy overwrite behaviour).
+     *
+     * @return True when release redeploys are rejected for this repo
+     */
+    public boolean releaseImmutable() {
+        return Boolean.parseBoolean(this.repoYaml().string("releaseImmutable"));
+    }
+
+    /**
      * Repo part of YAML.
      *
      * @return Async YAML mapping

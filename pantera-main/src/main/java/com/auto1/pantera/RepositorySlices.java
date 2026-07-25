@@ -769,7 +769,12 @@ public class RepositorySlices {
                 slice = browsableTrimPathSlice(
                     new MavenSlice(cfg.storage(), securityPolicy(),
                         authentication(), tokens.auth(), cfg.name(), artifactEvents(),
-                        this.settings.syncArtifactIndexer()),
+                        this.settings.syncArtifactIndexer(),
+                        // WS4-maven.1/.2/.6: per-repo verifyPgp / releaseImmutable,
+                        // additive — every other repo type is unaffected.
+                        new com.auto1.pantera.maven.http.MavenHostedPolicy(
+                            cfg.verifyPgp(), cfg.releaseImmutable()
+                        )),
                     cfg.storage()
                 );
                 break;

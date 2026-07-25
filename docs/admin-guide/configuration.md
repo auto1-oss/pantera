@@ -411,6 +411,8 @@ The following features are supported but configured primarily via the repository
 - **Scheduled scripts (crontab).** Run Groovy or Python 2 scripts on a Quartz schedule from `meta.crontab`. See [Configuration Reference §1.13](../configuration-reference.md#113-metacrontab).
 - **HTTP/3 (experimental).** Enable per repository with `http3: true` + `http3_ssl.jks`, or enable client-side proxy upstreams with the `http3.client` environment variable. See [Configuration Reference §2.6](../configuration-reference.md#26-http3-protocol-support-experimental).
 - **Repository filters.** Include/exclude artifacts by glob or regexp patterns under the repo's `filters` block. See [Configuration Reference §2.7](../configuration-reference.md#27-repository-filters).
+- **Maven/Gradle PGP signature verification.** Set `verifyPgp: true` on a `maven`/`gradle`/`maven-proxy`/`gradle-proxy` repo to require a verified `.asc`/`.sig` signature before an artifact is trusted. Upload trusted public keys first via `POST /api/v1/admin/pgp-keys` ([REST API Reference](../rest-api-reference.md#13-admin-auth-settings)) — **an empty keyring rejects every signed artifact** (fail-closed by design; there is no fail-open mode). See [Configuration Reference](../configuration-reference.md#25-type-specific-settings) for the repo-level flag.
+- **Maven/Gradle release immutability.** Set `releaseImmutable: true` on a `maven`/`gradle` local repo to reject redeploy of an already-published release (non-SNAPSHOT) coordinate with `409 Conflict`. SNAPSHOT redeploys are unaffected.
 
 ---
 

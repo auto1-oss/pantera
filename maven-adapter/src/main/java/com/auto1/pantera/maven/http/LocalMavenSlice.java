@@ -21,12 +21,15 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.headers.ContentLength;
+import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.slice.KeyFromPath;
+import com.auto1.pantera.http.slice.RangeSlice;
 import com.auto1.pantera.http.slice.StorageArtifactSlice;
 import com.auto1.pantera.maven.asto.RepositoryChecksums;
 
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -73,43 +76,22 @@ final class LocalMavenSlice implements Slice {
         final Key key = new KeyFromPath(line.uri().getPath());
         final Matcher match = LocalMavenSlice.PTN_ARTIFACT.matcher(new KeyLastPart(key).get());
         return match.matches()
-            ? artifactResponse(line.method(), key)
+            ? artifactResponse(line, headers, key)
             : plainResponse(line.method(), key);
     }
 
     /**
      * Artifact response for repository artifact request.
-     * @param method Method
+     * @param line Request line
+     * @param headers Request headers
      * @param artifact Artifact key
      * @return Response
      */
-    private CompletableFuture<Response> artifactResponse(final RqMethod method, final Key artifact) {
-        return switch (method) {
-            case GET -> storage.exists(artifact)
-                .thenCompose(
-                    exists -> {
-                        if (!exists) {
-                            return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
-                        }
-                        // Track download metric
-                        this.recordMetric(() ->
-                            com.auto1.pantera.metrics.PanteraMetrics.instance().download(this.repoName, "maven")
-                        );
-                        // Use storage-specific optimized content retrieval for 100-1000x faster downloads
-                        return storage.metadata(artifact).thenCompose(
-                            meta -> StorageArtifactSlice.optimizedValue(storage, artifact)
-                                .thenCombine(
-                                    new RepositoryChecksums(storage).checksums(artifact),
-                                    (body, checksums) ->
-                                        ResponseBuilder.ok()
-                                            .headers(ArtifactHeaders.from(artifact, checksums))
-                                            .header(LastModifiedHeader.from(meta))
-                                            .body(body)
-                                            .build()
-                                )
-                        );
-                    }
-                );
+    private CompletableFuture<Response> artifactResponse(
+        final RequestLine line, final Headers headers, final Key artifact
+    ) {
+        return switch (line.method()) {
+            case GET -> this.getArtifact(line, headers, artifact);
             case HEAD -> storage.exists(artifact)
                 .thenCompose(
                     exists -> {
@@ -133,6 +115,88 @@ final class LocalMavenSlice implements Slice {
                 );
             default -> CompletableFuture.completedFuture(ResponseBuilder.methodNotAllowed().build());
         };
+    }
+
+    /**
+     * {@code GET} for a local artifact (or {@code maven-metadata.xml}, which
+     * shares this path since it also matches {@link #PTN_ARTIFACT}).
+     *
+     * <ul>
+     *   <li>404 when the key is absent.</li>
+     *   <li>304 (WS4-maven.7) when the inbound {@code If-None-Match} matches
+     *       the sha1 {@code ETag} — no body is read from storage.</li>
+     *   <li>200 with {@code Content-Length} (WS4-maven.9) and, for real
+     *       binary artifacts only (never {@code maven-metadata.xml}),
+     *       {@code Accept-Ranges: bytes} and {@code Range} support
+     *       (WS4-maven.11) via {@link RangeSlice}.</li>
+     * </ul>
+     *
+     * @param line Request line, threaded through to {@link RangeSlice}
+     * @param headers Request headers (read for {@code If-None-Match} / {@code Range})
+     * @param artifact Artifact key
+     * @return Response
+     */
+    private CompletableFuture<Response> getArtifact(
+        final RequestLine line, final Headers headers, final Key artifact
+    ) {
+        return storage.exists(artifact).thenCompose(exists -> {
+            if (!exists) {
+                return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
+            }
+            this.recordMetric(() ->
+                com.auto1.pantera.metrics.PanteraMetrics.instance().download(this.repoName, "maven")
+            );
+            return storage.metadata(artifact).thenCombine(
+                new RepositoryChecksums(storage).checksums(artifact),
+                (meta, checksums) -> this.serveArtifact(line, headers, artifact, meta, checksums)
+            ).thenCompose(Function.identity());
+        });
+    }
+
+    /**
+     * Decide 304 vs 200 (and, for 200, whether {@link RangeSlice} applies)
+     * once the artifact's metadata and checksums are known.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    private CompletableFuture<Response> serveArtifact(
+        final RequestLine line, final Headers headers, final Key artifact,
+        final Meta meta, final Map<String, String> checksums
+    ) {
+        final String etag = checksums.get("sha1");
+        final Header lastModified = LastModifiedHeader.from(meta);
+        if (ArtifactConditionalGet.matches(headers, etag)) {
+            return CompletableFuture.completedFuture(
+                ArtifactConditionalGet.notModified(etag, lastModified)
+            );
+        }
+        final boolean metadataFile = isMetadataFile(artifact);
+        final Slice bodySlice = (l, h, b) -> StorageArtifactSlice.optimizedValue(this.storage, artifact)
+            .thenApply(bodyContent -> {
+                final ResponseBuilder resp = ResponseBuilder.ok()
+                    .headers(ArtifactHeaders.from(artifact, checksums))
+                    .header(lastModified);
+                meta.read(Meta.OP_SIZE).ifPresent(size -> resp.header(new ContentLength(size)));
+                if (!metadataFile) {
+                    // Advertised (and honoured, via the RangeSlice wrap below)
+                    // only for real binary artifacts — never maven-metadata.xml
+                    // (WS4-maven.11 explicitly excludes metadata from Range).
+                    resp.header("Accept-Ranges", "bytes");
+                }
+                return resp.body(bodyContent).build();
+            });
+        return metadataFile
+            ? bodySlice.response(line, headers, Content.EMPTY)
+            : new RangeSlice(bodySlice).response(line, headers, Content.EMPTY);
+    }
+
+    /**
+     * @param artifact Artifact key
+     * @return True when the key is a GA-level {@code maven-metadata.xml}
+     *         (which shares {@link #getArtifact} with real artifacts because
+     *         {@link #PTN_ARTIFACT} matches {@code .xml} too)
+     */
+    private static boolean isMetadataFile(final Key artifact) {
+        return artifact.string().endsWith("maven-metadata.xml");
     }
 
     /**

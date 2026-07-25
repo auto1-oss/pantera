@@ -1010,6 +1010,33 @@ repo:
     path: /var/pantera/data
 ```
 
+#### Maven / Gradle (`maven`, `gradle`, `maven-proxy`, `gradle-proxy`)
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `verifyPgp` | bool | No | `false` | Applies to `local` **and** `proxy` modes. When `true`, a detached `.asc`/`.sig` signature is verified against the admin-managed PGP keyring (`/api/v1/admin/pgp-keys`) before the primary artifact is committed to cache (proxy) or acknowledged (hosted store). An empty keyring rejects every signed artifact — enabling this without uploading trusted keys blocks all signed fetches/uploads (fail-closed by design, never fail-open). |
+| `releaseImmutable` | bool | No | `false` | `local` mode only. When `true`, redeploying an existing non-SNAPSHOT (release) coordinate is rejected with `409 Conflict` instead of silently overwriting it. SNAPSHOT redeploys are always allowed regardless of this setting. |
+
+```yaml
+repo:
+  type: maven
+  storage:
+    type: fs
+    path: /var/pantera/data
+  verifyPgp: true
+  releaseImmutable: true
+```
+
+```yaml
+repo:
+  type: maven-proxy
+  url: https://repo.maven.apache.org/maven2
+  verifyPgp: true
+  storage:
+    type: fs
+    path: /var/pantera/data
+```
+
 ---
 
 ### 2.6 HTTP/3 Protocol Support (Experimental)

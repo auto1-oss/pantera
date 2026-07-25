@@ -10,18 +10,25 @@
  */
 package com.auto1.pantera.api.v1;
 
+import com.auto1.pantera.api.AuthTokenRest;
 import com.auto1.pantera.api.AuthzHandler;
 import com.auto1.pantera.api.perms.ApiAdminPermission;
 import com.auto1.pantera.auth.RevocationBlocklist;
 import com.auto1.pantera.cache.CacheBroadcast;
 import com.auto1.pantera.db.dao.AuthSettingsDao;
+import com.auto1.pantera.db.dao.PgpKeyringDao;
 import com.auto1.pantera.db.dao.UserTokenDao;
 import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.maven.security.InMemoryKeyringStore;
+import com.auto1.pantera.maven.security.KeyringStoreRegistry;
 import com.auto1.pantera.security.policy.Policy;
+import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
+import java.time.format.DateTimeFormatter;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
@@ -70,6 +77,14 @@ public final class AdminAuthHandler {
     private final CacheBroadcast pubSub;
 
     /**
+     * DAO for the {@code pgp_keyring} table (WS4-maven.3), or {@code null}
+     * on a DB-less boot — but {@link AdminAuthHandler} itself is only ever
+     * constructed when a DataSource is present (see {@code AsyncApiVerticle}),
+     * so this is non-null on every production path.
+     */
+    private final PgpKeyringDao pgpKeyringDao;
+
+    /**
      * Ctor without cross-node broadcast (single-instance deployments).
      * @param settingsDao Auth settings DAO
      * @param tokenDao User token DAO
@@ -79,7 +94,7 @@ public final class AdminAuthHandler {
     public AdminAuthHandler(final AuthSettingsDao settingsDao,
         final UserTokenDao tokenDao, final RevocationBlocklist blocklist,
         final Policy<?> policy) {
-        this(settingsDao, tokenDao, blocklist, policy, null);
+        this(settingsDao, tokenDao, blocklist, policy, null, null);
     }
 
     /**
@@ -94,11 +109,31 @@ public final class AdminAuthHandler {
     public AdminAuthHandler(final AuthSettingsDao settingsDao,
         final UserTokenDao tokenDao, final RevocationBlocklist blocklist,
         final Policy<?> policy, final CacheBroadcast pubSub) {
+        this(settingsDao, tokenDao, blocklist, policy, pubSub, null);
+    }
+
+    /**
+     * Ctor with the PGP keyring DAO (WS4-maven.3). The single
+     * field-initializing constructor — every other overload delegates here.
+     * @param settingsDao Auth settings DAO
+     * @param tokenDao User token DAO
+     * @param blocklist Revocation blocklist
+     * @param policy Security policy
+     * @param pubSub Cross-node cache-invalidation broadcast, or {@code null}
+     *     when Valkey isn't configured (WS2.3, 2.3.0)
+     * @param pgpKeyringDao PGP keyring DAO
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public AdminAuthHandler(final AuthSettingsDao settingsDao,
+        final UserTokenDao tokenDao, final RevocationBlocklist blocklist,
+        final Policy<?> policy, final CacheBroadcast pubSub,
+        final PgpKeyringDao pgpKeyringDao) {
         this.settingsDao = settingsDao;
         this.tokenDao = tokenDao;
         this.blocklist = blocklist;
         this.policy = policy;
         this.pubSub = pubSub;
+        this.pgpKeyringDao = pgpKeyringDao;
     }
 
     /**
@@ -124,6 +159,144 @@ public final class AdminAuthHandler {
             .handler(adminAuthz).handler(this::getUpstreamBreakerSettings);
         router.put("/api/v1/admin/upstream-breaker-settings")
             .handler(adminAuthz).handler(this::updateUpstreamBreakerSettings);
+        router.get("/api/v1/admin/pgp-keys")
+            .handler(adminAuthz).handler(this::listPgpKeys);
+        router.post("/api/v1/admin/pgp-keys")
+            .handler(adminAuthz).handler(this::uploadPgpKey);
+        router.delete("/api/v1/admin/pgp-keys/:keyId")
+            .handler(adminAuthz).handler(this::deletePgpKey);
+    }
+
+    /**
+     * GET /api/v1/admin/pgp-keys — list registered keys (identity/provenance
+     * only, never the armored key material).
+     */
+    private void listPgpKeys(final RoutingContext ctx) {
+        CompletableFuture.supplyAsync(
+            () -> this.pgpKeyringDao.list(), HandlerExecutor.get()
+        ).whenComplete((rows, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                return;
+            }
+            final JsonArray keys = new JsonArray();
+            for (final PgpKeyringDao.KeyRow row : rows) {
+                keys.add(new JsonObject()
+                    .put("key_id_hex", row.keyIdHex())
+                    .put("fingerprint", row.fingerprint())
+                    .put("uploaded_by", row.uploadedBy())
+                    .put("uploaded_at", DateTimeFormatter.ISO_INSTANT.format(row.uploadedAt()))
+                    .put("description", row.description()));
+            }
+            ctx.response()
+                .setStatusCode(200)
+                .putHeader("Content-Type", "application/json")
+                .end(new JsonObject().put("keys", keys).encode());
+        });
+    }
+
+    /**
+     * POST /api/v1/admin/pgp-keys — body {@code {"public_key_armored": "...",
+     * "description": "..."}}. Parses the ASCII-armored block (rejecting
+     * malformed input with 400 before any DB write), inserts one row per
+     * key found (a block may contain a master key plus sub-keys — the
+     * signer of a future {@code .asc} may be any of them), and evicts the
+     * installed {@link KeyringStoreRegistry} cache entry for each so the
+     * very next verification sees the new key without waiting for the TTL.
+     */
+    private void uploadPgpKey(final RoutingContext ctx) {
+        final JsonObject body = ctx.body().asJsonObject();
+        final String armored = body == null ? null : body.getString("public_key_armored");
+        if (armored == null || armored.isBlank()) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "public_key_armored is required");
+            return;
+        }
+        final String description = body.getString("description");
+        final List<InMemoryKeyringStore.KeyDescriptor> descriptors;
+        try {
+            descriptors = InMemoryKeyringStore.describeKeys(
+                armored.getBytes(java.nio.charset.StandardCharsets.UTF_8)
+            );
+        } catch (final Exception ex) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                "public_key_armored could not be parsed as a PGP public key: " + ex.getMessage());
+            return;
+        }
+        if (descriptors.isEmpty()) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "No keys found in public_key_armored");
+            return;
+        }
+        final String owner = ctx.user() == null
+            ? "admin" : ctx.user().principal().getString(AuthTokenRest.SUB);
+        CompletableFuture.supplyAsync(() -> {
+            final JsonArray inserted = new JsonArray();
+            for (final InMemoryKeyringStore.KeyDescriptor descriptor : descriptors) {
+                this.pgpKeyringDao.insert(
+                    descriptor.keyIdHex(), descriptor.fingerprintHex(), armored, owner, description
+                );
+                KeyringStoreRegistry.invalidate(Long.parseUnsignedLong(descriptor.keyIdHex(), 16));
+                inserted.add(new JsonObject()
+                    .put("key_id_hex", descriptor.keyIdHex())
+                    .put("fingerprint", descriptor.fingerprintHex()));
+            }
+            return inserted;
+        }, HandlerExecutor.get()).whenComplete((inserted, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                return;
+            }
+            EcsLogger.info("com.auto1.pantera.api.v1")
+                .message("Admin uploaded PGP key(s) (" + inserted.size() + " key id(s))")
+                .eventCategory("configuration")
+                .eventAction("pgp_key_upload")
+                .eventOutcome("success")
+                .field("log.source", "application")
+                .log();
+            ctx.response()
+                .setStatusCode(201)
+                .putHeader("Content-Type", "application/json")
+                .end(new JsonObject().put("keys", inserted).encode());
+        });
+    }
+
+    /**
+     * DELETE /api/v1/admin/pgp-keys/{keyId} — {@code keyId} is the 16-char
+     * hex long key id. Evicts the {@link KeyringStoreRegistry} cache entry
+     * so the next verification of that signer immediately sees
+     * {@code UNTRUSTED_KEY}.
+     */
+    private void deletePgpKey(final RoutingContext ctx) {
+        final String keyId = ctx.pathParam("keyId");
+        if (keyId == null || keyId.isBlank()) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "keyId is required");
+            return;
+        }
+        CompletableFuture.supplyAsync(
+            () -> this.pgpKeyringDao.delete(keyId), HandlerExecutor.get()
+        ).whenComplete((deleted, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                return;
+            }
+            if (!deleted) {
+                ApiResponse.sendError(ctx, 404, "NOT_FOUND", "No key with id " + keyId);
+                return;
+            }
+            try {
+                KeyringStoreRegistry.invalidate(Long.parseUnsignedLong(keyId, 16));
+            } catch (final NumberFormatException ignored) {
+                // keyId shape is validated by the delete affecting a row above;
+                // a malformed id would simply not have matched any row.
+            }
+            EcsLogger.info("com.auto1.pantera.api.v1")
+                .message("Admin deleted PGP key key_id_hex=" + keyId)
+                .eventCategory("configuration")
+                .eventAction("pgp_key_delete")
+                .eventOutcome("success")
+                .field("log.source", "application")
+                .log();
+            ctx.response().setStatusCode(204).end();
+        });
     }
 
     /**
