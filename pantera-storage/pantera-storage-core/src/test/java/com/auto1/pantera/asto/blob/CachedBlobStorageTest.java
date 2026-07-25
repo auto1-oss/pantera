@@ -13,19 +13,25 @@ package com.auto1.pantera.asto.blob;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Meta;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
+import org.hamcrest.core.IsInstanceOf;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
@@ -218,6 +224,237 @@ final class CachedBlobStorageTest {
             storage.exists(key).join(), new IsEqual<>(false)
         );
         MatcherAssert.assertThat(fake.headCalls(), new IsEqual<>(1));
+    }
+
+    // ===== WS1.2 write-back tests (spec WS1-storage-for-scale.md sect.3.C) =====
+
+    @Test
+    void writeBackSaveAcksFromDiskThenUploaderConfirmsPresent(@TempDir final Path tmp) throws Exception {
+        final RecordingBlobStore fake = new RecordingBlobStore();
+        final CountDownLatch entered = new CountDownLatch(1);
+        final CountDownLatch release = new CountDownLatch(1);
+        fake.gatePut(entered, release);
+        final CachedBlobStorage storage = CachedBlobStorageTest.writeBackStorage(fake, tmp);
+        final Key key = new Key.From("wb.jar");
+        final byte[] data = "write-back-bytes".getBytes(StandardCharsets.UTF_8);
+
+        storage.save(key, new Content.From(data)).join();
+
+        // Acked from local disk durability, not the blob-store PUT: zero
+        // GETs, and the index already carries a PENDING_WRITE entry before
+        // the gated upload has even started.
+        MatcherAssert.assertThat("save() must not wait for the blob-store PUT", fake.getCalls(), new IsEqual<>(0));
+        MatcherAssert.assertThat(fake.putCalls(), new IsEqual<>(0));
+        MatcherAssert.assertThat("index must record PENDING_WRITE immediately after save() returns", storage.isPendingWrite(key), new IsEqual<>(true));
+        final byte[] servedWhilePending = storage.value(key).join().asBytesFuture().join();
+        MatcherAssert.assertThat("value() must serve the just-saved bytes from disk", servedWhilePending, new IsEqual<>(data));
+        MatcherAssert.assertThat("serving a PENDING_WRITE key must issue zero blobStore.get calls", fake.getCalls(), new IsEqual<>(0));
+
+        MatcherAssert.assertThat("the uploader pool must pick up the enqueued key", entered.await(10, TimeUnit.SECONDS), new IsEqual<>(true));
+        release.countDown();
+
+        CachedBlobStorageTest.awaitTrue(() -> !storage.isPendingWrite(key), Duration.ofSeconds(5));
+        MatcherAssert.assertThat("driving the uploader must confirm the upload with exactly one PUT", fake.putCalls(), new IsEqual<>(1));
+        MatcherAssert.assertThat(fake.getCalls(), new IsEqual<>(0));
+    }
+
+    @Test
+    void crashBeforeDrainReplaysPendingWriteOnFreshInstance(@TempDir final Path tmp) throws Exception {
+        final RecordingBlobStore stalledFake = new RecordingBlobStore();
+        final CountDownLatch entered = new CountDownLatch(1);
+        // Never counted down: simulates the process crashing before the
+        // write-back upload drains.
+        final CountDownLatch neverReleases = new CountDownLatch(1);
+        stalledFake.gatePut(entered, neverReleases);
+        final CachedBlobStorage crashed = CachedBlobStorageTest.writeBackStorage(stalledFake, tmp);
+        final Key key = new Key.From("crash.jar");
+        final byte[] data = "not-yet-durable-in-blob-store".getBytes(StandardCharsets.UTF_8);
+        crashed.save(key, new Content.From(data)).join();
+        MatcherAssert.assertThat(entered.await(10, TimeUnit.SECONDS), new IsEqual<>(true));
+        MatcherAssert.assertThat(
+            "the simulated crash never lets the upload complete -- must stay PENDING_WRITE",
+            crashed.isPendingWrite(key), new IsEqual<>(true)
+        );
+
+        // "Restart": a FRESH CachedBlobStorage instance over the SAME disk
+        // directory with a FRESH RecordingBlobStore (no shared in-memory
+        // state whatsoever) -- proves recovery is driven purely by the
+        // sidecar StorageIndex#rebuildFromDisk persisted, not by anything
+        // held in memory by the crashed instance.
+        final RecordingBlobStore freshFake = new RecordingBlobStore();
+        final CountDownLatch replayEntered = new CountDownLatch(1);
+        final CountDownLatch replayRelease = new CountDownLatch(1);
+        freshFake.gatePut(replayEntered, replayRelease);
+        final CachedBlobStorage restarted = CachedBlobStorageTest.writeBackStorage(freshFake, tmp);
+
+        MatcherAssert.assertThat(
+            "boot replay must re-enqueue the still-pending key on the fresh instance",
+            replayEntered.await(10, TimeUnit.SECONDS), new IsEqual<>(true)
+        );
+        replayRelease.countDown();
+        CachedBlobStorageTest.awaitTrue(() -> !restarted.isPendingWrite(key), Duration.ofSeconds(5));
+        MatcherAssert.assertThat("the replayed key must land in the blob store exactly once", freshFake.putCalls(), new IsEqual<>(1));
+        final byte[] served = restarted.value(key).join().asBytesFuture().join();
+        MatcherAssert.assertThat(served, new IsEqual<>(data));
+    }
+
+    @Test
+    void saveRejectsWithSaturatedExceptionAtHighWaterMarkWithoutWritingDisk(@TempDir final Path tmp) throws Exception {
+        final RecordingBlobStore fake = new RecordingBlobStore();
+        // put() never completes -- every admitted upload stays "in flight"
+        // forever, so the admission gate stays saturated once filled.
+        fake.gatePut(new CountDownLatch(1), new CountDownLatch(1));
+        final CachedBlobStorage.WriteBackConfig config =
+            new CachedBlobStorage.WriteBackConfig(2, 2, 5, 10L, 100L, 7L);
+        final CachedBlobStorage storage = CachedBlobStorageTest.writeBackStorage(fake, tmp, config);
+
+        storage.save(new Key.From("a.jar"), new Content.From("a".getBytes(StandardCharsets.UTF_8))).join();
+        storage.save(new Key.From("b.jar"), new Content.From("b".getBytes(StandardCharsets.UTF_8))).join();
+        // Both admissions are granted synchronously inside save() before any
+        // disk I/O -- by the time both joins return, the 2-permit queue is
+        // exhausted regardless of whether the uploader threads have started.
+
+        final Key rejected = new Key.From("c.jar");
+        final CompletableFuture<Void> saveFuture =
+            storage.save(rejected, new Content.From("c".getBytes(StandardCharsets.UTF_8)));
+        final ExecutionException wrapped = Assertions.assertThrows(
+            ExecutionException.class, () -> saveFuture.get(10, TimeUnit.SECONDS)
+        );
+        MatcherAssert.assertThat(wrapped.getCause(), new IsInstanceOf(WriteBackSaturatedException.class));
+        final WriteBackSaturatedException saturated = (WriteBackSaturatedException) wrapped.getCause();
+        MatcherAssert.assertThat(saturated.retryAfterSeconds(), new IsEqual<>(7L));
+        MatcherAssert.assertThat(
+            "admission is checked BEFORE any disk write -- the rejected key must never reach disk",
+            Files.exists(tmp.resolve("c.jar")), new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void writeThroughSaveDoesNotCompleteUntilBlobStorePutObserved(@TempDir final Path tmp) throws Exception {
+        final RecordingBlobStore fake = new RecordingBlobStore();
+        final CountDownLatch entered = new CountDownLatch(1);
+        final CountDownLatch release = new CountDownLatch(1);
+        fake.gatePut(entered, release);
+        final CachedBlobStorage storage = new CachedBlobStorage(
+            fake, tmp, FRESHNESS_TTL, NEGATIVE_TTL, true, CachedBlobStorage.WriteBackConfig.defaults()
+        );
+        final Key key = new Key.From("sync.jar");
+
+        final CompletableFuture<Void> save =
+            storage.save(key, new Content.From("sync-bytes".getBytes(StandardCharsets.UTF_8)));
+
+        MatcherAssert.assertThat("the PUT must have started", entered.await(10, TimeUnit.SECONDS), new IsEqual<>(true));
+        MatcherAssert.assertThat(
+            "write-through save() must NOT complete before the blob-store PUT is observed",
+            save.isDone(), new IsEqual<>(false)
+        );
+        release.countDown();
+        save.join();
+        MatcherAssert.assertThat(fake.putCalls(), new IsEqual<>(1));
+    }
+
+    @Test
+    void deletingAPendingWriteKeySkipsTheBlobStoreDeleteCall(@TempDir final Path tmp) throws Exception {
+        final RecordingBlobStore fake = new RecordingBlobStore();
+        final CountDownLatch entered = new CountDownLatch(1);
+        final CountDownLatch neverReleases = new CountDownLatch(1);
+        fake.gatePut(entered, neverReleases);
+        final CachedBlobStorage storage = CachedBlobStorageTest.writeBackStorage(fake, tmp);
+        final Key key = new Key.From("delete-while-pending.jar");
+        storage.save(key, new Content.From("x".getBytes(StandardCharsets.UTF_8))).join();
+        MatcherAssert.assertThat(entered.await(10, TimeUnit.SECONDS), new IsEqual<>(true));
+
+        storage.delete(key).join();
+
+        MatcherAssert.assertThat(
+            "the key was never confirmed in the blob store -- delete() must not call BlobStore.delete for it",
+            fake.deleteCalls(), new IsEqual<>(0)
+        );
+        MatcherAssert.assertThat(storage.exists(key).join(), new IsEqual<>(false));
+    }
+
+    @Test
+    void bootReplayDoesNotOverReleaseTheAdmissionGate(@TempDir final Path tmp) throws Exception {
+        // A crashed instance leaves ONE PENDING_WRITE entry on disk (data file
+        // + sidecar) that a fresh instance's boot replay must re-upload.
+        CachedBlobStorageTest.seedPendingWriteOnDisk(
+            tmp, "replayed.jar", "durable-locally".getBytes(StandardCharsets.UTF_8)
+        );
+        final RecordingBlobStore fake = new RecordingBlobStore();
+        // Capacity of exactly ONE permit makes any over-release observable.
+        final CachedBlobStorage.WriteBackConfig capacityOne =
+            new CachedBlobStorage.WriteBackConfig(1, 1, 5, 10L, 100L, 3L);
+        final CachedBlobStorage storage = CachedBlobStorageTest.writeBackStorage(fake, tmp, capacityOne);
+
+        // Deterministically await the full terminal path of boot replay --
+        // including the admission bookkeeping -- then assert the invariant.
+        storage.bootReplayComplete().get(10, TimeUnit.SECONDS);
+        MatcherAssert.assertThat("boot replay uploads the pending key exactly once", fake.putCalls(), new IsEqual<>(1));
+        MatcherAssert.assertThat(
+            "the replayed key is now durably confirmed (PRESENT), not pending",
+            storage.isPendingWrite(new Key.From("replayed.jar")), new IsEqual<>(false)
+        );
+        // Core regression: a boot-replay upload bypasses admission, so it must
+        // NOT release a permit it never acquired. The gate must still hold
+        // exactly its configured capacity (1), never an inflated 2.
+        MatcherAssert.assertThat(
+            "boot replay must not inflate the admission gate above its configured capacity",
+            storage.writeBackPermitsAvailable(), new IsEqual<>(1)
+        );
+
+        // Behavioural corollary: with the bound intact at 1, a single gated
+        // (never-completing) save consumes the only permit and the next save
+        // is correctly rejected. Under the over-release bug the gate would
+        // hold 2 permits and this second save would be wrongly admitted.
+        fake.gatePut(new CountDownLatch(1), new CountDownLatch(1));
+        storage.save(new Key.From("new1.jar"), new Content.From("1".getBytes(StandardCharsets.UTF_8))).join();
+        final CompletableFuture<Void> rejected =
+            storage.save(new Key.From("new2.jar"), new Content.From("2".getBytes(StandardCharsets.UTF_8)));
+        final ExecutionException wrapped = Assertions.assertThrows(
+            ExecutionException.class, () -> rejected.get(10, TimeUnit.SECONDS)
+        );
+        MatcherAssert.assertThat(wrapped.getCause(), new IsInstanceOf(WriteBackSaturatedException.class));
+    }
+
+    private static void seedPendingWriteOnDisk(final Path root, final String name, final byte[] data)
+        throws IOException {
+        final Path dataFile = root.resolve(name);
+        Files.write(dataFile, data);
+        StorageIndex.Sidecar.write(
+            Path.of(dataFile + StorageIndex.SIDECAR_SUFFIX),
+            StorageIndex.Entry.pendingWrite(data.length, null, null, 1L)
+        );
+    }
+
+    private static CachedBlobStorage writeBackStorage(final RecordingBlobStore fake, final Path tmp) {
+        return CachedBlobStorageTest.writeBackStorage(fake, tmp, CachedBlobStorage.WriteBackConfig.defaults());
+    }
+
+    private static CachedBlobStorage writeBackStorage(
+        final RecordingBlobStore fake, final Path tmp, final CachedBlobStorage.WriteBackConfig config
+    ) {
+        return new CachedBlobStorage(fake, tmp, FRESHNESS_TTL, NEGATIVE_TTL, false, config);
+    }
+
+    /**
+     * Poll for an eventual state transition after deterministically
+     * triggering it via a latch release -- CLAUDE.md testing doctrine
+     * explicitly sanctions this for shared-resource transient contention
+     * (as opposed to asserting an absolute wall-clock bound).
+     */
+    private static void awaitTrue(final BooleanSupplier condition, final Duration timeout) {
+        final long deadlineNanos = System.nanoTime() + timeout.toNanos();
+        while (!condition.getAsBoolean()) {
+            if (System.nanoTime() > deadlineNanos) {
+                throw new AssertionError("Condition not met within " + timeout);
+            }
+            try {
+                Thread.sleep(10);
+            } catch (final InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError(ex);
+            }
+        }
     }
 
     private static CachedBlobStorage storage(final RecordingBlobStore fake, final Path tmp) {

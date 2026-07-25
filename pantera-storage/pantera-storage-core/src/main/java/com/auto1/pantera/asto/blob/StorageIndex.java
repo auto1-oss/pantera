@@ -126,22 +126,27 @@ public final class StorageIndex {
 
     /**
      * Look up a key that is both known-positive, present on the local disk
-     * tier, and still inside its freshness window -- i.e. safe to serve
-     * bytes from disk with no blob-store re-validation.
+     * tier, and either {@link Entry#pendingUpload()} (locally authoritative
+     * until the write-back upload confirms it, so never TTL-expired -- see
+     * {@link #putPendingWrite}) or still inside its freshness window -- i.e.
+     * safe to serve bytes from disk with no blob-store re-validation.
      *
      * @param key Key.
-     * @param freshnessTtl How long a disk copy is trusted without re-validation.
+     * @param freshnessTtl How long a confirmed-{@code PRESENT} disk copy is
+     *  trusted without re-validation.
      * @return The entry if it qualifies for a disk-served hit.
      */
     public Optional<Entry> freshEntry(final Key key, final Duration freshnessTtl) {
         return this.knownEntry(key).filter(
             entry -> !entry.negative() && entry.presentOnDisk()
-                && this.clock.millis() - entry.lastModifiedEpochMilli() <= freshnessTtl.toMillis()
+                && (entry.pendingUpload()
+                    || this.clock.millis() - entry.lastModifiedEpochMilli() <= freshnessTtl.toMillis())
         );
     }
 
     /**
-     * Record (or overwrite) a positive entry.
+     * Record (or overwrite) a positive, durably-confirmed entry ({@code
+     * s3State=PRESENT}).
      *
      * @param key Key.
      * @param size Object size in bytes.
@@ -163,13 +168,61 @@ public final class StorageIndex {
     }
 
     /**
-     * Record a confirmed blob-store miss for {@code negativeTtl}.
+     * Record (or overwrite) a positive entry whose bytes are durable on the
+     * local disk tier but not yet confirmed in the blob store ({@code
+     * s3State=PENDING_WRITE}, WS1.2 write-back). Always {@code
+     * presentOnDisk=true} -- the disk copy is the only durable copy until the
+     * write-back uploader flips this to {@link #putPresent} on a confirmed
+     * {@code PUT}.
+     *
+     * @param key Key.
+     * @param size Object size in bytes.
+     * @param etag Backend etag, or {@code null} (unknown until the blob store
+     *  confirms the write).
+     * @param digest Content digest (hex) computed from the just-written disk
+     *  file, or {@code null} if not computed.
+     */
+    public void putPendingWrite(
+        final Key key,
+        final long size,
+        final String etag,
+        final String digest
+    ) {
+        this.entries.put(
+            key.string(),
+            Entry.pendingWrite(size, etag, digest, this.clock.millis())
+        );
+    }
+
+    /**
+     * Record a confirmed blob-store miss for {@code negativeTtl} ({@code
+     * s3State=ABSENT}).
      *
      * @param key Key confirmed absent in the blob store.
      * @param negativeTtl How long to remember the miss.
      */
     public void putNegative(final Key key, final Duration negativeTtl) {
         this.entries.put(key.string(), Entry.negative(this.clock.millis() + negativeTtl.toMillis()));
+    }
+
+    /**
+     * Enumerate every key currently in {@code s3State=PENDING_WRITE} -- bytes
+     * durable on local disk, upload to the blob store not yet confirmed.
+     * Used by {@code CachedBlobStorage}'s constructor to replay the write-back
+     * queue after a restart (spec &sect;3.C boot replay): the sidecar written
+     * next to each such entry's disk file already persisted this state, so
+     * {@link #rebuildFromDisk} recovers it without a second on-disk queue.
+     *
+     * @return Keys with a positive, disk-present, not-yet-confirmed entry.
+     */
+    public Collection<Key> pendingWriteKeys() {
+        final List<Key> pending = new ArrayList<>();
+        for (final Map.Entry<String, Entry> candidate : this.entries.entrySet()) {
+            if (candidate.getValue().pendingUpload()) {
+                pending.add(new Key.From(candidate.getKey()));
+            }
+        }
+        return pending;
     }
 
     /**
@@ -295,15 +348,17 @@ public final class StorageIndex {
         final long size = parsed.map(Sidecar::size).orElseGet(() -> StorageIndex.safeSize(dataFile));
         final long lastModified = parsed.map(Sidecar::lastModifiedEpochMilli)
             .orElseGet(() -> StorageIndex.safeLastModified(dataFile));
+        final String etag = parsed.map(Sidecar::etag).orElse(null);
+        final String digest = parsed.map(Sidecar::digest).orElse(null);
+        // A sidecar written before WS1.2 has no pendingUpload key at all --
+        // Sidecar.read defaults it to false, i.e. PRESENT, preserving the
+        // pre-WS1.2 meaning of every existing sidecar on disk.
+        final boolean pendingUpload = parsed.map(Sidecar::pendingUpload).orElse(false);
         this.entries.put(
             relKey,
-            Entry.present(
-                size,
-                parsed.map(Sidecar::etag).orElse(null),
-                parsed.map(Sidecar::digest).orElse(null),
-                lastModified,
-                true
-            )
+            pendingUpload
+                ? Entry.pendingWrite(size, etag, digest, lastModified)
+                : Entry.present(size, etag, digest, lastModified, true)
         );
     }
 
@@ -345,15 +400,40 @@ public final class StorageIndex {
     /**
      * Immutable index entry.
      *
+     * <p><strong>Mapping to the spec's {@code s3State} vocabulary</strong>
+     * (WS1-storage-for-scale.md &sect;3.A: {@code PRESENT|PENDING_WRITE|ABSENT}),
+     * kept as the minimal boolean/flag representation rather than a separate
+     * enum since the three states are already fully determined by the
+     * existing {@code negative} flag plus the new {@link #pendingUpload()}:
+     * <ul>
+     *   <li>{@code ABSENT} &rArr; {@link #negative()} {@code == true}.</li>
+     *   <li>{@code PRESENT} &rArr; {@code negative == false && pendingUpload
+     *   == false} -- durably confirmed in the blob store (or, for a
+     *   metadata-only entry hydrated from a HEAD, {@link #presentOnDisk()}
+     *   {@code == false}).</li>
+     *   <li>{@code PENDING_WRITE} &rArr; {@code negative == false &&
+     *   pendingUpload == true} -- bytes durable on the local disk tier
+     *   ({@link #presentOnDisk()} is always {@code true} for this state), a
+     *   {@code BlobStore} upload not yet confirmed (WS1.2 write-back,
+     *   {@code CachedBlobStorage#save}).</li>
+     * </ul>
+     *
      * @param size Object size in bytes (meaningless for negative entries).
-     * @param etag Backend etag, or {@code null} if unavailable.
+     * @param etag Backend etag, or {@code null} if unavailable (always
+     *  {@code null} while {@link #pendingUpload()} -- the blob store has not
+     *  yet assigned one).
      * @param digest Content digest (hex), or {@code null} if not computed.
-     * @param lastModifiedEpochMilli When this entry was (re)confirmed positive.
+     * @param lastModifiedEpochMilli When this entry was (re)confirmed positive
+     *  or, for {@link #pendingUpload()}, when the disk write completed.
      * @param presentOnDisk Whether bytes are cached on the local disk tier
      *  (as opposed to a metadata-only entry hydrated from a HEAD).
      * @param negative Whether this is a negative (confirmed-absent) entry.
      * @param negativeUntilEpochMilli Expiry of a negative entry; meaningless
      *  for positive entries.
+     * @param pendingUpload {@code true} iff this is a {@code PENDING_WRITE}
+     *  entry -- bytes are durable on disk but the write-back upload to the
+     *  blob store has not yet been confirmed. Always {@code false} for
+     *  negative entries.
      * @since 2.3.0
      */
     public record Entry(
@@ -363,17 +443,18 @@ public final class StorageIndex {
         long lastModifiedEpochMilli,
         boolean presentOnDisk,
         boolean negative,
-        long negativeUntilEpochMilli
+        long negativeUntilEpochMilli,
+        boolean pendingUpload
     ) {
         /**
-         * Build a positive entry.
+         * Build a positive, durably-confirmed entry ({@code s3State=PRESENT}).
          *
          * @param size Object size in bytes.
          * @param etag Backend etag, or {@code null}.
          * @param digest Content digest (hex), or {@code null}.
          * @param lastModifiedEpochMilli Confirmation timestamp.
          * @param presentOnDisk Whether bytes are on the local disk tier.
-         * @return New positive entry.
+         * @return New positive entry with {@link #pendingUpload()} {@code == false}.
          */
         public static Entry present(
             final long size,
@@ -382,18 +463,41 @@ public final class StorageIndex {
             final long lastModifiedEpochMilli,
             final boolean presentOnDisk
         ) {
-            return new Entry(size, etag, digest, lastModifiedEpochMilli, presentOnDisk, false, 0L);
+            return new Entry(size, etag, digest, lastModifiedEpochMilli, presentOnDisk, false, 0L, false);
         }
 
         /**
-         * Build a negative (confirmed-absent) entry.
+         * Build a positive, not-yet-durably-confirmed entry ({@code
+         * s3State=PENDING_WRITE}, WS1.2 write-back). {@link #presentOnDisk()}
+         * is always {@code true}: the local disk copy is the only durable
+         * copy of these bytes until the write-back uploader confirms the
+         * blob-store {@code PUT} and the entry is replaced via {@link
+         * StorageIndex#putPresent}.
+         *
+         * @param size Object size in bytes.
+         * @param etag Backend etag, or {@code null} (not yet assigned).
+         * @param digest Content digest (hex) computed from the disk write.
+         * @param lastModifiedEpochMilli When the disk write completed.
+         * @return New positive entry with {@link #pendingUpload()} {@code == true}.
+         */
+        public static Entry pendingWrite(
+            final long size,
+            final String etag,
+            final String digest,
+            final long lastModifiedEpochMilli
+        ) {
+            return new Entry(size, etag, digest, lastModifiedEpochMilli, true, false, 0L, true);
+        }
+
+        /**
+         * Build a negative (confirmed-absent) entry ({@code s3State=ABSENT}).
          *
          * @param negativeUntilEpochMilli Epoch millis after which the miss
          *  must be re-confirmed against the blob store.
          * @return New negative entry.
          */
         public static Entry negative(final long negativeUntilEpochMilli) {
-            return new Entry(0L, null, null, 0L, false, true, negativeUntilEpochMilli);
+            return new Entry(0L, null, null, 0L, false, true, negativeUntilEpochMilli, false);
         }
     }
 
@@ -408,15 +512,19 @@ public final class StorageIndex {
      *
      * @since 2.3.0
      */
-    record Sidecar(long size, String etag, String digest, long lastModifiedEpochMilli) {
+    record Sidecar(long size, String etag, String digest, long lastModifiedEpochMilli, boolean pendingUpload) {
 
         private static final String KEY_SIZE = "size";
         private static final String KEY_ETAG = "etag";
         private static final String KEY_DIGEST = "digest";
         private static final String KEY_LAST_MODIFIED = "lastModified";
+        private static final String KEY_PENDING_UPLOAD = "pendingUpload";
 
         /**
-         * Persist an entry's sidecar next to its data file.
+         * Persist an entry's sidecar next to its data file. Carries {@link
+         * Entry#pendingUpload()} so a restart before the WS1.2 write-back
+         * upload confirms can recover the {@code PENDING_WRITE} state via
+         * {@link #rebuildFromDisk} and re-enqueue it.
          *
          * @param sidecarPath Path to write (data file path + {@code .meta}).
          * @param entry Entry to persist.
@@ -432,13 +540,18 @@ public final class StorageIndex {
                 props.setProperty(KEY_DIGEST, entry.digest());
             }
             props.setProperty(KEY_LAST_MODIFIED, Long.toString(entry.lastModifiedEpochMilli()));
+            props.setProperty(KEY_PENDING_UPLOAD, Boolean.toString(entry.pendingUpload()));
             try (OutputStream out = Files.newOutputStream(sidecarPath)) {
                 props.store(out, "pantera CachedBlobStorage index sidecar");
             }
         }
 
         /**
-         * Read a sidecar, tolerating corruption by returning empty.
+         * Read a sidecar, tolerating corruption by returning empty. A sidecar
+         * written before WS1.2 has no {@code pendingUpload} key at all --
+         * {@link Boolean#parseBoolean} on a missing/absent value defaults to
+         * {@code false} (i.e. {@code PRESENT}), preserving the pre-WS1.2
+         * meaning of every sidecar already on disk.
          *
          * @param sidecarPath Sidecar file path.
          * @return Parsed sidecar, or empty if unreadable/corrupt.
@@ -453,7 +566,8 @@ public final class StorageIndex {
                         Long.parseLong(props.getProperty(KEY_SIZE, "0")),
                         props.getProperty(KEY_ETAG),
                         props.getProperty(KEY_DIGEST),
-                        Long.parseLong(props.getProperty(KEY_LAST_MODIFIED, "0"))
+                        Long.parseLong(props.getProperty(KEY_LAST_MODIFIED, "0")),
+                        Boolean.parseBoolean(props.getProperty(KEY_PENDING_UPLOAD, "false"))
                     )
                 );
             } catch (final IOException | NumberFormatException ex) {

@@ -39,6 +39,7 @@ routing patterns.
    - [S3 Express One Zone (s3-express)](#33-s3-express-one-zone-s3-express)
    - [Disk Hot Cache for S3](#34-disk-hot-cache-for-s3)
    - [Index Cache Mode for S3](#35-index-cache-mode-for-s3)
+   - [Write-Back (Async Durable Writes) for S3](#36-write-back-async-durable-writes-for-s3)
 4. [Storage Aliases (_storages.yaml)](#4-storage-aliases-_storagesyaml)
 5. [User Files](#5-user-files)
 6. [Role / Permission Files](#6-role--permission-files)
@@ -1325,6 +1326,44 @@ storage:
     path: /var/pantera/cache/s3
     freshness-ttl-millis: 300000
     negative-ttl-millis: 30000
+```
+
+### 3.6 Write-Back (Async Durable Writes) for S3
+
+Only meaningful under `cache.mode: index`. `cache.write-through: false` (the
+default) acknowledges `save()` from local disk durability and drains the
+upload to S3 asynchronously via a bounded pool of background threads; `true`
+restores the pre-WS1.2 synchronous behaviour (`save()` does not return until
+S3 confirms the write). See
+`docs/admin-guide/storage-backends.md#write-back-async-durable-writes-cachewrite-through`
+for the durability-window and backpressure write-up.
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `write-through` | boolean | No | `false` | `true` restores the pre-WS1.2 synchronous write-through save path |
+| `write-back-queue-capacity` | int | No | `1024` | High-water mark for in-flight (queued + retrying) uploads; a `save()` past this is rejected before any disk write |
+| `write-back-uploader-threads` | int | No | `4` | Size of the dedicated background thread pool draining the queue to S3 |
+| `write-back-max-retries` | int | No | `5` | Retries after the first failed S3 `PUT` before an upload is dead-lettered |
+| `write-back-backoff-millis` | long | No | `500` | Backoff before the first retry; doubles per attempt up to the ceiling below |
+| `write-back-max-backoff-millis` | long | No | `30000` | Backoff ceiling |
+| `write-back-retry-after-seconds` | long | No | `5` | `Retry-After` hint on a saturated-queue rejection |
+
+```yaml
+storage:
+  type: s3
+  bucket: my-artifacts
+  region: eu-west-1
+  cache:
+    enabled: true
+    mode: index
+    path: /var/pantera/cache/s3
+    write-through: false
+    write-back-queue-capacity: 1024
+    write-back-uploader-threads: 4
+    write-back-max-retries: 5
+    write-back-backoff-millis: 500
+    write-back-max-backoff-millis: 30000
+    write-back-retry-after-seconds: 5
 ```
 
 ---

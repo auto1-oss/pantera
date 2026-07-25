@@ -209,6 +209,103 @@ final class StorageIndexTest {
         MatcherAssert.assertThat(index.size(), new IsEqual<>(0));
     }
 
+    @Test
+    void putPendingWriteIsPresentOnDiskButNotConfirmed() {
+        final StorageIndex index = new StorageIndex();
+        final Key key = new Key.From("uploading.jar");
+        index.putPendingWrite(key, 7L, null, "digest-pending");
+        final Optional<StorageIndex.Entry> known = index.knownEntry(key);
+        MatcherAssert.assertThat("a PENDING_WRITE entry must be known", known.isPresent(), new IsEqual<>(true));
+        MatcherAssert.assertThat(known.get().pendingUpload(), new IsEqual<>(true));
+        MatcherAssert.assertThat(
+            "PENDING_WRITE bytes are durable on local disk -- presentOnDisk must be true",
+            known.get().presentOnDisk(), new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat("PENDING_WRITE is not a negative/ABSENT entry", known.get().negative(), new IsEqual<>(false));
+        MatcherAssert.assertThat(known.get().size(), new IsEqual<>(7L));
+        MatcherAssert.assertThat(known.get().digest(), new IsEqual<>("digest-pending"));
+    }
+
+    @Test
+    void pendingWriteNeverExpiresOutOfFreshnessRegardlessOfTtl() {
+        final MutableClock clock = new MutableClock(Instant.parse("2026-01-01T00:00:00Z"));
+        final StorageIndex index = new StorageIndex(clock);
+        final Key key = new Key.From("still-pending.jar");
+        index.putPendingWrite(key, 1L, null, "d");
+        clock.advance(Duration.ofDays(1));
+        MatcherAssert.assertThat(
+            "a PENDING_WRITE entry is locally authoritative until confirmed PRESENT -- "
+                + "it must stay disk-servable no matter how long the upload takes",
+            index.freshEntry(key, Duration.ofSeconds(1)).isPresent(),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void putPresentAfterPendingWriteFlipsToConfirmedAndClearsPendingUpload() {
+        final StorageIndex index = new StorageIndex();
+        final Key key = new Key.From("confirmed.jar");
+        index.putPendingWrite(key, 5L, null, "d");
+        index.putPresent(key, 5L, "etag", "d", true);
+        final Optional<StorageIndex.Entry> known = index.knownEntry(key);
+        MatcherAssert.assertThat(known.get().pendingUpload(), new IsEqual<>(false));
+        MatcherAssert.assertThat(known.get().etag(), new IsEqual<>("etag"));
+    }
+
+    @Test
+    void pendingWriteKeysEnumeratesExactlyThePendingEntries() {
+        final StorageIndex index = new StorageIndex();
+        index.putPresent(new Key.From("confirmed.jar"), 1L, null, null, true);
+        index.putPendingWrite(new Key.From("pending-1.jar"), 1L, null, null);
+        index.putPendingWrite(new Key.From("pending-2.jar"), 1L, null, null);
+        index.putNegative(new Key.From("missing.jar"), Duration.ofMinutes(1));
+        final Collection<Key> pending = index.pendingWriteKeys();
+        MatcherAssert.assertThat(
+            pending.stream().map(Key::string).sorted().toList(),
+            new IsEqual<>(List.of("pending-1.jar", "pending-2.jar"))
+        );
+    }
+
+    @Test
+    void rebuildFromDiskRecoversPendingWriteStateFromSidecar(@TempDir final Path tmp) throws IOException {
+        final Path dataFile = tmp.resolve("uploading.jar");
+        Files.write(dataFile, "not-yet-uploaded".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        StorageIndex.Sidecar.write(
+            Path.of(dataFile + StorageIndex.SIDECAR_SUFFIX),
+            StorageIndex.Entry.pendingWrite(16L, null, "pending-digest", 999L)
+        );
+        final StorageIndex index = new StorageIndex();
+        index.rebuildFromDisk(tmp);
+        final Optional<StorageIndex.Entry> rebuilt = index.knownEntry(new Key.From("uploading.jar"));
+        MatcherAssert.assertThat("PENDING_WRITE must survive a sidecar round-trip", rebuilt.isPresent(), new IsEqual<>(true));
+        MatcherAssert.assertThat(rebuilt.get().pendingUpload(), new IsEqual<>(true));
+        MatcherAssert.assertThat(rebuilt.get().presentOnDisk(), new IsEqual<>(true));
+        MatcherAssert.assertThat(rebuilt.get().digest(), new IsEqual<>("pending-digest"));
+        MatcherAssert.assertThat(
+            "the boot-replay accessor must surface this key",
+            index.pendingWriteKeys().stream().map(Key::string).toList(),
+            new IsEqual<>(List.of("uploading.jar"))
+        );
+    }
+
+    @Test
+    void rebuildFromDiskWithoutPendingUploadKeyDefaultsToPresent(@TempDir final Path tmp) throws IOException {
+        // A sidecar written before WS1.2 has no pendingUpload property at
+        // all -- Sidecar.read must default it to false (PRESENT), preserving
+        // the pre-WS1.2 meaning of every sidecar already on disk.
+        final Path dataFile = tmp.resolve("pre-ws1-2.jar");
+        Files.write(dataFile, "old-sidecar-format".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        StorageIndex.Sidecar.write(
+            Path.of(dataFile + StorageIndex.SIDECAR_SUFFIX),
+            StorageIndex.Entry.present(18L, "etag", "digest", 1L, true)
+        );
+        final StorageIndex index = new StorageIndex();
+        index.rebuildFromDisk(tmp);
+        final Optional<StorageIndex.Entry> rebuilt = index.knownEntry(new Key.From("pre-ws1-2.jar"));
+        MatcherAssert.assertThat(rebuilt.get().pendingUpload(), new IsEqual<>(false));
+        MatcherAssert.assertThat(index.pendingWriteKeys().isEmpty(), new IsEqual<>(true));
+    }
+
     /**
      * Deterministically advanceable {@link Clock} so TTL-expiry tests prove
      * semantics via explicit time control instead of {@code Thread.sleep}

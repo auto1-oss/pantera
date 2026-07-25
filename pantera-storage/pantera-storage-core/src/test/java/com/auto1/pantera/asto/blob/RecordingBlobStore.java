@@ -65,6 +65,23 @@ final class RecordingBlobStore implements BlobStore {
      */
     private volatile CountDownLatch releaseGetGate;
 
+    /**
+     * Counted down the moment a {@link #put(Key, Content)} invocation
+     * actually starts running -- optional, set via {@link
+     * #gatePut(CountDownLatch, CountDownLatch)}. Used by the WS1.2
+     * write-back tests to deterministically observe "the uploader picked
+     * this key up" and to hold a write-back admission permit open
+     * indefinitely (never counting down {@code release}) to simulate a
+     * saturated queue or a crash-before-drain.
+     */
+    private volatile CountDownLatch enteredPutGate;
+
+    /**
+     * Awaited before a {@link #put(Key, Content)} invocation completes --
+     * optional, set via {@link #gatePut(CountDownLatch, CountDownLatch)}.
+     */
+    private volatile CountDownLatch releasePutGate;
+
     void seed(final String key, final byte[] data) {
         this.objects.put(key, data);
     }
@@ -82,6 +99,22 @@ final class RecordingBlobStore implements BlobStore {
     void gateGet(final CountDownLatch entered, final CountDownLatch release) {
         this.enteredGetGate = entered;
         this.releaseGetGate = release;
+    }
+
+    /**
+     * Gate every subsequent {@link #put(Key, Content)} call: each counts
+     * down {@code entered} the instant it starts, then blocks until {@code
+     * release} counts down to zero. A test that never counts down {@code
+     * release} simulates a write-back upload that never confirms (queue
+     * saturation, or a crash-before-drain that leaves the entry {@code
+     * PENDING_WRITE}).
+     *
+     * @param entered Counted down every time a gated {@code put()} starts running.
+     * @param release Awaited before a gated {@code put()} completes.
+     */
+    void gatePut(final CountDownLatch entered, final CountDownLatch release) {
+        this.enteredPutGate = entered;
+        this.releasePutGate = release;
     }
 
     int existsCalls() {
@@ -150,7 +183,18 @@ final class RecordingBlobStore implements BlobStore {
     @Override
     public CompletableFuture<Void> put(final Key key, final Content content) {
         this.putCalls.incrementAndGet();
-        return content.asBytesFuture().thenAccept(bytes -> this.objects.put(key.string(), bytes));
+        return content.asBytesFuture().thenCompose(bytes -> CompletableFuture.<Void>supplyAsync(() -> {
+            final CountDownLatch entered = this.enteredPutGate;
+            if (entered != null) {
+                entered.countDown();
+            }
+            final CountDownLatch release = this.releasePutGate;
+            if (release != null) {
+                RecordingBlobStore.awaitUninterruptibly(release);
+            }
+            this.objects.put(key.string(), bytes);
+            return null;
+        }));
     }
 
     @Override

@@ -13,6 +13,7 @@ package com.auto1.pantera.http.cache;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blob.WriteBackSaturatedException;
 import com.auto1.pantera.http.context.RequestContext;
 import com.auto1.pantera.http.fault.Fault;
 import com.auto1.pantera.http.fault.Fault.ChecksumAlgo;
@@ -1221,9 +1222,23 @@ public final class ProxyCacheWriter {
     }
 
     /**
-     * Called when the atomic move of primary or sidecar has failed after the
-     * primary may have already landed. Deletes the primary + any sidecar that
-     * made it, so a subsequent GET re-fetches cleanly via this writer.
+     * Called when a {@code cache.save} has failed after the client's response
+     * was already committed (streamed/verified path) or after the primary
+     * may have already landed (buffered {@link #commit} path). This is the
+     * single central point every {@code cache.save} failure in this class
+     * funnels through ({@link #commitStreamed}, {@link #commitVerified},
+     * {@link #commit}) -- see WS1-storage-for-scale.md &sect;3.C, item C.
+     *
+     * <p>WS1.2 write-back backpressure ({@link WriteBackSaturatedException})
+     * is NOT a corruption/partial-write scenario -- {@code
+     * CachedBlobStorage}'s admission gate rejects the save BEFORE any byte
+     * reaches disk, so there is nothing to roll back. The client already has
+     * its bytes (served via the tee before this ever runs); the cache write
+     * is simply skipped and logged at a degraded-mode WARN, not the ERROR +
+     * rollback + delete treatment genuine partial failures get.</p>
+     *
+     * <p>Every other cause deletes the primary + any sidecar that made it, so
+     * a subsequent GET re-fetches cleanly via this writer.</p>
      */
     private void rollbackAfterPartialFailure(
         final Key primaryKey,
@@ -1231,6 +1246,11 @@ public final class ProxyCacheWriter {
         final Throwable cause,
         final RequestContext ctx
     ) {
+        final Throwable root = unwrap(cause);
+        if (root instanceof WriteBackSaturatedException) {
+            this.logWriteBackSaturatedSkip(primaryKey, (WriteBackSaturatedException) root, ctx);
+            return;
+        }
         this.cache.delete(primaryKey).exceptionally(ignored -> null);
         for (final ChecksumAlgo algo : sidecarAlgos) {
             this.cache.delete(sidecarKey(primaryKey, algo)).exceptionally(ignored -> null);
@@ -1243,7 +1263,7 @@ public final class ProxyCacheWriter {
             .field("repository.name", this.repoName)
             .field("url.path", primaryKey.string())
             .field("trace.id", traceId(ctx))
-            .error(unwrap(cause))
+            .error(root)
             .field("log.source", "application")
             .log();
         if (this.metrics != null) {
@@ -1252,6 +1272,30 @@ public final class ProxyCacheWriter {
                 .register(this.metrics)
                 .increment();
         }
+    }
+
+    /**
+     * Degraded-mode log for a proxy fill skipped due to write-back
+     * saturation: the client already received its bytes via the tee, so this
+     * is deliberately WARN (not ERROR) and does NOT roll back or count as a
+     * partial-write failure.
+     */
+    private void logWriteBackSaturatedSkip(
+        final Key primaryKey, final WriteBackSaturatedException cause, final RequestContext ctx
+    ) {
+        EcsLogger.warn("com.auto1.pantera.http.cache")
+            .message("Cache write skipped: write-back queue saturated"
+                + " (retry_after_seconds=" + cause.retryAfterSeconds()
+                + "); client already served from the tee, cache stays cold for this key")
+            .eventCategory("web")
+            .eventAction("cache_write")
+            .eventOutcome("failure")
+            .field("event.reason", "write_back_saturated")
+            .field("repository.name", this.repoName)
+            .field("url.path", primaryKey.string())
+            .field("trace.id", traceId(ctx))
+            .field("log.source", "application")
+            .log();
     }
 
     /**

@@ -13,6 +13,8 @@
 
 - **An opt-in index-accelerated S3 cache eliminates the per-hit S3 HEAD.** The existing disk cache (`DiskCacheStorage`) pays 1-2 synchronous S3 HEADs on every cache hit for existence/validation. A new `cache.mode: index` (opt-in per storage, default remains unchanged) routes through `CachedBlobStorage`: an in-memory `StorageIndex`, hydrated on boot from a scan of the disk cache, answers `exists`/`metadata`/`list` entirely from memory, and a disk-served `value()` hit never contacts the blob store at all. Concurrent cold-miss requests for the same key are single-flighted into exactly one blob-store `GET`/`HEAD` instead of one per caller.
   ([@aydasraf](https://github.com/aydasraf))
+- **`cache.mode: index` writes are acknowledged from local disk, not a synchronous S3 round trip.** `save()` now defaults to async durable write-back: bytes land on disk and are acked immediately, then a bounded pool of background threads uploads to S3 with retry/backoff; a crash before the upload confirms replays it on the next restart from the on-disk index. A saturated write-back queue rejects new writes immediately (before any disk I/O) rather than growing unbounded, and a proxy cache fill degrades gracefully instead of failing the client's already-served read. The prior synchronous behaviour remains available per-repository via `cache.write-through: true`.
+  ([@aydasraf](https://github.com/aydasraf))
 
 ### 🔧 Bug fixes
 

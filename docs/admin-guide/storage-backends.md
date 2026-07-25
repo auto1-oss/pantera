@@ -232,13 +232,16 @@ cache:
 
 **What's different from the disk cache:**
 
-- **Writes are still synchronous write-through** in this phase: `save()` writes
-  to disk, uploads to S3, then updates the index, all before the caller's
-  write is acknowledged. Asynchronous durable write-back is a later phase.
+- **Writes are asynchronous durable write-back by default** (WS1.2) -- see
+  [Write-Back (Async Durable Writes)](#write-back-async-durable-writes-cachewrite-through)
+  below. `cache.write-through: true` opts a repository back into the
+  pre-WS1.2 synchronous behaviour.
 - **No size-based eviction yet.** The disk directory under `cache.path` is not
   bounded by `max-bytes` in index mode; size-based eviction is a later phase.
   Size the volume accordingly, or stay on `cache.mode: disk` (which does
-  evict) until eviction lands for index mode.
+  evict) until eviction lands for index mode. A key with an unconfirmed
+  write-back upload (`PENDING_WRITE`) is never evicted once eviction lands --
+  it is the only durable copy of those bytes until the upload confirms.
 - **`list()` is scoped to what the index has observed** -- the boot-time disk
   scan plus every key written or read since. A repository switched to
   `cache.mode: index` with pre-existing S3 objects that Pantera has never
@@ -253,6 +256,63 @@ cache:
 
 The `validate-on-read` disk-cache option does not apply in index mode --
 there is nothing to validate against on the hot path by design.
+
+### Write-Back (Async Durable Writes) (`cache.write-through`)
+
+By default, `cache.mode: index` acknowledges a `save()` from **local disk
+durability**, not from a confirmed S3 write: bytes land on disk, a digest is
+computed once from the just-written file, the index records the key as
+`PENDING_WRITE`, and a bounded pool of background uploader threads drains the
+upload to S3 with retry/backoff. This is what makes writes scale past S3's
+per-request latency -- the caller is acknowledged in one local disk write
+instead of one disk write plus one round trip to S3.
+
+```yaml
+cache:
+  enabled: true
+  mode: index
+  path: /var/pantera/cache/s3
+  write-through: false                     # default: async write-back
+  write-back-queue-capacity: 1024          # high-water mark for in-flight uploads
+  write-back-uploader-threads: 4           # dedicated daemon uploader pool size
+  write-back-max-retries: 5                # retries before dead-lettering an upload
+  write-back-backoff-millis: 500           # backoff before the first retry
+  write-back-max-backoff-millis: 30000     # backoff ceiling
+  write-back-retry-after-seconds: 5        # Retry-After hint on a saturated queue
+```
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `write-through` | `false` | `true` restores the pre-WS1.2 synchronous behaviour: `save()` does not acknowledge until S3 confirms the write. Set this for repositories that cannot tolerate the durability window below (e.g. compliance). |
+| `write-back-queue-capacity` | `1024` | High-water mark for concurrently in-flight (queued + retrying) uploads. A `save()` past this mark is rejected immediately, before any disk write. |
+| `write-back-uploader-threads` | `4` | Size of the dedicated background thread pool draining the queue to S3. |
+| `write-back-max-retries` | `5` | Retry attempts after the first failed S3 `PUT` before an upload is dead-lettered. |
+| `write-back-backoff-millis` | `500` | Backoff before the first retry; doubles per attempt up to the ceiling below. |
+| `write-back-max-backoff-millis` | `30000` | Backoff ceiling. |
+| `write-back-retry-after-seconds` | `5` | `Retry-After` hint surfaced to a caller whose `save()` was rejected because the queue is saturated. |
+
+**Durability window.** Between a `save()` returning and the background
+uploader confirming the S3 `PUT`, the only durable copy of those bytes is the
+local disk file. If the process crashes in that window, the write survives:
+the `PENDING_WRITE` state is persisted in the on-disk `.meta` sidecar next to
+the file (not a second in-memory-only queue), and on restart `CachedBlobStorage`
+re-scans the cache directory and re-enqueues every still-pending upload for
+retry. What does **not** survive is the local disk itself being lost (disk
+failure, volume deletion) before the upload confirms -- for a proxy-cached
+artifact this is self-healing (the next request re-fetches from upstream),
+but for a hosted-mode upload it is a genuine, if narrow, durability gap.
+Repositories that cannot accept this window at all should set
+`cache.write-through: true`.
+
+**Backpressure.** When the write-back queue is at `write-back-queue-capacity`,
+a further `save()` is rejected immediately -- before any byte reaches disk, so
+the local disk cache cannot grow unbounded under sustained backpressure. For a
+proxy cache fill this is invisible to the client (the client already received
+its bytes; the cache write for that key is skipped and logged, and the next
+request for that key simply re-fetches from upstream). For a hosted-mode
+upload (where the `save()` *is* the client's request), this surfaces as
+`503 Service Unavailable` with a `Retry-After` header at the routes that map
+it (see the REST API reference for exactly which upload routes do today).
 
 ---
 

@@ -145,6 +145,14 @@ public class S3StorageFactory implements StorageFactory {
      * zero blob-store round trips and a disk tier serves hits directly, in
      * place of {@code DiskCacheStorage}'s per-hit HEAD validation.
      *
+     * <p>WS1.2 adds the durability-mode selector and write-back tuning:
+     * {@code cache.write-through} (default {@code false} = async write-back)
+     * and the {@code cache.write-back-*} knobs, each falling back to {@link
+     * CachedBlobStorage.WriteBackConfig#defaults()} per field when unset --
+     * see {@code docs/admin-guide/storage-backends.md} for the durability
+     * window this implies and {@code docs/configuration-reference.md} for
+     * every key.</p>
+     *
      * @param base Reference {@link BlobStore} cold tier.
      * @param cache {@code cache} config sub-tree.
      * @param path Local disk cache directory.
@@ -153,11 +161,35 @@ public class S3StorageFactory implements StorageFactory {
     private Storage cachedBlobStorage(final BlobStore base, final Config cache, final java.nio.file.Path path) {
         final long freshnessMillis = optLong(cache, "freshness-ttl-millis").orElse(300_000L);
         final long negativeMillis = optLong(cache, "negative-ttl-millis").orElse(30_000L);
+        final boolean writeThrough = "true".equalsIgnoreCase(cache.string("write-through"));
         return new CachedBlobStorage(
             base,
             path,
             Duration.ofMillis(freshnessMillis),
-            Duration.ofMillis(negativeMillis)
+            Duration.ofMillis(negativeMillis),
+            writeThrough,
+            this.writeBackConfig(cache)
+        );
+    }
+
+    /**
+     * Resolves the WS1.2 write-back tuning from the {@code cache} config
+     * sub-tree; every key falls back to {@link
+     * CachedBlobStorage.WriteBackConfig#defaults()} per field when unset.
+     * Ignored entirely when {@code cache.write-through: true}.
+     *
+     * @param cache {@code cache} config sub-tree.
+     * @return Resolved write-back configuration.
+     */
+    private CachedBlobStorage.WriteBackConfig writeBackConfig(final Config cache) {
+        final CachedBlobStorage.WriteBackConfig fallback = CachedBlobStorage.WriteBackConfig.defaults();
+        return new CachedBlobStorage.WriteBackConfig(
+            optInt(cache, "write-back-queue-capacity").orElse(fallback.queueCapacity()),
+            optInt(cache, "write-back-uploader-threads").orElse(fallback.uploaderThreads()),
+            optInt(cache, "write-back-max-retries").orElse(fallback.maxRetries()),
+            optLong(cache, "write-back-backoff-millis").orElse(fallback.baseBackoffMillis()),
+            optLong(cache, "write-back-max-backoff-millis").orElse(fallback.maxBackoffMillis()),
+            optLong(cache, "write-back-retry-after-seconds").orElse(fallback.retryAfterSeconds())
         );
     }
 
