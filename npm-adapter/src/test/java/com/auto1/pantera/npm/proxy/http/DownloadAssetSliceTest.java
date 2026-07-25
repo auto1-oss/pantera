@@ -261,6 +261,176 @@ final class DownloadAssetSliceTest {
         }
     }
 
+    /**
+     * Regression test for WS5.3: {@code cooldownRequest} used to split the
+     * tarball filename on {@code lastIndexOf('-')}, which for a prerelease
+     * tarball ({@code pkg-1.2.3-beta.1.tgz}) yields version {@code beta.1}
+     * instead of {@code 1.2.3-beta.1} — the cooldown lookup then keyed on
+     * the wrong version and could block/allow the wrong release entirely.
+     * The fix anchors on the package name already known from the URL
+     * (the segment before {@code /-/}) rather than the last dash.
+     */
+    @Test
+    void prereleaseTarballCooldownKeysOnFullVersionNotLastDashSegment() throws Exception {
+        final Storage storage = new InMemoryStorage();
+        final AssetPath path = new AssetPath("");
+        final java.util.concurrent.atomic.AtomicReference<CooldownRequest> captured =
+            new java.util.concurrent.atomic.AtomicReference<>();
+        final CooldownService capturingService = new CooldownService() {
+            @Override
+            public CompletableFuture<CooldownResult> evaluate(
+                final CooldownRequest request, final CooldownInspector inspector
+            ) {
+                captured.set(request);
+                return CompletableFuture.completedFuture(CooldownResult.allowed());
+            }
+            @Override
+            public CompletableFuture<Void> unblock(
+                final String rt, final String rn, final String art,
+                final String ver, final String actor
+            ) {
+                return CompletableFuture.completedFuture(null);
+            }
+            @Override
+            public CompletableFuture<Void> unblockAll(
+                final String rt, final String rn, final String actor
+            ) {
+                return CompletableFuture.completedFuture(null);
+            }
+            @Override
+            public CompletableFuture<List<CooldownBlock>> activeBlocks(
+                final String rt, final String rn
+            ) {
+                return CompletableFuture.completedFuture(List.of());
+            }
+        };
+        try (
+            VertxSliceServer server = new VertxSliceServer(
+                DownloadAssetSliceTest.VERTX,
+                new DownloadAssetSlice(
+                    new NpmProxy(
+                        storage,
+                        (line, headers, body) -> CompletableFuture.completedFuture(
+                            ResponseBuilder.ok()
+                                .header(ContentType.mime("tgz"))
+                                .body(new TestResource(
+                                    String.format("storage/%s", DownloadAssetSliceTest.TGZ)
+                                ).asBytes())
+                                .build()
+                        )
+                    ),
+                    path,
+                    Optional.of(this.packages),
+                    DownloadAssetSliceTest.RNAME,
+                    "npm-proxy",
+                    capturingService,
+                    noopInspector()
+                ),
+                this.port
+            )
+        ) {
+            server.start();
+            final String tgzPath = "pkg/-/pkg-1.2.3-beta.1.tgz";
+            final String url = String.format("http://127.0.0.1:%d/%s", this.port, tgzPath);
+            final WebClient client = WebClient.create(DownloadAssetSliceTest.VERTX);
+            client.getAbs(url).rxSend().blockingGet();
+            MatcherAssert.assertThat(
+                "cooldown request must key on the FULL prerelease version, "
+                    + "not the last dash-delimited segment",
+                captured.get().version(),
+                new IsEqual<>("1.2.3-beta.1")
+            );
+            MatcherAssert.assertThat(
+                "package name parsed correctly from before the /-/ separator",
+                captured.get().artifact(),
+                new IsEqual<>("pkg")
+            );
+        }
+    }
+
+    /**
+     * Same regression as above, for a scoped package: the tarball
+     * filename never carries the {@code @scope/} prefix, so the fix
+     * must anchor on the BARE (unscoped) package name.
+     */
+    @Test
+    void scopedPrereleaseTarballCooldownKeysOnFullVersion() throws Exception {
+        final Storage storage = new InMemoryStorage();
+        final AssetPath path = new AssetPath("");
+        final java.util.concurrent.atomic.AtomicReference<CooldownRequest> captured =
+            new java.util.concurrent.atomic.AtomicReference<>();
+        final CooldownService capturingService = new CooldownService() {
+            @Override
+            public CompletableFuture<CooldownResult> evaluate(
+                final CooldownRequest request, final CooldownInspector inspector
+            ) {
+                captured.set(request);
+                return CompletableFuture.completedFuture(CooldownResult.allowed());
+            }
+            @Override
+            public CompletableFuture<Void> unblock(
+                final String rt, final String rn, final String art,
+                final String ver, final String actor
+            ) {
+                return CompletableFuture.completedFuture(null);
+            }
+            @Override
+            public CompletableFuture<Void> unblockAll(
+                final String rt, final String rn, final String actor
+            ) {
+                return CompletableFuture.completedFuture(null);
+            }
+            @Override
+            public CompletableFuture<List<CooldownBlock>> activeBlocks(
+                final String rt, final String rn
+            ) {
+                return CompletableFuture.completedFuture(List.of());
+            }
+        };
+        try (
+            VertxSliceServer server = new VertxSliceServer(
+                DownloadAssetSliceTest.VERTX,
+                new DownloadAssetSlice(
+                    new NpmProxy(
+                        storage,
+                        (line, headers, body) -> CompletableFuture.completedFuture(
+                            ResponseBuilder.ok()
+                                .header(ContentType.mime("tgz"))
+                                .body(new TestResource(
+                                    String.format("storage/%s", DownloadAssetSliceTest.TGZ)
+                                ).asBytes())
+                                .build()
+                        )
+                    ),
+                    path,
+                    Optional.of(this.packages),
+                    DownloadAssetSliceTest.RNAME,
+                    "npm-proxy",
+                    capturingService,
+                    noopInspector()
+                ),
+                this.port
+            )
+        ) {
+            server.start();
+            final String tgzPath = "@scope/pkg/-/pkg-2.0.0-rc.2.tgz";
+            final String url = String.format("http://127.0.0.1:%d/%s", this.port, tgzPath);
+            final WebClient client = WebClient.create(DownloadAssetSliceTest.VERTX);
+            client.getAbs(url).rxSend().blockingGet();
+            MatcherAssert.assertThat(
+                "cooldown request must key on the FULL prerelease version "
+                    + "even for a scoped package (tarball has no scope prefix)",
+                captured.get().version(),
+                new IsEqual<>("2.0.0-rc.2")
+            );
+            MatcherAssert.assertThat(
+                "scoped package name preserved",
+                captured.get().artifact(),
+                new IsEqual<>("@scope/pkg")
+            );
+        }
+    }
+
     private void performRequestAndChecks(
         final String pathprefix, final VertxSliceServer server, final boolean expectEnqueue
     ) {
