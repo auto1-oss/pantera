@@ -46,7 +46,7 @@ import org.slf4j.MDC;
  *
  * @since 1.20.13
  */
-public final class CacheInvalidationPubSub implements AutoCloseable {
+public final class CacheInvalidationPubSub implements AutoCloseable, CacheBroadcast {
 
     /**
      * Redis channel name for cache invalidation messages.
@@ -130,6 +130,7 @@ public final class CacheInvalidationPubSub implements AutoCloseable {
      * @param name Cache type name (e.g. "auth", "filters", "policy")
      * @param cache Cache instance to invalidate on remote messages
      */
+    @Override
     public void register(final String name, final Cleanable<String> cache) {
         this.caches.put(name, cache);
     }
@@ -167,6 +168,7 @@ public final class CacheInvalidationPubSub implements AutoCloseable {
      * @param cacheType Cache type name
      * @param key Cache key to invalidate
      */
+    @Override
     public void publish(final String cacheType, final String key) {
         this.pubCommands.publish(
             CacheInvalidationPubSub.CHANNEL,
@@ -179,6 +181,7 @@ public final class CacheInvalidationPubSub implements AutoCloseable {
      * Other instances will call {@code cache.invalidateAll()} on receipt.
      * @param cacheType Cache type name
      */
+    @Override
     public void publishAll(final String cacheType) {
         this.pubCommands.publish(
             CacheInvalidationPubSub.CHANNEL,

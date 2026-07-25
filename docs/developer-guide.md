@@ -400,13 +400,13 @@ The `type` claim is mandatory. Tokens missing the `type` claim are rejected rega
 
 **API and refresh tokens** are revoked by setting `revoked = TRUE` in `user_tokens`. The `jti` check additionally verifies that the `sub` claim matches the token owner, preventing JTI-theft attacks.
 
-**Access tokens** (not DB-stored) are invalidated via a blocklist:
+**Access tokens** (not DB-stored) are invalidated via a `RevocationBlocklist` — DB-durable, Valkey-accelerated (`ValkeyRevocationBlocklist`), or DB-polling-only (`DbRevocationBlocklist`, single-node / Valkey-less deployments):
 
-1. `POST /api/v1/admin/revoke-user/:username` writes a revocation record and publishes a `pantera:revoke:user:{username}` message on the Valkey pub/sub channel.
-3. On each access token validation, the cache is consulted. Tokens issued before the revocation timestamp are rejected.
-4. Without Valkey, nodes poll the `user_tokens` revocation table every 30 seconds.
+1. `POST /api/v1/admin/revoke-user/:username` (and per-JTI revocation on refresh/logout) writes a row to the `revocation_blocklist` table — the durable source of truth on every path — then, when Valkey is configured, publishes an invalidation over `CacheInvalidationPubSub` (cache type `revocation`) carrying the token's real remaining TTL.
+2. A node hydrates its full active-revocation set from the DB on boot (`pollSince(EPOCH)`), so a restart never re-honors an already-revoked, unexpired token.
+3. On each access token validation, the local in-memory cache is consulted; a throttled 5-second DB reconciliation poll (on every `RevocationBlocklist` implementation, with or without Valkey) picks up anything a missed pub/sub message would otherwise have lost.
 
-The in-memory revocation cache has a TTL equal to the access token lifetime (default: 1 hour). After that period no access token from a revoked user can still be valid.
+A Valkey outage degrades revocation checks to DB-poll speed — never to fail-open.
 
 ### 6.4 Adding a New Protected Endpoint
 

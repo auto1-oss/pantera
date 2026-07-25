@@ -38,8 +38,8 @@ import org.quartz.SchedulerException;
  * <p>
  * 1) This class holds events queue {@link MetadataEventQueues#eventQueue()} for all the adapters,
  * this queue is passed to adapters, adapters adds packages metadata on upload/delete to the queue.
- * Queue is periodically processed by {@link com.auto1.pantera.scheduling.EventsProcessor} and consumed
- * by {@link com.auto1.pantera.db.DbConsumer}.
+ * The queue is drained by a per-node {@code LocalEventDrainScheduler} (never through Quartz — see
+ * the WS2.2 fix, 2.3.0) and consumed by {@link com.auto1.pantera.db.DbConsumer}.
  * <p>
  * 2) This class also holds queues for proxy adapters (maven, npm, pypi). Each proxy repository
  * has its own queue with packages metadata ({@link MetadataEventQueues#queues}) and its own quartz

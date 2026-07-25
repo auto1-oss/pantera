@@ -40,9 +40,9 @@ import com.auto1.pantera.http.auth.AuthLoader;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.http.client.HttpClientSettings;
 import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.scheduling.LocalEventDrainScheduler;
 import com.auto1.pantera.scheduling.MetadataEventQueues;
 import com.auto1.pantera.scheduling.QuartzService;
-import com.auto1.pantera.security.policy.CachedYamlPolicy;
 import com.auto1.pantera.settings.cache.PanteraCaches;
 import com.auto1.pantera.settings.cache.CachedUsers;
 import com.auto1.pantera.settings.cache.GuavaFiltersCache;
@@ -53,7 +53,6 @@ import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.index.ArtifactIndexCache;
 import com.auto1.pantera.index.DbArtifactIndex;
 import java.util.Locale;
-import org.quartz.SchedulerException;
 
 import javax.sql.DataSource;
 import java.nio.file.Files;
@@ -63,6 +62,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 import java.time.Duration;
@@ -115,6 +115,23 @@ public final class YamlSettings implements Settings {
     private static final String NODE_SSL = "ssl";
 
     /**
+     * No-op {@link Cleanable} used as the policy cache when the configured
+     * {@link com.auto1.pantera.security.policy.Policy} implementation isn't
+     * itself {@link Cleanable} — nothing to locally invalidate or broadcast.
+     */
+    private static final Cleanable<String> NOOP_POLICY_CACHE = new Cleanable<>() {
+        @Override
+        public void invalidate(final String key) {
+            // Intentional no-op — policy implementation has no local cache.
+        }
+
+        @Override
+        public void invalidateAll() {
+            // Intentional no-op — policy implementation has no local cache.
+        }
+    };
+
+    /**
      * YAML file content.
      */
     private final YamlMapping meta;
@@ -143,6 +160,14 @@ public final class YamlSettings implements Settings {
      * Artifacts event queue.
      */
     private final Optional<MetadataEventQueues> events;
+
+    /**
+     * Per-node drain of {@link #events}' queue into its DbConsumer batchers.
+     * Never scheduled through Quartz — see {@link LocalEventDrainScheduler}
+     * (WS2.2, 2.3.0). Null when {@link #events} is empty (no artifacts DB
+     * configured).
+     */
+    private final LocalEventDrainScheduler<ArtifactEvent> eventsDrainScheduler;
 
     /**
      * Synchronous artifact-index writer. Wired to the same DataSource that
@@ -330,24 +355,32 @@ public final class YamlSettings implements Settings {
             this.artifactsDb.orElse(null)
         );
         // Register cache handlers on the pub/sub created earlier.
+        // Policy (roles/permissions) cache — WS2.3 (2.3.0): previously
+        // passed raw into PanteraCaches.All with no publisher at all, so
+        // RoleHandler/UserHandler mutations only ever invalidated the
+        // local node. rawPolicyCache is the same unwrapped instance
+        // registered below as the pub/sub *receiver* (so remote messages
+        // land directly on it without re-publishing / looping); wrapped in
+        // PublishingCleanable — exactly like auth/filters — it becomes the
+        // *publisher* every RoleHandler/UserHandler invalidate() call goes
+        // through via PanteraCaches#policyCache().
+        final Cleanable<String> rawPolicyCache = this.security.policy() instanceof Cleanable
+            ? (Cleanable<String>) this.security.policy()
+            : YamlSettings.NOOP_POLICY_CACHE;
         if (psEarly != null) {
             psEarly.register("auth", auth);
             final GuavaFiltersCache filters = new GuavaFiltersCache();
             psEarly.register("filters", filters);
-            final Cleanable<String> policyCache;
-            if (this.security.policy() instanceof Cleanable) {
-                policyCache = (Cleanable<String>) this.security.policy();
-                psEarly.register("policy", policyCache);
-            }
+            psEarly.register("policy", rawPolicyCache);
             this.acach = new PanteraCaches.All(
                 new PublishingCleanable(auth, psEarly, "auth"),
                 new StoragesCache(),
-                this.security.policy(),
+                new PublishingCleanable(rawPolicyCache, psEarly, "policy"),
                 new PublishingFiltersCache(filters, psEarly)
             );
         } else {
             this.acach = new PanteraCaches.All(
-                auth, new StoragesCache(), this.security.policy(), new GuavaFiltersCache()
+                auth, new StoragesCache(), rawPolicyCache, new GuavaFiltersCache()
             );
         }
         this.mctx = new MetricsContext(this.meta());
@@ -393,9 +426,11 @@ public final class YamlSettings implements Settings {
         // Use the dedicated write pool for DbConsumer when provided;
         // fall back to the shared pool so single-pool deployments work unchanged.
         final Optional<DataSource> eventsDs = writeDs.isPresent() ? writeDs : this.artifactsDb;
-        this.events = eventsDs.flatMap(
+        final Optional<ArtifactsEventsWiring> eventsWiring = eventsDs.flatMap(
             db -> YamlSettings.initArtifactsEvents(this.meta(), quartz, db, this.artifactIndexCache)
         );
+        this.events = eventsWiring.map(ArtifactsEventsWiring::queues);
+        this.eventsDrainScheduler = eventsWiring.map(ArtifactsEventsWiring::drain).orElse(null);
         this.syncIndexer = eventsDs
             .<com.auto1.pantera.index.SyncArtifactIndexer>map(db ->
                 new com.auto1.pantera.db.DbSyncArtifactIndexer(db, this.artifactIndexCache))
@@ -603,6 +638,24 @@ public final class YamlSettings implements Settings {
                     .message("Failed to close storage")
                     .eventCategory("configuration")
                     .eventAction("storage_close")
+                    .eventOutcome("failure")
+                    .error(e)
+                    .field("log.source", "application")
+                    .log();
+            }
+        }
+        // Stop the artifact-events drain scheduler before the DataSource it
+        // writes through closes. Not a Quartz job — see
+        // LocalEventDrainScheduler (WS2.2, 2.3.0) — so it needs its own
+        // explicit shutdown here; QuartzService.stop() no longer covers it.
+        if (this.eventsDrainScheduler != null) {
+            try {
+                this.eventsDrainScheduler.close();
+            } catch (final Exception e) {
+                EcsLogger.error("com.auto1.pantera.settings")
+                    .message("Failed to stop artifact-events drain scheduler")
+                    .eventCategory("configuration")
+                    .eventAction("event_drain_stop")
                     .eventOutcome("failure")
                     .error(e)
                     .field("log.source", "application")
@@ -988,16 +1041,40 @@ public final class YamlSettings implements Settings {
     ) { }
 
     /**
-     * Initialize and scheduled mechanism to gather artifact events
-     * (adding and removing artifacts) and create {@link MetadataEventQueues} instance.
+     * Result holder for {@link #initArtifactsEvents}: the artifact-events
+     * queue wrapper plus the per-node scheduler draining it into the
+     * DbConsumer batchers. Bundled together so both share exactly one
+     * {@link ConcurrentLinkedDeque} instance and so {@link #close()} can
+     * stop the scheduler.
+     *
+     * @param queues Artifact/proxy metadata event queue wrapper
+     * @param drain Per-node drain scheduler for {@code queues.eventQueue()}
+     */
+    private record ArtifactsEventsWiring(
+        MetadataEventQueues queues, LocalEventDrainScheduler<ArtifactEvent> drain
+    ) { }
+
+    /**
+     * Initialize the node-local artifact-events queue, its per-node drain
+     * scheduler, and the {@link MetadataEventQueues} instance that wraps it
+     * (also used for per-repository proxy-package-processor queues, which
+     * remain Quartz-scheduled — unrelated to this drain).
+     * <p>
+     * The drain never goes through Quartz: clustered Quartz does not pin a
+     * repeating trigger to the node that scheduled it, so draining this
+     * node-local queue through the cluster-shared job store risked another
+     * node acquiring the trigger, finding nothing to resolve, and (pre-2.3.0)
+     * deleting the shared job — permanently orphaning this queue. See
+     * {@link LocalEventDrainScheduler} (WS2.2, 2.3.0).
      * @param settings Pantera settings
-     * @param quartz Quartz service
+     * @param quartz Quartz service (still used by {@link MetadataEventQueues}
+     *               for per-repository proxy-package-processor jobs)
      * @param database Artifact database
      * @param indexCache L1 artifact-index cache for post-commit negative-cache
      *                   invalidation, or empty when no DB-backed index is wired
-     * @return Event queue to gather artifacts events
+     * @return Wiring holder, or empty when {@code artifacts_database} is not configured
      */
-    private static Optional<MetadataEventQueues> initArtifactsEvents(
+    private static Optional<ArtifactsEventsWiring> initArtifactsEvents(
         final YamlMapping settings, final QuartzService quartz, final DataSource database,
         final Optional<ArtifactIndexCache> indexCache
     ) {
@@ -1007,7 +1084,7 @@ public final class YamlSettings implements Settings {
         }
         final int threads = readPositive(prop.integer("threads_count"), 1);
         final int interval = readPositive(prop.integer("interval_seconds"), 1);
-        
+
         // Read configurable buffer settings
         final int bufferTimeSeconds = prop.string("buffer_time_seconds") != null
             ? Integer.parseInt(prop.string("buffer_time_seconds"))
@@ -1015,19 +1092,19 @@ public final class YamlSettings implements Settings {
         final int bufferSize = prop.string("buffer_size") != null
             ? Integer.parseInt(prop.string("buffer_size"))
             : 50;
-        
+
         final List<Consumer<ArtifactEvent>> consumers = new ArrayList<>(threads);
         for (int idx = 0; idx < threads; idx = idx + 1) {
             consumers.add(new DbConsumer(
                 database, bufferTimeSeconds, bufferSize, indexCache
             ));
         }
-        try {
-            final Queue<ArtifactEvent> res = quartz.addPeriodicEventsProcessor(interval, consumers);
-            return Optional.of(new MetadataEventQueues(res, quartz));
-        } catch (final SchedulerException error) {
-            throw new PanteraException(error);
-        }
+        final Queue<ArtifactEvent> queue = new ConcurrentLinkedDeque<>();
+        final LocalEventDrainScheduler<ArtifactEvent> drain =
+            new LocalEventDrainScheduler<>(queue, consumers, interval);
+        return Optional.of(
+            new ArtifactsEventsWiring(new MetadataEventQueues(queue, quartz), drain)
+        );
     }
 
     /**

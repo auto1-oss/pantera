@@ -301,22 +301,30 @@ public final class VertxMain {
         } else {
             enabledCheck = com.auto1.pantera.auth.UserEnabledCheck.ALWAYS_ENABLED;
         }
-        // Revocation blocklist — previously never wired: revocation
-        // endpoints persisted to the DB but in-flight access tokens kept
-        // validating until natural expiry. Valkey-backed when the cluster
-        // infra is present (entries in Valkey + cross-node broadcast via
-        // CacheInvalidationPubSub, channel type "revocation"); DB-polling
-        // fallback otherwise; disabled only in storage-less test boots.
+        // Revocation blocklist — DB-durable and Valkey-accelerated (WS2.1,
+        // 2.3.0). The DB row (via RevocationDao, the same table
+        // DbRevocationBlocklist uses) is always the source of truth;
+        // ValkeyRevocationBlocklist additionally hydrates the full
+        // active-revocation set from the DB on boot and broadcasts over
+        // CacheInvalidationPubSub (channel type "revocation", real
+        // remaining TTL embedded in the payload) for near-instant
+        // cross-node fan-out when the cluster infra is present. A Valkey
+        // outage degrades it to DB-poll speed — never fail-open — because
+        // every isRevoked* check still reconciles against the DB on a
+        // throttled interval. DB-polling-only fallback when Valkey/pub-sub
+        // isn't configured; disabled only in storage-less test boots.
         final com.auto1.pantera.auth.RevocationBlocklist revocationBlocklist;
         if (settings.valkeyConnection().isPresent()
-            && settings.cacheInvalidationPubSub().isPresent()) {
+            && settings.cacheInvalidationPubSub().isPresent()
+            && sharedDs.isPresent()) {
             revocationBlocklist = new com.auto1.pantera.auth.ValkeyRevocationBlocklist(
-                settings.valkeyConnection().get(),
                 settings.cacheInvalidationPubSub().get(),
+                new com.auto1.pantera.db.dao.RevocationDao(sharedDs.get()),
                 (int) java.time.Duration.ofHours(2).toSeconds()
             );
             EcsLogger.info("com.auto1.pantera")
-                .message("Valkey-backed token revocation blocklist active (cross-node broadcast)")
+                .message("Valkey-backed token revocation blocklist active "
+                    + "(DB-durable, cross-node broadcast)")
                 .eventCategory("configuration")
                 .eventAction("revocation_blocklist_init")
                 .eventOutcome("success")
@@ -335,6 +343,16 @@ public final class VertxMain {
                 .log();
         } else {
             revocationBlocklist = null;
+            if (settings.valkeyConnection().isPresent()) {
+                EcsLogger.warn("com.auto1.pantera")
+                    .message("Valkey is configured but no DataSource is present — "
+                        + "revocation blocklist disabled (DB durability requires a DataSource)")
+                    .eventCategory("configuration")
+                    .eventAction("revocation_blocklist_init")
+                    .eventOutcome("failure")
+                    .field("log.source", "application")
+                    .log();
+            }
         }
         final com.auto1.pantera.auth.JwtTokens jwtTokens = new com.auto1.pantera.auth.JwtTokens(
             rsaKeys.privateKey(), rsaKeys.publicKey(), userTokenDao, null,
@@ -360,6 +378,35 @@ public final class VertxMain {
                 new com.auto1.pantera.db.dao.AuthSettingsDao(ds)
             )
         );
+        // WS2.3 (2.3.0): broadcast breaker/bulkhead settings-loader
+        // invalidation cross-node. Previously loader.invalidate() (called
+        // by AdminAuthHandler after a PUT) only ever updated the receiving
+        // node's AtomicReference cache — every peer kept serving stale
+        // breaker thresholds until its own restart. Subscribe here, once,
+        // for the lifetime of the process; AdminAuthHandler publishes on
+        // the same channel after every successful settings write.
+        settings.cacheInvalidationPubSub().ifPresent(pubSub -> {
+            pubSub.subscribe(
+                com.auto1.pantera.circuit.CircuitBreakerSettingsLoader.BROADCAST_CHANNEL,
+                key -> {
+                    final com.auto1.pantera.circuit.CircuitBreakerSettingsLoader loader =
+                        com.auto1.pantera.circuit.CircuitBreakerSettingsLoader.installed();
+                    if (loader != null) {
+                        loader.invalidate();
+                    }
+                }
+            );
+            pubSub.subscribe(
+                com.auto1.pantera.circuit.UpstreamBreakerSettingsLoader.BROADCAST_CHANNEL,
+                key -> {
+                    final com.auto1.pantera.circuit.UpstreamBreakerSettingsLoader loader =
+                        com.auto1.pantera.circuit.UpstreamBreakerSettingsLoader.installed();
+                    if (loader != null) {
+                        loader.invalidate();
+                    }
+                }
+            );
+        });
         // Install singleton PublishDateRegistry. Each adapter slice now resolves
         // canonical publish dates via RegistryBackedInspector(repoType, registry)
         // instead of HEAD-probing upstream — eliminates the per-cooldown-eval

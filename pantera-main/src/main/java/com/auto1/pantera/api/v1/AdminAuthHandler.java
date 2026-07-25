@@ -13,6 +13,7 @@ package com.auto1.pantera.api.v1;
 import com.auto1.pantera.api.AuthzHandler;
 import com.auto1.pantera.api.perms.ApiAdminPermission;
 import com.auto1.pantera.auth.RevocationBlocklist;
+import com.auto1.pantera.cache.CacheBroadcast;
 import com.auto1.pantera.db.dao.AuthSettingsDao;
 import com.auto1.pantera.db.dao.UserTokenDao;
 import com.auto1.pantera.http.context.HandlerExecutor;
@@ -62,7 +63,14 @@ public final class AdminAuthHandler {
     private final Policy<?> policy;
 
     /**
-     * Ctor.
+     * Cross-node cache-invalidation broadcast. Null in single-instance /
+     * Valkey-less deployments — breaker/bulkhead settings changes then stay
+     * local-node-only exactly as before 2.3.0 (no peers to broadcast to).
+     */
+    private final CacheBroadcast pubSub;
+
+    /**
+     * Ctor without cross-node broadcast (single-instance deployments).
      * @param settingsDao Auth settings DAO
      * @param tokenDao User token DAO
      * @param blocklist Revocation blocklist
@@ -71,10 +79,26 @@ public final class AdminAuthHandler {
     public AdminAuthHandler(final AuthSettingsDao settingsDao,
         final UserTokenDao tokenDao, final RevocationBlocklist blocklist,
         final Policy<?> policy) {
+        this(settingsDao, tokenDao, blocklist, policy, null);
+    }
+
+    /**
+     * Ctor.
+     * @param settingsDao Auth settings DAO
+     * @param tokenDao User token DAO
+     * @param blocklist Revocation blocklist
+     * @param policy Security policy
+     * @param pubSub Cross-node cache-invalidation broadcast, or {@code null}
+     *     when Valkey isn't configured (WS2.3, 2.3.0)
+     */
+    public AdminAuthHandler(final AuthSettingsDao settingsDao,
+        final UserTokenDao tokenDao, final RevocationBlocklist blocklist,
+        final Policy<?> policy, final CacheBroadcast pubSub) {
         this.settingsDao = settingsDao;
         this.tokenDao = tokenDao;
         this.blocklist = blocklist;
         this.policy = policy;
+        this.pubSub = pubSub;
     }
 
     /**
@@ -215,6 +239,15 @@ public final class AdminAuthHandler {
             if (loader != null) {
                 loader.invalidate();
             }
+            // WS2.3 (2.3.0): broadcast so every peer's loader re-reads the
+            // DB too — pre-2.3.0 this only ever invalidated the receiving
+            // node, leaving peers stale until their own restart.
+            if (this.pubSub != null) {
+                this.pubSub.publish(
+                    com.auto1.pantera.circuit.CircuitBreakerSettingsLoader.BROADCAST_CHANNEL,
+                    "changed"
+                );
+            }
             return null;
         }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
             if (err != null) {
@@ -336,6 +369,15 @@ public final class AdminAuthHandler {
                 com.auto1.pantera.circuit.UpstreamBreakerSettingsLoader.installed();
             if (loader != null) {
                 loader.invalidate();
+            }
+            // WS2.3 (2.3.0): broadcast so every peer's loader re-reads the
+            // DB too — pre-2.3.0 this only ever invalidated the receiving
+            // node, leaving peers stale until their own restart.
+            if (this.pubSub != null) {
+                this.pubSub.publish(
+                    com.auto1.pantera.circuit.UpstreamBreakerSettingsLoader.BROADCAST_CHANNEL,
+                    "changed"
+                );
             }
             return null;
         }, HandlerExecutor.get()).whenComplete((ignored, err) -> {

@@ -42,6 +42,16 @@ import java.util.function.Supplier;
  */
 public final class CircuitBreakerSettingsLoader implements Supplier<AutoBlockSettings> {
 
+    /**
+     * {@code CacheBroadcast} cache-type name this loader's {@link #invalidate()}
+     * is broadcast under (WS2.3, 2.3.0) — {@code VertxMain} subscribes a
+     * peer-side {@code invalidate()} call under this name; the admin PUT
+     * endpoint publishes on it after every successful write so every node's
+     * {@code AutoBlockRegistry} picks up the change, not just the node that
+     * received the request.
+     */
+    public static final String BROADCAST_CHANNEL = "circuit-breaker-settings";
+
     static final String KEY_RATE = "circuit_breaker_failure_rate_threshold";
     static final String KEY_MIN_CALLS = "circuit_breaker_minimum_number_of_calls";
     static final String KEY_WINDOW = "circuit_breaker_sliding_window_seconds";

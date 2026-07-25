@@ -408,9 +408,19 @@ curl -X POST http://pantera-host:8086/api/v1/admin/revoke-user/jdoe \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
-This publishes a revocation event via Valkey pub/sub, propagating to all cluster nodes within milliseconds. Nodes without Valkey fall back to polling the database every 30 seconds.
+This writes a row to the `revocation_blocklist` table (the durable source of
+truth) and, when Valkey is configured, publishes an invalidation over Valkey
+pub/sub — propagating to every cluster node within milliseconds, carrying
+the revocation's real remaining TTL. Every node also reconciles against the
+DB on a throttled 5-second poll regardless of Valkey, so a node that missed
+the pub/sub message (or booted after the revocation) still picks it up —
+Valkey acceleration is never the only copy of a revocation. Nodes without
+Valkey configured poll the DB every 5 seconds directly (no pub/sub fast
+path).
 
-The revocation blocklist is maintained in the `user_tokens` table and an in-memory cache. Access tokens (which are not stored in DB) are invalidated via the blocklist until they expire naturally.
+Access tokens (which are not stored in the DB) are invalidated via this
+blocklist until they expire naturally; API and refresh tokens are also
+individually revoked in `user_tokens`.
 
 ---
 

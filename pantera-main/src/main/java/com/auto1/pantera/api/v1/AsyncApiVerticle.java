@@ -477,7 +477,8 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                 new AuthSettingsDao(this.dataSource),
                 new UserTokenDao(this.dataSource),
                 this.jwtTokens != null ? this.jwtTokens.blocklist() : null,
-                this.security.policy()
+                this.security.policy(),
+                this.settings.cacheInvalidationPubSub().orElse(null)
             ).register(router);
         }
         new com.auto1.pantera.api.v1.admin.NegativeCacheAdminResource(

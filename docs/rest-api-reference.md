@@ -2331,7 +2331,7 @@ curl -X PUT http://localhost:8086/api/v1/admin/auth-settings \
 
 ### POST /api/v1/admin/revoke-user/:username
 
-Immediately revoke all tokens (access, refresh, and API) for the specified user. The revocation is propagated to all cluster nodes via Valkey pub/sub (sub-second propagation when Valkey is available; DB polling fallback otherwise).
+Immediately revoke all tokens (access, refresh, and API) for the specified user. The revocation is written to the `revocation_blocklist` table (the durable source of truth on every node) and, when Valkey is available, propagated to all cluster nodes via Valkey pub/sub for sub-second fan-out; every node — with or without Valkey — also reconciles against the DB on a throttled 5-second poll, and a node that boots after the revocation hydrates it immediately, so a restart or a missed pub/sub message never re-honors a revoked token.
 
 > Note: Access tokens (which are not DB-stored) are placed on an in-memory blocklist and will be rejected until they expire naturally. This makes the effective revocation window equal to the access token TTL (default: 1 hour).
 

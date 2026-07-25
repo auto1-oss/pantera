@@ -36,6 +36,14 @@ import java.util.function.Supplier;
  */
 public final class UpstreamBreakerSettingsLoader implements Supplier<CircuitBreakerConfig> {
 
+    /**
+     * {@code CacheBroadcast} cache-type name this loader's {@link #invalidate()}
+     * is broadcast under (WS2.3, 2.3.0) — mirrors
+     * {@link com.auto1.pantera.circuit.CircuitBreakerSettingsLoader#BROADCAST_CHANNEL}
+     * for the distinct outbound-HTTP breaker.
+     */
+    public static final String BROADCAST_CHANNEL = "upstream-breaker-settings";
+
     static final String KEY_RATE = "upstream_breaker_failure_rate_threshold";
     static final String KEY_MIN_CALLS = "upstream_breaker_minimum_calls";
     static final String KEY_WINDOW = "upstream_breaker_window_seconds";

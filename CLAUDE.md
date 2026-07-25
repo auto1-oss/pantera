@@ -38,7 +38,7 @@ A change is done when ALL of the following hold — do not open or update a PR b
 | Single test class | `mvn test -pl pantera-core -Dtest=NegativeCacheTest` |
 | Integration tests | `cd test_images && ./build.sh` then `mvn clean verify -Pitcase -T 1C` (needs Docker) |
 | Valkey-gated tests | `VALKEY_HOST=localhost mvn test -pl pantera-core` |
-| License headers | `mvn license:format` |
+| License headers | `mvn com.mycila:license-maven-plugin:format` (the bare `license:format` prefix resolves to the wrong plugin) |
 | UI dev server | `cd pantera-ui && npm install && npm run dev` |
 | UI checks | `cd pantera-ui && npm test && npm run lint && npm run type-check && npm run build` |
 | Version bump | `./bump-version.sh <new-version>` (all modules + compose tags + Dockerfile in one shot — never by hand) |
@@ -90,9 +90,9 @@ Invariants that must hold (they broke once — see the breaker-cascade fix in 2.
 
 **Database.** Single PostgreSQL, Flyway migrations under `pantera-main/src/main/resources/db/migration/` (next free version = highest existing + 1). `ArtifactDbFactory` builds the HikariCP pool. `DbConsumer` is an RxJava batcher (2 s / 200 events) that sorts by `(repo_name, name, version)` before UPSERTing — the sort prevents deadlocks; failed batches dead-letter with backoff. `DbArtifactIndex` does FTS (tsvector + GIN) with ILIKE fallback. `auth_settings` is the generic key/value store for admin-tunable runtime settings. Dashboard counts require the `pg_cron` extension — deployment prerequisite, not a bug.
 
-**Cluster / HA.** `CacheInvalidationPubSub` (cross-instance Caffeine invalidation over Valkey pub/sub, self-message filtering by instance UUID; its constructor blocks for the SUBSCRIBE ack — boot thread only, never event loop), Valkey-backed token-revocation broadcast (`ValkeyRevocationBlocklist`, selected at boot in `VertxMain` with a DB-polling fallback), Quartz JDBC mode (`PanteraScheduler` shared across nodes). Pure single-instance mode uses RAM Quartz and no Valkey.
+**Cluster / HA.** `CacheInvalidationPubSub` (cross-instance Caffeine invalidation over Valkey pub/sub, self-message filtering by instance UUID; its constructor blocks for the SUBSCRIBE ack — boot thread only, never event loop; cache types broadcast: `auth`, `filters`, `policy`, `revocation`, `circuit-breaker-settings`, `upstream-breaker-settings`), DB-durable + Valkey-accelerated token-revocation blocklist (`ValkeyRevocationBlocklist`, selected at boot in `VertxMain` when Valkey + a shared DataSource are both present — hydrates the full active-revocation set from the DB on boot, DB reconciliation poll every 5 s closes any missed pub/sub message, never fails open on a Valkey outage; DB-polling-only `DbRevocationBlocklist` fallback otherwise, same 5 s poll), Quartz JDBC mode (`PanteraScheduler` shared across nodes — node-local in-memory work, e.g. the artifact-events queue, is drained by a per-node `ScheduledExecutorService` instead, never through the cluster-shared job store; `QuartzJob#stopJob` skips-and-logs on an unresolved firing rather than deleting the shared job). Pure single-instance mode uses RAM Quartz and no Valkey.
 
-**JWT auth.** RS256 (Auth0 java-jwt), one key pair, three token types (`access`, `refresh`, `api`) — the `type` claim is mandatory. Access tokens stateless; refresh/api tokens in `user_tokens` with revocation flags; access-token revocation broadcast over Valkey (`pantera:revoke:user:{username}`), 30 s table polling without Valkey. When adding a protected endpoint in `AsyncApiVerticle`, **reuse the shared `jwtAuthHandler` instance** — a new `JWTAuthHandler` skips the blocklist + JTI ownership checks.
+**JWT auth.** RS256 (Auth0 java-jwt), one key pair, three token types (`access`, `refresh`, `api`) — the `type` claim is mandatory. Access tokens stateless; refresh/api tokens in `user_tokens` with revocation flags; access-token revocation goes through the `RevocationBlocklist` described above (DB row is the source of truth; Valkey pub/sub is an acceleration layer on top, cache type `revocation`, real remaining TTL embedded in the payload — never a fixed default). When adding a protected endpoint in `AsyncApiVerticle`, **reuse the shared `jwtAuthHandler` instance** — a new `JWTAuthHandler` skips the blocklist + JTI ownership checks.
 
 **Thread model — the hard rule.** The Vert.x event loop must never block. Never `.join()`/`.get()` on a `CompletableFuture` in code that may run on the event loop. JDBC and sync I/O go through `DispatchedStorage`/`StorageExecutors` (`pantera-io-{read,write,list}-%d`, tunable via `PANTERA_IO_*_THREADS`). `HandlerExecutor` (API worker pool) has a bounded queue + AbortPolicy **by design** — rejection is visible backpressure, don't "fix" it. `BlockedThreadDiagnostics` warns at >5 s event-loop / >120 s worker block.
 
@@ -164,7 +164,7 @@ Ruleset: `build-tools/src/main/resources/pmd-ruleset.xml`; `printFailingErrors=t
 - **Only one constructor initializes fields**; secondary constructors delegate via `this(...)`.
 - **Cyclomatic complexity** ≤15/method, ≤80/class; cognitive ≤17 — extract instance methods or strategy objects.
 - **No unused imports/parameters** (PMD catches both).
-- GPL-3.0 header from `LICENSE.header` on every Java file; `mvn license:format` adds them.
+- GPL-3.0 header from `LICENSE.header` on every Java file; `mvn com.mycila:license-maven-plugin:format` adds them (the bare `license:format` prefix resolves to a different plugin that has no `format` goal).
 
 ## Documentation — types and consistency
 
@@ -186,10 +186,11 @@ Consistency requirements: docs must never contradict each other or the code (e.g
 
 **Add a DB-backed admin setting** (mirror `upstream_breaker_*` / `UpstreamBreakerSettingsLoader`):
 1. Flyway migration seeding the keys into `auth_settings` (`ON CONFLICT DO NOTHING`, comment documenting defaults).
-2. Loader implementing `Supplier<YourConfig>`: DB → env (`PANTERA_<KEY>`) → hardcoded default per field; `AtomicReference` cache; `invalidate()`; static `install(dao)` from `VertxMain` + `activeSupplier()` fallback for DB-less boots.
+2. Loader implementing `Supplier<YourConfig>`: DB → env (`PANTERA_<KEY>`) → hardcoded default per field; `AtomicReference` cache; `invalidate()`; static `install(dao)` from `VertxMain` + `activeSupplier()` fallback for DB-less boots; a `public static final String BROADCAST_CHANNEL` cache-type name (mirror `UpstreamBreakerSettingsLoader.BROADCAST_CHANNEL`).
 3. Consumers read **through the supplier** on each decision so changes apply without restart (re-allocate any size-dependent state on change).
-4. `AdminAuthHandler`: GET/PUT with a key whitelist and validation by round-tripping the config constructor before writing; `loader.invalidate()` after write.
-5. `pantera-ui` `SettingsView.vue`: new card + SECTION_META entry + save-bar/dirty/discard wiring; label it so it cannot be confused with sibling settings. Update `configuration-reference.md` + `environment-variables.md`.
+4. `VertxMain`: after `install(...)`, `settings.cacheInvalidationPubSub().ifPresent(pubSub -> pubSub.subscribe(BROADCAST_CHANNEL, key -> loader.invalidate()))` — a settings change must reach every node, not just the one that received the PUT.
+5. `AdminAuthHandler`: GET/PUT with a key whitelist and validation by round-tripping the config constructor before writing; `loader.invalidate()` after write, then `pubSub.publish(BROADCAST_CHANNEL, "changed")` when the (nullable) `CacheBroadcast` field is present.
+6. `pantera-ui` `SettingsView.vue`: new card + SECTION_META entry + save-bar/dirty/discard wiring; label it so it cannot be confused with sibling settings. Update `configuration-reference.md` + `environment-variables.md`.
 
 **Add a metric + panel**:
 1. Record via `MicrometerMetrics` (guarded by `isInitialized()`), bounded tags only.

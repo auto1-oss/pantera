@@ -15,26 +15,29 @@ import com.auto1.pantera.db.ArtifactDbFactory;
 import com.auto1.pantera.db.DbConsumer;
 import com.auto1.pantera.db.PostgreSQLTestConfig;
 import com.auto1.pantera.scheduling.ArtifactEvent;
-import com.auto1.pantera.scheduling.QuartzService;
+import com.auto1.pantera.scheduling.LocalEventDrainScheduler;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.List;
 import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.TimeUnit;
 import javax.sql.DataSource;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.quartz.SchedulerException;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 /**
- * Test for {@link QuartzService} and
- * {@link com.auto1.pantera.db.DbConsumer}.
+ * Test for {@link LocalEventDrainScheduler} and
+ * {@link com.auto1.pantera.db.DbConsumer} together — the full node-local
+ * "queue -&gt; drain -&gt; DbConsumer -&gt; Postgres" pipeline (WS2.2, 2.3.0).
+ * No longer goes through {@link com.auto1.pantera.scheduling.QuartzService}:
+ * that Quartz-based drain was the pipeline WS2.2 replaced.
  * @since 0.31
  */
 @Testcontainers
@@ -52,9 +55,9 @@ public final class SchedulerDbTest {
     private DataSource source;
 
     /**
-     * Quartz service to test.
+     * Scheduler under test.
      */
-    private QuartzService service;
+    private LocalEventDrainScheduler<ArtifactEvent> drain;
 
     @BeforeEach
     void init() {
@@ -71,21 +74,21 @@ public final class SchedulerDbTest {
             ).build(),
             "artifacts"
         ).initialize();
-        this.service = new QuartzService();
     }
 
     @AfterEach
     void stop() {
-        this.service.stop();
+        if (this.drain != null) {
+            this.drain.close();
+        }
     }
 
     @Test
-    void insertsRecords() throws SchedulerException, InterruptedException {
-        this.service.start();
-        final Queue<ArtifactEvent> queue = this.service.addPeriodicEventsProcessor(
-            1, List.of(new DbConsumer(this.source), new DbConsumer(this.source))
+    void insertsRecords() {
+        final Queue<ArtifactEvent> queue = new ConcurrentLinkedDeque<>();
+        this.drain = new LocalEventDrainScheduler<>(
+            queue, List.of(new DbConsumer(this.source), new DbConsumer(this.source)), 1
         );
-        Thread.sleep(500);
         final long created = System.currentTimeMillis();
         for (int i = 0; i < 1000; i++) {
             queue.add(
@@ -93,9 +96,6 @@ public final class SchedulerDbTest {
                     "rpm", "my-rpm", "Alice", "org.time", String.valueOf(i), 1250L, created
                 )
             );
-            if (i % 50 == 0) {
-                Thread.sleep(990);
-            }
         }
         Awaitility.await().atMost(30, TimeUnit.SECONDS).until(
             () -> {

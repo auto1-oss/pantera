@@ -23,8 +23,12 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 /**
- * Integration tests for {@link ValkeyRevocationBlocklist}.
- * Uses a Testcontainers Valkey container.
+ * Integration tests for {@link ValkeyRevocationBlocklist} against a real
+ * Valkey pub/sub channel (Testcontainers). The DB side uses
+ * {@link InMemoryRevocationStore} — real Postgres adds nothing here since
+ * {@link com.auto1.pantera.db.dao.RevocationDao} is exercised on its own in
+ * {@link DbRevocationBlocklistTest}; what this class needs covered against a
+ * genuine Valkey server is the pub/sub fan-out.
  *
  * @since 2.1.0
  */
@@ -51,6 +55,11 @@ final class ValkeyRevocationBlocklistTest {
     private CacheInvalidationPubSub pubSub;
 
     /**
+     * In-memory DB fake — source of truth.
+     */
+    private InMemoryRevocationStore store;
+
+    /**
      * Blocklist under test.
      */
     private ValkeyRevocationBlocklist blocklist;
@@ -61,7 +70,8 @@ final class ValkeyRevocationBlocklistTest {
         final int port = VALKEY.getMappedPort(6379);
         this.conn = new ValkeyConnection(host, port, Duration.ofSeconds(5));
         this.pubSub = new CacheInvalidationPubSub(this.conn);
-        this.blocklist = new ValkeyRevocationBlocklist(this.conn, this.pubSub, 3600);
+        this.store = new InMemoryRevocationStore();
+        this.blocklist = new ValkeyRevocationBlocklist(this.pubSub, this.store, 3600);
     }
 
     @AfterEach
@@ -111,5 +121,40 @@ final class ValkeyRevocationBlocklistTest {
             this.blocklist.isRevokedUser("carol"),
             Matchers.is(false)
         );
+    }
+
+    @Test
+    void revokeWritesTheDbRowFirst() {
+        this.blocklist.revokeJti("db-durable-jti", 3600);
+        MatcherAssert.assertThat(
+            "Revocation must be DB-durable — insert() called once",
+            this.store.insertCalls(),
+            Matchers.is(1)
+        );
+    }
+
+    @Test
+    void peerOnAGenuineSecondValkeyConnectionObservesTheRevocation() {
+        // A real second "node": its own ValkeyConnection + pub/sub instance
+        // (distinct instanceId) pointed at the same Valkey server, its own
+        // DB fake. Sharing one CacheInvalidationPubSub between two
+        // blocklists would self-filter every message (same instanceId) and
+        // wouldn't prove anything about cross-node fan-out.
+        try (ValkeyConnection peerConn =
+            new ValkeyConnection(VALKEY.getHost(), VALKEY.getMappedPort(6379), Duration.ofSeconds(5));
+            CacheInvalidationPubSub peerPubSub = new CacheInvalidationPubSub(peerConn)) {
+            final ValkeyRevocationBlocklist peer = new ValkeyRevocationBlocklist(
+                peerPubSub, new InMemoryRevocationStore(), 3600
+            );
+            this.blocklist.revokeJti("cross-node-jti", 7200);
+            org.awaitility.Awaitility.await().atMost(5, java.util.concurrent.TimeUnit.SECONDS)
+                .untilAsserted(
+                    () -> MatcherAssert.assertThat(
+                        "Peer must observe the revocation via real Valkey pub/sub",
+                        peer.isRevokedJti("cross-node-jti"),
+                        Matchers.is(true)
+                    )
+                );
+        }
     }
 }
