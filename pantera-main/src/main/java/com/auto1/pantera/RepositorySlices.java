@@ -1120,6 +1120,17 @@ public class RepositorySlices {
                     }
                     final RepoConfig memberCfg = memberCfgOpt.get();
                     if ("docker".equals(memberCfg.type())) {
+                        // WS1.7 note: intentionally NOT passing
+                        // memberCfg.downloadPolicy() here -- MultiReadDocker
+                        // (the composite this member feeds into) does not
+                        // override Docker#downloadPolicy(), so the group's
+                        // own policy is always the interface default
+                        // (stream-only) regardless of what an individual
+                        // member's AstoDocker would report. Wiring
+                        // docker-group redirect requires a merge policy
+                        // across members and is a deliberate follow-up (see
+                        // the WS1.7 report) -- flagging here rather than
+                        // wiring a policy that would silently have no effect.
                         dockerMemberDockers.add(
                             new AstoDocker(
                                 memberCfg.name(), new SubStorage(RegistryRoot.V2, memberCfg.storage())
@@ -1171,7 +1182,8 @@ public class RepositorySlices {
             case "docker":
                 final Docker docker = new AstoDocker(
                     cfg.name(),
-                    new SubStorage(RegistryRoot.V2, cfg.storage())
+                    new SubStorage(RegistryRoot.V2, cfg.storage()),
+                    cfg.downloadPolicy()
                 );
                 if (cfg.port().isPresent()) {
                     slice = new DockerSlice(docker, securityPolicy(),

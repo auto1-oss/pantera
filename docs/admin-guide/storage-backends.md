@@ -517,6 +517,101 @@ dedicated upload slice and do not yet carry this mapping; a hosted upload to
 one of those formats against a saturated `cache.mode: index` write-back
 queue still surfaces a generic `500` today.
 
+### Presigned Direct-Download (WS1.7)
+
+For **immutable, content-addressed byte objects** (never metadata), Pantera
+can answer a GET with `302 Found` + a time-limited presigned URL instead of
+streaming the bytes itself. The client fetches the bytes directly from the
+object store; Pantera's cost is an index lookup plus local SigV4 signing --
+no S3 round trip on Pantera's side, and the byte transfer never touches
+Pantera's network path at all. This is the mechanism that lets the read side
+scale past what any single Pantera instance could stream.
+
+**What can redirect, and what never can.** Eligibility is decided per ROUTE,
+not by a blanket setting: only a route that explicitly serves an immutable
+byte object (a jar, a wheel, a tarball, a Docker blob) can ever redirect.
+Metadata -- a packument, `maven-metadata.xml`, the PyPI simple index, `/v2/`
+manifests and tags, Composer's `/p2/`, Go's `@v/list`/`@latest` -- is **never**
+redirected, regardless of `download-mode`: those responses are rewritten and
+cooldown-filtered by Pantera, and a redirect would bypass both. This is
+enforced structurally (the metadata-serving code paths never consult a
+presigned URL at all), not by a config flag a repository could get wrong.
+
+**Wired today: Docker blob GET** (`GET /v2/<name>/blobs/<digest>`, hosted
+`docker` repositories) -- the OCI distribution spec explicitly permits
+blob-GET redirects, and this is how S3-backed registries serve layers at
+scale. Maven/npm/PyPI/Go/Composer artifact routes, and `docker-proxy`/
+`docker-group` blob GETs, are not yet wired to this mechanism -- setting
+`download-mode` on those repositories has no effect today; they stream
+exactly as before 2.3.0. Each is a follow-up through the same extension
+point (`Blob#presignedUrl` for Docker; other formats need their own byte
+route to opt in the same way).
+
+**Per-repo configuration** (set on the `repo:` block, not the `storage:`
+block -- a repository's byte-serving policy is independent of which storage
+alias backs it, since one storage alias can back repositories with different
+reachability from their clients):
+
+```yaml
+repo:
+  type: docker
+  download-mode: redirect      # redirect | stream | auto (default: stream)
+  presign-ttl-seconds: 600     # default 600 (10 min); spec range 5-15 min
+  storage:
+    type: s3
+    bucket: my-docker-bucket
+    region: us-east-1
+```
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `download-mode` | `stream` | `stream`: never attempt a redirect -- byte-identical to pre-2.3.0 behaviour; the correct choice for locked-down/air-gapped repositories whose clients cannot reach the object store directly. `redirect`: attempt a presigned redirect for every eligible byte GET where it is technically possible right now. `auto`: identical technical gate to `redirect` as of WS1.7 -- the two differ only in operator-declared intent (`redirect` says "my clients can reach the object store"), not in mechanism. An unrecognized value logs a warning and defaults to `stream`. |
+| `presign-ttl-seconds` | `600` | Presigned URL validity window, in seconds. Only consulted when `download-mode` is not `stream`. |
+
+**The mandatory fallback.** `redirect`/`auto` never error when a redirect
+isn't currently possible -- they fall back to streaming through Pantera,
+exactly as `stream` mode would:
+
+- The object is not yet durably confirmed in the blob store (`cache.mode:
+  index` write-back: a key still `PENDING_WRITE` has bytes durable on local
+  disk but no confirmed upload -- redirecting to a presigned URL for an
+  object that doesn't exist there yet would send the client into a 404).
+- The backend storage has no `Presigner` configured (a bare `fs` storage, or
+  an S3-compatible storage the factory could not build signing credentials
+  for).
+
+**Client reachability (air-gap guidance).** A presigned URL points at the
+object store directly. `download-mode: redirect`/`auto` is only correct when
+every client that can reach Pantera can *also* reach the object store's
+endpoint (public S3, a VPC endpoint clients share, a reachable MinIO/R2/B2
+instance). Pantera cannot detect this at request time -- it is an operator
+network-topology decision, not something enforced in software. Locked-down
+or air-gapped networks (clients can reach only Pantera, never the object
+store) MUST use `download-mode: stream` (the default).
+
+**Observability tradeoff.** A redirected fetch's actual byte transfer never
+touches Pantera, so per-byte metrics (bytes served, transfer duration,
+client IP of the download) for that fetch come from the object store's own
+access logs (S3 server access logging, CloudTrail data events, or the
+equivalent for the configured backend) -- not from Pantera. Pantera records
+only the redirect *issuance*: the `pantera_storage_download_decision_total`
+metric (see below) and an `artifact_access` audit record (user, client IP,
+trace ID, package identity) at the moment the `302` is returned.
+
+**Integrity.** Pantera does not see the bytes on a redirected fetch. This is
+acceptable because every client format already verifies its own
+checksum/digest against what it receives (Docker content digest, Maven
+`.sha1`/`.sha512`, npm `integrity`, Go `go.sum`/sumdb, Composer
+`dist.shasum`, PyPI `#sha256`) -- the same verification that already happens
+on a streamed fetch.
+
+**Metrics.** `pantera_storage_download_decision_total{repo_name, decision}`
+(Counter) -- `decision` &isin; `redirect`\|`stream`. Recorded on every
+redirect-eligible byte GET, regardless of mode (an explicit `stream`-mode
+repo still records `decision="stream"`), so this one counter answers both
+the redirect-vs-stream ratio and the presign issuance rate (`rate()` of
+`decision="redirect"`). Guarded by `MicrometerMetrics.isInitialized()`.
+
 ---
 
 ## S3 Express One Zone (type: s3-express)

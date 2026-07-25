@@ -14,9 +14,12 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.MetaCommon;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blob.PresignResolver;
 import com.auto1.pantera.docker.Blob;
 import com.auto1.pantera.docker.Digest;
 
+import java.net.URI;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -65,5 +68,11 @@ public final class AstoBlob implements Blob {
     public CompletableFuture<Content> content() {
         // Storage.value() already returns Content with size, no need to wrap
         return this.storage.value(this.key);
+    }
+
+    @Override
+    public Optional<URI> presignedUrl(final long ttlSeconds) {
+        return PresignResolver.resolve(this.storage, this.key)
+            .flatMap(target -> target.presignIfDurable(ttlSeconds));
     }
 }

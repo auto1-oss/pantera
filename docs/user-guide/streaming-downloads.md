@@ -35,8 +35,26 @@ Cancelling clients used to cost Pantera real resources; now they cost nothing.
 
 ---
 
+## Presigned Direct-Download (Redirects)
+
+Some repositories can be configured to answer a byte-object GET (a Docker
+layer blob, for now — see [Docker: Blob Layer
+Redirects](repositories/docker.md#blob-layer-redirects-presigned-direct-download))
+with a `302 Found` to a time-limited presigned URL on the underlying object
+store, instead of streaming the bytes through Pantera. This is opt-in
+per-repository (admin-configured `download-mode`) and only ever applies to
+immutable byte objects — metadata (manifests, tags, package indexes) is
+never redirected. Standard HTTP clients follow redirects transparently; the
+one thing to be aware of is that **your client must be able to reach the
+object store directly**, not just Pantera — see [Storage Backends: Presigned
+Direct-Download](../admin-guide/storage-backends.md#presigned-direct-download-ws17)
+for the admin-side configuration and air-gap guidance.
+
+---
+
 ## Related Pages
 
 - [Response Headers](response-headers.md) -- Pantera's custom response headers.
 - [Error Reference](error-reference.md) -- 5xx fault tags.
 - [Troubleshooting](troubleshooting.md) -- Client-side issue catalogue.
+- [Docker: Blob Layer Redirects](repositories/docker.md#blob-layer-redirects-presigned-direct-download) -- the wired presigned-redirect case.

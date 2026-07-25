@@ -204,6 +204,39 @@ The proxy tries each configured upstream in order until it finds the requested i
 
 ---
 
+## Blob Layer Redirects (Presigned Direct-Download)
+
+When a hosted (`docker`) repository is configured with `download-mode:
+redirect` or `download-mode: auto` (admin-side setting; default is
+`stream`, which never redirects), a layer blob GET
+(`GET /v2/<name>/blobs/<digest>`) may answer with `302 Found` and a
+`Location` header pointing directly at the object store (S3 or an
+S3-compatible backend), instead of streaming the bytes through Pantera:
+
+```
+GET /v2/my-alpine/blobs/sha256:abc123... HTTP/1.1
+
+HTTP/1.1 302 Found
+Location: https://my-bucket.s3.amazonaws.com/...?X-Amz-Signature=...
+```
+
+**No client-side action is needed.** `docker pull`, `skopeo`, `oras`, `crane`,
+and every standards-compliant OCI client already follow HTTP redirects for
+blob GETs — this is explicitly permitted by the distribution spec and is how
+S3-backed registries commonly serve layers at scale. The presigned URL is
+time-limited (an admin-configured TTL, default 10 minutes) and single-object;
+your client's usual digest verification of the downloaded layer is unchanged.
+
+**One requirement: your client must be able to reach the object store
+directly**, not just Pantera. If your network only exposes Pantera to Docker
+clients (a locked-down or air-gapped environment), ask your admin to confirm
+`download-mode` is `stream` for that repository — the presigned URL would
+otherwise be unreachable and the pull would fail. Manifest and tag requests
+are never redirected (only layer blobs), so `docker inspect`-style metadata
+calls are unaffected either way.
+
+---
+
 ## Common Issues
 
 | Symptom | Cause | Fix |
@@ -217,6 +250,7 @@ The proxy tries each configured upstream in order until it finds the requested i
 | `EOF` during push | Connection reset, often from proxy/LB | Increase timeouts in Nginx (`proxy_read_timeout 300s`) and set `client_max_body_size 0` |
 | `skopeo delete` / blob `DELETE` returns `405 Method Not Allowed` | Target is a `docker-proxy` or `docker-group` repository | Delete against the hosted (`docker`) repository directly — proxy/group repos are read-through, not authoritative |
 | Chunked push fails with `416 Requested Range Not Satisfiable` | A `PATCH` chunk's `Content-Range` start does not match the bytes already received | Restart the upload (`POST` a new session) — chunks must be sent strictly in order with no gaps or overlaps |
+| Blob pull times out / connection refused after a `302` | `download-mode: redirect`/`auto` is enabled but the client network cannot reach the object store directly | Ask an admin to set `download-mode: stream` for the repository, or grant the client network route/DNS to the object store endpoint |
 
 ---
 
@@ -232,6 +266,20 @@ repo:
   storage:
     type: fs
     path: /var/pantera/data
+```
+
+**Local repository with S3 storage and presigned blob redirects:**
+
+```yaml
+# docker-local-s3.yaml
+repo:
+  type: docker
+  download-mode: redirect      # stream (default) | redirect | auto
+  presign-ttl-seconds: 600
+  storage:
+    type: s3
+    bucket: my-docker-bucket
+    region: us-east-1
 ```
 
 **Proxy repository (multiple upstreams):**
@@ -270,3 +318,4 @@ repo:
 - [Getting Started](../getting-started.md) -- Obtaining JWT tokens
 - [Troubleshooting](../troubleshooting.md) -- Common error resolution
 - [REST API Reference](../../rest-api-reference.md) -- Repository management endpoints
+- [Storage Backends: Presigned Direct-Download](../../admin-guide/storage-backends.md#presigned-direct-download-ws17) -- admin-side `download-mode` configuration, fallback semantics, and the observability trade-off
