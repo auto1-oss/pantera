@@ -256,6 +256,16 @@ final class CachedBlobStorageTest {
         CachedBlobStorageTest.awaitTrue(() -> !storage.isPendingWrite(key), Duration.ofSeconds(5));
         MatcherAssert.assertThat("driving the uploader must confirm the upload with exactly one PUT", fake.putCalls(), new IsEqual<>(1));
         MatcherAssert.assertThat(fake.getCalls(), new IsEqual<>(0));
+
+        // Teardown-safety barrier: awaitTrue(!isPendingWrite) above returns at
+        // index.putPresent, one statement BEFORE onUploadSuccess synchronously
+        // persists the .meta sidecar into the sharded cache dir and only THEN
+        // releases the admission permit. Await the permit's return so no
+        // uploader-thread sidecar write can race @TempDir cleanup ("5b/2a").
+        CachedBlobStorageTest.awaitTrue(
+            () -> storage.writeBackPermitsAvailable() == storage.writeBackQueueCapacity(),
+            Duration.ofSeconds(5)
+        );
     }
 
     @Test
@@ -296,6 +306,15 @@ final class CachedBlobStorageTest {
         MatcherAssert.assertThat("the replayed key must land in the blob store exactly once", freshFake.putCalls(), new IsEqual<>(1));
         final byte[] served = restarted.value(key).join().asBytesFuture().join();
         MatcherAssert.assertThat(served, new IsEqual<>(data));
+
+        // Teardown-safety barrier: the replay's onUploadSuccess persists the
+        // .meta sidecar before it completes the boot-replay barrier, whereas
+        // awaitTrue(!isPendingWrite) above returns one statement earlier at
+        // index.putPresent. Await the replay barrier so that trailing sidecar
+        // write cannot race @TempDir cleanup. (Boot-replay uploads bypass the
+        // admission gate, so the permit-count barrier used elsewhere does not
+        // apply here.)
+        restarted.bootReplayComplete().get(5, TimeUnit.SECONDS);
     }
 
     @Test
