@@ -537,15 +537,27 @@ cooldown-filtered by Pantera, and a redirect would bypass both. This is
 enforced structurally (the metadata-serving code paths never consult a
 presigned URL at all), not by a config flag a repository could get wrong.
 
-**Wired today: Docker blob GET** (`GET /v2/<name>/blobs/<digest>`, hosted
-`docker` repositories) -- the OCI distribution spec explicitly permits
-blob-GET redirects, and this is how S3-backed registries serve layers at
-scale. Maven/npm/PyPI/Go/Composer artifact routes, and `docker-proxy`/
-`docker-group` blob GETs, are not yet wired to this mechanism -- setting
-`download-mode` on those repositories has no effect today; they stream
-exactly as before 2.3.0. Each is a follow-up through the same extension
-point (`Blob#presignedUrl` for Docker; other formats need their own byte
-route to opt in the same way).
+**Wired today** -- the concrete immutable-byte route of each of these hosted
+repository types:
+
+| Type | Redirect-eligible route | Metadata that always streams |
+|------|-------------------------|------------------------------|
+| `docker` | blob GET `GET /v2/<name>/blobs/<digest>` | manifests, tags |
+| `npm` | tarball GET (`*.tgz`) | packument (`*.json`), dist-tags |
+| `pypi` | distribution GET (`*.whl`/`*.tar.gz`/`*.zip`/...) | PEP 658 `*.metadata`, simple index, legacy JSON, all HEAD probes |
+| `conda` | package GET (`*.tar.bz2`/`*.conda`) | `repodata.json` |
+| `go` | module GET (`@v/*.zip`) | `@v/*.info`, `@v/*.mod`, `@v/list`, `@latest` |
+
+Every other artifact route (Maven/Gradle, Gem, RPM, Helm, Debian, Conan,
+generic files, and all `*-proxy`/`*-group` repositories) still streams
+exactly as before 2.3.0 -- setting `download-mode` on those has no effect
+today. Each remaining format is a follow-up through the same extension point
+(`Blob#presignedUrl` for Docker; the shared `StorageArtifactSlice(storage,
+downloadPolicy)` constructor for the formats above), and is deliberately left
+stream-only where a single serving route mixes byte objects with metadata or
+checksum/signature sidecars (Gem specs, RPM `repodata`, Helm `.prov`, Debian
+`Release`/`Packages`, Conan manifests, Maven's shared metadata+checksum path)
+so a redirect can never escape onto a metadata response.
 
 **Per-repo configuration** (set on the `repo:` block, not the `storage:`
 block -- a repository's byte-serving policy is independent of which storage

@@ -24,6 +24,8 @@
   ([@aydasraf](https://github.com/aydasraf))
 - **Docker hosted repositories can serve layer blobs via presigned direct-download.** A per-repository `download-mode` (`stream` / `redirect` / `auto`) can issue a `302` to a time-limited presigned S3 URL for `GET /v2/<name>/blobs/<digest>` so the client pulls the layer bytes straight from the object store instead of streaming them through Pantera — removing Pantera from the byte path for cached blobs. It falls back to streaming whenever the object is not yet durably in the store or presigning is not configured, and metadata (manifests, tags) is never redirected. `stream` (the default) preserves the current behaviour for air-gapped clients.
   ([@aydasraf](https://github.com/aydasraf))
+- **Presigned direct-download extends to hosted npm, PyPI, conda, and Go repositories.** The same per-repository `download-mode` now applies to the immutable artifact byte of these formats — npm `.tgz` tarballs, PyPI wheels/sdists, conda `.tar.bz2`/`.conda` packages, and Go `@v/*.zip` modules — issuing a `302` to a presigned object-store URL only on that concrete byte route. Every metadata route (packument, PyPI simple index and `.metadata` sidecar, `repodata.json`, Go `@v/list`/`@latest`/`.info`/`.mod`) always streams, so cooldown filtering and generated-metadata correctness are never bypassed. Streaming remains the default and the automatic fallback.
+  ([@aydasraf](https://github.com/aydasraf))
 
 ### ⚡ Performance
 

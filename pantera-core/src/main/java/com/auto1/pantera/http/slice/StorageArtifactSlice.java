@@ -13,17 +13,26 @@ package com.auto1.pantera.http.slice;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.SubStorage;
 import com.auto1.pantera.asto.ValueNotFoundException;
 import com.auto1.pantera.asto.blob.CachedBlobStorage;
+import com.auto1.pantera.asto.blob.DownloadMode;
+import com.auto1.pantera.asto.blob.DownloadPolicy;
+import com.auto1.pantera.asto.blob.PresignResolver;
 import com.auto1.pantera.asto.cache.OptimizedStorageCache;
 import com.auto1.pantera.asto.fs.FileStorage;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.Location;
 import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.metrics.MicrometerMetrics;
 
+import java.net.URI;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -86,12 +95,48 @@ public final class StorageArtifactSlice implements Slice {
     private final Storage storage;
 
     /**
-     * Ctor.
+     * WS1.7 (spec {@code WS1-storage-for-scale.md} &sect;3.B2) per-repo
+     * presigned-direct-download policy. {@link DownloadPolicy#streamOnly()}
+     * (the one-arg-ctor default) is byte-identical to pre-WS1.7 behaviour:
+     * the redirect branch below is never entered, every GET streams.
+     */
+    private final DownloadPolicy policy;
+
+    /**
+     * Repo name for the {@code pantera.storage.download.decision} metric tag,
+     * derived from the outermost {@link SubStorage} prefix (a repo's storage
+     * is {@code SubStorage(repoName, &lt;alias storage&gt;)} -- see {@code
+     * RepoConfig#from}). Only consulted when a redirect decision is actually
+     * recorded (i.e. {@code policy.mode() != STREAM}).
+     */
+    private final String repoName;
+
+    /**
+     * Ctor -- stream-only (pre-WS1.7 behaviour, no redirect ever attempted).
      *
      * @param storage Storage to serve artifacts from
      */
     public StorageArtifactSlice(final Storage storage) {
+        this(storage, DownloadPolicy.streamOnly());
+    }
+
+    /**
+     * Ctor with an explicit WS1.7 download policy.
+     *
+     * <p>Only the concrete artifact-byte route(s) of a format should pass a
+     * non-{@link DownloadPolicy#streamOnly()} policy here -- metadata routes
+     * (packument, {@code maven-metadata.xml}, PyPI simple index, checksum/
+     * signature sidecars, ...) MUST keep the stream-only default so a redirect
+     * never bypasses cooldown filtering, checksum recomputation, or
+     * generated-metadata correctness.</p>
+     *
+     * @param storage Storage to serve artifacts from
+     * @param policy WS1.7 download policy for this route
+     */
+    public StorageArtifactSlice(final Storage storage, final DownloadPolicy policy) {
         this.storage = storage;
+        this.policy = policy;
+        this.repoName = StorageArtifactSlice.repoNameOf(storage);
     }
 
     @Override
@@ -100,9 +145,67 @@ public final class StorageArtifactSlice implements Slice {
         final Headers headers,
         final Content body
     ) {
+        // WS1.7: on a redirect-eligible GET, answer 302 to a presigned URL
+        // when one is currently possible (durably present + presigner
+        // configured); otherwise fall through to the UNCHANGED streaming
+        // serve. STREAM mode and non-GET methods never reach the resolver.
+        final Optional<URI> presigned = this.presignedFor(line);
+        if (presigned.isPresent()) {
+            this.recordDecision("redirect");
+            final Response redirect = ResponseBuilder.found()
+                .header(new Location(presigned.get().toString()))
+                .build();
+            // Consume the (empty) GET body -- reactive bodies must always be
+            // drained, even when we do not serve them.
+            return body.asBytesFuture().thenApply(ignored -> redirect);
+        }
+        if (this.policy.mode() != DownloadMode.STREAM && line.method() == RqMethod.GET) {
+            this.recordDecision("stream");
+        }
         // Dispatch to storage-specific implementation
         final Slice delegate = this.selectArtifactSlice();
         return delegate.response(line, headers, body);
+    }
+
+    /**
+     * Resolve the presigned URL for this request, or empty when a redirect is
+     * not applicable (stream-only policy, non-GET method, no presigner in the
+     * storage composition, or the object is not yet durably present).
+     *
+     * @param line Request line
+     * @return Presigned URL to redirect to, or empty to stream
+     */
+    private Optional<URI> presignedFor(final RequestLine line) {
+        if (this.policy.mode() == DownloadMode.STREAM || line.method() != RqMethod.GET) {
+            return Optional.empty();
+        }
+        final Key key = new Key.From(line.uri().getPath().replaceAll("^/+", ""));
+        return PresignResolver.resolve(this.storage, key)
+            .flatMap(target -> target.presignIfDurable(this.policy.presignTtlSeconds()));
+    }
+
+    /**
+     * Record the WS1.7 redirect-vs-stream serving decision (only ever called
+     * for redirect-eligible routes -- {@code policy.mode() != STREAM}).
+     *
+     * @param decision {@code "redirect"} or {@code "stream"}
+     */
+    private void recordDecision(final String decision) {
+        if (MicrometerMetrics.isInitialized()) {
+            MicrometerMetrics.getInstance().recordDownloadDecision(this.repoName, decision);
+        }
+    }
+
+    /**
+     * Best-effort repo name for the download-decision metric tag: the
+     * outermost {@link SubStorage} prefix of a repo-scoped storage is the repo
+     * name by construction. Bounded by {@code RepoNameMeterFilter} regardless.
+     *
+     * @param storage Repo-scoped storage
+     * @return Repo name, or {@code "unknown"} if the storage is not prefixed
+     */
+    private static String repoNameOf(final Storage storage) {
+        return storage instanceof SubStorage sub ? sub.prefix().string() : "unknown";
     }
 
     /**

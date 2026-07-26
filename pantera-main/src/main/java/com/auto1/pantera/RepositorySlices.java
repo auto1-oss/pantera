@@ -648,7 +648,7 @@ public class RepositorySlices {
                 slice = browsableTrimPathSlice(
                     new NpmSlice(
                         cfg.url(), cfg.storage(), securityPolicy(), authentication(), tokens.auth(), tokens, cfg.name(), artifactEvents(), true,
-                        this.settings.syncArtifactIndexer(), this.settings.artifactIndex()
+                        this.settings.syncArtifactIndexer(), this.settings.artifactIndex(), cfg.downloadPolicy()
                     ),
                     cfg.storage()
                 );
@@ -813,7 +813,8 @@ public class RepositorySlices {
                         tokens.auth(),
                         cfg.name(),
                         artifactEvents(),
-                        this.settings.syncArtifactIndexer()
+                        this.settings.syncArtifactIndexer(),
+                        cfg.downloadPolicy()
                     ),
                     cfg.storage()
                 );
@@ -1228,7 +1229,7 @@ public class RepositorySlices {
                 slice = new CondaSlice(
                     cfg.storage(), securityPolicy(), authentication(), tokens,
                     cfg.url().toString(), cfg.name(), artifactEvents(),
-                    this.settings.syncArtifactIndexer()
+                    this.settings.syncArtifactIndexer(), cfg.downloadPolicy()
                 );
                 break;
             case "conan":
@@ -1259,7 +1260,7 @@ public class RepositorySlices {
                         new com.auto1.pantera.pypi.http.PySlice(
                             cfg.storage(), securityPolicy(), authentication(),
                             tokens.auth(), cfg.name(), artifactEvents(),
-                            this.settings.syncArtifactIndexer()
+                            this.settings.syncArtifactIndexer(), cfg.downloadPolicy()
                         ),
                         "simple"
                     )

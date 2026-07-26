@@ -38,8 +38,11 @@ Cancelling clients used to cost Pantera real resources; now they cost nothing.
 ## Presigned Direct-Download (Redirects)
 
 Some repositories can be configured to answer a byte-object GET (a Docker
-layer blob, for now — see [Docker: Blob Layer
-Redirects](repositories/docker.md#blob-layer-redirects-presigned-direct-download))
+layer blob — see [Docker: Blob Layer
+Redirects](repositories/docker.md#blob-layer-redirects-presigned-direct-download)
+— and now also the immutable artifact byte of hosted `npm` (`.tgz`), `pypi`
+(`.whl`/sdist), `conda` (`.tar.bz2`/`.conda`) and `go` (`@v/*.zip`)
+repositories)
 with a `302 Found` to a time-limited presigned URL on the underlying object
 store, instead of streaming the bytes through Pantera. This is opt-in
 per-repository (admin-configured `download-mode`) and only ever applies to
