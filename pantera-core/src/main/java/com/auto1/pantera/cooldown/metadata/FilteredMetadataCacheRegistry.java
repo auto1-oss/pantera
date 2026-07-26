@@ -50,6 +50,26 @@ public final class FilteredMetadataCacheRegistry {
     }
 
     /**
+     * The single shared {@link FilteredMetadataCache} bean, or {@code null}
+     * when cooldown metadata caching has not been wired (tests, early
+     * startup, deployments without cooldown).
+     *
+     * <p>Adapter serve paths that want to cache their own filtered/rewritten
+     * metadata bytes (e.g. the PyPI {@code /simple/} handler) read the shared
+     * instance through this accessor so their entries live in the SAME cache
+     * the invalidation hooks target — {@link #invalidateAfterUpload}, {@link
+     * #invalidateAfterProxyRefresh}, the JDBC block/unblock envelope
+     * invalidator, cross-instance pub/sub, and the policy-change wipe all
+     * operate on this one bean, so a per-format cache reusing it inherits
+     * every coordination path for free instead of drifting out of sync.</p>
+     *
+     * @return Shared cache instance, or {@code null} if uninitialised.
+     */
+    public FilteredMetadataCache sharedCache() {
+        return this.shared;
+    }
+
+    /**
      * Clear the shared reference (for testing).
      */
     public void clear() {
