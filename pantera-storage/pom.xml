@@ -73,9 +73,11 @@
                       digest, finalize; all commonPool hops) can wedge indefinitely on
                       save().join(): they pass on multi-core dev machines but time out
                       the CI job. Size the common pool for I/O concurrency so the storage
-                      unit tests progress regardless of the runner's core count. The
-                      durable fix is a dedicated executor in FileStorage, mirroring
-                      OptimizedStorageCache BLOCKING_EXECUTOR; tracked as a follow-up.
+                      unit tests progress regardless of the runner's core count.
+                      FileStorage now also has its own dedicated I/O executor
+                      (mirroring OptimizedStorageCache BLOCKING_EXECUTOR), which is the
+                      durable fix; this argLine remains as defense-in-depth against any
+                      residual commonPool usage under -T8 on small runners.
                     -->
                     <argLine>-Djava.util.concurrent.ForkJoinPool.common.parallelism=8</argLine>
                 </configuration>
