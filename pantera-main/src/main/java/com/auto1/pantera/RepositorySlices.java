@@ -629,7 +629,8 @@ public class RepositorySlices {
                         authentication(),
                         tokens.auth(),
                         cfg.name(),
-                        artifactEvents()
+                        artifactEvents(),
+                        cfg.downloadPolicy()
                     ),
                     cfg.storage()
                 );
@@ -662,7 +663,8 @@ public class RepositorySlices {
                         tokens.auth(),
                         cfg.name(),
                         artifactEvents(),
-                        this.settings.syncArtifactIndexer()
+                        this.settings.syncArtifactIndexer(),
+                        cfg.downloadPolicy()
                     ),
                     cfg.storage()
                 );
@@ -671,7 +673,7 @@ public class RepositorySlices {
                 slice = browsableTrimPathSlice(
                     new HelmSlice(
                         cfg.storage(), cfg.url().toString(), securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents(),
-                        this.settings.syncArtifactIndexer()
+                        this.settings.syncArtifactIndexer(), cfg.downloadPolicy()
                     ),
                     cfg.storage()
                 );
@@ -681,7 +683,7 @@ public class RepositorySlices {
                     new RpmSlice(cfg.storage(), securityPolicy(), authentication(),
                         tokens.auth(), new com.auto1.pantera.rpm.RepoConfig.FromYaml(cfg.settings(), cfg.name()),
                         artifactEvents(),
-                        this.settings.syncArtifactIndexer()),
+                        this.settings.syncArtifactIndexer(), cfg.downloadPolicy()),
                     cfg.storage()
                 );
                 break;
@@ -1221,7 +1223,7 @@ public class RepositorySlices {
                         cfg.storage(), securityPolicy(), authentication(),
                         new com.auto1.pantera.debian.Config.FromYaml(cfg.name(), cfg.settings(), settings.configStorage()),
                         artifactEvents(),
-                        this.settings.syncArtifactIndexer()
+                        this.settings.syncArtifactIndexer(), cfg.downloadPolicy()
                     )
                 );
                 break;

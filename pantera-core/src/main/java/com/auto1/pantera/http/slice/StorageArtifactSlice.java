@@ -34,6 +34,7 @@ import com.auto1.pantera.metrics.MicrometerMetrics;
 import java.net.URI;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Predicate;
 
 /**
  * Smart storage-aware artifact serving slice with automatic optimization.
@@ -112,6 +113,19 @@ public final class StorageArtifactSlice implements Slice {
     private final String repoName;
 
     /**
+     * Per-key redirect gate. Returns {@code true} only for keys that are pure
+     * binary artifacts -- never metadata, indexes, signatures, or checksum
+     * sidecars. Formats whose byte and metadata routes share ONE catch-all
+     * {@code StorageArtifactSlice} (gem, rpm, helm, debian, files) pass a
+     * predicate that isolates the redirectable binaries; byte-only routes
+     * (npm {@code .tgz}, pypi {@code .whl}, conda, go) pass the always-true
+     * default. A key the predicate rejects is streamed exactly as under
+     * {@link DownloadPolicy#streamOnly()}, so a redirect can never bypass a
+     * client-visible metadata path.
+     */
+    private final Predicate<Key> redirectable;
+
+    /**
      * Ctor -- stream-only (pre-WS1.7 behaviour, no redirect ever attempted).
      *
      * @param storage Storage to serve artifacts from
@@ -121,7 +135,10 @@ public final class StorageArtifactSlice implements Slice {
     }
 
     /**
-     * Ctor with an explicit WS1.7 download policy.
+     * Ctor with an explicit WS1.7 download policy -- every key on the route is
+     * redirect-eligible (byte-only routes such as npm {@code .tgz}). Delegates
+     * to the three-arg ctor with an always-true predicate, so the four
+     * already-wired byte-only routes are byte-identical.
      *
      * <p>Only the concrete artifact-byte route(s) of a format should pass a
      * non-{@link DownloadPolicy#streamOnly()} policy here -- metadata routes
@@ -134,8 +151,33 @@ public final class StorageArtifactSlice implements Slice {
      * @param policy WS1.7 download policy for this route
      */
     public StorageArtifactSlice(final Storage storage, final DownloadPolicy policy) {
+        this(storage, policy, key -> true);
+    }
+
+    /**
+     * Ctor with an explicit WS1.7 download policy and a per-key redirect gate.
+     *
+     * <p>For formats that serve BOTH artifact bytes AND metadata/sidecars
+     * through one catch-all route (gem, rpm, helm, debian, files), {@code
+     * redirectable} MUST return {@code true} ONLY for pure binary-artifact
+     * keys and {@code false} for every metadata/index/signature/checksum key.
+     * A rejected key streams exactly as {@link DownloadPolicy#streamOnly()}
+     * would -- streaming is always safe; redirecting a metadata file is
+     * never acceptable.</p>
+     *
+     * @param storage Storage to serve artifacts from
+     * @param policy WS1.7 download policy for this route
+     * @param redirectable Predicate that is {@code true} only for binary
+     *  artifact keys (never metadata/sidecars)
+     */
+    public StorageArtifactSlice(
+        final Storage storage,
+        final DownloadPolicy policy,
+        final Predicate<Key> redirectable
+    ) {
         this.storage = storage;
         this.policy = policy;
+        this.redirectable = redirectable;
         this.repoName = StorageArtifactSlice.repoNameOf(storage);
     }
 
@@ -180,6 +222,11 @@ public final class StorageArtifactSlice implements Slice {
             return Optional.empty();
         }
         final Key key = new Key.From(line.uri().getPath().replaceAll("^/+", ""));
+        if (!this.redirectable.test(key)) {
+            // Metadata/sidecar key on a shared catch-all route: stream it,
+            // exactly as stream-only would -- never a 302.
+            return Optional.empty();
+        }
         return PresignResolver.resolve(this.storage, key)
             .flatMap(target -> target.presignIfDurable(this.policy.presignTtlSeconds()));
     }

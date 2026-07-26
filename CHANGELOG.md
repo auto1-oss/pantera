@@ -26,6 +26,8 @@
   ([@aydasraf](https://github.com/aydasraf))
 - **Presigned direct-download extends to hosted npm, PyPI, conda, and Go repositories.** The same per-repository `download-mode` now applies to the immutable artifact byte of these formats — npm `.tgz` tarballs, PyPI wheels/sdists, conda `.tar.bz2`/`.conda` packages, and Go `@v/*.zip` modules — issuing a `302` to a presigned object-store URL only on that concrete byte route. Every metadata route (packument, PyPI simple index and `.metadata` sidecar, `repodata.json`, Go `@v/list`/`@latest`/`.info`/`.mod`) always streams, so cooldown filtering and generated-metadata correctness are never bypassed. Streaming remains the default and the automatic fallback.
   ([@aydasraf](https://github.com/aydasraf))
+- **Presigned direct-download extends to hosted Gem, RPM, Helm, Debian, and generic-file repositories.** These formats serve package bytes and their indexes through one shared download route, so `download-mode: redirect`/`auto` now `302`s only the binary artifact — RubyGems `.gem`, RPM `.rpm`/`.drpm`, Helm chart `.tgz`, Debian `.deb`/`.udeb`/`.ddeb`, and generic stored objects — while every index, signature, and checksum sidecar (`specs.4.8*`, `repodata/`, `index.yaml`/`.prov`, `Release`/`InRelease`/`Packages`, the generic `?meta=true` view) always streams. Streaming remains the default and the automatic fallback.
+  ([@aydasraf](https://github.com/aydasraf))
 
 ### ⚡ Performance
 

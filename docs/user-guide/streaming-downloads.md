@@ -41,13 +41,15 @@ Some repositories can be configured to answer a byte-object GET (a Docker
 layer blob — see [Docker: Blob Layer
 Redirects](repositories/docker.md#blob-layer-redirects-presigned-direct-download)
 — and now also the immutable artifact byte of hosted `npm` (`.tgz`), `pypi`
-(`.whl`/sdist), `conda` (`.tar.bz2`/`.conda`) and `go` (`@v/*.zip`)
-repositories)
+(`.whl`/sdist), `conda` (`.tar.bz2`/`.conda`), `go` (`@v/*.zip`), `gem`
+(`.gem`), `rpm` (`.rpm`/`.drpm`), `helm` (chart `.tgz`), `deb`
+(`.deb`/`.udeb`/`.ddeb`) and generic `file` repositories)
 with a `302 Found` to a time-limited presigned URL on the underlying object
 store, instead of streaming the bytes through Pantera. This is opt-in
 per-repository (admin-configured `download-mode`) and only ever applies to
-immutable byte objects — metadata (manifests, tags, package indexes) is
-never redirected. Standard HTTP clients follow redirects transparently; the
+immutable byte objects — metadata (manifests, tags, package indexes,
+signatures, and checksum sidecars such as `repodata/`, `index.yaml`/`.prov`,
+and apt `Release`/`Packages`) is never redirected. Standard HTTP clients follow redirects transparently; the
 one thing to be aware of is that **your client must be able to reach the
 object store directly**, not just Pantera — see [Storage Backends: Presigned
 Direct-Download](../admin-guide/storage-backends.md#presigned-direct-download-ws17)

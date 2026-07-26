@@ -13,6 +13,7 @@ package com.auto1.pantera.gem.http;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blob.DownloadPolicy;
 import com.auto1.pantera.gem.GemApiKeyAuth;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
@@ -39,6 +40,7 @@ import java.io.UncheckedIOException;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Predicate;
 import java.util.zip.GZIPOutputStream;
 
 /**
@@ -46,6 +48,17 @@ import java.util.zip.GZIPOutputStream;
  * Ruby HTTP layer.
  */
 public final class GemSlice extends Slice.Wrap {
+
+    /**
+     * WS1.7 redirect gate for the shared catch-all GET route: only {@code
+     * .gem} package files (stored under {@code gems/}) are redirect-eligible.
+     * All RubyGems metadata streams -- {@code specs.4.8*} indexes, {@code
+     * /quick/**.gemspec.rz} marshalled specs, {@code /info/*} and {@code
+     * /versions} compact-index views -- none of which end in {@code .gem},
+     * so this predicate never leaks metadata into a 302.
+     */
+    private static final Predicate<Key> REDIRECTABLE =
+        key -> key.string().endsWith(".gem");
 
     /**
      * Specs file names required by the RubyGems protocol.
@@ -132,7 +145,7 @@ public final class GemSlice extends Slice.Wrap {
     }
 
     /**
-     * Ctor with synchronous artifact-index writer.
+     * Ctor with synchronous artifact-index writer -- stream-only downloads.
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     public GemSlice(
@@ -143,6 +156,27 @@ public final class GemSlice extends Slice.Wrap {
         final String name,
         final Optional<Queue<ArtifactEvent>> events,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
+    ) {
+        this(storage, policy, basicAuth, tokenAuth, name, events, syncIndex,
+            DownloadPolicy.streamOnly());
+    }
+
+    /**
+     * Ctor with an explicit WS1.7 download policy: {@code .gem} package GETs
+     * become redirect-eligible under a non-{@link DownloadPolicy#streamOnly()}
+     * policy, while every RubyGems metadata route keeps streaming (see {@link
+     * #REDIRECTABLE}).
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public GemSlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final DownloadPolicy downloadPolicy
     ) {
         super(
             new SliceRoute(
@@ -184,7 +218,7 @@ public final class GemSlice extends Slice.Wrap {
                 new RtRulePath(
                     MethodRule.GET,
                     GemSlice.createAuthSlice(
-                        new StorageArtifactSlice(storage),
+                        new StorageArtifactSlice(storage, downloadPolicy, GemSlice.REDIRECTABLE),
                         basicAuth,
                         tokenAuth,
                         new OperationControl(
