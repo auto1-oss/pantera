@@ -11,6 +11,7 @@
 package com.auto1.pantera.hex.http;
 
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blob.DownloadPolicy;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.auth.Authentication;
@@ -54,6 +55,20 @@ public final class HexSlice extends Slice.Wrap {
     public HexSlice(final Storage storage, final Policy<?> policy, final Authentication users,
                     final Optional<Queue<ArtifactEvent>> events, final String name,
                     final com.auto1.pantera.index.SyncArtifactIndexer syncIndex) {
+        this(storage, policy, users, events, name, syncIndex, DownloadPolicy.streamOnly());
+    }
+
+    /**
+     * Ctor with an explicit WS1.7 (spec {@code WS1-storage-for-scale.md}
+     * &sect;3.B2) download policy. Only the {@code /tarballs/} package-byte
+     * route is made redirect-eligible; {@code /packages/} registry metadata
+     * always streams.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public HexSlice(final Storage storage, final Policy<?> policy, final Authentication users,
+                    final Optional<Queue<ArtifactEvent>> events, final String name,
+                    final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+                    final DownloadPolicy downloadPolicy) {
         super(new SliceRoute(
                 new RtRulePath(
                     new RtRule.All(
@@ -64,7 +79,7 @@ public final class HexSlice extends Slice.Wrap {
                         )
                     ),
                     new BasicAuthzSlice(
-                        new DownloadSlice(storage),
+                        new DownloadSlice(storage, downloadPolicy),
                         users,
                         new OperationControl(
                             policy, new AdapterBasicPermission(name, Action.Standard.READ)

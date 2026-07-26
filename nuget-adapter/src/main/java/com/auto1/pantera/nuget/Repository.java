@@ -12,6 +12,7 @@ package com.auto1.pantera.nuget;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.nuget.metadata.Nuspec;
 import com.auto1.pantera.nuget.metadata.NuspecField;
 import java.util.Optional;
@@ -31,6 +32,17 @@ public interface Repository {
      * @return Content if exists, empty otherwise.
      */
     CompletionStage<Optional<Content>> content(Key key);
+
+    /**
+     * Underlying blob storage backing this repository. Exposed so the package
+     * content route can resolve a WS1.7 (spec {@code WS1-storage-for-scale.md}
+     * &sect;3.B2) presigned redirect for {@code .nupkg}/{@code .snupkg} bytes
+     * via {@code PresignResolver} against the SAME storage {@link
+     * #content(Key)} reads from.
+     *
+     * @return Repository storage.
+     */
+    Storage storage();
 
     /**
      * Adds NuGet package in .nupkg file format from storage.

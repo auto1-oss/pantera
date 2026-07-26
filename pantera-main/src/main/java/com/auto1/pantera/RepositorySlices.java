@@ -718,7 +718,10 @@ public class RepositorySlices {
                             cfg.name(),
                             artifactEvents(),
                             this.settings.syncArtifactIndexer(),
-                            this.settings.artifactIndex()
+                            this.settings.artifactIndex(),
+                            // WS1.7: only the dist-archive download redirects;
+                            // packages.json / provider metadata always stream.
+                            cfg.downloadPolicy()
                         ),
                         "direct-dists"
                     ),
@@ -761,7 +764,9 @@ public class RepositorySlices {
                     new NuGet(
                         cfg.url(), new com.auto1.pantera.nuget.AstoRepository(cfg.storage()),
                         securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents(),
-                        this.settings.syncArtifactIndexer()
+                        // WS1.7: only .nupkg/.snupkg content redirects; service
+                        // index / registration / versions / search stream.
+                        this.settings.syncArtifactIndexer(), cfg.downloadPolicy()
                     ),
                     cfg.storage()
                 );
@@ -776,7 +781,10 @@ public class RepositorySlices {
                         // additive — every other repo type is unaffected.
                         new com.auto1.pantera.maven.http.MavenHostedPolicy(
                             cfg.verifyPgp(), cfg.releaseImmutable()
-                        )),
+                        ),
+                        // WS1.7: only real binary-artifact GETs redirect;
+                        // maven-metadata.xml + checksum/signature sidecars stream.
+                        cfg.downloadPolicy()),
                     cfg.storage()
                 );
                 break;
@@ -1253,7 +1261,7 @@ public class RepositorySlices {
                 slice = trimPathSlice(
                     new HexSlice(cfg.storage(), securityPolicy(), authentication(),
                         artifactEvents(), cfg.name(),
-                        this.settings.syncArtifactIndexer())
+                        this.settings.syncArtifactIndexer(), cfg.downloadPolicy())
                 );
                 break;
             case "pypi":

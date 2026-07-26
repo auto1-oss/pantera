@@ -552,21 +552,26 @@ repository types:
 | `helm` | chart GET (`*.tgz`) | `index.yaml`, `*.prov` provenance |
 | `deb` | package GET (`*.deb`/`*.udeb`/`*.ddeb`) | `Release`/`InRelease`/`Packages*`/`Sources*`/`Contents*` and signatures |
 | `file` | stored-object GET | `?meta=true` metadata view, directory listings |
+| `maven` / `gradle` | artifact GET (`*.jar`/`*.pom`/`*.war`/`*.aar`/`*.zip`/`*.module`, incl. classifier jars) | `maven-metadata.xml`, `.sha1`/`.md5`/`.sha256`/`.sha512` checksums, `.asc` signatures |
+| `nuget` | package content GET (`*.nupkg`/`*.snupkg`) | service index, registration, versions, search |
+| `composer` | dist archive GET (`*.zip`/`*.tar.gz`/`*.tgz`) | `packages.json`, provider/per-package metadata |
+| `hexpm` | package tarball GET (`/tarballs/*`) | registry metadata (`/packages/*`) |
 
-The five formats that serve bytes and metadata through one shared route (Gem,
-RPM, Helm, Debian, generic `file`) redirect only on a binary-artifact key: a
-per-route predicate on the shared `StorageArtifactSlice(storage,
-downloadPolicy, redirectable)` constructor returns `true` only for the package
-suffix and `false` for every index/signature/checksum key, so streaming is
-always the fallback and a redirect can never escape onto a metadata response.
+Formats that serve bytes and metadata through one shared route (Gem, RPM, Helm,
+Debian, generic `file`) redirect only on a binary-artifact key via a per-route
+predicate on the shared `StorageArtifactSlice(storage, downloadPolicy,
+redirectable)` constructor; formats with their own serving slices (Docker,
+Maven/Gradle, NuGet, Composer, Hex) gate a direct presign call on the artifact
+key. In every case the gate returns `true` only for the package suffix and
+`false` for every index/signature/checksum key, so streaming is always the
+fallback and a redirect can never escape onto a metadata response.
 
-Every other artifact route (Maven/Gradle, Conan, and all `*-proxy`/`*-group`
-repositories) still streams exactly as before 2.3.0 -- setting `download-mode`
-on those has no effect today. They are deliberately left stream-only where a
-single serving route mixes byte objects with metadata or checksum/signature
-sidecars that cannot be isolated safely (Maven's shared metadata+checksum
-path; Conan's package downloads, which are served by dedicated per-item
-token-authenticated routes a presigned URL would bypass).
+Conan and all `*-proxy`/`*-group` repositories still stream exactly as before
+2.3.0 -- setting `download-mode` on those has no effect today. Conan is left
+stream-only because its package payloads are served by dedicated per-item
+token-authenticated routes whose revision/package layout cannot isolate a pure
+binary key safely; a proxy/group redirect would bypass the member walk and the
+cache/cooldown pipeline.
 
 **Per-repo configuration** (set on the `repo:` block, not the `storage:`
 block -- a repository's byte-serving policy is independent of which storage

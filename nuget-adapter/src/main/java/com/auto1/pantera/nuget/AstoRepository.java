@@ -44,6 +44,11 @@ public final class AstoRepository implements Repository {
     }
 
     @Override
+    public Storage storage() {
+        return this.storage;
+    }
+
+    @Override
     public CompletionStage<Optional<Content>> content(final Key key) {
         return this.storage.exists(key).thenCompose(
             exists -> {
