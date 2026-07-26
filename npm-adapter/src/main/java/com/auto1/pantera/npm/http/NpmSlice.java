@@ -12,6 +12,7 @@ package com.auto1.pantera.npm.http;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blob.DownloadPolicy;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
@@ -116,7 +117,8 @@ public final class NpmSlice implements Slice {
         final Optional<Queue<ArtifactEvent>> events
     ) {
         this(base, storage, policy, basicAuth, tokenAuth, name, events, false, null,
-            com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP);
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP,
+            DownloadPolicy.streamOnly());
     }
 
     /**
@@ -141,7 +143,8 @@ public final class NpmSlice implements Slice {
         final boolean jwtOnly
     ) {
         this(base, storage, policy, basicAuth, tokenAuth, name, events, jwtOnly, null,
-            com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP);
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP,
+            DownloadPolicy.streamOnly());
     }
 
     /**
@@ -169,11 +172,13 @@ public final class NpmSlice implements Slice {
         final boolean jwtOnly
     ) {
         this(base, storage, policy, basicAuth, tokenAuth, name, events, jwtOnly, tokens,
-            com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP);
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP,
+            DownloadPolicy.streamOnly());
     }
 
     /**
      * Ctor with synchronous artifact-index writer and the shared search index.
+     * Stream-only download policy (pre-WS1.7 behaviour).
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     public NpmSlice(
@@ -190,7 +195,31 @@ public final class NpmSlice implements Slice {
         final ArtifactIndex artifactIndex
     ) {
         this(base, storage, policy, basicAuth, tokenAuth, name, events, jwtOnly, tokens,
-            syncIndex, artifactIndex);
+            syncIndex, artifactIndex, DownloadPolicy.streamOnly());
+    }
+
+    /**
+     * Ctor with synchronous artifact-index writer, the shared search index and
+     * an explicit WS1.7 download policy. Only the {@code .tgz} tarball-byte
+     * route is redirect-eligible; every metadata route always streams.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public NpmSlice(
+        final URL base,
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final Tokens tokens,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final boolean jwtOnly,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final ArtifactIndex artifactIndex,
+        final DownloadPolicy downloadPolicy
+    ) {
+        this(base, storage, policy, basicAuth, tokenAuth, name, events, jwtOnly, tokens,
+            syncIndex, artifactIndex, downloadPolicy);
     }
 
     /**
@@ -206,6 +235,10 @@ public final class NpmSlice implements Slice {
      * @param tokens Token service (optional).
      * @param syncIndex Synchronous artifact-index writer.
      * @param artifactIndex Shared search index backing {@code /-/v1/search}.
+     * @param downloadPolicy WS1.7 download policy; only the {@code .tgz}
+     *  tarball-byte route is made redirect-eligible under a non-{@link
+     *  DownloadPolicy#streamOnly()} policy. Packument ({@code .json}) and
+     *  every other metadata route always stream.
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     private NpmSlice(
@@ -219,7 +252,8 @@ public final class NpmSlice implements Slice {
         final boolean jwtOnly,
         final Tokens tokens,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
-        final ArtifactIndex artifactIndex
+        final ArtifactIndex artifactIndex,
+        final DownloadPolicy downloadPolicy
     ) {
         this.tokens = tokens;
         final TokenAuthentication npmTokenAuth = jwtOnly
@@ -619,7 +653,7 @@ public final class NpmSlice implements Slice {
                     new RtRule.ByPath(".*\\.tgz$")
                 ),
                 NpmSlice.createAuthSlice(
-                    new StorageArtifactSlice(storage),
+                    new StorageArtifactSlice(storage, downloadPolicy),
                     basicAuth,
                     npmTokenAuth,
                     new OperationControl(

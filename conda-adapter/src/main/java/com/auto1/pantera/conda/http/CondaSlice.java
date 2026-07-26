@@ -12,6 +12,7 @@ package com.auto1.pantera.conda.http;
 
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blob.DownloadPolicy;
 import com.auto1.pantera.conda.http.auth.TokenAuth;
 import com.auto1.pantera.conda.http.auth.TokenAuthScheme;
 import com.auto1.pantera.conda.http.auth.TokenAuthSlice;
@@ -77,13 +78,31 @@ public final class CondaSlice extends Slice.Wrap {
     }
 
     /**
-     * Ctor with synchronous artifact-index writer.
+     * Ctor with synchronous artifact-index writer. Stream-only download
+     * policy (pre-WS1.7 behaviour); delegates to the policy-aware ctor.
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     public CondaSlice(final Storage storage, final Policy<?> policy, final Authentication users,
         final Tokens tokens, final String url, final String repo,
         final Optional<Queue<ArtifactEvent>> events,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex) {
+        this(storage, policy, users, tokens, url, repo, events, syncIndex,
+            DownloadPolicy.streamOnly());
+    }
+
+    /**
+     * Ctor with an explicit WS1.7 download policy. The two {@code
+     * .tar.bz2}/{@code .conda} package-byte routes become redirect-eligible
+     * under a non-{@link DownloadPolicy#streamOnly()} policy; {@code
+     * repodata.json} metadata is served by {@code DownloadRepodataSlice} and
+     * is never affected.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public CondaSlice(final Storage storage, final Policy<?> policy, final Authentication users,
+        final Tokens tokens, final String url, final String repo,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final DownloadPolicy downloadPolicy) {
         super(
             new SliceRoute(
                 new RtRulePath(
@@ -117,7 +136,7 @@ public final class CondaSlice extends Slice.Wrap {
                         MethodRule.GET
                     ),
                     new TokenAuthSlice(
-                        new StorageArtifactSlice(storage),
+                        new StorageArtifactSlice(storage, downloadPolicy),
                         new OperationControl(
                             policy, new AdapterBasicPermission(repo, Action.Standard.READ)
                         ), tokens.auth()
@@ -129,7 +148,7 @@ public final class CondaSlice extends Slice.Wrap {
                         MethodRule.GET
                     ),
                     new BasicAuthzSlice(
-                        new StorageArtifactSlice(storage), users,
+                        new StorageArtifactSlice(storage, downloadPolicy), users,
                         new OperationControl(
                             policy, new AdapterBasicPermission(repo, Action.Standard.READ)
                         )

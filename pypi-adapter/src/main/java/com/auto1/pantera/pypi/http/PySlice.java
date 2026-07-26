@@ -12,6 +12,7 @@ package com.auto1.pantera.pypi.http;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blob.DownloadPolicy;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
@@ -93,7 +94,8 @@ public final class PySlice extends Slice.Wrap {
     }
 
     /**
-     * Ctor with synchronous artifact-index writer.
+     * Ctor with synchronous artifact-index writer. Stream-only download
+     * policy (pre-WS1.7 behaviour); delegates to the policy-aware ctor.
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     public PySlice(
@@ -104,6 +106,29 @@ public final class PySlice extends Slice.Wrap {
         final String name,
         final Optional<Queue<ArtifactEvent>> queue,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
+    ) {
+        this(storage, policy, basicAuth, tokenAuth, name, queue, syncIndex,
+            DownloadPolicy.streamOnly());
+    }
+
+    /**
+     * Ctor with an explicit WS1.7 download policy. Only the concrete
+     * distribution-file GET route ({@code .whl}/{@code .tar.gz}/{@code
+     * .zip}/... bytes) becomes redirect-eligible under a non-{@link
+     * DownloadPolicy#streamOnly()} policy. The PEP 658 {@code .metadata}
+     * sidecar route, the HEAD probe routes, the simple index and legacy JSON
+     * are metadata and always stream.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public PySlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> queue,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final DownloadPolicy downloadPolicy
     ) {
         super(
             new SliceRoute(
@@ -140,7 +165,7 @@ public final class PySlice extends Slice.Wrap {
                     ),
                     PySlice.createAuthSlice(
                         new SliceWithHeaders(
-                            new StorageArtifactSlice(storage),
+                            new StorageArtifactSlice(storage, downloadPolicy),
                             Headers.from(ContentType.mime("application/octet-stream"))
                         ),
                         basicAuth,

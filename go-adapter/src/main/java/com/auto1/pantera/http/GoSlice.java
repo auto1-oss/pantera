@@ -12,6 +12,7 @@ package com.auto1.pantera.http;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blob.DownloadPolicy;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.http.auth.BasicAuthzSlice;
 import com.auto1.pantera.http.auth.CombinedAuthzSliceWrap;
@@ -136,21 +137,56 @@ public final class GoSlice implements Slice {
         final Optional<Queue<ArtifactEvent>> events,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
     ) {
+        this(storage, policy, basicAuth, tokenAuth, name, events, syncIndex,
+            DownloadPolicy.streamOnly());
+    }
+
+    /**
+     * Ctor with an explicit WS1.7 download policy. Only the {@code @v/*.zip}
+     * module-byte route is made redirect-eligible under a non-{@link
+     * DownloadPolicy#streamOnly()} policy; {@code @v/*.info}, {@code
+     * @v/*.mod}, {@code @v/list} and {@code @latest} are metadata and always
+     * stream.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public GoSlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final DownloadPolicy downloadPolicy
+    ) {
         this.origin = new SliceRoute(
             GoSlice.pathGet(
                 ".+/@v/v.*\\.info",
-                GoSlice.createSlice(storage, ContentType.json(), policy, basicAuth, tokenAuth, name)
+                GoSlice.createSlice(
+                    storage, ContentType.json(), policy, basicAuth, tokenAuth, name,
+                    DownloadPolicy.streamOnly()
+                )
             ),
             GoSlice.pathGet(
                 ".+/@v/v.*\\.mod",
-                GoSlice.createSlice(storage, ContentType.text(), policy, basicAuth, tokenAuth, name)
+                GoSlice.createSlice(
+                    storage, ContentType.text(), policy, basicAuth, tokenAuth, name,
+                    DownloadPolicy.streamOnly()
+                )
             ),
             GoSlice.pathGet(
                 ".+/@v/v.*\\.zip",
-                GoSlice.createSlice(storage, ContentType.mime("application/zip"), policy, basicAuth, tokenAuth, name)
+                GoSlice.createSlice(
+                    storage, ContentType.mime("application/zip"), policy, basicAuth, tokenAuth, name,
+                    downloadPolicy
+                )
             ),
             GoSlice.pathGet(
-                ".+/@v/list", GoSlice.createSlice(storage, ContentType.text(), policy, basicAuth, tokenAuth, name)
+                ".+/@v/list",
+                GoSlice.createSlice(
+                    storage, ContentType.text(), policy, basicAuth, tokenAuth, name,
+                    DownloadPolicy.streamOnly()
+                )
             ),
             GoSlice.pathGet(
                 ".+/@latest",
@@ -211,10 +247,13 @@ public final class GoSlice implements Slice {
         Policy<?> policy,
         Authentication basicAuth,
         TokenAuthentication tokenAuth,
-        String name
+        String name,
+        DownloadPolicy downloadPolicy
     ) {
         return GoSlice.createAuthSlice(
-            new SliceWithHeaders(new StorageArtifactSlice(storage), Headers.from(contentType)),
+            new SliceWithHeaders(
+                new StorageArtifactSlice(storage, downloadPolicy), Headers.from(contentType)
+            ),
             basicAuth,
             tokenAuth,
             new OperationControl(policy, new AdapterBasicPermission(name, Action.Standard.READ))
