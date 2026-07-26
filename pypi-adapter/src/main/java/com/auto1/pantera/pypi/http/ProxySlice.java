@@ -297,8 +297,18 @@ final class ProxySlice implements Slice {
         // Same packument-inline shortcut npm and composer take. Stops
         // the silent fail-open we hit when no PublishDateSource is
         // registered for pypi in DbPublishDateRegistry.
+        // WS5.5: share the cooldown-filtered metadata cache so the parse +
+        // per-version cooldown fan-out + filter + rewrite of a /simple/ index
+        // is paid once per (content, cutoff) instead of on every request. The
+        // shared instance is the one every invalidation hook already targets
+        // (upload, proxy refresh, JDBC block/unblock, cross-instance pub/sub,
+        // policy wipe), so PyPI entries stay coherent without a second cache.
+        // Null when cooldown metadata caching is not wired — the handler then
+        // recomputes per request, exactly as before.
         this.simpleHandler = new PypiSimpleHandler(
-            simpleUpstream, cooldown, rtype, rname
+            simpleUpstream, cooldown, rtype, rname,
+            com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry
+                .instance().sharedCache()
         );
         // WS6.3: route the JSON-API resolution surface through the same
         // cache/storage this repository already uses for the Simple-API
