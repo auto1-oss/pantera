@@ -159,6 +159,64 @@ final class StorageArtifactSlicePresignTest {
         );
     }
 
+    @Test
+    void redirectPredicateStreamsMetadataKeyEvenInRedirectMode() {
+        final PresigningStorage backend = new PresigningStorage(new InMemoryStorage());
+        backend.save(new Key.From("myrepo", "repodata", "repomd.xml"), content("index")).join();
+        final Storage repoScoped = new SubStorage(new Key.From("myrepo"), backend);
+        final Slice slice = new StorageArtifactSlice(
+            repoScoped, new DownloadPolicy(DownloadMode.REDIRECT, 600L),
+            key -> key.string().endsWith(".rpm")
+        );
+
+        final Response response = slice.response(
+            new RequestLine(RqMethod.GET, "/repodata/repomd.xml"), Headers.EMPTY, Content.EMPTY
+        ).join();
+
+        MatcherAssert.assertThat(
+            "a predicate-rejected (metadata) key must stream 200, never 302, even in redirect mode",
+            response.status().code(), new IsEqual<>(200)
+        );
+        MatcherAssert.assertThat(
+            "the rejected key must serve its actual bytes",
+            response.body().asBytesFuture().join(),
+            new IsEqual<>("index".getBytes(StandardCharsets.UTF_8))
+        );
+        MatcherAssert.assertThat(
+            "a predicate-rejected key must never even attempt to presign",
+            backend.presignCalls.get(), new IsEqual<>(0)
+        );
+    }
+
+    @Test
+    void redirectPredicateRedirectsBinaryKey() {
+        final PresigningStorage backend = new PresigningStorage(new InMemoryStorage());
+        backend.save(new Key.From("myrepo", "artifact.jar"), content("payload")).join();
+        final Storage repoScoped = new SubStorage(new Key.From("myrepo"), backend);
+        final Slice slice = new StorageArtifactSlice(
+            repoScoped, new DownloadPolicy(DownloadMode.REDIRECT, 600L),
+            key -> key.string().endsWith(".jar")
+        );
+
+        final Response response = slice.response(
+            new RequestLine(RqMethod.GET, "/artifact.jar"), Headers.EMPTY, Content.EMPTY
+        ).join();
+
+        MatcherAssert.assertThat(
+            "a predicate-accepted (binary) key must answer 302 in redirect mode",
+            response.status().code(), new IsEqual<>(302)
+        );
+        MatcherAssert.assertThat(
+            "the accepted key must redirect to the presigned URL",
+            new RqHeaders.Single(response.headers(), Location.NAME).asString(),
+            new IsEqual<>(PRESIGNED)
+        );
+        MatcherAssert.assertThat(
+            "the accepted binary key must presign exactly once",
+            backend.presignCalls.get(), new IsEqual<>(1)
+        );
+    }
+
     private static Content content(final String value) {
         return new Content.From(value.getBytes(StandardCharsets.UTF_8));
     }
