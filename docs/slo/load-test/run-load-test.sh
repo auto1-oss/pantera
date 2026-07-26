@@ -23,8 +23,10 @@ docker ps >/dev/null 2>&1 || { echo "ERROR: Docker is not reachable — the MinI
 echo ">> Running S3CacheLoadITCase (MinIO via Testcontainers)..."
 # The itcase profile runs failsafe over *ITCase; -Dexec.skip=true skips the
 # pom-bound docker buildx. Testcontainers pulls/starts/stops MinIO itself.
+# -Drun.load.test=true opts the throughput gate in (it is @EnabledIfSystemProperty
+# on that flag, so the regular CI build skips it).
 if ! mvn verify -pl pantera-storage/pantera-storage-s3 -Pitcase \
-      -Dit.test=S3CacheLoadITCase -Dexec.skip=true -ntp -DskipUTs=true >"$log" 2>&1; then
+      -Dit.test=S3CacheLoadITCase -Drun.load.test=true -Dexec.skip=true -ntp -DskipUTs=true >"$log" 2>&1; then
   echo "ERROR: load test build failed. Tail of log:" >&2
   tail -40 "$log" >&2
   exit 1
