@@ -26,6 +26,8 @@
   ([@aydasraf](https://github.com/aydasraf))
 - **Presigned direct-download extends to hosted npm, PyPI, conda, and Go repositories.** The same per-repository `download-mode` now applies to the immutable artifact byte of these formats — npm `.tgz` tarballs, PyPI wheels/sdists, conda `.tar.bz2`/`.conda` packages, and Go `@v/*.zip` modules — issuing a `302` to a presigned object-store URL only on that concrete byte route. Every metadata route (packument, PyPI simple index and `.metadata` sidecar, `repodata.json`, Go `@v/list`/`@latest`/`.info`/`.mod`) always streams, so cooldown filtering and generated-metadata correctness are never bypassed. Streaming remains the default and the automatic fallback.
   ([@aydasraf](https://github.com/aydasraf))
+- **Presigned direct-download extends to hosted Maven/Gradle, NuGet, Composer, and Hex repositories.** `download-mode` now also redirects the artifact byte of these formats — Maven/Gradle `.jar`/`.pom`/`.war`/`.aar`/`.zip`/`.module` artifacts (including classifier jars), NuGet `.nupkg`/`.snupkg` packages, Composer dist archives (`.zip`/`.tar.gz`/`.tgz`), and Hex package tarballs — only on that concrete byte route. Every metadata, index, checksum and signature route always streams: `maven-metadata.xml` and Maven `.sha1`/`.md5`/`.sha256`/`.sha512`/`.asc` sidecars, the NuGet service index/registration/versions/search, Composer `packages.json`/provider metadata (a redirect serves the identical stored bytes, so `dist.shasum` verification is unaffected), and the Hex registry metadata. Streaming remains the default and the automatic fallback.
+  ([@aydasraf](https://github.com/aydasraf))
 
 ### ⚡ Performance
 

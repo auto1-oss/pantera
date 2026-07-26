@@ -1443,10 +1443,14 @@ repository's byte-serving policy is independent of which storage alias backs
 it). Only affects redirect-eligible byte routes; metadata is never
 redirected regardless of value. Wired for the immutable byte route of hosted
 `docker` (blob GET), `npm` (`.tgz` tarball), `pypi` (`.whl`/sdist), `conda`
-(`.tar.bz2`/`.conda` package) and `go` (`@v/*.zip` module) repositories --
-every metadata route (packument, PyPI simple index, `repodata.json`, Go
-`@v/list`/`@latest`/`.info`/`.mod`, checksum/signature sidecars) always
-streams. See
+(`.tar.bz2`/`.conda` package), `go` (`@v/*.zip` module), `maven`/`gradle`
+(`.jar`/`.pom`/`.war`/`.aar`/`.zip`/`.module` artifacts, incl. classifier
+jars), `nuget` (`.nupkg`/`.snupkg`), `composer` (dist `.zip`/`.tar.gz`/`.tgz`)
+and `hexpm` (package tarball) repositories -- every metadata route (packument,
+PyPI simple index, `repodata.json`, Go `@v/list`/`@latest`/`.info`/`.mod`,
+`maven-metadata.xml`, NuGet service index/registration/versions/search,
+Composer `packages.json`/provider metadata, Hex registry metadata, and all
+checksum/signature sidecars) always streams. See
 `docs/admin-guide/storage-backends.md#presigned-direct-download-ws17` for the
 full write-up (fallback semantics, client-reachability/air-gap guidance, the
 off-Pantera-metrics observability trade-off, and which routes are wired).

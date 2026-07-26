@@ -11,6 +11,7 @@
 package com.auto1.pantera.nuget.http;
 
 import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.blob.DownloadPolicy;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
@@ -121,8 +122,12 @@ public final class NuGet implements Slice {
     /** Synchronous artifact-index writer. */
     private final com.auto1.pantera.index.SyncArtifactIndexer syncIndex;
 
+    /** WS1.7 presigned-direct-download policy for the package-content route. */
+    private final DownloadPolicy downloadPolicy;
+
     /**
-     * Ctor with synchronous artifact-index writer.
+     * Ctor with synchronous artifact-index writer -- stream-only download
+     * policy (pre-WS1.7 behaviour).
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     public NuGet(
@@ -135,6 +140,29 @@ public final class NuGet implements Slice {
         final Optional<Queue<ArtifactEvent>> events,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
     ) {
+        this(url, repository, policy, basicAuth, tokenAuth, name, events, syncIndex,
+            DownloadPolicy.streamOnly());
+    }
+
+    /**
+     * Ctor with synchronous artifact-index writer AND an explicit WS1.7 (spec
+     * {@code WS1-storage-for-scale.md} &sect;3.B2) download policy. Only the
+     * {@code PackageBaseAddress} content route reads it, and only for {@code
+     * .nupkg}/{@code .snupkg} bytes -- service index, registration, versions
+     * and search metadata always stream.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public NuGet(
+        final URL url,
+        final Repository repository,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final DownloadPolicy downloadPolicy
+    ) {
         this.url = url;
         this.repository = repository;
         this.policy = policy;
@@ -143,6 +171,7 @@ public final class NuGet implements Slice {
         this.name = name;
         this.events = events;
         this.syncIndex = syncIndex;
+        this.downloadPolicy = downloadPolicy;
     }
 
     @Override
@@ -169,7 +198,8 @@ public final class NuGet implements Slice {
         final PackagePublish publish = new PackagePublish(
             this.repository, this.events, this.name, this.syncIndex
         );
-        final PackageContent content = new PackageContent(this.url, this.repository);
+        final PackageContent content =
+            new PackageContent(this.url, this.repository, this.downloadPolicy);
         final PackageMetadata metadata = new PackageMetadata(this.repository, content);
         return new RoutingResource(
             path,

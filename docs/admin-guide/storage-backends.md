@@ -547,17 +547,22 @@ repository types:
 | `pypi` | distribution GET (`*.whl`/`*.tar.gz`/`*.zip`/...) | PEP 658 `*.metadata`, simple index, legacy JSON, all HEAD probes |
 | `conda` | package GET (`*.tar.bz2`/`*.conda`) | `repodata.json` |
 | `go` | module GET (`@v/*.zip`) | `@v/*.info`, `@v/*.mod`, `@v/list`, `@latest` |
+| `maven` / `gradle` | artifact GET (`*.jar`/`*.pom`/`*.war`/`*.aar`/`*.zip`/`*.module`, incl. classifier jars) | `maven-metadata.xml`, `.sha1`/`.md5`/`.sha256`/`.sha512` checksums, `.asc` signatures |
+| `nuget` | package content GET (`*.nupkg`/`*.snupkg`) | service index, registration, versions, search |
+| `composer` | dist archive GET (`*.zip`/`*.tar.gz`/`*.tgz`) | `packages.json`, provider/per-package metadata |
+| `hexpm` | package tarball GET (`/tarballs/*`) | registry metadata (`/packages/*`) |
 
-Every other artifact route (Maven/Gradle, Gem, RPM, Helm, Debian, Conan,
-generic files, and all `*-proxy`/`*-group` repositories) still streams
-exactly as before 2.3.0 -- setting `download-mode` on those has no effect
-today. Each remaining format is a follow-up through the same extension point
-(`Blob#presignedUrl` for Docker; the shared `StorageArtifactSlice(storage,
-downloadPolicy)` constructor for the formats above), and is deliberately left
-stream-only where a single serving route mixes byte objects with metadata or
-checksum/signature sidecars (Gem specs, RPM `repodata`, Helm `.prov`, Debian
-`Release`/`Packages`, Conan manifests, Maven's shared metadata+checksum path)
-so a redirect can never escape onto a metadata response.
+Every other artifact route (Gem, RPM, Helm, Debian, Conan, generic files, and
+all `*-proxy`/`*-group` repositories) still streams exactly as before 2.3.0 --
+setting `download-mode` on those has no effect today. Each remaining format is
+a follow-up through the same extension point (`Blob#presignedUrl` for Docker;
+the shared `StorageArtifactSlice(storage, downloadPolicy)` constructor for
+npm/pypi/conda/go; a direct `PresignResolver` call gated on the artifact key
+in the format's own serving slice for maven/nuget/composer/hexpm), and is
+deliberately left stream-only where a single serving route mixes byte objects
+with metadata or checksum/signature sidecars (Gem specs, RPM `repodata`, Helm
+`.prov`, Debian `Release`/`Packages`, Conan manifests) so a redirect can never
+escape onto a metadata response.
 
 **Per-repo configuration** (set on the `repo:` block, not the `storage:`
 block -- a repository's byte-serving policy is independent of which storage

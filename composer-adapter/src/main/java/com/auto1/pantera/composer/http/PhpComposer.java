@@ -11,6 +11,7 @@
 package com.auto1.pantera.composer.http;
 
 import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.blob.DownloadPolicy;
 import com.auto1.pantera.composer.Repository;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
@@ -112,6 +113,30 @@ public final class PhpComposer extends Slice.Wrap {
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
         final ArtifactIndex artifactIndex
     ) {
+        this(repository, policy, basicAuth, tokenAuth, name, events, syncIndex, artifactIndex,
+            DownloadPolicy.streamOnly());
+    }
+
+    /**
+     * Full ctor additionally carrying the WS1.7 (spec {@code
+     * WS1-storage-for-scale.md} &sect;3.B2) download policy. Only the two
+     * dist-archive download routes ({@link DownloadArchiveSlice}) become
+     * redirect-eligible under a non-{@link DownloadPolicy#streamOnly()} policy;
+     * every metadata route ({@code /p2/}, {@code available-packages.json},
+     * {@code packages/list.json}) always streams.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public PhpComposer(
+        final Repository repository,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final ArtifactIndex artifactIndex,
+        final DownloadPolicy downloadPolicy
+    ) {
         super(
             new SliceRoute(
                 new RtRulePath(
@@ -172,7 +197,7 @@ public final class PhpComposer extends Slice.Wrap {
                     ),
                     PhpComposer.headAware(
                         PhpComposer.createAuthSlice(
-                            new DownloadArchiveSlice(repository),
+                            new DownloadArchiveSlice(repository, downloadPolicy),
                             basicAuth,
                             tokenAuth,
                             new OperationControl(
@@ -188,7 +213,7 @@ public final class PhpComposer extends Slice.Wrap {
                     ),
                     PhpComposer.headAware(
                         PhpComposer.createAuthSlice(
-                            new DownloadArchiveSlice(repository),
+                            new DownloadArchiveSlice(repository, downloadPolicy),
                             basicAuth,
                             tokenAuth,
                             new OperationControl(
