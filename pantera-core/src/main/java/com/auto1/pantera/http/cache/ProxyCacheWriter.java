@@ -51,6 +51,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -915,7 +916,7 @@ public final class ProxyCacheWriter {
             }
             return CompletableFuture.completedFuture(
                 Result.ok(new VerifiedArtifact(
-                    tempFile, size, sidecars, primaryKey, ctx, this
+                    new RefCountedTempFile(tempFile), size, sidecars, primaryKey, ctx, this
                 ))
             );
         });
@@ -991,105 +992,89 @@ public final class ProxyCacheWriter {
     }
 
     /**
-     * Commit a previously verified artifact to storage. Reads the temp file
-     * eagerly so the response Flowable (which also reads the temp file) is
-     * not racing with temp-file deletion.
+     * Commit a previously verified artifact to storage (WS3.1 streaming
+     * commit). The primary is saved by streaming the shared temp file into
+     * the cache in bounded {@link #CHUNK_SIZE} chunks via
+     * {@link #streamingFileContent} — the artifact's bytes are never
+     * re-materialised on heap (the pre-2.3.0 path did a whole-file
+     * {@code Files.readAllBytes} here, an OOM lever on large artifacts).
      *
-     * <p>When a callback is installed (per-instance or via
-     * {@link CacheWriteCallbackRegistry}) we materialise a dedicated
-     * callback-owned temp file from the in-memory byte buffer before firing
-     * {@link #fireOnWrite}; the original {@code artifact.tempFile()} is
-     * owned by the response Flowable's disposer and may be deleted before
-     * the onWrite consumer schedules its read. The callback temp file is
-     * deleted right after the consumer returns.</p>
+     * <p><b>Ref-counted temp-file lifecycle.</b> The same temp file is read
+     * by two independent consumers — the client tee
+     * ({@link VerifiedArtifact#contentFromTempFile()}) and this cache commit
+     * — in any order. Each holds a reference on the artifact's
+     * {@link RefCountedTempFile} for the duration of its read; the file is
+     * deleted exactly once, only on the last release, so neither reader can
+     * pull the file out from under the other. This commit
+     * {@link RefCountedTempFile#retain() retains} before the store and
+     * {@link RefCountedTempFile#release() releases} in the terminal
+     * {@link CompletableFuture#handle} — <i>not</i> inside the streaming
+     * {@link Content}'s disposer — so the temp file is still on disk while
+     * {@link #fireOnWrite} runs (the {@link CacheWriteEvent} contract
+     * requires a live {@code bytesOnDisk}). The commit never touches the
+     * base reference, so a commit-only caller leaves the temp file in place
+     * for a later serve, exactly as the pre-2.3.0 buffered path did.
      *
-     * <p><b>Fast path:</b> when both the per-instance callback AND the
-     * registry's shared callback are no-ops, the materialise step is
-     * skipped entirely &mdash; no {@code Files.createTempFile + write +
-     * deleteQuietly} on the proxy hot path.</p>
+     * <p>Track 3 atomic commit order is preserved: sidecars FIRST, primary
+     * LAST, so any reader that observes the primary on disk is guaranteed to
+     * observe every matching sidecar. If the primary write fails or the JVM
+     * crashes between the two phases only orphaned sidecars remain; the next
+     * request finds no primary, re-fetches, and a fresh writer run overwrites
+     * the orphans with consistent values — orphans are harmless and
+     * self-healing.
      */
     CompletionStage<Result<Void>> commitVerified(final VerifiedArtifact artifact) {
-        final byte[] bytes;
-        try {
-            bytes = Files.readAllBytes(artifact.tempFile());
-        } catch (final IOException ex) {
-            return CompletableFuture.completedFuture(
-                Result.err(new Fault.StorageUnavailable(ex, artifact.primaryKey().string()))
-            );
-        }
-        // Fast path: when no callback is installed (per-instance or
-        // shared), skip the synchronous temp-file materialisation that
-        // would otherwise hit the disk for nothing on every cache write.
+        final RefCountedTempFile handle = artifact.handle();
         final boolean hasCallback = this.onWrite != NO_OP_ON_WRITE
             && !CacheWriteCallbackRegistry.instance().isNoOp(this.onWrite);
-        // Write a callback-owned copy so the consumer sees a stable file
-        // regardless of when the response Flowable disposer runs. Skipped
-        // when no callback would observe it.
-        final Path callbackFile = hasCallback
-            ? materialiseCallbackTempFile(bytes, artifact.primaryKey())
-            : null;
-        // Track 3 atomic commit: sidecars FIRST, primary LAST. By writing
-        // sidecars before the primary, any reader that observes the primary
-        // on disk is guaranteed to find every matching sidecar — the
-        // previously-possible "primary present without .sha1" window is
-        // eliminated. If the primary write fails or the JVM crashes
-        // between the two phases, only orphaned sidecars remain; the next
-        // request finds no primary, re-fetches from upstream, and a fresh
-        // ProxyCacheWriter run overwrites the orphans with consistent
-        // values. Orphans are therefore harmless and self-healing.
+        // Commit is an active reader of the shared temp file for the whole
+        // store. Retain up-front (synchronously, before any consumer can
+        // race a delete) and release exactly once in the terminal handle()
+        // below.
+        handle.retain();
         return this.saveSidecars(artifact.primaryKey(), artifact.sidecars())
-            .thenCompose(ignored -> this.cache.save(artifact.primaryKey(), new Content.From(bytes)))
+            .thenCompose(ignored -> this.cache.save(
+                artifact.primaryKey(),
+                streamingFileContent(handle.path(), artifact.size())
+            ))
             .handle((ignored, err) -> {
-                if (err == null) {
-                    if (hasCallback) {
-                        // Use the callback-owned file (still on disk)
-                        // instead of the response Flowable's temp file
-                        // (which may have been disposed by the time we
-                        // land here).
-                        this.fireOnWrite(
-                            artifact.primaryKey(),
-                            callbackFile == null ? artifact.tempFile() : callbackFile,
-                            artifact.size()
-                        );
-                        if (callbackFile != null) {
-                            deleteQuietly(callbackFile);
-                        }
-                    }
-                    this.logSuccess(artifact.primaryKey(), artifact.sidecars().keySet(), artifact.ctx());
-                    return Result.<Void>ok(null);
+                try {
+                    return this.finishCommitVerified(artifact, hasCallback, err);
+                } finally {
+                    // Single release paired with the retain above. The temp
+                    // file survives until here (and until the serve path also
+                    // releases), so fireOnWrite saw a live bytesOnDisk.
+                    handle.release();
                 }
-                if (callbackFile != null) {
-                    deleteQuietly(callbackFile);
-                }
-                this.rollbackAfterPartialFailure(
-                    artifact.primaryKey(), artifact.sidecars().keySet(), err, artifact.ctx()
-                );
-                return Result.<Void>err(new Fault.StorageUnavailable(
-                    unwrap(err), artifact.primaryKey().string()
-                ));
             });
     }
 
     /**
-     * Write the in-memory bytes to a fresh temp file dedicated to the
-     * onCacheWrite consumer. Returns {@code null} on IO failure (callback
-     * falls back to the response Flowable's path with the existing
-     * best-effort lifetime contract).
+     * Terminal branch of {@link #commitVerified}: on success fire the
+     * callback (temp file still alive — the commit reference is not released
+     * until the caller's {@code finally}) and log; on failure roll back the
+     * partial write.
      */
-    private static Path materialiseCallbackTempFile(final byte[] bytes, final Key key) {
-        try {
-            final Path tmp = Files.createTempFile("pantera-prefetch-", ".bin");
-            Files.write(tmp, bytes);
-            return tmp;
-        } catch (final IOException ex) {
-            EcsLogger.debug("com.auto1.pantera.http.cache")
-                .message("Failed to materialise onCacheWrite temp file; using response Flowable path")
-                .field("url.path", key.string())
-                .error(ex)
-                .field("log.source", "application")
-                .log();
-            return null;
+    private Result<Void> finishCommitVerified(
+        final VerifiedArtifact artifact, final boolean hasCallback, final Throwable err
+    ) {
+        if (err == null) {
+            if (hasCallback) {
+                this.fireOnWrite(
+                    artifact.primaryKey(), artifact.tempFile(), artifact.size()
+                );
+            }
+            this.logSuccess(
+                artifact.primaryKey(), artifact.sidecars().keySet(), artifact.ctx()
+            );
+            return Result.ok(null);
         }
+        this.rollbackAfterPartialFailure(
+            artifact.primaryKey(), artifact.sidecars().keySet(), err, artifact.ctx()
+        );
+        return Result.err(new Fault.StorageUnavailable(
+            unwrap(err), artifact.primaryKey().string()
+        ));
     }
 
     /**
@@ -1323,19 +1308,33 @@ public final class ProxyCacheWriter {
     // ===== helpers =====
 
     /**
-     * Create a {@link Content} backed by a temp file for immediate serving.
-     * The disposer closes the channel AND deletes the temp file, so this
-     * Content owns the temp file lifecycle.
+     * Create a {@link Content} that streams the shared temp file to the
+     * client for immediate serving. Retains the {@link RefCountedTempFile}
+     * for the life of the stream and releases it (deleting the file iff this
+     * was the last consumer) when the stream terminates — so a concurrent
+     * cache commit reading the same temp file is never handed a deleted
+     * file, and the file is cleaned up exactly once once both consumers are
+     * done. Serving is the temp file's lifecycle owner, so it also
+     * {@link RefCountedTempFile#dropBase() drops} the artifact's base
+     * reference (ownership handoff) the moment the body is built.
      */
-    static Content contentFromTempFile(final Path tempFile, final long size) {
+    static Content contentFromTempFile(final RefCountedTempFile handle, final long size) {
+        handle.retain();
+        handle.dropBase();
+        final AtomicBoolean released = new AtomicBoolean();
         return new Content.From(
             Optional.of(size),
             Flowable.using(
-                () -> FileChannel.open(tempFile, StandardOpenOption.READ),
+                () -> FileChannel.open(handle.path(), StandardOpenOption.READ),
                 ProxyCacheWriter::chunkedReader,
                 chan -> {
-                    chan.close();
-                    deleteQuietly(tempFile);
+                    try {
+                        chan.close();
+                    } finally {
+                        if (released.compareAndSet(false, true)) {
+                            handle.release();
+                        }
+                    }
                 }
             )
         );
@@ -1507,23 +1506,153 @@ public final class ProxyCacheWriter {
     ) {
     }
 
-    /** A verified-but-not-yet-committed artifact that can be served immediately. */
+    /**
+     * A verified-but-not-yet-committed artifact that can be served
+     * immediately. Its {@link RefCountedTempFile} is shared between the
+     * serve ({@link #contentFromTempFile()}) and the commit
+     * ({@link #commitAsync()}) so the temp file survives until both readers
+     * release it.
+     *
+     * @param handle     Ref-counted temp file holding the verified bytes.
+     * @param size       Size of the verified artifact in bytes.
+     * @param sidecars   Verified sidecar bytes keyed by algorithm.
+     * @param primaryKey Cache key of the primary artifact.
+     * @param ctx        Request context (trace id) for log correlation.
+     * @param writer     Owning writer, used by {@link #commitAsync()}.
+     */
     public record VerifiedArtifact(
-        Path tempFile,
+        RefCountedTempFile handle,
         long size,
         Map<ChecksumAlgo, byte[]> sidecars,
         Key primaryKey,
         RequestContext ctx,
         ProxyCacheWriter writer
     ) {
+        /** @return the shared temp file path holding the verified bytes. */
+        public Path tempFile() {
+            return this.handle.path();
+        }
+
         /** Create a {@link Content} from the temp file for immediate serving. */
         public Content contentFromTempFile() {
-            return ProxyCacheWriter.contentFromTempFile(this.tempFile, this.size);
+            return ProxyCacheWriter.contentFromTempFile(this.handle, this.size);
         }
 
         /** Commit the verified artifact to storage asynchronously. */
         public CompletionStage<Result<Void>> commitAsync() {
             return this.writer.commitVerified(this);
+        }
+    }
+
+    /**
+     * Reference-counted lifecycle wrapper around a proxy download temp file
+     * that is shared by two independent readers — the client tee
+     * ({@link VerifiedArtifact#contentFromTempFile()}) and the cache commit
+     * ({@link #commitVerified}). Each reader {@link #retain() retains} before
+     * it starts reading and {@link #release() releases} when it finishes; the
+     * file is physically deleted exactly once, on the last release, so
+     * neither reader can delete the file while the other is still reading it.
+     *
+     * <p>Construction installs one <b>base</b> reference so the file survives
+     * the gap between the two readers when they run sequentially (e.g. a
+     * commit that fully completes before the client body is subscribed). The
+     * serve path owns the file's lifecycle and {@link #dropBase() drops} that
+     * base reference when it takes over; the commit path never touches the
+     * base — so a commit-only caller leaves the temp file in place for a
+     * later serve (matching the pre-2.3.0 behaviour where the commit never
+     * deleted the temp file).
+     *
+     * <p>Thread-safe: all state transitions are lock-free CAS operations;
+     * {@link #retain()} refuses to resurrect an already-deleted file.
+     */
+    public static final class RefCountedTempFile {
+
+        /** Shared temp file backing the verified artifact. */
+        private final Path path;
+
+        /** Live reference count; the file is deleted when it reaches zero. */
+        private final AtomicInteger refs;
+
+        /** Guards the one-shot base-reference drop. */
+        private final AtomicBoolean baseDropped;
+
+        /** Guards the exactly-once physical delete. */
+        private final AtomicBoolean deleted;
+
+        /**
+         * Ctor. Starts with a single base reference (count = 1).
+         *
+         * @param path Temp file to guard.
+         */
+        RefCountedTempFile(final Path path) {
+            this.path = path;
+            this.refs = new AtomicInteger(1);
+            this.baseDropped = new AtomicBoolean();
+            this.deleted = new AtomicBoolean();
+        }
+
+        /** @return the guarded temp file path. */
+        public Path path() {
+            return this.path;
+        }
+
+        /**
+         * Acquire a reader reference. Must be paired with exactly one
+         * {@link #release()}.
+         *
+         * @throws IllegalStateException if the file has already been deleted —
+         *     a retain must never resurrect a released file.
+         */
+        void retain() {
+            int cur = this.refs.get();
+            while (true) {
+                if (cur <= 0) {
+                    throw new IllegalStateException(
+                        "retain after temp file released: " + this.path
+                    );
+                }
+                if (this.refs.compareAndSet(cur, cur + 1)) {
+                    return;
+                }
+                cur = this.refs.get();
+            }
+        }
+
+        /**
+         * Release a reader (or the base) reference. Deletes the file exactly
+         * once when the last reference is released.
+         */
+        void release() {
+            if (this.refs.decrementAndGet() == 0) {
+                this.deleteOnce();
+            }
+        }
+
+        /**
+         * Drop the base (construction) reference exactly once — called by the
+         * serve path as it takes ownership of the temp file's lifecycle. A
+         * no-op on every call after the first.
+         */
+        void dropBase() {
+            if (this.baseDropped.compareAndSet(false, true)) {
+                this.release();
+            }
+        }
+
+        /** @return the current reference count (test/diagnostic visibility). */
+        int refCount() {
+            return this.refs.get();
+        }
+
+        /** @return whether the temp file has been physically deleted. */
+        boolean deleted() {
+            return this.deleted.get();
+        }
+
+        private void deleteOnce() {
+            if (this.deleted.compareAndSet(false, true)) {
+                deleteQuietly(this.path);
+            }
         }
     }
 
