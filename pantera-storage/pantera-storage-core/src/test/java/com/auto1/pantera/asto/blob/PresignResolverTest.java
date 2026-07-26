@@ -37,7 +37,7 @@ import org.junit.jupiter.api.io.TempDir;
  * RecordingBlobStore} fake, never wall-clock timing (CLAUDE.md testing
  * doctrine).
  */
-@Timeout(15)
+@Timeout(value = 30, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
 final class PresignResolverTest {
 
     private static final Duration FRESHNESS_TTL = Duration.ofMinutes(5);

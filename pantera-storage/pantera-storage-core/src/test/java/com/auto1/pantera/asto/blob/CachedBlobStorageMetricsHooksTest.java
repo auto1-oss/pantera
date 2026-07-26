@@ -34,7 +34,7 @@ import org.junit.jupiter.api.io.TempDir;
  * (that bridge, {@code CachedBlobStorageMetricsBinder}, is a thin,
  * un-branching forward covered by this seam contract instead).
  */
-@Timeout(15)
+@Timeout(value = 30, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
 final class CachedBlobStorageMetricsHooksTest {
 
     private static final Duration FRESHNESS_TTL = Duration.ofMinutes(5);

@@ -38,7 +38,7 @@ import org.junit.jupiter.api.io.TempDir;
  * namespace sharing the same process-wide bus is ignored. All proved with
  * invocation counts, never wall-clock (CLAUDE.md testing doctrine).
  */
-@Timeout(15)
+@Timeout(value = 30, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
 final class CachedBlobStorageInvalidationTest {
 
     private static final Duration FRESHNESS_TTL = Duration.ofMinutes(5);

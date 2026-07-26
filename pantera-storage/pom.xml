@@ -60,6 +60,26 @@
                     </execution>
                 </executions>
             </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <!--
+                      FileStorage's async file I/O runs on ForkJoinPool.commonPool(),
+                      whose default parallelism is (availableProcessors minus 1), i.e. 1
+                      on a 2-core CI runner. Under the -T8 reactor (8 forks contending
+                      for 2 cores) that single commonPool thread is starved, so the
+                      multi-hop CachedBlobStorage save/read chains (FileStorage save,
+                      digest, finalize; all commonPool hops) can wedge indefinitely on
+                      save().join(): they pass on multi-core dev machines but time out
+                      the CI job. Size the common pool for I/O concurrency so the storage
+                      unit tests progress regardless of the runner's core count. The
+                      durable fix is a dedicated executor in FileStorage, mirroring
+                      OptimizedStorageCache BLOCKING_EXECUTOR; tracked as a follow-up.
+                    -->
+                    <argLine>-Djava.util.concurrent.ForkJoinPool.common.parallelism=8</argLine>
+                </configuration>
+            </plugin>
         </plugins>
         <pluginManagement>
             <plugins>
