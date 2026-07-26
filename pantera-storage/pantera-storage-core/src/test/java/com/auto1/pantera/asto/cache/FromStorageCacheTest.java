@@ -42,6 +42,14 @@ import org.junit.jupiter.api.Timeout;
  *
  * @since 0.24
  */
+// SEPARATE_THREAD is deliberate: these tests block on CompletableFuture.join(),
+// which ignores interruption, so a default (same-thread) @Timeout cannot abort a
+// load wedged under severe CPU starvation (a -T8 reactor, or several concurrent
+// local builds sharing cores). A separate watcher thread abandons the wedged
+// test deterministically, turning a hang into a fast, observable failure instead
+// of stalling the whole reactor. The bound is a hang-guard, not a latency
+// assertion.
+@Timeout(value = 90, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
 final class FromStorageCacheTest {
 
     /**
@@ -368,7 +376,7 @@ final class FromStorageCacheTest {
     }
 
     @Test
-    @Timeout(60)
+    @Timeout(value = 60, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
     void processMultipleRequestsSimultaneously() throws Exception {
         final FromStorageCache cache = new FromStorageCache(this.storage);
         final Key key = new Key.From("key4");
