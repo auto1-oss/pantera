@@ -181,7 +181,7 @@ Two-tier cache (L1 Caffeine + L2 Valkey) in front of `LocalEnabledFilter`. See [
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PANTERA_AUTH_ENABLED_L1_MAX_SIZE` | `10000` | L1 (Caffeine) max entries. |
+| `PANTERA_AUTH_ENABLED_L1_SIZE` | `10000` | L1 (Caffeine) max entries. |
 | `PANTERA_AUTH_ENABLED_L1_TTL_SECONDS` | `300` | L1 TTL in seconds. |
 | `PANTERA_AUTH_ENABLED_L2_ENABLED` | `true` | Enable the Valkey L2 tier. Set `false` to run L1-only. |
 | `PANTERA_AUTH_ENABLED_L2_TTL_SECONDS` | `3600` | L2 TTL in seconds. |
@@ -195,7 +195,7 @@ Two-tier last-known-good fallback for group repositories. `l2.ttlSeconds = 0` is
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PANTERA_GROUP_METADATA_STALE_L1_MAX_SIZE` | `100000` | L1 max entries. |
+| `PANTERA_GROUP_METADATA_STALE_L1_SIZE` | `100000` | L1 max entries. |
 | `PANTERA_GROUP_METADATA_STALE_L1_TTL_SECONDS` | `2592000` | L1 TTL in seconds (30 days). |
 | `PANTERA_GROUP_METADATA_STALE_L2_ENABLED` | `true` | Enable the Valkey L2 tier. |
 | `PANTERA_GROUP_METADATA_STALE_L2_TTL_SECONDS` | `0` | L2 TTL in seconds. `0` means no TTL; Valkey LRU evicts. |
