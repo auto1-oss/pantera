@@ -42,8 +42,17 @@ import org.junit.jupiter.api.io.TempDir;
  * correct behaviour after a boot rebuild -- proved with a recording {@link
  * BlobStore} fake and invocation counts, never wall-clock timing (CLAUDE.md
  * testing doctrine).
+ *
+ * <p>{@code SEPARATE_THREAD} mode is deliberate: the default (same-thread)
+ * {@code @Timeout} enforces the deadline by interrupting the test thread, but
+ * these tests block on {@code CompletableFuture.join()}, which ignores
+ * interruption -- so a write-back path wedged under severe CPU starvation (a
+ * 2-core CI runner under a {@code -T8} reactor, 8 forks contending) would hang
+ * the reused fork until the 45-minute job timeout instead of failing here.
+ * A separate watcher thread abandons the wedged test deterministically. The
+ * 30s bound is a hang-guard, not a latency assertion (~60x the idle runtime).
  */
-@Timeout(15)
+@Timeout(value = 30, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
 final class CachedBlobStorageTest {
 
     private static final Duration FRESHNESS_TTL = Duration.ofMinutes(5);
