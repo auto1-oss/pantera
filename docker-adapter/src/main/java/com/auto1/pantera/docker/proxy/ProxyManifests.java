@@ -13,6 +13,7 @@ package com.auto1.pantera.docker.proxy;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.docker.Digest;
 import com.auto1.pantera.docker.ManifestReference;
+import com.auto1.pantera.docker.ManifestVariant;
 import com.auto1.pantera.docker.Manifests;
 import com.auto1.pantera.docker.Repo;
 import com.auto1.pantera.docker.Tags;
@@ -29,8 +30,10 @@ import com.auto1.pantera.http.log.EcsLogger;
 import com.google.common.base.Joiner;
 import com.google.common.base.Strings;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 
 /**
  * Proxy implementation of {@link Repo}.
@@ -41,14 +44,18 @@ import java.util.concurrent.CompletableFuture;
  * {@code Accept} header (OCI image manifest, Docker distribution v1 / v2,
  * manifest list / image index — see {@link #MANIFEST_ACCEPT_HEADERS}),
  * so two clients hitting the same {@code /v2/<repo>/manifests/<ref>} can
- * receive different bodies. The
- * {@code ProxyCacheWriter.streamThroughAndCommit} primitive is keyed by a
- * single {@code Key} per primary, which cannot encode the Accept-driven
- * variant — caching a manifest list response under a key requested with
- * an image-manifest Accept would corrupt downstream clients. Manifests
- * stay on the buffered passthrough path; blobs (digest-addressed,
- * content-immutable) already stream through
+ * receive different bodies. Manifests therefore stay on the buffered
+ * passthrough path (not the {@code ProxyCacheWriter.streamThroughAndCommit}
+ * primitive, which is keyed by a single {@code Key} per primary); blobs
+ * (digest-addressed, content-immutable) already stream through
  * {@link com.auto1.pantera.docker.proxy.ProxyBlob#content()}.</p>
+ *
+ * <p>WS4-docker.7: {@link #get(ManifestReference, ManifestVariant)} forwards
+ * the client's negotiated {@code Accept} upstream instead of a fixed superset,
+ * so the upstream returns the variant the client asked for. Combined with the
+ * variant-keyed cache in {@link com.auto1.pantera.docker.cache.CacheManifests},
+ * a manifest-list response and an image-manifest response for the same tag are
+ * fetched and cached independently rather than cross-served.</p>
  */
 public final class ProxyManifests implements Manifests {
 
@@ -104,7 +111,28 @@ public final class ProxyManifests implements Manifests {
 
     @Override
     public CompletableFuture<Optional<Manifest>> get(final ManifestReference ref) {
+        return this.get(ref, ManifestVariant.any());
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>WS4-docker.7: forwards the client's negotiated {@code Accept} upstream
+     * so the upstream registry returns the representation the client actually
+     * wants — a client asking only for {@code manifest.v2+json} gets the
+     * single-arch manifest, not the OCI index it cannot parse. When the
+     * variant is not negotiated (absent/wildcard {@code Accept}), the upstream
+     * {@link #MANIFEST_ACCEPT_HEADERS superset} is sent, preserving the
+     * pre-negotiation behaviour.</p>
+     */
+    @Override
+    public CompletableFuture<Optional<Manifest>> get(
+        final ManifestReference ref, final ManifestVariant variant
+    ) {
         final String uri = String.format("/v2/%s/manifests/%s", name, ref.digest());
+        final Headers accept = variant.negotiated()
+            ? acceptHeaders(variant.mediaTypes())
+            : MANIFEST_ACCEPT_HEADERS;
         EcsLogger.info("com.auto1.pantera.docker.proxy")
             .message("ProxyManifests upstream request")
             .eventCategory("web")
@@ -118,7 +146,7 @@ public final class ProxyManifests implements Manifests {
         return new ResponseSink<>(
             this.remote.response(
                 new RequestLine(RqMethod.GET, uri),
-                MANIFEST_ACCEPT_HEADERS,
+                accept,
                 Content.EMPTY
             ),
             response -> {
@@ -182,6 +210,21 @@ public final class ProxyManifests implements Manifests {
                 return result;
             }
         ).result();
+    }
+
+    /**
+     * Builds the upstream {@code Accept} headers forwarding the client's
+     * negotiated media ranges (WS4-docker.7).
+     *
+     * @param mediaTypes Client-acceptable media ranges.
+     * @return One {@code Accept} header per media range.
+     */
+    private static Headers acceptHeaders(final List<String> mediaTypes) {
+        return new Headers(
+            mediaTypes.stream()
+                .map(type -> new Header("Accept", type))
+                .collect(Collectors.toList())
+        );
     }
 
     /**

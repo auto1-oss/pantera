@@ -13,6 +13,7 @@ package com.auto1.pantera.docker.cache;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.docker.Digest;
 import com.auto1.pantera.docker.ManifestReference;
+import com.auto1.pantera.docker.ManifestVariant;
 import com.auto1.pantera.docker.Manifests;
 import com.auto1.pantera.docker.Repo;
 import com.auto1.pantera.docker.Tags;
@@ -132,6 +133,25 @@ public final class CacheManifests implements Manifests {
 
     @Override
     public CompletableFuture<Optional<Manifest>> get(final ManifestReference ref) {
+        return this.get(ref, ManifestVariant.any());
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>WS4-docker.7: the origin fetch forwards the negotiated {@code Accept}
+     * upstream and the cache is keyed by the variant
+     * ({@link ManifestReference#withVariant(ManifestVariant)}), so a
+     * v2-manifest and an OCI-index representation of the same tag are cached
+     * independently. A request whose {@code Accept} does not match a cached
+     * variant misses that variant's key and fetches the correct one upstream;
+     * on upstream failure the offline fallback serves the matching cached
+     * variant rather than cross-serving a different media type.</p>
+     */
+    @Override
+    public CompletableFuture<Optional<Manifest>> get(
+        final ManifestReference ref, final ManifestVariant variant
+    ) {
         final long startTime = System.currentTimeMillis();
         final String requestOwner = MDC.get("user.name");
         // Capture trace.id + client.ip from the request-thread MDC at the
@@ -142,7 +162,7 @@ public final class CacheManifests implements Manifests {
         // inherit MDC.
         final String requestTraceId = MDC.get(com.auto1.pantera.http.log.EcsMdc.TRACE_ID);
         final String requestClientIp = MDC.get(com.auto1.pantera.http.log.EcsMdc.CLIENT_IP);
-        return this.origin.manifests().get(ref).handle(
+        return this.origin.manifests().get(ref, variant).handle(
             (original, throwable) -> {
                 final long duration = System.currentTimeMillis() - startTime;
                 final CompletionStage<Optional<Manifest>> result;
@@ -166,7 +186,7 @@ public final class CacheManifests implements Manifests {
                             Manifest.MANIFEST_OCI_V1.equals(manifest.mediaType()) ||
                             Manifest.MANIFEST_LIST_SCHEMA2.equals(manifest.mediaType()) ||
                             Manifest.MANIFEST_OCI_INDEX.equals(manifest.mediaType())) {
-                            this.copy(ref, requestOwner, requestTraceId, requestClientIp);
+                            this.copy(ref, variant, requestOwner, requestTraceId, requestClientIp);
                             result = CompletableFuture.completedFuture(original);
                         } else {
                             EcsLogger.warn("com.auto1.pantera.docker")
@@ -197,7 +217,8 @@ public final class CacheManifests implements Manifests {
                             .duration(duration)
                             .field("log.source", "application")
                             .log();
-                        result = this.cache.manifests().get(ref).exceptionally(ignored -> original);
+                        result = this.cache.manifests().get(ref.withVariant(variant))
+                            .exceptionally(ignored -> original);
                     }
                 } else {
                     this.recordProxyMetric("exception", duration);
@@ -214,7 +235,7 @@ public final class CacheManifests implements Manifests {
                         .error(throwable)
                         .field("log.source", "application")
                         .log();
-                    result = this.cache.manifests().get(ref);
+                    result = this.cache.manifests().get(ref.withVariant(variant));
                 }
                 return result;
             }
@@ -232,6 +253,8 @@ public final class CacheManifests implements Manifests {
      * Copy manifest by reference from original to cache.
      *
      * @param ref Manifest reference.
+     * @param variant Negotiated {@code Accept}-variant; re-fetched from origin
+     *                and used to key the cache entry so variants stay separate.
      * @param owner Authenticated user login captured from request thread.
      * @param traceId Request {@code trace.id} captured from MDC on the
      *                request thread; threaded through to the downstream
@@ -242,13 +265,13 @@ public final class CacheManifests implements Manifests {
      * @return Copy completion.
      */
     private CompletionStage<Void> copy(
-        final ManifestReference ref, final String owner,
+        final ManifestReference ref, final ManifestVariant variant, final String owner,
         final String traceId, final String clientIp
     ) {
-        return this.origin.manifests().get(ref)
+        return this.origin.manifests().get(ref, variant)
             .thenApply(Optional::get)
             .thenCompose(manifest ->
-                this.copySequentially(ref, manifest, owner, traceId, clientIp))
+                this.copySequentially(ref, variant, manifest, owner, traceId, clientIp))
             .handle(
                 (ignored, ex) -> {
                     if (ex != null) {
@@ -274,12 +297,14 @@ public final class CacheManifests implements Manifests {
      * on first access, so no separate blob pre-fetching is needed.
      *
      * @param ref Manifest reference
+     * @param variant Negotiated {@code Accept}-variant used to key the cache entry.
      * @param manifest The manifest
      * @param owner Authenticated user login captured from request thread.
      * @return Completion when manifest is cached
      */
     private CompletionStage<Void> copySequentially(
         final ManifestReference ref,
+        final ManifestVariant variant,
         final Manifest manifest,
         final String owner,
         final String traceId,
@@ -304,7 +329,7 @@ public final class CacheManifests implements Manifests {
                 })
             : CompletableFuture.completedFuture(Optional.empty());
         return release.thenCompose(
-            rel -> this.finalizeManifestCache(ref, manifest, rel, owner, traceId, clientIp)
+            rel -> this.finalizeManifestCache(ref, variant, manifest, rel, owner, traceId, clientIp)
         );
     }
 
@@ -313,6 +338,9 @@ public final class CacheManifests implements Manifests {
      * This method avoids blocking calls by using async composition.
      *
      * @param ref Manifest reference
+     * @param variant Negotiated {@code Accept}-variant; the manifest is stored
+     *                under {@link ManifestReference#withVariant(ManifestVariant)}
+     *                so distinct variants of one tag do not overwrite each other.
      * @param manifest The manifest
      * @param rel Release timestamp from config
      * @param owner Authenticated user login captured from request thread.
@@ -320,6 +348,7 @@ public final class CacheManifests implements Manifests {
      */
     private CompletionStage<Void> finalizeManifestCache(
         final ManifestReference ref,
+        final ManifestVariant variant,
         final Manifest manifest,
         final Optional<Long> rel,
         final String owner,
@@ -380,7 +409,8 @@ public final class CacheManifests implements Manifests {
                         ).withContext(traceId, clientIp)
                     );
                 });
-                return this.cache.manifests().putUnchecked(ref, manifest.content())
+                return this.cache.manifests()
+                    .putUnchecked(ref.withVariant(variant), manifest.content())
                     .thenApply(ignored -> null);
             });
         });

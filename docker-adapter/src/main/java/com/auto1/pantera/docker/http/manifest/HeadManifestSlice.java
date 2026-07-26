@@ -12,6 +12,7 @@ package com.auto1.pantera.docker.http.manifest;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.docker.Docker;
+import com.auto1.pantera.docker.ManifestVariant;
 import com.auto1.pantera.docker.error.ManifestError;
 import com.auto1.pantera.docker.error.ManifestNotAcceptableError;
 import com.auto1.pantera.docker.http.DigestHeader;
@@ -21,6 +22,7 @@ import com.auto1.pantera.docker.perms.DockerRepositoryPermission;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.headers.Accept;
 import com.auto1.pantera.http.headers.ContentType;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
@@ -64,11 +66,15 @@ public class HeadManifestSlice extends DockerActionSlice {
         // the async hops below. An absent header always accepts, preserving
         // pre-negotiation behaviour.
         final ManifestAccept accept = new ManifestAccept(headers);
+        // Proxy-cache/upstream variant derived from the same Accept header so
+        // the proxy fetches and caches each media-type variant independently
+        // (never cross-serving); non-proxy modes ignore it via the default get.
+        final ManifestVariant variant = ManifestVariant.fromAccept(new Accept(headers).values());
         return body.asBytesFuture().thenCompose(ignored -> {
             MDC.put("user.name", login);
             com.auto1.pantera.http.log.RequestContextHeaders.bindToMdc(headers);
             return this.docker.repo(request.name()).manifests()
-                .get(request.reference())
+                .get(request.reference(), variant)
                 .thenApply(
                     manifest -> manifest.map(
                         found -> {
