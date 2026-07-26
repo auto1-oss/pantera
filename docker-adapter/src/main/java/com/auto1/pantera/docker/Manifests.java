@@ -53,6 +53,28 @@ public interface Manifests {
     CompletableFuture<Optional<Manifest>> get(ManifestReference ref);
 
     /**
+     * Get manifest by reference, honoring the client's negotiated
+     * {@code Accept}-variant (WS4-docker.7).
+     *
+     * <p>Only the proxy/cache implementations care: they forward the variant's
+     * {@code Accept} upstream and key the cache by {@link ManifestVariant#cacheToken()}
+     * so a v2-manifest and an OCI-index representation of the same tag are
+     * fetched and cached independently, never cross-served. Every other
+     * implementation (authoritative local store, group, composites) serves a
+     * single stored representation and ignores the variant — the default here
+     * delegates to {@link #get(ManifestReference)} so they need no change.</p>
+     *
+     * @param ref Manifest reference.
+     * @param variant Negotiated {@code Accept}-variant.
+     * @return Manifest instance if it is found, empty if manifest is absent.
+     */
+    default CompletableFuture<Optional<Manifest>> get(
+        final ManifestReference ref, final ManifestVariant variant
+    ) {
+        return get(ref);
+    }
+
+    /**
      * List manifest tags.
      *
      * @param pagination  Pagination parameters.

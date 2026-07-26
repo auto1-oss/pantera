@@ -12,6 +12,7 @@ package com.auto1.pantera.docker.http.manifest;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.docker.Docker;
+import com.auto1.pantera.docker.ManifestVariant;
 import com.auto1.pantera.docker.error.ManifestError;
 import com.auto1.pantera.docker.error.ManifestNotAcceptableError;
 import com.auto1.pantera.docker.http.DigestHeader;
@@ -21,6 +22,7 @@ import com.auto1.pantera.docker.perms.DockerRepositoryPermission;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.headers.Accept;
 import com.auto1.pantera.http.headers.ContentType;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.rq.RequestLine;
@@ -48,6 +50,11 @@ public class GetManifestSlice extends DockerActionSlice {
         // login does). An absent header yields an always-accepting gate,
         // preserving pre-negotiation behaviour.
         final ManifestAccept accept = new ManifestAccept(headers);
+        // The same Accept header, as a proxy-cache/upstream variant: the
+        // proxy forwards it upstream and keys the cache by it so a v2-manifest
+        // and an OCI-index of the same tag are fetched/cached independently
+        // and never cross-served. Non-proxy modes ignore it (default get).
+        final ManifestVariant variant = ManifestVariant.fromAccept(new Accept(headers).values());
         // Consume request body to prevent Vert.x resource leak
         return body.asBytesFuture().thenCompose(ignored -> {
             MDC.put("user.name", login);
@@ -59,7 +66,7 @@ public class GetManifestSlice extends DockerActionSlice {
             com.auto1.pantera.http.log.RequestContextHeaders.bindToMdc(headers);
             return this.docker.repo(request.name())
                 .manifests()
-                .get(request.reference())
+                .get(request.reference(), variant)
                 .thenApply(
                     manifest -> manifest.map(
                         found -> {
