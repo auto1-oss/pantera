@@ -60,11 +60,71 @@ final class SliceByPathClientBaseTest {
     }
 
     @Test
-    void doesNotOverwriteAnAlreadyStampedBase() {
-        // Group-wins: the group's base is stamped before any member slice runs.
+    void clientSuppliedBaseHeaderIsOverwrittenNotTrusted() {
+        // A client that sends the internal header directly (exact case) must
+        // never have it echoed back — SliceByPath always re-derives the base
+        // for the repository actually addressed instead of trusting inbound
+        // input. This is what makes group-wins safe: the header is set
+        // exactly once, here, regardless of what arrived on the wire.
         MatcherAssert.assertThat(
-            this.observedBaseWithPreStamp("https://h/api/npm/npm_group"),
-            new IsEqual<>(Optional.of("https://h/api/npm/npm_group"))
+            this.observedBaseWithClientSuppliedHeader(
+                ClientBaseUrl.HEADER, "https://evil.example.com"
+            ),
+            new IsEqual<>(Optional.of("http://reg.example.com/test_prefix/npm_group"))
+        );
+    }
+
+    @Test
+    void clientSuppliedBaseHeaderIsOverwrittenEvenInLowercase() {
+        // Headers.add(header, true)'s overwrite path compares names
+        // case-sensitively, so a lowercase client header would otherwise
+        // survive alongside the real one and win, since ClientBaseUrl#first
+        // reads index 0. Confirms the strip is genuinely case-insensitive.
+        MatcherAssert.assertThat(
+            this.observedBaseWithClientSuppliedHeader(
+                "x-pantera-client-base", "https://evil.example.com"
+            ),
+            new IsEqual<>(Optional.of("http://reg.example.com/test_prefix/npm_group"))
+        );
+    }
+
+    @Test
+    void clientSuppliedBaseIsDroppedWhenNoReplacementCanBeDerived() {
+        // When SliceByPath cannot derive a value for the resolved repo (the
+        // recorded original path does not end with the repo-relative
+        // remainder), the header must simply be absent — never fall back to
+        // whatever the client supplied.
+        final Headers headers = new Headers()
+            .add("Host", "reg.example.com")
+            .add(ClientBaseUrl.ORIGINAL_PATH, "/does/not/match/the/remainder")
+            .add(ClientBaseUrl.HEADER, "https://evil.example.com");
+        MatcherAssert.assertThat(
+            this.invoke("/test_prefix/npm_group/pnpm", headers),
+            new IsEqual<>(Optional.empty())
+        );
+    }
+
+    @Test
+    void clientSuppliedOriginalPathCannotSteerTheDerivedBase() {
+        // Full production pipeline: ApiRoutingSlice always sits in front of
+        // SliceByPath (MainSlice) and must discard any inbound
+        // X-Original-Path before setting its own — otherwise a client could
+        // point the derived base's path at a repository of its choosing.
+        final PrefixesConfig prefixes = new PrefixesConfig(List.of("test_prefix"));
+        final RecordingSlices slices = new RecordingSlices(SliceByPathClientBaseTest.repositories());
+        final Slice pipeline = new ApiRoutingSlice(
+            new SliceByPath(slices, prefixes), slices.repositories()
+        );
+        final Headers headers = new Headers()
+            .add("Host", "reg.example.com")
+            .add(ClientBaseUrl.ORIGINAL_PATH, "/test_prefix/api/npm/evil_group/pnpm");
+        pipeline.response(
+            new RequestLine(RqMethod.GET, "/test_prefix/api/npm/npm_group/pnpm"),
+            headers, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            new ClientBaseUrl(slices.lastHeaders()).stamped(),
+            new IsEqual<>(Optional.of("http://reg.example.com/test_prefix/api/npm/npm_group"))
         );
     }
 
@@ -93,16 +153,21 @@ final class SliceByPathClientBaseTest {
     }
 
     /**
-     * Drive {@link SliceByPath} with a base already stamped by an outer
-     * slice, returning the base the downstream slice observed.
+     * Drive {@link SliceByPath} with {@link ClientBaseUrl#HEADER} already
+     * present under the given name — simulating a client that sent the
+     * internal header itself, in whatever case — returning the base the
+     * downstream slice observed.
      *
-     * @param preStamped Base stamped before {@link SliceByPath} runs
+     * @param headerName Header name to send the value under, any case
+     * @param clientSuppliedValue Value the "client" sends for that header
      * @return Stamped base, if present
      */
-    private Optional<String> observedBaseWithPreStamp(final String preStamped) {
+    private Optional<String> observedBaseWithClientSuppliedHeader(
+        final String headerName, final String clientSuppliedValue
+    ) {
         final Headers headers = new Headers()
             .add("Host", "reg.example.com")
-            .add(ClientBaseUrl.HEADER, preStamped);
+            .add(headerName, clientSuppliedValue);
         return this.invoke("/test_prefix/npm_group/pnpm", headers);
     }
 
