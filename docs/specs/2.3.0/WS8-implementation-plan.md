@@ -743,7 +743,7 @@ git commit -m "fix(npm): root tarball URLs at the repository the client addresse
 - Consumes: `NpmProxy` (`getPackageMetadataOnly`, `getPackageContentStream`), `CooldownMetadataService.filterMetadata(...)`, `NpmMetadataParser`/`Filter`/`Rewriter`, `Tarballs.rewriteTarball(String, String)`, `MetadataETag`, `AuditContext`, `AuditLogger.resolution(...)`.
 - Produces — Task 5 calls exactly these:
   - `new VersionManifestResolver(NpmProxy, CooldownMetadataService, String repoType, String repoName)`
-  - `Optional<PackageRef> parse(String rawPath)`
+  - `static Optional<PackageRef> parse(String rawPath)` — **package-private static**, because it is a pure function of its argument and uses no instance state. PMD bans only *public* static methods, so this is legal, and it keeps the tests from constructing a resolver with null collaborators just to reach it. Task 5 calls it as `VersionManifestResolver.parse(...)`.
   - `CompletableFuture<Response> resolve(String pkg, String ref, String tarballPrefix, Optional<String> clientETag, AuditContext ctx, String owner)`
   - nested `PackageRef` with `String pkg()` and `String ref()`
 
@@ -763,7 +763,7 @@ final class VersionManifestResolverTest {
     @Test
     void parsesUnscopedPackageAndVersion() {
         final VersionManifestResolver.PackageRef ref =
-            new VersionManifestResolver(null, null, null, null).parse("pnpm/11.5.1").orElseThrow();
+            VersionManifestResolver.parse("pnpm/11.5.1").orElseThrow();
         MatcherAssert.assertThat("package", ref.pkg(), new IsEqual<>("pnpm"));
         MatcherAssert.assertThat("reference", ref.ref(), new IsEqual<>("11.5.1"));
     }
@@ -771,8 +771,7 @@ final class VersionManifestResolverTest {
     @Test
     void parsesScopedPackageAndVersion() {
         final VersionManifestResolver.PackageRef ref =
-            new VersionManifestResolver(null, null, null, null)
-                .parse("@types/node/22.0.0").orElseThrow();
+            VersionManifestResolver.parse("@types/node/22.0.0").orElseThrow();
         MatcherAssert.assertThat("package", ref.pkg(), new IsEqual<>("@types/node"));
         MatcherAssert.assertThat("reference", ref.ref(), new IsEqual<>("22.0.0"));
     }
@@ -781,7 +780,7 @@ final class VersionManifestResolverTest {
     void treatsScopedPackageWithoutVersionAsAPackument() {
         // THE ambiguity: /@types/node is a package name, not (pkg=@types, ref=node).
         MatcherAssert.assertThat(
-            new VersionManifestResolver(null, null, null, null).parse("@types/node").isPresent(),
+            VersionManifestResolver.parse("@types/node").isPresent(),
             new IsEqual<>(false)
         );
     }
@@ -789,16 +788,19 @@ final class VersionManifestResolverTest {
     @Test
     void treatsBarePackageAsAPackument() {
         MatcherAssert.assertThat(
-            new VersionManifestResolver(null, null, null, null).parse("pnpm").isPresent(),
+            VersionManifestResolver.parse("pnpm").isPresent(),
             new IsEqual<>(false)
         );
     }
 
     @Test
     void rejectsDashAndEmptyReferences() {
-        final VersionManifestResolver resolver = new VersionManifestResolver(null, null, null, null);
-        MatcherAssert.assertThat("dash", resolver.parse("pnpm/-").isPresent(), new IsEqual<>(false));
-        MatcherAssert.assertThat("empty", resolver.parse("pnpm/").isPresent(), new IsEqual<>(false));
+        MatcherAssert.assertThat(
+            "dash", VersionManifestResolver.parse("pnpm/-").isPresent(), new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "empty", VersionManifestResolver.parse("pnpm/").isPresent(), new IsEqual<>(false)
+        );
     }
 }
 ```
@@ -824,7 +826,7 @@ Create the class with the license header, the four constructor fields, and:
      * @param rawPath Package path, with or without a leading slash
      * @return Parsed pair, or empty when the path is a plain packument request
      */
-    Optional<PackageRef> parse(final String rawPath) {
+    static Optional<PackageRef> parse(final String rawPath) {
         Optional<PackageRef> result = Optional.empty();
         if (rawPath != null && !rawPath.isEmpty()) {
             final String trimmed;
@@ -1015,7 +1017,7 @@ Delete the `LATEST_SUFFIX` constant (`:136-140`) and replace the dispatch block 
             // packument so cooldown still applies, with the tarball URL
             // rewritten to the base the client addressed.
             final Optional<VersionManifestResolver.PackageRef> versionRef =
-                this.resolver.parse(rawPackageName);
+                VersionManifestResolver.parse(rawPackageName);
             if (versionRef.isPresent()) {
                 return this.resolver.resolve(
                     versionRef.get().pkg(), versionRef.get().ref(),
