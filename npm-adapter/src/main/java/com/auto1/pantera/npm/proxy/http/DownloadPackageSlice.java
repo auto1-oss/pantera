@@ -18,6 +18,7 @@ import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.ClientBaseUrl;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.npm.proxy.NpmProxy;
@@ -985,18 +986,25 @@ public final class DownloadPackageSlice implements Slice {
     }
     
     /**
-     * Get tarball URL prefix for streaming transformer.
+     * Client-facing prefix for tarball URLs, in precedence order: the base
+     * stamped by {@code SliceByPath} for the repository the client actually
+     * addressed (so a group member emits group URLs), then this repository's
+     * configured {@code url:}, then the request's own origin.
+     *
+     * @param headers Request headers
+     * @return Absolute URL prefix
      */
     private String getTarballPrefix(final Headers headers) {
-        if (this.baseUrl.isPresent()) {
-            return this.baseUrl.get().toString();
+        final String result;
+        final Optional<String> stamped = new ClientBaseUrl(headers).stamped();
+        if (stamped.isPresent()) {
+            result = stamped.get();
+        } else if (this.baseUrl.isPresent()) {
+            result = this.baseUrl.get().toString();
+        } else {
+            result = this.assetPrefix(headers);
         }
-        final String host = StreamSupport.stream(headers.spliterator(), false)
-            .filter(e -> "Host".equalsIgnoreCase(e.getKey()))
-            .findAny()
-            .map(Header::getValue)
-            .orElse("localhost");
-        return this.assetPrefix(host);
+        return result;
     }
 
     /**
@@ -1114,22 +1122,8 @@ public final class DownloadPackageSlice implements Slice {
      * @param headers Request headers
      * @return External client package
      */
-    private String clientFormat(final String data,
-        final Iterable<Header> headers) {
-        final String prefix;
-        if (this.baseUrl.isPresent()) {
-            // Use configured repository URL
-            prefix = this.baseUrl.get().toString();
-        } else {
-            // Fall back to Host header
-            final String host = StreamSupport.stream(headers.spliterator(), false)
-                .filter(e -> "Host".equalsIgnoreCase(e.getKey()))
-                .findAny().orElseThrow(
-                    () -> new RuntimeException("Could not find Host header in request")
-                ).getValue();
-            prefix = this.assetPrefix(host);
-        }
-        return new ClientContent(data, prefix).value().toString();
+    private String clientFormat(final String data, final Headers headers) {
+        return new ClientContent(data, this.getTarballPrefix(headers)).value().toString();
     }
 
     /**
@@ -1148,16 +1142,18 @@ public final class DownloadPackageSlice implements Slice {
     }
 
     /**
-     * Generates asset base reference.
-     * @param host External host
+     * Generates asset base reference from the request's own origin,
+     * honouring reverse-proxy forwarding headers.
+     * @param headers Request headers
      * @return Asset base reference
      */
-    private String assetPrefix(final String host) {
+    private String assetPrefix(final Headers headers) {
+        final String origin = new ClientBaseUrl(headers).origin();
         final String result;
         if (StringUtils.isEmpty(this.path.prefix())) {
-            result = String.format("http://%s", host);
+            result = origin;
         } else {
-            result = String.format("http://%s/%s", host, this.path.prefix());
+            result = String.format("%s/%s", origin, this.path.prefix());
         }
         return result;
     }
