@@ -45,7 +45,12 @@ All citations are against `feat/2.3.0`.
 - **Member config wins.** `NpmProxyAdapter.java:68` sets `baseUrl = Optional.of(cfg.url())` — the member's own configured URL — and `DownloadPackageSlice.getTarballPrefix` (`:990-999`) returns it unconditionally when present. `clientFormat` (`:1117-1132`) does the same for the non-streaming path. A client addressing `npm_group` therefore receives `…/npm_proxy/…` tarballs.
 - **The fallback is worse than the config.** With no configured URL, `assetPrefix` (`:1155-1161`) builds `String.format("http://%s/%s", host, prefix)` — scheme hardcoded to `http://`, `X-Forwarded-Proto`/`-Host`/`-Prefix` ignored entirely. Behind any TLS-terminating reverse proxy this emits URLs the client cannot use.
 - **The shipped sample config is already wrong.** `pantera-main/docker-compose/pantera/repo/npm_proxy.yaml` declares `url: http://localhost:8081/npm_proxy`, but the documented dev route is `http://localhost:8081/test_prefix/api/npm_proxy/…` (`/CLAUDE.md`, "Local dev stack playbook"). The in-tree fixture cannot round-trip a tarball URL.
-- **The needed plumbing already exists.** `TrimPathSlice` (`pantera-core/.../http/slice/TrimPathSlice.java:105`) stamps `X-FullPath` with the full pre-trim path at the exact moment it also holds the trimmed remainder — i.e. it can compute the repo base precisely. `GroupResolver.dropFullPathHeader` (`group/GroupResolver.java:1279-1285`) filters **only** `X-FullPath` and copies every other header through to the member (`:1140-1146`, `:1244-1247`). A second, dedicated header therefore survives the group→member hop unmodified.
+- **`X-FullPath` cannot carry the client base.** `TrimPathSlice` (`pantera-core/.../http/slice/TrimPathSlice.java:105`) stamps it, but its recursion guard (`:84-90`) means only the *first* slice in a chain trims — and for a group member the stamp holds the **member's** path (`/npm_proxy/pnpm`), which is precisely why `GroupResolver.dropFullPathHeader` (`group/GroupResolver.java:1279-1285`) strips it. It filters **only** `X-FullPath` and copies every other header through to the member (`:1140-1146`, `:1244-1247`), so a second, dedicated header *does* survive the group→member hop.
+- **Two request-pipeline choke points know the true client base.** `ApiRoutingSlice.rewrite` (`pantera-main/.../http/ApiRoutingSlice.java:157-176`) holds `originalPath`, `prefix`, `repoName`, and `rest` for `/api/`-style routes (`PTN_API = ^(/[^/]+)?/api/(.+)$`, `:50-52`), and already stamps `X-Original-Path`; `rest` is a genuine substring of `originalPath`, so the repo base is `originalPath` minus `rest` — exact, with no suffix-matching or URL-decoding guesswork. `SliceByPath.response` (`pantera-main/.../http/SliceByPath.java:51-81`) is the single choke point for **both** route styles: it strips the global prefix and resolves the repository key.
+
+### D. `/latest` leaks upstream tarball URLs
+
+`DownloadPackageSlice`'s `/latest` shortcut documents its own behaviour: *"No URL rewriting is applied to the manifest body — tarball URLs in the manifest are preserved as-is from upstream"* (`:645-647`, implemented at `buildLatestManifestResponse` `:770-800`). So `GET /<pkg>/latest` through a proxy hands the client a `registry.npmjs.org` URL. It passes corepack's check (it allows the default registry) but bypasses Pantera entirely — no caching, no audit trail, and a hard failure in an air-gapped deployment. Mechanism B fixes this as a side effect by routing `/latest` through the same rewriting resolver as every other reference.
 
 ### C. What is *not* broken
 
@@ -62,16 +67,28 @@ A single internal header carrying the **client-facing base URL of the repository
 **Derivation** (new `ClientBaseUrl` helper, `pantera-core`, `com.auto1.pantera.http.headers`):
 
 ```
-origin = (X-Forwarded-Proto | request scheme) + "://" + (X-Forwarded-Host | Host)
-prefix = X-Forwarded-Prefix (optional, prepended)
-repoPath = fullPath minus trimmedSuffix          // both held by TrimPathSlice
-base = origin + prefix + repoPath
+origin = (X-Forwarded-Proto | "http") + "://" + (X-Forwarded-Host | Host)
+base   = origin + (X-Forwarded-Prefix | "") + repoBasePath
 ```
 
-**Stamping** — in `TrimPathSlice`, adjacent to the existing `X-FullPath` add (`:105`), under two rules:
+**Stamping — one point: `SliceByPath.response`.** It is the only place that simultaneously knows the client-facing path, the resolved repository key, and (via `RepositorySlices`) that repository's config. It also sits *above* `GroupResolver`, so the header is already set to the **group's** base before any member slice runs — group-wins needs no member-level suppression logic.
 
-1. **Stamp-if-absent.** A member repository is itself wrapped in a `TrimPathSlice`; because the group's value is already on the request, the member does not overwrite it. Group-wins is a consequence of the rule, not a special case. (`X-FullPath` cannot serve this purpose — `GroupResolver` deliberately strips it to defeat the recursion guard at `:84`.)
-2. **Configured `url:` overrides the derived value** for the *addressed* repository. `RepositorySlices` passes the repo's configured URL into the wrapper; when set, it is stamped verbatim. A group has no `url:` and so derives; a member's `url:` is never consulted once a header is present.
+```
+originalClientPath = X-Original-Path (stamped by ApiRoutingSlice) | line.uri().getPath()
+remainder          = strippedPath minus "/" + repoKey            // e.g. "/pnpm"
+repoBasePath       = originalClientPath minus remainder
+```
+
+Reading `X-Original-Path` is what preserves the `/api/<type>` segment the client actually configured:
+
+| Route style | `X-Original-Path` | stripped | `repoBasePath` |
+|---|---|---|---|
+| `/api/` | `/test_prefix/api/npm/npm_group/pnpm` | `/npm_group/pnpm` | `/test_prefix/api/npm/npm_group` |
+| plain | *(absent)* → `/test_prefix/npm_group/pnpm` | `/npm_group/pnpm` | `/test_prefix/npm_group` |
+
+Both paths come from `line.uri().getPath()`, so they are consistently decoded and `remainder` is a genuine suffix — no encoding-mismatch fragility. If it is ever *not* a suffix, the helper returns empty and consumers fall through to the existing chain rather than emitting a wrong URL.
+
+**The addressed repository's configured `url:` overrides the derived value**, stamped verbatim when set. Because the stamp happens once, at the addressed repository, a *member's* `url:` is never consulted — which is what makes this safe: a group has no `url:` and so derives, while an operator who has deliberately pinned a canonical external URL on the repo the client addresses still gets it honoured.
 
 **Consumption** — `DownloadPackageSlice.getTarballPrefix`/`clientFormat` and `SingleVersionSlice` take the header as first choice. The existing chain (`cfg.url()` → `Host` fallback) is retained beneath it for non-HTTP and unit-test paths, so no call site can become URL-less.
 
@@ -94,15 +111,18 @@ Generalise the `/latest` shortcut into a full version-or-tag resolver. Because `
 
 ```
 client   GET https://host/artifactory/api/npm/npm_group/pnpm/11.5.1
-  TrimPathSlice(npm_group)  stamps X-Pantera-Client-Base:
-                            https://host/artifactory/api/npm/npm_group
-                            trims path -> /pnpm/11.5.1
-  GroupResolver             drops X-FullPath, keeps client-base
-                            rewrites path -> /npm_proxy/pnpm/11.5.1
-  TrimPathSlice(npm_proxy)  header present -> does NOT overwrite
-  DownloadPackageSlice      -> VersionManifestResolver("pnpm", "11.5.1")
-                            packument (cached) -> cooldown filter -> versions["11.5.1"]
-  response                  dist.tarball =
+  ApiRoutingSlice     stamps X-Original-Path (existing behaviour)
+                      rewrites -> /artifactory/npm_group/pnpm/11.5.1
+  SliceByPath         strips global prefix -> /npm_group/pnpm/11.5.1
+                      resolves key "npm_group", remainder "/pnpm/11.5.1"
+                      stamps X-Pantera-Client-Base:
+                      https://host/artifactory/api/npm/npm_group
+  TrimPathSlice       trims -> /pnpm/11.5.1
+  GroupResolver       drops X-FullPath, keeps client-base
+                      rewrites path -> /npm_proxy/pnpm/11.5.1
+  DownloadPackageSlice -> VersionManifestResolver("pnpm", "11.5.1")
+                      packument (cached) -> cooldown filter -> versions["11.5.1"]
+  response            dist.tarball =
     https://host/artifactory/api/npm/npm_group/pnpm/-/pnpm-11.5.1.tgz
 ```
 
@@ -111,10 +131,10 @@ client   GET https://host/artifactory/api/npm/npm_group/pnpm/11.5.1
 ## 4. Implementation plan (ordered, file-level)
 
 **WS8-npm.1 — `ClientBaseUrl` helper [S]**
-`pantera-core/.../http/headers/ClientBaseUrl.java` (new) — header name constant, derivation from `(Headers, fullPath, trimmedPath)`, forwarded-header handling. Pure function, no I/O.
+`pantera-core/.../http/headers/ClientBaseUrl.java` (new) — header name constant, `origin(Headers)` (forwarded-header handling), and `derive(originalClientPath, remainder)` returning `Optional<String>` (empty when `remainder` is not a suffix). Pure functions, no I/O.
 
-**WS8-npm.2 — stamp in `TrimPathSlice` [S]**
-`pantera-core/.../http/slice/TrimPathSlice.java:105` — add the header alongside `X-FullPath`, stamp-if-absent. New optional ctor parameter carrying the addressed repo's configured `url:`; existing ctors delegate with `Optional.empty()` (**one constructor initialises fields**, per the PMD rule). Wire the configured URL through `RepositorySlices`' `trimPathSlice`/`browsableTrimPathSlice` helpers.
+**WS8-npm.2 — stamp in `SliceByPath` [S]**
+`pantera-main/.../http/SliceByPath.java:51-81` — after the key is resolved, compute the remainder, read `X-Original-Path` (falling back to the request path), prefer the addressed repo's configured `url:` when set, and stamp the header if absent. `TrimPathSlice` is deliberately **not** touched (§2.B explains why it cannot carry this value).
 
 **WS8-npm.3 — consume in the npm adapter [S]**
 `npm-adapter/.../proxy/http/DownloadPackageSlice.java:990-999,1117-1132,1155-1161` — header first, then `cfg.url()`, then a `Host` fallback that now honours `X-Forwarded-Proto` instead of hardcoding `http://`.
@@ -145,15 +165,17 @@ Per repository mode — **local, proxy, group** — unless noted:
 6. `If-None-Match` against a single-version response returns `304`; changing the client base changes the `ETag`.
 7. Behind `X-Forwarded-Proto: https` + `X-Forwarded-Host` + `X-Forwarded-Prefix`, emitted URLs use the forwarded scheme, host, and prefix.
 8. **Group:** tarball URLs are rooted at the group, never at the winning member.
-9. **corepack end-to-end:** `corepack use pnpm@11.5.1` succeeds against a group and against a proxy, with `COREPACK_NPM_REGISTRY` pointed at Pantera.
-10. `mvn clean install -T8` fully green (unit + PMD + license) — the standard gate.
+9. **`/latest` no longer leaks upstream.** `GET /<pkg>/latest` through a proxy returns a tarball URL rooted at Pantera, not at `registry.npmjs.org` (§2.D).
+10. **corepack end-to-end:** `corepack use pnpm@11.5.1` succeeds against a group and against a proxy, with `COREPACK_NPM_REGISTRY` pointed at Pantera.
+11. `mvn clean install -T8` fully green (unit + PMD + license) — the standard gate.
 
 ---
 
 ## 6. Test requirements
 
 **Unit** (`InMemoryStorage`, no Docker/network/DB, JUnit 5 + Hamcrest matcher objects):
-- `ClientBaseUrlTest` — derivation from `Host`; `X-Forwarded-Proto`/`-Host`/`-Prefix`; stamp-if-absent (group-wins); configured-`url:` override; trailing-slash normalisation.
+- `ClientBaseUrlTest` — derivation from `Host`; `X-Forwarded-Proto`/`-Host`/`-Prefix`; `X-Original-Path` preferred over the request path; non-suffix remainder → empty (no wrong URL); trailing-slash normalisation.
+- `SliceByPathClientBaseTest` — stamp-if-absent (group-wins); configured-`url:` override for the addressed repo; both route styles (`/api/` and plain) yield the base the client addressed.
 - `VersionManifestResolverTest` — scoped/unscoped parsing incl. the `/@scope/pkg` two-segment ambiguity; literal-version-beats-tag precedence; unknown ref → 404; cooldown-blocked version → 404; ETag round-trip → 304.
 - `DownloadPackageSliceSingleVersionTest` — the reported case end to end at slice level: `GET /pnpm/11.5.1` yields a manifest with `dist.tarball`, and **never** the `{name, modified}` stub.
 
@@ -190,8 +212,9 @@ Filled in by running each client; `?` means not yet exercised.
 | Risk | Assessment | Mitigation |
 |---|---|---|
 | Generalising `/<pkg>/<ref>` changes behaviour for two-segment paths previously forwarded upstream verbatim | The change most likely to surprise. Correct per npm semantics — such a path *is* a version reference — but it converts some previously-proxied requests into packument lookups | Acceptance criterion 5 guards the scoped-package ambiguity; the conformance sweep exercises the rest |
-| `TrimPathSlice` is shared by all 15 formats | Stamping is purely additive and consumption is npm-only, so blast radius is bounded — but it is a shared file on every request path | Unit coverage on the helper; no behaviour change when the header is unread |
-| `url:`-overrides-derived may be the wrong precedence for some deployments | An operator whose reverse proxy neither sends `X-Forwarded-*` nor is reflected in `url:` still gets a wrong base | Documented in `configuration-reference.md`; the derived value is strictly better than today's hardcoded `http://` + `Host` |
+| `SliceByPath` is on every request path for all 15 formats | Stamping is purely additive and consumption is npm-only, so blast radius is bounded — but it is the single repository entry point | Unit coverage on the helper; no behaviour change when the header is unread; a non-suffix remainder yields empty rather than a wrong value |
+| `url:`-overrides-derived may be the wrong precedence for some deployments | An operator whose reverse proxy neither sends `X-Forwarded-*` nor is reflected in `url:` still gets a wrong base. Note the in-tree sample configs (§2) show `url:` drifting out of date — an operator who leaves a stale `url:` set now overrides a *correct* derived value | Documented in `configuration-reference.md`; WS8-npm.5 fixes the shipped samples; the derived fallback is strictly better than today's hardcoded `http://` + `Host` |
+| `/latest` starts rewriting tarball URLs it previously passed through verbatim | A behaviour change for any client that depended on being handed upstream URLs — but that path bypassed Pantera's cache and audit trail entirely (§2.D), so the old behaviour was the defect | Acceptance criterion 9; called out in the CHANGELOG as a fix, not a silent change |
 | Packument re-parse per single-version request | Same cost as today's `/latest` path; these requests are rare | If it ever shows up in profiling, a small TTL cache keyed on `(pkg, filtered-etag)` slots in behind the resolver |
 
 **Rollback:** `git revert`. No feature flags — settled changes ship as full replacements (project convention).
