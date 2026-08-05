@@ -90,34 +90,60 @@ final class SliceByPath implements Slice {
     }
 
     /**
-     * Stamp the addressed repository's client-facing base URL, unless an
-     * outer slice already did. Stamping here — above the group resolver —
-     * is what makes a group member emit URLs under the <em>group</em>.
+     * Stamp the addressed repository's client-facing base URL, always
+     * discarding any inbound value first. {@link ClientBaseUrl#HEADER} is an
+     * internal-only signal consumed downstream to build absolute
+     * {@code dist.tarball} URLs; if a client-supplied value survived, a
+     * request could poison packument responses (cached by the fronting
+     * proxy) with an attacker-controlled host. Stamping here — above the
+     * group resolver — is what makes a group member emit URLs under the
+     * <em>group</em>; group-wins still holds because this is the only place
+     * that ever sets the header.
      *
      * @param headers Inbound headers
      * @param key Resolved repository key
      * @param originalPath Request path before prefix stripping
      * @param strippedPath Request path after prefix stripping
-     * @return Headers, with the base stamped when derivable
+     * @return Headers, with any client-supplied base removed and the
+     *  derived base stamped when one can be derived
      */
     private Headers stamped(
         final Headers headers, final Key key,
         final String originalPath, final String strippedPath
     ) {
-        final ClientBaseUrl base = new ClientBaseUrl(headers);
+        final Headers scrubbed = SliceByPath.without(headers, ClientBaseUrl.HEADER);
+        final ClientBaseUrl base = new ClientBaseUrl(scrubbed);
+        final Optional<String> value = this.configured(key)
+            .or(() -> base.derive(
+                SliceByPath.clientPath(scrubbed, originalPath),
+                SliceByPath.remainder(key, strippedPath)
+            ));
         final Headers result;
-        if (base.stamped().isPresent()) {
-            result = headers;
+        if (value.isPresent()) {
+            result = scrubbed.add(new Header(ClientBaseUrl.HEADER, value.get()));
         } else {
-            final Optional<String> value = this.configured(key)
-                .or(() -> base.derive(
-                    SliceByPath.clientPath(headers, originalPath),
-                    SliceByPath.remainder(key, strippedPath)
-                ));
-            if (value.isPresent()) {
-                result = headers.copy().add(new Header(ClientBaseUrl.HEADER, value.get()));
-            } else {
-                result = headers;
+            result = scrubbed;
+        }
+        return result;
+    }
+
+    /**
+     * Remove every header named {@code name}, matched case-insensitively,
+     * returning an independent copy. {@link Headers#add(Header, boolean)}'s
+     * overwrite path compares names case-<em>sensitively</em>, so it cannot
+     * be used to neutralise a client-supplied header sent in a different
+     * case (e.g. {@code x-pantera-client-base}) — this does the comparison
+     * the safe way instead.
+     *
+     * @param headers Source headers
+     * @param name Header name to remove, any case
+     * @return A new {@link Headers} without any entry matching {@code name}
+     */
+    private static Headers without(final Headers headers, final String name) {
+        final Headers result = new Headers();
+        for (final Header header : headers) {
+            if (!header.getKey().equalsIgnoreCase(name)) {
+                result.add(header);
             }
         }
         return result;
