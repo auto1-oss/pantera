@@ -26,6 +26,8 @@ import com.auto1.pantera.http.timeout.AutoBlockSettings;
 import com.auto1.pantera.index.ArtifactDocument;
 import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.index.SearchResult;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -234,6 +236,81 @@ final class GroupResolverTest {
                 GROUP, REPO_TYPE, PARSED_NAME, PARSED_VERSION);
         assertTrue(negCache.isKnown404(negKey),
             "a genuine all-members 404 (unmarked) must still be negative-cached");
+    }
+
+    // ---- WS8 Bug B5: the walk terminal must not discard a member's own honest 404 body ----
+
+    @Test
+    void allMembers404_terminalPreservesFirstMemberHonestBody() throws Exception {
+        // Regression for the live-server bug: GroupResolver's sequential walk
+        // used to drainBody() every member 404 and, once every member was
+        // exhausted, manufacture a bare ResponseBuilder.notFound().build() --
+        // discarding a proxy member's own honest "version not found" JSON
+        // (e.g. what CachedNpmProxySlice builds for npm's /<pkg>/<version>
+        // shape). This drives GroupResolver's real member-walk boundary --
+        // the same Slice interface production member adapters implement --
+        // with a stub whose 404 body/shape matches CachedNpmProxySlice's
+        // actual output exactly, so it fails on the pre-fix walk exactly as a
+        // live npm_group /<pkg>/<bad-version> lookup did.
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of())); // index miss
+        final NegativeCache negCache = buildNegativeCache();
+        final String honestBody =
+            "{\"error\":\"version not found: 999.999.999\",\"package\":\"pnpm\"}";
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, honestNotFoundSlice(honestBody));
+
+        final GroupResolver resolver = buildResolver(
+            idx, List.of(PROXY_A), Set.of(PROXY_A), negCache, slices
+        );
+        final Response resp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+
+        MatcherAssert.assertThat(
+            "the walk terminal must still answer 404",
+            resp.status(),
+            new IsEqual<>(RsStatus.NOT_FOUND)
+        );
+        MatcherAssert.assertThat(
+            "the walk terminal must forward the member's own honest body, not a bare empty one",
+            resp.body().asBytesFuture().get(),
+            new IsEqual<>(honestBody.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+        );
+    }
+
+    @Test
+    void allMembers404_unverifiedMarkerAlsoPreservesHonestBody() throws Exception {
+        // The anyUnverified terminal (Fix 2's SKIP_HEADER re-attachment) had
+        // the exact same bare-body bug as the plain terminal above -- cover
+        // it separately since it is a distinct branch in tryNextSequentialMember.
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of())); // index miss
+        final NegativeCache negCache = buildNegativeCache();
+        final String honestBody =
+            "{\"error\":\"version not found: 999.999.999\",\"package\":\"pnpm\"}";
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, honestUnverifiedNotFoundSlice(honestBody));
+
+        final GroupResolver resolver = buildResolver(
+            idx, List.of(PROXY_A), Set.of(PROXY_A), negCache, slices
+        );
+        final Response resp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+
+        MatcherAssert.assertThat(resp.status(), new IsEqual<>(RsStatus.NOT_FOUND));
+        MatcherAssert.assertThat(
+            "the non-authoritative-404 terminal must also forward the member's honest body",
+            resp.body().asBytesFuture().get(),
+            new IsEqual<>(honestBody.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+        );
+        final com.auto1.pantera.http.cache.NegativeCacheKey negKey =
+            new com.auto1.pantera.http.cache.NegativeCacheKey(
+                GROUP, REPO_TYPE, PARSED_NAME, PARSED_VERSION);
+        MatcherAssert.assertThat(
+            "a laundered 404 must still not be negative-cached, even with a preserved body",
+            negCache.isKnown404(negKey),
+            new IsEqual<>(false)
+        );
     }
 
     // ---- FIX 5: malformed version-range path rejected before any walk ----
@@ -827,6 +904,35 @@ final class GroupResolverTest {
     private static Slice notFoundSlice() {
         return (line, headers, body) ->
             CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
+    }
+
+    /**
+     * A member that returns a 404 with a non-empty JSON body, matching the
+     * shape {@code CachedNpmProxySlice} builds for a proxy/group version
+     * lookup (WS8 Bug B5). Used to prove {@link GroupResolver}'s walk
+     * terminal forwards a real member's honest body instead of discarding it.
+     *
+     * @param body Honest 404 JSON body the member returns
+     */
+    private static Slice honestNotFoundSlice(final String body) {
+        return (line, headers, requestBody) ->
+            CompletableFuture.completedFuture(ResponseBuilder.notFound().jsonBody(body).build());
+    }
+
+    /**
+     * Same as {@link #honestNotFoundSlice(String)}, but also marks the 404
+     * non-authoritative (WS8 Fix 2), exercising the {@code anyUnverified}
+     * terminal branch instead of the plain one.
+     *
+     * @param body Honest 404 JSON body the member returns
+     */
+    private static Slice honestUnverifiedNotFoundSlice(final String body) {
+        return (line, headers, requestBody) ->
+            CompletableFuture.completedFuture(
+                ResponseBuilder.notFound()
+                    .jsonBody(body)
+                    .header(com.auto1.pantera.http.cache.NegativeCache.SKIP_HEADER, "true")
+                    .build());
     }
 
     /**
