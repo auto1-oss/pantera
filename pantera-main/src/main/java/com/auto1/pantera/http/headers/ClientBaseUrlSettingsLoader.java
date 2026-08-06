@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 
@@ -41,6 +42,16 @@ import java.util.stream.Stream;
  * {@code pantera-core}-side static holder {@code ClientBaseUrl} actually
  * reads from on every construction. See that registry's Javadoc for the
  * full boundary-crossing rationale.</p>
+ *
+ * <p>{@code VertxMain} calls {@link #install(AuthSettingsDao)} at boot
+ * UNCONDITIONALLY, passing {@code null} when no shared {@code DataSource}
+ * is configured (a documented, supported single-instance mode), so the
+ * env then default tiers keep resolving on a DB-less boot exactly as the
+ * pre-2.3.0 static {@code System.getenv} read did. A {@code null} DAO is
+ * not a special case in {@link #load()}: {@code resolveBoolean} /
+ * {@code resolveHostAllowlist} treat a {@code null} DAO and a DAO whose
+ * {@link AuthSettingsDao#get} returns empty identically -- both fall
+ * through to the env tier.</p>
  *
  * @since 2.3.0
  */
@@ -69,13 +80,31 @@ public final class ClientBaseUrlSettingsLoader implements Supplier<ClientBaseUrl
     private static volatile ClientBaseUrlSettingsLoader installed;
 
     /**
-     * Install a shared loader backed by the given DAO, and install it into
+     * Install a shared loader backed by the given DAO — {@code dao} may be
+     * {@code null} (DB-less boot; see class Javadoc) — and install it into
      * {@link ClientBaseUrlSettingsRegistry} so {@code pantera-core}'s {@link
      * ClientBaseUrl} reads through it. Idempotent.
-     * @param dao Auth settings DAO
+     * @param dao Auth settings DAO, or {@code null} when no shared
+     *  {@code DataSource} is configured
      */
     public static synchronized void install(final AuthSettingsDao dao) {
-        final ClientBaseUrlSettingsLoader loader = new ClientBaseUrlSettingsLoader(dao);
+        ClientBaseUrlSettingsLoader.install(dao, System::getenv);
+    }
+
+    /**
+     * Test seam: install with an injectable env-var lookup so a resolved
+     * env value can be asserted without touching the real process
+     * environment. Production callers always go through
+     * {@link #install(AuthSettingsDao)}.
+     * @param dao Auth settings DAO, or {@code null}
+     * @param envLookup Env-var lookup, keyed by the fully-prefixed name
+     *  (e.g. {@code System::getenv})
+     */
+    static synchronized void install(
+        final AuthSettingsDao dao, final Function<String, String> envLookup
+    ) {
+        final ClientBaseUrlSettingsLoader loader =
+            new ClientBaseUrlSettingsLoader(dao, envLookup);
         ClientBaseUrlSettingsLoader.installed = loader;
         ClientBaseUrlSettingsRegistry.install(loader);
     }
@@ -98,8 +127,11 @@ public final class ClientBaseUrlSettingsLoader implements Supplier<ClientBaseUrl
 
     /**
      * Supplier resolving to the installed loader's settings, falling back to
-     * {@link ClientBaseUrlSettings#defaults()} when absent (tests, DB-less
-     * boots). Safe to call before {@link #install}.
+     * {@link ClientBaseUrlSettings#defaults()} when no loader has been
+     * installed at all (unit tests that never call {@link #install}). A
+     * DB-less production boot still installs a loader (with a {@code null}
+     * DAO), so it resolves through the env → default tiers here, not
+     * straight to defaults. Safe to call before {@link #install}.
      * @return Active-settings supplier
      */
     public static Supplier<ClientBaseUrlSettings> activeSupplier() {
@@ -111,10 +143,30 @@ public final class ClientBaseUrlSettingsLoader implements Supplier<ClientBaseUrl
 
     private final AuthSettingsDao dao;
 
+    private final Function<String, String> envLookup;
+
     private final AtomicReference<ClientBaseUrlSettings> cached = new AtomicReference<>();
 
+    /**
+     * Public ctor: real env lookup. Delegates to the field-initializing ctor.
+     * @param dao Auth settings DAO, or {@code null} for a DB-less boot
+     */
     public ClientBaseUrlSettingsLoader(final AuthSettingsDao dao) {
+        this(dao, System::getenv);
+    }
+
+    /**
+     * The single field-initializing constructor; {@link
+     * #ClientBaseUrlSettingsLoader(AuthSettingsDao)} delegates here via
+     * {@code this(...)}. Package-private: the env-lookup seam exists so
+     * tests can assert env-tier resolution deterministically, without
+     * touching the real process environment.
+     * @param dao Auth settings DAO, or {@code null} for a DB-less boot
+     * @param envLookup Env-var lookup, keyed by the fully-prefixed name
+     */
+    ClientBaseUrlSettingsLoader(final AuthSettingsDao dao, final Function<String, String> envLookup) {
         this.dao = dao;
+        this.envLookup = envLookup;
     }
 
     /**
@@ -166,7 +218,7 @@ public final class ClientBaseUrlSettingsLoader implements Supplier<ClientBaseUrl
         if (row.isPresent()) {
             result = Boolean.parseBoolean(row.get());
         } else {
-            final String env = System.getenv(ClientBaseUrlSettingsLoader.envName(key));
+            final String env = this.envLookup.apply(ClientBaseUrlSettingsLoader.envName(key));
             if (env != null) {
                 result = Boolean.parseBoolean(env);
             }
@@ -178,7 +230,7 @@ public final class ClientBaseUrlSettingsLoader implements Supplier<ClientBaseUrl
         final Optional<String> row =
             this.dao == null ? Optional.empty() : this.dao.get(KEY_HOST_ALLOWLIST);
         final String raw = row.orElseGet(
-            () -> System.getenv(ClientBaseUrlSettingsLoader.envName(KEY_HOST_ALLOWLIST))
+            () -> this.envLookup.apply(ClientBaseUrlSettingsLoader.envName(KEY_HOST_ALLOWLIST))
         );
         final List<String> result;
         if (raw == null || raw.isBlank()) {

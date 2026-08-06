@@ -361,21 +361,27 @@ public final class VertxMain {
                 new com.auto1.pantera.db.dao.AuthSettingsDao(ds)
             )
         );
-        // WS8 fixwave-b (2.3.0): install the client-base URL derivation
+        // WS8 fixwave-c (2.3.0): install the client-base URL derivation
         // settings (trust_forwarded_headers, client_base_host_allowlist)
         // consumed by pantera-core's ClientBaseUrl. install(...) also feeds
         // pantera-core's ClientBaseUrlSettingsRegistry — see that loader's
         // Javadoc for why this crosses the module boundary this way.
-        sharedDs.ifPresent(ds ->
-            com.auto1.pantera.http.headers.ClientBaseUrlSettingsLoader.install(
-                new com.auto1.pantera.db.dao.AuthSettingsDao(ds)
-            )
+        //
+        // Installed UNCONDITIONALLY -- dao is null when sharedDs is absent
+        // -- not gated behind sharedDs.ifPresent like the breaker loaders
+        // above: both keys resolve DB row -> env var -> hardcoded default
+        // per field, and a DB-less boot (a documented, supported mode) must
+        // keep resolving PANTERA_TRUST_FORWARDED_HEADERS /
+        // PANTERA_CLIENT_BASE_HOST_ALLOWLIST exactly as the pre-2.3.0
+        // static System.getenv read did. Gating this behind sharedDs would
+        // silently drop both env vars for every DB-less deployment.
+        com.auto1.pantera.http.headers.ClientBaseUrlSettingsLoader.install(
+            sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
         );
         // Fail LOUD, not closed: an empty/unset host allowlist is
         // permissive by design (upgrading an existing deployment must not
         // suddenly reject every Host), but that posture is worth an
-        // operator's attention at every boot, DB-backed or not — evaluated
-        // unconditionally, not only inside the sharedDs branch above.
+        // operator's attention at every boot, DB-backed or not.
         if (com.auto1.pantera.http.headers.ClientBaseUrlSettingsLoader.activeSupplier()
             .get().hostAllowlist().isEmpty()) {
             EcsLogger.warn("com.auto1.pantera")

@@ -1,34 +1,35 @@
 -- V137__client_base_url_settings.sql
--- Seed the client-facing base URL derivation settings into the
--- auth_settings key/value store. Both keys are consumed by
--- ClientBaseUrlSettingsLoader (pantera-main) via ClientBaseUrlSettingsRegistry
--- into pantera-core's ClientBaseUrl, which builds the absolute URLs Pantera
--- emits (e.g. npm dist.tarball) from the inbound request when a repository
--- has no explicit `url:` configured.
+-- Documents -- but deliberately does NOT seed -- the client-facing base URL
+-- derivation settings in the auth_settings key/value store. Both keys are
+-- consumed by ClientBaseUrlSettingsLoader (pantera-main) via
+-- ClientBaseUrlSettingsRegistry into pantera-core's ClientBaseUrl, which
+-- builds the absolute URLs Pantera emits (e.g. npm dist.tarball) from the
+-- inbound request when a repository has no explicit `url:` configured.
 --
---   trust_forwarded_headers     = 'false'
+--   trust_forwarded_headers     (no row here -- see below)
 --     Replaces the pre-2.3.0 env-only PANTERA_TRUST_FORWARDED_HEADERS flag.
 --     When 'true', X-Forwarded-Proto/-Host/-Prefix are honoured (only safe
 --     when a fronting reverse proxy overwrites them on every inbound
---     request). The key name deliberately matches the legacy env var
---     (PANTERA_TRUST_FORWARDED_HEADERS via ENV_PREFIX + key.toUpperCase()),
---     so an existing deployment's env setting keeps working as the fallback
---     tier under this DB row.
+--     request). Hardcoded default 'false'.
 --
---   client_base_host_allowlist  = ''
+--   client_base_host_allowlist  (no row here -- see below)
 --     Comma-separated Host header values permitted to be used when deriving
---     a base URL. EMPTY IS PERMISSIVE: any Host is honoured -- matches
---     Pantera's behaviour before this allowlist existed, so upgrading an
---     existing deployment never breaks it. A non-empty list rejects a
---     non-matching Host (falls through exactly as an absent Host would,
---     never emitting the rejected value). The loader logs a startup WARN
---     while this stays empty -- see VertxMain.
+--     a base URL. EMPTY/UNSET IS PERMISSIVE: any Host is honoured -- matches
+--     Pantera's behaviour before this allowlist existed. Hardcoded default
+--     '' (empty).
 --
--- The in-memory loader (ClientBaseUrlSettingsLoader) falls back to the
--- hardcoded defaults when rows are absent, so this migration is about
--- making the values explicit and admin-editable, not about correctness.
-
-INSERT INTO auth_settings (key, value) VALUES
-    ('trust_forwarded_headers', 'false'),
-    ('client_base_host_allowlist', '')
-ON CONFLICT (key) DO NOTHING;
+-- DELIBERATELY NOT SEEDED. Unlike the other auth_settings migrations
+-- (V107, V122, V136), this one must NOT INSERT a row for either key.
+-- ClientBaseUrlSettingsLoader resolves each field DB row -> env var ->
+-- hardcoded default, and both keys reuse their pre-2.3.0 env var names
+-- (PANTERA_TRUST_FORWARDED_HEADERS / PANTERA_CLIENT_BASE_HOST_ALLOWLIST) as
+-- that documented fallback tier. `INSERT ... ON CONFLICT (key) DO NOTHING`
+-- only no-ops when a row for that key already exists -- these two keys never
+-- existed before 2.3.0, so an unconditional seed here would ALWAYS fire on
+-- every fresh migration run and permanently shadow an operator's env var
+-- with the seeded default, with no warning and no way to recover short of
+-- an admin manually deleting the row. Rows are created only when an admin
+-- explicitly writes through PUT /api/v1/admin/client-base-url-settings, at
+-- which point the DB row correctly takes precedence over the env var by
+-- design -- that is the DB tier actually being used, not a migration
+-- pre-empting it.

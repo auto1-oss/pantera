@@ -10,13 +10,22 @@
  */
 package com.auto1.pantera.http.headers;
 
+import com.auto1.pantera.db.dao.AuthSettingsDao;
+
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.hamcrest.core.IsNull;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.Proxy;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.util.List;
+import java.util.Map;
+import javax.sql.DataSource;
 
 /**
  * Tests for {@link ClientBaseUrlSettingsLoader}: DB-less fallback to
@@ -86,5 +95,98 @@ final class ClientBaseUrlSettingsLoaderTest {
             "uninstall() must also clear the core-side registry",
             ClientBaseUrlSettingsRegistry.active(), new IsEqual<>(ClientBaseUrlSettings.defaults())
         );
+    }
+
+    /**
+     * Regression guard for the V137 seed-shadowing bug: a DB-backed
+     * deployment where the migration correctly leaves both keys unseeded
+     * has an installed DAO whose {@code get(key)} genuinely returns empty
+     * (not a {@code null} DAO -- that DB-less case is
+     * {@link #dbLessInstallPathResolvesEnvOverDefault()} below). Before the
+     * fix, {@code V137__client_base_url_settings.sql} unconditionally wrote
+     * {@code trust_forwarded_headers='false'}, so {@code dao.get(key)}
+     * always returned a present row and the env tier below was never
+     * consulted -- this test would have failed against that migration's
+     * behaviour reproduced at the loader level.
+     */
+    @Test
+    void daoReportsKeyAbsentEnvTierWinsOverDefault() {
+        final ClientBaseUrlSettingsLoader loader = new ClientBaseUrlSettingsLoader(
+            ClientBaseUrlSettingsLoaderTest.emptyRowDao(),
+            Map.of("PANTERA_TRUST_FORWARDED_HEADERS", "true")::get
+        );
+        MatcherAssert.assertThat(loader.get().trustForwardedHeaders(), new IsEqual<>(true));
+    }
+
+    /**
+     * Regression guard for the DB-less-boot bug: before the fix, {@code
+     * VertxMain} only called {@code ClientBaseUrlSettingsLoader.install}
+     * inside {@code sharedDs.ifPresent(...)}, so a boot with no shared
+     * {@code DataSource} never installed a loader at all and {@code
+     * PANTERA_TRUST_FORWARDED_HEADERS} was never read -- {@code
+     * activeSupplier()} fell straight to {@link
+     * ClientBaseUrlSettings#defaults()}. This drives the same {@code
+     * install(null, envLookup)} shape the fixed {@code VertxMain} now calls
+     * unconditionally, and would have failed before that fix.
+     */
+    @Test
+    void dbLessInstallPathResolvesEnvOverDefault() {
+        ClientBaseUrlSettingsLoader.install(
+            null, Map.of("PANTERA_TRUST_FORWARDED_HEADERS", "true")::get
+        );
+        MatcherAssert.assertThat(
+            ClientBaseUrlSettingsLoader.activeSupplier().get().trustForwardedHeaders(),
+            new IsEqual<>(true)
+        );
+    }
+
+    /**
+     * Builds an {@link AuthSettingsDao} whose {@code get(key)} always
+     * resolves empty, backed by dynamic-proxied JDK interfaces rather than
+     * a real database -- the same {@link Proxy}-based faking technique
+     * already used in {@code GroupMetadataCacheStaleFallbackTest} for a
+     * Redis client. Doing this via the actual {@link AuthSettingsDao}
+     * class (rather than a {@code null} DAO) exercises the real {@code
+     * dao.get(key)} call path, which a plain {@code null}-DAO test cannot.
+     * @return DAO that reports every key absent, without touching a real DB
+     */
+    private static AuthSettingsDao emptyRowDao() {
+        return new AuthSettingsDao(ClientBaseUrlSettingsLoaderTest.fakeDataSource());
+    }
+
+    private static DataSource fakeDataSource() {
+        return ClientBaseUrlSettingsLoaderTest.proxy(DataSource.class, (target, method, args) ->
+            "getConnection".equals(method.getName()) && method.getParameterCount() == 0
+                ? ClientBaseUrlSettingsLoaderTest.fakeConnection()
+                : null
+        );
+    }
+
+    private static Connection fakeConnection() {
+        return ClientBaseUrlSettingsLoaderTest.proxy(Connection.class, (target, method, args) ->
+            "prepareStatement".equals(method.getName())
+                ? ClientBaseUrlSettingsLoaderTest.fakePreparedStatement()
+                : null
+        );
+    }
+
+    private static PreparedStatement fakePreparedStatement() {
+        return ClientBaseUrlSettingsLoaderTest.proxy(
+            PreparedStatement.class, (target, method, args) ->
+                "executeQuery".equals(method.getName())
+                    ? ClientBaseUrlSettingsLoaderTest.fakeEmptyResultSet()
+                    : null
+        );
+    }
+
+    private static ResultSet fakeEmptyResultSet() {
+        return ClientBaseUrlSettingsLoaderTest.proxy(ResultSet.class, (target, method, args) ->
+            "next".equals(method.getName()) ? Boolean.FALSE : null
+        );
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T> T proxy(final Class<T> type, final InvocationHandler handler) {
+        return (T) Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[] {type}, handler);
     }
 }
