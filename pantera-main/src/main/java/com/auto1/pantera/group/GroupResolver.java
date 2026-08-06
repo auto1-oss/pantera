@@ -28,6 +28,7 @@ import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.slice.EcsLoggingSlice;
 import com.auto1.pantera.http.slice.KeyFromPath;
 import com.auto1.pantera.index.ArtifactIndex;
@@ -730,14 +731,29 @@ public final class GroupResolver implements Slice {
             .filter(MemberSlice::isProxy)
             .toList();
         if (fanoutMembers.isEmpty()) {
-            this.negativeCache.cacheNotFound(negCacheKey);
-            EcsLogger.debug("com.auto1.pantera.group")
-                .message("No proxy members, caching 404 and returning")
-                .eventCategory("web")
-                .eventAction("group_index_miss")
-                .field("url.path", line.uri().getPath())
-                .field("log.source", "application")
-                .log();
+            // WS8 Bug 2: a HEAD probe (proxy, scanner, health check, or a
+            // client's routine existence check) hitting an index-miss dead
+            // end must not poison the negative cache for a following real
+            // GET -- mirrors the HEAD guard in
+            // CachedNpmProxySlice#doFetch. Only a GET's 404 is trusted.
+            if (line.method() == RqMethod.HEAD) {
+                EcsLogger.debug("com.auto1.pantera.group")
+                    .message("No proxy members on HEAD probe; not negative-caching")
+                    .eventCategory("web")
+                    .eventAction("group_negative_cache_skip_head")
+                    .field("url.path", line.uri().getPath())
+                    .field("log.source", "application")
+                    .log();
+            } else {
+                this.negativeCache.cacheNotFound(negCacheKey);
+                EcsLogger.debug("com.auto1.pantera.group")
+                    .message("No proxy members, caching 404 and returning")
+                    .eventCategory("web")
+                    .eventAction("group_index_miss")
+                    .field("url.path", line.uri().getPath())
+                    .field("log.source", "application")
+                    .log();
+            }
             return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
         }
 
@@ -822,21 +838,35 @@ public final class GroupResolver implements Slice {
                     // 404 — the artifact may exist and the upstream was merely
                     // throttling; caching it would produce a long-lived false
                     // 404. Still return the 404 to the client.
-                    if (resp.headers().values(
-                            com.auto1.pantera.http.cache.NegativeCache.SKIP_HEADER).isEmpty()) {
-                        this.negativeCache.cacheNotFound(negCacheKey);
-                        EcsLogger.debug("com.auto1.pantera.group")
-                            .message("All proxies returned 404, caching negative result")
-                            .eventCategory("database")
-                            .eventAction("group_negative_cache_populate")
-                            .field("log.source", "application")
-                            .log();
-                    } else {
+                    final boolean unverified = !resp.headers().values(
+                        com.auto1.pantera.http.cache.NegativeCache.SKIP_HEADER).isEmpty();
+                    // WS8 Bug 2: a HEAD probe reaching an authoritative
+                    // all-members-404 must not poison the cache for a
+                    // following real GET -- same rationale as the
+                    // fanoutMembers.isEmpty() branch above and
+                    // CachedNpmProxySlice#doFetch's HEAD guard.
+                    if (unverified) {
                         EcsLogger.debug("com.auto1.pantera.group")
                             .message("Member 404 marked non-authoritative "
                                 + "(upstream throttle); not negative-caching")
                             .eventCategory("database")
                             .eventAction("group_negative_cache_skip_unverified")
+                            .field("log.source", "application")
+                            .log();
+                    } else if (line.method() == RqMethod.HEAD) {
+                        EcsLogger.debug("com.auto1.pantera.group")
+                            .message("All proxies returned 404 on a HEAD probe; "
+                                + "not negative-caching")
+                            .eventCategory("database")
+                            .eventAction("group_negative_cache_skip_head")
+                            .field("log.source", "application")
+                            .log();
+                    } else {
+                        this.negativeCache.cacheNotFound(negCacheKey);
+                        EcsLogger.debug("com.auto1.pantera.group")
+                            .message("All proxies returned 404, caching negative result")
+                            .eventCategory("database")
+                            .eventAction("group_negative_cache_populate")
                             .field("log.source", "application")
                             .log();
                     }

@@ -385,10 +385,19 @@ public final class VertxMain {
         // (upstream_breaker_* keys) — distinct from the group-member
         // breaker above. RepositorySlices hands the supplier to every
         // JettyClientSlices instance it creates.
-        sharedDs.ifPresent(ds ->
-            com.auto1.pantera.circuit.UpstreamBreakerSettingsLoader.install(
-                new com.auto1.pantera.db.dao.AuthSettingsDao(ds)
-            )
+        //
+        // WS8 fixwave-f (2.3.0): installed UNCONDITIONALLY -- dao is null
+        // when sharedDs is absent -- not gated behind sharedDs.ifPresent
+        // like the group-member breaker above. Each field resolves DB row
+        // -> env var -> hardcoded default, and a DB-less boot (a
+        // documented, supported mode) must keep resolving
+        // PANTERA_UPSTREAM_BREAKER_* exactly as a DB-backed boot with an
+        // absent row would. Gating this behind sharedDs would silently
+        // drop every PANTERA_UPSTREAM_BREAKER_* env var for a DB-less
+        // deployment -- the same regression already fixed for
+        // ClientBaseUrlSettingsLoader below.
+        com.auto1.pantera.circuit.UpstreamBreakerSettingsLoader.install(
+            sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
         );
         // WS8 fixwave-c (2.3.0): install the client-base URL derivation
         // settings (trust_forwarded_headers, client_base_host_allowlist)
