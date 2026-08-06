@@ -777,9 +777,18 @@ A local repository stores artifacts directly in the configured storage backend.
 |-----|------|----------|---------|-------------|
 | `type` | string | Yes | -- | Repository type (see table above) |
 | `storage` | map | Yes | -- | Storage backend configuration |
-| `url` | string | No | -- | Public-facing URL (required by some types: npm, php, helm, nuget, conan, conda) |
+| `url` | string | No | -- | Client-facing base URL for this repository (see note below); still required for some types -- [2.5](#25-type-specific-settings) |
 | `port` | int | No | -- | Dedicated port (conan only) |
 | `settings` | map | No | -- | Type-specific settings |
+
+`url` is optional. When set, it is used verbatim as the client-facing base URL
+for absolute URLs this repository emits (e.g. npm `dist.tarball`). When
+unset, the base is derived from the inbound request instead -- scheme `http`
+and the `Host` header by default, or `X-Forwarded-Proto`/`-Host`/`-Prefix`
+when `PANTERA_TRUST_FORWARDED_HEADERS=true` (see [7.8](#78-miscellaneous)).
+It remains required for repository types that build absolute URLs without
+this derivation ([2.5](#25-type-specific-settings): `php`, `helm`, `nuget`,
+`conan`, `conda`).
 
 ```yaml
 # File: maven.yaml
@@ -794,7 +803,6 @@ repo:
 # File: npm.yaml
 repo:
   type: npm
-  url: "http://pantera:8080/npm"
   storage:
     type: fs
     path: /var/pantera/data
@@ -811,7 +819,7 @@ A proxy repository caches artifacts from one or more remote upstream servers.
 | `type` | string | Yes | -- | Must end in `-proxy` (e.g., `maven-proxy`) |
 | `storage` | map | Yes | -- | Local cache storage backend |
 | `remotes` | list | Yes | -- | Ordered list of upstream servers |
-| `url` | string | No | -- | Public-facing URL |
+| `url` | string | No | -- | Client-facing base URL for this repository -- same optionality and derivation as [2.2](#22-local-repository) |
 | `path` | string | No | -- | URL path segment override |
 
 Each entry in `remotes`:
@@ -852,7 +860,6 @@ repo:
 # File: npm_proxy.yaml
 repo:
   type: npm-proxy
-  url: http://localhost:8081/npm_proxy
   path: npm_proxy
   remotes:
     - url: "https://registry.npmjs.org"
@@ -884,7 +891,13 @@ other groups). Requests are resolved against members in order; the first match w
 |-----|------|----------|---------|-------------|
 | `type` | string | Yes | -- | Must end in `-group` (e.g., `maven-group`) |
 | `members` | list | Yes | -- | Ordered list of member repository names |
-| `url` | string | No | -- | Public-facing URL (required by some types) |
+| `url` | string | No | -- | Client-facing base URL for the group itself -- same optionality and derivation as [2.2](#22-local-repository) |
+
+A group's members never contribute their own `url` (set or derived) to URLs
+emitted through the group. The client-facing base is stamped for the
+repository the client actually addressed -- the group -- before member
+resolution runs, so a group always emits URLs under its own `url` (or its
+own derived base) regardless of which member served the response.
 
 ```yaml
 # File: maven_group.yaml
