@@ -346,6 +346,84 @@ When `client_base_host_allowlist` rejects the request's `Host` and no `X-Forward
 
 ---
 
+## 6b. Final live sign-off (commit `6618f8b05`)
+
+Verification-only pass (no `src/main` changes) against branch `agent/npm-corepack`, HEAD `6618f8b05` — the commit that fixed five npm client-compatibility bugs (`B1`–`B5`) found by the 6a sweep's Findings #1–#5. `mvn clean install -T8 -Dexec.skip=true` and the UI gate were pre-validated (not re-run, per task instructions). Both `pantera:2.3.0` and `pantera-ui:2.3.0` images were rebuilt fresh from this commit's source/jar before testing, so nothing stale was in play.
+
+**Bootstrap note (environment, not a `src/main` defect):** `pantera-main/docker-compose/.env` does not exist in this worktree (correctly gitignored); the committed `.env.example` template does not boot the stack as-is — two genuine defects in the template itself:
+1. `POSTGRES_USER=PANTERA` (uppercase) creates a case-distinct Postgres role from the lowercase `pantera` hardcoded in `db/init/01-create-dbs.sql`'s `OWNER pantera` clauses, so `CREATE DATABASE` fails on first boot.
+2. `JVM_ARGS`/`PANTERA_CONFIG` reference `/var/PANTERA/...` and `/etc/PANTERA/PANTERA.yml` (uppercase), but the image (`pantera-main/Dockerfile`) creates lowercase `/var/pantera/...`/`/etc/pantera/pantera.yml` — the JVM refuses to start (`Error opening log file '/var/PANTERA/logs/gc.log'`).
+
+Worked around by copying `.env.example` to a local (gitignored, untracked) `.env` with these paths/casing corrected — `.env.example` itself was left untouched. Reported here per Finding #6 below since a fresh clone following the template verbatim cannot boot.
+
+Credentials: bootstrapped default admin (`YamlToDbMigrator`, hardcoded `admin`/`admin`, `must_change_password=TRUE` — does not block API use) since the fresh DB had no users.
+
+### B1–B5, live PASS/FAIL
+
+| # | Bug (6a Finding) | Result | Evidence |
+|---|---|---|---|
+| B1 | Scoped packument 404s on LOCAL | **PASS** | Published `@ws8verify/scoped-check@1.0.0` to local `npm`; `GET /@ws8verify%2fscoped-check` → `200` full packument (`dist-tags`, `versions`). Also confirmed `/@scope/pkg/<version>` → `200` manifest, `/pkg` → `200` packument, `/pkg/<version>` → `200` manifest (unscoped `ws8verify-unscoped-check`). |
+| B2 | `HEAD` tarball poisons subsequent `GET` (proxy/group) | **PASS** | `HEAD` as the **first-ever request** on a never-touched tarball (`npm_proxy/left-pad/-/left-pad-1.3.0.tgz`) → `200`; immediate `GET` on the same URL → `200` with correct byte count. Repeated on an already-warm tarball (`pnpm-11.18.0.tgz`): `HEAD` → `200`, three subsequent `GET`s all `200` with identical size. No poisoning in either warm or cold case. |
+| B3 | `npm ping` unwired on proxy/group | **PASS** | `GET /-/ping` → `200 {}` on `npm`, `npm_proxy`, `npm_group` alike. |
+| B4 | Registry root reachable only by `repo==npm` coincidence | **PASS** | `GET <repoBase>` and `GET <repoBase>/` both → `200` on `npm`, `npm_proxy`, `npm_group`, each correctly reporting its own `"registry"` name in the body (not hardcoded `"npm"`). |
+| B5 | Proxy/group 404 on unresolved version has empty body | **FAIL (live)** — see Finding #1 | `GET /pnpm/999.999.999` on `npm_proxy` and `npm_group` still returns `404` with `content-length: 0`, reproduced with a warm packument, a completely fresh package/version pair never touched this session (`is-positive/999.999.999-neverseen`), and via both `/api/` and plain route styles. Local mode (`SingleVersionSlice`) still correctly returns `{"error":"version not found: ...","package":"..."}`. The critical regression-guard property (never a `200` stub) still holds everywhere. |
+
+### Acceptance criteria spot re-checks (§5)
+
+| # | Criterion | Result | Evidence |
+|---|---|---|---|
+| AC1 | Single-version tarball rooted at addressed base | **PASS** | Confirmed via B1/B2 evidence above; `npm_proxy`/`npm_group` both emit Pantera-rooted tarballs. |
+| AC2 | `/latest` and custom tag resolve through same path | **PASS** | `pnpm/latest` on `npm_proxy` resolved to `11.18.0` with a Pantera-rooted tarball. |
+| AC3 | Nonexistent version → `404`, never `200` stub | **PASS** (never a stub); honest-body half **FAILS** on proxy/group | Same as B5 above. |
+| AC4 | Cooldown-blocked version → `404` | **PASS** | This dev stack already had npm cooldown active (packument showed 7 pnpm prereleases filtered); `GET /pnpm/11.19.0` (a filtered version) → `404` on `npm_proxy`. |
+| AC5 | `GET /@scope/pkg` resolves as packument | **PASS** (local via B1; proxy via real upstream pkg) | `@types/node` packument on `npm_proxy` → `200` with `versions`/`dist-tags` present, not the `(pkg=@scope, ref=pkg)` ambiguity. |
+| AC6 | `If-None-Match` → `304`; base change → different `ETag` | **PASS** | `pnpm/11.5.1` conditional `GET` on `npm_proxy` → `304`; `ETag` differs between `npm_proxy` and `npm_group` bases for the same package+version. |
+| AC7 | Forwarded headers honoured only when trusted | **PASS** | See settings section below. |
+| AC8 | Group tarball rooted at group, never the member | **PASS** | `npm_group/pnpm/11.5.1` → `dist.tarball` rooted at `npm_group`, not `npm_proxy`. |
+| AC9 | `/latest` no longer leaks upstream | **PASS** | `pnpm/latest` via `npm_proxy` returns a Pantera-rooted tarball, not `registry.npmjs.org`. |
+| AC10 | corepack end-to-end (proxy + group) | **PASS** | See client matrix below — cold-cache verified both ways, cross-checked against server audit logs. |
+| AC11 | `mvn clean install -T8` fully green | **PASS** (pre-validated, not re-run per task instructions) | Task-provided: BUILD SUCCESS, zero failures. |
+
+**Spoofing re-check:** `X-Pantera-Client-Base: http://evil.example.com/fake` + `X-Original-Path: /fake/path` sent as inbound client headers → no effect on the emitted tarball URL (still correctly rooted at the real addressed base). Confirmed again at this commit.
+
+### Client × mode matrix (caches cleared first)
+
+`npm cache clean --force`, `corepack cache clean`, `rm -rf ~/.cache/node/corepack`, `yarn cache clean`, `pnpm store prune` were all run before any test (via an explicit `COREPACK_NPM_REGISTRY=https://registry.npmjs.org` override — this host has ambient `COREPACK_NPM_REGISTRY`/`COREPACK_NPM_TOKEN` pointed at a real production registry; see Finding #4). Real client binaries only: corepack 0.35.0 / npm 11.18.0 / pnpm (corepack-pinned 11.5.1, ad hoc 11.20.0) / yarn classic 1.22.22 / yarn berry 4.13.0, host's nvm-managed Node 24.18.0.
+
+| Client | local | proxy | group | Notes |
+|---|---|---|---|---|
+| npm | **PASS** | **PASS** | **PASS** | Real `npm install`/`npm publish`; group resolved both a local-member and a proxy-member package correctly. |
+| pnpm | **PASS** | **PASS** | **PASS** | `pnpm install` against all three; local addressed via `:8081` to match the repo's configured `url:` (same `url:`-precedence behavior as the 6a sweep, not a bug). |
+| yarn classic | **PASS** | **PASS** | **PASS** | See Finding #2 — required `.yarnrc` (registry) + `.npmrc` (`_authToken`/`always-auth`) together; hand-edited single-file configs and the `npm_config_registry`/`npm_config__authToken` env-var form were both unreliable (client-side quirk, not a Pantera defect). |
+| yarn berry | **PASS** | **PASS** | **PASS** | Required `npmAlwaysAuth: true` in `.yarnrc.yml` in addition to `npmAuthToken` (yarn berry defaults to anonymous for non-scoped installs otherwise) plus `unsafeHttpWhitelist: [localhost]` for plain HTTP. Real checksums recorded in `yarn.lock` for all three modes. |
+| corepack (`use pnpm@11.5.1`) | not exercised¹ | **PASS** | **PASS** | Cache cleared before each run; genuine cold fetch confirmed both by the full integrity hash landing in `package.json` and by cross-checking server-side `artifact_resolution`/`artifact_access` audit log entries for `pnpm`/`11.5.1` immediately after each run. |
+
+¹ Same rationale as prior sweeps: nobody hosts `pnpm`/`yarn`/`npm` tool tarballs in a hosted repo in practice.
+
+### Step 4 — DB-backed settings, live (re-verified)
+
+- `GET /api/v1/admin/client-base-url-settings` → `{"trust_forwarded_headers":"false","client_base_host_allowlist":""}`. **PASS**.
+- `client_base_host_allowlist` hot reload: baseline `Host: evil.tld` → tarball rooted at `evil.tld` (permissive default). `PUT {"client_base_host_allowlist":"allowed.example.com"}` → immediately (no restart) the same `Host: evil.tld` request now falls back to `http://localhost/...` (allowlist rejected it). Reverted to empty → permissive behavior (evil.tld honored again) returned immediately. **Hot reload: YES, both directions.**
+- `trust_forwarded_headers` hot reload: baseline forwarded headers ignored → `PUT {"trust_forwarded_headers":"true"}` → immediately, `X-Forwarded-Proto: https` + `X-Forwarded-Host: registry.example.com` + `X-Forwarded-Prefix: /artifactory` correctly produced `https://registry.example.com/artifactory/.../pnpm-11.5.1.tgz`. Reverted to `false` immediately after. **Hot reload: YES.**
+- `Vary: Host` confirmed present on packument, single-version, and dist-tags-adjacent responses across `npm`, `npm_proxy`, `npm_group`. **PASS**.
+- Admin UI settings card: both `pantera:2.3.0` and `pantera-ui:2.3.0` images were rebuilt fresh from this commit before testing (no stale-image gap this time). Fetched the **actual HTTP-served** JS bundle from the running `pantera-ui` container (`curl http://localhost:8090/assets/...`, not just `docker exec`/on-disk `dist/`) and confirmed it contains both the `"Client-Facing Base URL"` label and the `client_base_host_allowlist` key. No browser automation tool was available in this environment to capture a rendered screenshot — verification is via served-bundle content, same limitation as the 6a sweep.
+
+### Findings (bugs found, NOT fixed — reported per the verification task's instructions)
+
+1. **[HIGH] B5 / AC3's honest-JSON-body requirement is still not met live, despite `6618f8b05`'s commit message claiming it was fixed.** `CachedNpmProxySlice.notFoundBuilder()` was added and does call `VersionManifestResolver.parse()` to reconstruct `{"error":"version not found: ...","package":"..."}`, but the live response for `GET /<pkg>/<nonexistent-version>` on `npm_proxy`/`npm_group` is still `404` with `content-length: 0` — reproduced on a warm packument, a wholly fresh package/version, and via both `/api/` and plain route styles, ruling out stale-negative-cache as the cause. Root cause not confirmed (out of scope for a verification-only pass — no `src/main` changes made), but code reading did not turn up an obvious mismatch in `VersionManifestResolver.parse()`'s expectations vs. the trimmed path `CachedNpmProxySlice` should be operating on; the discrepancy between the unit tests added in this same commit (`CachedNpmProxySliceTest.java`) and this live behavior is itself worth investigating. The critical regression-guard property this AC exists for — **never** a `200` stub — is fully intact everywhere.
+   ```
+   $ curl -sS -D - http://localhost:8088/test_prefix/api/npm/npm_proxy/is-positive/999.999.999-neverseen
+   HTTP/1.1 404 Not Found
+   content-length: 0
+   (empty body)
+   ```
+2. **[LOW] yarn classic does not reliably honor a per-registry `_authToken`/`_auth` configured via a hand-written `.yarnrc`, nor via `npm_config_registry`/`npm_config__authToken` environment variables** (both produced `401`s against a Pantera repo that `curl` authenticated against fine with the identical token). The only reliable recipe found: `.yarnrc` carrying `registry` only, plus a separate `.npmrc` carrying `//host/path/:_authToken=...` and `always-auth=true` — i.e. `yarn config set <key> <value>` output, not a hand-rolled file. This is a client-side yarn-classic behavior, not a Pantera defect, but it means the npm user-guide's claim that "yarn v1 uses the same `.npmrc` format" is only half true (registry pointer needs `.yarnrc`, auth can live in `.npmrc`) — worth a small doc clarification.
+3. **[LOW, carried forward from 6a] The `client_base_host_allowlist`-rejected fallback loses the port** (`http://localhost/...` instead of `http://localhost:8088/...`) — reproduced again this pass under the exact same conditions as 6a. Still not independently root-caused.
+4. **[INFO, environment, not a product bug] A `yarn config list` invocation without `HOME` isolation briefly printed this host's real ambient production auth tokens** (Okta-issued JWTs for `artifactory.prod.auto1.team`, `packages.prod.auto1.team`, `packages.qa.auto1.team`, sourced from `~/.npmrc` — unrelated to this repository) into command output during this session, because yarn classic does not respect `npm_config_userconfig=/dev/null` the way npm does. The values were not written into this report, this repo, or any committed file; every subsequent yarn invocation used an isolated `HOME` to prevent recurrence. This is the same host misconfiguration the 6a sweep flagged — repeating the recommendation to rotate those tokens, now with a second, independent trigger (a different client tool) confirming the exposure surface is broader than just corepack.
+5. **[LOW] `pantera-main/docker-compose/.env.example` does not boot the stack as-shipped** — see the bootstrap note above (Postgres role case mismatch; `/var/PANTERA`/`/etc/PANTERA` vs. the image's actual lowercase `/var/pantera`/`/etc/pantera` paths). A fresh clone following the documented "copy to `.env`" instruction verbatim fails at both the Postgres init step and the JVM startup step.
+
+---
+
 ## 7. Out of scope
 
 - Adopting `ClientBaseUrl` in the Composer, PyPI, and Docker adapters (structurally identical rewriting; separate change).
