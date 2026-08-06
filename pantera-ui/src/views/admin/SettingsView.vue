@@ -8,6 +8,7 @@ import {
   getAuthSettings, updateAuthSettings,
   getCircuitBreakerSettings, updateCircuitBreakerSettings,
   getUpstreamBreakerSettings, updateUpstreamBreakerSettings,
+  getClientBaseUrlSettings, updateClientBaseUrlSettings,
 } from '@/api/auth'
 import type { RuntimeSettingKey } from '@/api/runtimeSettings'
 import { useRuntimeSettings } from '@/composables/useRuntimeSettings'
@@ -39,7 +40,7 @@ const saving = ref<string | null>(null)
 type SectionId =
   | 'prefixes' | 'jwt' | 'auth' | 'circuit_breaker' | 'upstream_breaker'
   | 'cooldown' | 'http_client' | 'bulkhead' | 'http_server'
-  | 'external_links'
+  | 'external_links' | 'client_base_url'
 
 interface SectionMeta {
   /** Human-readable name shown in toasts and the dirty list. */
@@ -113,6 +114,10 @@ const SECTION_META: Record<SectionId, SectionMeta> = {
     label: 'External Links',
     hotReload: true,
   },
+  client_base_url: {
+    label: 'Client-Facing Base URL (Forwarded Headers / Host Allowlist)',
+    hotReload: true,
+  },
 }
 
 // Editable state
@@ -149,6 +154,15 @@ const ubMinCalls = ref(10)
 const ubWindowSeconds = ref(30)
 const ubSeedBackoffSeconds = ref(2)
 const ubMaxBackoffSeconds = ref(3600)
+
+// Client-facing base URL derivation (ClientBaseUrl, pantera-core) — governs
+// absolute URLs Pantera emits (e.g. npm dist.tarball) when a repository has
+// no explicit url: configured. Two independent settings: whether to trust
+// reverse-proxy X-Forwarded-* headers, and which Host values may be used at
+// all. clientBaseHostAllowlist is edited as a comma-separated string and
+// split/joined the same way `prefixes` is.
+const trustForwardedHeaders = ref(false)
+const clientBaseHostAllowlist = ref('')
 
 // Cooldown config
 const cooldownConfig = ref<CooldownConfig | null>(null)
@@ -312,6 +326,10 @@ onMounted(async () => {
         ubWindowSeconds.value = parseInt(s.upstream_breaker_window_seconds ?? '30')
         ubSeedBackoffSeconds.value = parseInt(s.upstream_breaker_seed_backoff_seconds ?? '2')
         ubMaxBackoffSeconds.value = parseInt(s.upstream_breaker_max_backoff_seconds ?? '3600')
+      }),
+      getClientBaseUrlSettings().then(s => {
+        trustForwardedHeaders.value = s.trust_forwarded_headers === 'true'
+        clientBaseHostAllowlist.value = s.client_base_host_allowlist ?? ''
       }),
       runtime.load(),
     ])
@@ -480,6 +498,33 @@ async function saveUpstreamBreakerSettings() {
   }
 }
 
+/**
+ * Save the client-facing base URL derivation settings (forwarded-header
+ * trust + host allowlist). Both apply on the very next request — every
+ * `ClientBaseUrl` reads through the DB-backed loader on each construction,
+ * no restart required.
+ */
+async function saveClientBaseUrlSettings() {
+  saving.value = 'client-base-url'
+  try {
+    const allowlist = clientBaseHostAllowlist.value
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .join(',')
+    await updateClientBaseUrlSettings({
+      trust_forwarded_headers: String(trustForwardedHeaders.value),
+      client_base_host_allowlist: allowlist,
+    })
+    clientBaseHostAllowlist.value = allowlist
+    notify.success('Client-facing base URL settings saved')
+  } catch {
+    notify.error('Failed to save client-facing base URL settings')
+  } finally {
+    saving.value = null
+  }
+}
+
 function saveHttpClient() {
   saveSection('http_client', {
     proxy_timeout: httpProxyTimeout.value,
@@ -628,6 +673,8 @@ interface Baseline {
   ubWindowSeconds: number
   ubSeedBackoffSeconds: number
   ubMaxBackoffSeconds: number
+  trustForwardedHeaders: boolean
+  clientBaseHostAllowlist: string
   cooldownEnabled: boolean
   cooldownAge: string
   cooldownHistoryRetentionDays: number
@@ -668,6 +715,8 @@ function snapshot(): Baseline {
     ubWindowSeconds: ubWindowSeconds.value,
     ubSeedBackoffSeconds: ubSeedBackoffSeconds.value,
     ubMaxBackoffSeconds: ubMaxBackoffSeconds.value,
+    trustForwardedHeaders: trustForwardedHeaders.value,
+    clientBaseHostAllowlist: clientBaseHostAllowlist.value,
     cooldownEnabled: cooldownEnabled.value,
     cooldownAge: cooldownAge.value,
     cooldownHistoryRetentionDays: cooldownHistoryRetentionDays.value,
@@ -717,6 +766,10 @@ const isDirtyUpstreamBreaker = computed(() =>
       || baseline.value.ubWindowSeconds !== ubWindowSeconds.value
       || baseline.value.ubSeedBackoffSeconds !== ubSeedBackoffSeconds.value
       || baseline.value.ubMaxBackoffSeconds !== ubMaxBackoffSeconds.value))
+const isDirtyClientBaseUrl = computed(() =>
+  !!baseline.value
+    && (baseline.value.trustForwardedHeaders !== trustForwardedHeaders.value
+      || baseline.value.clientBaseHostAllowlist !== clientBaseHostAllowlist.value))
 const isDirtyCooldown = computed(() =>
   !!baseline.value
     && (baseline.value.cooldownEnabled !== cooldownEnabled.value
@@ -756,6 +809,7 @@ const DIRTY_PER_SECTION: Record<SectionId, { value: boolean }> = {
   auth: isDirtyAuth,
   circuit_breaker: isDirtyCircuitBreaker,
   upstream_breaker: isDirtyUpstreamBreaker,
+  client_base_url: isDirtyClientBaseUrl,
   cooldown: isDirtyCooldown,
   http_client: isDirtyHttpClient,
   bulkhead: isDirtyBulkhead,
@@ -781,6 +835,7 @@ async function saveSectionById(id: SectionId): Promise<void> {
     case 'auth': await saveAuthSettings(); break
     case 'circuit_breaker': await saveCircuitBreakerSettings(); break
     case 'upstream_breaker': await saveUpstreamBreakerSettings(); break
+    case 'client_base_url': await saveClientBaseUrlSettings(); break
     case 'cooldown': await saveCooldown(); break
     case 'http_client': await Promise.resolve(saveHttpClient()); break
     case 'bulkhead': await runtime.saveAllDirty(); break
@@ -847,6 +902,8 @@ function discardAll() {
   ubWindowSeconds.value = b.ubWindowSeconds
   ubSeedBackoffSeconds.value = b.ubSeedBackoffSeconds
   ubMaxBackoffSeconds.value = b.ubMaxBackoffSeconds
+  trustForwardedHeaders.value = b.trustForwardedHeaders
+  clientBaseHostAllowlist.value = b.clientBaseHostAllowlist
   cooldownEnabled.value = b.cooldownEnabled
   cooldownAge.value = b.cooldownAge
   cooldownHistoryRetentionDays.value = b.cooldownHistoryRetentionDays
@@ -1129,6 +1186,58 @@ const SectionHeader = (props: { id: SectionId; dirty: boolean }) => {
               Settings take effect on the next recorded outcome for every upstream
               endpoint — no restart needed. While an endpoint is blocked, outbound
               requests to it fail fast until a HEAD probe succeeds.
+            </div>
+          </div>
+        </template>
+      </Card>
+
+      <!-- Client-Facing Base URL (forwarded-header trust + Host allowlist) -->
+      <Card class="shadow-sm">
+        <template #title>
+          <SectionHeader id="client_base_url" :dirty="isDirtyClientBaseUrl" />
+        </template>
+        <template #subtitle>
+          Governs how Pantera derives the absolute base URL it embeds in links it
+          emits (e.g. npm <code>dist.tarball</code>) for a repository with no
+          explicit <code>url:</code> configured. Distinct from — and unrelated
+          to — the circuit breaker cards above.
+        </template>
+        <template #content>
+          <div class="space-y-5">
+            <div class="flex items-center gap-3">
+              <InputSwitch v-model="trustForwardedHeaders" />
+              <div>
+                <div class="text-sm">Trust reverse-proxy forwarded headers</div>
+                <div class="text-xs text-gray-500">
+                  Honour <code>X-Forwarded-Proto</code>/<code>-Host</code>/<code>-Prefix</code>.
+                  Enable ONLY when a fronting reverse proxy overwrites these on
+                  every inbound request — they are otherwise client-suppliable.
+                  Default: off.
+                </div>
+              </div>
+            </div>
+            <div class="flex flex-col gap-2">
+              <label class="text-sm text-gray-500">Host allowlist (comma-separated)</label>
+              <InputText
+                v-model="clientBaseHostAllowlist"
+                class="w-full"
+                placeholder="e.g. registry.example.com, registry.example.com:8443"
+              />
+              <div
+                v-if="!clientBaseHostAllowlist.trim()"
+                class="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded p-2"
+              >
+                <i class="pi pi-exclamation-triangle mr-1" />
+                Empty is PERMISSIVE: the client-supplied <code>Host</code> header is
+                trusted as-is for any repository without an explicit <code>url:</code>.
+                A client can steer emitted URLs at any host it likes. Add at least
+                one entry to restrict which <code>Host</code> values are honoured
+                — a non-matching <code>Host</code> falls back exactly like an
+                absent one, never emitted verbatim.
+              </div>
+              <span v-else class="text-xs text-gray-400">
+                Exact match, case-insensitive, including port if the client sends one.
+              </span>
             </div>
           </div>
         </template>

@@ -361,6 +361,45 @@ public final class VertxMain {
                 new com.auto1.pantera.db.dao.AuthSettingsDao(ds)
             )
         );
+        // WS8 fixwave-b (2.3.0): install the client-base URL derivation
+        // settings (trust_forwarded_headers, client_base_host_allowlist)
+        // consumed by pantera-core's ClientBaseUrl. install(...) also feeds
+        // pantera-core's ClientBaseUrlSettingsRegistry — see that loader's
+        // Javadoc for why this crosses the module boundary this way.
+        sharedDs.ifPresent(ds ->
+            com.auto1.pantera.http.headers.ClientBaseUrlSettingsLoader.install(
+                new com.auto1.pantera.db.dao.AuthSettingsDao(ds)
+            )
+        );
+        // Fail LOUD, not closed: an empty/unset host allowlist is
+        // permissive by design (upgrading an existing deployment must not
+        // suddenly reject every Host), but that posture is worth an
+        // operator's attention at every boot, DB-backed or not — evaluated
+        // unconditionally, not only inside the sharedDs branch above.
+        if (com.auto1.pantera.http.headers.ClientBaseUrlSettingsLoader.activeSupplier()
+            .get().hostAllowlist().isEmpty()) {
+            EcsLogger.warn("com.auto1.pantera")
+                .message("client_base_host_allowlist is empty — the Host header is trusted "
+                    + "unconditionally to derive client-facing base URLs Pantera emits (e.g. "
+                    + "npm dist.tarball) for any repository without an explicit url:. Configure "
+                    + "client_base_host_allowlist (PUT /api/v1/admin/client-base-url-settings) "
+                    + "or PANTERA_CLIENT_BASE_HOST_ALLOWLIST to restrict which Host values are "
+                    + "honoured.")
+                .eventCategory("configuration")
+                .eventAction("client_base_host_allowlist_permissive")
+                .eventOutcome("success")
+                .field("log.source", "application")
+                .log();
+        }
+        // NOTE (2.2.5 backport): unlike CircuitBreakerSettingsLoader /
+        // UpstreamBreakerSettingsLoader, this setting has no cross-node
+        // pub/sub broadcast wiring here — that pattern (WS2.3) is a 2.3.0
+        // addition out of scope for this backport. A PUT to
+        // client-base-url-settings invalidates the writing node's cache
+        // immediately (see AdminAuthHandler#updateClientBaseUrlSettings);
+        // other nodes pick up the change on their own TTL-less cache miss
+        // path only after a restart, matching this backport's baseline
+        // behaviour for the breaker settings before WS2.3.
         // Install singleton PublishDateRegistry. Each adapter slice now resolves
         // canonical publish dates via RegistryBackedInspector(repoType, registry)
         // instead of HEAD-probing upstream — eliminates the per-cooldown-eval

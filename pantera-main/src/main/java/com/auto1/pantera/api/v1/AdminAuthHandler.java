@@ -100,6 +100,10 @@ public final class AdminAuthHandler {
             .handler(adminAuthz).handler(this::getUpstreamBreakerSettings);
         router.put("/api/v1/admin/upstream-breaker-settings")
             .handler(adminAuthz).handler(this::updateUpstreamBreakerSettings);
+        router.get("/api/v1/admin/client-base-url-settings")
+            .handler(adminAuthz).handler(this::getClientBaseUrlSettings);
+        router.put("/api/v1/admin/client-base-url-settings")
+            .handler(adminAuthz).handler(this::updateClientBaseUrlSettings);
     }
 
     /**
@@ -347,6 +351,117 @@ public final class AdminAuthHandler {
                         + String.join(",", body.fieldNames()) + ")")
                     .eventCategory("configuration")
                     .eventAction("upstream_breaker_settings_update")
+                    .eventOutcome("success")
+                    .field("log.source", "application")
+                    .log();
+                ctx.response().setStatusCode(204).end();
+            }
+        });
+    }
+
+    /**
+     * Whitelist for the client-base-URL derivation endpoint — {@link
+     * com.auto1.pantera.http.headers.ClientBaseUrl}'s {@code
+     * trustForwardedHeaders} / host allowlist, distinct from both breaker
+     * whitelists above.
+     */
+    private static final java.util.Set<String> CLIENT_BASE_KEYS = java.util.Set.of(
+        "trust_forwarded_headers",
+        "client_base_host_allowlist"
+    );
+
+    /**
+     * GET /api/v1/admin/client-base-url-settings — current values for the
+     * two settings governing {@link com.auto1.pantera.http.headers.ClientBaseUrl}'s
+     * derivation of the client-facing base URL Pantera emits (e.g. npm
+     * {@code dist.tarball}). {@code client_base_host_allowlist} is returned
+     * as a comma-joined string (empty when the allowlist is empty /
+     * permissive), the same convention the PUT body accepts.
+     */
+    private void getClientBaseUrlSettings(final RoutingContext ctx) {
+        CompletableFuture.supplyAsync(() -> {
+            final com.auto1.pantera.http.headers.ClientBaseUrlSettings current =
+                com.auto1.pantera.http.headers.ClientBaseUrlSettingsLoader.activeSupplier().get();
+            return new JsonObject()
+                .put("trust_forwarded_headers", String.valueOf(current.trustForwardedHeaders()))
+                .put("client_base_host_allowlist", String.join(",", current.hostAllowlist()));
+        }, HandlerExecutor.get()).whenComplete((settings, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
+                ctx.response()
+                    .setStatusCode(200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(settings.encode());
+            }
+        });
+    }
+
+    /**
+     * PUT /api/v1/admin/client-base-url-settings — partial updates OK; only
+     * {@link #CLIENT_BASE_KEYS} accepted. Values validated by round-tripping
+     * through the {@code ClientBaseUrlSettings} record constructor before
+     * anything is written — an unparseable boolean is rejected outright
+     * since the record itself has no invariant to catch it.
+     */
+    private void updateClientBaseUrlSettings(final RoutingContext ctx) {
+        final JsonObject body = ctx.body().asJsonObject();
+        if (body == null || body.isEmpty()) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Request body is required");
+            return;
+        }
+        for (final String key : body.fieldNames()) {
+            if (!CLIENT_BASE_KEYS.contains(key)) {
+                ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                    "Unknown client-base-url setting: " + key);
+                return;
+            }
+        }
+        final com.auto1.pantera.http.headers.ClientBaseUrlSettings current =
+            com.auto1.pantera.http.headers.ClientBaseUrlSettingsLoader.activeSupplier().get();
+        final String trustRaw = body.getString(
+            "trust_forwarded_headers", String.valueOf(current.trustForwardedHeaders())
+        );
+        if (!"true".equalsIgnoreCase(trustRaw) && !"false".equalsIgnoreCase(trustRaw)) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                "trust_forwarded_headers must be \"true\" or \"false\"");
+            return;
+        }
+        final String allowlistRaw = body.getString(
+            "client_base_host_allowlist", String.join(",", current.hostAllowlist())
+        );
+        final java.util.List<String> allowlist = java.util.Arrays.stream(allowlistRaw.split(","))
+            .map(String::trim)
+            .filter(host -> !host.isEmpty())
+            .toList();
+        try {
+            new com.auto1.pantera.http.headers.ClientBaseUrlSettings(
+                Boolean.parseBoolean(trustRaw), allowlist
+            );
+        } catch (final IllegalArgumentException ex) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                "Invalid client-base-url setting: " + ex.getMessage());
+            return;
+        }
+        CompletableFuture.supplyAsync(() -> {
+            for (final String key : body.fieldNames()) {
+                this.settingsDao.put(key, body.getValue(key).toString());
+            }
+            final com.auto1.pantera.http.headers.ClientBaseUrlSettingsLoader loader =
+                com.auto1.pantera.http.headers.ClientBaseUrlSettingsLoader.installed();
+            if (loader != null) {
+                loader.invalidate();
+            }
+            return null;
+        }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
+                EcsLogger.info("com.auto1.pantera.api.v1")
+                    .message("Admin updated client-base-url settings (keys="
+                        + String.join(",", body.fieldNames()) + ")")
+                    .eventCategory("configuration")
+                    .eventAction("client_base_url_settings_update")
                     .eventOutcome("success")
                     .field("log.source", "application")
                     .log();

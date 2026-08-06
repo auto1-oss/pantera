@@ -13,11 +13,21 @@ package com.auto1.pantera.http.headers;
 import com.auto1.pantera.http.Headers;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
+import org.hamcrest.core.IsNot;
+import org.hamcrest.core.StringContains;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 
 final class ClientBaseUrlTest {
+
+    @AfterEach
+    void tearDown() {
+        ClientBaseUrlSettingsRegistry.uninstall();
+    }
 
     @Test
     void derivesBaseFromHostAndPath() {
@@ -121,6 +131,115 @@ final class ClientBaseUrlTest {
         MatcherAssert.assertThat(
             new ClientBaseUrl(Headers.from(ClientBaseUrl.HEADER, "https://h/npm_group")).stamped(),
             new IsEqual<>(Optional.of("https://h/npm_group"))
+        );
+    }
+
+    /**
+     * Proves the hot-reload requirement directly: the SAME registered
+     * supplier reference stays installed for the whole test, but its
+     * resolved value changes between two constructions of {@link
+     * ClientBaseUrl} — nothing is re-installed, restarted, or
+     * reconstructed. This is exactly what happens in production between an
+     * admin PUT (which calls {@code loader.invalidate()}) and the next
+     * request: the very next {@code new ClientBaseUrl(headers)} observes it.
+     */
+    @Test
+    void oneArgConstructorPicksUpASettingsChangeWithoutReinstalling() {
+        final AtomicReference<ClientBaseUrlSettings> live =
+            new AtomicReference<>(ClientBaseUrlSettings.defaults());
+        ClientBaseUrlSettingsRegistry.install(live::get);
+        final Headers headers = new Headers()
+            .add("Host", "internal:8080")
+            .add("X-Forwarded-Proto", "https")
+            .add("X-Forwarded-Host", "reg.example.com");
+        MatcherAssert.assertThat(
+            "before the change, forwarded headers are not trusted (default)",
+            new ClientBaseUrl(headers).origin(),
+            new IsEqual<>("http://internal:8080")
+        );
+        live.set(new ClientBaseUrlSettings(true, List.of()));
+        MatcherAssert.assertThat(
+            "after the change — same installed supplier, new resolved value — "
+                + "a freshly constructed instance honours forwarded headers",
+            new ClientBaseUrl(headers).origin(),
+            new IsEqual<>("https://reg.example.com")
+        );
+    }
+
+    @Test
+    void oneArgConstructorFallsBackToDefaultsWhenNothingIsInstalled() {
+        MatcherAssert.assertThat(
+            new ClientBaseUrl(Headers.from("Host", "reg.example.com")).origin(),
+            new IsEqual<>("http://reg.example.com")
+        );
+    }
+
+    @Test
+    void hostNotOnTheAllowlistIsNeverEmittedAsTheOrigin() {
+        ClientBaseUrlSettingsRegistry.install(
+            () -> new ClientBaseUrlSettings(false, List.of("good.example.com"))
+        );
+        final String origin = new ClientBaseUrl(Headers.from("Host", "evil.tld")).origin();
+        MatcherAssert.assertThat(
+            "a Host absent from the allowlist must never be reflected into the origin",
+            origin, new IsNot<>(new StringContains("evil.tld"))
+        );
+        MatcherAssert.assertThat(
+            "disallowed Host falls back exactly like an absent one",
+            origin, new IsEqual<>("http://localhost")
+        );
+    }
+
+    @Test
+    void hostOnTheAllowlistIsUsedNormallyCaseInsensitively() {
+        ClientBaseUrlSettingsRegistry.install(
+            () -> new ClientBaseUrlSettings(false, List.of("Reg.Example.com"))
+        );
+        MatcherAssert.assertThat(
+            new ClientBaseUrl(Headers.from("Host", "reg.example.com")).origin(),
+            new IsEqual<>("http://reg.example.com")
+        );
+    }
+
+    @Test
+    void emptyAllowlistIsPermissive() {
+        ClientBaseUrlSettingsRegistry.install(() -> new ClientBaseUrlSettings(false, List.of()));
+        MatcherAssert.assertThat(
+            new ClientBaseUrl(Headers.from("Host", "anything.example.com")).origin(),
+            new IsEqual<>("http://anything.example.com")
+        );
+    }
+
+    @Test
+    void allowlistAlsoGatesTheHostFallbackWhenForwardedHostIsAbsentButTrusted() {
+        // trustForwarded=true but no X-Forwarded-Host on the request: origin()
+        // falls back to Host, which must still respect the allowlist.
+        ClientBaseUrlSettingsRegistry.install(
+            () -> new ClientBaseUrlSettings(true, List.of("good.example.com"))
+        );
+        final Headers headers = new Headers()
+            .add("Host", "evil.tld")
+            .add("X-Forwarded-Proto", "https");
+        MatcherAssert.assertThat(
+            new ClientBaseUrl(headers).origin(),
+            new IsEqual<>("https://localhost")
+        );
+    }
+
+    /**
+     * The explicit 2-argument constructor is the deterministic, test-only
+     * escape hatch: it never consults {@link ClientBaseUrlSettingsRegistry},
+     * so a restrictive allowlist installed for other tests/production has no
+     * effect on it.
+     */
+    @Test
+    void twoArgConstructorNeverConsultsTheAllowlist() {
+        ClientBaseUrlSettingsRegistry.install(
+            () -> new ClientBaseUrlSettings(false, List.of("good.example.com"))
+        );
+        MatcherAssert.assertThat(
+            new ClientBaseUrl(Headers.from("Host", "evil.tld"), false).origin(),
+            new IsEqual<>("http://evil.tld")
         );
     }
 }

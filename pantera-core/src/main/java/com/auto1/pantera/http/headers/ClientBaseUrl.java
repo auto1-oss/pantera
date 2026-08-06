@@ -30,9 +30,25 @@ import java.util.Optional;
  * unless something in front of Pantera overwrites them on every inbound
  * request. Honouring them unconditionally lets a client steer the tarball
  * URLs Pantera emits at an arbitrary host, and those responses are
- * cacheable. They are therefore only honoured when the operator has set
- * {@code PANTERA_TRUST_FORWARDED_HEADERS=true} (default {@code false}); see
- * {@link #ClientBaseUrl(Headers, boolean)}.</p>
+ * cacheable. They are therefore only honoured when the operator has enabled
+ * it via the DB-backed {@code trust_forwarded_headers} admin setting
+ * (env fallback {@code PANTERA_TRUST_FORWARDED_HEADERS}, default {@code
+ * false}); see {@link #ClientBaseUrl(Headers)}.</p>
+ *
+ * <p><b>{@code Host} is also client-supplied.</b> Even with forwarded
+ * headers untrusted, the base is still derived from the raw {@code Host}
+ * header by default — a request can carry any {@code Host} it likes. The
+ * DB-backed {@code client_base_host_allowlist} admin setting (env fallback
+ * {@code PANTERA_CLIENT_BASE_HOST_ALLOWLIST}) restricts which {@code Host}
+ * values may be used for derivation; a non-matching {@code Host} is treated
+ * exactly as an absent one rather than emitted verbatim. An empty/unset
+ * allowlist is permissive (today's behaviour, honouring any {@code Host}).</p>
+ *
+ * <p>Both settings are read dynamically on every construction via {@link
+ * ClientBaseUrlSettingsRegistry#active()} — a change made through the admin
+ * API applies to the very next request, no restart required. The
+ * two-argument constructor bypasses that lookup entirely, for tests that
+ * need a fixed, deployment-independent {@code trustForwarded} value.</p>
  */
 public final class ClientBaseUrl {
 
@@ -49,15 +65,6 @@ public final class ClientBaseUrl {
     public static final String ORIGINAL_PATH = "X-Original-Path";
 
     /**
-     * Whether {@code X-Forwarded-*} headers are honoured by default, read
-     * once from {@code PANTERA_TRUST_FORWARDED_HEADERS} at class-load time.
-     * Deliberately env-var-only (not a DB-backed setting): a trust-boundary
-     * flag must require a deliberate deployment change, not a runtime toggle.
-     */
-    private static final boolean TRUST_FORWARDED_BY_DEFAULT =
-        Boolean.parseBoolean(System.getenv("PANTERA_TRUST_FORWARDED_HEADERS"));
-
-    /**
      * Request headers.
      */
     private final Headers headers;
@@ -68,29 +75,66 @@ public final class ClientBaseUrl {
     private final boolean trustForwarded;
 
     /**
-     * Ctor. Trusts forwarded headers only when
-     * {@code PANTERA_TRUST_FORWARDED_HEADERS=true} at the environment level.
+     * {@code Host} values permitted to be used when deriving a base for this
+     * instance. Empty means permissive (any {@code Host} is honoured).
+     */
+    private final List<String> hostAllowlist;
+
+    /**
+     * Ctor. Reads the CURRENT {@code trustForwardedHeaders} and {@code
+     * hostAllowlist} settings from {@link ClientBaseUrlSettingsRegistry} —
+     * dynamically, on every call, so a runtime admin-API change is honoured
+     * on the next request without restarting the process.
      * @param headers Request headers
      */
     public ClientBaseUrl(final Headers headers) {
-        this(headers, ClientBaseUrl.TRUST_FORWARDED_BY_DEFAULT);
+        this(headers, ClientBaseUrlSettingsRegistry.active());
     }
 
     /**
-     * Ctor.
+     * Ctor delegating to the field-initializing constructor with the given
+     * settings snapshot.
+     * @param headers Request headers
+     * @param settings Settings snapshot to derive from
+     */
+    private ClientBaseUrl(final Headers headers, final ClientBaseUrlSettings settings) {
+        this(headers, settings.trustForwardedHeaders(), settings.hostAllowlist());
+    }
+
+    /**
+     * Ctor for callers that need a fixed, deployment-independent trust
+     * decision (tests). The host allowlist is always empty (permissive) for
+     * this constructor — it never consults {@link ClientBaseUrlSettingsRegistry}.
      * @param headers Request headers
      * @param trustForwarded Whether to honour {@code X-Forwarded-Proto},
      *  {@code X-Forwarded-Host}, and {@code X-Forwarded-Prefix}
      */
     public ClientBaseUrl(final Headers headers, final boolean trustForwarded) {
+        this(headers, trustForwarded, List.of());
+    }
+
+    /**
+     * The single field-initializing constructor; every other constructor
+     * delegates here via {@code this(...)}.
+     * @param headers Request headers
+     * @param trustForwarded Whether to honour {@code X-Forwarded-Proto},
+     *  {@code X-Forwarded-Host}, and {@code X-Forwarded-Prefix}
+     * @param hostAllowlist {@code Host} values permitted for derivation;
+     *  empty is permissive
+     */
+    private ClientBaseUrl(
+        final Headers headers, final boolean trustForwarded, final List<String> hostAllowlist
+    ) {
         this.headers = headers;
         this.trustForwarded = trustForwarded;
+        this.hostAllowlist = hostAllowlist;
     }
 
     /**
      * Scheme and authority the client used. Honours reverse-proxy forwarding
      * headers only when this instance trusts them; otherwise derives from
-     * the {@code Host} header alone, scheme {@code http}.
+     * the {@code Host} header alone (subject to the host allowlist), scheme
+     * {@code http}.
      * @return e.g. {@code https://reg.example.com}
      */
     public String origin() {
@@ -99,10 +143,35 @@ public final class ClientBaseUrl {
             result = String.format(
                 "%s://%s",
                 this.first("X-Forwarded-Proto").orElse("http"),
-                this.first("X-Forwarded-Host").or(() -> this.first("Host")).orElse("localhost")
+                this.first("X-Forwarded-Host").or(this::allowedHost).orElse("localhost")
             );
         } else {
-            result = String.format("http://%s", this.first("Host").orElse("localhost"));
+            result = String.format("http://%s", this.allowedHost().orElse("localhost"));
+        }
+        return result;
+    }
+
+    /**
+     * The {@code Host} header value, but only when it passes the configured
+     * host allowlist. {@code Host} is client-supplied; an empty/unset
+     * allowlist is permissive (any {@code Host} is honoured, matching the
+     * behaviour before this allowlist existed). A non-empty allowlist that
+     * the header's value does not match (case-insensitive, exact string
+     * including any port) yields empty here — every caller of this method
+     * already treats an empty result exactly like an absent {@code Host}
+     * header, so a disallowed value is never emitted, only ever silently
+     * falls back.
+     * @return {@code Host} header value if present and allowed, else empty
+     */
+    private Optional<String> allowedHost() {
+        final Optional<String> host = this.first("Host");
+        final Optional<String> result;
+        if (host.isEmpty() || this.hostAllowlist.isEmpty()) {
+            result = host;
+        } else {
+            final String candidate = host.get();
+            result = this.hostAllowlist.stream().anyMatch(candidate::equalsIgnoreCase)
+                ? host : Optional.empty();
         }
         return result;
     }
@@ -124,11 +193,15 @@ public final class ClientBaseUrl {
      * read them in that case.
      *
      * <p>Deliberately independent of the headers this instance was built
-     * with: whether a header participates in the derivation is a
-     * boot-time property ({@link #trustForwarded}), not a per-request one,
-     * so callers may compute this from any {@link ClientBaseUrl} instance,
-     * including one built from headers unrelated to the response being
-     * built.</p>
+     * with: whether a header participates in the derivation is a property
+     * of the CURRENT {@code trust_forwarded_headers} setting ({@link
+     * #trustForwarded}, resolved dynamically at construction via {@link
+     * ClientBaseUrlSettingsRegistry#active()} — never a boot-time snapshot),
+     * not a per-request one, so callers may compute this from any {@link
+     * ClientBaseUrl} instance, including one built from headers unrelated to
+     * the response being built. A change applied through the admin API is
+     * therefore reflected in the very next response's {@code Vary} header,
+     * with no restart.</p>
      *
      * @return Vary header value
      */
