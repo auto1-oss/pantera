@@ -102,6 +102,27 @@ final class DownloadPackageSliceClientBaseTest {
         );
     }
 
+    @Test
+    void responseCarriesVaryHostSoASharedCacheCannotCrossServeIt() throws Exception {
+        // I2: the same URL now serves different dist.tarball values
+        // depending on the request's Host (or the internal stamped-base
+        // header derived from it), so a shared cache in front of Pantera
+        // must not treat two clients' requests as interchangeable.
+        final Storage storage = new InMemoryStorage();
+        this.saveFilesToStorage(storage);
+        final DownloadPackageSlice slice = new DownloadPackageSlice(
+            new NpmProxy(storage, new SliceSimple(ResponseBuilder.notFound().build())),
+            new PackagePath(""),
+            Optional.empty()
+        );
+        final String vary = slice.response(
+            new RequestLine(RqMethod.GET, "/" + PKG),
+            Headers.from("Host", "reg.example.com"),
+            Content.EMPTY
+        ).get().headers().single("Vary").getValue();
+        MatcherAssert.assertThat(vary, new IsEqual<>("Host"));
+    }
+
     /**
      * Drive a packument request through a freshly-seeded slice and return
      * the served {@code dist.tarball} for version 1.0.1.

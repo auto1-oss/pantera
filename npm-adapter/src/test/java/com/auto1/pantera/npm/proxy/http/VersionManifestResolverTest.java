@@ -107,7 +107,7 @@ final class VersionManifestResolverTest {
     @Test
     void emitsUnscopedVersionWithRewrittenTarball() throws Exception {
         final Response response = RESOLVER.emit(
-            PACKUMENT, "pnpm", "11.5.1", "https://h/api/npm/npm_group", Optional.empty()
+            PACKUMENT, "pnpm", "11.5.1", "https://h/api/npm/npm_group", "Host", Optional.empty()
         );
         MatcherAssert.assertThat(
             "status", response.status(), new IsEqual<>(RsStatus.OK)
@@ -120,12 +120,25 @@ final class VersionManifestResolverTest {
     }
 
     @Test
+    void emitCarriesTheSuppliedVaryHeader() {
+        // I2: a shared cache must not cross-serve this response to a
+        // different client whose derived base would differ.
+        final Response response = RESOLVER.emit(
+            PACKUMENT, "pnpm", "11.5.1", "https://h/api/npm/npm_group", "Host", Optional.empty()
+        );
+        MatcherAssert.assertThat(
+            response.headers().single("Vary").getValue(),
+            new IsEqual<>("Host")
+        );
+    }
+
+    @Test
     void emitResolvesDistTagToVersionManifestWithRewrittenTarball() throws Exception {
         // This is the /latest upstream-URL leak fix (spec S2.D): the dist-tag
         // must resolve to the same rewritten (Pantera-rooted) tarball as the
         // literal version, never the raw registry.npmjs.org URL.
         final Response response = RESOLVER.emit(
-            PACKUMENT, "pnpm", "latest", "https://h/api/npm/npm_group", Optional.empty()
+            PACKUMENT, "pnpm", "latest", "https://h/api/npm/npm_group", "Host", Optional.empty()
         );
         MatcherAssert.assertThat(
             "status", response.status(), new IsEqual<>(RsStatus.OK)
@@ -143,7 +156,7 @@ final class VersionManifestResolverTest {
         // version must 404 with an honest body, never the old {name,
         // modified} stub that silently 200s.
         final Response response = RESOLVER.emit(
-            PACKUMENT, "pnpm", "9.9.9", "https://h/api/npm/npm_group", Optional.empty()
+            PACKUMENT, "pnpm", "9.9.9", "https://h/api/npm/npm_group", "Host", Optional.empty()
         );
         MatcherAssert.assertThat(
             "status", response.status(), new IsEqual<>(RsStatus.NOT_FOUND)
@@ -160,11 +173,11 @@ final class VersionManifestResolverTest {
     void emitHonoursMatchingIfNoneMatchWith304() throws Exception {
         final String prefix = "https://h/api/npm/npm_group";
         final Response first = RESOLVER.emit(
-            PACKUMENT, "pnpm", "11.5.1", prefix, Optional.empty()
+            PACKUMENT, "pnpm", "11.5.1", prefix, "Host", Optional.empty()
         );
         final String etag = first.headers().single("ETag").getValue();
         final Response revalidated = RESOLVER.emit(
-            PACKUMENT, "pnpm", "11.5.1", prefix, Optional.of(etag)
+            PACKUMENT, "pnpm", "11.5.1", prefix, "Host", Optional.of(etag)
         );
         MatcherAssert.assertThat(
             "304 on a matching If-None-Match",
@@ -181,15 +194,20 @@ final class VersionManifestResolverTest {
             revalidated.body().asBytesFuture().get().length,
             new IsEqual<>(0)
         );
+        MatcherAssert.assertThat(
+            "304 carries the same Vary as the 200 it revalidates",
+            revalidated.headers().single("Vary").getValue(),
+            new IsEqual<>("Host")
+        );
     }
 
     @Test
     void differentTarballPrefixesProduceDifferentETags() {
         final Response first = RESOLVER.emit(
-            PACKUMENT, "pnpm", "11.5.1", "https://h1/api/npm/npm_group", Optional.empty()
+            PACKUMENT, "pnpm", "11.5.1", "https://h1/api/npm/npm_group", "Host", Optional.empty()
         );
         final Response second = RESOLVER.emit(
-            PACKUMENT, "pnpm", "11.5.1", "https://h2/api/npm/npm_group", Optional.empty()
+            PACKUMENT, "pnpm", "11.5.1", "https://h2/api/npm/npm_group", "Host", Optional.empty()
         );
         MatcherAssert.assertThat(
             first.headers().single("ETag").getValue().equals(
@@ -255,7 +273,7 @@ final class VersionManifestResolverTest {
             new FakeNpmProxy(RAW_PACKUMENT), null, null, "npm-proxy"
         );
         final Response response = resolver.resolve(
-            "pnpm", "11.5.1", "https://h/api/npm/npm_proxy", Optional.empty(),
+            "pnpm", "11.5.1", "https://h/api/npm/npm_proxy", "Host", Optional.empty(),
             AuditContext.NONE, "owner"
         ).get();
         MatcherAssert.assertThat(
@@ -276,7 +294,7 @@ final class VersionManifestResolverTest {
             new FakeNpmProxy(new byte[0]), null, null, "npm-proxy"
         );
         final Response response = resolver.resolve(
-            "pnpm", "11.5.1", "https://h/api/npm/npm_proxy", Optional.empty(),
+            "pnpm", "11.5.1", "https://h/api/npm/npm_proxy", "Host", Optional.empty(),
             AuditContext.NONE, "owner"
         ).get();
         MatcherAssert.assertThat(
@@ -297,7 +315,7 @@ final class VersionManifestResolverTest {
             "npm", "npm-proxy"
         );
         final Response response = resolver.resolve(
-            "pnpm", "11.5.1", "https://h/api/npm/npm_proxy", Optional.empty(),
+            "pnpm", "11.5.1", "https://h/api/npm/npm_proxy", "Host", Optional.empty(),
             AuditContext.NONE, "owner"
         ).get();
         MatcherAssert.assertThat(
@@ -319,7 +337,7 @@ final class VersionManifestResolverTest {
             "npm", "npm-proxy"
         );
         final Response response = resolver.resolve(
-            "pnpm", "11.5.1", "https://h/api/npm/npm_proxy", Optional.empty(),
+            "pnpm", "11.5.1", "https://h/api/npm/npm_proxy", "Host", Optional.empty(),
             AuditContext.NONE, "owner"
         ).get();
         MatcherAssert.assertThat(
@@ -343,7 +361,7 @@ final class VersionManifestResolverTest {
             "npm", "npm-proxy"
         );
         final Response response = resolver.resolve(
-            "pnpm", "11.5.1", "https://h/api/npm/npm_proxy", Optional.empty(),
+            "pnpm", "11.5.1", "https://h/api/npm/npm_proxy", "Host", Optional.empty(),
             AuditContext.NONE, "owner"
         ).get();
         MatcherAssert.assertThat(

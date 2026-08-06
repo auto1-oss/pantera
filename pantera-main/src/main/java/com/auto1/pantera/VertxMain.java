@@ -18,6 +18,7 @@ import com.auto1.pantera.cooldown.CooldownCleanupFallback;
 import com.auto1.pantera.cooldown.CooldownRepository;
 import com.auto1.pantera.cooldown.PgCronStatus;
 import com.auto1.pantera.http.BaseSlice;
+import com.auto1.pantera.http.InternalHeaderScrubSlice;
 import com.auto1.pantera.http.MainSlice;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.misc.ConfigDefaults;
@@ -644,7 +645,14 @@ public final class VertxMain {
                                             slices.invalidateRepo(name);
                                             repos.config(name).ifPresent(cfg -> cfg.port().ifPresent(
                                                 prt -> {
-                                                    final Slice slice = slices.slice(new Key.From(name), prt);
+                                                    // Dedicated ports bypass MainSlice's
+                                                    // ApiRoutingSlice/SliceByPath pipeline
+                                                    // entirely, so the internal client-base
+                                                    // marker scrub has to be applied here
+                                                    // instead (see InternalHeaderScrubSlice).
+                                                    final Slice slice = new InternalHeaderScrubSlice(
+                                                        slices.slice(new Key.From(name), prt)
+                                                    );
                                                     if (cfg.startOnHttp3()) {
                                                         this.http3.computeIfAbsent(
                                                             prt, key -> {
@@ -1235,7 +1243,12 @@ public final class VertxMain {
                 repo.port().ifPresentOrElse(
                     prt -> {
                         final String name = new ConfigFile(repo.name()).name();
-                        final Slice slice = slices.slice(new Key.From(name), prt);
+                        // Dedicated ports bypass MainSlice's ApiRoutingSlice/SliceByPath
+                        // pipeline entirely, so the internal client-base marker scrub
+                        // has to be applied here instead (see InternalHeaderScrubSlice).
+                        final Slice slice = new InternalHeaderScrubSlice(
+                            slices.slice(new Key.From(name), prt)
+                        );
                         if (repo.startOnHttp3()) {
                             this.http3.computeIfAbsent(
                                 prt, key -> {

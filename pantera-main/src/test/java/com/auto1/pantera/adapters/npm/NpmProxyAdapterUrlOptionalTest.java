@@ -41,7 +41,7 @@ import java.util.Optional;
  * NpmrcAuthSlice} and {@code npm.http.DownloadPackageSlice}'s {@code
  * Tarballs} rewriter have no such fallback and hard-require a non-null
  * {@code URL}, so {@code url:} remains genuinely required there -- see
- * {@code com.auto1.pantera.settings.repo.RepoConfigTest#throwsExceptionWhenUrlNotSpecified}
+ * {@code com.auto1.pantera.settings.repo.RepoConfigTest#throwsExceptionWhenUrlNotSpecifiedForLocalNpm}
  * for that half of the contract.</p>
  */
 final class NpmProxyAdapterUrlOptionalTest {

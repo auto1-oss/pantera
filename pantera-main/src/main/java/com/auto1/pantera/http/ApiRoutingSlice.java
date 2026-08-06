@@ -12,7 +12,7 @@ package com.auto1.pantera.http;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.http.headers.ClientBaseUrl;
-import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.headers.InternalHeaderScrub;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.settings.repo.Repositories;
 import org.apache.http.client.utils.URIBuilder;
@@ -124,7 +124,7 @@ public final class ApiRoutingSlice implements Slice {
         // the client-facing base URL for dist.tarball links; a client that
         // supplied its own value could steer that derivation, so any inbound
         // copy is discarded before this slice decides whether to set its own.
-        final Headers scrubbed = ApiRoutingSlice.without(headers, ClientBaseUrl.ORIGINAL_PATH);
+        final Headers scrubbed = new InternalHeaderScrub(headers).without(ClientBaseUrl.ORIGINAL_PATH);
         final Matcher matcher = PTN_API.matcher(path);
 
         if (matcher.matches()) {
@@ -187,27 +187,5 @@ public final class ApiRoutingSlice implements Slice {
             newHeaders,
             body
         );
-    }
-
-    /**
-     * Remove every header named {@code name}, matched case-insensitively,
-     * returning an independent copy. {@link Headers#add(Header, boolean)}'s
-     * overwrite path compares names case-<em>sensitively</em>, so it cannot
-     * be used to neutralise a client-supplied header sent in a different
-     * case (e.g. {@code x-original-path}) — this does the comparison the
-     * safe way instead.
-     *
-     * @param headers Source headers
-     * @param name Header name to remove, any case
-     * @return A new {@link Headers} without any entry matching {@code name}
-     */
-    private static Headers without(final Headers headers, final String name) {
-        final Headers result = new Headers();
-        for (final Header header : headers) {
-            if (!header.getKey().equalsIgnoreCase(name)) {
-                result.add(header);
-            }
-        }
-        return result;
     }
 }

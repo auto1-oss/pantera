@@ -116,6 +116,33 @@ public final class ClientBaseUrl {
     }
 
     /**
+     * {@code Vary} response header value for any response whose body embeds
+     * a base URL this instance could derive. {@code Host} always
+     * participates (see {@link #origin()}); the {@code X-Forwarded-*}
+     * triplet only participates when this instance trusts forwarded
+     * headers, since {@link #origin()} and {@link #forwardedPrefix()} only
+     * read them in that case.
+     *
+     * <p>Deliberately independent of the headers this instance was built
+     * with: whether a header participates in the derivation is a
+     * boot-time property ({@link #trustForwarded}), not a per-request one,
+     * so callers may compute this from any {@link ClientBaseUrl} instance,
+     * including one built from headers unrelated to the response being
+     * built.</p>
+     *
+     * @return Vary header value
+     */
+    public String varyHeaderValue() {
+        final String result;
+        if (this.trustForwarded) {
+            result = "Host, X-Forwarded-Proto, X-Forwarded-Host, X-Forwarded-Prefix";
+        } else {
+            result = "Host";
+        }
+        return result;
+    }
+
+    /**
      * Build the absolute repository base by removing the slice-relative
      * remainder from the client-facing path.
      *
