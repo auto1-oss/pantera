@@ -267,6 +267,8 @@ New versions may introduce new configuration keys with sensible defaults. Existi
 
 > **Breaking change in v2.1.0:** JWT signing has switched from HS256 (shared secret) to RS256 (asymmetric key pair). All existing tokens are invalidated on upgrade. See the [JWT Migration Steps](#jwt-migration-hs256-to-rs256) section below for the required configuration changes.
 
+> **v2.2.5 requires a DB migration and a UI redeploy.** `V137__client_base_url_settings.sql` adds the `trust_forwarded_headers` / `client_base_host_allowlist` admin settings (additive; runs automatically at startup like any other Flyway migration). `pantera-ui` must be redeployed alongside the backend — the new Settings page card (forwarded-header trust / host allowlist) and the npm token/profile admin surfaces require the matching UI build; running the 2.2.5 backend against an older UI build simply hides the new card, it is not unsafe, but the setting is only reachable via the raw `GET`/`PUT /api/v1/admin/client-base-url-settings` API until the UI catches up.
+
 ---
 
 ## JWT Migration (HS256 to RS256)

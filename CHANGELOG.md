@@ -1,5 +1,52 @@
 # Changelog
 
+## Version 2.2.5
+
+### 🌟 New features
+
+- **npm local repositories sign published packages** (ECDSA, served at `/-/npm/v1/keys`), store `--provenance` attestations (`/-/npm/v1/attestations/<spec>`), and support `npm token`/`profile` and single-version fetches.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Forwarded-header trust is now a DB-backed, hot-reloadable admin setting** — `trust_forwarded_headers` (`GET`/`PUT /api/v1/admin/client-base-url-settings`, admin UI Settings page card) replaces the old env-only `PANTERA_TRUST_FORWARDED_HEADERS` flag, which is now only the fallback tier; a change applies to the very next request on the node that received it, no restart required.
+  ([@aydasraf](https://github.com/aydasraf))
+
+### 🔧 Bug fixes
+
+- **npm cooldown no longer hides an unblocked version behind a stale `304`** — the packument `ETag` is computed from the filtered bytes served, not the raw upstream hash.
+  ([@aydasraf](https://github.com/aydasraf))
+- **npm `dist-tag`, `deprecate`, and single-version `unpublish` work** for published packages (dist-tags persist in a durable sidecar; unpublish removes the version).
+  ([@aydasraf](https://github.com/aydasraf))
+- **`npm search` returns real results** — `/-/v1/search` queries the shared artifact index instead of an always-empty in-memory one, and npm-proxy repositories forward search/dist-tag lookups upstream instead of `404`ing them.
+  ([@aydasraf](https://github.com/aydasraf))
+- **npm `ping`, `GET /npm`, `HEAD`, and proxied `search`/`dist-tag ls` work, and `npm audit` is honest** (real zero-vuln / empty bulk-advisory response).
+  ([@aydasraf](https://github.com/aydasraf))
+- **npm proxy conditional refresh works and cooldown-filtered metadata stays coherent** — the ETag round-trips, a changed refresh invalidates the filtered envelope, and prerelease tarballs key correctly.
+  ([@aydasraf](https://github.com/aydasraf))
+- **corepack works against npm proxy and group repositories** — `GET /<pkg>/<version>` (and `/<pkg>/<tag>`, including `/latest`) now returns a full version manifest instead of a `{name, modified}` stub that `200`d with no `dist`, which crashed corepack's `dist.tarball` destructuring.
+  ([@aydasraf](https://github.com/aydasraf))
+- **npm tarball URLs are rooted at the repository the client addressed** — a group repository no longer hands out its winning member's URLs, so corepack and other clients that reject responses from an unexpected registry now work through npm groups and proxies.
+  ([@aydasraf](https://github.com/aydasraf))
+- **An npm proxy repository with no configured `url:` no longer throws on its first request** — repository construction read the throwing config accessor even though the client-facing base is optional there and derives from the request when unset.
+  ([@aydasraf](https://github.com/aydasraf))
+- **`GET /<pkg>/latest` on an npm proxy no longer returns raw upstream tarball URLs** — the manifest is rewritten to point back at Pantera, so the download goes through Pantera's cache and audit trail instead of bypassing it (and works in air-gapped deployments).
+  ([@aydasraf](https://github.com/aydasraf))
+- **npm scoped-package packuments (`GET /@scope/pkg`) no longer `404` on local repositories** — the single-version route regex ambiguously matched a bare scoped package name as package+version; routing now mirrors the parser's own disambiguation, so `/@scope/pkg` serves the packument and `/@scope/pkg/<version>` still serves the version manifest.
+  ([@aydasraf](https://github.com/aydasraf))
+- **`HEAD` on an npm proxy/group tarball no longer poisons the shared negative cache for every subsequent `GET`** — the tarball route now accepts `HEAD`, and a probe response can never write a negative-cache entry, closing a path where any HTTP proxy, scanner, or client issuing a routine existence check durably broke that exact artifact for every other client.
+  ([@aydasraf](https://github.com/aydasraf))
+- **`npm ping` and the registry-root endpoint now work on npm proxy and group repositories, not just local** — both answer directly from Pantera without an upstream round-trip; the registry-root route previously matched only the coincidence of a repository literally named `npm`.
+  ([@aydasraf](https://github.com/aydasraf))
+- **npm proxy/group `404`s for an unresolved package version carry an honest JSON body** (`{"error":"version not found: ...","package":"..."}`) instead of an empty one, matching local repositories.
+  ([@aydasraf](https://github.com/aydasraf))
+
+### 🔒 Security
+
+- **npm registry keys and user/token records are never served over HTTP** — a reserved-key guard `404`s `.registry-keys.json`, `_users/`, and `_tokens/` ahead of any content route, so the registry's ECDSA signing key and user/token records can't be fetched.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Internal client-base headers can no longer be spoofed by a client** — `X-Pantera-Client-Base` and `X-Original-Path` are stripped from inbound requests at the edge, and `X-Forwarded-Proto`/`-Host`/`-Prefix` are honoured only when explicitly enabled via the `trust_forwarded_headers` setting (default `false` — see the New features entry above), closing a path where a crafted request could make Pantera emit and cache tarball URLs pointing at an attacker-controlled host.
+  ([@aydasraf](https://github.com/aydasraf))
+- **A new `client_base_host_allowlist` admin setting closes the remaining `Host`-header path to the same class of attack** — even with forwarded headers untrusted, a raw client-supplied `Host` was still used verbatim to build cached absolute URLs (e.g. `curl -H 'Host: evil.tld' <repo>/pnpm` poisoning `dist.tarball`); a configured allowlist now rejects a non-matching `Host` exactly like an absent one. Empty/unset stays permissive by design (an existing deployment must not suddenly reject every `Host` on upgrade) and logs a startup `WARN`.
+  ([@aydasraf](https://github.com/aydasraf))
+
 ## Version 2.2.4
 
 ### 🔧 Bug fixes
