@@ -3,4 +3,3 @@ repo:
   storage:
     type: fs
     path: /var/pantera/data
-  url: http://localhost:8081/npm
