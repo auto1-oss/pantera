@@ -240,6 +240,112 @@ Identical result against `npm_proxy`. `package.json` after the run carries a ful
 
 ---
 
+## 6a. Final operational verification (commit `c1fbcc729`)
+
+Independent, from-scratch re-verification against a fresh `2.3.0` stack rebuilt at the branch's final HEAD (`c1fbcc729`, 19 commits — includes the `Vary` header, internal-header scrub on dedicated ports, completed LOCAL client-base rewriting, HEAD on dist-tags/search, and the two new DB-backed settings `trust_forwarded_headers`/`client_base_host_allowlist` with admin API + hot reload). `mvn clean install -T8 -Dexec.skip=true` was fully green in one pass (30/30 modules, 10:11 min wall clock, no `-T8` flakes). Credentials: a freshly-seeded throwaway `devadmin`/`devadminpass` (the DB reset to a fresh Postgres volume for this pass — `Bootstrapped default admin user` fired again on boot). Real client binaries only: corepack 0.35.0 / npm 11.18.0 / pnpm 11.6.0 pinned via corepack to 11.5.1 / yarn classic 1.22.22 / yarn berry 4.13.0, all via the host's nvm-managed Node 24.18.0 — no simulated requests.
+
+### Acceptance criteria (§5), per-criterion result
+
+| # | Criterion | Result | Evidence |
+|---|---|---|---|
+| 1 | `GET /<pkg>/<version>` → `200`, `dist.tarball` string-prefixed by the addressed base | **PASS** (local, proxy, group) | `pnpm/11.5.1` via `npm_proxy` and `npm_group` each returned a tarball rooted at the base addressed, not the winning member. Local mode's tarball reflects the repo's configured `url:` (`http://localhost:8081/...`) by design — confirmed intentional per §3's override precedence. |
+| 2 | `/<pkg>/latest` and `/<pkg>/<custom-tag>` resolve through the same path | **PASS** | `pnpm/latest` on both `npm_proxy` and `npm_group` resolved to `11.18.0` with a Pantera-rooted tarball. |
+| 3 | `GET /<pkg>/<nonexistent-version>` → `404`, never a `200` stub (regression guard) | **PASS**, with a caveat | `404` confirmed on all three modes for a bogus version, a bogus tag, and a wholly nonexistent package — the critical property (never `200`) holds everywhere. However, the literal "honest JSON body" half of this criterion does NOT hold for proxy/group: those return `404` with an **empty body** (`content-length: 0`), while local (`SingleVersionSlice`) returns `{"error":"version not found: ...","package":"..."}`. Confirmed this is not a WS8 regression — the pre-existing, out-of-scope full-packument 404 path exhibits the identical empty-body behavior on proxy. See Findings #5 below. |
+| 4 | Cooldown-blocked version → `404` on the single-version endpoint, not bypassed | **PASS** | Exercised for real this time (previous sweep marked it "not exercised"): raised `npm-proxy` cooldown to `3650d` via `PUT /api/v1/cooldown/config`, confirmed 7 real pnpm prerelease versions became actively blocked (`GET /api/v1/cooldown/blocked`), then confirmed `GET /<pkg>/11.19.0` (a blocked version) 404s on both `npm_proxy` and `npm_group`, and is absent from the full packument's `versions` map. Config reverted to the original `7d` afterward. |
+| 5 | `GET /@scope/pkg` resolves as a packument, not `(pkg=@scope, ref=pkg)` | **FAIL (local only)**; PASS proxy/group | See Finding #1 — a scoped package published to the **local** `npm` repo cannot be resolved by packument request at all (`404`), including via the real npm CLI's exact request shape (`GET /@scope%2fpkg`). Proxy/group (tested against `@types/node`) correctly resolve the packument. |
+| 6 | `If-None-Match` → `304`; changing the client base changes the `ETag` | **PASS** | `304` round-trip confirmed on `npm_proxy`; `ETag` for the same package+version differs between `npm_proxy` and `npm_group` bases as expected. |
+| 7 | Forwarded headers honoured only when trusted | **PASS** | Default (`trust_forwarded_headers=false`): forwarded headers ignored. After `PUT .../client-base-url-settings {"trust_forwarded_headers":"true"}` (no restart): `X-Forwarded-Proto/-Host/-Prefix` correctly honoured, producing `https://registry.example.com/artifactory/.../pnpm-11.5.1.tgz`. Reverted afterward. |
+| 8 | Group: tarball rooted at the group, never the winning member | **PASS** | Confirmed for a **proxy** member (`pnpm` via `npm_proxy`) and, separately, for a **local** member (`pantera-ws8-verify-test` published to `npm`, resolved through `npm_group` whose first member is `npm`) — both cases rooted at `npm_group`, never at the member's own base/configured `url:`. |
+| 9 | `/latest` no longer leaks an upstream (`registry.npmjs.org`) tarball URL | **PASS** | `pnpm/latest` on `npm_proxy` and `npm_group` both returned Pantera-rooted tarball URLs. |
+| 10 | corepack end-to-end (`corepack use pnpm@11.5.1`) against group and proxy | **PASS** | Initial runs were **false passes** — this host's global corepack package-manager cache (`~/.cache/node/corepack`) already had `pnpm@11.5.1` from an earlier session and satisfied `corepack use` with **zero network calls**. Re-ran after `corepack cache clean`: confirmed genuine cold-cache fetches through both `npm_proxy` and `npm_group` (server logs show `artifact_resolution`/`artifact_access` for `pnpm`/`pnpm 11.5.1` immediately after each `corepack use`), full integrity hash recorded in `package.json` (`pnpm@11.5.1+sha512.93f7b57...`). |
+| 11 | `mvn clean install -T8` fully green | **PASS** | 30/30 modules SUCCESS, 10:11 min, zero test failures, no re-run needed for `-T8` flakes. |
+
+**Score: 9 PASS, 1 PASS-with-caveat, 1 FAIL (local-only), 0 not exercised** — every criterion was actually driven against the live stack this time, including AC4 (cooldown) and AC10's genuine cold-cache path, both of which the previous sweep could not or did not exercise.
+
+### Client × mode matrix (re-verified)
+
+| Client | local | proxy | group | Notes |
+|---|---|---|---|---|
+| corepack (`use pnpm@11.5.1`) | not exercised¹ | **PASS** | **PASS** | Verified with a cleared corepack cache to force real network fetches (see AC10 above). |
+| npm 11.18.0 | **PASS** | **PASS** | **PASS** | `install`, `dist-tag add/rm/ls`, `deprecate`, `publish`/`unpublish`, `whoami`, `profile get` all real-CLI verified. |
+| pnpm 11.5.1 (corepack-pinned) | **PASS**² | **PASS** | **PASS** | Local run required addressing the repo via nginx `:8081` to match its configured `url:` (see ² below) — not a bug, a consequence of `url:`-override precedence combined with testing the backend directly. |
+| yarn classic 1.22.22 | **PASS** | **PASS** | **PASS** | |
+| yarn berry 4.13.0 | **PASS** | **PASS** | **PASS** | Real checksums recorded in `yarn.lock` for all three modes (proves tarball bytes were actually fetched and verified, not just metadata). Requires `unsafeHttpWhitelist: [localhost]` in `.yarnrc.yml` for plain-HTTP registries (client-side yarn requirement, not a Pantera issue). |
+
+¹ Same rationale as the prior sweep: nobody hosts `pnpm`/`yarn`/`npm` tool tarballs in a hosted repo in practice.
+² First attempt (against the backend `:8088` directly, auth token scoped to `:8088`) got a real `401` from `pnpm` — because the local repo's configured `url:` points at `:8081` (nginx) and `pnpm` correctly declines to send `:8088`-scoped credentials to a `:8081`-rooted tarball URL it wasn't told about. This is the same `url:`-override behavior as AC1 — resolved by addressing the repo consistently via `:8081`.
+
+### Step 4 — npm API surface results
+
+| API | Result | Detail |
+|---|---|---|
+| `npm publish` (local) → resolves through group, tarball rooted at group | **PASS** | Confirmed in AC8 above. |
+| `npm dist-tag add/rm/ls` | **PASS** | Real CLI, local repo. |
+| `npm deprecate` | **PASS** | Deprecation message appears in the served packument. |
+| `npm unpublish` (single version) | **PASS** | Published `1.0.1`, unpublished it, confirmed `1.0.0` survives and `1.0.1` is gone from the packument. |
+| `npm search` (`/-/v1/search`) | **PASS** | Proxy: 47,755 real upstream results for `left-pad`. Local: DB-backed FTS returned the just-published test package. |
+| `npm audit` (`/-/npm/v1/security/advisories/bulk`) | **PASS** | Honest `{}` (zero-vuln) response, `200`. |
+| `npm ping` | **FAIL (proxy/group)** | See Finding #3 — works on local (`200`, real PONG via real CLI), `404`s (real npm-CLI error) on `npm_proxy`/`npm_group`. |
+| `GET /npm` (registry root) | **FAIL (all modes)** | See Finding #4 — unreachable as documented in every mode, including local. |
+| `HEAD` packument / version / dist-tags | **PASS** | All three respond `200` to `HEAD` on proxy and local. |
+| `HEAD` tarball | **FAIL (proxy/group)**, PASS local | See Finding #2 — `HEAD` on a proxy tarball URL 404s (unrouted) **and poisons subsequent `GET`s for the same URL**. Local (nginx-fronted) `HEAD` on a tarball is a clean `200`. |
+| `npm whoami` | **PASS** | Real CLI, `devadmin`. |
+| `npm token list/create/revoke` | **NOT EXERCISED** — environmental | Server returns a clean, fast, honest `501 {"error":"npm token management is not available for JWT-only repositories"}` — this dev stack has no native npm-token-storage auth provider wired (only keycloak/jwt-password/okta), so the feature is genuinely unavailable in this configuration, not broken. (The real npm CLI hangs ~60s on this `501` instead of surfacing it — a client-side quirk, not server-side; direct `curl` confirms the server responds in single-digit milliseconds.) |
+| `npm profile get` | **PASS** | Real CLI; `GET /-/npm/v1/user` returns `{"name":"devadmin","tfa":false}`. |
+| `GET /-/npm/v1/keys` | **PASS** | Real ECDSA signing key returned. |
+| `GET /-/npm/v1/attestations/<spec>` | **PASS (negative case)**; positive case **NOT EXERCISED** | Honest `404` for a package published without `--provenance`. An actual existing attestation was not exercised — provenance generation needs CI/OIDC (Sigstore) infrastructure unavailable in a local shell. |
+| Reserved-key guard (`/.registry-keys.json`, `/_users/…`, `/_tokens/…`) | **PASS** | All three `404` with no body, confirmed on local and proxy. |
+| Scoped packages end-to-end | **FAIL (local)**; PASS proxy | See Finding #1. Proxy: `@types/node` packument, single-version, and tarball all resolve correctly. Local: packument 404s for a package that was just successfully published. |
+
+### Step 5 — DB-backed settings, live
+
+- `GET /api/v1/admin/client-base-url-settings` — returns `{"trust_forwarded_headers":"false","client_base_host_allowlist":""}` by default. **PASS**.
+- `client_base_host_allowlist` hot reload: `PUT {"client_base_host_allowlist":"allowed.example.com"}`, then immediately (no restart) `curl -H 'Host: evil.tld' .../pnpm/11.5.1` → tarball rooted at `http://localhost/...` (fallback, `evil.tld` no longer honored) instead of `http://evil.tld/...` (the permissive-default baseline confirmed moments earlier). Reverted to empty; permissive behavior (evil.tld honored again) returned immediately. **Hot reload: YES, both directions, no restart.**
+- `trust_forwarded_headers` hot reload: same pattern — `PUT {"trust_forwarded_headers":"true"}` applied on the very next request (AC7 above), reverted immediately after. **Hot reload: YES.**
+- `Vary` header: confirmed present (`Vary: Host`) on packument, single-version, and dist-tags responses, across local, proxy, and group. **PASS**.
+- Admin UI settings card: the **deployed** `pantera-ui:2.3.0` image was **stale** (built before commits `ad93ea65c`/`c1fbcc729` landed the "Client-Facing Base URL" card — its served bundle had no trace of it). Rebuilt `pantera-ui:2.3.0` from current HEAD source and redeployed; the freshly-served bundle now genuinely contains the card's label and both setting keys (`grep` against the actual HTTP-served JS chunk, not just the local `dist/` folder). This was an environment-freshness gap, not a code defect — the source (`pantera-ui/src/views/admin/SettingsView.vue`) was already correctly wired. No interactive browser was available in this environment to capture an actual rendered screenshot; verification is via the served compiled bundle's content, not a visual render.
+
+### Minor observation (not independently investigated further)
+
+When `client_base_host_allowlist` rejects the request's `Host` and no `X-Forwarded-*`/configured `url:` applies, the fallback-of-a-fallback base loses the port (`http://localhost/...` instead of `http://localhost:8088/...`). Observed once during the settings test above; not re-verified or root-caused.
+
+### Findings (bugs found, NOT fixed — reported per the verification task's instructions)
+
+1. **[HIGH] Scoped-package packument `404`s on LOCAL (hosted) npm repositories.** `GET /@scope/pkg` (no version) `404`s for a **local** repo even immediately after a successful `npm publish` of that exact package, while `GET /@scope/pkg/<version>` and the tarball download both work fine for the same package. A real `npm install @pantera-ws8/verify-scoped --registry http://localhost:8081/test_prefix/api/npm/npm/` fails with `E404`. The identical URL-encoded request shape npm actually sends (`GET /@scope%2fpkg`) works correctly on **proxy** mode for a real scoped package (`@types/node`), so this is local/hosted-mode-specific. Also reproduces through `npm_group` whenever the group's resolving member is such a local repo. Likely site: `npm-adapter/.../npm/http/NpmSlice.java` route registration around the packument pattern (`^/(@[^/]+/)?[^/]+$`, line ~436) versus the single-version pattern (`^/(@[^/]+/)?[^/]+/[^/]+$`, line ~611) — the single-version pattern's optional scope group can also match a bare 2-segment `@scope/pkg` path without a version, which is exactly the ambiguity `VersionManifestResolver.parse` was explicitly written to exclude on the proxy side (WS8 §3, mechanism B step 1) but this local-mode route apparently was not.
+   ```
+   $ npm publish   # @pantera-ws8/verify-scoped@1.0.0 -> succeeds
+   $ npm install @pantera-ws8/verify-scoped --registry http://localhost:8081/test_prefix/api/npm/npm/
+   npm error 404 Not Found - GET http://localhost:8081/test_prefix/api/npm/npm/@pantera-ws8%2fverify-scoped
+   $ curl http://localhost:8088/test_prefix/api/npm/npm/@pantera-ws8%2fverify-scoped        → 404
+   $ curl http://localhost:8088/test_prefix/api/npm/npm/@pantera-ws8/verify-scoped/1.0.0    → 200 (works)
+   $ curl http://localhost:8088/test_prefix/api/npm/npm_proxy/@types%2fnode                 → 200 (works, proxy)
+   ```
+
+2. **[HIGH] `HEAD` on an npm-proxy tarball URL poisons the (shared) negative cache and breaks subsequent `GET`s for the same URL.** The proxy asset route (`NpmProxySlice.java`) is registered `MethodRule.GET`-only (no `HEAD`), so a `HEAD` request falls through to the generic `RtRule.FALLBACK` 404 handler. That 404 result then appears to be cached and served back to a **subsequent GET on the exact same URL**, which had been working moments before:
+   ```
+   $ curl -o /dev/null -w '%{http_code}' http://localhost:8088/test_prefix/api/npm/npm_proxy/pnpm/-/pnpm-11.18.0.tgz
+   200
+   $ curl -I http://localhost:8088/test_prefix/api/npm/npm_proxy/pnpm/-/pnpm-11.18.0.tgz
+   HTTP/1.1 404 Not Found
+   $ curl -o /dev/null -w '%{http_code}' http://localhost:8088/test_prefix/api/npm/npm_proxy/pnpm/-/pnpm-11.18.0.tgz
+   404          # <- was 200 one command ago, same URL, nothing else changed
+   ```
+   Reproduces identically through `npm_group`. Any client, corporate proxy, or security scanner that issues a `HEAD` existence-check against an npm-proxy tarball (a common, unremarkable practice) would durably break that exact artifact for **every** subsequent client until the negative-cache entry expires.
+
+3. **[MEDIUM] `npm ping` is not wired for `npm-proxy`/`npm-group` repositories.** `GET /-/ping` returns `200 {}` (real PONG via the actual npm CLI) on `npm` (local) but a real npm-CLI `404 Not Found - GET .../npm_proxy/-/ping` on `npm_proxy` and `npm_group`. `NpmProxySlice.java`'s route table (registered: search, dist-tags, packument, asset, two audit patterns, fallback) has no `/-/ping` entry at all; `PingSlice`/the `.*/-/ping$` route only appears in `NpmSlice.java` (local).
+
+4. **[MEDIUM] `GET /npm` (the documented "registry root" endpoint, `RegistryInfoSlice`) is unreachable as documented, in every mode including local.** `NpmSlice.java:275` registers this route with the **hardcoded literal path** `RtRule.ByPath("/npm")` rather than a root/empty-path pattern. Since `TrimPathSlice` already strips the repository-name segment before this rule is evaluated, the route only matches a request shaped `<repoBase>/npm` — i.e. it "works" only by the accident of a repo being named exactly `npm` with a client appending a spurious extra `/npm` path segment (`curl .../npm/npm` → `200`, the intended info payload). The actual registry root (`GET <repoBase>` / `GET <repoBase>/`, matching this class's own javadoc) `404`s — confirmed for `npm`, `npm_proxy`, and `npm_group` alike.
+
+5. **[LOW, informational] AC3's "honest JSON body" half is not met for proxy/group `404`s** on a nonexistent version, tag, or wholly nonexistent package — the response is `404` with `content-length: 0`, not the `{"error":"version not found: ...","package":"..."}` body `VersionManifestResolver.notFound()` is written to produce, and not the local mode's actual honest-body behavior (confirmed correct via `SingleVersionSlice`). Confirmed this is **not** a new regression: the pre-existing, WS8-unrelated full-packument-404 path (`serveFull`/`serveAbbreviated`, i.e. `GET /<wholly-nonexistent-pkg>` with no version segment) exhibits the identical empty-body behavior on proxy, so something in the shared proxy-repository response pipeline (candidates: `TimeoutSlice`, `CombinedAuthzSliceWrap`, or a `RepositorySlices`-level wrapper) strips 404 bodies uniformly for `npm-proxy`, independent of which internal handler built the response. The critical regression-guard property this AC exists for (never a `200` stub) is fully intact.
+
+### Environment notes (not product bugs, disclosed per the verification task's honesty requirement)
+
+- A real, pre-existing Okta-issued production JWT API token (`sub: ayd.asraf@auto1.local`) is present in `~/.npmrc` and as ambient `COREPACK_NPM_REGISTRY`/`COREPACK_NPM_TOKEN` env vars on this host, pointing at `artifactory.prod.auto1.team` — the same host misconfiguration a prior sweep flagged and recommended rotating. It was never printed into this report; every command in this pass explicitly overrode these three vectors (`npm_config_userconfig=/dev/null`, CLI-level `--//host/path/:_authToken=`, explicit `COREPACK_NPM_REGISTRY=`) to avoid using it. Recommend rotation (repeated recommendation from the prior sweep).
+- The deployed `pantera-ui:2.3.0` image was rebuilt from current HEAD during this pass (see Step 5 above) — a dev-environment freshness gap, not a code defect.
+- The Postgres data volume was fresh for this pass (anonymous volume not reused across the `down`/`up` this time), so `YamlToDbMigrator` re-bootstrapped a default admin and re-migrated all 35 YAML repo configs from `prod_repo/` on boot — confirmed the migrated `npm`/`npm_proxy`/`npm_group` configs exactly match the current `repo/npm*.yaml` fixtures (`npm_proxy` correctly carries no stale `url:`, per WS8-npm.5).
+
+---
+
 ## 7. Out of scope
 
 - Adopting `ClientBaseUrl` in the Composer, PyPI, and Docker adapters (structurally identical rewriting; separate change).
