@@ -106,7 +106,7 @@ public final class NpmProxySlice implements Slice {
             ),
             new RtRulePath(
                 new RtRule.All(
-                    MethodRule.GET,
+                    new RtRule.Any(MethodRule.GET, MethodRule.HEAD),
                     new RtRule.ByPath(ppath.pattern())
                 ),
                 new LoggingSlice(

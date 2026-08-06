@@ -93,6 +93,12 @@ public final class DownloadPackageSlice implements Slice {
     private final String repoName;
 
     /**
+     * Resolves {@code GET}/{@code HEAD /<pkg>/<version-or-tag>} against the
+     * (cooldown-filtered) packument.
+     */
+    private final VersionManifestResolver resolver;
+
+    /**
      * @param npm NPM Proxy facade
      * @param path Package path helper
      */
@@ -131,14 +137,8 @@ public final class DownloadPackageSlice implements Slice {
         this.cooldownMetadata = cooldownMetadata;
         this.repoType = repoType;
         this.repoName = repoName;
+        this.resolver = new VersionManifestResolver(npm, cooldownMetadata, repoType, repoName);
     }
-
-    /**
-     * Suffix identifying the dist-tag shortcut endpoint
-     * {@code GET /<pkg>/latest}. Older yarn/pnpm/npm versions hit this
-     * directly to fetch only the {@code latest} version's manifest.
-     */
-    private static final String LATEST_SUFFIX = "/latest";
 
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
@@ -167,17 +167,17 @@ public final class DownloadPackageSlice implements Slice {
             final String rawPath = this.path.value(line.uri().getPath());
             final String rawPackageName = URLDecoder.decode(rawPath, StandardCharsets.UTF_8);
 
-            // DIST-TAG SHORTCUT: GET /<pkg>/latest returns only the latest
-            // version's manifest. Strip the /latest suffix, fetch & filter the
-            // packument, then emit the post-filter latest version's manifest.
-            // Covers v1.21.0+ metadata cooldown gap for clients that resolve
-            // via the shortcut instead of the full packument.
-            if (rawPackageName.endsWith(LATEST_SUFFIX)
-                && rawPackageName.length() > LATEST_SUFFIX.length()) {
-                final String packageName = rawPackageName.substring(
-                    0, rawPackageName.length() - LATEST_SUFFIX.length()
+            // Single-version / dist-tag reference: GET /<pkg>/<version> and
+            // /<pkg>/<tag> (including /latest). Resolved from the filtered
+            // packument so cooldown still applies, with the tarball URL
+            // rewritten to the base the client addressed.
+            final Optional<VersionManifestResolver.PackageRef> versionRef =
+                VersionManifestResolver.parse(rawPackageName);
+            if (versionRef.isPresent()) {
+                return this.resolver.resolve(
+                    versionRef.get().pkg(), versionRef.get().ref(),
+                    this.getTarballPrefix(headers), clientETag, auditCtx, owner
                 );
-                return this.serveLatestManifest(packageName, auditCtx, owner);
             }
 
             // MEMORY OPTIMIZATION: Use different paths for abbreviated vs full requests
@@ -622,208 +622,6 @@ public final class DownloadPackageSlice implements Slice {
             .toSingle(ResponseBuilder.notFound().build())
             .to(SingleInterop.get())
             .toCompletableFuture();
-    }
-
-    /**
-     * Serve the dist-tag shortcut endpoint {@code GET /<pkg>/latest}.
-     *
-     * <p>Fetches the packument, applies cooldown filtering (via the same
-     * pipeline used by the full-packument path), resolves the post-filter
-     * {@code dist-tags.latest}, and returns that version's manifest extracted
-     * from {@code versions[latest]}. Behaviour:</p>
-     *
-     * <ul>
-     *   <li>Upstream latest not blocked &rarr; pass-through (just extract the
-     *       entry from the packument).</li>
-     *   <li>Upstream latest blocked, fallback exists &rarr; post-filter
-     *       {@code dist-tags.latest} points at the highest non-blocked stable
-     *       version by release date; we emit that entry.</li>
-     *   <li>All versions blocked &rarr; {@code MetadataFilterService} throws
-     *       {@link AllVersionsBlockedException}; we map to 404 (npm's
-     *       convention for "version not found" on this endpoint).</li>
-     * </ul>
-     *
-     * <p>No URL rewriting is applied to the manifest body — tarball URLs in
-     * the manifest are preserved as-is from upstream. This matches the
-     * behaviour of the upstream npm registry for this endpoint.</p>
-     */
-    private CompletableFuture<Response> serveLatestManifest(
-        final String packageName,
-        final com.auto1.pantera.audit.AuditContext auditCtx,
-        final String owner
-    ) {
-        if (this.cooldownMetadata == null || this.repoType == null) {
-            // Cooldown disabled: pass-through by fetching packument and
-            // returning its current latest manifest. This keeps behaviour
-            // parity with upstream registry even without filtering.
-            return this.resolveLatestFromRaw(packageName, auditCtx, owner);
-        }
-        return this.npm.getPackageMetadataOnly(packageName)
-            .flatMap(metadata -> this.npm.getPackageContentStream(packageName)
-                .flatMap(contentStream -> {
-                    final long contentSize = contentStream.size().orElse(-1L);
-                    return Concatenation.withSize(contentStream, contentSize)
-                        .single()
-                        .map(buf -> new Remaining(buf).bytes())
-                        .toMaybe()
-                        .flatMap(rawBytes -> io.reactivex.Maybe.just(rawBytes));
-                })
-            )
-            .toSingle(new byte[0])
-            .to(SingleInterop.get())
-            .toCompletableFuture()
-            .thenCompose(rawBytes -> {
-                if (rawBytes.length == 0) {
-                    return CompletableFuture.completedFuture(
-                        ResponseBuilder.notFound()
-                            .jsonBody(String.format(
-                                "{\"error\":\"version not found: latest\",\"package\":\"%s\"}",
-                                packageName
-                            ))
-                            .build()
-                    );
-                }
-                return this.cooldownMetadata.filterMetadata(
-                    this.repoType,
-                    this.repoName,
-                    packageName,
-                    rawBytes,
-                    new NpmMetadataParser(),
-                    new NpmMetadataFilter(),
-                    new NpmMetadataRewriter(),
-                    auditCtx,
-                    owner
-                ).handle((filteredBytes, ex) -> {
-                    if (ex != null) {
-                        Throwable cause = ex;
-                        while (cause != null) {
-                            if (cause instanceof AllVersionsBlockedException) {
-                                EcsLogger.info("com.auto1.pantera.npm")
-                                    .message("All versions blocked by cooldown (latest shortcut)")
-                                    .eventCategory("database")
-                                    .eventAction("all_versions_blocked")
-                                    .field("package.name", packageName)
-                                    .field("log.source", "application")
-                                    .log();
-                                return ResponseBuilder.notFound()
-                                    .jsonBody(String.format(
-                                        "{\"error\":\"version not found: latest\",\"package\":\"%s\"}",
-                                        packageName
-                                    ))
-                                    .build();
-                            }
-                            cause = cause.getCause();
-                        }
-                        EcsLogger.warn("com.auto1.pantera.npm")
-                            .message("Cooldown filter error (latest shortcut) - falling back to raw")
-                            .eventCategory("database")
-                            .eventAction("filter_error")
-                            .field("package.name", packageName)
-                            .error(ex)
-                            .field("log.source", "application")
-                            .log();
-                        return this.buildLatestManifestResponse(rawBytes, packageName);
-                    }
-                    return this.buildLatestManifestResponse(filteredBytes, packageName);
-                });
-            });
-    }
-
-    /**
-     * Cooldown-disabled pass-through for {@code /<pkg>/latest}: fetch the
-     * packument and extract its {@code dist-tags.latest} manifest. Still a
-     * metadata listing view — audited with an empty filtered list.
-     */
-    private CompletableFuture<Response> resolveLatestFromRaw(
-        final String packageName,
-        final com.auto1.pantera.audit.AuditContext auditCtx,
-        final String owner
-    ) {
-        return this.npm.getPackageMetadataOnly(packageName)
-            .flatMap(metadata -> this.npm.getPackageContentStream(packageName)
-                .flatMap(contentStream -> {
-                    final long contentSize = contentStream.size().orElse(-1L);
-                    return Concatenation.withSize(contentStream, contentSize)
-                        .single()
-                        .map(buf -> new Remaining(buf).bytes())
-                        .toMaybe();
-                })
-            )
-            .map(rawBytes -> {
-                com.auto1.pantera.audit.AuditLogger.resolution(
-                    auditCtx, this.repoType, this.repoName, packageName,
-                    owner, java.util.List.of()
-                );
-                return this.buildLatestManifestResponse(rawBytes, packageName);
-            })
-            .toSingle(ResponseBuilder.notFound()
-                .jsonBody(String.format(
-                    "{\"error\":\"version not found: latest\",\"package\":\"%s\"}",
-                    packageName
-                ))
-                .build())
-            .to(SingleInterop.get())
-            .toCompletableFuture();
-    }
-
-    /**
-     * Build a {@code /<pkg>/latest} response from (post-filter) packument
-     * bytes: parse JSON, read {@code dist-tags.latest}, look up the
-     * corresponding entry in {@code versions}, and emit it as the body. Returns
-     * 404 if the packument is malformed, has no {@code latest} tag, or the
-     * referenced version is missing (e.g. all blocked and removed).
-     */
-    private Response buildLatestManifestResponse(
-        final byte[] packumentBytes,
-        final String packageName
-    ) {
-        try {
-            final com.fasterxml.jackson.databind.JsonNode root =
-                new com.fasterxml.jackson.databind.ObjectMapper().readTree(packumentBytes);
-            final com.fasterxml.jackson.databind.JsonNode distTags = root.get("dist-tags");
-            if (distTags == null || !distTags.isObject() || !distTags.has("latest")) {
-                return ResponseBuilder.notFound()
-                    .jsonBody(String.format(
-                        "{\"error\":\"version not found: latest\",\"package\":\"%s\"}",
-                        packageName
-                    ))
-                    .build();
-            }
-            final String latest = distTags.get("latest").asText();
-            final com.fasterxml.jackson.databind.JsonNode versions = root.get("versions");
-            if (versions == null || !versions.has(latest)) {
-                return ResponseBuilder.notFound()
-                    .jsonBody(String.format(
-                        "{\"error\":\"version not found: latest\",\"package\":\"%s\"}",
-                        packageName
-                    ))
-                    .build();
-            }
-            final com.fasterxml.jackson.databind.JsonNode manifest = versions.get(latest);
-            final byte[] body = new com.fasterxml.jackson.databind.ObjectMapper()
-                .writeValueAsBytes(manifest);
-            return ResponseBuilder.ok()
-                .header("Content-Type", "application/json; charset=utf-8")
-                .header("Cache-Control", "public, max-age=300")
-                .body(body)
-                .build();
-        } catch (final java.io.IOException ex) {
-            EcsLogger.warn("com.auto1.pantera.npm")
-                .message("Failed to extract /latest manifest from packument")
-                .eventCategory("web")
-                .eventAction("latest_manifest")
-                .eventOutcome("failure")
-                .field("package.name", packageName)
-                .error(ex)
-                .field("log.source", "application")
-                .log();
-            return ResponseBuilder.notFound()
-                .jsonBody(String.format(
-                    "{\"error\":\"version not found: latest\",\"package\":\"%s\"}",
-                    packageName
-                ))
-                .build();
-        }
     }
 
     /**
