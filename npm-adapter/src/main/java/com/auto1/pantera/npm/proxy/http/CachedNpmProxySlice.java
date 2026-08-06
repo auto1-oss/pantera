@@ -24,6 +24,7 @@ import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.slice.KeyFromPath;
 
 import java.time.Duration;
@@ -151,7 +152,7 @@ public final class CachedNpmProxySlice implements Slice {
         // Check negative cache first (404s)
         if (this.negativeCache.isKnown404(this.negKey(path))) {
             return CompletableFuture.completedFuture(
-                ResponseBuilder.notFound().build()
+                CachedNpmProxySlice.notFoundBuilder(path).build()
             );
         }
         // Tarball / package.json reads always traverse dedup → origin; the
@@ -238,7 +239,18 @@ public final class CachedNpmProxySlice implements Slice {
                 capture.set(response);
                 final long duration = System.currentTimeMillis() - startTime;
                 if (response.status().code() == 404) {
-                    this.negativeCache.cacheNotFound(this.negKey(key.string()));
+                    // WS8 Bug B2: a probe request must not be able to
+                    // poison a real one. A HEAD reaching this point 404'd
+                    // either on a genuine absence check (fine either way)
+                    // or -- for any route this repository does not (yet)
+                    // serve on HEAD -- on the generic FALLBACK stub, which
+                    // is a routing gap, not an authoritative "does not
+                    // exist" signal. Only a GET-driven 404 is trusted to
+                    // negative-cache; HEAD may still read a cache a prior
+                    // GET populated (line ~152 above).
+                    if (line.method() != RqMethod.HEAD) {
+                        this.negativeCache.cacheNotFound(this.negKey(key.string()));
+                    }
                     this.recordProxyMetric("not_found", duration);
                     return FetchSignal.NOT_FOUND;
                 }
@@ -306,15 +318,21 @@ public final class CachedNpmProxySlice implements Slice {
                 // which will serve from cache (no upstream request)
                 return this.origin.response(line, headers, Content.EMPTY);
             case NOT_FOUND:
+                // WS8 Bug B5: the origin (VersionManifestResolver /
+                // DownloadPackageSlice) already built an honest body naming
+                // the package and the unresolved reference for a
+                // single-version-shaped path -- reconstruct the same shape
+                // here instead of the bare empty 404 the old code returned,
+                // so proxy/group match local mode's SingleVersionSlice#notFound.
                 return CompletableFuture.completedFuture(
-                    ResponseBuilder.notFound().build()
+                    CachedNpmProxySlice.notFoundBuilder(line.uri().getPath()).build()
                 );
             case NOT_FOUND_UNVERIFIED:
                 // 404 to the client (RaceSlice fall-through contract), but flag
                 // it so a fronting group does not negative-cache a non-
                 // authoritative absence (Fix 2).
                 return CompletableFuture.completedFuture(
-                    ResponseBuilder.notFound()
+                    CachedNpmProxySlice.notFoundBuilder(line.uri().getPath())
                         .header(com.auto1.pantera.http.cache.NegativeCache.SKIP_HEADER, "true")
                         .build()
                 );
@@ -381,5 +399,34 @@ public final class CachedNpmProxySlice implements Slice {
     private com.auto1.pantera.http.cache.NegativeCacheKey negKey(final String path) {
         return com.auto1.pantera.http.cache.NegativeCacheKey.fromPath(
             this.repoName, this.repoType, path);
+    }
+
+    /**
+     * WS8 Bug B5: an honest 404 naming both the package and the unresolved
+     * reference for a single-version-shaped path ({@code /<pkg>/<ref>} or
+     * {@code /@scope/<pkg>/<ref>}) -- the same shape {@code
+     * VersionManifestResolver}'s own not-found response builds,
+     * reconstructed here (rather than reused) because that response's real
+     * body is not always available at this point: a coalesced follower
+     * never traversed origin itself, and a warm negative-cache hit never
+     * traverses it at all. {@link VersionManifestResolver#parse} is
+     * package-private in this same package, so this reuses it directly
+     * without any resolution-logic change. A bare packument path (no
+     * reference segment) keeps the pre-existing empty-body 404, matching
+     * local mode's own out-of-scope behaviour for that shape.
+     *
+     * @param path Request path
+     * @return A {@link ResponseBuilder} pre-populated with 404 status and,
+     *  when the path names a version reference, an honest JSON body
+     */
+    private static ResponseBuilder notFoundBuilder(final String path) {
+        final ResponseBuilder builder = ResponseBuilder.notFound();
+        VersionManifestResolver.parse(path).ifPresent(ref -> builder.jsonBody(
+            String.format(
+                "{\"error\":\"version not found: %s\",\"package\":\"%s\"}",
+                ref.ref(), ref.pkg()
+            )
+        ));
+        return builder;
     }
 }

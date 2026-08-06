@@ -131,4 +131,104 @@ final class CachedNpmProxySliceTest {
             new IsEqual<>(1)
         );
     }
+
+    /**
+     * WS8 Bug B2 (the more important half): a probe request must never be
+     * able to poison a real one. The origin here simulates the exact
+     * routing-gap shape the bug report described -- a path this repository
+     * does not (yet) serve on {@code HEAD} 404s -- independent of whether
+     * {@code NpmProxySlice}'s own route table has since been fixed to route
+     * HEAD correctly; this proves the wrapper's own defense holds even if
+     * some future route still has the same gap.
+     */
+    @Test
+    void headNotFoundDoesNotPoisonSubsequentGet() throws Exception {
+        final byte[] tarball = "tarball-bytes".getBytes(StandardCharsets.UTF_8);
+        final Slice origin = (line, headers, content) -> CompletableFuture.completedFuture(
+            line.method() == RqMethod.HEAD
+                ? ResponseBuilder.notFound().build()
+                : ResponseBuilder.ok().body(tarball).build()
+        );
+        final CachedNpmProxySlice slice = new CachedNpmProxySlice(
+            origin, Optional.empty(), "head-poison-repo", "upstream", "npm"
+        );
+        final String path = "/head-poison-pkg/-/head-poison-pkg-1.0.0.tgz";
+        final Response headResponse = slice.response(
+            new RequestLine(RqMethod.HEAD, path), Headers.EMPTY, Content.EMPTY
+        ).get();
+        MatcherAssert.assertThat(
+            "the probe itself still reports its own 404 to its caller",
+            headResponse.status(),
+            new IsEqual<>(RsStatus.NOT_FOUND)
+        );
+        final Response getResponse = slice.response(
+            new RequestLine(RqMethod.GET, path), Headers.EMPTY, Content.EMPTY
+        ).get();
+        MatcherAssert.assertThat(
+            "a HEAD probe must never poison the shared negative cache for a "
+                + "subsequent GET of the exact same path",
+            getResponse.status(),
+            new IsEqual<>(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "the GET must still receive the real artifact bytes",
+            getResponse.body().asBytesFuture().get(),
+            new IsEqual<>(tarball)
+        );
+    }
+
+    /**
+     * WS8 Bug B5: proxy/group 404s for a single-version-shaped path must
+     * carry the same honest {@code {"error":..., "package":...}} body local
+     * mode's {@code SingleVersionSlice#notFound} builds, not an empty one.
+     */
+    @Test
+    void notFoundCarriesHonestBodyForSingleVersionPath() throws Exception {
+        final Slice origin = (line, headers, content) -> CompletableFuture.completedFuture(
+            ResponseBuilder.notFound().build()
+        );
+        final CachedNpmProxySlice slice = new CachedNpmProxySlice(
+            origin, Optional.empty(), "honest-404-repo", "upstream", "npm"
+        );
+        final Response response = slice.response(
+            new RequestLine(RqMethod.GET, "/honest-404-pkg/9.9.9"),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).get();
+        MatcherAssert.assertThat(response.status(), new IsEqual<>(RsStatus.NOT_FOUND));
+        MatcherAssert.assertThat(
+            "a cold-miss 404 for /<pkg>/<version> must name both the package "
+                + "and the unresolved version, matching local mode's shape",
+            response.body().asString(),
+            new IsEqual<>("{\"error\":\"version not found: 9.9.9\",\"package\":\"honest-404-pkg\"}")
+        );
+    }
+
+    /**
+     * WS8 Bug B5: the honest body must also survive a warm negative-cache
+     * hit (the second identical request), not just the cold miss that
+     * populated the cache -- the shape must be consistent regardless of
+     * which code path answered it.
+     */
+    @Test
+    void negativeCacheHitAlsoCarriesHonestBody() throws Exception {
+        final Slice origin = (line, headers, content) -> CompletableFuture.completedFuture(
+            ResponseBuilder.notFound().build()
+        );
+        final CachedNpmProxySlice slice = new CachedNpmProxySlice(
+            origin, Optional.empty(), "honest-404-warm-repo", "upstream", "npm"
+        );
+        final RequestLine request = new RequestLine(RqMethod.GET, "/honest-404-warm-pkg/9.9.9");
+        slice.response(request, Headers.EMPTY, Content.EMPTY).get();
+        final Response warm = slice.response(request, Headers.EMPTY, Content.EMPTY).get();
+        MatcherAssert.assertThat(warm.status(), new IsEqual<>(RsStatus.NOT_FOUND));
+        MatcherAssert.assertThat(
+            "a warm negative-cache hit must carry the same honest body as the "
+                + "cold miss that populated it",
+            warm.body().asString(),
+            new IsEqual<>(
+                "{\"error\":\"version not found: 9.9.9\",\"package\":\"honest-404-warm-pkg\"}"
+            )
+        );
+    }
 }

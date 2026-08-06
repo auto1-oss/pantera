@@ -238,7 +238,13 @@ public final class NpmSlice implements Slice {
             new RtRulePath(
                 new RtRule.All(
                     MethodRule.GET,
-                    new RtRule.ByPath("/npm")
+                    // WS8 Bug B4: the repository root, once TrimPathSlice
+                    // (wired one layer up, in RepositorySlices) has already
+                    // stripped the repository-name segment -- always a bare
+                    // "/" (never a literal "/npm", which only "matched" by
+                    // the accident of a repo being named exactly "npm" plus
+                    // a spurious extra "/npm" path segment).
+                    new RtRule.ByPath("^/?$")
                 ),
                 NpmSlice.createAuthSlice(
                     new RegistryInfoSlice(name),
@@ -574,7 +580,18 @@ public final class NpmSlice implements Slice {
             new RtRulePath(
                 new RtRule.All(
                     new RtRule.Any(MethodRule.GET, MethodRule.HEAD),
-                    new RtRule.ByPath("^/(@[^/]+/)?[^/]+/[^/]+$")
+                    // WS8 Bug B1: the old pattern "^/(@[^/]+/)?[^/]+/[^/]+$"
+                    // let its optional scope group not participate, so
+                    // "[^/]+/[^/]+" alone matched a bare 2-segment scoped
+                    // PACKAGE NAME ("/@scope/pkg") as if it were
+                    // package+version ("/pkg/version") -- routing a
+                    // packument request here, where SingleVersionSlice#parse
+                    // correctly refuses that shape and 404s instead of
+                    // letting it fall through to the packument route below.
+                    // Mirrors SingleVersionSlice#parse exactly: an unscoped
+                    // pair is 2 segments whose first does not start with
+                    // "@"; a scoped pair is 3 segments whose first does.
+                    new RtRule.ByPath("^/(?:@[^/]+/[^/]+/[^/]+|[^/@][^/]*/[^/]+)$")
                 ),
                 NpmSlice.createAuthSlice(
                     new SingleVersionSlice(base, storage, name),
