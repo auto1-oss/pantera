@@ -963,8 +963,13 @@ public final class DownloadPackageSlice implements Slice {
 
     /**
      * Generates asset base reference from the request's own origin, honouring
-     * reverse-proxy forwarding headers only when {@code PANTERA_TRUST_FORWARDED_HEADERS=true};
-     * otherwise the origin is derived from {@code Host} alone.
+     * reverse-proxy forwarding headers only when the DB-backed {@code
+     * trust_forwarded_headers} admin setting is enabled (env fallback
+     * {@code PANTERA_TRUST_FORWARDED_HEADERS}, default {@code false});
+     * otherwise the origin is derived from the raw {@code Host} header,
+     * itself gated by the {@code client_base_host_allowlist} setting (env
+     * fallback {@code PANTERA_CLIENT_BASE_HOST_ALLOWLIST}) -- see {@link
+     * ClientBaseUrl#origin()}.
      * @param headers Request headers
      * @return Asset base reference
      */

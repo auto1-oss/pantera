@@ -32,10 +32,14 @@ import java.util.function.Supplier;
  * the admin API and broadcast to every node is picked up on the very next
  * request, with no restart.</p>
  *
- * <p>A DB-less boot (tests, embedded) never calls {@link #install}, and
- * {@link #active()} falls back to {@link ClientBaseUrlSettings#defaults()}
- * -- {@link ClientBaseUrl} behaves exactly as it did before this setting
- * became DB-backed.</p>
+ * <p>A DB-less production boot still calls {@link #install} -- {@code
+ * VertxMain} installs the loader unconditionally, passing a {@code null}
+ * DAO when no shared {@code DataSource} is configured -- so the env-var
+ * fallback tier keeps resolving exactly as it did before this setting
+ * became DB-backed. Only a caller that never reaches that {@code VertxMain}
+ * wiring at all (most unit tests, or a hand-built {@link ClientBaseUrl} in
+ * isolation) sees {@link #active()} fall all the way back to {@link
+ * ClientBaseUrlSettings#defaults()}.</p>
  *
  * @since 2.3.0
  */
