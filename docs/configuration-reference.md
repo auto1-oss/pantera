@@ -1513,6 +1513,7 @@ a Java system property using the lowercase, dot-separated equivalent (e.g.,
 | `PANTERA_DIAGNOSTICS_DISABLED` | `false` | Set to `true` to disable blocked-thread diagnostics |
 | `PANTERA_INIT` | `false` | Set to `true` to initialize default example configs on first start |
 | `PANTERA_BUF_ACCUMULATOR_MAX_BYTES` | `104857600` (100 MB) | Maximum buffer size for HTTP header/multipart boundary parsing. Safety limit to prevent OOM from malformed requests. Not used for artifact streaming. |
+| `PANTERA_TRUST_FORWARDED_HEADERS` | `false` | Set to `true` only when a fronting reverse proxy overwrites `X-Forwarded-Proto`, `X-Forwarded-Host`, and `X-Forwarded-Prefix` on every inbound request. Controls whether `ClientBaseUrl` (used to build absolute URLs Pantera emits, e.g. npm `dist.tarball`) honours those client-suppliable headers. When `false`, the base URL is derived from `Host` alone (scheme `http`) and `X-Forwarded-Prefix` is ignored entirely. Env-var only, not DB-backed -- a trust-boundary flag must not be toggleable at runtime; requires a restart to change. **Interaction with `url:`:** setting an explicit `url:` on the addressed repository (see [2.2](#22-local-repository), [2.3](#23-proxy-repository)) overrides the derived base entirely, so a fixed, correctly-configured `url:` is the other -- and often simpler -- way to get correct absolute URLs behind a reverse proxy, without trusting any forwarded headers at all. |
 
 ---
 

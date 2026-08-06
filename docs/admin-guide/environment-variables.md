@@ -100,6 +100,7 @@ All `PANTERA_*` variables can also be set as Java system properties using the lo
 | `PANTERA_INIT` | `false` | Set to `true` to auto-initialize default example configurations on first start |
 | `PANTERA_VERSION` | `2.0.0` | Version identifier. Set automatically in the Docker image. |
 | `PANTERA_DOWNLOAD_TOKEN_SECRET` | (auto-generated) | HMAC secret for direct download token signing. If not set, a random secret is generated at startup (not shared across HA nodes). Set explicitly in HA deployments. |
+| `PANTERA_TRUST_FORWARDED_HEADERS` | `false` | Set to `true` only when Pantera sits behind a fronting reverse proxy that overwrites `X-Forwarded-Proto`, `X-Forwarded-Host`, and `X-Forwarded-Prefix` on **every** inbound request (e.g. nginx/ALB in front of the backend). These headers are client-suppliable and are used to build the client-facing base URL for absolute links Pantera emits (npm `dist.tarball`); if left trusted without such a proxy, a client can steer those URLs at an arbitrary host and the response is cacheable by the fronting proxy. When `false` (the default), the base URL is derived from the `Host` header only (scheme `http`) and `X-Forwarded-Prefix` is ignored. Env-var only -- not a DB-backed admin setting, so it cannot be toggled at runtime; changing it requires a restart. Read once at class-load time. See [Configuration Reference](../configuration-reference.md#78-miscellaneous) for how a repository's own `url:` key is the other way to make a reverse-proxy deployment correct. |
 
 ---
 

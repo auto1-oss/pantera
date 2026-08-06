@@ -39,9 +39,11 @@ import java.util.Optional;
  * the repository the client actually addressed MUST win over this
  * repository's configured {@code url:} — otherwise a group member hands out
  * its own URLs instead of the group's, and strict clients (corepack) reject
- * the mismatch. Falling back to the request's own origin (honouring
- * forwarding headers) is the last resort, for repositories with no
- * configured {@code url:} at all.
+ * the mismatch. Falling back to the request's own origin is the last resort,
+ * for repositories with no configured {@code url:} at all — that origin
+ * honours {@code X-Forwarded-*} only when the deployment has opted in via
+ * {@code PANTERA_TRUST_FORWARDED_HEADERS=true}; unset (the default in this
+ * test JVM), it derives from {@code Host} alone.
  *
  * <p>Drives a real packument request through the slice (mirroring
  * {@code DownloadPackageSliceTest} / {@code DownloadPackageSliceCooldownEtagTest}'s
@@ -87,13 +89,16 @@ final class DownloadPackageSliceClientBaseTest {
     }
 
     @Test
-    void hostFallbackHonoursForwardedProto() throws Exception {
+    void hostFallbackIgnoresForwardedProtoByDefault() throws Exception {
+        // PANTERA_TRUST_FORWARDED_HEADERS is unset in this test JVM, so the
+        // client-supplied X-Forwarded-Proto must NOT steer the served
+        // tarball host's scheme — only the Host header does.
         final Headers headers = new Headers()
             .add("Host", "reg.example.com")
             .add("X-Forwarded-Proto", "https");
         MatcherAssert.assertThat(
             this.tarballFor(headers, Optional.empty()),
-            new IsEqual<>("https://reg.example.com" + TARBALL_SUFFIX)
+            new IsEqual<>("http://reg.example.com" + TARBALL_SUFFIX)
         );
     }
 

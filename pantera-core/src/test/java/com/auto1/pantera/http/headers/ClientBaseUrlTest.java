@@ -29,26 +29,66 @@ final class ClientBaseUrlTest {
     }
 
     @Test
-    void honoursForwardedSchemeHostAndPrefix() {
+    void honoursForwardedSchemeHostAndPrefixWhenTrusted() {
         final Headers headers = new Headers()
             .add("Host", "internal:8080")
             .add("X-Forwarded-Proto", "https")
             .add("X-Forwarded-Host", "reg.example.com")
             .add("X-Forwarded-Prefix", "/artifactory");
         MatcherAssert.assertThat(
-            new ClientBaseUrl(headers).derive("/api/npm/npm_group/pnpm", "/pnpm"),
+            new ClientBaseUrl(headers, true).derive("/api/npm/npm_group/pnpm", "/pnpm"),
             new IsEqual<>(Optional.of("https://reg.example.com/artifactory/api/npm/npm_group"))
         );
     }
 
     @Test
-    void takesFirstValueOfCommaListedForwardedProto() {
+    void takesFirstValueOfCommaListedForwardedProtoWhenTrusted() {
         final Headers headers = new Headers()
             .add("Host", "reg.example.com")
             .add("X-Forwarded-Proto", "https, http");
         MatcherAssert.assertThat(
-            new ClientBaseUrl(headers).origin(),
+            new ClientBaseUrl(headers, true).origin(),
             new IsEqual<>("https://reg.example.com")
+        );
+    }
+
+    @Test
+    void ignoresForwardedHostAndProtoWhenNotTrusted() {
+        final Headers headers = new Headers()
+            .add("Host", "reg.example.com")
+            .add("X-Forwarded-Host", "evil.example.com")
+            .add("X-Forwarded-Proto", "https");
+        MatcherAssert.assertThat(
+            new ClientBaseUrl(headers, false).origin(),
+            new IsEqual<>("http://reg.example.com")
+        );
+    }
+
+    @Test
+    void ignoresForwardedPrefixWhenNotTrusted() {
+        final Headers headers = new Headers()
+            .add("Host", "reg.example.com")
+            .add("X-Forwarded-Prefix", "/artifactory");
+        MatcherAssert.assertThat(
+            new ClientBaseUrl(headers, false).derive("/api/npm/npm_group/pnpm", "/pnpm"),
+            new IsEqual<>(Optional.of("http://reg.example.com/api/npm/npm_group"))
+        );
+    }
+
+    @Test
+    void defaultConstructorDoesNotTrustForwardedHeadersByDefault() {
+        // Without mutating the environment: the 1-arg constructor's
+        // behaviour must match the 2-arg constructor's explicit
+        // trustForwarded=false for identical headers, proving the default
+        // is "don't trust" regardless of ambient PANTERA_TRUST_FORWARDED_HEADERS.
+        final Headers headers = new Headers()
+            .add("Host", "reg.example.com")
+            .add("X-Forwarded-Host", "evil.example.com")
+            .add("X-Forwarded-Proto", "https")
+            .add("X-Forwarded-Prefix", "/artifactory");
+        MatcherAssert.assertThat(
+            new ClientBaseUrl(headers).derive("/api/npm/npm_group/pnpm", "/pnpm"),
+            new IsEqual<>(new ClientBaseUrl(headers, false).derive("/api/npm/npm_group/pnpm", "/pnpm"))
         );
     }
 

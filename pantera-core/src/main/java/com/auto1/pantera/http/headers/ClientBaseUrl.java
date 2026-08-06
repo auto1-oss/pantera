@@ -24,6 +24,15 @@ import java.util.Optional;
  * <em>group's</em> base rather than its own — which is the whole point: a
  * client that configured the group as its registry must receive URLs under
  * the group, or strict clients (corepack) reject them.</p>
+ *
+ * <p><b>Forwarded headers are a trust boundary.</b> {@code X-Forwarded-Proto},
+ * {@code X-Forwarded-Host}, and {@code X-Forwarded-Prefix} are client-supplied
+ * unless something in front of Pantera overwrites them on every inbound
+ * request. Honouring them unconditionally lets a client steer the tarball
+ * URLs Pantera emits at an arbitrary host, and those responses are
+ * cacheable. They are therefore only honoured when the operator has set
+ * {@code PANTERA_TRUST_FORWARDED_HEADERS=true} (default {@code false}); see
+ * {@link #ClientBaseUrl(Headers, boolean)}.</p>
  */
 public final class ClientBaseUrl {
 
@@ -40,29 +49,62 @@ public final class ClientBaseUrl {
     public static final String ORIGINAL_PATH = "X-Original-Path";
 
     /**
+     * Whether {@code X-Forwarded-*} headers are honoured by default, read
+     * once from {@code PANTERA_TRUST_FORWARDED_HEADERS} at class-load time.
+     * Deliberately env-var-only (not a DB-backed setting): a trust-boundary
+     * flag must require a deliberate deployment change, not a runtime toggle.
+     */
+    private static final boolean TRUST_FORWARDED_BY_DEFAULT =
+        Boolean.parseBoolean(System.getenv("PANTERA_TRUST_FORWARDED_HEADERS"));
+
+    /**
      * Request headers.
      */
     private final Headers headers;
 
     /**
-     * Ctor.
+     * Whether {@code X-Forwarded-*} headers are honoured for this instance.
+     */
+    private final boolean trustForwarded;
+
+    /**
+     * Ctor. Trusts forwarded headers only when
+     * {@code PANTERA_TRUST_FORWARDED_HEADERS=true} at the environment level.
      * @param headers Request headers
      */
     public ClientBaseUrl(final Headers headers) {
-        this.headers = headers;
+        this(headers, ClientBaseUrl.TRUST_FORWARDED_BY_DEFAULT);
     }
 
     /**
-     * Scheme and authority the client used, honouring reverse-proxy
-     * forwarding headers.
+     * Ctor.
+     * @param headers Request headers
+     * @param trustForwarded Whether to honour {@code X-Forwarded-Proto},
+     *  {@code X-Forwarded-Host}, and {@code X-Forwarded-Prefix}
+     */
+    public ClientBaseUrl(final Headers headers, final boolean trustForwarded) {
+        this.headers = headers;
+        this.trustForwarded = trustForwarded;
+    }
+
+    /**
+     * Scheme and authority the client used. Honours reverse-proxy forwarding
+     * headers only when this instance trusts them; otherwise derives from
+     * the {@code Host} header alone, scheme {@code http}.
      * @return e.g. {@code https://reg.example.com}
      */
     public String origin() {
-        return String.format(
-            "%s://%s",
-            this.first("X-Forwarded-Proto").orElse("http"),
-            this.first("X-Forwarded-Host").or(() -> this.first("Host")).orElse("localhost")
-        );
+        final String result;
+        if (this.trustForwarded) {
+            result = String.format(
+                "%s://%s",
+                this.first("X-Forwarded-Proto").orElse("http"),
+                this.first("X-Forwarded-Host").or(() -> this.first("Host")).orElse("localhost")
+            );
+        } else {
+            result = String.format("http://%s", this.first("Host").orElse("localhost"));
+        }
+        return result;
     }
 
     /**
@@ -115,13 +157,20 @@ public final class ClientBaseUrl {
     }
 
     /**
-     * Reverse-proxy path prefix stripped before forwarding, if declared.
+     * Reverse-proxy path prefix stripped before forwarding, if declared and
+     * this instance trusts forwarded headers; otherwise treated as absent.
      * @return Prefix without a trailing slash, or empty string
      */
     private String forwardedPrefix() {
-        return this.first("X-Forwarded-Prefix")
-            .map(ClientBaseUrl::withoutTrailingSlash)
-            .orElse("");
+        final String result;
+        if (this.trustForwarded) {
+            result = this.first("X-Forwarded-Prefix")
+                .map(ClientBaseUrl::withoutTrailingSlash)
+                .orElse("");
+        } else {
+            result = "";
+        }
+        return result;
     }
 
     /**
