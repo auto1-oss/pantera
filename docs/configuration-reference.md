@@ -781,14 +781,18 @@ A local repository stores artifacts directly in the configured storage backend.
 | `port` | int | No | -- | Dedicated port (conan only) |
 | `settings` | map | No | -- | Type-specific settings |
 
-`url` is optional. When set, it is used verbatim as the client-facing base URL
-for absolute URLs this repository emits (e.g. npm `dist.tarball`). When
-unset, the base is derived from the inbound request instead -- scheme `http`
-and the `Host` header by default, or `X-Forwarded-Proto`/`-Host`/`-Prefix`
-when `PANTERA_TRUST_FORWARDED_HEADERS=true` (see [7.8](#78-miscellaneous)).
-It remains required for repository types that build absolute URLs without
-this derivation ([2.5](#25-type-specific-settings): `php`, `helm`, `nuget`,
-`conan`, `conda`).
+`url` is optional for most local repository types. When set, it is used
+verbatim as the client-facing base URL for absolute URLs this repository
+emits (e.g. npm `dist.tarball`). When unset, the base is derived from the
+inbound request instead -- scheme `http` and the `Host` header by default,
+or `X-Forwarded-Proto`/`-Host`/`-Prefix` when
+`PANTERA_TRUST_FORWARDED_HEADERS=true` (see [7.8](#78-miscellaneous)). It
+remains hard-required for repository types whose adapter constructs absolute
+URLs without this derivation ([2.5](#25-type-specific-settings): `php`,
+`helm`, `nuget`, `conan`, `conda` -- and, for local `npm` specifically, its
+`.npmrc`-auth and full-packument tarball-rewrite endpoints have not yet been
+migrated to the derivation path, so a **local** `npm` repository still needs
+`url:` configured. `npm-proxy` and `npm-group` derive correctly and do not).
 
 ```yaml
 # File: maven.yaml
@@ -803,6 +807,7 @@ repo:
 # File: npm.yaml
 repo:
   type: npm
+  url: http://localhost:8081/test_prefix/api/npm/npm
   storage:
     type: fs
     path: /var/pantera/data
@@ -819,7 +824,7 @@ A proxy repository caches artifacts from one or more remote upstream servers.
 | `type` | string | Yes | -- | Must end in `-proxy` (e.g., `maven-proxy`) |
 | `storage` | map | Yes | -- | Local cache storage backend |
 | `remotes` | list | Yes | -- | Ordered list of upstream servers |
-| `url` | string | No | -- | Client-facing base URL for this repository -- same optionality and derivation as [2.2](#22-local-repository) |
+| `url` | string | No | -- | Client-facing base URL for this repository -- same optionality and derivation as [2.2](#22-local-repository); proxy adapters that support the derivation (including `npm-proxy`) never hard-require it |
 | `path` | string | No | -- | URL path segment override |
 
 Each entry in `remotes`:

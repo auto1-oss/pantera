@@ -237,7 +237,8 @@ Point your `.npmrc` registry at the group, and Pantera handles resolution order 
 <details>
 <summary>Server-Side Repository Configuration (Admin Reference)</summary>
 
-**Local repository:**
+**Local repository:** `url:` is required here (used for `.npmrc` auth
+responses and full-packument tarball rewriting).
 
 ```yaml
 # npm-local.yaml
@@ -249,7 +250,10 @@ repo:
     path: /var/pantera/data
 ```
 
-**Proxy repository:**
+**Proxy repository:** `url:` is optional here -- omit it and Pantera derives
+the client-facing base from each request instead (see
+[configuration-reference.md §2.3](../../configuration-reference.md#23-proxy-repository)).
+Shown explicitly below for a deployment behind a fixed public hostname.
 
 ```yaml
 # npm-proxy.yaml

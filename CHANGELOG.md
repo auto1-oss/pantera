@@ -52,6 +52,7 @@
 - **`SingleFlight` no longer risks rejoining a just-finished load** — invalidation and completion happen in one callback, so eviction precedes the caller observing completion. ([@aydasraf](https://github.com/aydasraf))
 - **corepack works against npm proxy and group repositories** — `GET /<pkg>/<version>` (and `/<pkg>/<tag>`, including `/latest`) now returns a full version manifest instead of a `{name, modified}` stub that `200`d with no `dist`, which crashed corepack's `dist.tarball` destructuring. ([@aydasraf](https://github.com/aydasraf))
 - **npm tarball URLs are rooted at the repository the client addressed** — a group repository no longer hands out its winning member's URLs, so corepack and other clients that reject responses from an unexpected registry now work through npm groups and proxies. ([@aydasraf](https://github.com/aydasraf))
+- **An npm proxy repository with no configured `url:` no longer throws on its first request** — repository construction read the throwing config accessor even though the client-facing base is optional there and derives from the request when unset. ([@aydasraf](https://github.com/aydasraf))
 - **`GET /<pkg>/latest` on an npm proxy no longer returns raw upstream tarball URLs** — the manifest is rewritten to point back at Pantera, so the download goes through Pantera's cache and audit trail instead of bypassing it (and works in air-gapped deployments). ([@aydasraf](https://github.com/aydasraf))
 
 ### 🔒 Security

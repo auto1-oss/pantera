@@ -116,6 +116,40 @@ public final class RepoConfigTest {
         );
     }
 
+    /**
+     * Local {@code npm} repositories still hard-require {@code url:} --
+     * unlike {@code npm-proxy}, {@code NpmrcAuthSlice} and the local {@code
+     * DownloadPackageSlice}'s {@code Tarballs} rewriter have no
+     * client-facing-base fallback and read {@code cfg.url()} directly (see
+     * {@code RepositorySlices}'s {@code "npm"} case). This is the exact
+     * failure surface a stack with a local {@code npm.yaml} missing {@code
+     * url:} hits on first request -- guarding it here at the accessor level
+     * covers the whole call site without needing to construct the full
+     * {@code NpmSlice} dependency graph.
+     */
+    @Test
+    public void throwsExceptionWhenUrlNotSpecifiedForLocalNpm() {
+        Assertions.assertThrows(
+            IllegalStateException.class,
+            () -> RepoConfig.from(
+                Yaml.createYamlMappingBuilder().add(
+                    "repo", Yaml.createYamlMappingBuilder()
+                        .add("type", "npm")
+                        .add(
+                            "storage",
+                            Yaml.createYamlMappingBuilder()
+                                .add("type", "fs")
+                                .add("path", "/var/pantera/data")
+                                .build()
+                        )
+                        .build()
+                ).build(),
+                new StorageByAlias(Yaml.createYamlMappingBuilder().build()),
+                new Key.From("repo-npm-no-url.yml"), cache, false
+            ).url()
+        );
+    }
+
     @Test
     public void throwsExceptionWhenStorageWithDefaultAliasesNotConfigured() {
         Assertions.assertEquals("Storage is not configured",
