@@ -22,6 +22,8 @@ import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
 import com.auto1.pantera.http.slice.LoggingSlice;
 import com.auto1.pantera.http.slice.SliceSimple;
+import com.auto1.pantera.npm.http.PingSlice;
+import com.auto1.pantera.npm.http.RegistryInfoSlice;
 import com.auto1.pantera.npm.proxy.NpmProxy;
 import com.auto1.pantera.publishdate.PublishDateRegistries;
 import com.auto1.pantera.publishdate.RegistryBackedInspector;
@@ -92,21 +94,49 @@ public final class NpmProxySlice implements Slice {
             // route existed for either endpoint.
             new RtRulePath(
                 new RtRule.All(
-                    MethodRule.GET,
+                    new RtRule.Any(MethodRule.GET, MethodRule.HEAD),
                     new RtRule.ByPath(NpmProxySlice.searchPattern(path))
                 ),
                 new LoggingSlice(new UpstreamPassthroughSlice(remote, "search"))
             ),
             new RtRulePath(
                 new RtRule.All(
-                    MethodRule.GET,
+                    // GET+HEAD (Minor 1 fix): the packument route below also
+                    // matches HEAD, and its pattern is broad enough to
+                    // swallow "<pkg>/dist-tags" as a bogus (pkg, ref) pair
+                    // if this route stayed GET-only -- HEAD would 404
+                    // instead of forwarding upstream.
+                    new RtRule.Any(MethodRule.GET, MethodRule.HEAD),
                     new RtRule.ByPath(NpmProxySlice.distTagsPattern(path))
                 ),
                 new LoggingSlice(new UpstreamPassthroughSlice(remote, "dist-tags"))
             ),
+            // WS8 Bug B3: answered directly from Pantera -- a proxy/group
+            // ping must not require an upstream round-trip just to prove
+            // Pantera itself is alive. Registered BEFORE the packument
+            // route for the same reason as search/dist-tags above: the
+            // packument pattern is broad enough to otherwise swallow
+            // "/-/ping" as a bogus package name.
             new RtRulePath(
                 new RtRule.All(
                     MethodRule.GET,
+                    new RtRule.ByPath(NpmProxySlice.pingPattern(path))
+                ),
+                new LoggingSlice(new PingSlice())
+            ),
+            // WS8 Bug B4: the repository root -- also answered directly
+            // from Pantera, registered before the packument route for the
+            // same reason as ping just above.
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.GET,
+                    new RtRule.ByPath(NpmProxySlice.rootPattern(path))
+                ),
+                new LoggingSlice(new RegistryInfoSlice(repoName))
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    new RtRule.Any(MethodRule.GET, MethodRule.HEAD),
                     new RtRule.ByPath(ppath.pattern())
                 ),
                 new LoggingSlice(
@@ -115,7 +145,15 @@ public final class NpmProxySlice implements Slice {
             ),
             new RtRulePath(
                 new RtRule.All(
-                    MethodRule.GET,
+                    // WS8 Bug B2: GET-only left a HEAD tarball probe falling
+                    // through to the generic FALLBACK 404 below, which
+                    // CachedNpmProxySlice then negative-cached -- poisoning
+                    // every subsequent GET of the exact same tarball.
+                    // DownloadAssetSlice does not branch on method (a HEAD
+                    // gets the same cache-check/fetch path as a GET; the
+                    // Vert.x layer strips the body for HEAD), so routing it
+                    // here is sufficient to serve a genuine status.
+                    new RtRule.Any(MethodRule.GET, MethodRule.HEAD),
                     new RtRule.ByPath(apath.pattern())
                 ),
                 new LoggingSlice(
@@ -210,5 +248,34 @@ public final class NpmProxySlice implements Slice {
             ? ""
             : String.format("/%s", java.util.regex.Pattern.quote(prefix));
         return String.format("^%s/.+/dist-tags$", base);
+    }
+
+    /**
+     * Matches {@code GET /-/ping} (WS8 Bug B3) so {@code npm ping} answers
+     * directly from Pantera instead of requiring an upstream round-trip.
+     *
+     * @param prefix Repository path prefix (empty for proxy repos)
+     * @return Path pattern
+     */
+    private static String pingPattern(final String prefix) {
+        final String base = (prefix == null || prefix.isEmpty())
+            ? ""
+            : String.format("/%s", java.util.regex.Pattern.quote(prefix));
+        return String.format("^%s/-/ping$", base);
+    }
+
+    /**
+     * Matches the repository root (WS8 Bug B4) -- {@code GET <repoBase>} /
+     * {@code GET <repoBase>/}, once the outer {@code TrimPathSlice} has
+     * already stripped the repository-name segment.
+     *
+     * @param prefix Repository path prefix (empty for proxy repos)
+     * @return Path pattern
+     */
+    private static String rootPattern(final String prefix) {
+        final String base = (prefix == null || prefix.isEmpty())
+            ? ""
+            : String.format("/%s", java.util.regex.Pattern.quote(prefix));
+        return String.format("^%s/?$", base);
     }
 }

@@ -11,6 +11,8 @@
 package com.auto1.pantera.http;
 
 import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.headers.ClientBaseUrl;
+import com.auto1.pantera.http.headers.InternalHeaderScrub;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.settings.repo.Repositories;
 import org.apache.http.client.utils.URIBuilder;
@@ -118,6 +120,11 @@ public final class ApiRoutingSlice implements Slice {
         RequestLine line, Headers headers, Content body
     ) {
         final String path = line.uri().getPath();
+        // X-Original-Path is an internal signal SliceByPath trusts to derive
+        // the client-facing base URL for dist.tarball links; a client that
+        // supplied its own value could steer that derivation, so any inbound
+        // copy is discarded before this slice decides whether to set its own.
+        final Headers scrubbed = new InternalHeaderScrub(headers).without(ClientBaseUrl.ORIGINAL_PATH);
         final Matcher matcher = PTN_API.matcher(path);
 
         if (matcher.matches()) {
@@ -127,7 +134,7 @@ public final class ApiRoutingSlice implements Slice {
             // Split the path into segments
             final String[] segments = apiPath.split("/", 3);
             if (segments.length < 1) {
-                return this.origin.response(line, headers, body);
+                return this.origin.response(line, scrubbed, body);
             }
 
             // Check if first segment is a repo_type.
@@ -142,21 +149,26 @@ public final class ApiRoutingSlice implements Slice {
                 // Pattern: /api/{repo_type}/{repo_name}[/rest]
                 final String repoName = segments[1];
                 final String rest = segments.length > 2 ? "/" + segments[2] : "";
-                return this.rewrite(line, headers, body, path, prefix, repoName, rest);
+                return this.rewrite(line, scrubbed, body, path, prefix, repoName, rest);
             } else {
                 // Pattern: /api/{repo_name}[/rest]
                 final String repoName = firstSegment;
                 final String rest = segments.length > 1
                     ? "/" + apiPath.substring(repoName.length() + 1) : "";
-                return this.rewrite(line, headers, body, path, prefix, repoName, rest);
+                return this.rewrite(line, scrubbed, body, path, prefix, repoName, rest);
             }
         }
 
-        return this.origin.response(line, headers, body);
+        return this.origin.response(line, scrubbed, body);
     }
 
     /**
      * Rewrite the request path and forward to origin.
+     *
+     * <p>{@code headers} is assumed already scrubbed of any inbound
+     * {@link ClientBaseUrl#ORIGINAL_PATH} by the caller, so the {@code add}
+     * below cannot end up alongside a client-supplied value of the same
+     * header — only ever this slice's own, authoritative one.</p>
      */
     private CompletableFuture<Response> rewrite(
         final RequestLine line, final Headers headers, final Content body,
@@ -165,7 +177,7 @@ public final class ApiRoutingSlice implements Slice {
     ) {
         final String newPath = (prefix != null ? prefix : "") + "/" + repoName + rest;
         final Headers newHeaders = headers.copy();
-        newHeaders.add("X-Original-Path", originalPath);
+        newHeaders.add(ClientBaseUrl.ORIGINAL_PATH, originalPath);
         return this.origin.response(
             new RequestLine(
                 line.method().toString(),

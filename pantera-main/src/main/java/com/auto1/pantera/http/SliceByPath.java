@@ -14,9 +14,15 @@ import com.auto1.pantera.RepositorySlices;
 import com.auto1.pantera.RqPath;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.http.headers.ClientBaseUrl;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.headers.InternalHeaderScrub;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.settings.PrefixesConfig;
+import com.auto1.pantera.settings.repo.RepoConfig;
+import com.auto1.pantera.settings.repo.Repositories;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
@@ -77,7 +83,104 @@ final class SliceByPath implements Slice {
             );
         }
         return this.slices.slice(key.get(), effectiveLine.uri().getPort())
-            .response(effectiveLine, headers, body);
+            .response(
+                effectiveLine,
+                this.stamped(headers, key.get(), originalPath, strippedPath),
+                body
+            );
+    }
+
+    /**
+     * Stamp the addressed repository's client-facing base URL, always
+     * discarding any inbound value first. {@link ClientBaseUrl#HEADER} is an
+     * internal-only signal consumed downstream to build absolute
+     * {@code dist.tarball} URLs; if a client-supplied value survived, a
+     * request could poison packument responses (cached by the fronting
+     * proxy) with an attacker-controlled host. Stamping here — above the
+     * group resolver — is what makes a group member emit URLs under the
+     * <em>group</em>; group-wins still holds because this is the only place
+     * that ever sets the header.
+     *
+     * @param headers Inbound headers
+     * @param key Resolved repository key
+     * @param originalPath Request path before prefix stripping
+     * @param strippedPath Request path after prefix stripping
+     * @return Headers, with any client-supplied base removed and the
+     *  derived base stamped when one can be derived
+     */
+    private Headers stamped(
+        final Headers headers, final Key key,
+        final String originalPath, final String strippedPath
+    ) {
+        final Headers scrubbed = new InternalHeaderScrub(headers).without(ClientBaseUrl.HEADER);
+        final ClientBaseUrl base = new ClientBaseUrl(scrubbed);
+        final Optional<String> value = this.configured(key)
+            .or(() -> base.derive(
+                SliceByPath.clientPath(scrubbed, originalPath),
+                SliceByPath.remainder(key, strippedPath)
+            ));
+        final Headers result;
+        if (value.isPresent()) {
+            result = scrubbed.add(new Header(ClientBaseUrl.HEADER, value.get()));
+        } else {
+            result = scrubbed;
+        }
+        return result;
+    }
+
+    /**
+     * Explicitly configured {@code url:} of the addressed repository. Only the
+     * addressed repository is consulted — never a group member's own URL,
+     * which is the bug this whole mechanism exists to fix.
+     *
+     * @param key Repository key
+     * @return Configured URL, or empty
+     */
+    private Optional<String> configured(final Key key) {
+        Optional<String> result = Optional.empty();
+        final Repositories repos = this.slices.repositories();
+        if (repos != null) {
+            result = repos.config(key.string()).flatMap(RepoConfig::urlOpt);
+        }
+        return result;
+    }
+
+    /**
+     * Path as the client sent it: the pre-rewrite path when
+     * {@code ApiRoutingSlice} recorded one, else the current path.
+     *
+     * @param headers Inbound headers
+     * @param originalPath Current request path
+     * @return Client-facing path
+     */
+    private static String clientPath(final Headers headers, final String originalPath) {
+        final List<String> recorded = headers.values(ClientBaseUrl.ORIGINAL_PATH);
+        final String result;
+        if (recorded.isEmpty() || recorded.get(0) == null || recorded.get(0).isBlank()) {
+            result = originalPath;
+        } else {
+            result = recorded.get(0);
+        }
+        return result;
+    }
+
+    /**
+     * Path relative to the repository, e.g. {@code /pnpm} for
+     * {@code /npm_group/pnpm}.
+     *
+     * @param key Repository key
+     * @param strippedPath Path after global-prefix stripping
+     * @return Repository-relative remainder
+     */
+    private static String remainder(final Key key, final String strippedPath) {
+        final String prefixed = "/" + key.string();
+        final String result;
+        if (strippedPath.length() > prefixed.length() && strippedPath.startsWith(prefixed)) {
+            result = strippedPath.substring(prefixed.length());
+        } else {
+            result = "";
+        }
+        return result;
     }
 
     /**

@@ -141,6 +141,18 @@ final class SingleVersionSliceTest {
         );
     }
 
+    @Test
+    void carriesVaryHostSoASharedCacheCannotCrossServeIt() {
+        // I2: the served dist.tarball depends on the request's Host (or the
+        // internal stamped-base header derived from it), so a shared cache
+        // must not treat requests from different clients as interchangeable.
+        final String vary = new SingleVersionSlice(url(), this.storage, "npm-local").response(
+            new RequestLine(RqMethod.GET, "/simple-npm-project/1.0.0"),
+            Headers.EMPTY, Content.EMPTY
+        ).join().headers().single("Vary").getValue();
+        MatcherAssert.assertThat(vary, new IsEqual<>("Host"));
+    }
+
     private JsonObject get(final String path) throws Exception {
         final String responseBody = new SingleVersionSlice(url(), this.storage, "npm-local").response(
             new RequestLine(RqMethod.GET, path),

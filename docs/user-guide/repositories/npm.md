@@ -57,6 +57,23 @@ npmAuthToken: "your-jwt-token-here"
 
 pnpm reads `.npmrc` natively. No additional configuration is needed.
 
+### Corepack
+
+Corepack (bundled with Node.js) manages the package manager itself (`pnpm`,
+`yarn`) rather than your project's dependencies, and it resolves package
+manager releases through its own registry setting instead of `.npmrc`:
+
+```bash
+export COREPACK_NPM_REGISTRY=http://pantera-host:8080/npm-group
+```
+
+Corepack fetches `GET <registry>/<pkg>/<version>` directly (e.g. `/pnpm/9.1.0`
+or `/pnpm/latest`) and expects a full version manifest with a `dist.tarball`
+field -- the same single-version endpoint covered in
+[Fetching a Single Version](#fetching-a-single-version), served correctly by
+local, proxy, and group repositories alike. Point `COREPACK_NPM_REGISTRY` at
+any of the three.
+
 ---
 
 ## Install Packages
@@ -133,13 +150,20 @@ On proxy repositories, `npm dist-tag ls` and `npm search` are forwarded upstream
 
 ## Fetching a Single Version
 
-Local repositories serve a specific version's manifest directly, without downloading the whole packument:
+Local, proxy, and group repositories alike serve a specific version's (or
+dist-tag's, including `latest`) manifest directly, without downloading the
+whole packument:
 
 ```bash
 npm view @myorg/my-package@1.2.0 version
 curl http://pantera-host:8080/npm-local/@myorg/my-package/1.2.0
 curl http://pantera-host:8080/npm-local/@myorg/my-package/latest
 ```
+
+The returned manifest's `dist.tarball` is always rooted at the repository
+address you requested -- a proxy or group never hands back another
+repository's URL, so the response is usable as-is by strict clients such as
+corepack.
 
 `HEAD` requests are also supported on packument and tarball URLs (returns headers only, e.g. `Content-Length`, no body) — useful for existence checks without downloading.
 
@@ -213,7 +237,8 @@ Point your `.npmrc` registry at the group, and Pantera handles resolution order 
 <details>
 <summary>Server-Side Repository Configuration (Admin Reference)</summary>
 
-**Local repository:**
+**Local repository:** `url:` is required here (used for `.npmrc` auth
+responses and full-packument tarball rewriting).
 
 ```yaml
 # npm-local.yaml
@@ -225,7 +250,10 @@ repo:
     path: /var/pantera/data
 ```
 
-**Proxy repository:**
+**Proxy repository:** `url:` is optional here -- omit it and Pantera derives
+the client-facing base from each request instead (see
+[configuration-reference.md §2.3](../../configuration-reference.md#23-proxy-repository)).
+Shown explicitly below for a deployment behind a fixed public hostname.
 
 ```yaml
 # npm-proxy.yaml

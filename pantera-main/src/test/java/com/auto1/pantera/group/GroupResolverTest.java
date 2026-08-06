@@ -26,6 +26,8 @@ import com.auto1.pantera.http.timeout.AutoBlockSettings;
 import com.auto1.pantera.index.ArtifactDocument;
 import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.index.SearchResult;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -236,6 +238,81 @@ final class GroupResolverTest {
             "a genuine all-members 404 (unmarked) must still be negative-cached");
     }
 
+    // ---- WS8 Bug B5: the walk terminal must not discard a member's own honest 404 body ----
+
+    @Test
+    void allMembers404_terminalPreservesFirstMemberHonestBody() throws Exception {
+        // Regression for the live-server bug: GroupResolver's sequential walk
+        // used to drainBody() every member 404 and, once every member was
+        // exhausted, manufacture a bare ResponseBuilder.notFound().build() --
+        // discarding a proxy member's own honest "version not found" JSON
+        // (e.g. what CachedNpmProxySlice builds for npm's /<pkg>/<version>
+        // shape). This drives GroupResolver's real member-walk boundary --
+        // the same Slice interface production member adapters implement --
+        // with a stub whose 404 body/shape matches CachedNpmProxySlice's
+        // actual output exactly, so it fails on the pre-fix walk exactly as a
+        // live npm_group /<pkg>/<bad-version> lookup did.
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of())); // index miss
+        final NegativeCache negCache = buildNegativeCache();
+        final String honestBody =
+            "{\"error\":\"version not found: 999.999.999\",\"package\":\"pnpm\"}";
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, honestNotFoundSlice(honestBody));
+
+        final GroupResolver resolver = buildResolver(
+            idx, List.of(PROXY_A), Set.of(PROXY_A), negCache, slices
+        );
+        final Response resp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+
+        MatcherAssert.assertThat(
+            "the walk terminal must still answer 404",
+            resp.status(),
+            new IsEqual<>(RsStatus.NOT_FOUND)
+        );
+        MatcherAssert.assertThat(
+            "the walk terminal must forward the member's own honest body, not a bare empty one",
+            resp.body().asBytesFuture().get(),
+            new IsEqual<>(honestBody.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+        );
+    }
+
+    @Test
+    void allMembers404_unverifiedMarkerAlsoPreservesHonestBody() throws Exception {
+        // The anyUnverified terminal (Fix 2's SKIP_HEADER re-attachment) had
+        // the exact same bare-body bug as the plain terminal above -- cover
+        // it separately since it is a distinct branch in tryNextSequentialMember.
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of())); // index miss
+        final NegativeCache negCache = buildNegativeCache();
+        final String honestBody =
+            "{\"error\":\"version not found: 999.999.999\",\"package\":\"pnpm\"}";
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, honestUnverifiedNotFoundSlice(honestBody));
+
+        final GroupResolver resolver = buildResolver(
+            idx, List.of(PROXY_A), Set.of(PROXY_A), negCache, slices
+        );
+        final Response resp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+
+        MatcherAssert.assertThat(resp.status(), new IsEqual<>(RsStatus.NOT_FOUND));
+        MatcherAssert.assertThat(
+            "the non-authoritative-404 terminal must also forward the member's honest body",
+            resp.body().asBytesFuture().get(),
+            new IsEqual<>(honestBody.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+        );
+        final com.auto1.pantera.http.cache.NegativeCacheKey negKey =
+            new com.auto1.pantera.http.cache.NegativeCacheKey(
+                GROUP, REPO_TYPE, PARSED_NAME, PARSED_VERSION);
+        MatcherAssert.assertThat(
+            "a laundered 404 must still not be negative-cached, even with a preserved body",
+            negCache.isKnown404(negKey),
+            new IsEqual<>(false)
+        );
+    }
+
     // ---- FIX 5: malformed version-range path rejected before any walk ----
 
     @Test
@@ -434,6 +511,84 @@ final class GroupResolverTest {
             new com.auto1.pantera.http.cache.NegativeCacheKey(GROUP, REPO_TYPE, PARSED_NAME, PARSED_VERSION);
         assertTrue(negCache.isKnown404(negKey),
             "Negative cache must be populated");
+    }
+
+    // ---- WS8 Bug 2: a HEAD probe must never poison the negative cache ----
+
+    @Test
+    void headProbe_noProxyMembers_doesNotNegativeCache_andFollowingGetStillQueries() {
+        // Counterpart to noProxyMembers_indexMiss_returns404 above, driven by
+        // HEAD instead of GET. A HEAD probe (health check, scanner, routine
+        // existence check) hitting the same no-proxy-members dead end must
+        // NOT write a negative-cache entry -- only a GET's 404 is trusted.
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of())); // miss
+        final NegativeCache negCache = buildNegativeCache();
+        final GroupResolver resolver = buildResolver(
+            idx,
+            List.of(HOSTED),
+            Collections.emptySet(), // no proxy members
+            negCache,
+            Map.of(HOSTED, okSlice())
+        );
+
+        final Response headResp = resolver.response(
+            new RequestLine("HEAD", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        assertEquals(404, headResp.status().code(),
+            "HEAD with no proxy members must still return 404");
+        final com.auto1.pantera.http.cache.NegativeCacheKey negKey =
+            new com.auto1.pantera.http.cache.NegativeCacheKey(GROUP, REPO_TYPE, PARSED_NAME, PARSED_VERSION);
+        assertFalse(negCache.isKnown404(negKey),
+            "A HEAD probe 404 must NOT negative-cache");
+
+        // A following GET must re-query rather than short-circuit off a
+        // negative-cache entry the HEAD probe should never have written --
+        // negativeCacheHit_returns404WithoutDbQuery above proves a poisoned
+        // cache skips the index query entirely, so this is the direct
+        // counter-proof that the HEAD did not poison it.
+        final int callsBeforeGet = idx.locateByNameCalls.size();
+        final Response getResp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        assertEquals(404, getResp.status().code(),
+            "GET with no proxy members still returns 404 -- there is nothing to serve it");
+        assertTrue(idx.locateByNameCalls.size() > callsBeforeGet,
+            "The GET must re-query the index, proving it was not short-circuited "
+                + "by a HEAD-poisoned negative cache");
+    }
+
+    @Test
+    void headProbe_allMembers404_doesNotNegativeCache_andFollowingGetSucceeds() {
+        // Counterpart to indexMiss_allProxy404_negCachePopulated below, driven
+        // by HEAD. All proxy members answer 404 to the HEAD probe; the group
+        // must still answer 404 but must NOT negative-cache it. A following
+        // GET for the same coordinate, now that the artifact has actually been
+        // published, must succeed -- proving the HEAD never shadowed the GET.
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of())); // miss
+        final NegativeCache negCache = buildNegativeCache();
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, notFoundThenOkSlice());
+
+        final GroupResolver resolver = buildResolver(
+            idx, List.of(PROXY_A), Set.of(PROXY_A), negCache, slices
+        );
+
+        final Response headResp = resolver.response(
+            new RequestLine("HEAD", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        assertEquals(404, headResp.status().code(),
+            "HEAD against a not-yet-published artifact must return 404");
+        final com.auto1.pantera.http.cache.NegativeCacheKey negKey =
+            new com.auto1.pantera.http.cache.NegativeCacheKey(GROUP, REPO_TYPE, PARSED_NAME, PARSED_VERSION);
+        assertFalse(negCache.isKnown404(negKey),
+            "A HEAD-driven all-proxies-404 must NOT negative-cache");
+
+        final Response getResp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        assertEquals(200, getResp.status().code(),
+            "A following GET for the now-published artifact must succeed, "
+                + "not be shadowed by a HEAD-poisoned negative cache");
     }
 
     // ---- Index hit + member 5xx: returns StorageUnavailable 500 ----
@@ -830,6 +985,35 @@ final class GroupResolverTest {
     }
 
     /**
+     * A member that returns a 404 with a non-empty JSON body, matching the
+     * shape {@code CachedNpmProxySlice} builds for a proxy/group version
+     * lookup (WS8 Bug B5). Used to prove {@link GroupResolver}'s walk
+     * terminal forwards a real member's honest body instead of discarding it.
+     *
+     * @param body Honest 404 JSON body the member returns
+     */
+    private static Slice honestNotFoundSlice(final String body) {
+        return (line, headers, requestBody) ->
+            CompletableFuture.completedFuture(ResponseBuilder.notFound().jsonBody(body).build());
+    }
+
+    /**
+     * Same as {@link #honestNotFoundSlice(String)}, but also marks the 404
+     * non-authoritative (WS8 Fix 2), exercising the {@code anyUnverified}
+     * terminal branch instead of the plain one.
+     *
+     * @param body Honest 404 JSON body the member returns
+     */
+    private static Slice honestUnverifiedNotFoundSlice(final String body) {
+        return (line, headers, requestBody) ->
+            CompletableFuture.completedFuture(
+                ResponseBuilder.notFound()
+                    .jsonBody(body)
+                    .header(com.auto1.pantera.http.cache.NegativeCache.SKIP_HEADER, "true")
+                    .build());
+    }
+
+    /**
      * A member that returns a 404 marked non-authoritative (as the npm proxy
      * does when it launders an upstream rate-limit / non-404 4xx into a 404 for
      * the multi-remote race). The group must NOT negative-cache such a 404.
@@ -840,6 +1024,21 @@ final class GroupResolverTest {
                 ResponseBuilder.notFound()
                     .header(com.auto1.pantera.http.cache.NegativeCache.SKIP_HEADER, "true")
                     .build());
+    }
+
+    /**
+     * A member that answers NOT_FOUND on its first invocation and OK on
+     * every one after -- simulates an artifact that genuinely did not
+     * exist when a HEAD probe checked, then was published before a
+     * following GET arrived (WS8 Bug 2 regression coverage).
+     */
+    private static Slice notFoundThenOkSlice() {
+        final AtomicInteger calls = new AtomicInteger(0);
+        return (line, headers, body) -> CompletableFuture.completedFuture(
+            calls.getAndIncrement() == 0
+                ? ResponseBuilder.notFound().build()
+                : ResponseBuilder.ok().build()
+        );
     }
 
     private static Slice staticSlice(final RsStatus status) {

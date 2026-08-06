@@ -19,6 +19,7 @@ import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.headers.ClientBaseUrl;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsMdc;
@@ -110,7 +111,7 @@ public final class SingleVersionSlice implements Slice {
                     AuditLogger.resolution(ctx, "npm", this.repoName, ref.pkg(), owner, List.of());
                     return versionJson.isEmpty()
                         ? notFound(ref)
-                        : this.serve(versionJson, clientETag);
+                        : this.serve(versionJson, clientETag, headers);
                 });
             }).toCompletableFuture();
         });
@@ -151,14 +152,19 @@ public final class SingleVersionSlice implements Slice {
      *
      * @param versionJson Resolved per-version manifest
      * @param clientETag Client's If-None-Match value, if present
+     * @param headers Request headers
      * @return Response
      */
-    private Response serve(final JsonObject versionJson, final Optional<String> clientETag) {
+    private Response serve(
+        final JsonObject versionJson, final Optional<String> clientETag, final Headers headers
+    ) {
         final JsonObjectBuilder builder = Json.createObjectBuilder(versionJson);
         builder.remove("_publishTime");
         if (versionJson.containsKey("dist") && versionJson.getJsonObject("dist").containsKey("tarball")) {
+            final String prefix = new ClientBaseUrl(headers).stamped()
+                .orElseGet(() -> this.base.toString());
             final String rewritten = Tarballs.rewriteTarball(
-                versionJson.getJsonObject("dist").getString("tarball"), this.base.toString()
+                versionJson.getJsonObject("dist").getString("tarball"), prefix
             );
             builder.add(
                 "dist",
@@ -169,16 +175,19 @@ public final class SingleVersionSlice implements Slice {
         }
         final String responseBody = builder.build().toString();
         final String etag = new MetadataETag(responseBody).calculate();
+        final String vary = new ClientBaseUrl(headers).varyHeaderValue();
         if (clientETag.isPresent() && clientETag.get().equals(etag)) {
             return ResponseBuilder.from(RsStatus.NOT_MODIFIED)
                 .header("ETag", etag)
                 .header("Cache-Control", "public, max-age=300")
+                .header("Vary", vary)
                 .build();
         }
         return ResponseBuilder.ok()
             .header("Content-Type", "application/json; charset=utf-8")
             .header("ETag", etag)
             .header("Cache-Control", "public, max-age=300")
+            .header("Vary", vary)
             .jsonBody(responseBody)
             .build();
     }

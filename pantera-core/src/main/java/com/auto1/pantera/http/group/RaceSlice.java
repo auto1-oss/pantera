@@ -107,6 +107,18 @@ public final class RaceSlice implements Slice {
             final java.util.concurrent.atomic.AtomicReference<DrainedResponse> firstForbidden =
                 new java.util.concurrent.atomic.AtomicReference<>();
 
+            // First 404 captured the same way (WS8 Bug B5). completeBasedOnPriority's
+            // "all targets failed, nothing forbidden, nothing 5xx" fallback used to
+            // manufacture a bare bodyless 404 unconditionally, discarding a target's
+            // own honest 404 body (e.g. CachedNpmProxySlice's "version not found: X"
+            // JSON) that had already been drained into bytes just below. A single
+            // npm-proxy remote is still raced through this class (RaceSlice wraps
+            // even a one-element target list), so this loss reproduced on a live
+            // server for both npm_proxy and npm_group even though the honest body
+            // was correctly built one layer down.
+            final java.util.concurrent.atomic.AtomicReference<DrainedResponse> firstNotFound =
+                new java.util.concurrent.atomic.AtomicReference<>();
+
             // Start all repository requests in parallel
             for (int i = 0; i < this.targets.size(); i++) {
                 final int index = i;
@@ -193,9 +205,17 @@ public final class RaceSlice implements Slice {
                                 null,
                                 new DrainedResponse(res.status(), res.headers(), bytes)
                             );
+                        } else if (code == RsStatus.NOT_FOUND.code()) {
+                            // CAS — only the FIRST 404's body is kept (WS8 Bug B5).
+                            firstNotFound.compareAndSet(
+                                null,
+                                new DrainedResponse(res.status(), res.headers(), bytes)
+                            );
                         }
                         if (failedCount.incrementAndGet() == this.targets.size()) {
-                            completeBasedOnPriority(result, firstForbidden, anyServerError);
+                            completeBasedOnPriority(
+                                result, firstForbidden, firstNotFound, anyServerError
+                            );
                         }
                         return null;
                     });
@@ -215,7 +235,9 @@ public final class RaceSlice implements Slice {
                     // Treat exceptions the same as 5xx — race-continue + remember.
                     anyServerError.set(true);
                     if (failedCount.incrementAndGet() == this.targets.size()) {
-                        completeBasedOnPriority(result, firstForbidden, anyServerError);
+                        completeBasedOnPriority(
+                            result, firstForbidden, firstNotFound, anyServerError
+                        );
                     }
                     return null;
                 });
@@ -234,12 +256,15 @@ public final class RaceSlice implements Slice {
      *       outranks 404 (definitively absent) and 5xx (transient).</li>
      *   <li>If any target returned 5xx (or threw) — return 502, since at
      *       least one upstream's true state is unknown.</li>
-     *   <li>Otherwise (all 404 / similar definitive misses) — return 404.</li>
+     *   <li>Otherwise (all 404 / similar definitive misses) — return 404,
+     *       forwarding the FIRST target's own 404 body/headers when one was
+     *       captured (WS8 Bug B5) instead of a bare empty body.</li>
      * </ol>
      */
     private static void completeBasedOnPriority(
         final CompletableFuture<Response> result,
         final java.util.concurrent.atomic.AtomicReference<DrainedResponse> firstForbidden,
+        final java.util.concurrent.atomic.AtomicReference<DrainedResponse> firstNotFound,
         final java.util.concurrent.atomic.AtomicBoolean anyServerError
     ) {
         final DrainedResponse forbidden = firstForbidden.get();
@@ -257,15 +282,23 @@ public final class RaceSlice implements Slice {
             );
             return;
         }
+        final DrainedResponse notFound = firstNotFound.get();
+        if (notFound != null) {
+            result.complete(new Response(
+                notFound.status, notFound.headers, new Content.From(notFound.bytes)
+            ));
+            return;
+        }
         result.complete(ResponseBuilder.notFound().build());
     }
 
     /**
-     * Captured 403 response — status, headers, and fully-drained body bytes.
-     * Held in an AtomicReference so the FIRST 403 wins via CAS; subsequent
-     * 403s are dropped after their bodies are drained at the per-target
-     * handler. If the priority rule selects "forbidden" as the final answer,
-     * we reconstitute a Response from these fields.
+     * Captured 403 or 404 response — status, headers, and fully-drained body
+     * bytes. Held in an AtomicReference so the FIRST occurrence of either
+     * status wins via CAS; later ones are dropped after their bodies are
+     * drained at the per-target handler. If the priority rule selects
+     * "forbidden" or "not found" as the final answer, we reconstitute a
+     * Response from these fields instead of manufacturing a bare one.
      */
     private static final class DrainedResponse {
         final RsStatus status;

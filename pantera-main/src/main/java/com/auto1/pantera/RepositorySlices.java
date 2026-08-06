@@ -70,6 +70,8 @@ import com.auto1.pantera.http.slice.SliceSimple;
 import com.auto1.pantera.http.slice.TrimPathSlice;
 import com.auto1.pantera.maven.http.MavenSlice;
 import com.auto1.pantera.npm.http.NpmSlice;
+import com.auto1.pantera.npm.http.PingSlice;
+import com.auto1.pantera.npm.http.RegistryInfoSlice;
 import com.auto1.pantera.npm.proxy.NpmProxy;
 import com.auto1.pantera.npm.proxy.http.NpmProxySlice;
 import com.auto1.pantera.nuget.http.NuGet;
@@ -955,6 +957,42 @@ public class RepositorySlices {
                                 com.auto1.pantera.http.ResponseBuilder.forbidden()
                                     .textBody("User management not supported on group. Use local npm repository.")
                                     .build()
+                            )
+                        ),
+                        // WS8 Bug B3: answered directly from Pantera, not by
+                        // walking group members - a group ping must not
+                        // depend on any one member (or that member's own
+                        // upstream) being reachable.
+                        new com.auto1.pantera.http.rt.RtRulePath(
+                            new com.auto1.pantera.http.rt.RtRule.All(
+                                com.auto1.pantera.http.rt.MethodRule.GET,
+                                new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/ping$")
+                            ),
+                            new CombinedAuthzSliceWrap(
+                                new PingSlice(),
+                                authentication(),
+                                tokens.auth(),
+                                new OperationControl(
+                                    securityPolicy(),
+                                    new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                                )
+                            )
+                        ),
+                        // WS8 Bug B4: the repository root, also answered
+                        // directly from Pantera for the same reason as ping.
+                        new com.auto1.pantera.http.rt.RtRulePath(
+                            new com.auto1.pantera.http.rt.RtRule.All(
+                                com.auto1.pantera.http.rt.MethodRule.GET,
+                                new com.auto1.pantera.http.rt.RtRule.ByPath("^/?$")
+                            ),
+                            new CombinedAuthzSliceWrap(
+                                new RegistryInfoSlice(cfg.name()),
+                                authentication(),
+                                tokens.auth(),
+                                new OperationControl(
+                                    securityPolicy(),
+                                    new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                                )
                             )
                         ),
                         // All other operations - require JWT

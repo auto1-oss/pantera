@@ -17,6 +17,7 @@ import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.ClientBaseUrl;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.npm.PackageNameFromUrl;
@@ -27,6 +28,8 @@ import com.auto1.pantera.npm.misc.MetadataETag;
 import com.auto1.pantera.npm.misc.MetadataEnhancer;
 import javax.json.JsonObject;
 
+import java.net.MalformedURLException;
+import java.net.URI;
 import java.net.URL;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
@@ -97,7 +100,7 @@ public final class DownloadPackageSlice implements Slice {
                 // Use per-version layout - generate meta.json dynamically
                 return layout.generateMetaJson(packageKey)
                     .thenCompose(metaJson -> this.processMetadata(
-                        metaJson, abbreviated, clientETag
+                        metaJson, abbreviated, clientETag, headers
                     ));
             } else {
                 // Fall back to old layout - read existing meta.json
@@ -107,7 +110,7 @@ public final class DownloadPackageSlice implements Slice {
                         return this.storage.value(metaKey)
                             .thenCompose(Content::asJsonObjectFuture)
                             .thenCompose(metaJson -> this.processMetadata(
-                                metaJson, abbreviated, clientETag
+                                metaJson, abbreviated, clientETag, headers
                             ));
                     } else {
                         return CompletableFuture.completedFuture(
@@ -121,16 +124,18 @@ public final class DownloadPackageSlice implements Slice {
     
     /**
      * Process metadata: enhance, abbreviate if needed, calculate ETag, handle 304.
-     * 
+     *
      * @param metaJson Original metadata
      * @param abbreviated Whether to return abbreviated format
      * @param clientETag Client's ETag from If-None-Match header
+     * @param headers Request headers
      * @return Response with metadata or 304 Not Modified
      */
     private CompletableFuture<Response> processMetadata(
         final JsonObject metaJson,
         final boolean abbreviated,
-        final Optional<String> clientETag
+        final Optional<String> clientETag,
+        final Headers headers
     ) {
         // P1.1: Enhance metadata with time and users objects
         final JsonObject enhanced = new MetadataEnhancer(metaJson).enhance();
@@ -145,33 +150,66 @@ public final class DownloadPackageSlice implements Slice {
         
         // P0.2: Calculate ETag from JSON string (no extra buffering)
         final String etag = new MetadataETag(responseStr).calculate();
-        
+        final String vary = new ClientBaseUrl(headers).varyHeaderValue();
+
         // P0.2: Check if client has matching ETag (304 Not Modified)
         if (clientETag.isPresent() && clientETag.get().equals(etag)) {
             return CompletableFuture.completedFuture(
                 ResponseBuilder.from(com.auto1.pantera.http.RsStatus.NOT_MODIFIED)
                     .header("ETag", etag)
                     .header("Cache-Control", "public, max-age=300")
+                    .header("Vary", vary)
                     .build()
             );
         }
-        
+
+        // Root the served tarball URL at the base stamped by SliceByPath for
+        // the repository the client actually addressed (so a group member
+        // emits the GROUP's URLs, not its own configured url:), falling
+        // back to this repository's own base when nothing was stamped —
+        // the same precedence SingleVersionSlice#serve uses.
+        final String prefix = new ClientBaseUrl(headers).stamped()
+            .orElseGet(() -> this.base.toString());
         // Apply tarball URL rewriting and STREAM response (no buffering!)
         final Content content = new Content.From(responseStr.getBytes(StandardCharsets.UTF_8));
-        final Content rewritten = new Tarballs(content, this.base).value();
-        
+        final Content rewritten = new Tarballs(
+            content, DownloadPackageSlice.toBaseUrl(prefix, this.base)
+        ).value();
+
         // Return streaming response - memory usage: ~4KB instead of 200MB+
         return CompletableFuture.completedFuture(
             ResponseBuilder.ok()
-                .header("Content-Type", abbreviated 
+                .header("Content-Type", abbreviated
                     ? "application/vnd.npm.install-v1+json; charset=utf-8"
                     : "application/json; charset=utf-8")
                 .header("ETag", etag)
                 .header("Cache-Control", "public, max-age=300")
                 .header("CDN-Cache-Control", "public, max-age=600")
+                .header("Vary", vary)
                 .body(rewritten)  // STREAM IT - no asBytesFuture()!
                 .build()
         );
+    }
+
+    /**
+     * Parse the client-facing base prefix as a {@link URL} for {@link
+     * Tarballs}, which takes a {@link URL} rather than a {@link String}.
+     * Falls back to {@code fallback} on a malformed prefix — defensive
+     * only, since {@code SliceByPath} never stamps anything but a
+     * well-formed absolute URL.
+     *
+     * @param prefix Client-facing base prefix (stamped or configured)
+     * @param fallback This repository's configured base
+     * @return Parsed URL, or {@code fallback} if {@code prefix} is unparsable
+     */
+    private static URL toBaseUrl(final String prefix, final URL fallback) {
+        URL result;
+        try {
+            result = URI.create(prefix).toURL();
+        } catch (final IllegalArgumentException | MalformedURLException ex) {
+            result = fallback;
+        }
+        return result;
     }
     
     /**

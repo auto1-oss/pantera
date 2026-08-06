@@ -29,6 +29,8 @@ import com.auto1.pantera.npm.proxy.http.NpmProxySlice;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 import com.auto1.pantera.settings.repo.RepoConfig;
 
+import java.net.MalformedURLException;
+import java.net.URI;
 import java.net.URL;
 import java.util.Optional;
 import java.util.Queue;
@@ -65,7 +67,13 @@ public final class NpmProxyAdapter implements Slice {
         final CooldownMetadataService cooldownMetadata
     ) {
         final Optional<Storage> asto = cfg.storageOpt();
-        final Optional<URL> baseUrl = Optional.of(cfg.url());
+        // `url:` is optional for npm-proxy (unlike local npm -- see NpmSlice's
+        // consumers): every downstream consumer of baseUrl (NpmProxySlice,
+        // DownloadPackageSlice) already falls back to the client-facing base
+        // stamped by SliceByPath/ClientBaseUrl when this is empty. Only
+        // absence is tolerated here; a configured-but-malformed value still
+        // fails fast the same way RepoConfig#url() does.
+        final Optional<URL> baseUrl = cfg.urlOpt().map(NpmProxyAdapter::toUrl);
         
         // Support multiple remotes with GroupResolver (similar to maven-proxy).
         // Each remote gets its own NpmProxy + NpmProxySlice, evaluated in
@@ -153,5 +161,25 @@ public final class NpmProxyAdapter implements Slice {
         final Content body
     ) {
         return this.slice.response(line, headers, body);
+    }
+
+    /**
+     * Convert a configured {@code url:} string to a {@link URL}, mirroring
+     * {@code RepoConfig#url()}'s conversion and exception behaviour exactly
+     * -- the difference is only that this is called from inside {@code
+     * Optional#map}, so it never runs for an absent value in the first place.
+     *
+     * @param str Configured URL string
+     * @return Parsed URL
+     */
+    private static URL toUrl(final String str) {
+        try {
+            return URI.create(str).toURL();
+        } catch (final MalformedURLException ex) {
+            throw new IllegalArgumentException(
+                String.format("Failed to build URL from '%s'", str),
+                ex
+            );
+        }
     }
 }

@@ -43,6 +43,7 @@ Status · Depends-on · Blocks · Decision-gated
 | **WS5** | [Cooldown-cache coherence](WS5-cooldown-cache-coherence.md) | Correctness | — | 📝 DRAFT |
 | **WS6** | [Upstream efficiency & resolution availability](WS6-upstream-efficiency.md) | Efficiency | — | 📝 DRAFT |
 | **WS7** | [Observability](WS7-observability.md) | Cross-cutting (DoD) | Gates release | 📝 DRAFT |
+| **WS8** | [npm client conformance — corepack/yarn/npm](WS8-npm-client-conformance.md) | Correctness | Gates "drop-in npm registry" | 📝 DRAFT |
 
 WS4 is split into per-format sub-specs because most items are independent "a routed handler lies; make it truthful" tasks ideal for isolated coding agents. Each WS4-*.md covers that format's API-completeness + hosted-write correctness + its WS4a security item from `00`.
 
@@ -52,6 +53,7 @@ WS4 is split into per-format sub-specs because most items are independent "a rou
 2. **WS3** overlaps WS1's write path (both touch `ProxyCacheWriter`); sequence right after WS1's storage-writer lands.
 3. **WS4 / WS5 / WS6** are per-format and parallelizable once the storage/streaming primitives exist.
 4. **WS7** tracks every metric introduced by the above; it is a definition-of-done gate, not a trailing task.
+5. **WS8** depends on WS4-npm having landed; it is also the source of the **2.2.5 backport** (see WS8 §10).
 
 ## Release gate (whole 2.3.0)
 

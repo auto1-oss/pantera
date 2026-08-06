@@ -273,6 +273,15 @@ Token policy is also stored in the database (`auth_settings` table) and can be u
 | `api_token_max_expiry_days` | int | `90` | Maximum expiry days for user-generated API tokens |
 | `allow_permanent_tokens` | boolean | `false` | Whether users may generate non-expiring API tokens |
 
+#### Client-facing base URL settings (auth_settings table)
+
+Governs how [`ClientBaseUrl`](#22-local-repository) derives the absolute base URL Pantera emits (e.g. npm `dist.tarball`) for a repository with no explicit `url:`. DB-backed and hot-reloadable via `GET`/`PUT /api/v1/admin/client-base-url-settings` -- no restart, and a change broadcasts to every node in a cluster. Falls back to the env var, then the hardcoded default, when no DB row is present -- see [7.8](#78-miscellaneous) for the env-var fallback names.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `trust_forwarded_headers` | boolean | `false` | Honour `X-Forwarded-Proto`/`-Host`/`-Prefix`. Enable only when a fronting reverse proxy overwrites these on every inbound request -- they are otherwise client-suppliable. |
+| `client_base_host_allowlist` | string (comma-separated) | `` (empty) | `Host` header values permitted for derivation, matched case-insensitively including port. **Empty is PERMISSIVE**: any `Host` is honoured -- this is the default so upgrading an existing deployment never breaks it, but it means a client can steer emitted URLs at any host it supplies. A non-matching `Host` is treated exactly as an absent one (falls through to the repository's configured `url:` or the request's own further fallback), never emitted verbatim. Pantera logs a startup WARN (`event.action=client_base_host_allowlist_permissive`) while this stays empty. |
+
 ---
 
 ### 1.5 meta.metrics
@@ -777,9 +786,29 @@ A local repository stores artifacts directly in the configured storage backend.
 |-----|------|----------|---------|-------------|
 | `type` | string | Yes | -- | Repository type (see table above) |
 | `storage` | map | Yes | -- | Storage backend configuration |
-| `url` | string | No | -- | Public-facing URL (required by some types: npm, php, helm, nuget, conan, conda) |
+| `url` | string | No | -- | Client-facing base URL for this repository (see note below); still required for some types -- [2.5](#25-type-specific-settings) |
 | `port` | int | No | -- | Dedicated port (conan only) |
 | `settings` | map | No | -- | Type-specific settings |
+
+`url` is optional for most local repository types. When set, it is used
+verbatim as the client-facing base URL for absolute URLs this repository
+emits (e.g. npm `dist.tarball`). When unset, the base is derived from the
+inbound request instead -- scheme `http` and the `Host` header by default
+(subject to the `client_base_host_allowlist` admin setting), or
+`X-Forwarded-Proto`/`-Host`/`-Prefix` when the `trust_forwarded_headers`
+admin setting is enabled (see [7.8](#78-miscellaneous)). Both settings are
+DB-backed and hot-reloadable via the admin API/UI -- see [Client-facing base
+URL settings](#client-facing-base-url-settings-auth_settings-table) below.
+It remains hard-required for repository types whose adapter constructs absolute
+URLs without this derivation ([2.5](#25-type-specific-settings): `php`,
+`helm`, `nuget`, `conan`, `conda` -- and, for local `npm` specifically, its
+`.npmrc`-auth endpoint has not yet been migrated to the derivation path, so a
+**local** `npm` repository still needs `url:` configured regardless. Its
+full-packument and single-version endpoints additionally honour the
+client-base header a group stamps for the repository actually addressed
+([2.4](#24-group-repository)), but still fall back to this required `url:`
+-- never to `Host`-derivation -- when no header is stamped. `npm-proxy` and
+`npm-group` derive correctly and do not).
 
 ```yaml
 # File: maven.yaml
@@ -794,7 +823,7 @@ repo:
 # File: npm.yaml
 repo:
   type: npm
-  url: "http://pantera:8080/npm"
+  url: http://localhost:8081/test_prefix/api/npm/npm
   storage:
     type: fs
     path: /var/pantera/data
@@ -811,7 +840,7 @@ A proxy repository caches artifacts from one or more remote upstream servers.
 | `type` | string | Yes | -- | Must end in `-proxy` (e.g., `maven-proxy`) |
 | `storage` | map | Yes | -- | Local cache storage backend |
 | `remotes` | list | Yes | -- | Ordered list of upstream servers |
-| `url` | string | No | -- | Public-facing URL |
+| `url` | string | No | -- | Client-facing base URL for this repository -- same optionality and derivation as [2.2](#22-local-repository); proxy adapters that support the derivation (including `npm-proxy`) never hard-require it |
 | `path` | string | No | -- | URL path segment override |
 
 Each entry in `remotes`:
@@ -852,7 +881,6 @@ repo:
 # File: npm_proxy.yaml
 repo:
   type: npm-proxy
-  url: http://localhost:8081/npm_proxy
   path: npm_proxy
   remotes:
     - url: "https://registry.npmjs.org"
@@ -884,7 +912,13 @@ other groups). Requests are resolved against members in order; the first match w
 |-----|------|----------|---------|-------------|
 | `type` | string | Yes | -- | Must end in `-group` (e.g., `maven-group`) |
 | `members` | list | Yes | -- | Ordered list of member repository names |
-| `url` | string | No | -- | Public-facing URL (required by some types) |
+| `url` | string | No | -- | Client-facing base URL for the group itself -- same optionality and derivation as [2.2](#22-local-repository) |
+
+A group's members never contribute their own `url` (set or derived) to URLs
+emitted through the group. The client-facing base is stamped for the
+repository the client actually addressed -- the group -- before member
+resolution runs, so a group always emits URLs under its own `url` (or its
+own derived base) regardless of which member served the response.
 
 ```yaml
 # File: maven_group.yaml
@@ -1704,6 +1738,8 @@ a Java system property using the lowercase, dot-separated equivalent (e.g.,
 | `PANTERA_DIAGNOSTICS_DISABLED` | `false` | Set to `true` to disable blocked-thread diagnostics |
 | `PANTERA_INIT` | `false` | Set to `true` to initialize default example configs on first start |
 | `PANTERA_BUF_ACCUMULATOR_MAX_BYTES` | `104857600` (100 MB) | Maximum buffer size for HTTP header/multipart boundary parsing. Safety limit to prevent OOM from malformed requests. Not used for artifact streaming. |
+| `PANTERA_TRUST_FORWARDED_HEADERS` | `false` | **Fallback tier only** -- since 2.3.0 this is the DB-backed `trust_forwarded_headers` admin setting (see [Client-facing base URL settings](#client-facing-base-url-settings-auth_settings-table)); this env var is consulted only when no `auth_settings` row is present, and the key name is unchanged so an existing deployment's setting keeps working unmodified. Set to `true` only when a fronting reverse proxy overwrites `X-Forwarded-Proto`, `X-Forwarded-Host`, and `X-Forwarded-Prefix` on every inbound request. Controls whether `ClientBaseUrl` (used to build absolute URLs Pantera emits, e.g. npm `dist.tarball`) honours those client-suppliable headers. When `false`, the base URL is derived from `Host` alone (scheme `http`, subject to `client_base_host_allowlist` below) and `X-Forwarded-Prefix` is ignored entirely. **Interaction with `url:`:** setting an explicit `url:` on the addressed repository (see [2.2](#22-local-repository), [2.3](#23-proxy-repository)) overrides the derived base entirely, so a fixed, correctly-configured `url:` is the other -- and often simpler -- way to get correct absolute URLs behind a reverse proxy, without trusting any forwarded headers at all. |
+| `PANTERA_CLIENT_BASE_HOST_ALLOWLIST` | `` (empty) | **Fallback tier only**, mirrors the DB-backed `client_base_host_allowlist` admin setting -- see [Client-facing base URL settings](#client-facing-base-url-settings-auth_settings-table). Comma-separated `Host` values permitted for base-URL derivation. Empty is PERMISSIVE (any `Host` honoured); Pantera logs a startup WARN while it stays empty. |
 
 ---
 
