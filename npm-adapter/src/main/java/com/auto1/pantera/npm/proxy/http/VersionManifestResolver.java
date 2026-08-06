@@ -157,13 +157,16 @@ public final class VersionManifestResolver {
      * @param pkg Package name
      * @param ref Version string or dist-tag name
      * @param tarballPrefix Client-facing base for the tarball URL
+     * @param vary {@code Vary} header value for the response (see
+     *  {@code com.auto1.pantera.http.headers.ClientBaseUrl#varyHeaderValue()})
      * @param clientETag Client's If-None-Match value, if any
      * @param auditCtx Audit context captured before the async hop
      * @param owner Request owner
      * @return Response
+     * @checkstyle ParameterNumberCheck (5 lines)
      */
     CompletableFuture<Response> resolve(
-        final String pkg, final String ref, final String tarballPrefix,
+        final String pkg, final String ref, final String tarballPrefix, final String vary,
         final Optional<String> clientETag, final AuditContext auditCtx, final String owner
     ) {
         return this.packumentBytes(pkg).thenCompose(raw -> {
@@ -175,7 +178,7 @@ public final class VersionManifestResolver {
             } else if (this.cooldownMetadata == null || this.repoType == null) {
                 AuditLogger.resolution(auditCtx, this.repoType, this.repoName, pkg, owner, List.of());
                 result = CompletableFuture.completedFuture(
-                    this.emit(raw, pkg, ref, tarballPrefix, clientETag)
+                    this.emit(raw, pkg, ref, tarballPrefix, vary, clientETag)
                 );
             } else {
                 result = this.cooldownMetadata.filterMetadata(
@@ -185,7 +188,7 @@ public final class VersionManifestResolver {
                 ).handle((filtered, ex) -> {
                     final Response response;
                     if (ex == null) {
-                        response = this.emit(filtered, pkg, ref, tarballPrefix, clientETag);
+                        response = this.emit(filtered, pkg, ref, tarballPrefix, vary, clientETag);
                     } else if (VersionManifestResolver.allBlocked(ex, pkg)) {
                         response = VersionManifestResolver.notFound(pkg, ref);
                     } else {
@@ -197,7 +200,7 @@ public final class VersionManifestResolver {
                             .error(ex)
                             .field("log.source", "application")
                             .log();
-                        response = this.emit(raw, pkg, ref, tarballPrefix, clientETag);
+                        response = this.emit(raw, pkg, ref, tarballPrefix, vary, clientETag);
                     }
                     return response;
                 });
@@ -207,9 +210,7 @@ public final class VersionManifestResolver {
     }
 
     /**
-     * Fetch the raw upstream packument bytes for a package. Rx interop
-     * copied verbatim from {@code DownloadPackageSlice.resolveLatestFromRaw}
-     * (the shape shared with {@code serveLatestManifest}): concatenate the
+     * Fetch the raw upstream packument bytes for a package: concatenate the
      * content stream into a single byte array, then bridge the RxJava
      * {@code Maybe} to a {@code CompletableFuture}, defaulting to an empty
      * array (rather than never completing) when the package does not exist.
@@ -236,8 +237,7 @@ public final class VersionManifestResolver {
 
     /**
      * Walk the cause chain for {@link AllVersionsBlockedException}, logging
-     * the standard {@code all_versions_blocked} record on a hit (mirroring
-     * {@code DownloadPackageSlice.serveLatestManifest}, ":697-715").
+     * the standard {@code all_versions_blocked} record on a hit.
      *
      * @param ex Throwable raised by {@link CooldownMetadataService#filterMetadata}
      * @param pkg Package name, for the log record
@@ -271,12 +271,15 @@ public final class VersionManifestResolver {
      * @param pkg Package name
      * @param ref Version string or dist-tag name
      * @param tarballPrefix Client-facing base for the tarball URL
+     * @param vary {@code Vary} header value for the response (see
+     *  {@code com.auto1.pantera.http.headers.ClientBaseUrl#varyHeaderValue()})
      * @param clientETag Client's If-None-Match value, if any
      * @return Response
+     * @checkstyle ParameterNumberCheck (5 lines)
      */
     Response emit(
         final byte[] packumentBytes, final String pkg, final String ref,
-        final String tarballPrefix, final Optional<String> clientETag
+        final String tarballPrefix, final String vary, final Optional<String> clientETag
     ) {
         try {
             final ObjectMapper mapper = new ObjectMapper();
@@ -300,12 +303,14 @@ public final class VersionManifestResolver {
                     response = ResponseBuilder.from(RsStatus.NOT_MODIFIED)
                         .header("ETag", etag)
                         .header("Cache-Control", "public, max-age=300")
+                        .header("Vary", vary)
                         .build();
                 } else {
                     response = ResponseBuilder.ok()
                         .header("Content-Type", "application/json; charset=utf-8")
                         .header("ETag", etag)
                         .header("Cache-Control", "public, max-age=300")
+                        .header("Vary", vary)
                         .body(body)
                         .build();
                 }

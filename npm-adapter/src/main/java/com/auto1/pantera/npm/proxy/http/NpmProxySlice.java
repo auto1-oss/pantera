@@ -92,14 +92,19 @@ public final class NpmProxySlice implements Slice {
             // route existed for either endpoint.
             new RtRulePath(
                 new RtRule.All(
-                    MethodRule.GET,
+                    new RtRule.Any(MethodRule.GET, MethodRule.HEAD),
                     new RtRule.ByPath(NpmProxySlice.searchPattern(path))
                 ),
                 new LoggingSlice(new UpstreamPassthroughSlice(remote, "search"))
             ),
             new RtRulePath(
                 new RtRule.All(
-                    MethodRule.GET,
+                    // GET+HEAD (Minor 1 fix): the packument route below also
+                    // matches HEAD, and its pattern is broad enough to
+                    // swallow "<pkg>/dist-tags" as a bogus (pkg, ref) pair
+                    // if this route stayed GET-only -- HEAD would 404
+                    // instead of forwarding upstream.
+                    new RtRule.Any(MethodRule.GET, MethodRule.HEAD),
                     new RtRule.ByPath(NpmProxySlice.distTagsPattern(path))
                 ),
                 new LoggingSlice(new UpstreamPassthroughSlice(remote, "dist-tags"))

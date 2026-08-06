@@ -175,16 +175,19 @@ public final class SingleVersionSlice implements Slice {
         }
         final String responseBody = builder.build().toString();
         final String etag = new MetadataETag(responseBody).calculate();
+        final String vary = new ClientBaseUrl(headers).varyHeaderValue();
         if (clientETag.isPresent() && clientETag.get().equals(etag)) {
             return ResponseBuilder.from(RsStatus.NOT_MODIFIED)
                 .header("ETag", etag)
                 .header("Cache-Control", "public, max-age=300")
+                .header("Vary", vary)
                 .build();
         }
         return ResponseBuilder.ok()
             .header("Content-Type", "application/json; charset=utf-8")
             .header("ETag", etag)
             .header("Cache-Control", "public, max-age=300")
+            .header("Vary", vary)
             .jsonBody(responseBody)
             .build();
     }

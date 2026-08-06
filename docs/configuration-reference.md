@@ -790,9 +790,13 @@ or `X-Forwarded-Proto`/`-Host`/`-Prefix` when
 remains hard-required for repository types whose adapter constructs absolute
 URLs without this derivation ([2.5](#25-type-specific-settings): `php`,
 `helm`, `nuget`, `conan`, `conda` -- and, for local `npm` specifically, its
-`.npmrc`-auth and full-packument tarball-rewrite endpoints have not yet been
-migrated to the derivation path, so a **local** `npm` repository still needs
-`url:` configured. `npm-proxy` and `npm-group` derive correctly and do not).
+`.npmrc`-auth endpoint has not yet been migrated to the derivation path, so a
+**local** `npm` repository still needs `url:` configured regardless. Its
+full-packument and single-version endpoints additionally honour the
+client-base header a group stamps for the repository actually addressed
+([2.4](#24-group-repository)), but still fall back to this required `url:`
+-- never to `Host`-derivation -- when no header is stamped. `npm-proxy` and
+`npm-group` derive correctly and do not).
 
 ```yaml
 # File: maven.yaml

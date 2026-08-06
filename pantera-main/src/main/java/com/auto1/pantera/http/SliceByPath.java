@@ -16,6 +16,7 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.http.headers.ClientBaseUrl;
 import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.headers.InternalHeaderScrub;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.settings.PrefixesConfig;
 import com.auto1.pantera.settings.repo.RepoConfig;
@@ -111,7 +112,7 @@ final class SliceByPath implements Slice {
         final Headers headers, final Key key,
         final String originalPath, final String strippedPath
     ) {
-        final Headers scrubbed = SliceByPath.without(headers, ClientBaseUrl.HEADER);
+        final Headers scrubbed = new InternalHeaderScrub(headers).without(ClientBaseUrl.HEADER);
         final ClientBaseUrl base = new ClientBaseUrl(scrubbed);
         final Optional<String> value = this.configured(key)
             .or(() -> base.derive(
@@ -123,28 +124,6 @@ final class SliceByPath implements Slice {
             result = scrubbed.add(new Header(ClientBaseUrl.HEADER, value.get()));
         } else {
             result = scrubbed;
-        }
-        return result;
-    }
-
-    /**
-     * Remove every header named {@code name}, matched case-insensitively,
-     * returning an independent copy. {@link Headers#add(Header, boolean)}'s
-     * overwrite path compares names case-<em>sensitively</em>, so it cannot
-     * be used to neutralise a client-supplied header sent in a different
-     * case (e.g. {@code x-pantera-client-base}) — this does the comparison
-     * the safe way instead.
-     *
-     * @param headers Source headers
-     * @param name Header name to remove, any case
-     * @return A new {@link Headers} without any entry matching {@code name}
-     */
-    private static Headers without(final Headers headers, final String name) {
-        final Headers result = new Headers();
-        for (final Header header : headers) {
-            if (!header.getKey().equalsIgnoreCase(name)) {
-                result.add(header);
-            }
         }
         return result;
     }
