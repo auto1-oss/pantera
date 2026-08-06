@@ -185,15 +185,58 @@ Per repository mode — **local, proxy, group** — unless noted:
 
 ### Conformance matrix (WS8-npm.6 deliverable)
 
-Filled in by running each client; `?` means not yet exercised.
+Filled in by running each client against a live `2.3.0` stack (image built from this branch's HEAD) on 2026-08-06. Credentials: a locally-seeded admin user (`devadmin`), since the committed dev fixtures assume a pre-existing DB this fresh stack didn't have — full bootstrap steps are in the task execution report (`task-7-report.md`), not reproduced here since they are environment setup, not part of this spec's design. All results are from driving the **real, unmodified client binaries** (corepack 0.35.0 / npm 11.18.0 / pnpm 11.6.0 / yarn 1.22.22 + 4.13.0, all via the system Node 24.18.0 toolchain), not simulated requests.
 
 | Client | Endpoints exercised | local | proxy | group |
 |---|---|---|---|---|
-| corepack | `/<pkg>/<version>`, tarball | ? | ? | ? |
-| npm | packument (abbrev), tarball, `/-/v1/search`, audit | ? | ? | ? |
-| pnpm | packument (abbrev + `time`), tarball | ? | ? | ? |
-| yarn classic | packument, tarball | ? | ? | ? |
-| yarn berry | packument, tarball, checksum verify | ? | ? | ? |
+| corepack | `/<pkg>/<version>`, tarball | not exercised¹ | PASS | PASS |
+| npm | packument (abbrev), tarball, `/-/v1/search`, `/-/npm/v1/security/advisories/bulk`, `/-/package/:pkg/dist-tags` | PASS | PASS | PASS |
+| pnpm | packument (abbrev + `time`), tarball | PASS | PASS | PASS |
+| yarn classic | packument, tarball | PASS | PASS | PASS |
+| yarn berry | packument, tarball, checksum verify | PASS | PASS | PASS |
+
+All cells above are genuine PASS results from a running client against a running server, not inferred from code. No failures were found — the two mechanisms this spec set out to verify held under every real client tried.
+
+¹ **corepack / local — not exercised.** Corepack resolves package-manager tool versions (`pnpm`, `yarn`, `npm` itself); nobody hosts those tools in a hosted/local repository in practice, so there is no realistic scenario to drive. The underlying mechanism (`SingleVersionSlice` + group-base rewriting for a `local`-mode group member) *was* exercised indirectly: the task report publishes a throwaway package to the `npm` local repo and resolves it through `npm_group` (whose first member is `npm`), and the returned `dist.tarball` is correctly rooted at the group base rather than the local member's own configured `url:`. That is the same rewriting path a local-hosted corepack scenario would exercise.
+
+**Headline reproduction (the reported bug), against this branch's HEAD:**
+
+```
+$ curl -sS -u devadmin:devadminpass \
+    http://localhost:8088/test_prefix/api/npm/npm_group/pnpm/11.5.1 | jq '{name, version, tarball: .dist.tarball}'
+{
+  "name": "pnpm",
+  "version": "11.5.1",
+  "tarball": "http://localhost:8088/test_prefix/api/npm/npm_group/pnpm/-/pnpm-11.5.1.tgz"
+}
+```
+
+Before this branch (2.2.4): `{"name":"pnpm","modified":"<now>"}` — no `dist`, no `version`. Confirmed fixed against both `npm_group` and `npm_proxy` directly; `/latest` also confirmed no longer leaking a `registry.npmjs.org` tarball URL (§2.D). Full command transcript in the task report.
+
+**Real corepack, the actual regression scenario:**
+
+```
+$ COREPACK_NPM_REGISTRY=http://localhost:8088/test_prefix/api/npm/npm_group \
+  COREPACK_NPM_TOKEN=<pantera-issued-jwt> corepack use pnpm@11.5.1
+Installing pnpm@11.5.1 in the project...
+
+Already up to date
+
+Done in 269ms using pnpm v11.5.1
+$ pnpm --version
+11.5.1
+```
+
+Identical result against `npm_proxy`. `package.json` after the run carries a full integrity hash (`packageManager": "pnpm@11.5.1+sha512.93f7b57..."`), proving the tarball was actually downloaded and its checksum verified by corepack — not merely that the metadata request returned 200.
+
+**Spoofing check (CHANGELOG's security claim for this branch):** sending `X-Pantera-Client-Base: http://evil.example.com/fake` and `X-Original-Path: /fake/path` as inbound client headers had no effect on the emitted tarball URL — confirmed both are stripped/overridden at the edge, not client-controllable.
+
+**Forwarded-header trust:** the shipped `ClientBaseUrl` gates `X-Forwarded-Proto`/`-Host`/`-Prefix` behind `PANTERA_TRUST_FORWARDED_HEADERS` (default `false`, undocumented in this spec's §3 but present in `docs/configuration-reference.md` and `docs/admin-guide/environment-variables.md` and called out in `CHANGELOG.md`). With it set to `true`, forwarded headers were honoured correctly: a request with `X-Forwarded-Proto: https`, `X-Forwarded-Host: registry.example.com`, `X-Forwarded-Prefix: /artifactory` against `npm_group` produced `tarball: "https://registry.example.com/artifactory/test_prefix/api/npm/npm_group/pnpm/-/pnpm-11.5.1.tgz"`.
+
+**Not exercised (environmental, not scope-related):**
+- Cooldown-blocked version → 404 on the single-version endpoint (AC4): cooldown is disabled by default in the dev-stack fixture (`meta.cooldown.enabled: false`), and enabling it plus aging a package past the minimum-allowed-age window was disproportionate setup for this sweep. Covered by `VersionManifestResolverTest` per §6's unit-test requirements — not independently re-verified here against a live server.
+- Integration test suite (`-Pitcase`, corepack client image) — not run; no `test_images/` corepack image exists yet (§10's own note: "flag CI feasibility as part of WS8-npm.6"). A corepack image for `-Pitcase` remains a gap; this sweep used the host's real Node/corepack toolchain instead, which is the reason its results are trustworthy but not CI-automatable yet.
+- Docker-image-based client runs: not needed — corepack, npm, pnpm, and yarn (classic + berry) were all natively available via the host's nvm-managed Node 24.18.0, so no `docker run node:22 ...` fallback was used.
 
 ---
 
