@@ -38,6 +38,11 @@
 - **npm proxy/group `404`s for an unresolved package version carry an honest JSON body** (`{"error":"version not found: ...","package":"..."}`) instead of an empty one, matching local repositories.
   ([@aydasraf](https://github.com/aydasraf))
 
+- **A `HEAD` probe against any group repository can no longer poison the negative cache for every subsequent `GET`** — `GroupResolver`, the shared resolution path for every group type (Maven, npm, PyPI, Docker, Composer, Go, Gem, generic files), wrote a negative-cache entry off a member's `404` regardless of request method; only a `GET`'s `404` is now trusted, closing the same class of bug already fixed for the npm proxy above.
+  ([@aydasraf](https://github.com/aydasraf))
+- **`PANTERA_UPSTREAM_BREAKER_*` env vars are no longer silently shadowed by the migration that seeds their defaults, and are honoured on DB-less boots too** — V136 unconditionally wrote `upstream_breaker_*` rows into `auth_settings`, so the DB row was always present and an operator's env vars were ignored from the moment they upgraded; a follow-up migration removes only the rows still holding their untouched default (an admin's own customised value is left alone), and `UpstreamBreakerSettingsLoader` now installs unconditionally at boot like every other DB→env→default settings loader.
+  ([@aydasraf](https://github.com/aydasraf))
+
 ### 🔒 Security
 
 - **npm registry keys and user/token records are never served over HTTP** — a reserved-key guard `404`s `.registry-keys.json`, `_users/`, and `_tokens/` ahead of any content route, so the registry's ECDSA signing key and user/token records can't be fetched.

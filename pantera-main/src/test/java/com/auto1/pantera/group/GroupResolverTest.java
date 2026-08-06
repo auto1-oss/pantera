@@ -513,6 +513,84 @@ final class GroupResolverTest {
             "Negative cache must be populated");
     }
 
+    // ---- WS8 Bug 2: a HEAD probe must never poison the negative cache ----
+
+    @Test
+    void headProbe_noProxyMembers_doesNotNegativeCache_andFollowingGetStillQueries() {
+        // Counterpart to noProxyMembers_indexMiss_returns404 above, driven by
+        // HEAD instead of GET. A HEAD probe (health check, scanner, routine
+        // existence check) hitting the same no-proxy-members dead end must
+        // NOT write a negative-cache entry -- only a GET's 404 is trusted.
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of())); // miss
+        final NegativeCache negCache = buildNegativeCache();
+        final GroupResolver resolver = buildResolver(
+            idx,
+            List.of(HOSTED),
+            Collections.emptySet(), // no proxy members
+            negCache,
+            Map.of(HOSTED, okSlice())
+        );
+
+        final Response headResp = resolver.response(
+            new RequestLine("HEAD", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        assertEquals(404, headResp.status().code(),
+            "HEAD with no proxy members must still return 404");
+        final com.auto1.pantera.http.cache.NegativeCacheKey negKey =
+            new com.auto1.pantera.http.cache.NegativeCacheKey(GROUP, REPO_TYPE, PARSED_NAME, PARSED_VERSION);
+        assertFalse(negCache.isKnown404(negKey),
+            "A HEAD probe 404 must NOT negative-cache");
+
+        // A following GET must re-query rather than short-circuit off a
+        // negative-cache entry the HEAD probe should never have written --
+        // negativeCacheHit_returns404WithoutDbQuery above proves a poisoned
+        // cache skips the index query entirely, so this is the direct
+        // counter-proof that the HEAD did not poison it.
+        final int callsBeforeGet = idx.locateByNameCalls.size();
+        final Response getResp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        assertEquals(404, getResp.status().code(),
+            "GET with no proxy members still returns 404 -- there is nothing to serve it");
+        assertTrue(idx.locateByNameCalls.size() > callsBeforeGet,
+            "The GET must re-query the index, proving it was not short-circuited "
+                + "by a HEAD-poisoned negative cache");
+    }
+
+    @Test
+    void headProbe_allMembers404_doesNotNegativeCache_andFollowingGetSucceeds() {
+        // Counterpart to indexMiss_allProxy404_negCachePopulated below, driven
+        // by HEAD. All proxy members answer 404 to the HEAD probe; the group
+        // must still answer 404 but must NOT negative-cache it. A following
+        // GET for the same coordinate, now that the artifact has actually been
+        // published, must succeed -- proving the HEAD never shadowed the GET.
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of())); // miss
+        final NegativeCache negCache = buildNegativeCache();
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, notFoundThenOkSlice());
+
+        final GroupResolver resolver = buildResolver(
+            idx, List.of(PROXY_A), Set.of(PROXY_A), negCache, slices
+        );
+
+        final Response headResp = resolver.response(
+            new RequestLine("HEAD", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        assertEquals(404, headResp.status().code(),
+            "HEAD against a not-yet-published artifact must return 404");
+        final com.auto1.pantera.http.cache.NegativeCacheKey negKey =
+            new com.auto1.pantera.http.cache.NegativeCacheKey(GROUP, REPO_TYPE, PARSED_NAME, PARSED_VERSION);
+        assertFalse(negCache.isKnown404(negKey),
+            "A HEAD-driven all-proxies-404 must NOT negative-cache");
+
+        final Response getResp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        assertEquals(200, getResp.status().code(),
+            "A following GET for the now-published artifact must succeed, "
+                + "not be shadowed by a HEAD-poisoned negative cache");
+    }
+
     // ---- Index hit + member 5xx: returns StorageUnavailable 500 ----
 
     @Test
@@ -946,6 +1024,21 @@ final class GroupResolverTest {
                 ResponseBuilder.notFound()
                     .header(com.auto1.pantera.http.cache.NegativeCache.SKIP_HEADER, "true")
                     .build());
+    }
+
+    /**
+     * A member that answers NOT_FOUND on its first invocation and OK on
+     * every one after -- simulates an artifact that genuinely did not
+     * exist when a HEAD probe checked, then was published before a
+     * following GET arrived (WS8 Bug 2 regression coverage).
+     */
+    private static Slice notFoundThenOkSlice() {
+        final AtomicInteger calls = new AtomicInteger(0);
+        return (line, headers, body) -> CompletableFuture.completedFuture(
+            calls.getAndIncrement() == 0
+                ? ResponseBuilder.notFound().build()
+                : ResponseBuilder.ok().build()
+        );
     }
 
     private static Slice staticSlice(final RsStatus status) {

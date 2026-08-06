@@ -15,6 +15,7 @@ import com.auto1.pantera.http.client.circuitbreaker.CircuitBreakerConfig;
 
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
@@ -31,6 +32,14 @@ import java.util.function.Supplier;
  * {@code auth_settings}) → env var ({@code PANTERA_UPSTREAM_BREAKER_*})
  * → hardcoded {@link CircuitBreakerConfig#defaults()}. Trip predicates
  * are not configurable — only the numeric gate/backoff knobs.</p>
+ *
+ * <p>{@code VertxMain} calls {@link #install(AuthSettingsDao)} at boot
+ * UNCONDITIONALLY, passing {@code null} when no shared {@code DataSource}
+ * is configured (a documented, supported single-instance mode) — mirroring
+ * {@code ClientBaseUrlSettingsLoader}. A {@code null} DAO is not a special
+ * case in {@link #load()}: {@code resolveDouble}/{@code resolveInt} treat a
+ * {@code null} DAO and a DAO whose {@link AuthSettingsDao#get} returns
+ * empty identically — both fall through to the env tier.</p>
  *
  * @since 2.2.0
  */
@@ -52,10 +61,28 @@ public final class UpstreamBreakerSettingsLoader implements Supplier<CircuitBrea
     private static volatile UpstreamBreakerSettingsLoader installed;
 
     /**
-     * Install a shared loader backed by the given DAO. Idempotent.
+     * Install a shared loader backed by the given DAO — {@code dao} may be
+     * {@code null} (DB-less boot; see class Javadoc). Idempotent.
+     * @param dao Auth settings DAO, or {@code null} when no shared
+     *  {@code DataSource} is configured
      */
     public static synchronized void install(final AuthSettingsDao dao) {
-        installed = new UpstreamBreakerSettingsLoader(dao);
+        UpstreamBreakerSettingsLoader.install(dao, System::getenv);
+    }
+
+    /**
+     * Test seam: install with an injectable env-var lookup so a resolved
+     * env value can be asserted without touching the real process
+     * environment. Production callers always go through
+     * {@link #install(AuthSettingsDao)}.
+     * @param dao Auth settings DAO, or {@code null}
+     * @param envLookup Env-var lookup, keyed by the fully-prefixed name
+     *  (e.g. {@code System::getenv})
+     */
+    static synchronized void install(
+        final AuthSettingsDao dao, final Function<String, String> envLookup
+    ) {
+        installed = new UpstreamBreakerSettingsLoader(dao, envLookup);
     }
 
     /** Clear the installed loader (tests, shutdown). */
@@ -81,10 +108,31 @@ public final class UpstreamBreakerSettingsLoader implements Supplier<CircuitBrea
     }
 
     private final AuthSettingsDao dao;
+
+    private final Function<String, String> envLookup;
+
     private final AtomicReference<CircuitBreakerConfig> cached = new AtomicReference<>();
 
+    /**
+     * Public ctor: real env lookup. Delegates to the field-initializing ctor.
+     * @param dao Auth settings DAO, or {@code null} for a DB-less boot
+     */
     public UpstreamBreakerSettingsLoader(final AuthSettingsDao dao) {
+        this(dao, System::getenv);
+    }
+
+    /**
+     * The single field-initializing constructor; {@link
+     * #UpstreamBreakerSettingsLoader(AuthSettingsDao)} delegates here via
+     * {@code this(...)}. Package-private: the env-lookup seam exists so
+     * tests can assert env-tier resolution deterministically, without
+     * touching the real process environment.
+     * @param dao Auth settings DAO, or {@code null} for a DB-less boot
+     * @param envLookup Env-var lookup, keyed by the fully-prefixed name
+     */
+    UpstreamBreakerSettingsLoader(final AuthSettingsDao dao, final Function<String, String> envLookup) {
         this.dao = dao;
+        this.envLookup = envLookup;
     }
 
     /** Current cached settings, loading from DB on first call. */
@@ -145,7 +193,7 @@ public final class UpstreamBreakerSettingsLoader implements Supplier<CircuitBrea
                 // fall through to env / default
             }
         }
-        final String env = System.getenv(ENV_PREFIX + key.toUpperCase(java.util.Locale.ROOT));
+        final String env = this.envLookup.apply(ENV_PREFIX + key.toUpperCase(java.util.Locale.ROOT));
         if (env != null) {
             try {
                 return Double.parseDouble(env);
@@ -163,7 +211,7 @@ public final class UpstreamBreakerSettingsLoader implements Supplier<CircuitBrea
                 return value;
             }
         }
-        final String env = System.getenv(ENV_PREFIX + key.toUpperCase(java.util.Locale.ROOT));
+        final String env = this.envLookup.apply(ENV_PREFIX + key.toUpperCase(java.util.Locale.ROOT));
         if (env != null) {
             try {
                 return Integer.parseInt(env);
