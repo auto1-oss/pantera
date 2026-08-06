@@ -189,6 +189,14 @@ public final class VersionManifestResolver {
                     } else if (VersionManifestResolver.allBlocked(ex, pkg)) {
                         response = VersionManifestResolver.notFound(pkg, ref);
                     } else {
+                        EcsLogger.warn("com.auto1.pantera.npm")
+                            .message("Cooldown filter error (version resolver) - falling back to unfiltered")
+                            .eventCategory("database")
+                            .eventAction("filter_error")
+                            .field("package.name", pkg)
+                            .error(ex)
+                            .field("log.source", "application")
+                            .log();
                         response = this.emit(raw, pkg, ref, tarballPrefix, clientETag);
                     }
                     return response;
