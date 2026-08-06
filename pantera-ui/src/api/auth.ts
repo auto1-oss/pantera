@@ -166,6 +166,35 @@ export async function updateUpstreamBreakerSettings(
   await getApiClient().put('/admin/upstream-breaker-settings', settings)
 }
 
+// --- Client-Facing Base URL Settings ---
+
+/**
+ * Shape of the 2 tunables returned by GET /admin/client-base-url-settings.
+ * These govern `ClientBaseUrl` (pantera-core) — the absolute-URL derivation
+ * used for links Pantera emits (e.g. npm `dist.tarball`) when a repository
+ * has no explicit `url:` configured. `client_base_host_allowlist` is a
+ * comma-joined string of allowed `Host` values; an empty string is
+ * PERMISSIVE (any `Host` is honoured — the default, matching pre-existing
+ * behaviour so upgrading never breaks a deployment).
+ */
+export interface ClientBaseUrlSettings {
+  trust_forwarded_headers: string
+  client_base_host_allowlist: string
+}
+
+export async function getClientBaseUrlSettings(): Promise<ClientBaseUrlSettings> {
+  const { data } = await getApiClient().get<ClientBaseUrlSettings>(
+    '/admin/client-base-url-settings',
+  )
+  return data
+}
+
+export async function updateClientBaseUrlSettings(
+  settings: Partial<ClientBaseUrlSettings>,
+): Promise<void> {
+  await getApiClient().put('/admin/client-base-url-settings', settings)
+}
+
 export async function revokeAllUserTokens(username: string): Promise<{ revoked_count: number }> {
   const { data } = await getApiClient().post<{ revoked_count: number }>(
     `/admin/revoke-user/${username}`

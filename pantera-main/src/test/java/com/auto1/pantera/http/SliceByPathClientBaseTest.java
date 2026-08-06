@@ -16,6 +16,8 @@ import com.auto1.pantera.RepositorySlices;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.http.headers.ClientBaseUrl;
+import com.auto1.pantera.http.headers.ClientBaseUrlSettings;
+import com.auto1.pantera.http.headers.ClientBaseUrlSettingsRegistry;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.settings.PrefixesConfig;
@@ -26,6 +28,9 @@ import com.auto1.pantera.test.TestSettings;
 import com.auto1.pantera.test.TestStoragesCache;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
+import org.hamcrest.core.IsNot;
+import org.hamcrest.core.StringContains;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
@@ -39,6 +44,11 @@ import java.util.concurrent.CompletableFuture;
  * headers it forwards to the resolved repository slice.
  */
 final class SliceByPathClientBaseTest {
+
+    @AfterEach
+    void tearDown() {
+        ClientBaseUrlSettingsRegistry.uninstall();
+    }
 
     @Test
     void stampsApiRouteBaseFromOriginalPath() {
@@ -138,6 +148,40 @@ final class SliceByPathClientBaseTest {
     }
 
     /**
+     * The security scenario a host allowlist exists to close: {@code curl -H
+     * 'Host: evil.tld' <repo>/pnpm} against a repository with no configured
+     * {@code url:} (like {@code npm_group} here). Without an allowlist this
+     * derives {@code http://evil.tld/...} and {@code SliceByPath} stamps it
+     * verbatim — cached, and pointed at a host the attacker chose. With a
+     * non-matching allowlist configured, the disallowed {@code Host} must
+     * never appear in the derived base.
+     */
+    @Test
+    void hostNotOnTheConfiguredAllowlistIsNeverStampedIntoTheBase() {
+        ClientBaseUrlSettingsRegistry.install(
+            () -> new ClientBaseUrlSettings(false, List.of("reg.example.com"))
+        );
+        final Optional<String> stamped = this.observedBase(
+            "/test_prefix/npm_group/pnpm", Optional.empty(), "evil.tld"
+        );
+        MatcherAssert.assertThat(
+            "the attacker-chosen Host must never be reflected into the stamped base",
+            stamped.orElse(""), new IsNot<>(new StringContains("evil.tld"))
+        );
+    }
+
+    @Test
+    void hostOnTheConfiguredAllowlistIsStampedNormally() {
+        ClientBaseUrlSettingsRegistry.install(
+            () -> new ClientBaseUrlSettings(false, List.of("reg.example.com"))
+        );
+        MatcherAssert.assertThat(
+            this.observedBase("/test_prefix/npm_group/pnpm", Optional.empty(), "reg.example.com"),
+            new IsEqual<>(Optional.of("http://reg.example.com/test_prefix/npm_group"))
+        );
+    }
+
+    /**
      * Drive {@link SliceByPath} with the given request path and an optional
      * pre-rewrite {@code X-Original-Path} header, returning the base the
      * downstream slice observed.
@@ -147,7 +191,23 @@ final class SliceByPathClientBaseTest {
      * @return Stamped base, if present
      */
     private Optional<String> observedBase(final String path, final Optional<String> originalPath) {
-        final Headers headers = new Headers().add("Host", "reg.example.com");
+        return this.observedBase(path, originalPath, "reg.example.com");
+    }
+
+    /**
+     * Same as {@link #observedBase(String, Optional)} with an explicit
+     * {@code Host} value, for allowlist scenarios where the default
+     * {@code reg.example.com} would not exercise the interesting case.
+     *
+     * @param path Request path
+     * @param originalPath Pre-rewrite client path, if any
+     * @param host {@code Host} header value to send
+     * @return Stamped base, if present
+     */
+    private Optional<String> observedBase(
+        final String path, final Optional<String> originalPath, final String host
+    ) {
+        final Headers headers = new Headers().add("Host", host);
         originalPath.ifPresent(value -> headers.add(ClientBaseUrl.ORIGINAL_PATH, value));
         return this.invoke(path, headers);
     }

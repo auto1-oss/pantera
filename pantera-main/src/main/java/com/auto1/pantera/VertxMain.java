@@ -390,6 +390,36 @@ public final class VertxMain {
                 new com.auto1.pantera.db.dao.AuthSettingsDao(ds)
             )
         );
+        // WS8 fixwave-b (2.3.0): install the client-base URL derivation
+        // settings (trust_forwarded_headers, client_base_host_allowlist)
+        // consumed by pantera-core's ClientBaseUrl. install(...) also feeds
+        // pantera-core's ClientBaseUrlSettingsRegistry — see that loader's
+        // Javadoc for why this crosses the module boundary this way.
+        sharedDs.ifPresent(ds ->
+            com.auto1.pantera.http.headers.ClientBaseUrlSettingsLoader.install(
+                new com.auto1.pantera.db.dao.AuthSettingsDao(ds)
+            )
+        );
+        // Fail LOUD, not closed: an empty/unset host allowlist is
+        // permissive by design (upgrading an existing deployment must not
+        // suddenly reject every Host), but that posture is worth an
+        // operator's attention at every boot, DB-backed or not — evaluated
+        // unconditionally, not only inside the sharedDs branch above.
+        if (com.auto1.pantera.http.headers.ClientBaseUrlSettingsLoader.activeSupplier()
+            .get().hostAllowlist().isEmpty()) {
+            EcsLogger.warn("com.auto1.pantera")
+                .message("client_base_host_allowlist is empty — the Host header is trusted "
+                    + "unconditionally to derive client-facing base URLs Pantera emits (e.g. "
+                    + "npm dist.tarball) for any repository without an explicit url:. Configure "
+                    + "client_base_host_allowlist (PUT /api/v1/admin/client-base-url-settings) "
+                    + "or PANTERA_CLIENT_BASE_HOST_ALLOWLIST to restrict which Host values are "
+                    + "honoured.")
+                .eventCategory("configuration")
+                .eventAction("client_base_host_allowlist_permissive")
+                .eventOutcome("success")
+                .field("log.source", "application")
+                .log();
+        }
         // WS4-maven.1: install the JDBC-backed PGP keyring store so any repo
         // with `verifyPgp: true` (parsed by RepositorySlices below) consults
         // admin-uploaded trusted keys. DB-less boots (tests, embedded) never
@@ -424,6 +454,16 @@ public final class VertxMain {
                 key -> {
                     final com.auto1.pantera.circuit.UpstreamBreakerSettingsLoader loader =
                         com.auto1.pantera.circuit.UpstreamBreakerSettingsLoader.installed();
+                    if (loader != null) {
+                        loader.invalidate();
+                    }
+                }
+            );
+            pubSub.subscribe(
+                com.auto1.pantera.http.headers.ClientBaseUrlSettingsLoader.BROADCAST_CHANNEL,
+                key -> {
+                    final com.auto1.pantera.http.headers.ClientBaseUrlSettingsLoader loader =
+                        com.auto1.pantera.http.headers.ClientBaseUrlSettingsLoader.installed();
                     if (loader != null) {
                         loader.invalidate();
                     }

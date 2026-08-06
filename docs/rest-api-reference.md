@@ -2329,6 +2329,75 @@ curl -X PUT http://localhost:8086/api/v1/admin/auth-settings \
 
 ---
 
+### GET /api/v1/admin/client-base-url-settings
+
+Retrieve the current client-facing base URL derivation settings — governs how `ClientBaseUrl` (pantera-core) builds absolute URLs Pantera emits (e.g. npm `dist.tarball`) for a repository with no explicit `url:` configured.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin`
+
+**Response (200):**
+
+```json
+{
+  "trust_forwarded_headers": "false",
+  "client_base_host_allowlist": ""
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `trust_forwarded_headers` | string (`"true"`/`"false"`) | Whether `X-Forwarded-Proto`/`-Host`/`-Prefix` are honoured. Default `"false"`. |
+| `client_base_host_allowlist` | string (comma-separated) | `Host` header values permitted for base-URL derivation. Empty string is PERMISSIVE — any `Host` is honoured (the default). |
+
+**curl example:**
+
+```bash
+curl http://localhost:8086/api/v1/admin/client-base-url-settings \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+---
+
+### PUT /api/v1/admin/client-base-url-settings
+
+Update the client-facing base URL derivation settings. Both fields are optional — partial updates are accepted; omitted fields retain their current values. Values are validated (round-tripped through the settings record) before anything is written; an invalid `trust_forwarded_headers` (anything other than `"true"`/`"false"`) is rejected with `400` and nothing is persisted. Takes effect on the very next request — every `ClientBaseUrl` reads the current settings on construction, no restart required; in a cluster, the change is broadcast to every node.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin`
+
+**Request Body:**
+
+```json
+{
+  "trust_forwarded_headers": "false",
+  "client_base_host_allowlist": "registry.example.com,registry.example.com:8443"
+}
+```
+
+**Response (204):** No content.
+
+**Response (400):**
+
+```json
+{
+  "error": "BAD_REQUEST",
+  "message": "trust_forwarded_headers must be \"true\" or \"false\"",
+  "status": 400
+}
+```
+
+**curl example:**
+
+```bash
+curl -X PUT http://localhost:8086/api/v1/admin/client-base-url-settings \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"client_base_host_allowlist": "registry.example.com"}'
+```
+
+---
+
 ### POST /api/v1/admin/revoke-user/:username
 
 Immediately revoke all tokens (access, refresh, and API) for the specified user. The revocation is written to the `revocation_blocklist` table (the durable source of truth on every node) and, when Valkey is available, propagated to all cluster nodes via Valkey pub/sub for sub-second fan-out; every node — with or without Valkey — also reconciles against the DB on a throttled 5-second poll, and a node that boots after the revocation hydrates it immediately, so a restart or a missed pub/sub message never re-honors a revoked token.
