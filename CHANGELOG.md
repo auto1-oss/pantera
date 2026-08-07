@@ -43,6 +43,9 @@
 - **`PANTERA_UPSTREAM_BREAKER_*` env vars are no longer silently shadowed by the migration that seeds their defaults, and are honoured on DB-less boots too** — V136 unconditionally wrote `upstream_breaker_*` rows into `auth_settings`, so the DB row was always present and an operator's env vars were ignored from the moment they upgraded; a follow-up migration removes only the rows still holding their untouched default (an admin's own customised value is left alone), and `UpstreamBreakerSettingsLoader` now installs unconditionally at boot like every other DB→env→default settings loader.
   ([@aydasraf](https://github.com/aydasraf))
 
+- **`PANTERA_CIRCUIT_BREAKER_*` env vars (the group-member breaker) are no longer silently shadowed by the migration that seeds their defaults, and are honoured on DB-less boots too** — the same V136 bug, but for V122's `circuit_breaker_*` rows: a follow-up migration removes only the rows still holding their untouched default, and `CircuitBreakerSettingsLoader` now installs unconditionally at boot instead of only when a shared `DataSource` is configured.
+  ([@aydasraf](https://github.com/aydasraf))
+
 ### 🔒 Security
 
 - **npm registry keys and user/token records are never served over HTTP** — a reserved-key guard `404`s `.registry-keys.json`, `_users/`, and `_tokens/` ahead of any content route, so the registry's ECDSA signing key and user/token records can't be fetched.

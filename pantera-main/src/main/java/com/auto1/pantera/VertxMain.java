@@ -344,13 +344,20 @@ public final class VertxMain {
         // Install the circuit-breaker settings loader BEFORE constructing
         // RepositorySlices so the default-constructor activeSupplier()
         // picks up the DB-backed loader rather than pure hardcoded
-        // defaults. When no DataSource is present (tests, DB-less boot)
-        // RepositorySlices falls back to AutoBlockSettings::defaults
-        // automatically via activeSupplier().
-        sharedDs.ifPresent(ds ->
-            com.auto1.pantera.circuit.CircuitBreakerSettingsLoader.install(
-                new com.auto1.pantera.db.dao.AuthSettingsDao(ds)
-            )
+        // defaults.
+        //
+        // WS8 fixwave-g (2.3.0): installed UNCONDITIONALLY -- dao is null
+        // when sharedDs is absent -- no longer gated behind
+        // sharedDs.ifPresent. Each field resolves DB row -> env var ->
+        // hardcoded default, and a DB-less boot (a documented, supported
+        // mode) must keep resolving PANTERA_CIRCUIT_BREAKER_* exactly as a
+        // DB-backed boot with an absent row would. Gating this behind
+        // sharedDs silently dropped every PANTERA_CIRCUIT_BREAKER_* env var
+        // for a DB-less deployment -- the same regression already fixed for
+        // UpstreamBreakerSettingsLoader and ClientBaseUrlSettingsLoader
+        // below.
+        com.auto1.pantera.circuit.CircuitBreakerSettingsLoader.install(
+            sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
         );
         // Same lifecycle for the OUTBOUND http-client breaker settings
         // (upstream_breaker_* keys) — distinct from the group-member
@@ -359,9 +366,9 @@ public final class VertxMain {
         //
         // WS8 fixwave-f (2.3.0): installed UNCONDITIONALLY -- dao is null
         // when sharedDs is absent -- not gated behind sharedDs.ifPresent
-        // like the group-member breaker above. Each field resolves DB row
-        // -> env var -> hardcoded default, and a DB-less boot (a
-        // documented, supported mode) must keep resolving
+        // like the group-member breaker above used to be. Each field
+        // resolves DB row -> env var -> hardcoded default, and a DB-less
+        // boot (a documented, supported mode) must keep resolving
         // PANTERA_UPSTREAM_BREAKER_* exactly as a DB-backed boot with an
         // absent row would. Gating this behind sharedDs would silently
         // drop every PANTERA_UPSTREAM_BREAKER_* env var for a DB-less
