@@ -169,17 +169,23 @@ export async function updateUpstreamBreakerSettings(
 // --- Client-Facing Base URL Settings ---
 
 /**
- * Shape of the 2 tunables returned by GET /admin/client-base-url-settings.
+ * Shape of the 3 tunables returned by GET /admin/client-base-url-settings.
  * These govern `ClientBaseUrl` (pantera-core) — the absolute-URL derivation
  * used for links Pantera emits (e.g. npm `dist.tarball`) when a repository
  * has no explicit `url:` configured. `client_base_host_allowlist` is a
  * comma-joined string of allowed `Host` values; an empty string is
  * PERMISSIVE (any `Host` is honoured — the default, matching pre-existing
- * behaviour so upgrading never breaks a deployment).
+ * behaviour so upgrading never breaks a deployment). `client_base_url` is
+ * the canonical origin (+ optional path prefix, e.g.
+ * `https://reg.example.com/artifactory`); when non-empty it is ENFORCED for
+ * every repository without an explicit `url:` — `trust_forwarded_headers`
+ * and `client_base_host_allowlist` stop being consulted for those repos
+ * entirely. Empty string (the default) means unset.
  */
 export interface ClientBaseUrlSettings {
   trust_forwarded_headers: string
   client_base_host_allowlist: string
+  client_base_url: string
 }
 
 export async function getClientBaseUrlSettings(): Promise<ClientBaseUrlSettings> {

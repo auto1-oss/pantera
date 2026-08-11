@@ -2341,14 +2341,16 @@ Retrieve the current client-facing base URL derivation settings — governs how 
 ```json
 {
   "trust_forwarded_headers": "false",
-  "client_base_host_allowlist": ""
+  "client_base_host_allowlist": "",
+  "client_base_url": ""
 }
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `trust_forwarded_headers` | string (`"true"`/`"false"`) | Whether `X-Forwarded-Proto`/`-Host`/`-Prefix` are honoured. Default `"false"`. |
-| `client_base_host_allowlist` | string (comma-separated) | `Host` header values permitted for base-URL derivation. Empty string is PERMISSIVE — any `Host` is honoured (the default). |
+| `client_base_url` | string (absolute URL) | Canonical origin (+ optional path prefix), e.g. `https://reg.example.com/artifactory`. Empty string is unset (the default). When non-empty it is ENFORCED for every repository without an explicit `url:` — `trust_forwarded_headers` and `client_base_host_allowlist` below stop being consulted for those repositories. Takes precedence over both fields below; a repository's own `url:` still wins over this setting. |
+| `trust_forwarded_headers` | string (`"true"`/`"false"`) | Whether `X-Forwarded-Proto`/`-Host`/`-Prefix` are honoured. Default `"false"`. Ignored while `client_base_url` is set. |
+| `client_base_host_allowlist` | string (comma-separated) | `Host` header values permitted for base-URL derivation. Empty string is PERMISSIVE — any `Host` is honoured (the default). Ignored while `client_base_url` is set. |
 
 **curl example:**
 
@@ -2361,7 +2363,7 @@ curl http://localhost:8086/api/v1/admin/client-base-url-settings \
 
 ### PUT /api/v1/admin/client-base-url-settings
 
-Update the client-facing base URL derivation settings. Both fields are optional — partial updates are accepted; omitted fields retain their current values. Values are validated (round-tripped through the settings record) before anything is written; an invalid `trust_forwarded_headers` (anything other than `"true"`/`"false"`) is rejected with `400` and nothing is persisted. Takes effect on the very next request — every `ClientBaseUrl` reads the current settings on construction, no restart required; in a cluster, the change is broadcast to every node.
+Update the client-facing base URL derivation settings. All three fields are optional — partial updates are accepted; omitted fields retain their current values. Values are validated (round-tripped through the settings record) before anything is written; an invalid `trust_forwarded_headers` (anything other than `"true"`/`"false"`) or a `client_base_url` that doesn't parse as an absolute `http`/`https` URL is rejected with `400` and nothing is persisted. Takes effect on the very next request — every `ClientBaseUrl` reads the current settings on construction, no restart required; in a cluster, the change is broadcast to every node.
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_admin_permissions:admin`
@@ -2370,6 +2372,7 @@ Update the client-facing base URL derivation settings. Both fields are optional 
 
 ```json
 {
+  "client_base_url": "https://reg.example.com/artifactory",
   "trust_forwarded_headers": "false",
   "client_base_host_allowlist": "registry.example.com,registry.example.com:8443"
 }
@@ -2394,6 +2397,15 @@ curl -X PUT http://localhost:8086/api/v1/admin/client-base-url-settings \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"client_base_host_allowlist": "registry.example.com"}'
+```
+
+**curl example (canonical override):**
+
+```bash
+curl -X PUT http://localhost:8086/api/v1/admin/client-base-url-settings \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"client_base_url": "https://reg.example.com/artifactory"}'
 ```
 
 ---

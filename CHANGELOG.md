@@ -15,6 +15,7 @@
 - **Admin UI for the Maven PGP keyring** — list/add/remove the trusted signing keys backing `verifyPgp`. ([@aydasraf](https://github.com/aydasraf))
 - **Presigned direct-download for all formats** — a per-repo `download-mode` (`stream`/`redirect`/`auto`) `302`s the immutable artifact byte to a time-limited object-store URL for Docker, npm, PyPI, conda, Go, Gem, RPM, Helm, Debian, generic files, Maven/Gradle, NuGet, Composer, and Hex; metadata is never redirected, and streaming stays the default and automatic fallback. ([@aydasraf](https://github.com/aydasraf))
 - **Forwarded-header trust is now a DB-backed, hot-reloadable admin setting** — `trust_forwarded_headers` (`GET`/`PUT /api/v1/admin/client-base-url-settings`, admin UI Settings page) replaces the old env-only `PANTERA_TRUST_FORWARDED_HEADERS` flag, which is now only the fallback tier; a change applies to the very next request, no restart, broadcast across a cluster. ([@aydasraf](https://github.com/aydasraf))
+- **A canonical `client_base_url` admin setting supersedes Host-based URL derivation entirely** — once set, it enforces the origin for every repository without its own `url:`, structurally ignoring `Host`/`X-Forwarded-*` rather than just filtering them, and fixes a shipped-nginx `$host` port-stripping bug that broke `COREPACK_NPM_REGISTRY` through the sample dev proxy; a repository's own `url:` still wins, and leaving it unset keeps today's derivation unchanged. ([@aydasraf](https://github.com/aydasraf))
 
 ### ⚡ Performance
 

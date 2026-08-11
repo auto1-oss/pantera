@@ -12,6 +12,8 @@ package com.auto1.pantera.http.headers;
 
 import com.auto1.pantera.http.Headers;
 
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.List;
 import java.util.Optional;
 
@@ -44,7 +46,20 @@ import java.util.Optional;
  * exactly as an absent one rather than emitted verbatim. An empty/unset
  * allowlist is permissive (today's behaviour, honouring any {@code Host}).</p>
  *
- * <p>Both settings are read dynamically on every construction via {@link
+ * <p><b>The canonical base URL setting supersedes both of the above.</b>
+ * When the DB-backed {@code client_base_url} admin setting (env fallback
+ * {@code PANTERA_CLIENT_BASE_URL}) is non-empty, it supplies the origin (and
+ * optional path prefix) for every repository with no explicit {@code url:}
+ * -- {@code Host} and {@code X-Forwarded-*} are not consulted at all for
+ * those repositories, which makes Host-spoofing structurally impossible
+ * rather than merely filtered by the allowlist. The repository-relative
+ * path portion is still derived from the request in {@link #derive(String,
+ * String)}, since a deployment may use a global path prefix and/or the
+ * {@code /api/<type>/<name>} route style. Unset (the default) falls through
+ * to tier 3 (request-derived, subject to the allowlist above) exactly as
+ * before this setting existed.</p>
+ *
+ * <p>All three settings are read dynamically on every construction via {@link
  * ClientBaseUrlSettingsRegistry#active()} — a change made through the admin
  * API applies to the very next request, no restart required. The
  * two-argument constructor bypasses that lookup entirely, for tests that
@@ -81,10 +96,24 @@ public final class ClientBaseUrl {
     private final List<String> hostAllowlist;
 
     /**
-     * Ctor. Reads the CURRENT {@code trustForwardedHeaders} and {@code
-     * hostAllowlist} settings from {@link ClientBaseUrlSettingsRegistry} —
-     * dynamically, on every call, so a runtime admin-API change is honoured
-     * on the next request without restarting the process.
+     * Scheme + authority of the canonical base URL setting (e.g. {@code
+     * https://reg.example.com}), or empty when unset — in which case tier 3
+     * (request-derived) is used instead. See {@link #absolute(String)}.
+     */
+    private final String canonicalOrigin;
+
+    /**
+     * Path prefix of the canonical base URL setting (e.g. {@code
+     * /artifactory}), or empty when unset or the setting is a bare origin.
+     */
+    private final String canonicalPrefix;
+
+    /**
+     * Ctor. Reads the CURRENT {@code trustForwardedHeaders}, {@code
+     * hostAllowlist}, and {@code canonicalBaseUrl} settings from {@link
+     * ClientBaseUrlSettingsRegistry} — dynamically, on every call, so a
+     * runtime admin-API change is honoured on the next request without
+     * restarting the process.
      * @param headers Request headers
      */
     public ClientBaseUrl(final Headers headers) {
@@ -98,19 +127,23 @@ public final class ClientBaseUrl {
      * @param settings Settings snapshot to derive from
      */
     private ClientBaseUrl(final Headers headers, final ClientBaseUrlSettings settings) {
-        this(headers, settings.trustForwardedHeaders(), settings.hostAllowlist());
+        this(
+            headers, settings.trustForwardedHeaders(), settings.hostAllowlist(),
+            settings.canonicalBaseUrl()
+        );
     }
 
     /**
      * Ctor for callers that need a fixed, deployment-independent trust
-     * decision (tests). The host allowlist is always empty (permissive) for
-     * this constructor — it never consults {@link ClientBaseUrlSettingsRegistry}.
+     * decision (tests). The host allowlist is always empty (permissive) and
+     * the canonical base URL is always unset for this constructor — it
+     * never consults {@link ClientBaseUrlSettingsRegistry}.
      * @param headers Request headers
      * @param trustForwarded Whether to honour {@code X-Forwarded-Proto},
      *  {@code X-Forwarded-Host}, and {@code X-Forwarded-Prefix}
      */
     public ClientBaseUrl(final Headers headers, final boolean trustForwarded) {
-        this(headers, trustForwarded, List.of());
+        this(headers, trustForwarded, List.of(), "");
     }
 
     /**
@@ -121,13 +154,18 @@ public final class ClientBaseUrl {
      *  {@code X-Forwarded-Host}, and {@code X-Forwarded-Prefix}
      * @param hostAllowlist {@code Host} values permitted for derivation;
      *  empty is permissive
+     * @param canonicalBaseUrl Canonical base URL setting (already validated
+     *  and normalized by {@link ClientBaseUrlSettings}), or blank when unset
      */
     private ClientBaseUrl(
-        final Headers headers, final boolean trustForwarded, final List<String> hostAllowlist
+        final Headers headers, final boolean trustForwarded, final List<String> hostAllowlist,
+        final String canonicalBaseUrl
     ) {
         this.headers = headers;
         this.trustForwarded = trustForwarded;
         this.hostAllowlist = hostAllowlist;
+        this.canonicalOrigin = ClientBaseUrl.originOf(canonicalBaseUrl);
+        this.canonicalPrefix = ClientBaseUrl.pathOf(canonicalBaseUrl);
     }
 
     /**
@@ -186,16 +224,25 @@ public final class ClientBaseUrl {
 
     /**
      * {@code Vary} response header value for any response whose body embeds
-     * a base URL this instance could derive. {@code Host} always
-     * participates (see {@link #origin()}); the {@code X-Forwarded-*}
-     * triplet only participates when this instance trusts forwarded
-     * headers, since {@link #origin()} and {@link #forwardedPrefix()} only
-     * read them in that case.
+     * a base URL this instance could derive.
+     *
+     * <p>When the canonical base URL setting is in effect ({@link
+     * #canonicalOrigin} non-empty), {@code Host} and {@code X-Forwarded-*}
+     * are not consulted at all — see {@link #absolute(String)} — so NEITHER
+     * participates here either; an empty string is returned. Getting this
+     * backwards (leaving a header in {@code Vary} that no longer influences
+     * the body, or — the dangerous direction — dropping one that still
+     * does) is exactly the kind of stale {@code Vary} that lets a shared
+     * cache cross-serve a response built for a different request. Otherwise
+     * {@code Host} always participates (see {@link #origin()}); the {@code
+     * X-Forwarded-*} triplet only participates when this instance trusts
+     * forwarded headers, since {@link #origin()} and
+     * {@link #forwardedPrefix()} only read them in that case.</p>
      *
      * <p>Deliberately independent of the headers this instance was built
      * with: whether a header participates in the derivation is a property
-     * of the CURRENT {@code trust_forwarded_headers} setting ({@link
-     * #trustForwarded}, resolved dynamically at construction via {@link
+     * of the CURRENT settings ({@link #trustForwarded} / {@link
+     * #canonicalOrigin}, resolved dynamically at construction via {@link
      * ClientBaseUrlSettingsRegistry#active()} — never a boot-time snapshot),
      * not a per-request one, so callers may compute this from any {@link
      * ClientBaseUrl} instance, including one built from headers unrelated to
@@ -203,11 +250,13 @@ public final class ClientBaseUrl {
      * therefore reflected in the very next response's {@code Vary} header,
      * with no restart.</p>
      *
-     * @return Vary header value
+     * @return Vary header value, or {@code ""} when nothing varies
      */
     public String varyHeaderValue() {
         final String result;
-        if (this.trustForwarded) {
+        if (!this.canonicalOrigin.isEmpty()) {
+            result = "";
+        } else if (this.trustForwarded) {
             result = "Host, X-Forwarded-Proto, X-Forwarded-Host, X-Forwarded-Prefix";
         } else {
             result = "Host";
@@ -248,12 +297,76 @@ public final class ClientBaseUrl {
     }
 
     /**
-     * Prepend origin and any forwarded prefix to a repository path.
+     * Prepend a base to a repository path: the canonical base URL setting
+     * when one is configured (tier 2 — {@code Host}/{@code X-Forwarded-*}
+     * are never consulted in this branch, see {@link #origin()}), otherwise
+     * the request-derived origin and any forwarded prefix (tier 3, today's
+     * behaviour).
+     *
+     * <p>Tier 2 avoids doubling the canonical prefix: when the derived
+     * {@code repoPath} already starts with it — the deployment's global
+     * path prefix happens to equal the canonical setting's own path prefix
+     * — only the origin is prepended, since the prefix is already present.</p>
+     *
      * @param repoPath Repository base path
      * @return Absolute URL without a trailing slash
      */
     private String absolute(final String repoPath) {
-        return this.origin() + this.forwardedPrefix() + ClientBaseUrl.withoutTrailingSlash(repoPath);
+        final String path = ClientBaseUrl.withoutTrailingSlash(repoPath);
+        final String result;
+        if (this.canonicalOrigin.isEmpty()) {
+            result = this.origin() + this.forwardedPrefix() + path;
+        } else if (!this.canonicalPrefix.isEmpty() && path.startsWith(this.canonicalPrefix)) {
+            result = this.canonicalOrigin + path;
+        } else {
+            result = this.canonicalOrigin + this.canonicalPrefix + path;
+        }
+        return result;
+    }
+
+    /**
+     * Scheme + authority of a canonical base URL setting value, e.g. {@code
+     * https://reg.example.com} out of {@code https://reg.example.com/artifactory}.
+     * Defensive against a non-parseable value even though every value
+     * reaching this method already passed {@link ClientBaseUrlSettings}'s
+     * validation.
+     * @param canonicalBaseUrl Canonical base URL setting, or blank when unset
+     * @return {@code scheme://authority}, or {@code ""} when unset/unparseable
+     */
+    private static String originOf(final String canonicalBaseUrl) {
+        String result = "";
+        if (canonicalBaseUrl != null && !canonicalBaseUrl.isBlank()) {
+            try {
+                final URI uri = new URI(canonicalBaseUrl);
+                result = uri.getScheme() + "://" + uri.getAuthority();
+            } catch (final URISyntaxException ex) {
+                result = "";
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Path prefix of a canonical base URL setting value, e.g. {@code
+     * /artifactory} out of {@code https://reg.example.com/artifactory}, or
+     * {@code ""} for a bare origin. Defensive against a non-parseable value
+     * for the same reason as {@link #originOf(String)}.
+     * @param canonicalBaseUrl Canonical base URL setting, or blank when unset
+     * @return Path prefix without a trailing slash, or {@code ""}
+     */
+    private static String pathOf(final String canonicalBaseUrl) {
+        String result = "";
+        if (canonicalBaseUrl != null && !canonicalBaseUrl.isBlank()) {
+            try {
+                final String path = new URI(canonicalBaseUrl).getRawPath();
+                if (path != null) {
+                    result = path;
+                }
+            } catch (final URISyntaxException ex) {
+                result = "";
+            }
+        }
+        return result;
     }
 
     /**

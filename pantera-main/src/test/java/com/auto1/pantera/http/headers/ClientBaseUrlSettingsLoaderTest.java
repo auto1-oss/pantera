@@ -141,6 +141,52 @@ final class ClientBaseUrlSettingsLoaderTest {
     }
 
     /**
+     * Same shape as {@link #daoReportsKeyAbsentEnvTierWinsOverDefault()}, but
+     * for the canonical base URL (fixwave-h, 2.3.0): a DB-backed deployment
+     * where {@code client_base_url} genuinely has no row must still resolve
+     * {@code PANTERA_CLIENT_BASE_URL} rather than falling straight to the
+     * hardcoded default.
+     */
+    @Test
+    void canonicalBaseUrlEnvTierWinsOverDefaultWhenDaoReportsKeyAbsent() {
+        final ClientBaseUrlSettingsLoader loader = new ClientBaseUrlSettingsLoader(
+            ClientBaseUrlSettingsLoaderTest.emptyRowDao(),
+            Map.of("PANTERA_CLIENT_BASE_URL", "http://localhost:9999")::get
+        );
+        MatcherAssert.assertThat(
+            loader.get().canonicalBaseUrl(), new IsEqual<>("http://localhost:9999")
+        );
+    }
+
+    /**
+     * DB-less boot resolves the canonical base URL from its env var too --
+     * the same regression class {@link #dbLessInstallPathResolvesEnvOverDefault()}
+     * guards for {@code trust_forwarded_headers}.
+     */
+    @Test
+    void canonicalBaseUrlDbLessInstallPathResolvesEnvOverDefault() {
+        ClientBaseUrlSettingsLoader.install(
+            null, Map.of("PANTERA_CLIENT_BASE_URL", "https://reg.example.com/artifactory")::get
+        );
+        MatcherAssert.assertThat(
+            ClientBaseUrlSettingsLoader.activeSupplier().get().canonicalBaseUrl(),
+            new IsEqual<>("https://reg.example.com/artifactory")
+        );
+    }
+
+    /**
+     * No DB row and no env var: the canonical base URL resolves to the
+     * hardcoded default (unset), exactly like a fresh install.
+     */
+    @Test
+    void canonicalBaseUrlDefaultsToUnsetWithNoDbRowAndNoEnvVar() {
+        final ClientBaseUrlSettingsLoader loader = new ClientBaseUrlSettingsLoader(
+            ClientBaseUrlSettingsLoaderTest.emptyRowDao(), Map.<String, String>of()::get
+        );
+        MatcherAssert.assertThat(loader.get().canonicalBaseUrl(), new IsEqual<>(""));
+    }
+
+    /**
      * Builds an {@link AuthSettingsDao} whose {@code get(key)} always
      * resolves empty, backed by dynamic-proxied JDK interfaces rather than
      * a real database -- the same {@link Proxy}-based faking technique
