@@ -180,14 +180,14 @@ public final class SingleVersionSlice implements Slice {
             return ResponseBuilder.from(RsStatus.NOT_MODIFIED)
                 .header("ETag", etag)
                 .header("Cache-Control", "public, max-age=300")
-                .header("Vary", vary)
+                .varyHeader(vary)
                 .build();
         }
         return ResponseBuilder.ok()
             .header("Content-Type", "application/json; charset=utf-8")
             .header("ETag", etag)
             .header("Cache-Control", "public, max-age=300")
-            .header("Vary", vary)
+            .varyHeader(vary)
             .jsonBody(responseBody)
             .build();
     }

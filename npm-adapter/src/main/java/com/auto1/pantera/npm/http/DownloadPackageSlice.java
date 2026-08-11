@@ -158,7 +158,7 @@ public final class DownloadPackageSlice implements Slice {
                 ResponseBuilder.from(com.auto1.pantera.http.RsStatus.NOT_MODIFIED)
                     .header("ETag", etag)
                     .header("Cache-Control", "public, max-age=300")
-                    .header("Vary", vary)
+                    .varyHeader(vary)
                     .build()
             );
         }
@@ -185,7 +185,7 @@ public final class DownloadPackageSlice implements Slice {
                 .header("ETag", etag)
                 .header("Cache-Control", "public, max-age=300")
                 .header("CDN-Cache-Control", "public, max-age=600")
-                .header("Vary", vary)
+                .varyHeader(vary)
                 .body(rewritten)  // STREAM IT - no asBytesFuture()!
                 .build()
         );

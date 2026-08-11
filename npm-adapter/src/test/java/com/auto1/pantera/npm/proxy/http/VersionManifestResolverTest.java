@@ -133,6 +133,44 @@ final class VersionManifestResolverTest {
     }
 
     @Test
+    void emitOmitsVaryHeaderWhenSuppliedValueIsEmpty() {
+        // Callers pass ClientBaseUrl#varyHeaderValue()'s result straight
+        // through as the "vary" parameter; when a canonical base URL is
+        // configured that value is "" (nothing left to vary by), and the
+        // response must omit Vary entirely rather than send a malformed
+        // "Vary: " (RFC 9110 S12.5.5).
+        final Response response = RESOLVER.emit(
+            PACKUMENT, "pnpm", "11.5.1", "https://h/api/npm/npm_group", "", Optional.empty()
+        );
+        MatcherAssert.assertThat(
+            response.headers().find("Vary").isEmpty(),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void emit304OmitsVaryHeaderWhenSuppliedValueIsEmpty() throws Exception {
+        final String prefix = "https://h/api/npm/npm_group";
+        final Response first = RESOLVER.emit(
+            PACKUMENT, "pnpm", "11.5.1", prefix, "", Optional.empty()
+        );
+        final String etag = first.headers().single("ETag").getValue();
+        final Response revalidated = RESOLVER.emit(
+            PACKUMENT, "pnpm", "11.5.1", prefix, "", Optional.of(etag)
+        );
+        MatcherAssert.assertThat(
+            "304 on a matching If-None-Match",
+            revalidated.status(),
+            new IsEqual<>(RsStatus.NOT_MODIFIED)
+        );
+        MatcherAssert.assertThat(
+            "a 304 must omit Vary too when nothing varies the response",
+            revalidated.headers().find("Vary").isEmpty(),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
     void emitResolvesDistTagToVersionManifestWithRewrittenTarball() throws Exception {
         // This is the /latest upstream-URL leak fix (spec S2.D): the dist-tag
         // must resolve to the same rewritten (Pantera-rooted) tarball as the

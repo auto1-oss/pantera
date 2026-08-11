@@ -16,14 +16,18 @@ import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.asto.test.TestResource;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.headers.ClientBaseUrl;
+import com.auto1.pantera.http.headers.ClientBaseUrlSettings;
+import com.auto1.pantera.http.headers.ClientBaseUrlSettingsRegistry;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.slice.SliceSimple;
 import com.auto1.pantera.npm.proxy.NpmProxy;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import javax.json.Json;
@@ -31,6 +35,7 @@ import javax.json.JsonObject;
 import java.io.StringReader;
 import java.net.URI;
 import java.net.URL;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -52,6 +57,11 @@ import java.util.Optional;
  * {@code getTarballPrefix} for direct access.</p>
  */
 final class DownloadPackageSliceClientBaseTest {
+
+    @AfterEach
+    void tearDown() {
+        ClientBaseUrlSettingsRegistry.uninstall();
+    }
 
     /**
      * Package the fixture packument lives under.
@@ -121,6 +131,32 @@ final class DownloadPackageSliceClientBaseTest {
             Content.EMPTY
         ).get().headers().single("Vary").getValue();
         MatcherAssert.assertThat(vary, new IsEqual<>("Host"));
+    }
+
+    @Test
+    void responseOmitsVaryEntirelyWhenCanonicalBaseUrlIsSet() throws Exception {
+        // Once a canonical base URL is configured, ClientBaseUrl#varyHeaderValue()
+        // returns "" -- the proxy packument response must omit Vary entirely
+        // rather than send the malformed "Vary: " (RFC 9110 S12.5.5).
+        ClientBaseUrlSettingsRegistry.install(
+            () -> new ClientBaseUrlSettings(false, List.of(), "http://canonical.example.com")
+        );
+        final Storage storage = new InMemoryStorage();
+        this.saveFilesToStorage(storage);
+        final DownloadPackageSlice slice = new DownloadPackageSlice(
+            new NpmProxy(storage, new SliceSimple(ResponseBuilder.notFound().build())),
+            new PackagePath(""),
+            Optional.empty()
+        );
+        final Response response = slice.response(
+            new RequestLine(RqMethod.GET, "/" + PKG),
+            Headers.from("Host", "reg.example.com"),
+            Content.EMPTY
+        ).get();
+        MatcherAssert.assertThat(
+            response.headers().find("Vary").isEmpty(),
+            new IsEqual<>(true)
+        );
     }
 
     /**
