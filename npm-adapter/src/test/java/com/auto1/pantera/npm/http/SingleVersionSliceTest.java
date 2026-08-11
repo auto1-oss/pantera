@@ -15,15 +15,20 @@ import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.headers.ClientBaseUrlSettings;
+import com.auto1.pantera.http.headers.ClientBaseUrlSettingsRegistry;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.npm.PerVersionLayout;
 import java.net.URI;
+import java.util.List;
 import javax.json.Json;
 import javax.json.JsonObject;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -36,6 +41,11 @@ final class SingleVersionSliceTest {
     private Storage storage;
 
     private PerVersionLayout layout;
+
+    @AfterEach
+    void tearDown() {
+        ClientBaseUrlSettingsRegistry.uninstall();
+    }
 
     @BeforeEach
     void init() throws Exception {
@@ -151,6 +161,72 @@ final class SingleVersionSliceTest {
             Headers.EMPTY, Content.EMPTY
         ).join().headers().single("Vary").getValue();
         MatcherAssert.assertThat(vary, new IsEqual<>("Host"));
+    }
+
+    @Test
+    void omitsVaryEntirelyWhenCanonicalBaseUrlIsSet() {
+        // Once a canonical base URL is configured, Host no longer
+        // participates in deriving the served tarball URL, so
+        // ClientBaseUrl#varyHeaderValue() returns "" -- the response must
+        // omit Vary entirely rather than send a malformed "Vary: ".
+        ClientBaseUrlSettingsRegistry.install(
+            () -> new ClientBaseUrlSettings(false, List.of(), "http://canonical.example.com")
+        );
+        final Response response = new SingleVersionSlice(url(), this.storage, "npm-local").response(
+            new RequestLine(RqMethod.GET, "/simple-npm-project/1.0.0"),
+            Headers.EMPTY, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            response.headers().find("Vary").isEmpty(),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void notModifiedResponseStillCarriesVaryWhenCanonicalBaseUrlIsUnset() {
+        final SingleVersionSlice slice = new SingleVersionSlice(url(), this.storage, "npm-local");
+        final Response first = slice.response(
+            new RequestLine(RqMethod.GET, "/simple-npm-project/1.0.0"),
+            Headers.EMPTY, Content.EMPTY
+        ).join();
+        final String etag = first.headers().single("ETag").getValue();
+        final Response revalidated = slice.response(
+            new RequestLine(RqMethod.GET, "/simple-npm-project/1.0.0"),
+            Headers.from("If-None-Match", etag), Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "304 on a matching If-None-Match", revalidated.status(), new IsEqual<>(RsStatus.NOT_MODIFIED)
+        );
+        MatcherAssert.assertThat(
+            "304 carries the same Vary as the 200 it revalidates",
+            revalidated.headers().single("Vary").getValue(),
+            new IsEqual<>("Host")
+        );
+    }
+
+    @Test
+    void notModifiedResponseOmitsVaryWhenCanonicalBaseUrlIsSet() {
+        final SingleVersionSlice slice = new SingleVersionSlice(url(), this.storage, "npm-local");
+        final Response first = slice.response(
+            new RequestLine(RqMethod.GET, "/simple-npm-project/1.0.0"),
+            Headers.EMPTY, Content.EMPTY
+        ).join();
+        final String etag = first.headers().single("ETag").getValue();
+        ClientBaseUrlSettingsRegistry.install(
+            () -> new ClientBaseUrlSettings(false, List.of(), "http://canonical.example.com")
+        );
+        final Response revalidated = slice.response(
+            new RequestLine(RqMethod.GET, "/simple-npm-project/1.0.0"),
+            Headers.from("If-None-Match", etag), Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "304 on a matching If-None-Match", revalidated.status(), new IsEqual<>(RsStatus.NOT_MODIFIED)
+        );
+        MatcherAssert.assertThat(
+            "a 304 must omit Vary too when nothing varies the response",
+            revalidated.headers().find("Vary").isEmpty(),
+            new IsEqual<>(true)
+        );
     }
 
     private JsonObject get(final String path) throws Exception {

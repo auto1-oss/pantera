@@ -164,6 +164,26 @@ public class ResponseBuilder {
         return this;
     }
 
+    /**
+     * Adds a {@code Vary} header, but only when {@code value} is non-empty.
+     * RFC 9110 &sect;12.5.5 requires {@code Vary} to be either {@code *} or a
+     * non-empty list of field names -- when nothing varies the response (e.g.
+     * {@code ClientBaseUrl#varyHeaderValue()} returning {@code ""} because a
+     * canonical base URL is in effect), the header must be omitted entirely
+     * rather than emitted as a literal, malformed {@code Vary: } with no
+     * value.
+     *
+     * @param value Vary header value, or {@code ""}/{@code null} when
+     *  nothing varies the response
+     * @return This builder
+     */
+    public ResponseBuilder varyHeader(String value) {
+        if (value != null && !value.isEmpty()) {
+            header("Vary", value);
+        }
+        return this;
+    }
+
     public ResponseBuilder body(Publisher<ByteBuffer> body) {
         return body(new Content.From(body));
     }

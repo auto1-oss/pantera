@@ -17,11 +17,14 @@ import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.headers.ClientBaseUrl;
+import com.auto1.pantera.http.headers.ClientBaseUrlSettings;
+import com.auto1.pantera.http.headers.ClientBaseUrlSettingsRegistry;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import org.apache.commons.io.IOUtils;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import javax.json.Json;
@@ -29,6 +32,7 @@ import javax.json.JsonObject;
 import java.io.StringReader;
 import java.net.URI;
 import java.net.URL;
+import java.util.List;
 
 /**
  * I3 regression coverage: {@code npm.http.DownloadPackageSlice} is the LOCAL
@@ -47,6 +51,11 @@ import java.net.URL;
  * any private method for direct access.</p>
  */
 final class DownloadPackageSliceClientBaseTest {
+
+    @AfterEach
+    void tearDown() {
+        ClientBaseUrlSettingsRegistry.uninstall();
+    }
 
     /**
      * Package the fixture packument lives under.
@@ -90,6 +99,24 @@ final class DownloadPackageSliceClientBaseTest {
         MatcherAssert.assertThat(
             response.headers().single("Vary").getValue(),
             new IsEqual<>("Host")
+        );
+    }
+
+    @Test
+    void responseOmitsVaryEntirelyWhenCanonicalBaseUrlIsSet() throws Exception {
+        // Once a canonical base URL is configured, Host/X-Forwarded-* no
+        // longer participate in deriving the served URL, so
+        // ClientBaseUrl#varyHeaderValue() returns "" -- the response must
+        // omit Vary entirely rather than send the malformed "Vary: ".
+        ClientBaseUrlSettingsRegistry.install(
+            () -> new ClientBaseUrlSettings(false, List.of(), "http://canonical.example.com")
+        );
+        final Response response = this.responseFor(
+            Headers.from(ClientBaseUrl.HEADER, "https://h/api/npm/npm_group")
+        );
+        MatcherAssert.assertThat(
+            response.headers().find("Vary").isEmpty(),
+            new IsEqual<>(true)
         );
     }
 

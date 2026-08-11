@@ -303,14 +303,14 @@ public final class VersionManifestResolver {
                     response = ResponseBuilder.from(RsStatus.NOT_MODIFIED)
                         .header("ETag", etag)
                         .header("Cache-Control", "public, max-age=300")
-                        .header("Vary", vary)
+                        .varyHeader(vary)
                         .build();
                 } else {
                     response = ResponseBuilder.ok()
                         .header("Content-Type", "application/json; charset=utf-8")
                         .header("ETag", etag)
                         .header("Cache-Control", "public, max-age=300")
-                        .header("Vary", vary)
+                        .varyHeader(vary)
                         .body(body)
                         .build();
                 }

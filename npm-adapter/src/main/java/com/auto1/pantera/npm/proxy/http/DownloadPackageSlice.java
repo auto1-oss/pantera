@@ -297,7 +297,7 @@ public final class DownloadPackageSlice implements Slice {
                             ResponseBuilder.from(RsStatus.NOT_MODIFIED)
                                 .header("ETag", derivedEtag)
                                 .header("Cache-Control", "public, max-age=300")
-                                .header("Vary", this.vary(headers))
+                                .varyHeader(this.vary(headers))
                                 .build()
                         );
                     }
@@ -547,7 +547,7 @@ public final class DownloadPackageSlice implements Slice {
                             ResponseBuilder.from(RsStatus.NOT_MODIFIED)
                                 .header("ETag", derivedEtag)
                                 .header("Cache-Control", "public, max-age=300")
-                                .header("Vary", this.vary(headers))
+                                .varyHeader(this.vary(headers))
                                 .build()
                         );
                     }
@@ -650,7 +650,7 @@ public final class DownloadPackageSlice implements Slice {
             return ResponseBuilder.from(RsStatus.NOT_MODIFIED)
                 .header("ETag", etag)
                 .header("Cache-Control", "public, max-age=300")
-                .header("Vary", this.vary(headers))
+                .varyHeader(this.vary(headers))
                 .build();
         }
         // Only transform bytes when we actually need to send them
@@ -665,7 +665,7 @@ public final class DownloadPackageSlice implements Slice {
             .header("ETag", etag)
             .header("Cache-Control", "public, max-age=300")
             .header("CDN-Cache-Control", "public, max-age=600")
-            .header("Vary", this.vary(headers))
+            .varyHeader(this.vary(headers))
             .body(streamedContent)
             .build();
     }
@@ -696,7 +696,7 @@ public final class DownloadPackageSlice implements Slice {
                     return ResponseBuilder.from(RsStatus.NOT_MODIFIED)
                         .header("ETag", etag)
                         .header("Cache-Control", "public, max-age=300")
-                        .header("Vary", this.vary(headers))
+                        .varyHeader(this.vary(headers))
                         .build();
                 }
                 final ByteLevelUrlTransformer transformer = new ByteLevelUrlTransformer();
@@ -710,7 +710,7 @@ public final class DownloadPackageSlice implements Slice {
                     .header("ETag", etag)
                     .header("Cache-Control", "public, max-age=300")
                     .header("CDN-Cache-Control", "public, max-age=600")
-                    .header("Vary", this.vary(headers))
+                    .varyHeader(this.vary(headers))
                     .body(streamedContent)
                     .build();
             }
@@ -727,7 +727,7 @@ public final class DownloadPackageSlice implements Slice {
                 return ResponseBuilder.from(RsStatus.NOT_MODIFIED)
                     .header("ETag", etag)
                     .header("Cache-Control", "public, max-age=300")
-                    .header("Vary", this.vary(headers))
+                    .varyHeader(this.vary(headers))
                     .build();
             }
             final Content streamedContent = new Content.From(
@@ -739,7 +739,7 @@ public final class DownloadPackageSlice implements Slice {
                 .header("ETag", etag)
                 .header("Cache-Control", "public, max-age=300")
                 .header("CDN-Cache-Control", "public, max-age=600")
-                .header("Vary", this.vary(headers))
+                .varyHeader(this.vary(headers))
                 .body(streamedContent)
                 .build();
         } catch (final Exception e) {
@@ -772,7 +772,7 @@ public final class DownloadPackageSlice implements Slice {
             return ResponseBuilder.from(RsStatus.NOT_MODIFIED)
                 .header("ETag", etag)
                 .header("Cache-Control", "public, max-age=300")
-                .header("Vary", this.vary(headers))
+                .varyHeader(this.vary(headers))
                 .build();
         }
 
@@ -788,7 +788,7 @@ public final class DownloadPackageSlice implements Slice {
             .header("ETag", etag)
             .header("Cache-Control", "public, max-age=300")
             .header("CDN-Cache-Control", "public, max-age=600")
-            .header("Vary", this.vary(headers))
+            .varyHeader(this.vary(headers))
             .body(streamedContent)
             .build();
     }
