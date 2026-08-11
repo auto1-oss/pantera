@@ -362,21 +362,24 @@ public final class AdminAuthHandler {
     /**
      * Whitelist for the client-base-URL derivation endpoint — {@link
      * com.auto1.pantera.http.headers.ClientBaseUrl}'s {@code
-     * trustForwardedHeaders} / host allowlist, distinct from both breaker
-     * whitelists above.
+     * trustForwardedHeaders} / host allowlist / canonical base URL,
+     * distinct from both breaker whitelists above.
      */
     private static final java.util.Set<String> CLIENT_BASE_KEYS = java.util.Set.of(
         "trust_forwarded_headers",
-        "client_base_host_allowlist"
+        "client_base_host_allowlist",
+        "client_base_url"
     );
 
     /**
      * GET /api/v1/admin/client-base-url-settings — current values for the
-     * two settings governing {@link com.auto1.pantera.http.headers.ClientBaseUrl}'s
+     * three settings governing {@link com.auto1.pantera.http.headers.ClientBaseUrl}'s
      * derivation of the client-facing base URL Pantera emits (e.g. npm
      * {@code dist.tarball}). {@code client_base_host_allowlist} is returned
      * as a comma-joined string (empty when the allowlist is empty /
      * permissive), the same convention the PUT body accepts.
+     * {@code client_base_url} is returned normalized (trailing slash
+     * stripped), empty when unset.
      */
     private void getClientBaseUrlSettings(final RoutingContext ctx) {
         CompletableFuture.supplyAsync(() -> {
@@ -384,7 +387,8 @@ public final class AdminAuthHandler {
                 com.auto1.pantera.http.headers.ClientBaseUrlSettingsLoader.activeSupplier().get();
             return new JsonObject()
                 .put("trust_forwarded_headers", String.valueOf(current.trustForwardedHeaders()))
-                .put("client_base_host_allowlist", String.join(",", current.hostAllowlist()));
+                .put("client_base_host_allowlist", String.join(",", current.hostAllowlist()))
+                .put("client_base_url", current.canonicalBaseUrl());
         }, HandlerExecutor.get()).whenComplete((settings, err) -> {
             if (err != null) {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
@@ -401,8 +405,10 @@ public final class AdminAuthHandler {
      * PUT /api/v1/admin/client-base-url-settings — partial updates OK; only
      * {@link #CLIENT_BASE_KEYS} accepted. Values validated by round-tripping
      * through the {@code ClientBaseUrlSettings} record constructor before
-     * anything is written — an unparseable boolean is rejected outright
-     * since the record itself has no invariant to catch it.
+     * anything is written — an unparseable boolean, or a {@code
+     * client_base_url} that doesn't parse as an absolute {@code http}/
+     * {@code https} URL, is rejected outright with {@code 400} since the
+     * record itself carries those invariants.
      */
     private void updateClientBaseUrlSettings(final RoutingContext ctx) {
         final JsonObject body = ctx.body().asJsonObject();
@@ -434,9 +440,10 @@ public final class AdminAuthHandler {
             .map(String::trim)
             .filter(host -> !host.isEmpty())
             .toList();
+        final String canonicalRaw = body.getString("client_base_url", current.canonicalBaseUrl());
         try {
             new com.auto1.pantera.http.headers.ClientBaseUrlSettings(
-                Boolean.parseBoolean(trustRaw), allowlist
+                Boolean.parseBoolean(trustRaw), allowlist, canonicalRaw
             );
         } catch (final IllegalArgumentException ex) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST",

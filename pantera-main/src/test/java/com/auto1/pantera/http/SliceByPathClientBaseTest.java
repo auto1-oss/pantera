@@ -181,6 +181,106 @@ final class SliceByPathClientBaseTest {
         );
     }
 
+    // --- Canonical base URL setting (fixwave-h, 2.3.0) ---
+
+    /**
+     * Topology 1: bare origin, no global path prefix in the request.
+     */
+    @Test
+    void canonicalBaseUrlComposesWithABarePathWhenNoGlobalPrefix() {
+        ClientBaseUrlSettingsRegistry.install(
+            () -> new ClientBaseUrlSettings(false, List.of(), "http://localhost:9999")
+        );
+        MatcherAssert.assertThat(
+            this.observedBase("/npm_group/pnpm", Optional.empty()),
+            new IsEqual<>(Optional.of("http://localhost:9999/npm_group"))
+        );
+    }
+
+    /**
+     * Topology 2: bare origin, request carries the global prefix + the
+     * {@code /api/<type>/<name>} route style.
+     */
+    @Test
+    void canonicalBaseUrlPreservesGlobalPrefixAndApiRouteStyle() {
+        ClientBaseUrlSettingsRegistry.install(
+            () -> new ClientBaseUrlSettings(false, List.of(), "http://localhost:9999")
+        );
+        MatcherAssert.assertThat(
+            this.observedBase(
+                "/test_prefix/npm_group/pnpm",
+                Optional.of("/test_prefix/api/npm/npm_group/pnpm")
+            ),
+            new IsEqual<>(Optional.of("http://localhost:9999/test_prefix/api/npm/npm_group"))
+        );
+    }
+
+    /**
+     * Topology 3: the canonical setting carries its own path prefix.
+     */
+    @Test
+    void canonicalBaseUrlWithAPathPrefixIsPrependedAheadOfTheRepoPath() {
+        ClientBaseUrlSettingsRegistry.install(
+            () -> new ClientBaseUrlSettings(false, List.of(), "https://reg.example.com/artifactory")
+        );
+        MatcherAssert.assertThat(
+            this.observedBase("/npm_group/pnpm", Optional.empty()),
+            new IsEqual<>(Optional.of("https://reg.example.com/artifactory/npm_group"))
+        );
+    }
+
+    /**
+     * Guards against doubling: the deployment's global prefix and the
+     * canonical setting's own path prefix are the same string here, so the
+     * derived repository path already carries it -- must not be doubled.
+     */
+    @Test
+    void canonicalBaseUrlPrefixIsNotDoubledWhenTheDerivedPathAlreadyCarriesIt() {
+        ClientBaseUrlSettingsRegistry.install(
+            () -> new ClientBaseUrlSettings(false, List.of(), "https://reg.example.com/test_prefix")
+        );
+        MatcherAssert.assertThat(
+            this.observedBase(
+                "/test_prefix/npm_group/pnpm",
+                Optional.of("/test_prefix/api/npm/npm_group/pnpm")
+            ),
+            new IsEqual<>(Optional.of("https://reg.example.com/test_prefix/api/npm/npm_group"))
+        );
+    }
+
+    /**
+     * The exact reported bug, at the full {@link SliceByPath} pipeline
+     * level: nginx's {@code $host} strips the port, so a request arrives
+     * with a portless {@code Host}. With the canonical setting present,
+     * {@code Host} is never consulted -- the configured port survives.
+     */
+    @Test
+    void portlessHostIsIgnoredWhenCanonicalBaseUrlIsSetSoThePortSurvives() {
+        ClientBaseUrlSettingsRegistry.install(
+            () -> new ClientBaseUrlSettings(false, List.of(), "http://localhost:9999")
+        );
+        MatcherAssert.assertThat(
+            this.observedBase("/npm_group/pnpm", Optional.empty(), "localhost"),
+            new IsEqual<>(Optional.of("http://localhost:9999/npm_group"))
+        );
+    }
+
+    /**
+     * The addressed repository's own {@code url:} still wins even when a
+     * canonical base URL is configured -- tier 1 (repo url) is checked
+     * before tier 2 (canonical setting) is ever consulted.
+     */
+    @Test
+    void configuredUrlStillWinsOverTheCanonicalBaseUrlSetting() {
+        ClientBaseUrlSettingsRegistry.install(
+            () -> new ClientBaseUrlSettings(false, List.of(), "http://canonical.example.com:1234")
+        );
+        MatcherAssert.assertThat(
+            this.observedBase("/npm_proxy/pnpm", Optional.empty()),
+            new IsEqual<>(Optional.of("https://upstream.example.com/npm_proxy"))
+        );
+    }
+
     /**
      * Drive {@link SliceByPath} with the given request path and an optional
      * pre-rewrite {@code X-Original-Path} header, returning the base the

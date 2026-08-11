@@ -1,0 +1,32 @@
+-- V140__canonical_client_base_url.sql
+-- Documents -- but deliberately does NOT seed -- the new canonical
+-- client-facing base URL setting in the auth_settings key/value store.
+-- Consumed by ClientBaseUrlSettingsLoader (pantera-main) via
+-- ClientBaseUrlSettingsRegistry into pantera-core's ClientBaseUrl, exactly
+-- like the trust_forwarded_headers / client_base_host_allowlist keys V137
+-- already documents.
+--
+--   client_base_url  (no row here -- see below)
+--     Canonical origin (+ optional path prefix), e.g. http://localhost:9999
+--     or https://reg.example.com/artifactory. Once set, it is ENFORCED for
+--     every repository with no explicit `url:`: the client-facing Host and
+--     X-Forwarded-* headers are not consulted at all for those repos --
+--     Host-spoofing becomes structurally impossible rather than merely
+--     filtered by client_base_host_allowlist. The repository-relative path
+--     portion is still derived from the request (global prefix / API route
+--     style are preserved). Env fallback PANTERA_CLIENT_BASE_URL. Hardcoded
+--     default '' (empty, i.e. unset -- falls through to the pre-existing
+--     Host/X-Forwarded-* derivation).
+--
+-- DELIBERATELY NOT SEEDED, for the identical reason V137 does not seed
+-- trust_forwarded_headers / client_base_host_allowlist: this tree has been
+-- burned three times (V107, V122, V136) by a migration unconditionally
+-- writing a row that then permanently shadows an operator's env var, with
+-- V138/V139 needed as follow-up corrections. ClientBaseUrlSettingsLoader
+-- resolves this key DB row -> env var -> hardcoded default; an unconditional
+-- seed here would always fire on a fresh migration run and shadow
+-- PANTERA_CLIENT_BASE_URL from the moment an operator upgrades, with no
+-- warning and no way to recover short of an admin manually deleting the
+-- row. A row is created only when an admin explicitly writes through
+-- PUT /api/v1/admin/client-base-url-settings, at which point the DB row
+-- correctly takes precedence over the env var by design.

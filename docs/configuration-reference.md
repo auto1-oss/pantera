@@ -273,10 +273,17 @@ Token policy is also stored in the database (`auth_settings` table) and can be u
 
 Governs how [`ClientBaseUrl`](#22-local-repository) derives the absolute base URL Pantera emits (e.g. npm `dist.tarball`) for a repository with no explicit `url:`. DB-backed and hot-reloadable via `GET`/`PUT /api/v1/admin/client-base-url-settings` -- no restart, and a change broadcasts to every node in a cluster. Falls back to the env var, then the hardcoded default, when no DB row is present -- see [7.8](#78-miscellaneous) for the env-var fallback names.
 
+Precedence for the base used to build a repository's emitted URLs:
+
+1. **The repository's own `url:`** -- always wins when explicitly set, regardless of any setting below.
+2. **`client_base_url`** (canonical, below) -- used for every repository with no `url:`. When set, it is ENFORCED: `Host` and `X-Forwarded-*` are not consulted at all for those repositories, so Host-spoofing is structurally impossible rather than merely filtered.
+3. **Request-derived** (`Host` / `X-Forwarded-*`, subject to `client_base_host_allowlist`) -- today's behaviour, only reached when `client_base_url` is unset.
+
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `trust_forwarded_headers` | boolean | `false` | Honour `X-Forwarded-Proto`/`-Host`/`-Prefix`. Enable only when a fronting reverse proxy overwrites these on every inbound request -- they are otherwise client-suppliable. |
-| `client_base_host_allowlist` | string (comma-separated) | `` (empty) | `Host` header values permitted for derivation, matched case-insensitively including port. **Empty is PERMISSIVE**: any `Host` is honoured -- this is the default so upgrading an existing deployment never breaks it, but it means a client can steer emitted URLs at any host it supplies. A non-matching `Host` is treated exactly as an absent one (falls through to the repository's configured `url:` or the request's own further fallback), never emitted verbatim. Pantera logs a startup WARN (`event.action=client_base_host_allowlist_permissive`) while this stays empty. |
+| `client_base_url` | string (absolute URL) | `` (empty) | Canonical origin (+ optional path prefix) used for every repository with no explicit `url:`, e.g. `http://localhost:9999` or `https://reg.example.com/artifactory`. Must parse as an absolute `http`/`https` URL with a host; a trailing slash is stripped so it never doubles when composed with the derived repository path. The repository-relative path portion is always still derived from the request (preserving any global path prefix and the `/api/<type>/<name>` route style) -- only the origin (and optional prefix) comes from this setting. **Empty (the default) is unset** -- falls through to tier 3 above, making `Host`/`trust_forwarded_headers`/`client_base_host_allowlist` unnecessary once set. |
+| `trust_forwarded_headers` | boolean | `false` | Honour `X-Forwarded-Proto`/`-Host`/`-Prefix`. Enable only when a fronting reverse proxy overwrites these on every inbound request -- they are otherwise client-suppliable. Ignored entirely while `client_base_url` is set. |
+| `client_base_host_allowlist` | string (comma-separated) | `` (empty) | `Host` header values permitted for derivation, matched case-insensitively including port. **Empty is PERMISSIVE**: any `Host` is honoured -- this is the default so upgrading an existing deployment never breaks it, but it means a client can steer emitted URLs at any host it supplies. A non-matching `Host` is treated exactly as an absent one (falls through to the repository's configured `url:` or the request's own further fallback), never emitted verbatim. Pantera logs a startup WARN (`event.action=client_base_host_allowlist_permissive`) while this stays empty. Ignored entirely while `client_base_url` is set. |
 
 ---
 
@@ -788,14 +795,17 @@ A local repository stores artifacts directly in the configured storage backend.
 
 `url` is optional for most local repository types. When set, it is used
 verbatim as the client-facing base URL for absolute URLs this repository
-emits (e.g. npm `dist.tarball`). When unset, the base is derived from the
-inbound request instead -- scheme `http` and the `Host` header by default
+emits (e.g. npm `dist.tarball`). When unset, the base comes from the
+DB-backed `client_base_url` admin setting if one is configured (canonical
+origin, enforced -- `Host`/`X-Forwarded-*` are not consulted at all); only
+when that setting is also unset does the base fall back to deriving from
+the inbound request -- scheme `http` and the `Host` header by default
 (subject to the `client_base_host_allowlist` admin setting), or
 `X-Forwarded-Proto`/`-Host`/`-Prefix` when the `trust_forwarded_headers`
-admin setting is enabled (see [7.8](#78-miscellaneous)). Both settings are
-DB-backed and hot-reloadable via the admin API/UI -- see [Client-facing base
-URL settings](#client-facing-base-url-settings-auth_settings-table) below.
-It remains hard-required for repository types whose adapter constructs absolute
+admin setting is enabled (see [7.8](#78-miscellaneous)). All three settings
+are DB-backed and hot-reloadable via the admin API/UI -- see [Client-facing
+base URL settings](#client-facing-base-url-settings-auth_settings-table)
+below. `url:` remains hard-required for repository types whose adapter constructs absolute
 URLs without this derivation ([2.5](#25-type-specific-settings): `php`,
 `helm`, `nuget`, `conan`, `conda` -- and, for local `npm` specifically, its
 `.npmrc`-auth endpoint has not yet been migrated to the derivation path, so a
@@ -1547,8 +1557,9 @@ a Java system property using the lowercase, dot-separated equivalent (e.g.,
 | `PANTERA_DIAGNOSTICS_DISABLED` | `false` | Set to `true` to disable blocked-thread diagnostics |
 | `PANTERA_INIT` | `false` | Set to `true` to initialize default example configs on first start |
 | `PANTERA_BUF_ACCUMULATOR_MAX_BYTES` | `104857600` (100 MB) | Maximum buffer size for HTTP header/multipart boundary parsing. Safety limit to prevent OOM from malformed requests. Not used for artifact streaming. |
-| `PANTERA_TRUST_FORWARDED_HEADERS` | `false` | **Fallback tier only** -- since 2.3.0 this is the DB-backed `trust_forwarded_headers` admin setting (see [Client-facing base URL settings](#client-facing-base-url-settings-auth_settings-table)); this env var is consulted only when no `auth_settings` row is present, and the key name is unchanged so an existing deployment's setting keeps working unmodified. Set to `true` only when a fronting reverse proxy overwrites `X-Forwarded-Proto`, `X-Forwarded-Host`, and `X-Forwarded-Prefix` on every inbound request. Controls whether `ClientBaseUrl` (used to build absolute URLs Pantera emits, e.g. npm `dist.tarball`) honours those client-suppliable headers. When `false`, the base URL is derived from `Host` alone (scheme `http`, subject to `client_base_host_allowlist` below) and `X-Forwarded-Prefix` is ignored entirely. **Interaction with `url:`:** setting an explicit `url:` on the addressed repository (see [2.2](#22-local-repository), [2.3](#23-proxy-repository)) overrides the derived base entirely, so a fixed, correctly-configured `url:` is the other -- and often simpler -- way to get correct absolute URLs behind a reverse proxy, without trusting any forwarded headers at all. |
-| `PANTERA_CLIENT_BASE_HOST_ALLOWLIST` | `` (empty) | **Fallback tier only**, mirrors the DB-backed `client_base_host_allowlist` admin setting -- see [Client-facing base URL settings](#client-facing-base-url-settings-auth_settings-table). Comma-separated `Host` values permitted for base-URL derivation. Empty is PERMISSIVE (any `Host` honoured); Pantera logs a startup WARN while it stays empty. |
+| `PANTERA_CLIENT_BASE_URL` | `` (empty) | **Fallback tier only**, mirrors the DB-backed `client_base_url` admin setting -- see [Client-facing base URL settings](#client-facing-base-url-settings-auth_settings-table). Canonical origin (+ optional path prefix, e.g. `https://reg.example.com/artifactory`) used for every repository with no explicit `url:`. Once set, it is ENFORCED: `Host` and `X-Forwarded-*` are not consulted at all for those repositories -- making `PANTERA_TRUST_FORWARDED_HEADERS`/`PANTERA_CLIENT_BASE_HOST_ALLOWLIST` below unnecessary. Must be an absolute `http`/`https` URL; an invalid value is rejected with `400` at the admin endpoint (this env var itself is not validated until the loader reads it, at which point an invalid value falls back to the hardcoded default rather than crashing the boot). |
+| `PANTERA_TRUST_FORWARDED_HEADERS` | `false` | **Fallback tier only** -- since 2.3.0 this is the DB-backed `trust_forwarded_headers` admin setting (see [Client-facing base URL settings](#client-facing-base-url-settings-auth_settings-table)); this env var is consulted only when no `auth_settings` row is present, and the key name is unchanged so an existing deployment's setting keeps working unmodified. Set to `true` only when a fronting reverse proxy overwrites `X-Forwarded-Proto`, `X-Forwarded-Host`, and `X-Forwarded-Prefix` on every inbound request. Controls whether `ClientBaseUrl` (used to build absolute URLs Pantera emits, e.g. npm `dist.tarball`) honours those client-suppliable headers. When `false`, the base URL is derived from `Host` alone (scheme `http`, subject to `client_base_host_allowlist` below) and `X-Forwarded-Prefix` is ignored entirely. Ignored entirely while `PANTERA_CLIENT_BASE_URL`/`client_base_url` is set. **Interaction with `url:`:** setting an explicit `url:` on the addressed repository (see [2.2](#22-local-repository), [2.3](#23-proxy-repository)) overrides the derived base entirely, so a fixed, correctly-configured `url:` is the other -- and often simpler -- way to get correct absolute URLs behind a reverse proxy, without trusting any forwarded headers at all. |
+| `PANTERA_CLIENT_BASE_HOST_ALLOWLIST` | `` (empty) | **Fallback tier only**, mirrors the DB-backed `client_base_host_allowlist` admin setting -- see [Client-facing base URL settings](#client-facing-base-url-settings-auth_settings-table). Comma-separated `Host` values permitted for base-URL derivation. Empty is PERMISSIVE (any `Host` honoured); Pantera logs a startup WARN while it stays empty. Ignored entirely while `PANTERA_CLIENT_BASE_URL`/`client_base_url` is set. |
 
 ---
 

@@ -46,6 +46,9 @@
 - **`PANTERA_CIRCUIT_BREAKER_*` env vars (the group-member breaker) are no longer silently shadowed by the migration that seeds their defaults, and are honoured on DB-less boots too** — the same V136 bug, but for V122's `circuit_breaker_*` rows: a follow-up migration removes only the rows still holding their untouched default, and `CircuitBreakerSettingsLoader` now installs unconditionally at boot instead of only when a shared `DataSource` is configured.
   ([@aydasraf](https://github.com/aydasraf))
 
+- **A canonical `client_base_url` admin setting supersedes Host-based URL derivation entirely** — once set, it enforces the origin for every repository without its own `url:`, structurally ignoring `Host`/`X-Forwarded-*` rather than just filtering them, and fixes a shipped-nginx `$host` port-stripping bug that broke `COREPACK_NPM_REGISTRY` through the sample dev proxy; a repository's own `url:` still wins, and leaving it unset keeps today's derivation unchanged.
+  ([@aydasraf](https://github.com/aydasraf))
+
 ### 🔒 Security
 
 - **npm registry keys and user/token records are never served over HTTP** — a reserved-key guard `404`s `.registry-keys.json`, `_users/`, and `_tokens/` ahead of any content route, so the registry's ECDSA signing key and user/token records can't be fetched.

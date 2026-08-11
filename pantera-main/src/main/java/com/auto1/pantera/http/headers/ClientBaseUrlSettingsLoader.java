@@ -21,15 +21,17 @@ import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 /**
- * Loads {@link ClientBaseUrlSettings} — {@code trustForwardedHeaders} and
- * {@code hostAllowlist}, both consumed by {@code pantera-core}'s {@link
- * ClientBaseUrl} — from the DB with env-var and hardcoded fallbacks.
- * Mirrors {@code UpstreamBreakerSettingsLoader} exactly.
+ * Loads {@link ClientBaseUrlSettings} — {@code trustForwardedHeaders},
+ * {@code hostAllowlist}, and {@code canonicalBaseUrl}, all consumed by
+ * {@code pantera-core}'s {@link ClientBaseUrl} — from the DB with env-var
+ * and hardcoded fallbacks. Mirrors {@code UpstreamBreakerSettingsLoader}
+ * exactly.
  *
  * <p>Load order per field: DB row ({@code trust_forwarded_headers} /
- * {@code client_base_host_allowlist} keys in {@code auth_settings}) → env
- * var ({@code PANTERA_TRUST_FORWARDED_HEADERS} / {@code
- * PANTERA_CLIENT_BASE_HOST_ALLOWLIST}) → hardcoded {@link
+ * {@code client_base_host_allowlist} / {@code client_base_url} keys in
+ * {@code auth_settings}) → env var ({@code PANTERA_TRUST_FORWARDED_HEADERS}
+ * / {@code PANTERA_CLIENT_BASE_HOST_ALLOWLIST} / {@code
+ * PANTERA_CLIENT_BASE_URL}) → hardcoded {@link
  * ClientBaseUrlSettings#defaults()}. The env var name for {@code
  * trust_forwarded_headers} is deliberately unchanged from the pre-2.3.0
  * env-only flag it replaces — an existing deployment's
@@ -70,6 +72,14 @@ public final class ClientBaseUrlSettingsLoader implements Supplier<ClientBaseUrl
     static final String KEY_TRUST_FORWARDED = "trust_forwarded_headers";
 
     static final String KEY_HOST_ALLOWLIST = "client_base_host_allowlist";
+
+    /**
+     * Canonical client-facing base URL — enforced (not merely a fallback
+     * default) for every repository with no explicit {@code url:} once set;
+     * see {@link ClientBaseUrl#derive(String, String)}. Env fallback is
+     * {@code PANTERA_CLIENT_BASE_URL} via {@link #envName(String)}.
+     */
+    static final String KEY_CANONICAL_BASE_URL = "client_base_url";
 
     private static final String ENV_PREFIX = "PANTERA_";
 
@@ -205,7 +215,8 @@ public final class ClientBaseUrlSettingsLoader implements Supplier<ClientBaseUrl
         try {
             return new ClientBaseUrlSettings(
                 this.resolveBoolean(KEY_TRUST_FORWARDED, defaults.trustForwardedHeaders()),
-                this.resolveHostAllowlist(defaults.hostAllowlist())
+                this.resolveHostAllowlist(defaults.hostAllowlist()),
+                this.resolveCanonicalBaseUrl(defaults.canonicalBaseUrl())
             );
         } catch (final IllegalArgumentException ex) {
             return defaults;
@@ -242,6 +253,24 @@ public final class ClientBaseUrlSettingsLoader implements Supplier<ClientBaseUrl
                 .toList();
         }
         return result;
+    }
+
+    /**
+     * Resolve the canonical base URL: DB row → env var → hardcoded default
+     * (blank, i.e. unset). Validation and trailing-slash normalization
+     * happen once, in {@link ClientBaseUrlSettings}'s compact constructor,
+     * on every {@link #load()} — not here.
+     * @param fallback Hardcoded default (always {@code ""})
+     * @return Resolved raw value, before {@link ClientBaseUrlSettings}
+     *  validates/normalizes it
+     */
+    private String resolveCanonicalBaseUrl(final String fallback) {
+        final Optional<String> row =
+            this.dao == null ? Optional.empty() : this.dao.get(KEY_CANONICAL_BASE_URL);
+        final String raw = row.orElseGet(
+            () -> this.envLookup.apply(ClientBaseUrlSettingsLoader.envName(KEY_CANONICAL_BASE_URL))
+        );
+        return raw == null || raw.isBlank() ? fallback : raw.trim();
     }
 
     private static String envName(final String key) {

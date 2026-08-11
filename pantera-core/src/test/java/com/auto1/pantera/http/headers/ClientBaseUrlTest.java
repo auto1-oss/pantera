@@ -242,4 +242,136 @@ final class ClientBaseUrlTest {
             new IsEqual<>("http://evil.tld")
         );
     }
+
+    // --- Canonical base URL setting (fixwave-h, 2.3.0) ---
+
+    /**
+     * Topology 1: a bare origin, no global path prefix in the request.
+     */
+    @Test
+    void canonicalBaseUrlComposesWithABarePathWhenNoGlobalPrefix() {
+        ClientBaseUrlSettingsRegistry.install(
+            () -> new ClientBaseUrlSettings(false, List.of(), "http://localhost:9999")
+        );
+        MatcherAssert.assertThat(
+            new ClientBaseUrl(Headers.from("Host", "reg.example.com"))
+                .derive("/npm_group/pnpm", "/pnpm"),
+            new IsEqual<>(Optional.of("http://localhost:9999/npm_group"))
+        );
+    }
+
+    /**
+     * Topology 2: a bare origin, request carries the global prefix + the
+     * {@code /api/<type>/<name>} route style -- both must be preserved in
+     * the composed URL even though only the origin comes from the setting.
+     */
+    @Test
+    void canonicalBaseUrlPreservesGlobalPrefixAndApiRouteStyle() {
+        ClientBaseUrlSettingsRegistry.install(
+            () -> new ClientBaseUrlSettings(false, List.of(), "http://localhost:9999")
+        );
+        MatcherAssert.assertThat(
+            new ClientBaseUrl(Headers.from("Host", "reg.example.com"))
+                .derive("/test_prefix/api/npm/npm_group/pnpm", "/pnpm"),
+            new IsEqual<>(Optional.of("http://localhost:9999/test_prefix/api/npm/npm_group"))
+        );
+    }
+
+    /**
+     * Topology 3: the canonical setting itself carries a path prefix, which
+     * must be prepended ahead of the derived repository path.
+     */
+    @Test
+    void canonicalBaseUrlWithAPathPrefixIsPrependedAheadOfTheRepoPath() {
+        ClientBaseUrlSettingsRegistry.install(
+            () -> new ClientBaseUrlSettings(false, List.of(), "https://reg.example.com/artifactory")
+        );
+        MatcherAssert.assertThat(
+            new ClientBaseUrl(Headers.from("Host", "reg.example.com"))
+                .derive("/npm_group/pnpm", "/pnpm"),
+            new IsEqual<>(Optional.of("https://reg.example.com/artifactory/npm_group"))
+        );
+    }
+
+    /**
+     * Guards against doubling: when the deployment's global path prefix
+     * happens to equal the canonical setting's own path prefix, the derived
+     * repository path already carries it -- the composed URL must not
+     * prepend it a second time.
+     */
+    @Test
+    void canonicalBaseUrlPrefixIsNotDoubledWhenTheDerivedPathAlreadyCarriesIt() {
+        ClientBaseUrlSettingsRegistry.install(
+            () -> new ClientBaseUrlSettings(false, List.of(), "https://reg.example.com/test_prefix")
+        );
+        MatcherAssert.assertThat(
+            new ClientBaseUrl(Headers.from("Host", "reg.example.com"))
+                .derive("/test_prefix/api/npm/npm_group/pnpm", "/pnpm"),
+            new IsEqual<>(Optional.of("https://reg.example.com/test_prefix/api/npm/npm_group"))
+        );
+    }
+
+    /**
+     * The exact reported bug: nginx's {@code $host} strips the port, so
+     * Pantera used to see a portless {@code Host} and emit a portless URL.
+     * With the canonical setting present, {@code Host} is not consulted at
+     * all -- the setting's own port survives regardless of what {@code Host}
+     * carries.
+     */
+    @Test
+    void portlessHostIsIgnoredWhenCanonicalBaseUrlIsSetSoThePortSurvives() {
+        ClientBaseUrlSettingsRegistry.install(
+            () -> new ClientBaseUrlSettings(false, List.of(), "http://localhost:9999")
+        );
+        MatcherAssert.assertThat(
+            new ClientBaseUrl(Headers.from("Host", "localhost"))
+                .derive("/npm_group/pnpm", "/pnpm"),
+            new IsEqual<>(Optional.of("http://localhost:9999/npm_group"))
+        );
+    }
+
+    /**
+     * Enforcement, not filtering: even {@code X-Forwarded-*} (which would
+     * otherwise win when trusted) is ignored once a canonical base URL is
+     * set -- the setting is consulted first, unconditionally.
+     */
+    @Test
+    void forwardedHeadersAreIgnoredTooWhenCanonicalBaseUrlIsSetEvenIfTrusted() {
+        ClientBaseUrlSettingsRegistry.install(
+            () -> new ClientBaseUrlSettings(true, List.of(), "http://localhost:9999")
+        );
+        final Headers headers = new Headers()
+            .add("Host", "internal:8080")
+            .add("X-Forwarded-Proto", "https")
+            .add("X-Forwarded-Host", "evil.example.com")
+            .add("X-Forwarded-Prefix", "/hijacked");
+        MatcherAssert.assertThat(
+            new ClientBaseUrl(headers).derive("/npm_group/pnpm", "/pnpm"),
+            new IsEqual<>(Optional.of("http://localhost:9999/npm_group"))
+        );
+    }
+
+    @Test
+    void varyIsHostWhenCanonicalBaseUrlIsUnset() {
+        MatcherAssert.assertThat(
+            new ClientBaseUrl(Headers.from("Host", "reg.example.com")).varyHeaderValue(),
+            new IsEqual<>("Host")
+        );
+    }
+
+    /**
+     * Nothing left to vary by: Host/X-Forwarded-* are not consulted at all
+     * once a canonical base URL is set, so the response must not claim they
+     * still influence it -- a stale Vary is a cache-poisoning vector.
+     */
+    @Test
+    void varyIsEmptyWhenCanonicalBaseUrlIsSet() {
+        ClientBaseUrlSettingsRegistry.install(
+            () -> new ClientBaseUrlSettings(true, List.of(), "http://localhost:9999")
+        );
+        MatcherAssert.assertThat(
+            new ClientBaseUrl(Headers.from("Host", "reg.example.com")).varyHeaderValue(),
+            new IsEqual<>("")
+        );
+    }
 }
