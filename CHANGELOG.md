@@ -52,6 +52,9 @@
 - **Clicking "Browse" from a search result no longer lands in a non-existent directory** — the UI guessed that dots in a flat artifact name were directory separators, so a version like `1.0.0-SNAPSHOT` was split into fake nested folders; it now trusts the artifact's real stored path instead of guessing.
   ([@aydasraf](https://github.com/aydasraf))
 
+- **Browsing from a search result works for Helm, Debian and RPM repositories too** — those types fell through to a branch that emitted a relative parent directory (`charts` instead of `/charts`), so the browse link resolved against the wrong base.
+  ([@aydasraf](https://github.com/aydasraf))
+
 ### 🔒 Security
 
 - **npm registry keys and user/token records are never served over HTTP** — a reserved-key guard `404`s `.registry-keys.json`, `_users/`, and `_tokens/` ahead of any content route, so the registry's ECDSA signing key and user/token records can't be fetched.

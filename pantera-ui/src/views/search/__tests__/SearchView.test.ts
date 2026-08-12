@@ -129,5 +129,35 @@ describe('SearchView', () => {
       const link = wrapper.findComponent(RouterLinkStub)
       expect(link.props('to')).toBe('/repositories/files?path=%2Fcom.example%2Ffoo&from=search')
     })
+
+    // helm/debian/rpm fall through to the catch-all branch, which used to
+    // emit a parent dir with no leading slash (e.g. "charts" instead of
+    // "/charts") -- an absolute-vs-relative mismatch every other branch
+    // already avoided.
+    it.each([
+      ['helm', 'charts', '/charts/mychart-1.2.3.tgz', '%2Fcharts'],
+      ['deb', 'debian', '/pool/main/n/nginx/nginx_1.2.3.deb', '%2Fpool%2Fmain%2Fn%2Fnginx'],
+      ['rpm', 'rpms', '/packages/foo-1.2.3-1.x86_64.rpm', '%2Fpackages'],
+    ])('%s browse path is absolute', async (rtype, repo, path, expected) => {
+      const wrapper = await mountWithResult(makeResult({
+        repo_type: rtype,
+        repo_name: repo,
+        artifact_path: path,
+      }))
+
+      const link = wrapper.findComponent(RouterLinkStub)
+      expect(link.props('to')).toBe(`/repositories/${repo}?path=${expected}&from=search`)
+    })
+
+    it('catch-all repo type at the root still browses to the root', async () => {
+      const wrapper = await mountWithResult(makeResult({
+        repo_type: 'helm',
+        repo_name: 'charts',
+        artifact_path: 'mychart-1.2.3.tgz',
+      }))
+
+      const link = wrapper.findComponent(RouterLinkStub)
+      expect(link.props('to')).toBe('/repositories/charts?path=%2F&from=search')
+    })
   })
 })
