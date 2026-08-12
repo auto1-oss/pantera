@@ -12,7 +12,9 @@ package com.auto1.pantera.backfill;
 
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
+import org.hamcrest.core.IsInstanceOf;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -27,7 +29,7 @@ final class ScannerFactoryTest {
     @ValueSource(strings = {
         "maven", "gradle", "docker", "npm", "pypi",
         "go", "helm", "composer", "php", "file",
-        "deb", "debian", "gem", "gems",
+        "deb", "debian", "gem", "gems", "hexpm", "hex", "conda",
         "maven-proxy", "gradle-proxy", "docker-proxy",
         "npm-proxy", "pypi-proxy", "go-proxy",
         "helm-proxy", "php-proxy", "file-proxy",
@@ -100,6 +102,23 @@ final class ScannerFactoryTest {
             String.format("Type '%s' should produce a GemScanner", type),
             ScannerFactory.create(type),
             Matchers.instanceOf(GemScanner.class)
+        );
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"hexpm", "hex"})
+    void hexpmAndHexReturnHexScanner(final String type) {
+        MatcherAssert.assertThat(
+            ScannerFactory.create(type),
+            new IsInstanceOf(HexScanner.class)
+        );
+    }
+
+    @Test
+    void condaReturnsCondaScanner() {
+        MatcherAssert.assertThat(
+            ScannerFactory.create("conda"),
+            new IsInstanceOf(CondaScanner.class)
         );
     }
 }

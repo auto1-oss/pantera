@@ -93,6 +93,13 @@ public final class ScannerFactory {
             case "gems":
                 scanner = new GemScanner();
                 break;
+            case "hexpm":
+            case "hex":
+                scanner = new HexScanner();
+                break;
+            case "conda":
+                scanner = new CondaScanner();
+                break;
             default:
                 throw new IllegalArgumentException(
                     String.format("Unknown repository type: %s", type)

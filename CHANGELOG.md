@@ -54,6 +54,7 @@
 
 - **Browsing from a search result works for Helm, Debian and RPM repositories too** — those types fell through to a branch that emitted a relative parent directory (`charts` instead of `/charts`), so the browse link resolved against the wrong base.
   ([@aydasraf](https://github.com/aydasraf))
+- **Browsing from a search result now works for Conan, Gem, Hex and Conda** — Conan browsed to the artifact's own file instead of its parent directory; Gem/Hex storage is flat and Conda's indexed name is a synthetic composite, so none of the three had a real directory to browse to at all. Search now exposes the writer's real storage key when one was recorded, and the UI browses to its parent instead of guessing; Conan and newly-uploaded Gem/Hex/Conda artifacts are fixed immediately, existing Gem/Hex/Conda rows pick it up once `pantera-backfill` is re-run against their storage. ([@aydasraf](https://github.com/aydasraf))
 
 ### 🔒 Security
 

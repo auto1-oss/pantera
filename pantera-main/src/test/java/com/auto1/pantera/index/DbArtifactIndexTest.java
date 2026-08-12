@@ -286,12 +286,108 @@ class DbArtifactIndexTest {
             Matchers.contains("maven-central")
         );
         // Locate with a path that doesn't match any prefix
-        final List<String> empty = this.index.locate("org/apache/commons/commons-lang3/3.12/commons-lang3-3.12.jar").join();
+        final List<String> empty = this.index.locate(
+            "org/apache/commons/commons-lang3/3.12/commons-lang3-3.12.jar"
+        ).join();
         MatcherAssert.assertThat(
             "Should return empty for non-matching path",
             empty,
             Matchers.empty()
         );
+    }
+
+    @Test
+    void searchReturnsPathPrefixForRowsThatHaveOne() throws Exception {
+        // gem and conda writers now record the real storage key as
+        // path_prefix (SubmitGemSlice / conda UpdateSlice); this must
+        // survive the round trip through search()'s SELECT + fromResultSet.
+        this.insertArtifactRow(
+            "gem", "gem-repo", "pathprefixtest-rails", "7.0.4",
+            100L, "system", "gems/pathprefixtest-rails-7.0.4.gem"
+        );
+        this.insertArtifactRow(
+            "conda", "conda-forge", "pathprefixtest-numpy_linux-64", "1.21.0",
+            200L, "system", "linux-64/pathprefixtest-numpy-1.21.0-py39_0.tar.bz2"
+        );
+        final SearchResult gemResult = this.index.search("pathprefixtest-rails", 10, 0).join();
+        MatcherAssert.assertThat(
+            "Should find exactly the gem row",
+            gemResult.documents().size(),
+            new IsEqual<>(1)
+        );
+        MatcherAssert.assertThat(
+            "gem row should carry its real storage key as pathPrefix",
+            gemResult.documents().get(0).pathPrefix(),
+            new IsEqual<>("gems/pathprefixtest-rails-7.0.4.gem")
+        );
+        final SearchResult condaResult = this.index.search("pathprefixtest-numpy", 10, 0).join();
+        MatcherAssert.assertThat(
+            "Should find exactly the conda row",
+            condaResult.documents().size(),
+            new IsEqual<>(1)
+        );
+        MatcherAssert.assertThat(
+            "conda row should carry its real storage key as pathPrefix",
+            condaResult.documents().get(0).pathPrefix(),
+            new IsEqual<>("linux-64/pathprefixtest-numpy-1.21.0-py39_0.tar.bz2")
+        );
+    }
+
+    @Test
+    void searchOmitsPathPrefixWhenRowHasNone() throws Exception {
+        this.index.index(new ArtifactDocument(
+            "npm", "npm-local", "pathprefixtest-lodash", "pathprefixtest-lodash",
+            "4.17.21", 100L, Instant.now(), "user1"
+        )).join();
+        final SearchResult result = this.index.search("pathprefixtest-lodash", 10, 0).join();
+        MatcherAssert.assertThat(
+            "Should find exactly the npm row",
+            result.documents().size(),
+            new IsEqual<>(1)
+        );
+        MatcherAssert.assertThat(
+            "Row indexed without a path_prefix should report null, not a guess",
+            result.documents().get(0).pathPrefix(),
+            Matchers.nullValue()
+        );
+    }
+
+    /**
+     * Insert an {@code artifacts} row directly via SQL, bypassing
+     * {@link DbArtifactIndex#index(ArtifactDocument)} (which never sets
+     * {@code path_prefix} — that column is populated by
+     * {@code DbConsumer}/{@code DbSyncArtifactIndexer} from
+     * {@code ArtifactEvent}, not through this index's own write path).
+     *
+     * @param repoType Repository type
+     * @param repoName Repository name
+     * @param name Artifact name (the {@code artifact_path} column)
+     * @param version Artifact version
+     * @param size Artifact size
+     * @param owner Owner username
+     * @param pathPrefix Real storage key to store
+     * @throws Exception On SQL error
+     */
+    private void insertArtifactRow(
+        final String repoType, final String repoName, final String name,
+        final String version, final long size, final String owner,
+        final String pathPrefix
+    ) throws Exception {
+        try (Connection conn = this.dataSource.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(
+                 "INSERT INTO artifacts (repo_type, repo_name, name, version, size, "
+                     + "created_date, owner, path_prefix) VALUES (?,?,?,?,?,?,?,?)"
+             )) {
+            stmt.setString(1, repoType);
+            stmt.setString(2, repoName);
+            stmt.setString(3, name);
+            stmt.setString(4, version);
+            stmt.setLong(5, size);
+            stmt.setLong(6, System.currentTimeMillis());
+            stmt.setString(7, owner);
+            stmt.setString(8, pathPrefix);
+            stmt.executeUpdate();
+        }
     }
 
     @Test

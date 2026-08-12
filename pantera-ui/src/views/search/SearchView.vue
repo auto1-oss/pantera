@@ -211,6 +211,7 @@ function parentDir(path: string): string {
 function browseUrl(data: SearchResult): string {
   const rtype = (data.repo_type ?? '').toLowerCase()
   const name = data.artifact_path
+  const realKey = data.path_prefix
   let path: string
 
   if (rtype.startsWith('maven') || rtype.startsWith('gradle')) {
@@ -225,11 +226,31 @@ function browseUrl(data: SearchResult): string {
     path = '/dist/' + name
   } else if (rtype === 'php') {
     path = '/artifacts'
+  } else if (rtype.startsWith('gem') || rtype.startsWith('hex') || rtype.startsWith('conda')) {
+    // artifact_path is not a real directory for any of these: gem/hex
+    // storage is flat (no per-package directory), and conda's artifact_path
+    // is a synthetic "name_arch" composite unrelated to the real
+    // "<arch>/<filename>" key. When a writer has recorded the real storage
+    // key (path_prefix), browse to ITS parent directory. Rows indexed
+    // before that field existed -- or any writer that still doesn't
+    // populate it -- fall back to the historical '/' + name guess, which is
+    // wrong as often as not but no worse than before this fix.
+    if (realKey) {
+      const dir = parentDir(realKey)
+      path = '/' + (dir || '')
+    } else {
+      path = '/' + name
+    }
+  } else if (rtype.startsWith('conan')) {
+    // Unlike gem/hex/conda, artifact_path IS already the real, exact
+    // upload key here (never a synthetic name) -- it just needs the same
+    // "browse to the parent, not the file itself" treatment as maven/file,
+    // so no path_prefix dependency and no fallback branch needed.
+    const dir = parentDir(name)
+    path = '/' + (dir || '')
   } else if (
     rtype.startsWith('npm') || rtype.startsWith('pypi') ||
     rtype.startsWith('go') ||
-    rtype.startsWith('gem') || rtype.startsWith('hex') ||
-    rtype.startsWith('conan') || rtype.startsWith('conda') ||
     rtype.startsWith('nuget')
   ) {
     path = '/' + name
