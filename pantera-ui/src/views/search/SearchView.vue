@@ -239,8 +239,10 @@ function browseUrl(data: SearchResult): string {
   } else if (rtype.startsWith('docker')) {
     path = '/'
   } else {
+    // helm/debian/rpm and any future type land here; the browse path must be
+    // absolute like every other branch's, so the leading slash is not optional.
     const dir = parentDir(name)
-    path = dir || '/'
+    path = '/' + (dir || '')
   }
   return `/repositories/${data.repo_name}?path=${encodeURIComponent(path)}&from=search`
 }
