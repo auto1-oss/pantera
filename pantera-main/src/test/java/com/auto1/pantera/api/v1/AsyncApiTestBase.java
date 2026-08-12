@@ -176,7 +176,7 @@ public class AsyncApiTestBase {
             Optional.empty(),
             NoopCooldownService.INSTANCE,
             new TestSettings(),
-            ArtifactIndex.NOP,
+            this.testIndex(),
             sharedDs,
             jwtTokens
         );
@@ -202,6 +202,19 @@ public class AsyncApiTestBase {
      */
     protected Policy<?> testPolicy() {
         return Policy.FREE;
+    }
+
+    /**
+     * Search index backing the deployed verticle for this test class.
+     * Defaults to {@link ArtifactIndex#NOP} (search always empty) so
+     * existing subclasses that only exercise non-search endpoints are
+     * unaffected — override to exercise search-response content against a
+     * real, seeded index (e.g. a {@code DbArtifactIndex} bound to
+     * {@link #sharedDs()}).
+     * @return Artifact index used to construct the verticle
+     */
+    protected ArtifactIndex testIndex() {
+        return ArtifactIndex.NOP;
     }
 
     /**

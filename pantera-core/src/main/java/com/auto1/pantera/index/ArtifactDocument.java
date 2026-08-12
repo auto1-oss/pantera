@@ -24,6 +24,10 @@ import java.util.Objects;
  * @param size Artifact size in bytes
  * @param createdAt Creation timestamp
  * @param owner Owner/uploader username (nullable)
+ * @param pathPrefix Real storage key backing this artifact (nullable — only
+ *     populated for writers that record it; see {@code ArtifactEvent#pathPrefix()}).
+ *     Unlike {@code artifactPath}, this is always an actual storage key when
+ *     present, never a synthetic display name.
  * @since 1.20.13
  */
 public record ArtifactDocument(
@@ -34,7 +38,8 @@ public record ArtifactDocument(
     String version,
     long size,
     Instant createdAt,
-    String owner
+    String owner,
+    String pathPrefix
 ) {
 
     /**
@@ -44,5 +49,26 @@ public record ArtifactDocument(
         Objects.requireNonNull(repoType, "repoType");
         Objects.requireNonNull(repoName, "repoName");
         Objects.requireNonNull(artifactPath, "artifactPath");
+    }
+
+    /**
+     * Back-compat ctor for callers that predate {@code pathPrefix} — defaults
+     * it to {@code null} (no known real storage key).
+     *
+     * @param repoType Repository type
+     * @param repoName Repository name
+     * @param artifactPath Full artifact path
+     * @param artifactName Human-readable artifact name
+     * @param version Artifact version
+     * @param size Artifact size in bytes
+     * @param createdAt Creation timestamp
+     * @param owner Owner/uploader username (nullable)
+     */
+    public ArtifactDocument(
+        final String repoType, final String repoName, final String artifactPath,
+        final String artifactName, final String version, final long size,
+        final Instant createdAt, final String owner
+    ) {
+        this(repoType, repoName, artifactPath, artifactName, version, size, createdAt, owner, null);
     }
 }

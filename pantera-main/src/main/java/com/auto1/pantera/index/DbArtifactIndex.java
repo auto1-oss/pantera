@@ -1178,7 +1178,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
         final String orderBy = buildOrderBy(field, sortAsc, true);
         final String searchSql = String.join(
             " ",
-            "SELECT repo_type, repo_name, name, version, size, created_date, owner,",
+            "SELECT repo_type, repo_name, name, version, size, created_date, owner, path_prefix,",
             "ts_rank(search_tokens, to_tsquery('simple', ?)) AS rank,",
             "COUNT(*) OVER() AS total_count",
             "FROM artifacts WHERE search_tokens @@ to_tsquery('simple', ?)",
@@ -1297,7 +1297,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
         final String orderBy = buildOrderBy(field, sortAsc, true);
         final String searchSql = String.join(
             " ",
-            "SELECT repo_type, repo_name, name, version, size, created_date, owner,",
+            "SELECT repo_type, repo_name, name, version, size, created_date, owner, path_prefix,",
             "ts_rank(search_tokens, plainto_tsquery('simple', ?)) AS rank,",
             "COUNT(*) OVER() AS total_count",
             "FROM artifacts WHERE search_tokens @@ plainto_tsquery('simple', ?)",
@@ -1414,7 +1414,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
         final String orderBy = buildOrderBy(field, sortAsc, false);
         final String searchSql = String.join(
             " ",
-            "SELECT repo_type, repo_name, name, version, size, created_date, owner,",
+            "SELECT repo_type, repo_name, name, version, size, created_date, owner, path_prefix,",
             "COUNT(*) OVER() AS total_count",
             "FROM artifacts WHERE LOWER(name) LIKE LOWER(?)",
             filter,
@@ -1882,7 +1882,8 @@ public final class DbArtifactIndex implements ArtifactIndex {
             rs.getString("version"),
             rs.getLong("size"),
             Instant.ofEpochMilli(createdDate),
-            rs.getString("owner")
+            rs.getString("owner"),
+            rs.getString("path_prefix")
         );
     }
 }

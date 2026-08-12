@@ -258,6 +258,15 @@ public final class SearchHandler {
                 if (doc.owner() != null) {
                     obj.put("owner", doc.owner());
                 }
+                if (doc.pathPrefix() != null && !doc.pathPrefix().isEmpty()) {
+                    // Real storage key, when a writer recorded one — distinct
+                    // from artifact_path, which can be a display name that
+                    // never existed as a path (e.g. gem/hex package names,
+                    // the synthetic conda "name_arch" composite). Frontend
+                    // browse-to-directory uses this in preference to
+                    // artifact_path when present.
+                    obj.put("path_prefix", doc.pathPrefix());
+                }
                 items.add(obj);
             }
             final long total = result.totalHits();

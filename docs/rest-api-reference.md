@@ -1624,7 +1624,8 @@ spring boot
       "version": "1.0",
       "size": 15234,
       "created_at": "2026-03-20T14:30:00Z",
-      "owner": "admin"
+      "owner": "admin",
+      "path_prefix": "com/example/lib/1.0/lib-1.0.jar"
     }
   ],
   "page": 0,
@@ -1633,6 +1634,8 @@ spring boot
   "hasMore": false
 }
 ```
+
+`path_prefix` is present only when the indexing writer recorded the artifact's real storage key. `artifact_path` is always a display name (a package name, a synthetic identifier, or a real path depending on the format) and must not be assumed to be resolvable to a storage location; `path_prefix`, when present, always is. Currently populated by the npm/pypi/go/maven-or-gradle/composer proxy processors and by gem, hexpm, and conda uploads; absent for other writers (older rows, local/hosted uploads of other formats, docker, helm, debian, rpm, files, conan, and the bulk importer) — clients must fall back to `artifact_path`-based logic when it is absent.
 
 **Response (400):**
 

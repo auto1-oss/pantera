@@ -22,74 +22,63 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Scanner for Ruby gem repositories.
+ * Scanner for Hex (Erlang/Elixir) repositories.
  *
- * <p>Walks the repository directory tree looking for {@code .gem} files.
- * If a {@code gems/} subdirectory exists under the root, only that
- * subdirectory is scanned; otherwise the root itself is scanned
- * (flat layout). Each {@code .gem} filename is parsed with a regex
- * to extract the gem name and version.</p>
- *
- * <p>The filename convention is
- * {@code {name}-{version}(-{platform}).gem}. Gem names may contain
- * hyphens (e.g. {@code net-http}, {@code ruby-ole}), so the version
- * is identified as the first hyphen-separated segment that starts
- * with a digit.</p>
+ * <p>Hex storage is flat by design: {@code packages/<name>} is a single
+ * JSON metadata file describing every release, and the actual release
+ * tarballs live under {@code tarballs/<name>-<version>.tar} — there is
+ * never a per-package directory. This scanner walks {@code tarballs/} and
+ * parses each filename to recover the package name and version, and
+ * records the tarball's repo-relative path as {@code pathPrefix} so
+ * browse-to-directory can resolve the real flat layout instead of guessing
+ * a per-package directory that never exists.</p>
  *
  * @since 1.20.13
  */
-final class GemScanner implements Scanner {
+final class HexScanner implements Scanner {
 
     /**
      * Logger.
      */
     private static final Logger LOG =
-        LoggerFactory.getLogger(GemScanner.class);
+        LoggerFactory.getLogger(HexScanner.class);
 
     /**
-     * Pattern for gem filenames.
-     * Captures the gem name (which may contain hyphens) and the
-     * version (which starts with a digit). An optional platform
-     * suffix (e.g. {@code -x86_64-linux}) is allowed but not
-     * captured.
-     * Examples:
-     * <ul>
-     *   <li>{@code rails-7.0.4.gem} -> name=rails, version=7.0.4</li>
-     *   <li>{@code net-http-0.3.2.gem} -> name=net-http, version=0.3.2</li>
-     *   <li>{@code nokogiri-1.13.8-x86_64-linux.gem} -> name=nokogiri, version=1.13.8</li>
-     *   <li>{@code ruby-ole-1.2.12.7.gem} -> name=ruby-ole, version=1.2.12.7</li>
-     * </ul>
+     * Pattern for tarball filenames: {@code {name}-{version}.tar}. Hex
+     * package names are conventionally hyphen-free (lowercase letters,
+     * digits, underscores), but the version is still identified as the
+     * first hyphen-separated segment that starts with a digit, mirroring
+     * {@link GemScanner}, so an unexpected hyphenated name degrades
+     * gracefully instead of mis-parsing.
      */
-    private static final Pattern GEM_PATTERN = Pattern.compile(
-        "^(?<name>.+?)-(?<version>\\d[A-Za-z0-9._]*)(?:-[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)*)?[.]gem$"
+    private static final Pattern TARBALL_PATTERN = Pattern.compile(
+        "^(?<name>.+?)-(?<version>\\d[A-Za-z0-9._+-]*)[.]tar$"
     );
 
     /**
-     * Name of the standard gems subdirectory.
+     * Name of the tarballs subdirectory.
      */
-    private static final String GEMS_DIR = "gems";
+    private static final String TARBALLS_DIR = "tarballs";
 
     @Override
     public Stream<ArtifactRecord> scan(final Path root, final String repoName)
         throws IOException {
-        final Path base;
-        if (Files.isDirectory(root.resolve(GemScanner.GEMS_DIR))) {
-            base = root.resolve(GemScanner.GEMS_DIR);
-        } else {
-            base = root;
+        final Path base = root.resolve(HexScanner.TARBALLS_DIR);
+        if (!Files.isDirectory(base)) {
+            return Stream.empty();
         }
         return Files.walk(base, 1)
             .filter(Files::isRegularFile)
             .filter(path -> !path.getFileName().toString().startsWith("."))
-            .filter(path -> path.getFileName().toString().endsWith(".gem"))
+            .filter(path -> path.getFileName().toString().endsWith(".tar"))
             .flatMap(path -> this.tryParse(repoName, path, root));
     }
 
     /**
-     * Attempt to parse a gem file path into an artifact record.
+     * Attempt to parse a tarball file path into an artifact record.
      *
      * @param repoName Logical repository name
-     * @param path File path to parse
+     * @param path Tarball file path to parse
      * @param root Repository root, used to compute the repo-relative real
      *     storage key stored as {@code pathPrefix}
      * @return Stream with a single record, or empty if filename does not match
@@ -97,10 +86,10 @@ final class GemScanner implements Scanner {
     private Stream<ArtifactRecord> tryParse(final String repoName,
         final Path path, final Path root) {
         final String filename = path.getFileName().toString();
-        final Matcher matcher = GEM_PATTERN.matcher(filename);
+        final Matcher matcher = HexScanner.TARBALL_PATTERN.matcher(filename);
         if (!matcher.matches()) {
             LOG.debug(
-                "Skipping non-conforming gem filename: {}", filename
+                "Skipping non-conforming hex tarball filename: {}", filename
             );
             return Stream.empty();
         }
@@ -110,17 +99,11 @@ final class GemScanner implements Scanner {
             final BasicFileAttributes attrs = Files.readAttributes(
                 path, BasicFileAttributes.class
             );
-            // Real storage key: the scanned file's path relative to the
-            // repo root, e.g. "gems/rails-7.0.4.gem" (or just the filename
-            // for the flat-at-root layout) -- exactly what live uploads
-            // write via Gem.update(), so browse-to-directory can resolve
-            // it without guessing a per-package directory that never
-            // exists.
             final String pathPrefix = root.relativize(path).toString()
                 .replace('\\', '/');
             return Stream.of(
                 new ArtifactRecord(
-                    "gem",
+                    "hexpm",
                     repoName,
                     name,
                     version,

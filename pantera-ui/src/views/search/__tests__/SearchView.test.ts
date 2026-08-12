@@ -159,5 +159,88 @@ describe('SearchView', () => {
       const link = wrapper.findComponent(RouterLinkStub)
       expect(link.props('to')).toBe('/repositories/charts?path=%2F&from=search')
     })
+
+    // gem/hex/conda: artifact_path is not a real directory for any of
+    // these (gem/hex storage is flat, conda's artifact_path is a synthetic
+    // "name_arch" composite) -- when the backend has recorded the real
+    // storage key as path_prefix, browse to ITS parent directory instead.
+    it('gem with a real key browses to the flat gems/ directory, not a per-package dir', async () => {
+      const wrapper = await mountWithResult(makeResult({
+        repo_type: 'gem',
+        repo_name: 'gems',
+        artifact_path: 'rails',
+        path_prefix: 'gems/rails-7.0.4.gem',
+      }))
+
+      const link = wrapper.findComponent(RouterLinkStub)
+      expect(link.props('to')).toBe('/repositories/gems?path=%2Fgems&from=search')
+    })
+
+    it('hex with a real key browses to the flat tarballs/ directory, not a per-package dir', async () => {
+      const wrapper = await mountWithResult(makeResult({
+        repo_type: 'hexpm',
+        repo_name: 'hex',
+        artifact_path: 'phoenix',
+        path_prefix: 'tarballs/phoenix-1.6.0.tar',
+      }))
+
+      const link = wrapper.findComponent(RouterLinkStub)
+      expect(link.props('to')).toBe('/repositories/hex?path=%2Ftarballs&from=search')
+    })
+
+    it('conda with a real key browses to the real per-arch directory, not the synthetic name_arch path', async () => {
+      const wrapper = await mountWithResult(makeResult({
+        repo_type: 'conda',
+        repo_name: 'conda-forge',
+        artifact_path: 'numpy_linux-64',
+        path_prefix: 'linux-64/numpy-1.21.0-py39_0.tar.bz2',
+      }))
+
+      const link = wrapper.findComponent(RouterLinkStub)
+      expect(link.props('to')).toBe('/repositories/conda-forge?path=%2Flinux-64&from=search')
+    })
+
+    it('conan browses to its parent directory using artifact_path -- no path_prefix needed', async () => {
+      const wrapper = await mountWithResult(makeResult({
+        repo_type: 'conan',
+        repo_name: 'conan-local',
+        artifact_path: 'zlib/1.2.13/_/_/0/export/conanfile.py',
+      }))
+
+      const link = wrapper.findComponent(RouterLinkStub)
+      expect(link.props('to')).toBe(
+        '/repositories/conan-local?path=%2Fzlib%2F1.2.13%2F_%2F_%2F0%2Fexport&from=search',
+      )
+    })
+
+    it('conan artifact at repository root browses to "/", not "//" or empty', async () => {
+      const wrapper = await mountWithResult(makeResult({
+        repo_type: 'conan',
+        repo_name: 'conan-local',
+        artifact_path: 'conanfile.py',
+      }))
+
+      const link = wrapper.findComponent(RouterLinkStub)
+      expect(link.props('to')).toBe('/repositories/conan-local?path=%2F&from=search')
+    })
+
+    // Rows indexed before path_prefix existed (or any writer that hasn't
+    // been updated to populate it yet) must fall back to today's per-format
+    // guess -- exactly the pre-fix behaviour -- rather than crash or browse
+    // to an empty path.
+    it.each([
+      ['gem', 'gems', 'rails', '%2Frails'],
+      ['hexpm', 'hex', 'phoenix', '%2Fphoenix'],
+      ['conda', 'conda-forge', 'numpy_linux-64', '%2Fnumpy_linux-64'],
+    ])('%s falls back to the historical guess when path_prefix is absent', async (rtype, repo, path, expected) => {
+      const wrapper = await mountWithResult(makeResult({
+        repo_type: rtype,
+        repo_name: repo,
+        artifact_path: path,
+      }))
+
+      const link = wrapper.findComponent(RouterLinkStub)
+      expect(link.props('to')).toBe(`/repositories/${repo}?path=${expected}&from=search`)
+    })
   })
 })

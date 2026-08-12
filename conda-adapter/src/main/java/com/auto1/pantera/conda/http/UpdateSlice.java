@@ -133,12 +133,22 @@ public final class UpdateSlice implements Slice {
                                 );
                                 action = action.thenCompose(nothing -> {
                                     final String pkgName = json.getString("name", "<no name>");
+                                    // Real storage key: matcher.group(1) is
+                                    // the exact "<arch>/<filename>" key this
+                                    // request just moved the package to
+                                    // (`main`, above) — the indexed name is
+                                    // a synthetic "name_arch" composite
+                                    // unrelated to it, so pathPrefix is the
+                                    // only way browse-to-directory can find
+                                    // the real per-arch directory.
                                     final ArtifactEvent event = new ArtifactEvent(
                                         UpdateSlice.CONDA, this.repoName,
                                         new Login(headers).getValue(),
                                         String.join("_", pkgName, json.getString("arch", "<no arch>")),
                                         json.getString("version"),
-                                        json.getJsonNumber(UpdateSlice.SIZE).longValue()
+                                        json.getJsonNumber(UpdateSlice.SIZE).longValue(),
+                                        System.currentTimeMillis(), null,
+                                        matcher.group(1)
                                     );
                                     this.events.ifPresent(queue -> queue.add(event));
                                     com.auto1.pantera.http.cache.NegativeCacheRegistry

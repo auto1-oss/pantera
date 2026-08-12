@@ -118,6 +118,11 @@ export interface SearchResult {
   size: number
   created_at?: string
   owner?: string
+  // Real storage key backing this artifact, when the writer recorded one.
+  // Unlike artifact_path, this is always an actual path when present --
+  // never a display name or synthetic composite. Absent on rows indexed
+  // before this field existed, or for writers that don't populate it yet.
+  path_prefix?: string
 }
 
 export interface LocateResponse {
