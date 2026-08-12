@@ -189,29 +189,19 @@ function formatUploadedAtAbsolute(iso?: string | null): string {
   })
 }
 
-function normalizePath(path: string): string {
-  if (path.includes('/')) return path
-  const lastDot = path.lastIndexOf('.')
-  if (lastDot <= 0) return path
-  const ext = path.substring(lastDot)
-  if (ext.length > 1 && ext.length <= 8) {
-    const withoutExt = path.substring(0, lastDot)
-    if (withoutExt.includes('.')) {
-      return withoutExt.replace(/\./g, '/') + ext
-    }
-  }
-  return path
-}
-
+// artifact_path is the artifact's real storage key (StorageArtifactSlice
+// populates it straight from the request URI path) -- it is never a dotted
+// encoding of a directory hierarchy, so trust it as-is: a key with slashes
+// is already a real path, a key without slashes is a flat file at the
+// repository root. Guessing dots-as-separators previously turned version
+// strings like "1.0.0-SNAPSHOT" into fake directory levels.
 function artifactName(path: string): string {
-  const normalized = normalizePath(path)
-  const parts = normalized.split('/').filter(Boolean)
+  const parts = path.split('/').filter(Boolean)
   return parts.length > 0 ? parts[parts.length - 1] : path
 }
 
 function parentDir(path: string): string {
-  const normalized = normalizePath(path)
-  const parts = normalized.split('/').filter(Boolean)
+  const parts = path.split('/').filter(Boolean)
   parts.pop()
   return parts.join('/')
 }
@@ -221,12 +211,16 @@ function parentDir(path: string): string {
 function browseUrl(data: SearchResult): string {
   const rtype = (data.repo_type ?? '').toLowerCase()
   const name = data.artifact_path
-  const version = data.version
   let path: string
 
   if (rtype.startsWith('maven') || rtype.startsWith('gradle')) {
-    const slashPath = name.replace(/\./g, '/')
-    path = version ? `/${slashPath}/${version}` : `/${slashPath}`
+    // artifact_path is already the real repository key, e.g.
+    // "/com/google/guava/guava/31.0-jre/guava-31.0-jre.jar" -- its parent
+    // directory IS the version directory, so no extra "+ version" segment
+    // is needed (that used to compensate for a dotted GAV coordinate that
+    // never actually reached this code).
+    const dir = parentDir(name)
+    path = '/' + (dir || '')
   } else if (rtype === 'php-proxy') {
     path = '/dist/' + name
   } else if (rtype === 'php') {
@@ -240,8 +234,7 @@ function browseUrl(data: SearchResult): string {
   ) {
     path = '/' + name
   } else if (rtype === 'file' || rtype === 'file-proxy' || rtype === 'file-group') {
-    const normalized = normalizePath(name)
-    const dir = normalized.split('/').filter(Boolean).slice(0, -1).join('/')
+    const dir = parentDir(name)
     path = '/' + (dir || '')
   } else if (rtype.startsWith('docker')) {
     path = '/'
@@ -424,7 +417,7 @@ const SORT_OPTIONS = [
                 {{ artifactName(item.artifact_path) }}
               </div>
               <div class="text-xs text-gray-400 font-mono mt-0.5 truncate">
-                {{ normalizePath(item.artifact_path) }}
+                {{ item.artifact_path }}
               </div>
               <div class="flex items-center gap-2 mt-2 flex-wrap">
                 <RepoTypeBadge :type="item.repo_type" />

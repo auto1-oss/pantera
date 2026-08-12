@@ -49,6 +49,9 @@
 - **A canonical `client_base_url` admin setting supersedes Host-based URL derivation entirely** — once set, it enforces the origin for every repository without its own `url:`, structurally ignoring `Host`/`X-Forwarded-*` rather than just filtering them, and fixes a shipped-nginx `$host` port-stripping bug that broke `COREPACK_NPM_REGISTRY` through the sample dev proxy; a repository's own `url:` still wins, and leaving it unset keeps today's derivation unchanged.
   ([@aydasraf](https://github.com/aydasraf))
 
+- **Clicking "Browse" from a search result no longer lands in a non-existent directory** — the UI guessed that dots in a flat artifact name were directory separators, so a version like `1.0.0-SNAPSHOT` was split into fake nested folders; it now trusts the artifact's real stored path instead of guessing.
+  ([@aydasraf](https://github.com/aydasraf))
+
 ### 🔒 Security
 
 - **npm registry keys and user/token records are never served over HTTP** — a reserved-key guard `404`s `.registry-keys.json`, `_users/`, and `_tokens/` ahead of any content route, so the registry's ECDSA signing key and user/token records can't be fetched.
