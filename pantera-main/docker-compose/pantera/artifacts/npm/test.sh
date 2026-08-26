@@ -155,7 +155,7 @@ section_clients() {
     if ( cd "$dir" && "$client" install --silent >/dev/null 2>&1 ); then
       pass "$client install"
     else
-      fail "$client install: exit code $?"
+      fail "$client install"
       continue
     fi
     # The failure mode a plain exit code cannot see: a lockfile whose
