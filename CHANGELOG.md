@@ -48,7 +48,7 @@
   ([@aydasraf](https://github.com/aydasraf))
 - **npm packuments now carry a deterministic `_rev`**, so `npm unpublish --force` validates the caller's revision instead of accepting any value (see Breaking changes above).
   ([@ayd](https://github.com/ayd))
-- **Unimplemented npm endpoints (currently `npm token`) answer a fast `404` with `X-Pantera-Reason: not_implemented`** instead of a `5xx` that npm clients retried for roughly 70 seconds — npm's retry logic only backs off on `4xx`, so even a semantically-correct `501` would have been retried just as long.
+- **Unimplemented npm endpoints (currently `npm token`, `npm hook`, `npm team`, `npm org` writes) answer a fast `404` with `X-Pantera-Reason: not_implemented`** instead of a `5xx` that npm clients retried for roughly 70 seconds — npm's retry logic only backs off on `4xx`, so even a semantically-correct `501` would have been retried just as long.
   ([@ayd](https://github.com/ayd))
 - **`npm profile set` now requires the `write` permission instead of `read`.**
   ([@ayd](https://github.com/ayd))

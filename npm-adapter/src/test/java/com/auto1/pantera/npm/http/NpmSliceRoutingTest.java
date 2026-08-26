@@ -123,6 +123,122 @@ final class NpmSliceRoutingTest {
         );
     }
 
+    /**
+     * WS-A follow-on: {@code npm hook} has no supported surface at all, for
+     * any method -- unlike {@code npm token} (fixed by the sibling task this
+     * one follows), this route was previously unrouted and fell through to
+     * whatever catch-all matched next, which is exactly the failure mode
+     * {@link DeclinedEndpointSlice} exists to close off.
+     */
+    @Test
+    void npmHookGetIsDeclined() throws Exception {
+        this.assertDeclined(this.responseFor(RqMethod.GET, "/-/npm/v1/hooks"));
+    }
+
+    @Test
+    void npmHookPutIsDeclined() throws Exception {
+        this.assertDeclined(this.responseFor(RqMethod.PUT, "/-/npm/v1/hooks/hook-id"));
+    }
+
+    /**
+     * {@code npm team} is declined for every method, including the specific
+     * regression this route closes: unrouted {@code /-/team/...} requests
+     * previously reached a 5xx instead of a fast, non-retriable 404.
+     */
+    @Test
+    void npmTeamGetIsDeclined() throws Exception {
+        this.assertDeclined(this.responseFor(RqMethod.GET, "/-/team/myscope/myteam"));
+    }
+
+    @Test
+    void npmTeamPutIsDeclined() throws Exception {
+        this.assertDeclined(this.responseFor(RqMethod.PUT, "/-/team/myscope/myteam"));
+    }
+
+    /**
+     * {@code npm org} write verbs (create/set/remove membership) are
+     * declined -- see {@link #npmOrgGetIsNotDeclined()} for the read side,
+     * which must keep working.
+     */
+    @Test
+    void npmOrgPutIsDeclined() throws Exception {
+        this.assertDeclined(this.responseFor(RqMethod.PUT, "/-/org/myorg/user"));
+    }
+
+    @Test
+    void npmOrgPostIsDeclined() throws Exception {
+        this.assertDeclined(this.responseFor(RqMethod.POST, "/-/org/myorg/user"));
+    }
+
+    @Test
+    void npmOrgDeleteIsDeclined() throws Exception {
+        this.assertDeclined(this.responseFor(RqMethod.DELETE, "/-/org/myorg/user"));
+    }
+
+    /**
+     * Regression guard: {@code GET /-/org/<org>/user} ("npm org ls") is a
+     * faithful upstream passthrough on proxy and group repositories --
+     * registry.npmjs.org genuinely answers {@code 200 {}} for it -- so it
+     * must never be routed to {@link DeclinedEndpointSlice}. If someone
+     * later "simplifies" the org rule to cover all methods like {@code npm
+     * team}'s, this must fail.
+     */
+    @Test
+    void npmOrgGetIsNotDeclined() throws Exception {
+        final Response response = this.responseFor(RqMethod.GET, "/-/org/myorg/user");
+        MatcherAssert.assertThat(
+            "GET org membership must not be routed to the declined-endpoint "
+                + "slice: it is a genuine passthrough on proxy/group repositories",
+            response.headers().values("X-Pantera-Reason"),
+            new IsEqual<>(java.util.List.of())
+        );
+    }
+
+    /**
+     * Asserts the three properties that matter for a declined npm platform
+     * endpoint: a non-retriable ({@code < 500}) status, specifically {@code
+     * 404}, and the {@code X-Pantera-Reason} header logs/dashboards key off.
+     * @param response Response to check
+     */
+    private void assertDeclined(final Response response) {
+        MatcherAssert.assertThat(
+            "declined endpoints must answer a status npm clients do not "
+                + "retry -- the entire defect class this route closes is "
+                + "\"is it >= 500\"",
+            response.status().code() < 500, new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "declined endpoints answer 404, not some other client error",
+            response.status(), new IsEqual<>(RsStatus.NOT_FOUND)
+        );
+        MatcherAssert.assertThat(
+            "declined endpoints name the reason for logs and dashboards",
+            response.headers().values("X-Pantera-Reason"),
+            new IsEqual<>(java.util.List.of("not_implemented"))
+        );
+    }
+
+    /**
+     * Drive one request through a freshly built LOCAL npm slice and return
+     * the raw response, without asserting on it -- unlike {@link
+     * #getJson(String)}, callers here expect non-{@code 200} statuses.
+     * @param method Request method
+     * @param path Request path
+     * @return Response
+     * @throws Exception If the base URL is malformed
+     */
+    private Response responseFor(final RqMethod method, final String path) throws Exception {
+        final NpmSlice slice = new NpmSlice(
+            NpmSliceRoutingTest.baseUrl(), this.storage, Policy.FREE,
+            NpmSliceRoutingTest.permissiveAuth(), "npm-local", Optional.empty()
+        );
+        return slice.response(
+            new RequestLine(method, path),
+            Headers.from(new Authorization.Bearer(NpmSliceRoutingTest.TOKEN)),
+            Content.EMPTY
+        ).join();
+    }
+
     private JsonObject getJson(final String path) throws Exception {
         final NpmSlice slice = new NpmSlice(
             NpmSliceRoutingTest.baseUrl(), this.storage, Policy.FREE,
