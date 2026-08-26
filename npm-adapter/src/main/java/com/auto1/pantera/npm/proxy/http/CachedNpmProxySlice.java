@@ -63,6 +63,13 @@ import java.util.concurrent.ForkJoinPool;
 public final class CachedNpmProxySlice implements Slice {
 
     /**
+     * Header naming the upstream HTTP status that produced a laundered
+     * (non-authoritative) 404 -- see {@link #handleSignal}. Never present on
+     * a genuine upstream 404, which needs no annotation.
+     */
+    private static final String UPSTREAM_STATUS_HEADER = "X-Pantera-Upstream-Status";
+
+    /**
      * Origin slice (NpmProxySlice).
      */
     private final Slice origin;
@@ -89,10 +96,10 @@ public final class CachedNpmProxySlice implements Slice {
 
     /**
      * Per-key request coalescer. Concurrent requests for the same cache key
-     * share one upstream fetch, each receiving the same {@link FetchSignal}
+     * share one upstream fetch, each receiving the same {@link UpstreamOutcome}
      * terminal state. Wired in WI-05.
      */
-    private final SingleFlight<Key, FetchSignal> deduplicator;
+    private final SingleFlight<Key, UpstreamOutcome> deduplicator;
 
     /**
      * Ctor with default settings.
@@ -204,29 +211,32 @@ public final class CachedNpmProxySlice implements Slice {
         return this.deduplicator.load(
             key,
             () -> this.doFetch(line, headers, body, key, leaderResponse)
-        ).thenCompose(signal -> {
+        ).thenCompose(outcome -> {
             final Response captured = leaderResponse.get();
             if (captured != null) {
-                if (signal == FetchSignal.SUCCESS) {
+                if (outcome.signal() == FetchSignal.SUCCESS) {
                     // Leader: serve the response we already have — origin was
                     // traversed exactly once for this request.
                     return CompletableFuture.completedFuture(captured);
                 }
                 // Leader on a non-success signal: handleSignal builds the
-                // synthetic 404/503 (the raw upstream status must not leak —
-                // RaceSlice's fallback contract depends on the 404 mapping).
-                // Drain the captured body so the publisher is not leaked.
+                // synthetic 404/503 (the raw upstream status must not become
+                // the response status — RaceSlice's fallback contract depends
+                // on the 404 mapping; handleSignal still names it in the
+                // X-Pantera-Upstream-Status header for non-authoritative
+                // misses). Drain the captured body so the publisher is not
+                // leaked.
                 captured.body().asBytesFuture().whenComplete((b, e) -> { });
             }
-            return this.handleSignal(signal, line, headers);
+            return this.handleSignal(outcome, line, headers);
         });
     }
 
     /**
-     * Perform the actual fetch from origin, returning a FetchSignal and
+     * Perform the actual fetch from origin, returning an UpstreamOutcome and
      * capturing the raw response for the leader's direct serve.
      */
-    private CompletableFuture<FetchSignal> doFetch(
+    private CompletableFuture<UpstreamOutcome> doFetch(
         final RequestLine line,
         final Headers headers,
         final Content body,
@@ -252,19 +262,19 @@ public final class CachedNpmProxySlice implements Slice {
                         this.negativeCache.cacheNotFound(this.negKey(key.string()));
                     }
                     this.recordProxyMetric("not_found", duration);
-                    return FetchSignal.NOT_FOUND;
+                    return new UpstreamOutcome(FetchSignal.NOT_FOUND, response.status().code());
                 }
                 if (response.status().success()
                     || response.status().code() == 304) {
                     this.recordProxyMetric("success", duration);
-                    return FetchSignal.SUCCESS;
+                    return new UpstreamOutcome(FetchSignal.SUCCESS, response.status().code());
                 }
                 if (response.status().code() >= 500) {
                     this.recordProxyMetric("error", duration);
                     this.recordUpstreamErrorMetric(
                         new RuntimeException("HTTP " + response.status().code())
                     );
-                    return FetchSignal.ERROR;
+                    return new UpstreamOutcome(FetchSignal.ERROR, response.status().code());
                 }
                 // Non-404 4xx (403 rate-limit / unauthorized, 410 Gone for
                 // unpublished, 451, 409, etc.) means "this remote doesn't
@@ -282,9 +292,21 @@ public final class CachedNpmProxySlice implements Slice {
                 // the UNVERIFIED signal so handleSignal marks the response and a
                 // fronting group does NOT negative-cache it (which would produce
                 // a long-lived false 404). NOT_FOUND (genuine upstream 404, line
-                // above) stays cacheable.
+                // above) stays cacheable. The raw status is logged here (and
+                // named on the response by handleSignal) so a legally blocked
+                // package (451) is distinguishable from a typo in dashboards.
                 this.recordProxyMetric("client_error", duration);
-                return FetchSignal.NOT_FOUND_UNVERIFIED;
+                EcsLogger.info("com.auto1.pantera.npm")
+                    .message("Upstream returned a non-authoritative miss")
+                    .eventCategory("web")
+                    .eventAction("proxy_upstream_miss")
+                    .eventOutcome("failure")
+                    .field("http.response.status_code", response.status().code())
+                    .field("repository.name", this.repoName)
+                    .field("package.name", key.string())
+                    .field("log.source", "application")
+                    .log();
+                return new UpstreamOutcome(FetchSignal.NOT_FOUND_UNVERIFIED, response.status().code());
             })
             .exceptionally(error -> {
                 final long duration = System.currentTimeMillis() - startTime;
@@ -300,19 +322,19 @@ public final class CachedNpmProxySlice implements Slice {
                     .error(error)
                     .field("log.source", "application")
                     .log();
-                return FetchSignal.ERROR;
+                return new UpstreamOutcome(FetchSignal.ERROR);
             });
     }
 
     /**
-     * Handle result for a request based on the dedup signal.
+     * Handle result for a request based on the dedup outcome.
      */
     private CompletableFuture<Response> handleSignal(
-        final FetchSignal signal,
+        final UpstreamOutcome outcome,
         final RequestLine line,
         final Headers headers
     ) {
-        switch (signal) {
+        switch (outcome.signal()) {
             case SUCCESS:
                 // Data is now in NpmProxy's storage cache — re-fetch from origin
                 // which will serve from cache (no upstream request)
@@ -324,26 +346,51 @@ public final class CachedNpmProxySlice implements Slice {
                 // single-version-shaped path -- reconstruct the same shape
                 // here instead of the bare empty 404 the old code returned,
                 // so proxy/group match local mode's SingleVersionSlice#notFound.
+                // A genuine 404 needs no upstream-status annotation.
                 return CompletableFuture.completedFuture(
                     CachedNpmProxySlice.notFoundBuilder(line.uri().getPath()).build()
                 );
             case NOT_FOUND_UNVERIFIED:
                 // 404 to the client (RaceSlice fall-through contract), but flag
                 // it so a fronting group does not negative-cache a non-
-                // authoritative absence (Fix 2).
+                // authoritative absence (Fix 2), and name the upstream status
+                // that produced it -- a 451/403/429 reads very differently
+                // from a mistyped package name -- without changing the
+                // response status itself.
                 return CompletableFuture.completedFuture(
-                    CachedNpmProxySlice.notFoundBuilder(line.uri().getPath())
-                        .header(com.auto1.pantera.http.cache.NegativeCache.SKIP_HEADER, "true")
-                        .build()
+                    CachedNpmProxySlice.withUpstreamStatus(
+                        CachedNpmProxySlice.notFoundBuilder(line.uri().getPath())
+                            .header(NegativeCache.SKIP_HEADER, "true"),
+                        outcome.status()
+                    ).build()
                 );
             case ERROR:
             default:
                 return CompletableFuture.completedFuture(
-                    ResponseBuilder.unavailable()
-                        .textBody("Upstream temporarily unavailable - please retry")
-                        .build()
+                    CachedNpmProxySlice.withUpstreamStatus(
+                        ResponseBuilder.unavailable()
+                            .textBody("Upstream temporarily unavailable - please retry"),
+                        outcome.status()
+                    ).build()
                 );
         }
+    }
+
+    /**
+     * Name the upstream HTTP status that produced a synthetic response, when
+     * it is known and would not already be implied by the response status
+     * itself -- a genuine 404 needs no annotation.
+     *
+     * @param builder Response builder to annotate, mutated in place
+     * @param status Upstream HTTP status observed, or 0 when there was none
+     *  (exception/timeout -- {@link UpstreamOutcome}'s no-status constructor)
+     * @return The same builder, for chaining
+     */
+    private static ResponseBuilder withUpstreamStatus(final ResponseBuilder builder, final int status) {
+        if (status != 0 && status != 404) {
+            builder.header(CachedNpmProxySlice.UPSTREAM_STATUS_HEADER, Integer.toString(status));
+        }
+        return builder;
     }
 
     /**
