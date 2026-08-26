@@ -1108,6 +1108,10 @@ mvn test -pl pantera-core -Dtest=NegativeCacheTest
 mvn install -DskipTests
 ```
 
+### Manual Conformance Scripts
+
+Some format adapters also ship a `test.sh` fixture under `pantera-main/docker-compose/pantera/artifacts/<format>/` -- a script that drives the real client (not a mock) against a running local stack, covering client-level behavior the Maven test suite doesn't reach (CLI retry/backoff, `.npmrc`-style auth file formats, and similar). These run manually, on demand, and are not part of any CI job. `pantera-main/docker-compose/pantera/artifacts/npm/test.sh` exercises the npm, yarn, pnpm, and corepack client surface.
+
 ---
 
 ## 16. Debugging

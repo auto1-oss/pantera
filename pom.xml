@@ -364,7 +364,7 @@ Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
                 <exclude>pom.xml</exclude>
                 <exclude>LICENSE.header</exclude>
                 <exclude>.Dockerignore</exclude>
-                <exclude>.testcontainers.properties</exclude>
+                <exclude>**/.testcontainers.properties</exclude>
                 <exclude>**/com/auto1/pantera/hex/proto/generated/*</exclude>
                 <exclude>**/src/test/resources/**</exclude>
                 <exclude>**/src/test/resources-binary/**</exclude>

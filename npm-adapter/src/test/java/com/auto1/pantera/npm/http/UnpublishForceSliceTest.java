@@ -14,20 +14,16 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
-import com.auto1.pantera.asto.test.TestResource;
 import com.auto1.pantera.http.Headers;
-import com.auto1.pantera.http.hm.RsHasStatus;
-import com.auto1.pantera.http.hm.SliceHasResponse;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
-import com.auto1.pantera.http.RsStatus;
-import com.auto1.pantera.scheduling.ArtifactEvent;
-import java.util.LinkedList;
+import com.auto1.pantera.npm.misc.PackumentRevision;
+import java.nio.charset.StandardCharsets;
 import java.util.Optional;
-import java.util.Queue;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -35,59 +31,81 @@ import org.junit.jupiter.api.Test;
  * @since 0.8
  */
 final class UnpublishForceSliceTest {
-    /**
-     * Storage.
-     */
-    private Storage storage;
 
-    /**
-     * Test artifact events.
-     */
-    private Queue<ArtifactEvent> events;
-
-    @BeforeEach
-    void init() {
-        this.storage = new InMemoryStorage();
-        this.events = new LinkedList<>();
+    @Test
+    void deletesWhenRevisionMatches() {
+        final Storage storage = new InMemoryStorage();
+        storage.save(new Key.From("pkg", ".versions", "1.0.0.json"),
+            new Content.From("{}".getBytes(StandardCharsets.UTF_8))).join();
+        final String rev = new PackumentRevision(storage, "pkg").value().join();
+        final Response response = new UnpublishForceSlice(storage, Optional.empty(), "npm")
+            .response(
+                new RequestLine(RqMethod.DELETE, String.format("/pkg/-rev/%s", rev)),
+                Headers.EMPTY, Content.EMPTY
+            ).join();
+        MatcherAssert.assertThat(
+            "deletes on a matching revision",
+            response.status(), new IsEqual<>(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "package is gone",
+            storage.exists(new Key.From("pkg", ".versions", "1.0.0.json")).join(),
+            new IsEqual<>(false)
+        );
     }
 
     @Test
-    void returnsOkAndDeletePackage() {
-        new TestResource("storage").addFilesTo(this.storage, Key.ROOT);
+    void refusesOnRevisionMismatch() {
+        final Storage storage = new InMemoryStorage();
+        storage.save(new Key.From("pkg", ".versions", "1.0.0.json"),
+            new Content.From("{}".getBytes(StandardCharsets.UTF_8))).join();
+        final Response response = new UnpublishForceSlice(storage, Optional.empty(), "npm")
+            .response(
+                new RequestLine(RqMethod.DELETE, "/pkg/-rev/9-deadbeef"),
+                Headers.EMPTY, Content.EMPTY
+            ).join();
         MatcherAssert.assertThat(
-            "Response status is OK",
-            new UnpublishForceSlice(
-                this.storage, Optional.of(this.events), UnpublishPutSliceTest.REPO
-            ),
-            new SliceHasResponse(
-                new RsHasStatus(RsStatus.OK),
-                new RequestLine(
-                    RqMethod.DELETE, "/@hello%2fsimple-npm-project/-rev/undefined"
-                ),
-                Headers.EMPTY,
-                Content.EMPTY
-            )
+            "answers 409 on mismatch",
+            response.status(), new IsEqual<>(RsStatus.CONFLICT)
         );
         MatcherAssert.assertThat(
-            "The entire package was removed",
-            this.storage.list(new Key.From("@hello/simple-npm-project"))
-                .join().isEmpty(),
+            "package survives",
+            storage.exists(new Key.From("pkg", ".versions", "1.0.0.json")).join(),
             new IsEqual<>(true)
         );
-        MatcherAssert.assertThat("Events queue has one item", this.events.size() == 1);
     }
 
     @Test
-    void returnsBadRequest() {
+    void refusesTheLiteralUndefinedRevision() {
+        final Storage storage = new InMemoryStorage();
+        storage.save(new Key.From("pkg", ".versions", "1.0.0.json"),
+            new Content.From("{}".getBytes(StandardCharsets.UTF_8))).join();
+        final Response response = new UnpublishForceSlice(storage, Optional.empty(), "npm")
+            .response(
+                new RequestLine(RqMethod.DELETE, "/pkg/-rev/undefined"),
+                Headers.EMPTY, Content.EMPTY
+            ).join();
         MatcherAssert.assertThat(
-            new UnpublishForceSlice(
-                this.storage, Optional.of(this.events), UnpublishPutSliceTest.REPO
-            ),
-            new SliceHasResponse(
-                new RsHasStatus(RsStatus.BAD_REQUEST),
-                new RequestLine(RqMethod.GET, "/bad/request")
-            )
+            "answers 428 when no usable revision was sent",
+            response.status(), new IsEqual<>(RsStatus.PRECONDITION_REQUIRED)
         );
-        MatcherAssert.assertThat("Events queue is empty", this.events.size() == 0);
+        MatcherAssert.assertThat(
+            "package survives",
+            storage.exists(new Key.From("pkg", ".versions", "1.0.0.json")).join(),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void answersNotFoundForAnUnknownPackage() {
+        final Response response =
+            new UnpublishForceSlice(new InMemoryStorage(), Optional.empty(), "npm")
+                .response(
+                    new RequestLine(RqMethod.DELETE, "/absent/-rev/1-abc"),
+                    Headers.EMPTY, Content.EMPTY
+                ).join();
+        MatcherAssert.assertThat(
+            response.status(), new IsEqual<>(RsStatus.NOT_FOUND)
+        );
     }
 }

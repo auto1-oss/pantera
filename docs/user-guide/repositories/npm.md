@@ -46,7 +46,17 @@ echo -n "your-username:your-jwt-token" | base64
 
 ### yarn
 
-yarn v1 uses the same `.npmrc` format. For yarn v2+, edit `.yarnrc.yml`:
+yarn v1 uses the same `.npmrc` format, with one important difference: unlike npm, yarn does not walk up the registry path looking for credentials, so the host-root-scoped auth key from the example above (`//pantera-host:8080/:_authToken=...`) is not enough on its own. yarn v1 needs **both** `always-auth=true` **and** an auth key that is either bare or scoped to the **full registry path**:
+
+```ini
+registry=http://pantera-host:8080/npm-group/
+//pantera-host:8080/npm-group/:_auth=BASE64_ENCODED
+always-auth=true
+```
+
+Do not add `always-auth` to an npm 7+ `.npmrc` -- the setting was deprecated and removed there, and npm authenticates correctly without it.
+
+For yarn v2+, edit `.yarnrc.yml`:
 
 ```yaml
 npmRegistryServer: "http://pantera-host:8080/npm-group"
@@ -142,7 +152,9 @@ Installing from a tag works the same as anywhere else:
 npm install @myorg/my-package@beta
 ```
 
-Dist-tags are persisted durably per package on local repositories, so `dist-tag ls`/`add`/`rm`, `--tag` publishes, and installing by tag all reflect the same state. `npm deprecate` and `npm unpublish <pkg>@<version>` (single-version) are also effective against local repositories: a deprecated version is marked in the packument, and an unpublished version genuinely stops being served.
+Dist-tags are persisted durably per package on local repositories, so `dist-tag ls`/`add`/`rm`, `--tag` publishes, and installing by tag all reflect the same state. `npm deprecate` and `npm unpublish <pkg>@<version>` (single-version) are also effective against local repositories: a deprecated version is marked in the packument, and an unpublished version genuinely stops being served. Removing a version or a dist-tag (`npm unpublish <pkg>@<version>`, `npm dist-tag rm`) requires the `delete` permission; publishing and adding a dist-tag only require `write`.
+
+Whole-package removal (`npm unpublish <pkg> --force`) additionally requires a current packument revision (`_rev`) with the request. The npm CLI does this automatically -- it reads the packument before force-unpublishing -- so this is transparent to normal CLI use. A hand-rolled script that calls the registry API directly must read `_rev` from the package's own packument first and send it with the delete; a mismatched revision is rejected with `409 Conflict`, a missing or literal `undefined` revision (the usual sign a script never read the packument) with `428 Precondition Required`, and an unknown package with `404 Not Found`.
 
 On proxy repositories, `npm dist-tag ls` and `npm search` are forwarded upstream (read-through, not persisted locally).
 
@@ -197,15 +209,27 @@ If you published with `npm publish --provenance`, the provenance/attestation bun
 
 ## Tokens & Profile
 
-On local (non-JWT-only) repositories, `npm token` manages registry-scoped tokens:
+`npm token` is not supported. Every Pantera repository is JWT-authenticated -- there is no "local, non-JWT" mode for the npm CLI's own token management to manage -- so API tokens are issued from the Pantera UI or REST API instead: see [Generating Long-Lived API Tokens](../getting-started.md#generating-long-lived-api-tokens). This matches Artifactory, which does not support `npm token` either. Requests to `npm token` subcommands are declined; see [Unsupported Endpoints](#unsupported-endpoints).
 
-```bash
-npm token list
-npm token create
-npm token revoke <id>
-```
+`npm profile get` returns the authenticated user's identity. `npm profile set` is accepted (`200`) but is a no-op -- Pantera has no per-npm profile field beyond username/email to persist -- and requires the `write` permission.
 
-`npm profile get` returns the authenticated user's identity. On JWT-authenticated repositories, token management is not available through the npm CLI (JWT tokens are managed through the Pantera UI/API instead) — the endpoint answers with an honest "not available" status rather than silently returning an empty token list.
+---
+
+## Unsupported Endpoints
+
+Pantera does not implement the following npm CLI surfaces:
+
+| Command | Area |
+|---------|------|
+| `npm token` | Registry-scoped token management -- see [Tokens & Profile](#tokens--profile) |
+| `npm hook` | Webhooks |
+| `npm org` | Write operations (organization membership management) |
+| `npm team` | Team management |
+| `npm star` | Package starring -- behaves differently, see below |
+
+A request to `npm token`, `npm hook`, `npm org` (write operations), or `npm team` is declined immediately with `404 Not Found`, an `X-Pantera-Reason: not_implemented` response header, and a small JSON body naming the operation -- never a `5xx`. This is deliberate, not an oversight: npm's client retries any `>= 500` response on a non-`POST` request, and that retry check is purely status-code based, so even a semantically-correct `501 Not Implemented` would still be retried for roughly a minute before the client gave up. Only a `4xx` fails fast.
+
+`npm star` does not get this clean decline. Unlike the other four, it has no endpoint of its own: the npm CLI sends it as `PUT /<pkg>` with a `users` key in the body -- the same route and method npm uses to publish that package. Because the request is indistinguishable from a publish at the routing layer, there is no way to add a dedicated decline route for it without also intercepting real publishes, so it falls through to the publish handler, which rejects it as a malformed publish payload instead of naming `star` as the actual operation.
 
 ---
 
@@ -231,6 +255,7 @@ Point your `.npmrc` registry at the group, and Pantera handles resolution order 
 | Publish goes to npmjs.org instead of Pantera | Missing `publishConfig` in `package.json` | Add `publishConfig.registry` or use `--registry` flag |
 | `ETARGET` no matching version | Package exists upstream but is in cooldown | Check with admin; see [Cooldown](../cooldown.md) |
 | Scoped packages not resolving | Scope registry not configured | Add `@myorg:registry=http://pantera-host:8080/npm-group` to `.npmrc` |
+| `npm ERR! 404 Not Found` on a package that works in a browser | Upstream answered with a status Pantera doesn't treat as "not found" (e.g. `410`, `451`, `507`) | Check the response's `X-Pantera-Upstream-Status` header for the real upstream status -- `451` means the package is legally blocked at the source |
 
 ---
 

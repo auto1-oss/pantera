@@ -365,7 +365,7 @@ public final class NpmSlice implements Slice {
                     basicAuth,
                     npmTokenAuth,
                     new OperationControl(
-                        policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
+                        policy, new AdapterBasicPermission(name, Action.Standard.DELETE)
                     )
                 )
             ),
@@ -416,7 +416,7 @@ public final class NpmSlice implements Slice {
                     basicAuth,
                     npmTokenAuth,
                     new OperationControl(
-                        policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
+                        policy, new AdapterBasicPermission(name, Action.Standard.DELETE)
                     )
                 )
             ),
@@ -543,7 +543,10 @@ public final class NpmSlice implements Slice {
                     new RtRule.ByPath(".*/-/npm/v1/tokens$")
                 ),
                 NpmSlice.createAuthSlice(
-                    NpmSlice.tokensSlice(jwtOnly, storage),
+                    new DeclinedEndpointSlice(
+                        "npm token management",
+                        "repositories/npm.md#unsupported-endpoints"
+                    ),
                     basicAuth,
                     npmTokenAuth,
                     new OperationControl(
@@ -557,7 +560,10 @@ public final class NpmSlice implements Slice {
                     new RtRule.ByPath(".*/-/npm/v1/tokens/token/.+$")
                 ),
                 NpmSlice.createAuthSlice(
-                    NpmSlice.tokensSlice(jwtOnly, storage),
+                    new DeclinedEndpointSlice(
+                        "npm token management",
+                        "repositories/npm.md#unsupported-endpoints"
+                    ),
                     basicAuth,
                     npmTokenAuth,
                     new OperationControl(
@@ -565,9 +571,38 @@ public final class NpmSlice implements Slice {
                     )
                 )
             ),
+            // WS-A: npm hook and npm team have no supported surface at all
+            // (any method); npm org is only declined for its write verbs --
+            // GET (e.g. "npm org ls") is a genuine passthrough on proxy and
+            // group repositories and must keep falling through to the
+            // package routes below. See repositories/npm.md#unsupported-endpoints.
+            new RtRulePath(
+                new RtRule.ByPath(".*/-/npm/v1/hooks.*"),
+                this.declinedRoute(
+                    "npm registry webhooks", Action.Standard.READ,
+                    basicAuth, npmTokenAuth, policy, name
+                )
+            ),
+            new RtRulePath(
+                new RtRule.ByPath(".*/-/team/.*"),
+                this.declinedRoute(
+                    "npm team management", Action.Standard.READ,
+                    basicAuth, npmTokenAuth, policy, name
+                )
+            ),
             new RtRulePath(
                 new RtRule.All(
-                    new RtRule.Any(MethodRule.GET, MethodRule.PUT),
+                    new RtRule.Any(MethodRule.PUT, MethodRule.POST, MethodRule.DELETE),
+                    new RtRule.ByPath(".*/-/org/.*")
+                ),
+                this.declinedRoute(
+                    "npm organization management", Action.Standard.WRITE,
+                    basicAuth, npmTokenAuth, policy, name
+                )
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.GET,
                     new RtRule.ByPath(".*/-/npm/v1/user$")
                 ),
                 NpmSlice.createAuthSlice(
@@ -576,6 +611,20 @@ public final class NpmSlice implements Slice {
                     npmTokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    )
+                )
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.PUT,
+                    new RtRule.ByPath(".*/-/npm/v1/user$")
+                ),
+                NpmSlice.createAuthSlice(
+                    NpmSlice.profileSlice(jwtOnly, storage),
+                    basicAuth,
+                    npmTokenAuth,
+                    new OperationControl(
+                        policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
                     )
                 )
             ),
@@ -741,24 +790,36 @@ public final class NpmSlice implements Slice {
     }
 
     /**
-     * {@code /-/npm/v1/tokens} is backed by {@code StorageTokenRepository}
-     * outside JWT-only mode; JWT-only repositories have no per-npm-token
-     * storage (see {@code NpmTokensSlice}'s class javadoc).
+     * Wraps a {@link DeclinedEndpointSlice} the same way every other route
+     * in this class wraps its handler: shared auth, then a permission
+     * check against {@code name}. Pulled out purely to keep the declined
+     * npm-platform routes (webhooks, team, organization writes) from
+     * lengthening the primary constructor further -- see {@code
+     * repositories/npm.md#unsupported-endpoints}.
      *
-     * @param jwtOnly Whether this repository is JWT-only
-     * @param storage Repository storage
-     * @return Tokens slice
+     * @param feature Human-readable feature name for the decline message
+     * @param action Permission required to reach the decline response
+     * @param basicAuth Basic authentication
+     * @param tokenAuth Token authentication
+     * @param policy Access permissions
+     * @param name Repository name
+     * @return Auth-wrapped declined-endpoint slice
+     * @checkstyle ParameterNumberCheck (3 lines)
      */
-    private static Slice tokensSlice(final boolean jwtOnly, final Storage storage) {
-        final Slice slice;
-        if (jwtOnly) {
-            slice = new com.auto1.pantera.npm.http.auth.NpmTokensSlice();
-        } else {
-            slice = new com.auto1.pantera.npm.http.auth.NpmTokensSlice(
-                new StorageTokenRepository(storage)
-            );
-        }
-        return slice;
+    private Slice declinedRoute(
+        final String feature,
+        final Action action,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final Policy<?> policy,
+        final String name
+    ) {
+        return NpmSlice.createAuthSlice(
+            new DeclinedEndpointSlice(feature, "repositories/npm.md#unsupported-endpoints"),
+            basicAuth,
+            tokenAuth,
+            new OperationControl(policy, new AdapterBasicPermission(name, action))
+        );
     }
 
     /**
