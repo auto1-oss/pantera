@@ -225,9 +225,11 @@ Pantera does not implement the following npm CLI surfaces:
 | `npm hook` | Webhooks |
 | `npm org` | Write operations (organization membership management) |
 | `npm team` | Team management |
-| `npm star` | Package starring |
+| `npm star` | Package starring -- behaves differently, see below |
 
-A request to any of these is declined immediately with `404 Not Found`, an `X-Pantera-Reason: not_implemented` response header, and a small JSON body naming the operation -- never a `5xx`. This is deliberate, not an oversight: npm's client retries any `>= 500` response on a non-`POST` request, and that retry check is purely status-code based, so even a semantically-correct `501 Not Implemented` would still be retried for roughly a minute before the client gave up. Only a `4xx` fails fast.
+A request to `npm token`, `npm hook`, `npm org` (write operations), or `npm team` is declined immediately with `404 Not Found`, an `X-Pantera-Reason: not_implemented` response header, and a small JSON body naming the operation -- never a `5xx`. This is deliberate, not an oversight: npm's client retries any `>= 500` response on a non-`POST` request, and that retry check is purely status-code based, so even a semantically-correct `501 Not Implemented` would still be retried for roughly a minute before the client gave up. Only a `4xx` fails fast.
+
+`npm star` does not get this clean decline. Unlike the other four, it has no endpoint of its own: the npm CLI sends it as `PUT /<pkg>` with a `users` key in the body -- the same route and method npm uses to publish that package. Because the request is indistinguishable from a publish at the routing layer, there is no way to add a dedicated decline route for it without also intercepting real publishes, so it falls through to the publish handler, which rejects it as a malformed publish payload instead of naming `star` as the actual operation.
 
 ---
 
