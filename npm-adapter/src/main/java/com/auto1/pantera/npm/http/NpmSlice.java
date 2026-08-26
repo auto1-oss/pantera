@@ -509,7 +509,10 @@ public final class NpmSlice implements Slice {
                     new RtRule.ByPath(".*/-/npm/v1/tokens$")
                 ),
                 NpmSlice.createAuthSlice(
-                    NpmSlice.tokensSlice(jwtOnly, storage),
+                    new DeclinedEndpointSlice(
+                        "npm token management",
+                        "repositories/npm.md#unsupported-endpoints"
+                    ),
                     basicAuth,
                     npmTokenAuth,
                     new OperationControl(
@@ -523,7 +526,10 @@ public final class NpmSlice implements Slice {
                     new RtRule.ByPath(".*/-/npm/v1/tokens/token/.+$")
                 ),
                 NpmSlice.createAuthSlice(
-                    NpmSlice.tokensSlice(jwtOnly, storage),
+                    new DeclinedEndpointSlice(
+                        "npm token management",
+                        "repositories/npm.md#unsupported-endpoints"
+                    ),
                     basicAuth,
                     npmTokenAuth,
                     new OperationControl(
@@ -702,27 +708,6 @@ public final class NpmSlice implements Slice {
             slice = new com.auto1.pantera.npm.http.auth.OAuthLoginSlice(basicAuth, this.tokens);
         } else {
             slice = new SliceSimple(ResponseBuilder.notFound().build());
-        }
-        return slice;
-    }
-
-    /**
-     * {@code /-/npm/v1/tokens} is backed by {@code StorageTokenRepository}
-     * outside JWT-only mode; JWT-only repositories have no per-npm-token
-     * storage (see {@code NpmTokensSlice}'s class javadoc).
-     *
-     * @param jwtOnly Whether this repository is JWT-only
-     * @param storage Repository storage
-     * @return Tokens slice
-     */
-    private static Slice tokensSlice(final boolean jwtOnly, final Storage storage) {
-        final Slice slice;
-        if (jwtOnly) {
-            slice = new com.auto1.pantera.npm.http.auth.NpmTokensSlice();
-        } else {
-            slice = new com.auto1.pantera.npm.http.auth.NpmTokensSlice(
-                new StorageTokenRepository(storage)
-            );
         }
         return slice;
     }
