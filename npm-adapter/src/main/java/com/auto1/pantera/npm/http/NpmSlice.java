@@ -331,7 +331,7 @@ public final class NpmSlice implements Slice {
                     basicAuth,
                     npmTokenAuth,
                     new OperationControl(
-                        policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
+                        policy, new AdapterBasicPermission(name, Action.Standard.DELETE)
                     )
                 )
             ),
@@ -382,7 +382,7 @@ public final class NpmSlice implements Slice {
                     basicAuth,
                     npmTokenAuth,
                     new OperationControl(
-                        policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
+                        policy, new AdapterBasicPermission(name, Action.Standard.DELETE)
                     )
                 )
             ),
@@ -539,7 +539,7 @@ public final class NpmSlice implements Slice {
             ),
             new RtRulePath(
                 new RtRule.All(
-                    new RtRule.Any(MethodRule.GET, MethodRule.PUT),
+                    MethodRule.GET,
                     new RtRule.ByPath(".*/-/npm/v1/user$")
                 ),
                 NpmSlice.createAuthSlice(
@@ -548,6 +548,20 @@ public final class NpmSlice implements Slice {
                     npmTokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    )
+                )
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.PUT,
+                    new RtRule.ByPath(".*/-/npm/v1/user$")
+                ),
+                NpmSlice.createAuthSlice(
+                    NpmSlice.profileSlice(jwtOnly, storage),
+                    basicAuth,
+                    npmTokenAuth,
+                    new OperationControl(
+                        policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
                     )
                 )
             ),
