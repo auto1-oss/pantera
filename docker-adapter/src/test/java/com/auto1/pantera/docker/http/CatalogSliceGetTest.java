@@ -15,16 +15,20 @@ import com.auto1.pantera.docker.Catalog;
 import com.auto1.pantera.docker.Docker;
 import com.auto1.pantera.docker.Repo;
 import com.auto1.pantera.docker.misc.Pagination;
+import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.headers.ContentLength;
 import com.auto1.pantera.http.headers.ContentType;
+import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.hm.ResponseAssert;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
+import org.hamcrest.collection.IsEmptyCollection;
 import org.junit.jupiter.api.Test;
 
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -70,6 +74,59 @@ class CatalogSliceGetTest {
             "Parses limit",
             docker.paginationRef.get().limit(),
             Matchers.is(limit)
+        );
+    }
+
+    /**
+     * WS4-docker.4: a truncated page must carry {@code Link: <...>; rel="next"}.
+     */
+    @Test
+    void shouldEmitNextLinkWhenTruncated() {
+        final byte[] body = "{\"repositories\":[\"bar\",\"busybox\"]}".getBytes();
+        final Catalog catalog = new Catalog() {
+            @Override
+            public Content json() {
+                return new Content.From(body);
+            }
+
+            @Override
+            public boolean hasNext() {
+                return true;
+            }
+
+            @Override
+            public Optional<String> nextCursor() {
+                return Optional.of("busybox");
+            }
+        };
+        final Response response = TestDockerAuth.slice(new FakeDocker(catalog)).response(
+            new RequestLine(RqMethod.GET, "/v2/_catalog?n=2"),
+            TestDockerAuth.headers(),
+            Content.EMPTY
+        ).join();
+        ResponseAssert.check(
+            response, RsStatus.OK,
+            new Header("Link", "</v2/_catalog?n=2&last=busybox>; rel=\"next\"")
+        );
+    }
+
+    /**
+     * WS4-docker.4: the last (non-truncated) page must not carry a {@code Link} header.
+     */
+    @Test
+    void shouldOmitNextLinkWhenNotTruncated() {
+        final byte[] body = "{\"repositories\":[\"bar\"]}".getBytes();
+        final Catalog catalog = () -> new Content.From(body);
+        final Response response = TestDockerAuth.slice(new FakeDocker(catalog)).response(
+            new RequestLine(RqMethod.GET, "/v2/_catalog"),
+            TestDockerAuth.headers(),
+            Content.EMPTY
+        ).join();
+        ResponseAssert.check(response, RsStatus.OK);
+        MatcherAssert.assertThat(
+            "No Link header expected when the page is not truncated",
+            response.headers().find("Link"),
+            new IsEmptyCollection<>()
         );
     }
 

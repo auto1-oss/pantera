@@ -13,12 +13,14 @@ package com.auto1.pantera.http.cache;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blob.WriteBackSaturatedException;
 import com.auto1.pantera.asto.fs.FileStorage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.http.context.RequestContext;
 import com.auto1.pantera.http.fault.Fault;
 import com.auto1.pantera.http.fault.Fault.ChecksumAlgo;
 import com.auto1.pantera.http.fault.Result;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -46,6 +48,7 @@ import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.instanceOf;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -265,6 +268,33 @@ final class ProxyCacheWriterTest {
         // of asserting instantly; the instant assert flaked under CI load.
         awaitGone(cache, PRIMARY_KEY, "primary rolled back");
         awaitGone(cache, sha1Key, "sidecar rolled back");
+    }
+
+    @Test
+    @DisplayName("WS1.2: write-back queue saturation → cache write skipped, NOT rolled back, no partial-failure metric")
+    void writeBackSaturation_skipsCacheWriteWithoutRollback() {
+        final CrashingStorage cache = new CrashingStorage();
+        cache.failWith(PRIMARY_KEY, new WriteBackSaturatedException(PRIMARY_KEY.string(), 5L));
+        final SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        final ProxyCacheWriter writer = new ProxyCacheWriter(cache, "maven-proxy", registry);
+
+        final Result<Void> result = writer.writeWithSidecars(
+            PRIMARY_KEY,
+            UPSTREAM_URI,
+            () -> CompletableFuture.completedFuture(new ByteArrayInputStream(PRIMARY_BYTES)),
+            Map.of(ChecksumAlgo.SHA1, sidecarServing(sha1Hex(PRIMARY_BYTES).getBytes(StandardCharsets.UTF_8))),
+            CTX
+        ).toCompletableFuture().join();
+
+        assertThat("outcome is Err (cache stays cold for this key)", result, instanceOf(Result.Err.class));
+        assertEquals(
+            0, cache.deleteCalls(),
+            "saturation is not a partial-write corruption -- rollbackAfterPartialFailure must NOT call delete()"
+        );
+        assertNull(
+            registry.find("pantera.proxy.cache.write_partial_failure").counter(),
+            "a deliberate write-back backpressure skip must not be counted as a partial-write failure"
+        );
     }
 
     /**
@@ -670,10 +700,22 @@ final class ProxyCacheWriterTest {
      */
     private static final class CrashingStorage implements Storage {
         private final InMemoryStorage delegate = new InMemoryStorage();
+        private final AtomicInteger deleteInvocations = new AtomicInteger();
         private Key failing;
+        private Throwable failure = new RuntimeException("boom");
 
         void failOn(final Key key) {
             this.failing = key;
+        }
+
+        /** Fail {@code key}'s save with a specific throwable instead of the default RuntimeException. */
+        void failWith(final Key key, final Throwable throwable) {
+            this.failing = key;
+            this.failure = throwable;
+        }
+
+        int deleteCalls() {
+            return this.deleteInvocations.get();
         }
 
         @Override
@@ -691,7 +733,7 @@ final class ProxyCacheWriterTest {
             if (key.equals(this.failing)) {
                 // Drain the content so the caller's stream doesn't dangle, then fail.
                 return content.asBytesFuture().thenCompose(ignored ->
-                    CompletableFuture.failedFuture(new RuntimeException("boom"))
+                    CompletableFuture.failedFuture(this.failure)
                 );
             }
             return this.delegate.save(key, content);
@@ -714,6 +756,7 @@ final class ProxyCacheWriterTest {
 
         @Override
         public CompletableFuture<Void> delete(final Key key) {
+            this.deleteInvocations.incrementAndGet();
             return this.delegate.delete(key);
         }
 

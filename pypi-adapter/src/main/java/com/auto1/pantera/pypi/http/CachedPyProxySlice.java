@@ -230,6 +230,9 @@ public final class CachedPyProxySlice implements Slice {
         final Headers headers,
         final Content body
     ) {
+        if (line.method() == RqMethod.HEAD) {
+            return this.headAsGet(line, headers, body);
+        }
         final String path = line.uri().getPath();
         final Key key = new KeyFromPath(path);
 
@@ -264,6 +267,29 @@ public final class CachedPyProxySlice implements Slice {
 
         // Fetch from origin and cache result
         return this.fetchAndCache(line, headers, body, key);
+    }
+
+    /**
+     * Translate a HEAD request into a GET against this same slice (so
+     * negative-cache / primary-artifact-write / metadata-cache all run
+     * exactly as they do for a real GET — populating the cache on an
+     * uncached HEAD probe, not corrupting it) and then drop the body.
+     *
+     * <p>MUST run before any of this slice's own caching branches inspect
+     * {@code line.method()} — those branches are method-agnostic and, in
+     * particular, {@link #streamPrimary} would otherwise fetch upstream
+     * with the original HEAD line, receive a body-less response, and
+     * commit a phantom zero-byte "artifact" to the cache.</p>
+     */
+    private CompletableFuture<Response> headAsGet(
+        final RequestLine line, final Headers headers, final Content body
+    ) {
+        final RequestLine asGet = new RequestLine(RqMethod.GET, line.uri(), line.version());
+        return this.response(asGet, headers, body).thenCompose(resp ->
+            resp.body().asBytesFuture().thenApply(ignored ->
+                new Response(resp.status(), resp.headers(), Content.EMPTY)
+            )
+        );
     }
 
     /**

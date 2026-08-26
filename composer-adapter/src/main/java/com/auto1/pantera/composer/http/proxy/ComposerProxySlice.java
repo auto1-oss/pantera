@@ -13,6 +13,7 @@ package com.auto1.pantera.composer.http.proxy;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.cache.Cache;
 import com.auto1.pantera.audit.AuditContext;
+import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.composer.Repository;
 import com.auto1.pantera.composer.cooldown.ComposerPackageMetadataHandler;
 import com.auto1.pantera.composer.cooldown.ComposerRootPackagesHandler;
@@ -21,7 +22,6 @@ import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
-import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.client.ClientSlices;
 import com.auto1.pantera.http.client.UriClientSlice;
@@ -32,11 +32,11 @@ import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.rt.MethodRule;
 import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
-import com.auto1.pantera.http.slice.SliceSimple;
 import com.auto1.pantera.publishdate.PublishDateRegistries;
 import com.auto1.pantera.publishdate.RegistryBackedInspector;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
@@ -45,6 +45,7 @@ import java.net.URI;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.regex.Pattern;
 
 /**
  * Composer proxy repository slice.
@@ -52,9 +53,12 @@ import java.util.concurrent.CompletableFuture;
  * <p>Dispatch order (cooldown-aware):</p>
  * <ol>
  *   <li>{@link ComposerRootPackagesHandler} for {@code /packages.json}
- *       and {@code /repo.json} — filters blocked versions out of
- *       inline root aggregation shapes before the response leaves
- *       the proxy.</li>
+ *       and {@code /repo.json} — fetches the raw upstream root
+ *       (bootstraps a standalone proxy even with no local member),
+ *       filters blocked versions out of inline root aggregation
+ *       shapes, and rewrites every top-level URL field to a
+ *       Pantera-local equivalent so a client cannot be steered
+ *       straight to the upstream from the root.</li>
  *   <li>{@link ComposerPackageMetadataHandler} for
  *       {@code /p2/<vendor>/<pkg>.json} and
  *       {@code /packages/<vendor>/<pkg>.json} — filters blocked
@@ -91,6 +95,51 @@ public class ComposerProxySlice implements Slice {
      * Cooldown handler for per-package metadata filtering.
      */
     private final ComposerPackageMetadataHandler packageHandler;
+
+    /**
+     * Raw (unrewritten, uncached) upstream slice — shared with the root
+     * handler. Also backs the WS4-composer.5/.6 catalog-surface routes
+     * ({@code available-packages.json}, {@code packages/list.json}):
+     * these are live-passthrough (not cached) because, unlike a single
+     * package's metadata, the catalog surfaces enumerate the ENTIRE
+     * upstream registry (hundreds of thousands of packages on Packagist)
+     * — not meaningfully cacheable at per-repository scale, and rarely on
+     * the hot path of a {@code composer install}.
+     */
+    private final Slice rawRemote;
+
+    /**
+     * Repository type, threaded to the catalog-surface passthrough routes
+     * for audit records.
+     */
+    private final String rtype;
+
+    /**
+     * Repository name, threaded to the catalog-surface passthrough routes
+     * for audit records.
+     */
+    private final String rname;
+
+    /**
+     * {@code /p2/available-packages.json} — advertised by
+     * {@link com.auto1.pantera.composer.SatisLayout} and rewritten
+     * Pantera-local by {@link MetadataUrlRewriter#rewriteRoot}; served
+     * here as a live passthrough (WS4-composer.5) so the surface does not
+     * 404 once advertised.
+     */
+    private static final Pattern AVAILABLE_PACKAGES = Pattern.compile(
+        "^/p2/available-packages\\.json$"
+    );
+
+    /**
+     * {@code /packages/list.json} (optionally {@code ?q=&type=}) —
+     * rewritten Pantera-local by {@link MetadataUrlRewriter#rewriteRoot}
+     * (both {@code list} and {@code search} point here); served here as a
+     * live passthrough (WS4-composer.6).
+     */
+    private static final Pattern LIST_JSON = Pattern.compile(
+        "^/packages/list\\.json$"
+    );
 
     /**
      * New Composer proxy without cache.
@@ -189,18 +238,21 @@ public class ComposerProxySlice implements Slice {
         final String baseUrl,
         final String upstreamUrl
     ) {
+        // Raw upstream slice — shared by the primary-artifact fetch inside
+        // CachedProxySlice, ProxyDownloadSlice, and the root handler.
+        final Slice rawRemote = remote(clients, remote, auth);
         // Build the cache+rewrite slice once and share it between the
-        // fallback SliceRoute (cooldown-off path) and the cooldown
-        // handlers (cooldown-on path). The previous wiring built a
-        // raw-remote slice for the handlers, which bypassed the metadata
-        // cache AND the dist.url rewriter — so on the cooldown-enabled
-        // path, /p2/<vendor>/<pkg>.json responses still pointed Composer
-        // at the upstream (api.github.com / packagist) for archive
-        // downloads, breaking the proxy. Sharing the slice keeps cache
-        // + URL rewriting + primary-artifact integrity intact on both
-        // paths, with per-version cooldown filtering layered on top.
+        // fallback SliceRoute (cooldown-off path) and the per-package
+        // cooldown handler (cooldown-on path). A raw-remote slice for the
+        // per-package handler would bypass the metadata cache AND the
+        // dist.url rewriter — so on the cooldown-enabled path,
+        // /p2/<vendor>/<pkg>.json responses would still point Composer at
+        // the upstream (api.github.com / packagist) for archive downloads,
+        // breaking the proxy. Sharing the slice keeps cache + URL
+        // rewriting + primary-artifact integrity intact on both paths,
+        // with per-version cooldown filtering layered on top.
         final CachedProxySlice cachedProxy = new CachedProxySlice(
-            remote(clients, remote, auth),
+            rawRemote,
             repository,
             cache,
             events,
@@ -209,22 +261,6 @@ public class ComposerProxySlice implements Slice {
             upstreamUrl
         );
         this.fallback = new SliceRoute(
-            new RtRulePath(
-                new RtRule.All(
-                    new RtRule.ByPath(PackageMetadataSlice.ALL_PACKAGES),
-                    MethodRule.GET
-                ),
-                new SliceSimple(
-                    () -> ResponseBuilder.ok()
-                        .jsonBody(
-                            String.format(
-                                "{\"packages\":{}, \"metadata-url\":\"/%s/p2/%%package%%.json\"}",
-                                rname
-                            )
-                        )
-                        .build()
-                )
-            ),
             new RtRulePath(
                 new RtRule.All(
                     new RtRule.ByPath(PackageMetadataSlice.PACKAGE),
@@ -236,7 +272,7 @@ public class ComposerProxySlice implements Slice {
                 RtRule.FALLBACK,
                 // Proxy all other requests (zip files, etc.) through to remote
                 new ProxyDownloadSlice(
-                    remote(clients, remote, auth),
+                    rawRemote,
                     clients,
                     remote,
                     events,
@@ -258,29 +294,52 @@ public class ComposerProxySlice implements Slice {
         // unfiltered — behaviourally identical to the old
         // skip-handlers-when-noop gate, minus the audit blackout.
         //
-        // Handlers fetch through the shared cache+rewrite slice
-        // (rather than re-entering this dispatcher) — so metadata
-        // is served from cache with dist.url already rewritten,
-        // and the handler just layers per-version filtering on top.
-        // Per-version release dates come from the packument's inline
-        // {@code time} field (Composer always inlines them); the
-        // CooldownInspector is therefore not threaded through the
-        // handler path — the evaluator uses {@code
-        // evaluateWithKnownDate} which skips inspector lookup
-        // entirely. Mirrors the npm/PyPI packument-inline pattern
-        // landed in {@code dbdde1736}.
+        // The ROOT handler fetches the RAW remote — not cachedProxy.
+        // cachedProxy's package-merge path keys its cache/merge lookup on
+        // a single package name derived from the request path; fed
+        // "/packages.json" it mangles the path into a bogus package name
+        // ("/packages"), which can never merge successfully and always
+        // 404s. There is no per-package name for a root aggregation
+        // document, so the root is fetched directly and rewritten here
+        // (top-level URLs to Pantera-local via MetadataUrlRewriter,
+        // per-version cooldown filtering via ComposerRootPackagesFilter)
+        // rather than routed through the merge cache.
+        //
+        // The PACKAGE handler fetches through the shared cache+rewrite
+        // slice (rather than re-entering this dispatcher) — so metadata
+        // is served from cache with dist.url already rewritten, and the
+        // handler just layers per-version filtering on top. Per-version
+        // release dates come from the packument's inline {@code time}
+        // field (Composer always inlines them); the CooldownInspector is
+        // therefore not threaded through the handler path — the evaluator
+        // uses {@code evaluateWithKnownDate} which skips inspector lookup
+        // entirely. Mirrors the npm/PyPI packument-inline pattern landed
+        // in {@code dbdde1736}.
+        // WS6.3: route the root aggregation surface through the same
+        // cache/storage this repository already uses for per-package
+        // metadata — TTL-cached, single-flighted, serve-stale-on-outage
+        // (ComposerRootBaseLoader), instead of hitting the upstream
+        // unconditionally on every /packages.json or /repo.json request.
+        // ComposerRootBaseLoader namespaces its keys so they never collide
+        // with the per-package cache entries.
         this.rootHandler = new ComposerRootPackagesHandler(
-            cachedProxy, cooldown, rtype, rname
+            rawRemote, cache, repository.storage(), cooldown, rtype, rname, baseUrl
         );
         this.packageHandler = new ComposerPackageMetadataHandler(
             cachedProxy, cooldown, rtype, rname
         );
+        this.rawRemote = rawRemote;
+        this.rtype = rtype;
+        this.rname = rname;
     }
 
     @Override
     public CompletableFuture<Response> response(
         final RequestLine line, final Headers headers, final Content body
     ) {
+        if (line.method() == RqMethod.HEAD) {
+            return this.headAsGet(line, headers, body);
+        }
         final String path = line.uri().getPath();
         final String user = new Login(headers).getValue();
         // Bound as early as possible — before any async hop — so the
@@ -292,6 +351,14 @@ public class ComposerProxySlice implements Slice {
             org.slf4j.MDC.get(EcsMdc.TRACE_ID),
             org.slf4j.MDC.get(EcsMdc.CLIENT_IP)
         );
+        // WS4-composer.5/.6: available-packages / search-list catalog
+        // surfaces. Checked ahead of rootHandler/packageHandler/fallback
+        // so they resolve to an explicit passthrough rather than falling
+        // into ProxyDownloadSlice's "doesn't match download pattern, proxy
+        // to remote verbatim" catch-all.
+        if (AVAILABLE_PACKAGES.matcher(path).matches() || LIST_JSON.matcher(path).matches()) {
+            return this.passthroughCatalogSurface(line, headers, body, auditCtx, user);
+        }
         // Cooldown handlers run ahead of the legacy route so blocked
         // versions cannot leak through the root / per-package
         // metadata surfaces. Mirrors the Go / PyPI / Docker
@@ -319,6 +386,64 @@ public class ComposerProxySlice implements Slice {
                 .thenCompose(ignored -> this.packageHandler.handle(line, user, auditCtx));
         }
         return this.fallback.response(line, headers, body);
+    }
+
+    /**
+     * HEAD support (WS4-composer.8): resolve exactly as GET across the
+     * whole dispatch (root / per-package metadata / catalog surfaces /
+     * dist download), then drop the body before returning so the client
+     * sees the same status/headers without a body (RFC 9110 &sect;9.3.2).
+     */
+    private CompletableFuture<Response> headAsGet(
+        final RequestLine line, final Headers headers, final Content body
+    ) {
+        final RequestLine asGet = new RequestLine(RqMethod.GET, line.uri(), line.version());
+        return this.response(asGet, headers, body).thenCompose(resp ->
+            resp.body().asBytesFuture().thenApply(
+                ignored -> new Response(resp.status(), resp.headers(), Content.EMPTY)
+            )
+        );
+    }
+
+    /**
+     * Live passthrough for the catalog surfaces (WS4-composer.5/.6):
+     * forward the request verbatim to the raw upstream and return its
+     * response unmodified — these bodies carry no per-package download
+     * URLs to rewrite (just names / an availability list), so there is
+     * nothing for {@link MetadataUrlRewriter} to do. Audited as a
+     * metadata-listing view ({@code artifact_resolution}), matching the
+     * root/per-package surfaces; the {@code detail unavailable} variant
+     * is used because a live passthrough has no cooldown-filter detail to
+     * report (unlike the root/per-package handlers, which do their own
+     * per-version filtering).
+     */
+    private CompletableFuture<Response> passthroughCatalogSurface(
+        final RequestLine line,
+        final Headers headers,
+        final Content body,
+        final AuditContext auditCtx,
+        final String user
+    ) {
+        final String path = line.uri().getPath();
+        EcsLogger.debug("com.auto1.pantera.composer")
+            .message("Live-passthrough catalog surface request")
+            .eventCategory("web")
+            .eventAction("proxy_request")
+            .field("url.path", path)
+            .field("log.source", "application")
+            .log();
+        // GET requests carry no meaningful body; drain it here (per the
+        // "always consume Content" contract) and forward Content.EMPTY
+        // downstream, matching the rootHandler/packageHandler dispatch
+        // idiom above rather than threading the original body through.
+        return body.asBytesFuture().thenCompose(
+            ignored -> this.rawRemote.response(line, headers, Content.EMPTY)
+        ).thenApply(response -> {
+            AuditLogger.resolutionDetailUnknown(
+                auditCtx, this.rtype, this.rname, path, user, "live-passthrough"
+            );
+            return response;
+        });
     }
 
     /**

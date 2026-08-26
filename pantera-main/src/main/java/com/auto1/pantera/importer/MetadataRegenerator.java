@@ -20,15 +20,12 @@ import com.auto1.pantera.gem.Gem;
 import com.auto1.pantera.helm.TgzArchive;
 import com.auto1.pantera.helm.metadata.IndexYaml;
 import com.auto1.pantera.importer.api.DigestType;
-import com.auto1.pantera.maven.metadata.MavenTimestamp;
-import com.auto1.pantera.maven.metadata.Version;
+import com.auto1.pantera.maven.metadata.MavenMetadataRegenerator;
 import com.auto1.pantera.npm.MetaUpdate;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.pypi.http.IndexGenerator;
 import hu.akarnokd.rxjava2.interop.CompletableInterop;
 import io.reactivex.Flowable;
-import org.xembly.Directives;
-import org.xembly.Xembler;
 
 import javax.json.Json;
 import javax.json.JsonObject;
@@ -36,7 +33,6 @@ import javax.json.JsonObjectBuilder;
 import java.nio.charset.StandardCharsets;
 
 import java.util.Base64;
-import java.util.Collection;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
@@ -242,142 +238,27 @@ public final class MetadataRegenerator {
         final String version = segments[segments.length - 2];
         final Key baseKey = new Key.From(String.join("/", coords));
         final Key versionKey = new Key.From(baseKey, version);
-        final Key metadataKey = new Key.From(baseKey, "maven-metadata.xml");
-        
-        // CRITICAL: Lock maven-metadata.xml during update
-        // Different artifacts (0.12.11 vs 0.3.0) are locked separately but both update this file
-        // Use lock WITHOUT retry to avoid long delays that cause 504 timeouts
+        // Regenerating maven-metadata.xml (re-deriving <versions> from what is
+        // actually in storage under a per-GA exclusive lock, with bounded
+        // full-jitter retry so a concurrent-import burst never loses a version)
+        // is delegated to the shared MavenMetadataRegenerator in maven-adapter,
+        // so the importer and the hosted UploadSlice share one implementation
+        // rather than each carrying a copy of the algorithm. Regenerating the
+        // artifact / version-directory checksums below is importer-specific and
+        // stays here.
         final long startTime = System.currentTimeMillis();
-        return this.storage.exclusively(
-            metadataKey,
-            lockedStorage -> this.storage.list(baseKey)
-                .exceptionally(ex -> {
-                    EcsLogger.debug("com.auto1.pantera.importer")
-                        .message("Base key '" + baseKey.string() + "' doesn't exist yet, creating metadata for first version")
-                        .eventCategory("web")
-                        .eventAction("maven_metadata_regenerate")
-                        .field("log.source", "application")
-                        .log();
-                    return List.of();
-                })
-                .thenApply(keys -> collectMavenVersions(baseKey, version, keys))
-                .thenCompose(versions -> writeMavenMetadata(baseKey, groupId, artifactId, versions))
-                .thenCompose(nothing -> this.generateMavenChecksums(artifactKey))
-                .thenCompose(nothing -> this.generateAllVersionChecksums(versionKey))
-        ).whenComplete((result, error) -> {
-            final long duration = System.currentTimeMillis() - startTime;
-            if (error != null) {
-                recordMetadataOperation("regenerate_failed", duration);
-            } else {
-                recordMetadataOperation("regenerate", duration);
-            }
-        });
-    }
-
-    /**
-     * Collect available Maven versions located under the base key.
-     *
-     * @param baseKey Base key containing artifact versions
-     * @param currentVersion Version of current artifact
-     * @param keys All keys under base
-     * @return Sorted set of versions
-     */
-    private static TreeSet<String> collectMavenVersions(
-        final Key baseKey,
-        final String currentVersion,
-        final Collection<Key> keys
-    ) {
-        final TreeSet<String> versions = new TreeSet<>(
-            (left, right) -> new Version(left).compareTo(new Version(right))
-        );
-        versions.add(currentVersion);
-        final String prefix = baseKey.string();
-        final String normalizedPrefix = prefix.isEmpty() ? "" : prefix + "/";
-        for (final Key key : keys) {
-            final String relative = key.string().substring(normalizedPrefix.length());
-            if (relative.isEmpty()) {
-                continue;
-            }
-            final String firstSegment = relative.split("/")[0];
-            // Skip metadata files, hidden files, and system files
-            if ("maven-metadata.xml".equals(firstSegment)
-                || firstSegment.endsWith(".lastUpdated")
-                || firstSegment.endsWith(".properties")
-                || firstSegment.startsWith(".")  // Skip .DS_Store, .git, etc.
-                || firstSegment.contains(".tmp")
-                || firstSegment.contains(".lock")) {
-                continue;
-            }
-            // Try to parse as version to validate it's a real version directory
-            try {
-                new Version(firstSegment);
-                versions.add(firstSegment);
-            } catch (final Exception ex) {
-                // Not a valid version, skip it
-                EcsLogger.debug("com.auto1.pantera.importer")
-                    .message("Skipping non-version directory")
-                    .eventCategory("web")
-                    .eventAction("maven_metadata_regenerate")
-                    .field("file.directory", firstSegment)
-                    .error(ex)
-                    .field("log.source", "application")
-                    .log();
-            }
-        }
-        return versions;
-    }
-
-    /**
-     * Write Maven metadata file for artifact coordinates.
-     *
-     * @param baseKey Base key
-     * @param groupId Group id
-     * @param artifactId Artifact id
-     * @param versions Available versions
-     * @return Completion stage
-     */
-    private CompletionStage<Void> writeMavenMetadata(
-        final Key baseKey,
-        final String groupId,
-        final String artifactId,
-        final TreeSet<String> versions
-    ) {
-        if (versions.isEmpty()) {
-            return CompletableFuture.completedFuture(null);
-        }
-        final String latest = versions.isEmpty() ? null : versions.last();
-        final String release = versions.stream()
-            .filter(version -> !version.endsWith("SNAPSHOT"))
-            .reduce((first, second) -> second)
-            .orElse(latest);
-        final Directives dirs = new Directives()
-            .add("metadata")
-                .add("groupId").set(groupId).up()
-                .add("artifactId").set(artifactId).up()
-                .add("versioning");
-        if (latest != null) {
-            dirs.add("latest").set(latest).up();
-        }
-        if (release != null) {
-            dirs.add("release").set(release).up();
-        }
-        dirs.add("versions");
-        versions.forEach(version -> dirs.add("version").set(version).up());
-        dirs.up() // versions
-            .add("lastUpdated").set(MavenTimestamp.now()).up()
-            .up() // versioning
-        .up(); // metadata
-        final String metadata;
-        try {
-            metadata = new Xembler(dirs).xml();
-        } catch (final Exception err) {
-            return CompletableFuture.failedFuture(err);
-        }
-        final Key metadataKey = new Key.From(baseKey, "maven-metadata.xml");
-        return this.storage.save(
-            metadataKey,
-            new Content.From(metadata.getBytes(StandardCharsets.UTF_8))
-        );
+        return new MavenMetadataRegenerator(this.storage)
+            .regenerate(baseKey, groupId, artifactId, version)
+            .thenCompose(nothing -> this.generateMavenChecksums(artifactKey))
+            .thenCompose(nothing -> this.generateAllVersionChecksums(versionKey))
+            .whenComplete((result, error) -> {
+                final long duration = System.currentTimeMillis() - startTime;
+                if (error != null) {
+                    recordMetadataOperation("regenerate_failed", duration);
+                } else {
+                    recordMetadataOperation("regenerate", duration);
+                }
+            });
     }
 
     /**

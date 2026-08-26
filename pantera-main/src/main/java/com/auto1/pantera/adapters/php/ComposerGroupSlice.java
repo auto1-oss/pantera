@@ -12,6 +12,7 @@ package com.auto1.pantera.adapters.php;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.composer.http.proxy.MetadataUrlRewriter;
 import com.auto1.pantera.group.SliceResolver;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
@@ -326,6 +327,14 @@ public final class ComposerGroupSlice implements Slice {
      * Composer would follow the upstream's metadata-url and bypass pantera
      * entirely (cooldown filter + cache + auth).
      *
+     * <p>Every other top-level URL field — {@code search}, {@code list},
+     * {@code notify}/{@code notify-batch}, {@code security-advisories},
+     * {@code available-packages-url} — goes through the same
+     * {@link MetadataUrlRewriter#rewriteRoot} used by the Composer proxy's
+     * root handler, so the group closes the identical leak: a client
+     * cannot be steered straight to a member's upstream by following any
+     * URL this root advertises.</p>
+     *
      * <p>UID injection on package versions is preserved: Composer v1 uses
      * the {@code uid} field for cache invalidation; we inject a stable UUID
      * if the upstream omitted it.</p>
@@ -347,9 +356,31 @@ public final class ComposerGroupSlice implements Slice {
             return ResponseBuilder.notFound().build();
         }
 
+        // Rewrite every top-level URL field to the group's own basePath
+        // (or drop it, fail-closed, if unrecognised) before copying the
+        // "other" fields across — this is what plugs the search / list /
+        // notify-batch / security-advisories / available-packages-url
+        // leak. metadata-url / providers-url / packages / providers keep
+        // their existing bespoke handling below (uid injection, Satis
+        // provider-table passthrough) — rewriteRoot produces the same
+        // metadata-url/providers-url shape those branches already write,
+        // so excluding them from the generic copy is still correct.
+        final JsonObject rewritten;
+        try (
+            JsonReader reader = Json.createReader(
+                new ByteArrayInputStream(
+                    new MetadataUrlRewriter(this.basePath).rewriteRoot(
+                        new String(bytes, StandardCharsets.UTF_8), this.basePath
+                    )
+                )
+            )
+        ) {
+            rewritten = reader.readObject();
+        }
+
         final JsonObjectBuilder out = Json.createObjectBuilder();
-        // Copy every field except the URL fields we rewrite.
-        json.forEach((key, value) -> {
+        // Copy every field except the URL fields with their own handling.
+        rewritten.forEach((key, value) -> {
             if (!"packages".equals(key)
                 && !"metadata-url".equals(key)
                 && !"providers-url".equals(key)

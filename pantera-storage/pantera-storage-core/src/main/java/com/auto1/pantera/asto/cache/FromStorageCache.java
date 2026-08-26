@@ -106,8 +106,16 @@ public final class FromStorageCache implements Cache {
             )
             .onErrorComplete()
             .switchIfEmpty(
-                // Use non-blocking RxFuture.single instead of blocking SingleInterop.fromFuture
-                RxFuture.single(remote.get()).flatMap(
+                // LAZY on purpose: Single.defer(...) postpones calling remote.get()
+                // until this fallback is actually subscribed, which RxJava's
+                // switchIfEmpty only does when the cache-hit chain above completed
+                // empty (a genuine miss). Without the defer, remote.get() -- a
+                // plain method-call argument to switchIfEmpty -- would be evaluated
+                // eagerly while *constructing* the chain, i.e. on every load(), so a
+                // side-effecting Remote (an upstream HTTP fetch) fired even on a
+                // cache hit. Use non-blocking RxFuture.single, not blocking
+                // SingleInterop.fromFuture.
+                Single.defer(() -> RxFuture.single(remote.get()).flatMap(
                     content -> {
                         final Single<Optional<? extends Content>> res;
                         if (content.isPresent()) {
@@ -122,7 +130,7 @@ public final class FromStorageCache implements Cache {
                         }
                         return res;
                     }
-                )
+                ))
             ).to(SingleInterop.get());
     }
 

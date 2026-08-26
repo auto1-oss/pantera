@@ -24,6 +24,7 @@ import com.auto1.pantera.asto.ext.CompletableFutureSupport;
 import com.auto1.pantera.asto.lock.storage.StorageLock;
 import com.auto1.pantera.asto.log.EcsLogger;
 import com.auto1.pantera.asto.metrics.StorageMetricsCollector;
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import java.io.IOException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileSystems;
@@ -43,6 +44,8 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -65,6 +68,21 @@ public final class FileStorage implements Storage {
      * Storage string identifier (name and path).
      */
     private final String id;
+
+    /**
+     * Dedicated executor for blocking file I/O operations.
+     * CRITICAL: Without an explicit executor, thenApplyAsync()/supplyAsync() run on
+     * ForkJoinPool.commonPool(), whose parallelism is cores-1 (only 1 on a 2-core host).
+     * That starves under load and can wedge multi-hop CompletableFuture chains, so
+     * blocking file I/O gets its own dedicated daemon-thread pool here.
+     */
+    private static final ExecutorService BLOCKING_EXECUTOR = Executors.newFixedThreadPool(
+        Math.max(8, Runtime.getRuntime().availableProcessors() * 2),
+        new ThreadFactoryBuilder()
+            .setNameFormat("pantera-fs-io.worker-%d")
+            .setDaemon(true)
+            .build()
+    );
 
     /**
      * Ctor.
@@ -90,7 +108,8 @@ public final class FileStorage implements Storage {
     public CompletableFuture<Boolean> exists(final Key key) {
         final long startNs = System.nanoTime();
         return this.keyPath(key).thenApplyAsync(
-            path -> Files.exists(path) && !Files.isDirectory(path)
+            path -> Files.exists(path) && !Files.isDirectory(path),
+            BLOCKING_EXECUTOR
         ).whenComplete((result, throwable) -> {
             final long durationNs = System.nanoTime() - startNs;
             StorageMetricsCollector.record(
@@ -156,7 +175,8 @@ public final class FileStorage implements Storage {
                     .field("log.source", "application")
                     .log();
                 return keys;
-            }
+            },
+            BLOCKING_EXECUTOR
         ).whenComplete((result, throwable) -> {
             final long durationNs = System.nanoTime() - startNs;
             StorageMetricsCollector.record(
@@ -240,7 +260,8 @@ public final class FileStorage implements Storage {
                     .log();
 
                 return new ListResult.Simple(files, new ArrayList<>(directories));
-            }
+            },
+            BLOCKING_EXECUTOR
         );
     }
 
@@ -277,7 +298,8 @@ public final class FileStorage implements Storage {
                 }
 
                 return ImmutablePair.of(path, tmp);
-            }
+            },
+            BLOCKING_EXECUTOR
         ).thenCompose(
             pair -> {
                 final Path path = pair.getKey();
@@ -297,7 +319,8 @@ public final class FileStorage implements Storage {
                         } else {
                             throw new PanteraIOException(throwable);
                         }
-                    }
+                    },
+                    BLOCKING_EXECUTOR
                 );
             }
         );
@@ -355,7 +378,8 @@ public final class FileStorage implements Storage {
                 } else {
                     throw new ValueNotFoundException(key);
                 }
-            }
+            },
+            BLOCKING_EXECUTOR
         ).whenComplete((result, throwable) -> {
             final long durationNs = System.nanoTime() - startNs;
             StorageMetricsCollector.record(
@@ -380,7 +404,8 @@ public final class FileStorage implements Storage {
                     throw new PanteraIOException(iox);
                 }
                 return new FileMeta(attrs);
-            }
+            },
+            BLOCKING_EXECUTOR
         );
     }
 
@@ -536,7 +561,8 @@ public final class FileStorage implements Storage {
                     throw new PanteraIOException(iex);
                 }
                 return dest;
-            }
+            },
+            BLOCKING_EXECUTOR
         ).thenAcceptAsync(
             dst -> {
                 try {
@@ -553,7 +579,8 @@ public final class FileStorage implements Storage {
                 } catch (final IOException iex) {
                     throw new PanteraIOException(iex);
                 }
-            }
+            },
+            BLOCKING_EXECUTOR
         );
     }
 

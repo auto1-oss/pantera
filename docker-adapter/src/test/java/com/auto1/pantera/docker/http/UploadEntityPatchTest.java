@@ -12,6 +12,7 @@ package com.auto1.pantera.docker.http;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.docker.Digest;
 import com.auto1.pantera.docker.Docker;
 import com.auto1.pantera.docker.asto.AstoDocker;
 import com.auto1.pantera.docker.asto.Upload;
@@ -22,6 +23,7 @@ import com.auto1.pantera.http.hm.ResponseAssert;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import org.hamcrest.MatcherAssert;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -75,6 +77,77 @@ class UploadEntityPatchTest {
         MatcherAssert.assertThat(
             response,
             new IsErrorsResponse(RsStatus.NOT_FOUND, "BLOB_UPLOAD_UNKNOWN")
+        );
+    }
+
+    /**
+     * WS4-docker.6: a chunk-per-PATCH sequence (declaring each chunk's
+     * start via {@code Content-Range}) assembles correctly, and the
+     * assembled blob is retrievable after the final {@code PUT ?digest=}.
+     */
+    @Test
+    void shouldAssembleChunkedPatchSequenceThenPut() {
+        final String name = "chunked";
+        final Upload upload = this.docker.repo(name).uploads().start().toCompletableFuture().join();
+        final String uuid = upload.uuid();
+        final String path = String.format("/v2/%s/blobs/uploads/%s", name, uuid);
+        final byte[] first = "first-chunk-".getBytes();
+        final byte[] second = "second-chunk".getBytes();
+        final Response firstPatch = this.slice.response(
+            new RequestLine(RqMethod.PATCH, path), TestDockerAuth.headers(), new Content.From(first)
+        ).join();
+        ResponseAssert.check(
+            firstPatch, RsStatus.ACCEPTED,
+            new Header("Range", String.format("0-%d", first.length - 1))
+        );
+        final Response secondPatch = this.slice.response(
+            new RequestLine(RqMethod.PATCH, path),
+            TestDockerAuth.headers(new Header("Content-Range", first.length + "-" + (first.length + second.length - 1))),
+            new Content.From(second)
+        ).join();
+        ResponseAssert.check(
+            secondPatch, RsStatus.ACCEPTED,
+            new Header("Range", String.format("0-%d", first.length + second.length - 1))
+        );
+        final byte[] assembled = new byte[first.length + second.length];
+        System.arraycopy(first, 0, assembled, 0, first.length);
+        System.arraycopy(second, 0, assembled, first.length, second.length);
+        final Digest digest = new Digest.Sha256(assembled);
+        final Response put = this.slice.response(
+            new RequestLine(RqMethod.PUT, String.format("%s?digest=%s", path, digest.string())),
+            TestDockerAuth.headers(),
+            Content.EMPTY
+        ).join();
+        ResponseAssert.check(put, RsStatus.CREATED);
+        final byte[] stored = this.docker.repo(name).layers().get(digest)
+            .thenCompose(found -> found.orElseThrow().content())
+            .thenCompose(Content::asBytesFuture)
+            .join();
+        MatcherAssert.assertThat(stored, new IsEqual<>(assembled));
+    }
+
+    /**
+     * WS4-docker.6: a chunk whose {@code Content-Range} start does not
+     * match what has actually been received is rejected with {@code 416},
+     * not silently accepted out of order.
+     */
+    @Test
+    void shouldReturn416ForNonContiguousChunk() {
+        final String name = "chunked-reject";
+        final Upload upload = this.docker.repo(name).uploads().start().toCompletableFuture().join();
+        final String uuid = upload.uuid();
+        final String path = String.format("/v2/%s/blobs/uploads/%s", name, uuid);
+        this.slice.response(
+            new RequestLine(RqMethod.PATCH, path), TestDockerAuth.headers(), new Content.From("first".getBytes())
+        ).join();
+        final Response response = this.slice.response(
+            new RequestLine(RqMethod.PATCH, path),
+            TestDockerAuth.headers(new Header("Content-Range", "999-1010")),
+            new Content.From("out-of-order".getBytes())
+        ).join();
+        MatcherAssert.assertThat(
+            response,
+            new IsErrorsResponse(RsStatus.REQUESTED_RANGE_NOT_SATISFIABLE, "BLOB_UPLOAD_INVALID")
         );
     }
 }

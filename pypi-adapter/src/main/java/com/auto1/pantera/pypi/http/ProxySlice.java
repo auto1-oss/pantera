@@ -297,11 +297,27 @@ final class ProxySlice implements Slice {
         // Same packument-inline shortcut npm and composer take. Stops
         // the silent fail-open we hit when no PublishDateSource is
         // registered for pypi in DbPublishDateRegistry.
+        // WS5.5: share the cooldown-filtered metadata cache so the parse +
+        // per-version cooldown fan-out + filter + rewrite of a /simple/ index
+        // is paid once per (content, cutoff) instead of on every request. The
+        // shared instance is the one every invalidation hook already targets
+        // (upload, proxy refresh, JDBC block/unblock, cross-instance pub/sub,
+        // policy wipe), so PyPI entries stay coherent without a second cache.
+        // Null when cooldown metadata caching is not wired — the handler then
+        // recomputes per request, exactly as before.
         this.simpleHandler = new PypiSimpleHandler(
-            simpleUpstream, cooldown, rtype, rname
+            simpleUpstream, cooldown, rtype, rname,
+            com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry
+                .instance().sharedCache()
         );
+        // WS6.3: route the JSON-API resolution surface through the same
+        // cache/storage this repository already uses for the Simple-API
+        // index — TTL-cached, single-flighted, serve-stale-on-outage
+        // (PypiJsonBaseLoader), instead of hitting pypi.org unconditionally
+        // on every /pypi/<pkg>/json request. PypiJsonBaseLoader namespaces
+        // its keys so they never collide with the index cache entries.
         this.jsonHandler = new PypiJsonHandler(
-            jsonApiUpstream, cooldown, rtype, rname
+            jsonApiUpstream, this.cache, this.asyncStorage, cooldown, rtype, rname
         );
     }
 
@@ -327,6 +343,22 @@ final class ProxySlice implements Slice {
                 .field("log.source", "application")
                 .log();
             return this.jsonHandler.handle(line, user, rqheaders);
+        }
+        // WS4-pypi.9: /pypi/<name>/<ver>/json was previously an unfiltered
+        // upstream passthrough (deliberately unmatched by the detector) —
+        // a cooldown-blocked version's metadata leaked straight through.
+        // Route it through the same cooldown filter the package-level
+        // endpoint uses, single-version-scoped.
+        if (this.jsonHandler != null && this.jsonHandler.matchesVersion(path)) {
+            EcsLogger.debug("com.auto1.pantera.pypi")
+                .message("Dispatching /pypi/<pkg>/<ver>/json to cooldown JSON handler")
+                .eventCategory("web")
+                .eventAction("proxy_request")
+                .field("url.path", path)
+                .field("repository.name", this.rname)
+                .field("log.source", "application")
+                .log();
+            return this.jsonHandler.handleVersion(line, user, rqheaders);
         }
         if (coords.isEmpty() && this.simpleHandler.matches(path)) {
             final boolean clientWantsJson =
@@ -355,8 +387,88 @@ final class ProxySlice implements Slice {
             return this.checkCacheFirst(line, info, user, ctx);
         }
 
-        // Non-artifacts (index pages, metadata): serve directly from cache/upstream
+        // M1 fix: a PEP 658 `.metadata` sidecar (/packages/{hash}/{file}.metadata)
+        // is not a distribution archive itself, so `extract()` above never
+        // matches it and it used to fall straight into the unfiltered
+        // non-artifact path below — a cooldown-blocked version's core
+        // metadata (dependencies, requires-python) was retrievable even
+        // though the wheel/sdist bytes it describes were correctly blocked.
+        // Derive the same (name, version) the described distribution file
+        // would resolve to and run it through the identical cooldown gate
+        // the artifact-byte path uses, BEFORE any serve/upstream-forward.
+        final Optional<ArtifactCoordinates> metadataCoords = this.extractMetadataCoordinates(line);
+        if (metadataCoords.isPresent()) {
+            final AuditContext ctx = this.captureAuditContext(rqheaders);
+            return this.checkMetadataCooldown(line, rqheaders, body, metadataCoords.get(), user, ctx);
+        }
+
+        // Non-artifacts (index pages): serve directly from cache/upstream
         return this.serveNonArtifact(line, rqheaders, body, user);
+    }
+
+    /**
+     * WS4/M1 fix: gate a PEP 658 {@code .metadata} sidecar request behind
+     * the same cooldown evaluation {@link #evaluateCooldownAndFetch} runs
+     * for the distribution file it describes. A blocked version 404s
+     * instead of the artifact path's cooldown-forbidden response — PEP 658
+     * already defines a missing {@code .metadata} as "not available, fall
+     * back to the full distribution download", which then correctly
+     * re-evaluates cooldown on the actual artifact bytes. Allowed requests
+     * fall through unchanged to the existing cache/upstream serving path.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    private CompletableFuture<Response> checkMetadataCooldown(
+        final RequestLine line, final Headers rqheaders, final Content body,
+        final ArtifactCoordinates info, final String user, final AuditContext ctx
+    ) {
+        final CooldownRequest request = new CooldownRequest(
+            this.rtype, this.rname, info.artifact(), info.version(), user, Instant.now()
+        );
+        return this.cooldown.evaluate(request, this.inspector).thenCompose(evaluation -> {
+            if (evaluation.blocked()) {
+                EcsLogger.warn("com.auto1.pantera.pypi")
+                    .message("PEP 658 .metadata BLOCKED by cooldown")
+                    .eventCategory("web")
+                    .eventAction("cooldown_evaluation")
+                    .eventOutcome("failure")
+                    .field("package.name", info.artifact())
+                    .field("package.version", info.version())
+                    .field("url.path", line.uri().getPath())
+                    .field("log.source", "application")
+                    .log();
+                AuditLogger.access(
+                    ctx, this.rtype, this.rname, info.artifact(), info.version(), 0L,
+                    user, AuditLogger.OUTCOME_FAILURE, AuditLogger.REASON_COOLDOWN_ACTIVE
+                );
+                return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
+            }
+            return this.serveNonArtifact(line, rqheaders, body, user);
+        });
+    }
+
+    /**
+     * PEP 658 {@code .metadata} sidecar coordinates — the same
+     * {@code (name, version)} as the distribution file it describes, since
+     * the sidecar path is always exactly {@code <distribution-path>.metadata}
+     * (see the mirror registration in {@link #storeMirror} / {@link
+     * #metadataUri}). Derived by stripping the {@code .metadata} suffix and
+     * running the result through the same filename parser {@link
+     * #extract(RequestLine)} uses for the artifact itself, so the two paths
+     * can never disagree on which version gates which cooldown check.
+     *
+     * @param line Request line
+     * @return Coordinates, or empty when the path is not a {@code .metadata}
+     *         request or the underlying filename does not parse
+     */
+    private Optional<ArtifactCoordinates> extractMetadataCoordinates(final RequestLine line) {
+        final String path = line.uri().getPath();
+        if (path == null || !path.endsWith(".metadata")) {
+            return Optional.empty();
+        }
+        final String withoutSuffix = path.substring(0, path.length() - ".metadata".length());
+        final int slash = withoutSuffix.lastIndexOf('/');
+        final String filename = slash >= 0 ? withoutSuffix.substring(slash + 1) : withoutSuffix;
+        return this.coordinatesFromFilename(filename);
     }
 
     /**

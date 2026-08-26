@@ -18,17 +18,23 @@ import com.auto1.pantera.docker.ManifestReference;
 import com.auto1.pantera.docker.Manifests;
 import com.auto1.pantera.docker.Tags;
 import com.auto1.pantera.docker.error.InvalidManifestException;
+import com.auto1.pantera.docker.error.DockerReferenceNotFoundException;
 import com.auto1.pantera.docker.manifest.Manifest;
 import com.auto1.pantera.docker.manifest.ManifestLayer;
+import com.auto1.pantera.docker.manifest.ReferrerDescriptor;
+import com.auto1.pantera.docker.manifest.Referrers;
 import com.auto1.pantera.docker.misc.Pagination;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.google.common.base.Strings;
 
 import javax.json.JsonException;
 import java.nio.charset.StandardCharsets;
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
@@ -71,6 +77,7 @@ public final class AstoManifests implements Manifests {
                     .thenCompose(
                         manifest -> this.validate(manifest)
                             .thenCompose(nothing -> this.addManifestLinks(ref, manifest.digest()))
+                            .thenCompose(nothing -> this.indexReferrer(manifest))
                             .thenApply(nothing -> manifest)
                     )
             );
@@ -84,8 +91,33 @@ public final class AstoManifests implements Manifests {
                     .thenApply(digest -> new Manifest(digest, bytes))
                     .thenCompose(
                         manifest -> this.addManifestLinks(ref, manifest.digest())
+                            .thenCompose(nothing -> this.indexReferrer(manifest))
                             .thenApply(nothing -> manifest)
                     )
+            );
+    }
+
+    @Override
+    public CompletableFuture<Referrers> referrers(final Digest subject, final Optional<String> artifactType) {
+        final Key root = Layout.referrersRoot(this.name, subject);
+        return this.storage.list(root)
+            .thenCompose(this::readDescriptors)
+            .thenApply(
+                descriptors -> {
+                    final List<ReferrerDescriptor> filtered = artifactType
+                        .map(type -> filterByArtifactType(descriptors, type))
+                        .orElse(descriptors);
+                    EcsLogger.info("com.auto1.pantera.docker")
+                        .message("Referrers listing served (count=" + filtered.size() + ")")
+                        .eventCategory("web")
+                        .eventAction("referrers_serve")
+                        .eventOutcome("success")
+                        .field("repository.name", this.name)
+                        .field("container.image.hash.all", subject.string())
+                        .field("log.source", "application")
+                        .log();
+                    return new Referrers(filtered);
+                }
             );
     }
 
@@ -161,6 +193,114 @@ public final class AstoManifests implements Manifests {
         return this.storage.list(root).thenApply(
             keys -> new AstoTags(this.name, root, keys, pagination)
         );
+    }
+
+    @Override
+    public CompletableFuture<Void> delete(final ManifestReference ref) {
+        return this.readLink(ref).thenCompose(
+            digestOpt -> digestOpt.map(
+                digest -> this.removeLinks(ref, digest)
+                    .thenCompose(nothing -> this.pruneReferrerEntry(digest))
+                    .thenRun(() -> this.logManifestDelete(ref, digest))
+            ).orElseGet(() -> {
+                EcsLogger.debug("com.auto1.pantera.docker")
+                    .message("Manifest delete requested for a reference that does not exist")
+                    .eventCategory("web")
+                    .eventAction("manifest_delete")
+                    .eventOutcome("failure")
+                    .field("repository.name", this.name)
+                    .field("container.image.hash.all", ref.digest())
+                    .field("log.source", "application")
+                    .log();
+                return CompletableFuture.failedFuture(
+                    new DockerReferenceNotFoundException(
+                        String.format("manifest not found: %s", ref.digest())
+                    )
+                );
+            })
+        );
+    }
+
+    /**
+     * Removes the link {@code ref} itself resolves to, plus the canonical
+     * by-digest link (when different from {@code ref}) so nothing is left
+     * pointing at a manifest with no remaining named reference. Tags other
+     * than {@code ref} that independently reference {@code digest} keep
+     * their own link untouched.
+     *
+     * @param ref Reference requested for deletion.
+     * @param digest Digest {@code ref} resolved to.
+     * @return Signal that both link removals completed.
+     */
+    private CompletableFuture<Void> removeLinks(final ManifestReference ref, final Digest digest) {
+        final ManifestReference byDigest = ManifestReference.from(digest);
+        final CompletableFuture<Void> removeRequested =
+            this.storage.delete(Layout.manifest(this.name, ref));
+        if (ref.equals(byDigest)) {
+            return removeRequested;
+        }
+        final Key digestKey = Layout.manifest(this.name, byDigest);
+        return CompletableFuture.allOf(
+            removeRequested,
+            this.storage.exists(digestKey).thenCompose(
+                exists -> exists
+                    ? this.storage.delete(digestKey)
+                    : CompletableFuture.completedFuture(null)
+            )
+        );
+    }
+
+    /**
+     * Prunes the OCI 1.1 referrers-index entry for a deleted manifest, when
+     * it carried a {@code subject} — otherwise a no-op. The underlying blob
+     * is still present at this point (blob GC is a separate operation), so
+     * the manifest bytes can still be read to check for a subject.
+     *
+     * @param digest Digest of the deleted manifest.
+     * @return Signal that pruning (or the no-op check) completed.
+     */
+    private CompletableFuture<Void> pruneReferrerEntry(final Digest digest) {
+        return this.blobs.blob(digest).thenCompose(
+            blobOpt -> blobOpt.map(
+                blob -> blob.content()
+                    .thenCompose(Content::asBytesFuture)
+                    .thenCompose(bytes -> {
+                        final Manifest manifest = new Manifest(digest, bytes);
+                        return manifest.subject().map(
+                            subject -> this.storage.delete(Layout.referrer(this.name, subject, digest))
+                                .thenRun(() -> EcsLogger.info("com.auto1.pantera.docker")
+                                    .message("Referrers index entry pruned for deleted manifest")
+                                    .eventCategory("web")
+                                    .eventAction("referrers_index_prune")
+                                    .eventOutcome("success")
+                                    .field("repository.name", this.name)
+                                    .field("container.image.hash.all", subject.string())
+                                    .field("package.checksum", digest.string())
+                                    .field("log.source", "application")
+                                    .log())
+                        ).orElseGet(() -> CompletableFuture.completedFuture(null));
+                    })
+            ).orElseGet(() -> CompletableFuture.completedFuture(null))
+        );
+    }
+
+    /**
+     * Logs the manifest-delete state transition.
+     *
+     * @param ref Reference that was deleted.
+     * @param digest Digest the reference resolved to.
+     */
+    private void logManifestDelete(final ManifestReference ref, final Digest digest) {
+        EcsLogger.info("com.auto1.pantera.docker")
+            .message("Manifest reference deleted")
+            .eventCategory("web")
+            .eventAction("manifest_delete")
+            .eventOutcome("success")
+            .field("repository.name", this.name)
+            .field("container.image.hash.all", ref.digest())
+            .field("package.checksum", digest.string())
+            .field("log.source", "application")
+            .log();
     }
 
     /**
@@ -265,5 +405,82 @@ public final class AstoManifests implements Manifests {
                 return CompletableFuture.completedFuture(Optional.empty());
             }
         );
+    }
+
+    /**
+     * Indexes {@code manifest} against its OCI 1.1 {@code subject}, if
+     * present, so {@code GET .../referrers/<subject-digest>} can find it.
+     * A no-op for ordinary manifests that carry no {@code subject}.
+     *
+     * <p>Not gated on {@link com.auto1.pantera.docker.misc.ImageTag#valid} —
+     * referrer artifacts (signatures, SBOMs) are pushed by digest, never by
+     * tag, unlike the DB-index gate in {@code PushManifestSlice}.
+     *
+     * @param manifest Manifest just written to blob storage.
+     * @return Signal that indexing completed (or that there was nothing to index).
+     */
+    private CompletableFuture<Void> indexReferrer(final Manifest manifest) {
+        return manifest.subject()
+            .map(subject -> this.writeReferrerEntry(subject, manifest))
+            .orElseGet(() -> CompletableFuture.completedFuture(null));
+    }
+
+    /**
+     * Writes the referrer descriptor entry and logs the state transition.
+     *
+     * @param subject Subject digest the manifest refers to.
+     * @param manifest Referring manifest.
+     * @return Signal that the entry is written.
+     */
+    private CompletableFuture<Void> writeReferrerEntry(final Digest subject, final Manifest manifest) {
+        return this.storage.save(
+            Layout.referrer(this.name, subject, manifest.digest()),
+            new Content.From(ReferrerDescriptor.of(manifest).toBytes())
+        ).toCompletableFuture().thenRun(
+            () -> EcsLogger.info("com.auto1.pantera.docker")
+                .message("Referrers index entry written")
+                .eventCategory("web")
+                .eventAction("referrers_index_write")
+                .eventOutcome("success")
+                .field("repository.name", this.name)
+                .field("container.image.hash.all", subject.string())
+                .field("package.checksum", manifest.digest().string())
+                .field("log.source", "application")
+                .log()
+        );
+    }
+
+    /**
+     * Reads every referrer descriptor found under a listed set of keys.
+     *
+     * @param keys Referrer descriptor keys (from {@link Layout#referrersRoot}).
+     * @return Parsed descriptors, in no particular order.
+     */
+    private CompletableFuture<List<ReferrerDescriptor>> readDescriptors(final Collection<Key> keys) {
+        final List<CompletableFuture<ReferrerDescriptor>> futures = keys.stream()
+            .map(
+                key -> this.storage.value(key)
+                    .thenCompose(Content::asBytesFuture)
+                    .thenApply(ReferrerDescriptor::fromBytes)
+                    .toCompletableFuture()
+            )
+            .collect(Collectors.toList());
+        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+            .thenApply(ignored -> futures.stream().map(CompletableFuture::join).collect(Collectors.toList()));
+    }
+
+    /**
+     * Filters descriptors down to those matching the requested artifact type.
+     *
+     * @param descriptors Unfiltered descriptors.
+     * @param artifactType Requested {@code ?artifactType=} value.
+     * @return Matching descriptors.
+     */
+    private static List<ReferrerDescriptor> filterByArtifactType(
+        final List<ReferrerDescriptor> descriptors, final String artifactType
+    ) {
+        return descriptors.stream()
+            .filter(descriptor -> descriptor.artifactType().filter(artifactType::equals).isPresent())
+            .collect(Collectors.toList());
     }
 }

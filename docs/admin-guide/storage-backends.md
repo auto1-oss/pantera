@@ -59,6 +59,7 @@ storage:
   region: eu-central-1
   endpoint: https://s3.eu-central-1.amazonaws.com
   path-style: true
+  storage-class: STANDARD_IA   # optional; defaults to the S3 default (STANDARD)
 
   # Multipart upload
   multipart: true
@@ -198,11 +199,450 @@ cache:
 
 **Sizing recommendation:** Set `max-bytes` to fit your hot working set (the artifacts accessed most frequently in a typical build cycle). For most teams, 10-50 GB is sufficient.
 
+### Index Cache Mode (`cache.mode: index`)
+
+`cache.mode: index` opts a storage into the WS1.1 index-accelerated cache
+(`CachedBlobStorage`) instead of the disk cache above. The difference is the
+hit path: the disk cache (`cache.mode: disk`, the default) still issues 1-2
+synchronous S3 HEADs on every cache hit to check existence and validate the
+cached copy against S3; index mode never does. An in-memory `StorageIndex`,
+hydrated once at boot by scanning the cache directory's `.meta` sidecars,
+answers `exists`/`metadata`/`list` from memory with zero S3 round trips, and a
+disk-served read is a pure local file read with no inline S3 call at all. A
+disk copy is trusted for `freshness-ttl-millis` before it would need
+re-validation; a confirmed-absent key is remembered for `negative-ttl-millis`
+so a repeated lookup for a key that doesn't exist doesn't re-hit S3 either.
+Concurrent requests for the same not-yet-cached key are coalesced into a
+single S3 fetch.
+
+```yaml
+cache:
+  enabled: true
+  mode: index
+  path: /var/pantera/cache/s3
+  freshness-ttl-millis: 300000     # 5 min -- how long a disk copy is trusted
+  negative-ttl-millis: 30000       # 30 sec -- how long a confirmed miss is remembered
+```
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `mode` | `disk` | `disk` (existing `DiskCacheStorage`) or `index` (`CachedBlobStorage`) |
+| `freshness-ttl-millis` | `300000` (5 min) | How long a disk-cached entry is trusted without S3 re-validation |
+| `negative-ttl-millis` | `30000` (30 sec) | How long a confirmed S3 miss is cached to avoid repeat lookups |
+
+**What's different from the disk cache:**
+
+- **Writes are asynchronous durable write-back by default** (WS1.2) -- see
+  [Write-Back (Async Durable Writes)](#write-back-async-durable-writes-cachewrite-through)
+  below. `cache.write-through: true` opts a repository back into the
+  pre-WS1.2 synchronous behaviour.
+- **Size-bounded with index-driven LRU/LFU eviction** (WS1.4) -- see
+  [Eviction & Admission Control](#eviction--admission-control-cachemax-disk-bytes)
+  below. The disk directory under `cache.path` never exceeds
+  `cache.max-disk-bytes`: a write that would cross it evicts the coldest
+  entries first, synchronously, before the write lands. A key with an
+  unconfirmed write-back upload (`PENDING_WRITE`) is NEVER evicted -- it is
+  the only durable copy of those bytes until the upload confirms.
+- **Cache files are sharded on disk** (WS1.4) -- a 2-level hex fan-out keyed
+  off a hash of the artifact key, not the artifact key's own path structure,
+  so the cache directory never accumulates one huge flat directory. This is
+  purely an internal disk layout detail; it has no config key and no
+  observable effect other than the directory structure under `cache.path`.
+- **`list()` is scoped to what the index has observed** -- the boot-time disk
+  scan plus every key written or read since. A repository switched to
+  `cache.mode: index` with pre-existing S3 objects that Pantera has never
+  locally touched will not show those objects in a listing until they are
+  individually accessed (or a future backfill populates the index). This does
+  not affect artifact *retrieval* (a `value()`/`exists()` for an unindexed key
+  still correctly falls through to S3), only listing/browsing completeness.
+- **Cross-node staleness is event-driven** (WS1.5) -- see
+  [Cross-Node Coherence](#cross-node-coherence-ws15) below.
+  `freshness-ttl-millis` remains only the backstop for the window before an
+  invalidation message arrives, or if one is lost.
+
+The `validate-on-read` disk-cache option does not apply in index mode --
+there is nothing to validate against on the hot path by design.
+
+### Write-Back (Async Durable Writes) (`cache.write-through`)
+
+By default, `cache.mode: index` acknowledges a `save()` from **local disk
+durability**, not from a confirmed S3 write: bytes land on disk, a digest is
+computed once from the just-written file, the index records the key as
+`PENDING_WRITE`, and a bounded pool of background uploader threads drains the
+upload to S3 with retry/backoff. This is what makes writes scale past S3's
+per-request latency -- the caller is acknowledged in one local disk write
+instead of one disk write plus one round trip to S3.
+
+```yaml
+cache:
+  enabled: true
+  mode: index
+  path: /var/pantera/cache/s3
+  write-through: false                     # default: async write-back
+  write-back-queue-capacity: 1024          # high-water mark for in-flight uploads
+  write-back-uploader-threads: 4           # dedicated daemon uploader pool size
+  write-back-max-retries: 5                # retries before dead-lettering an upload
+  write-back-backoff-millis: 500           # backoff before the first retry
+  write-back-max-backoff-millis: 30000     # backoff ceiling
+  write-back-retry-after-seconds: 5        # Retry-After hint on a saturated queue
+```
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `write-through` | `false` | `true` restores the pre-WS1.2 synchronous behaviour: `save()` does not acknowledge until S3 confirms the write. Set this for repositories that cannot tolerate the durability window below (e.g. compliance). |
+| `write-back-queue-capacity` | `1024` | High-water mark for concurrently in-flight (queued + retrying) uploads. A `save()` past this mark is rejected immediately, before any disk write. |
+| `write-back-uploader-threads` | `4` | Size of the dedicated background thread pool draining the queue to S3. |
+| `write-back-max-retries` | `5` | Retry attempts after the first failed S3 `PUT` before an upload is dead-lettered. |
+| `write-back-backoff-millis` | `500` | Backoff before the first retry; doubles per attempt up to the ceiling below. |
+| `write-back-max-backoff-millis` | `30000` | Backoff ceiling. |
+| `write-back-retry-after-seconds` | `5` | `Retry-After` hint surfaced to a caller whose `save()` was rejected because the queue is saturated. |
+
+**Durability window.** Between a `save()` returning and the background
+uploader confirming the S3 `PUT`, the only durable copy of those bytes is the
+local disk file. If the process crashes in that window, the write survives:
+the `PENDING_WRITE` state is persisted in the on-disk `.meta` sidecar next to
+the file (not a second in-memory-only queue), and on restart `CachedBlobStorage`
+re-scans the cache directory and re-enqueues every still-pending upload for
+retry. What does **not** survive is the local disk itself being lost (disk
+failure, volume deletion) before the upload confirms -- for a proxy-cached
+artifact this is self-healing (the next request re-fetches from upstream),
+but for a hosted-mode upload it is a genuine, if narrow, durability gap.
+Repositories that cannot accept this window at all should set
+`cache.write-through: true`.
+
+**Backpressure.** When the write-back queue is at `write-back-queue-capacity`,
+a further `save()` is rejected immediately -- before any byte reaches disk, so
+the local disk cache cannot grow unbounded under sustained backpressure. For a
+proxy cache fill this is invisible to the client (the client already received
+its bytes; the cache write for that key is skipped and logged, and the next
+request for that key simply re-fetches from upstream). For a hosted-mode
+upload (where the `save()` *is* the client's request), this surfaces as
+`503 Service Unavailable` with a `Retry-After` header at the routes that map
+it (see the REST API reference for exactly which upload routes do today).
+
+### Eviction & Admission Control (`cache.max-disk-bytes`)
+
+Only meaningful under `cache.mode: index` (WS1.4). Keeps the local disk cache
+bounded without ever `Files.walk`-ing the directory to find out how full it
+is: an in-memory running byte counter, updated incrementally on every
+write/evict/remove, answers "how many bytes are cached right now" instantly.
+
+```yaml
+cache:
+  enabled: true
+  mode: index
+  path: /var/pantera/cache/s3
+  max-disk-bytes: 10737418240            # 10 GiB
+  eviction-high-watermark-percent: 90     # proactive eviction starts at 90% full
+  eviction-low-watermark-percent: 80      # proactive eviction stops at 80% full
+  eviction-policy: LRU                    # LRU or LFU
+```
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `max-disk-bytes` | `10737418240` (10 GiB) | Hard bound on total disk-cache bytes. A `save()` that would cross it evicts synchronously first; if it still can't fit (e.g. the content itself exceeds the bound, or everything else is pinned `PENDING_WRITE`) the write is rejected. `<= 0` disables eviction/admission entirely (unbounded). |
+| `eviction-high-watermark-percent` | `90` | Percentage of `max-disk-bytes` at which a write proactively triggers eviction (ahead of the hard bound). |
+| `eviction-low-watermark-percent` | `80` | Percentage of `max-disk-bytes` eviction works down toward once triggered -- evicting further than the immediate write needs, so the cache isn't evicting on almost every subsequent write. |
+| `eviction-policy` | `LRU` | `LRU` (least recently used) or `LFU` (least frequently used) -- same vocabulary and semantics as `cache.mode: disk`'s `eviction-policy`. |
+
+**Hard bound, not just a watermark.** Even if eviction fails to free enough
+space (every other entry happens to be `PENDING_WRITE`), the hard
+`max-disk-bytes` check runs on every single write and rejects rather than
+silently exceeding the bound -- the disk directory never grows past
+`max-disk-bytes`, checked at every write, not just at a periodic sweep.
+
+**`PENDING_WRITE` is never evicted.** An entry with an unconfirmed write-back
+upload is the ONLY durable copy of those bytes (see
+[Write-Back](#write-back-async-durable-writes-cachewrite-through) above) --
+eviction always skips it, regardless of how cold it is or how full the cache
+gets. A repository under sustained write pressure with a very small
+`max-disk-bytes` and a large in-flight write-back queue can therefore see
+disk usage stay above the low watermark indefinitely (bounded from above only
+by `max-disk-bytes` itself, via the hard-bound rejection) until uploads drain.
+
+**Coldness signal (`hits`/`lastAccess`) survives a restart, approximately.**
+Every index entry tracks how many times it has been read and when it was last
+read, driving the LRU/LFU comparison. These are persisted in the same
+per-file `.meta` sidecar as everything else, but only refreshed at the points
+a sidecar is already written for another reason (a confirmed write, or a
+write-back upload confirming) -- NOT on every read. A restart therefore
+recovers each entry's coldness signal "as of its last write", not "as of its
+last read"; a background per-read sidecar rewrite was deliberately avoided
+because it can race a concurrent reader of the same sidecar file (most
+notably another node's or another restart's boot-time disk scan). In
+practice this means freshly-restarted eviction ordering is a reasonable
+approximation, converging back to precise ordering as the process runs.
+
+### Sharded Cache Directories
+
+`cache.mode: index` shards its disk cache directory: each cached file lives
+under a 2-level hex fan-out directory (e.g. `a1/b2/<encoded-key>`) derived
+from a hash of the artifact key, not the artifact key's own path segments.
+This keeps any single directory from growing unbounded regardless of how flat
+a format's own key naming is (many generic/npm uploads, for instance, can
+share a shallow prefix). This is purely an on-disk layout detail: no config
+key controls it, and it has no effect on any API behaviour -- only on what you
+see if you browse `cache.path` directly. The mapping is deterministic and
+reconstructed on every boot from the encoded file name alone (the hash-derived
+directory levels are write-only fan-out, never consulted on read).
+
+**Known limitation:** a percent-encoded key can, in principle, exceed a
+filesystem's typical single-filename length limit (~255 bytes) for an
+unusually long logical key. This mirrors a pre-existing limitation of
+`cache.mode: disk` for deeply nested keys and is not specially handled.
+
+### Cross-Node Coherence (WS1.5)
+
+`cache.mode: index` trusts a disk-cached entry for `freshness-ttl-millis`
+without re-validating against S3 (see
+[Index Cache Mode](#index-cache-mode-cachemode-index) above) -- WS1.5 is what
+makes that safe across a multi-node cluster instead of only within one
+process: on a write-through or write-back commit, and on a delete, the owning
+node publishes an invalidation (`key` + content digest + commit time) over a
+new `storage` pub/sub channel, reusing the SAME cross-instance bus (Valkey
+pub/sub) that already carries auth/filters/policy-settings invalidation. A
+peer node that has that key cached locally drops its disk+index entry on
+receipt, so its NEXT access re-resolves the key with a fresh S3 fetch instead
+of serving what it now knows is stale. `freshness-ttl-millis` remains the
+backstop for the window before a message arrives, or if a message never
+arrives at all (e.g. a Valkey outage) -- it does not disappear, its role
+narrows to "worst case", not "only case".
+
+**No configuration required.** There is no `cache.*` key for this -- it is
+wired in automatically wherever `cache.mode: index` is active AND clustering
+(Valkey) is configured, the same condition that already enables the existing
+auth/filters/policy cross-instance invalidation. A single-instance deployment
+(no Valkey) gets a no-op bus: behaviour is identical to a pre-WS1.5 index
+cache, because there are no peers to notify or be notified by.
+
+**What is published, and when:**
+
+| Trigger | Published? | Notes |
+|---|---|---|
+| Write-through `save()` confirms an S3 `PUT` | Yes | Content digest computed on the write is carried as the version marker. |
+| Write-back upload confirms an S3 `PUT` (async) | Yes | Same as above, published once the background uploader confirms `PRESENT`, not when `save()` itself returns. |
+| `delete()` that actually removed a durably-confirmed (`PRESENT`) key | Yes | A tombstone (no digest). |
+| `delete()` of a key that was still `PENDING_WRITE` locally | No | Never confirmed anywhere else, so there is nothing to invalidate on a peer. |
+| Local WS1.4 eviction (disk-cache housekeeping) | No | The object is unchanged in S3; only THIS node's local disk cache shrank. Not a coherence event. |
+
+**Two races handled explicitly, so an operator never sees a spurious
+eviction or a corrupted in-flight upload:**
+
+- **A node's own in-flight write-back upload is never touched by a peer
+  message.** While a key is `PENDING_WRITE` (upload not yet confirmed), an
+  invalidation for that same key from ANY peer is ignored unconditionally --
+  the local disk file is the only durable copy of those bytes until the
+  upload confirms, and the background uploader thread is reading that exact
+  file. Dropping it out from under an in-flight upload would corrupt it.
+- **A delayed/reordered message can never evict a newer local write.** Every
+  invalidation carries the commit time the publishing node recorded for it;
+  a receiver ignores any message whose commit time is not strictly after its
+  OWN local entry's last write. This is what stops a network-delayed message
+  from a node's own earlier (now-superseded) write from wrongly evicting a
+  node's own more recent one.
+
+Multiple repositories with `cache.mode: index` in the same process share ONE
+`storage` channel; each repository's messages carry its own cache-directory
+path as a namespace tag, so a repository never reacts to another
+repository's traffic even though they are multiplexed together.
+
+### Metrics (WS1.6)
+
+`cache.mode: index` is fully instrumented -- reversing the historical "no
+per-S3-op metrics" gap (`RepoConfig` never wraps the outer `Storage` surface
+in a generic metrics decorator, deliberately, to keep the WS1.1 hit path
+free of per-call overhead; these metrics instead meter the ACTUAL blob-store
+tier and the cache's own internal state, one layer below).
+
+**Blob-store tier** (`MeteredBlobStore`, wraps the reference `BlobStore`
+before `CachedBlobStorage` ever sees it -- so a disk hit records ZERO of
+these, by design):
+
+| Metric | Type | Tags | Notes |
+|---|---|---|---|
+| `pantera_storage_blobstore_requests_total` | Counter | `backend`, `operation`, `outcome` | `backend` &isin; `s3`\|`gcs`\|`azure`\|`other` (bounded, code-defined); `operation` &isin; `exists`\|`head`\|`get`\|`put`\|`delete`\|`list`; `outcome` &isin; `success`\|`throttled`\|`error` (throttled = a best-effort match on the failure's class name/message for known rate-limit signals: `SlowDown`, `TooManyRequests`, `RequestLimitExceeded`, `429`, `503`). |
+| `pantera_storage_blobstore_request_duration_seconds` | Timer | same as above | Transfer SLO ladder (up to 20 min) under `PANTERA_METRICS_PERCENTILES_HISTOGRAM=true` -- GET/PUT can stream a full artifact body. |
+
+**Cache tier** (`CachedBlobStorage`'s own disk/write-back/invalidation state):
+
+| Metric | Type | Tags | Notes |
+|---|---|---|---|
+| `pantera_cache_requests_total{cache_type="blob_disk",cache_tier="disk",result}` | Counter | `result` &isin; `hit`\|`miss` | Reuses the existing generic cache-hit/miss family; `blob_disk` is a NEW, dedicated `cache_type` (distinct from `storage`, the L1 `StoragesCache` Guava cache of *Storage instances*). |
+| `pantera_storage_cache_disk_bytes_used` | Gauge | `cache` | Bytes currently on the local disk tier. |
+| `pantera_storage_cache_disk_bytes_max` | Gauge | `cache` | Configured `cache.max-disk-bytes` (0/absent if unbounded). |
+| `pantera_cache_eviction_bytes_total{cache_type="blob_disk",cache_tier="disk"}` | Counter | -- | Bytes freed by WS1.4 eviction; chart `rate()` for an eviction-bytes/sec panel. |
+| `pantera_storage_cache_writeback_queue_depth` | Gauge | `cache` | Write-back admissions currently outstanding (enqueued or retrying); 0 in `write-through` mode. |
+| `pantera_storage_cache_writeback_queue_capacity` | Gauge | `cache` | Configured `cache.write-back-queue-capacity`; 0 in `write-through` mode. |
+| `pantera_storage_cache_writeback_oldest_pending_age_seconds` | Gauge | `cache` | Age of the longest-outstanding `PENDING_WRITE` upload; 0 if nothing is pending. |
+| `pantera_storage_invalidation_total{stage,outcome}` | Counter | `stage` &isin; `published`\|`received`\|`applied`; `outcome` is stage-specific (`received`: `ok`\|`malformed`; `applied`: `applied`\|`ignored_pending_write`\|`ignored_superseded_by_local_write`\|`ignored_not_cached`) | The WS1.5 cross-node coherence lifecycle: `published`/`received` are recorded by the pub/sub bus itself; `applied` is recorded by `CachedBlobStorage`'s own accept/ignore decision. |
+
+The `cache` tag on the four gauges above is the cache's own disk-cache
+directory path (`cache.path`), NOT a repository name: a single
+`CachedBlobStorage` instance can serve more than one repository when they
+share a storage alias (see `StoragesCache`, which caches storage instances
+by config identity), so these gauges describe the state of the CACHE, not
+of any one repository. In practice this is bounded by the number of
+distinct `cache.path` values an operator configures -- the same order of
+magnitude as the repo count `RepoNameMeterFilter` caps.
+
+All of the above are guarded by `MicrometerMetrics.isInitialized()` --
+recording is a no-op with metrics disabled, and the gauges are simply never
+registered.
+
+### Hosted-Read Slice (WS1.6)
+
+A hosted (non-proxy) GET against a `cache.mode: index` repository is served
+by `IndexBackedArtifactSlice`, not the generic `exists()`-then-`value()`
+slice every other backend uses. The generic slice's two calls are each an
+independent `StorageIndex` consult -- on a cold key this meant a `HEAD`
+(from `exists()`) immediately followed by a `GET` (from `value()`), and on
+a warm key, a second redundant index lookup. `IndexBackedArtifactSlice`
+calls `value()` directly and derives "not found" from the resulting
+exception, so a cold-but-present key now costs exactly one blob-store `GET`
+and a 404 costs exactly one failed `GET` attempt -- never a `HEAD` first.
+`DiskCacheStorage`- and plain-`S3Storage`-backed repositories are
+unaffected -- they keep the existing generic slice exactly as before.
+
+### Hosted-Upload Backpressure (WS1.6)
+
+A hosted upload's `save()` failing with a write-back queue saturation
+(`WriteBackSaturatedException`, see
+[Write-Back](#write-back-async-durable-writes-cachewrite-through) above) now
+surfaces as `503 Service Unavailable` with a `Retry-After` header (via the
+same `X-Pantera-Fault: overload:write_back_queue` translation every other
+overload source in Pantera uses) instead of a generic `500`. This is wired
+at the single shared upload seam (`SliceUpload`, used by the generic files
+format and Conan) -- Docker, Maven, npm, Go, and Hex.pm each have their own
+dedicated upload slice and do not yet carry this mapping; a hosted upload to
+one of those formats against a saturated `cache.mode: index` write-back
+queue still surfaces a generic `500` today.
+
+### Presigned Direct-Download (WS1.7)
+
+For **immutable, content-addressed byte objects** (never metadata), Pantera
+can answer a GET with `302 Found` + a time-limited presigned URL instead of
+streaming the bytes itself. The client fetches the bytes directly from the
+object store; Pantera's cost is an index lookup plus local SigV4 signing --
+no S3 round trip on Pantera's side, and the byte transfer never touches
+Pantera's network path at all. This is the mechanism that lets the read side
+scale past what any single Pantera instance could stream.
+
+**What can redirect, and what never can.** Eligibility is decided per ROUTE,
+not by a blanket setting: only a route that explicitly serves an immutable
+byte object (a jar, a wheel, a tarball, a Docker blob) can ever redirect.
+Metadata -- a packument, `maven-metadata.xml`, the PyPI simple index, `/v2/`
+manifests and tags, Composer's `/p2/`, Go's `@v/list`/`@latest` -- is **never**
+redirected, regardless of `download-mode`: those responses are rewritten and
+cooldown-filtered by Pantera, and a redirect would bypass both. This is
+enforced structurally (the metadata-serving code paths never consult a
+presigned URL at all), not by a config flag a repository could get wrong.
+
+**Wired today** -- the concrete immutable-byte route of each of these hosted
+repository types:
+
+| Type | Redirect-eligible route | Metadata that always streams |
+|------|-------------------------|------------------------------|
+| `docker` | blob GET `GET /v2/<name>/blobs/<digest>` | manifests, tags |
+| `npm` | tarball GET (`*.tgz`) | packument (`*.json`), dist-tags |
+| `pypi` | distribution GET (`*.whl`/`*.tar.gz`/`*.zip`/...) | PEP 658 `*.metadata`, simple index, legacy JSON, all HEAD probes |
+| `conda` | package GET (`*.tar.bz2`/`*.conda`) | `repodata.json` |
+| `go` | module GET (`@v/*.zip`) | `@v/*.info`, `@v/*.mod`, `@v/list`, `@latest` |
+| `gem` | package GET (`*.gem`) | `specs.4.8*`, `/quick/*.gemspec.rz`, `/info/*`, `/versions` |
+| `rpm` | package GET (`*.rpm`/`*.drpm`) | everything under `repodata/` (`repomd.xml`, `*-primary.xml.gz`, ...) |
+| `helm` | chart GET (`*.tgz`) | `index.yaml`, `*.prov` provenance |
+| `deb` | package GET (`*.deb`/`*.udeb`/`*.ddeb`) | `Release`/`InRelease`/`Packages*`/`Sources*`/`Contents*` and signatures |
+| `file` | stored-object GET | `?meta=true` metadata view, directory listings |
+| `maven` / `gradle` | artifact GET (`*.jar`/`*.pom`/`*.war`/`*.aar`/`*.zip`/`*.module`, incl. classifier jars) | `maven-metadata.xml`, `.sha1`/`.md5`/`.sha256`/`.sha512` checksums, `.asc` signatures |
+| `nuget` | package content GET (`*.nupkg`/`*.snupkg`) | service index, registration, versions, search |
+| `composer` | dist archive GET (`*.zip`/`*.tar.gz`/`*.tgz`) | `packages.json`, provider/per-package metadata |
+| `hexpm` | package tarball GET (`/tarballs/*`) | registry metadata (`/packages/*`) |
+
+Formats that serve bytes and metadata through one shared route (Gem, RPM, Helm,
+Debian, generic `file`) redirect only on a binary-artifact key via a per-route
+predicate on the shared `StorageArtifactSlice(storage, downloadPolicy,
+redirectable)` constructor; formats with their own serving slices (Docker,
+Maven/Gradle, NuGet, Composer, Hex) gate a direct presign call on the artifact
+key. In every case the gate returns `true` only for the package suffix and
+`false` for every index/signature/checksum key, so streaming is always the
+fallback and a redirect can never escape onto a metadata response.
+
+Conan and all `*-proxy`/`*-group` repositories still stream exactly as before
+2.3.0 -- setting `download-mode` on those has no effect today. Conan is left
+stream-only because its package payloads are served by dedicated per-item
+token-authenticated routes whose revision/package layout cannot isolate a pure
+binary key safely; a proxy/group redirect would bypass the member walk and the
+cache/cooldown pipeline.
+
+**Per-repo configuration** (set on the `repo:` block, not the `storage:`
+block -- a repository's byte-serving policy is independent of which storage
+alias backs it, since one storage alias can back repositories with different
+reachability from their clients):
+
+```yaml
+repo:
+  type: docker
+  download-mode: redirect      # redirect | stream | auto (default: stream)
+  presign-ttl-seconds: 600     # default 600 (10 min); spec range 5-15 min
+  storage:
+    type: s3
+    bucket: my-docker-bucket
+    region: us-east-1
+```
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `download-mode` | `stream` | `stream`: never attempt a redirect -- byte-identical to pre-2.3.0 behaviour; the correct choice for locked-down/air-gapped repositories whose clients cannot reach the object store directly. `redirect`: attempt a presigned redirect for every eligible byte GET where it is technically possible right now. `auto`: identical technical gate to `redirect` as of WS1.7 -- the two differ only in operator-declared intent (`redirect` says "my clients can reach the object store"), not in mechanism. An unrecognized value logs a warning and defaults to `stream`. |
+| `presign-ttl-seconds` | `600` | Presigned URL validity window, in seconds. Only consulted when `download-mode` is not `stream`. |
+
+**The mandatory fallback.** `redirect`/`auto` never error when a redirect
+isn't currently possible -- they fall back to streaming through Pantera,
+exactly as `stream` mode would:
+
+- The object is not yet durably confirmed in the blob store (`cache.mode:
+  index` write-back: a key still `PENDING_WRITE` has bytes durable on local
+  disk but no confirmed upload -- redirecting to a presigned URL for an
+  object that doesn't exist there yet would send the client into a 404).
+- The backend storage has no `Presigner` configured (a bare `fs` storage, or
+  an S3-compatible storage the factory could not build signing credentials
+  for).
+
+**Client reachability (air-gap guidance).** A presigned URL points at the
+object store directly. `download-mode: redirect`/`auto` is only correct when
+every client that can reach Pantera can *also* reach the object store's
+endpoint (public S3, a VPC endpoint clients share, a reachable MinIO/R2/B2
+instance). Pantera cannot detect this at request time -- it is an operator
+network-topology decision, not something enforced in software. Locked-down
+or air-gapped networks (clients can reach only Pantera, never the object
+store) MUST use `download-mode: stream` (the default).
+
+**Observability tradeoff.** A redirected fetch's actual byte transfer never
+touches Pantera, so per-byte metrics (bytes served, transfer duration,
+client IP of the download) for that fetch come from the object store's own
+access logs (S3 server access logging, CloudTrail data events, or the
+equivalent for the configured backend) -- not from Pantera. Pantera records
+only the redirect *issuance*: the `pantera_storage_download_decision_total`
+metric (see below) and an `artifact_access` audit record (user, client IP,
+trace ID, package identity) at the moment the `302` is returned.
+
+**Integrity.** Pantera does not see the bytes on a redirected fetch. This is
+acceptable because every client format already verifies its own
+checksum/digest against what it receives (Docker content digest, Maven
+`.sha1`/`.sha512`, npm `integrity`, Go `go.sum`/sumdb, Composer
+`dist.shasum`, PyPI `#sha256`) -- the same verification that already happens
+on a streamed fetch.
+
+**Metrics.** `pantera_storage_download_decision_total{repo_name, decision}`
+(Counter) -- `decision` &isin; `redirect`\|`stream`. Recorded on every
+redirect-eligible byte GET, regardless of mode (an explicit `stream`-mode
+repo still records `decision="stream"`), so this one counter answers both
+the redirect-vs-stream ratio and the presign issuance rate (`rate()` of
+`decision="redirect"`). Guarded by `MicrometerMetrics.isInitialized()`.
+
 ---
 
 ## S3 Express One Zone (type: s3-express)
 
-S3 Express One Zone provides single-digit millisecond read latency for frequently accessed data. Uses the same configuration keys as `s3`.
+S3 Express One Zone provides single-digit millisecond read latency for frequently accessed data. Uses the same configuration keys as `s3` -- `s3-express` is implemented as a thin extension of the `s3` factory that only changes two defaults: `path-style` defaults to `false` (S3 Express One Zone requires virtual-hosted-style access) and `storage-class` defaults to `EXPRESS_ONEZONE`. Both remain overridable if you ever need to.
 
 ```yaml
 storage:
@@ -215,9 +655,11 @@ S3 Express buckets use directory bucket naming (suffix `--<az>--x-s3`). All stan
 
 ---
 
-## MinIO / S3-Compatible Storage
+## S3-API-Compatible Object Stores
 
-Use the S3 storage type with `endpoint` and `path-style: true` for S3-compatible services like MinIO, Ceph, or LocalStack.
+The `s3` storage type talks to any service that speaks the S3 API, not just AWS S3 -- set a custom `endpoint`, the matching `path-style` setting, and backend-appropriate `credentials`. No separate storage type or code path is needed; internally this is the same `BlobStore` reference implementation (`S3Storage`) that backs the `type: s3` factory.
+
+**MinIO** (path-style required):
 
 ```yaml
 storage:
@@ -232,7 +674,84 @@ storage:
     secretAccessKey: minioadmin
 ```
 
-The `path-style: true` setting is required for MinIO and most S3-compatible services that do not support virtual-hosted-style URLs.
+**Cloudflare R2** (virtual-hosted style, account-scoped endpoint):
+
+```yaml
+storage:
+  type: s3
+  bucket: artifacts
+  region: auto
+  endpoint: https://<account-id>.r2.cloudflarestorage.com
+  path-style: false
+  credentials:
+    type: basic
+    accessKeyId: <r2-access-key-id>
+    secretAccessKey: <r2-secret-access-key>
+```
+
+**Backblaze B2** (S3-compatible endpoint, path-style required):
+
+```yaml
+storage:
+  type: s3
+  bucket: artifacts
+  region: us-west-002
+  endpoint: https://s3.us-west-002.backblazeb2.com
+  path-style: true
+  credentials:
+    type: basic
+    accessKeyId: <b2-key-id>
+    secretAccessKey: <b2-application-key>
+```
+
+**Wasabi** (path-style required):
+
+```yaml
+storage:
+  type: s3
+  bucket: artifacts
+  region: eu-central-1
+  endpoint: https://s3.eu-central-1.wasabisys.com
+  path-style: true
+  credentials:
+    type: basic
+    accessKeyId: <wasabi-access-key>
+    secretAccessKey: <wasabi-secret-key>
+```
+
+**Ceph / RADOS Gateway** (path-style required):
+
+```yaml
+storage:
+  type: s3
+  bucket: artifacts
+  region: default
+  endpoint: https://rgw.internal.example.com
+  path-style: true
+  credentials:
+    type: basic
+    accessKeyId: <radosgw-access-key>
+    secretAccessKey: <radosgw-secret-key>
+```
+
+**Google Cloud Storage** (via its S3 interoperability endpoint):
+
+```yaml
+storage:
+  type: s3
+  bucket: artifacts
+  region: auto
+  endpoint: https://storage.googleapis.com
+  path-style: false
+  credentials:
+    type: basic
+    accessKeyId: <gcs-hmac-access-key>
+    secretAccessKey: <gcs-hmac-secret>
+```
+
+`path-style: true` is required for MinIO, Backblaze B2, Wasabi, and Ceph/RADOS Gateway (services that do not support virtual-hosted-style URLs). Cloudflare R2 and GCS's S3-interop endpoint support virtual-hosted style. Consult each provider's docs to confirm; when in doubt, `path-style: true` is the safer default and works everywhere.
+
+Native (non-S3-API) backends -- Google Cloud Storage's own API and Azure Blob Storage -- are a separate, later addition and are not yet available; the S3-interoperability path above is the supported way to use GCS today.
 
 ---
 

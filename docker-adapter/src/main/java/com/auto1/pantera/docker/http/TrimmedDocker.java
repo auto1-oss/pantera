@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.docker.http;
 
+import com.auto1.pantera.asto.blob.DownloadPolicy;
 import com.auto1.pantera.docker.Catalog;
 import com.auto1.pantera.docker.Docker;
 import com.auto1.pantera.docker.Repo;
@@ -58,12 +59,33 @@ public final class TrimmedDocker implements Docker {
 
     @Override
     public String registryName() {
-        return origin.registryName();
+        // Report the configured prefix, not origin.registryName() — for a
+        // plain "docker"/"docker-proxy" repo these are already the same
+        // value (both derive from the repo's own configured name), so this
+        // is behavior-neutral there. It matters for a "docker-group": the
+        // origin is a MultiReadDocker composed of several MEMBER Dockers,
+        // and MultiReadDocker.registryName() reports whichever member
+        // happens to be first — the wrong name for audit/event logging on
+        // the group itself. The prefix passed in here is always the
+        // group's (or repo's) own configured name, so it is always correct.
+        return this.prefix;
     }
 
     @Override
     public Repo repo(String name) {
         return this.origin.repo(trim(name));
+    }
+
+    @Override
+    public DownloadPolicy downloadPolicy() {
+        // Forward to origin -- this decorator only strips a name prefix for
+        // shared-port routing (RepositorySlices wraps the hosted "docker"
+        // case in this whenever cfg.port() is absent); without forwarding,
+        // every repo served through that (very common) path would silently
+        // lose its configured WS1.7 download-mode and fall back to the
+        // interface default (stream-only) regardless of what the repo's
+        // YAML actually configures.
+        return this.origin.downloadPolicy();
     }
 
     @Override

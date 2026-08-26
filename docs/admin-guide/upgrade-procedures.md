@@ -6,6 +6,20 @@ This page covers the process for upgrading Pantera to a new version, including p
 
 ---
 
+## Version-Specific Notes
+
+### Upgrading to 2.3.0
+
+**No breaking changes.** All 2.3.0 features are opt-in and backward-compatible: an existing `pantera.yml`, repo YAMLs, and environment work unchanged, and the Flyway migrations apply automatically. The new capabilities are opt-in per storage/repository:
+
+- **Index-accelerated S3 cache** (`cache.mode: index`) — serves cache hits from an in-memory index with async durable write-back and byte-bounded LRU/LFU eviction. Default is unchanged (the prior disk cache). See the "Index Cache Mode" section of [Storage Backends](storage-backends.md).
+- **S3-API-compatible backends** — the S3 backend now also targets MinIO, Cloudflare R2, Backblaze B2, Wasabi, Ceph/RADOS, or GCS's S3-interop endpoint via `endpoint`/`region`/`path-style`/`credentials`. See the "S3-API-Compatible Object Stores" section of [Storage Backends](storage-backends.md).
+- **Presigned direct-download** — a per-repository `download-mode` (`stream` / `redirect` / `auto`) can `302` binary artifact GETs to a time-limited object-store URL, removing Pantera from the byte path; metadata is never redirected, and it falls back to streaming when the object is not durably stored or presigning is not configured. See the "Presigned Direct-Download" section of [Storage Backends](storage-backends.md).
+
+None of these require a configuration or schema migration to keep the current behavior — leave the keys unset to upgrade with no functional change.
+
+---
+
 ## Pre-Upgrade Checklist
 
 Before upgrading, complete the following:

@@ -469,14 +469,19 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         ).register(router);
         new SearchHandler(this.artifactIndex, this.security.policy()).register(router);
         new PypiHandler(
-            crs, new RepoData(this.configsStorage, this.caches.storagesCache())
+            crs, new RepoData(this.configsStorage, this.caches.storagesCache()),
+            this.security.policy()
         ).register(router);
         if (this.dataSource != null) {
             new AdminAuthHandler(
                 new AuthSettingsDao(this.dataSource),
                 new UserTokenDao(this.dataSource),
                 this.jwtTokens != null ? this.jwtTokens.blocklist() : null,
-                this.security.policy()
+                this.security.policy(),
+                this.settings.cacheInvalidationPubSub().orElse(null),
+                // WS4-maven.3: admin PGP keyring CRUD — additive, every
+                // other admin endpoint above is unaffected.
+                new com.auto1.pantera.db.dao.PgpKeyringDao(this.dataSource)
             ).register(router);
         }
         new com.auto1.pantera.api.v1.admin.NegativeCacheAdminResource(

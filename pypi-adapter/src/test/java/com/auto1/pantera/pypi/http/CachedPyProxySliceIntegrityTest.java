@@ -206,6 +206,73 @@ final class CachedPyProxySliceIntegrityTest {
         );
     }
 
+    @Test
+    @DisplayName("HEAD on an uncached wheel returns 200 with no body and populates "
+        + "the cache with the FULL bytes (not a phantom empty artifact) — WS4-pypi.8")
+    void headOnUncachedWheel_populatesCacheWithoutCorruption() throws Exception {
+        final Storage storage = new InMemoryStorage();
+        final MeterRegistry registry = new SimpleMeterRegistry();
+        final FakePyUpstream origin = new FakePyUpstream(
+            WHEEL_BYTES, sha256Hex(WHEEL_BYTES), md5Hex(WHEEL_BYTES), null
+        );
+        final CachedPyProxySlice slice = buildSlice(origin, storage, registry);
+
+        final Response head = slice.response(
+            new RequestLine(RqMethod.HEAD, WHEEL_PATH),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).join();
+
+        assertEquals(RsStatus.OK, head.status(), "HEAD on uncached wheel returns 200");
+        assertArrayEquals(
+            new byte[0],
+            head.body().asBytesFuture().join(),
+            "HEAD response body must be empty"
+        );
+        assertTrue(
+            storage.exists(WHEEL_KEY).join(),
+            "HEAD on an uncached wheel must still populate the cache (real GET underneath)"
+        );
+        assertArrayEquals(
+            WHEEL_BYTES,
+            storage.value(WHEEL_KEY).join().asBytes(),
+            "cached artifact must be the FULL wheel bytes, not a phantom empty write"
+        );
+
+        final int upstreamCallsAfterHead = origin.primaryCalls();
+        final Response get = slice.response(
+            new RequestLine(RqMethod.GET, WHEEL_PATH),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).join();
+        assertEquals(RsStatus.OK, get.status(), "subsequent GET 200 from the now-warm cache");
+        assertArrayEquals(
+            WHEEL_BYTES, get.body().asBytesFuture().join(), "subsequent GET serves full bytes"
+        );
+        assertEquals(
+            upstreamCallsAfterHead, origin.primaryCalls(),
+            "subsequent GET must be served from cache, not hit upstream again"
+        );
+    }
+
+    @Test
+    @DisplayName("HEAD on a missing artifact returns 404, never 405 (WS4-pypi.8)")
+    void headOnMissingArtifact_returns404NotMethodNotAllowed() throws Exception {
+        final Storage storage = new InMemoryStorage();
+        final MeterRegistry registry = new SimpleMeterRegistry();
+        final Slice alwaysNotFound = (line, headers, body) ->
+            CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
+        final CachedPyProxySlice slice = buildSlice(alwaysNotFound, storage, registry);
+
+        final Response head = slice.response(
+            new RequestLine(RqMethod.HEAD, "/missing/missing-0.0.1-py3-none-any.whl"),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).join();
+
+        assertEquals(RsStatus.NOT_FOUND, head.status(), "missing artifact HEAD -> 404, never 405");
+    }
+
     private static CachedPyProxySlice buildSlice(
         final Slice origin, final Storage storage, final MeterRegistry registry
     ) throws Exception {

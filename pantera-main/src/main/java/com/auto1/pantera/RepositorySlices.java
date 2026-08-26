@@ -631,7 +631,8 @@ public class RepositorySlices {
                         authentication(),
                         tokens.auth(),
                         cfg.name(),
-                        artifactEvents()
+                        artifactEvents(),
+                        cfg.downloadPolicy()
                     ),
                     cfg.storage()
                 );
@@ -650,7 +651,7 @@ public class RepositorySlices {
                 slice = browsableTrimPathSlice(
                     new NpmSlice(
                         cfg.url(), cfg.storage(), securityPolicy(), authentication(), tokens.auth(), tokens, cfg.name(), artifactEvents(), true,
-                        this.settings.syncArtifactIndexer(), this.settings.artifactIndex()
+                        this.settings.syncArtifactIndexer(), this.settings.artifactIndex(), cfg.downloadPolicy()
                     ),
                     cfg.storage()
                 );
@@ -664,7 +665,8 @@ public class RepositorySlices {
                         tokens.auth(),
                         cfg.name(),
                         artifactEvents(),
-                        this.settings.syncArtifactIndexer()
+                        this.settings.syncArtifactIndexer(),
+                        cfg.downloadPolicy()
                     ),
                     cfg.storage()
                 );
@@ -673,7 +675,7 @@ public class RepositorySlices {
                 slice = browsableTrimPathSlice(
                     new HelmSlice(
                         cfg.storage(), cfg.url().toString(), securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents(),
-                        this.settings.syncArtifactIndexer()
+                        this.settings.syncArtifactIndexer(), cfg.downloadPolicy()
                     ),
                     cfg.storage()
                 );
@@ -683,7 +685,7 @@ public class RepositorySlices {
                     new RpmSlice(cfg.storage(), securityPolicy(), authentication(),
                         tokens.auth(), new com.auto1.pantera.rpm.RepoConfig.FromYaml(cfg.settings(), cfg.name()),
                         artifactEvents(),
-                        this.settings.syncArtifactIndexer()),
+                        this.settings.syncArtifactIndexer(), cfg.downloadPolicy()),
                     cfg.storage()
                 );
                 break;
@@ -717,7 +719,11 @@ public class RepositorySlices {
                             tokens.auth(),
                             cfg.name(),
                             artifactEvents(),
-                            this.settings.syncArtifactIndexer()
+                            this.settings.syncArtifactIndexer(),
+                            this.settings.artifactIndex(),
+                            // WS1.7: only the dist-archive download redirects;
+                            // packages.json / provider metadata always stream.
+                            cfg.downloadPolicy()
                         ),
                         "direct-dists"
                     ),
@@ -760,7 +766,9 @@ public class RepositorySlices {
                     new NuGet(
                         cfg.url(), new com.auto1.pantera.nuget.AstoRepository(cfg.storage()),
                         securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents(),
-                        this.settings.syncArtifactIndexer()
+                        // WS1.7: only .nupkg/.snupkg content redirects; service
+                        // index / registration / versions / search stream.
+                        this.settings.syncArtifactIndexer(), cfg.downloadPolicy()
                     ),
                     cfg.storage()
                 );
@@ -770,7 +778,15 @@ public class RepositorySlices {
                 slice = browsableTrimPathSlice(
                     new MavenSlice(cfg.storage(), securityPolicy(),
                         authentication(), tokens.auth(), cfg.name(), artifactEvents(),
-                        this.settings.syncArtifactIndexer()),
+                        this.settings.syncArtifactIndexer(),
+                        // WS4-maven.1/.2/.6: per-repo verifyPgp / releaseImmutable,
+                        // additive — every other repo type is unaffected.
+                        new com.auto1.pantera.maven.http.MavenHostedPolicy(
+                            cfg.verifyPgp(), cfg.releaseImmutable()
+                        ),
+                        // WS1.7: only real binary-artifact GETs redirect;
+                        // maven-metadata.xml + checksum/signature sidecars stream.
+                        cfg.downloadPolicy()),
                     cfg.storage()
                 );
                 break;
@@ -809,7 +825,8 @@ public class RepositorySlices {
                         tokens.auth(),
                         cfg.name(),
                         artifactEvents(),
-                        this.settings.syncArtifactIndexer()
+                        this.settings.syncArtifactIndexer(),
+                        cfg.downloadPolicy()
                     ),
                     cfg.storage()
                 );
@@ -1135,7 +1152,6 @@ public class RepositorySlices {
             case "gem-group":
             case "go-group":
             case "pypi-group":
-            case "docker-group":
                 final List<String> genericFlatMembers = flattenMembers(cfg.name());
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
@@ -1186,10 +1202,99 @@ public class RepositorySlices {
                     )
                 );
                 break;
+            case "docker-group":
+                // Unlike the generic groups above (GroupResolver: first-2xx-
+                // wins over each member's own HTTP Slice, no merge), docker
+                // needs tags/list + _catalog to return the UNION across
+                // members. MultiReadDocker already provides that via
+                // JoinedTagsSource/JoinedCatalogSource (WS4-docker.3); build
+                // each member's Docker directly the same way the "docker"/
+                // "docker-proxy" cases below do, and let a normal DockerSlice
+                // route the composite — manifest/blob GET inherit
+                // MultiReadRepo's prioritized first-hit walk (correct for
+                // content-addressed pulls), and PUT/DELETE reject with
+                // UnsupportedOperationException -> 405 (proxy/group writes
+                // and deletes are out of scope, CLAUDE.md/WS4-docker.5 §3).
+                final List<String> dockerFlatMembers = flattenMembers(cfg.name());
+                final List<Docker> dockerMemberDockers = new java.util.ArrayList<>();
+                for (final String memberName : dockerFlatMembers) {
+                    final Optional<RepoConfig> memberCfgOpt = this.repos.config(memberName);
+                    if (memberCfgOpt.isEmpty()) {
+                        EcsLogger.warn("com.auto1.pantera")
+                            .message("docker-group member config not found, skipping")
+                            .eventCategory("configuration")
+                            .eventAction("docker_group_member_skip")
+                            .field("repository.name", cfg.name())
+                            .field("log.source", "application")
+                            .log();
+                        continue;
+                    }
+                    final RepoConfig memberCfg = memberCfgOpt.get();
+                    if ("docker".equals(memberCfg.type())) {
+                        // WS1.7 note: intentionally NOT passing
+                        // memberCfg.downloadPolicy() here -- MultiReadDocker
+                        // (the composite this member feeds into) does not
+                        // override Docker#downloadPolicy(), so the group's
+                        // own policy is always the interface default
+                        // (stream-only) regardless of what an individual
+                        // member's AstoDocker would report. Wiring
+                        // docker-group redirect requires a merge policy
+                        // across members and is a deliberate follow-up (see
+                        // the WS1.7 report) -- flagging here rather than
+                        // wiring a policy that would silently have no effect.
+                        dockerMemberDockers.add(
+                            new AstoDocker(
+                                memberCfg.name(), new SubStorage(RegistryRoot.V2, memberCfg.storage())
+                            )
+                        );
+                    } else if ("docker-proxy".equals(memberCfg.type())) {
+                        if (clientLease == null) {
+                            clientLease = jettyClientSlices(cfg);
+                        }
+                        dockerMemberDockers.add(
+                            DockerProxy.buildDocker(
+                                clientLease.client(), memberCfg, artifactEvents()
+                            )
+                        );
+                    } else {
+                        EcsLogger.warn("com.auto1.pantera")
+                            .message("docker-group member has an unsupported type, skipping")
+                            .eventCategory("configuration")
+                            .eventAction("docker_group_member_skip")
+                            .field("repository.name", cfg.name())
+                            .field("log.source", "application")
+                            .log();
+                    }
+                }
+                if (dockerMemberDockers.isEmpty()) {
+                    throw new IllegalStateException(
+                        String.format(
+                            "docker-group '%s' has no usable docker/docker-proxy members",
+                            cfg.name()
+                        )
+                    );
+                }
+                final Docker groupDocker = new com.auto1.pantera.docker.composite.MultiReadDocker(
+                    dockerMemberDockers
+                );
+                if (cfg.port().isPresent()) {
+                    slice = new DockerSlice(groupDocker, securityPolicy(),
+                        new CombinedAuthScheme(authentication(), tokens.auth()), artifactEvents(),
+                        this.settings.syncArtifactIndexer());
+                } else {
+                    slice = new DockerRoutingSlice.Reverted(
+                        new DockerSlice(new TrimmedDocker(groupDocker, cfg.name()),
+                            securityPolicy(), new CombinedAuthScheme(authentication(), tokens.auth()),
+                            artifactEvents(),
+                            this.settings.syncArtifactIndexer())
+                    );
+                }
+                break;
             case "docker":
                 final Docker docker = new AstoDocker(
                     cfg.name(),
-                    new SubStorage(RegistryRoot.V2, cfg.storage())
+                    new SubStorage(RegistryRoot.V2, cfg.storage()),
+                    cfg.downloadPolicy()
                 );
                 if (cfg.port().isPresent()) {
                     slice = new DockerSlice(docker, securityPolicy(),
@@ -1226,7 +1331,7 @@ public class RepositorySlices {
                         cfg.storage(), securityPolicy(), authentication(),
                         new com.auto1.pantera.debian.Config.FromYaml(cfg.name(), cfg.settings(), settings.configStorage()),
                         artifactEvents(),
-                        this.settings.syncArtifactIndexer()
+                        this.settings.syncArtifactIndexer(), cfg.downloadPolicy()
                     )
                 );
                 break;
@@ -1234,7 +1339,7 @@ public class RepositorySlices {
                 slice = new CondaSlice(
                     cfg.storage(), securityPolicy(), authentication(), tokens,
                     cfg.url().toString(), cfg.name(), artifactEvents(),
-                    this.settings.syncArtifactIndexer()
+                    this.settings.syncArtifactIndexer(), cfg.downloadPolicy()
                 );
                 break;
             case "conan":
@@ -1256,7 +1361,7 @@ public class RepositorySlices {
                 slice = trimPathSlice(
                     new HexSlice(cfg.storage(), securityPolicy(), authentication(),
                         artifactEvents(), cfg.name(),
-                        this.settings.syncArtifactIndexer())
+                        this.settings.syncArtifactIndexer(), cfg.downloadPolicy())
                 );
                 break;
             case "pypi":
@@ -1265,7 +1370,7 @@ public class RepositorySlices {
                         new com.auto1.pantera.pypi.http.PySlice(
                             cfg.storage(), securityPolicy(), authentication(),
                             tokens.auth(), cfg.name(), artifactEvents(),
-                            this.settings.syncArtifactIndexer()
+                            this.settings.syncArtifactIndexer(), cfg.downloadPolicy()
                         ),
                         "simple"
                     )

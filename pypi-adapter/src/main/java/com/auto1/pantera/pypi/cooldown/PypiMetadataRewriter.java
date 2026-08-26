@@ -60,6 +60,11 @@ public final class PypiMetadataRewriter implements MetadataRewriter<PypiSimpleIn
                     html.append(escapeHtml(link.uploadTime()));
                     html.append('"');
                 }
+                if (link.yanked() != null) {
+                    html.append(" data-yanked=\"");
+                    html.append(escapeHtml(link.yanked()));
+                    html.append('"');
+                }
                 html.append('>');
                 html.append(escapeHtml(link.filename()));
                 html.append("</a>\n");

@@ -137,6 +137,22 @@ class GoSliceTest {
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
+    void sumdbHasNoRouteOnLocalRepo(final boolean anonymous) throws Exception {
+        // WS4-go.4: a "go" (hosted/local) repository has no upstream to
+        // proxy sumdb requests to, so /sumdb/ must honestly 404 rather
+        // than being served or accidentally cached as an artifact.
+        final String path = "sumdb/sum.golang.org/supported";
+        MatcherAssert.assertThat(
+            this.slice(GoSliceTest.storage("unrelated/key", "unrelated"), anonymous),
+            new SliceHasResponse(
+                anonymous ? unauthorized() : new RsHasStatus(RsStatus.NOT_FOUND),
+                GoSliceTest.line(path), this.headers(anonymous), Content.EMPTY
+            )
+        );
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
     void returnsLatest(final boolean anonymous) throws Exception {
         final String body = "{\"Version\":\"1.1\",\"Time\":\"2020-01-24T00:54:14Z\"}";
         MatcherAssert.assertThat(
@@ -210,6 +226,101 @@ class GoSliceTest {
             versions.contains("v1.2.3"),
             "List file should contain uploaded version"
         );
+    }
+
+    @Test
+    void uploadDecodesEscapedModuleNameForArtifactEventButNotStorageKey() throws Exception {
+        // WS4-go.6: Go escapes uppercase as `!` + lowercase on the wire and
+        // in the storage key ("BurntSushi" -> "!burnt!sushi"); the
+        // ArtifactEvent (DB/index/audit) must show the decoded, human
+        // readable form, while the storage key stays escaped — that is
+        // what `go get` requests and expects served back.
+        final Storage storage = new InMemoryStorage();
+        final Queue<ArtifactEvent> events = new ConcurrentLinkedQueue<>();
+        final GoSlice slice = new GoSlice(
+            storage,
+            new PolicyByUsername(USER.getKey()),
+            new Authentication.Single(USER.getKey(), USER.getValue()),
+            "go-repo",
+            Optional.of(events)
+        );
+        final byte[] data = "zip-content".getBytes(StandardCharsets.UTF_8);
+        final String escapedPath = "github.com/!burnt!sushi/toml/@v/v1.0.0.zip";
+        final Response response = slice.response(
+            new RequestLine("PUT", escapedPath),
+            Headers.from(
+                new Authorization.Basic(USER.getKey(), USER.getValue())
+            ),
+            new Content.From(data)
+        ).toCompletableFuture().get();
+        MatcherAssert.assertThat(response, new RsHasStatus(RsStatus.CREATED));
+        // Storage key MUST stay escaped — this is what the client requests.
+        final Key escapedKey = new KeyFromPath(escapedPath);
+        org.junit.jupiter.api.Assertions.assertTrue(
+            storage.exists(escapedKey).toCompletableFuture().join(),
+            "escaped storage key must be used unchanged"
+        );
+        final ArtifactEvent event = events.poll();
+        org.junit.jupiter.api.Assertions.assertNotNull(event, "Artifact event should be recorded");
+        MatcherAssert.assertThat(
+            event.artifactName(),
+            new IsEqual<>("github.com/BurntSushi/toml")
+        );
+    }
+
+    @Test
+    void uploadInvalidatesRegisteredGoProxyMetadataBaseCache() throws Exception {
+        // WS4-go.2: a hosted publish inside a go-group must not stay hidden
+        // behind a sibling go-proxy member's 12h @v/list / @latest TTL cache.
+        // GoMetadataCacheRegistry is the process-wide bridge between the
+        // hosted repo's storage (used here) and the proxy repo's storage
+        // (simulated below via a direct registration, matching what
+        // CachedProxySlice does at construction).
+        final Storage storage = new InMemoryStorage();
+        final GoSlice slice = new GoSlice(
+            storage,
+            new PolicyByUsername(USER.getKey()),
+            new Authentication.Single(USER.getKey(), USER.getValue()),
+            "go-repo",
+            Optional.empty()
+        );
+        final Storage proxyStorage = new InMemoryStorage();
+        GoMetadataCacheRegistry.instance().register("go-proxy-repo", proxyStorage);
+        try {
+            final Key list = new Key.From("example.com/hello/@v/list");
+            final Key latest = new Key.From("example.com/hello/@latest");
+            proxyStorage.save(
+                list, new Content.From("v1.2.2\n".getBytes(StandardCharsets.UTF_8))
+            ).toCompletableFuture().join();
+            proxyStorage.save(
+                latest,
+                new Content.From("{\"Version\":\"v1.2.2\"}".getBytes(StandardCharsets.UTF_8))
+            ).toCompletableFuture().join();
+
+            final Response response = slice.response(
+                new RequestLine("PUT", "example.com/hello/@v/v1.2.3.zip"),
+                Headers.from(
+                    new Authorization.Basic(USER.getKey(), USER.getValue())
+                ),
+                new Content.From("zip-content".getBytes(StandardCharsets.UTF_8))
+            ).toCompletableFuture().get();
+            MatcherAssert.assertThat(response, new RsHasStatus(RsStatus.CREATED));
+
+            MatcherAssert.assertThat(
+                "go-proxy's cached @v/list must be evicted so the newly "
+                    + "published version is not hidden for the cache TTL",
+                proxyStorage.exists(list).toCompletableFuture().join(),
+                new IsEqual<>(false)
+            );
+            MatcherAssert.assertThat(
+                "go-proxy's cached @latest must be evicted so the newly "
+                    + "published version is not hidden for the cache TTL",
+                proxyStorage.exists(latest).toCompletableFuture().join(),
+                new IsEqual<>(false)
+            );
+        } finally {
+            GoMetadataCacheRegistry.instance().clear();
+        }
     }
 
     @Test

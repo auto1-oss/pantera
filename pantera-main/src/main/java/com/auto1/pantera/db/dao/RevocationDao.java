@@ -24,7 +24,7 @@ import javax.sql.DataSource;
  * Stores JWT revocation entries (by JTI or username) with an expiry.
  * @since 2.1.0
  */
-public final class RevocationDao {
+public final class RevocationDao implements RevocationStore {
 
     /**
      * Database data source.
@@ -45,6 +45,7 @@ public final class RevocationDao {
      * @param entryValue The JTI string or username
      * @param ttlSeconds Time-to-live in seconds; expires_at = NOW() + ttl
      */
+    @Override
     public void insert(final String entryType, final String entryValue, final int ttlSeconds) {
         final String sql = String.join(" ",
             "INSERT INTO revocation_blocklist (entry_type, entry_value, expires_at)",
@@ -91,6 +92,7 @@ public final class RevocationDao {
      * @param since Fetch entries created after this instant
      * @return List of active revocation entries created since the given timestamp
      */
+    @Override
     public List<RevocationEntry> pollSince(final Instant since) {
         final String sql = String.join(" ",
             "SELECT entry_type, entry_value, expires_at",

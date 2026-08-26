@@ -88,6 +88,33 @@ class ManifestEntityPutTest {
         Assertions.assertTrue(events.isEmpty(),  events.toString());
     }
 
+    @Test
+    void shouldOmitOciSubjectHeaderWhenManifestHasNoSubject() {
+        final var response = this.slice.response(
+            new RequestLine(RqMethod.PUT, "/v2/my-alpine/manifests/1"), Headers.EMPTY, this.manifest()
+        ).join();
+        MatcherAssert.assertThat(
+            "No OCI-Subject header on a manifest that carries no `subject` field",
+            response.headers().find("OCI-Subject").isEmpty(),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void shouldEmitOciSubjectHeaderWhenManifestHasSubject() {
+        final String subject = "sha256:" + "a".repeat(64);
+        final var response = this.slice.response(
+            new RequestLine(RqMethod.PUT, "/v2/my-alpine/manifests/sig-tag"),
+            Headers.EMPTY,
+            this.manifestWithSubject(subject)
+        ).join();
+        ResponseAssert.check(
+            response,
+            RsStatus.CREATED,
+            new Header("OCI-Subject", subject)
+        );
+    }
+
     /**
      * Create manifest content.
      *
@@ -101,6 +128,28 @@ class ManifestEntityPutTest {
         final byte[] data = String.format(
             "{\"config\":{\"digest\":\"%s\"},\"layers\":[],\"mediaType\":\"my-type\"}",
             digest.string()
+        ).getBytes();
+        return new Content.From(data);
+    }
+
+    /**
+     * Create manifest content carrying an OCI 1.1 {@code subject} field.
+     *
+     * @param subject Subject digest.
+     * @return Manifest content.
+     */
+    private Content manifestWithSubject(final String subject) {
+        final byte[] content = "sig-config".getBytes();
+        final Digest digest = this.docker.repo("my-alpine").layers()
+            .put(new TrustedBlobSource(content))
+            .toCompletableFuture().join();
+        final byte[] data = String.format(
+            "{\"config\":{\"digest\":\"%s\"},\"layers\":[],"
+                + "\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\","
+                + "\"artifactType\":\"application/vnd.example.sig.v1+json\","
+                + "\"subject\":{\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\","
+                + "\"digest\":\"%s\",\"size\":42}}",
+            digest.string(), subject
         ).getBytes();
         return new Content.From(data);
     }

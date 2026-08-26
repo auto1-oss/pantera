@@ -15,6 +15,7 @@ import com.auto1.pantera.docker.Tags;
 
 import javax.json.Json;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * {@link Tags} that is a page of given tags list.
@@ -23,9 +24,7 @@ public final class TagsPage implements Tags {
 
     private final String repoName;
 
-    private final List<String> tags;
-
-    private final Pagination pagination;
+    private final Pagination.Page page;
 
     /**
      * @param repoName Repository name.
@@ -34,8 +33,7 @@ public final class TagsPage implements Tags {
      */
     public TagsPage(String repoName, List<String> tags, Pagination pagination) {
         this.repoName = repoName;
-        this.tags = tags;
-        this.pagination = pagination;
+        this.page = pagination.page(tags.stream());
     }
 
     @Override
@@ -43,10 +41,20 @@ public final class TagsPage implements Tags {
         return new Content.From(
             Json.createObjectBuilder()
                 .add("name", this.repoName)
-                .add("tags", pagination.apply(tags.stream()))
+                .add("tags", this.page.json())
                 .build()
                 .toString()
                 .getBytes()
         );
+    }
+
+    @Override
+    public boolean hasNext() {
+        return this.page.truncated();
+    }
+
+    @Override
+    public Optional<String> nextCursor() {
+        return this.page.cursor();
     }
 }

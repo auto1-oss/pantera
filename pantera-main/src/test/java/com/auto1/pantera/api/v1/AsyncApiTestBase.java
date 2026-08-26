@@ -76,7 +76,8 @@ public class AsyncApiTestBase {
      * far longer by sibling JVMs. Set generously (~30x the idle latency) so
      * contention slowness is never a false failure, while a genuinely hung
      * request still fails deterministically. Bumped from 5s after
-     * {@code SearchHandlerTest} flaked with {@code TimeoutException} under load.
+     * {@code SearchHandlerTest}/{@code AuthHandlerTest} flaked with
+     * {@code TimeoutException} under load.
      */
     static final long TEST_TIMEOUT = Duration.ofSeconds(30).toSeconds();
 
@@ -262,6 +263,34 @@ public class AsyncApiTestBase {
         final HttpMethod method, final String path, final JsonObject body,
         final String token,
         final Consumer<HttpResponse<Buffer>> assertion) throws Exception {
+        this.request(vertx, ctx, method, path, body, token, TEST_TIMEOUT, assertion);
+    }
+
+    /**
+     * Perform HTTP request with specified token, body and an explicit await
+     * timeout. Use this overload (rather than bumping {@link #TEST_TIMEOUT}
+     * for every subclass) when a specific test is known to exercise a
+     * request path with extra blocking work — e.g. a handler that reads
+     * {@code auth_settings} via synchronous JDBC directly on the Vert.x
+     * event loop — that can occasionally run long under a contended shared
+     * Testcontainers Postgres (`-T8` reactor load). A generous, explicit
+     * bound here is a pure hang-guard: it costs nothing when the request is
+     * fast (the common case) and only matters when the runner is loaded.
+     * @param vertx Vertx instance
+     * @param ctx Test context
+     * @param method HTTP method
+     * @param path Request path
+     * @param body Request body (nullable)
+     * @param token JWT token (nullable for no auth)
+     * @param timeoutSeconds Seconds to await the response before failing
+     * @param assertion Response assertion
+     * @throws Exception On error
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    final void request(final Vertx vertx, final VertxTestContext ctx,
+        final HttpMethod method, final String path, final JsonObject body,
+        final String token, final long timeoutSeconds,
+        final Consumer<HttpResponse<Buffer>> assertion) throws Exception {
         final HttpRequest<Buffer> req = WebClient.create(vertx)
             .request(method, this.port, HOST, path);
         if (token != null) {
@@ -274,7 +303,7 @@ public class AsyncApiTestBase {
             })
             .onFailure(ctx::failNow)
             .toCompletionStage().toCompletableFuture()
-            .get(TEST_TIMEOUT, TimeUnit.SECONDS);
+            .get(timeoutSeconds, TimeUnit.SECONDS);
     }
 
     /**

@@ -14,17 +14,21 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.MetaCommon;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.rx.RxFuture;
 import com.auto1.pantera.docker.Blob;
 import com.auto1.pantera.docker.Digest;
 import com.auto1.pantera.docker.Layers;
 import com.auto1.pantera.docker.error.InvalidDigestException;
-import com.auto1.pantera.docker.misc.DigestedFlowable;
+import com.auto1.pantera.docker.error.NonContiguousChunkException;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.slice.ContentWithSize;
+import io.reactivex.Flowable;
 
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
-import java.util.Collection;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -33,6 +37,16 @@ import java.util.concurrent.CompletionStage;
 /**
  * Blob upload.
  * See <a href="https://docs.docker.com/registry/spec/api/#blob-upload">Blob Upload</a>
+ *
+ * <p>Chunks accumulate under a dedicated {@code chunks/} subtree, one key
+ * per chunk named by its (zero-padded, so lexicographic order == numeric
+ * order) starting byte offset — the offset itself, not a content digest,
+ * because the digest that matters is the one over the FINAL assembled
+ * blob, computed once at {@link #putTo(Layers, Digest)} time (WS4-docker.9's
+ * explicit-verify primitive, reused here). A separate small {@code offset}
+ * marker file tracks the running byte count so {@link #offset()} and the
+ * contiguity check in {@link #append(Content, Optional)} are O(1) reads
+ * rather than a full re-scan/re-sum of every chunk on each call.
  */
 public final class Upload {
 
@@ -103,28 +117,52 @@ public final class Upload {
     }
 
     /**
-     * Appends a chunk of data to upload.
+     * Appends a chunk of data to upload, with no {@code Content-Range}
+     * contiguity claim to validate (legacy/monolithic callers).
      *
      * @param chunk Chunk of data.
-     * @return Offset after appending chunk.
+     * @return Offset (0-based index of the last received byte) after
+     *         appending.
      */
     public CompletableFuture<Long> append(final Content chunk) {
-        return this.chunks().thenCompose(
-            chunks -> {
-                if (!chunks.isEmpty()) {
-                    throw new UnsupportedOperationException("Multiple chunks are not supported");
+        return this.append(chunk, Optional.empty());
+    }
+
+    /**
+     * Appends a chunk of data to upload. Supports an arbitrary number of
+     * sequential chunks (WS4-docker.6) — each is staged under a key named
+     * by its starting byte offset, so {@link #putTo(Layers, Digest)} can
+     * later assemble them back in order.
+     *
+     * @param chunk Chunk of data.
+     * @param declaredStart Start byte offset the client claimed via {@code
+     *                       Content-Range}, if any. When present and it does
+     *                       not match the number of bytes already received,
+     *                       the chunk is rejected with {@link
+     *                       NonContiguousChunkException} (416) rather than
+     *                       silently accepted out of order.
+     * @return Offset (0-based index of the last received byte) after
+     *         appending.
+     */
+    public CompletableFuture<Long> append(final Content chunk, final Optional<Long> declaredStart) {
+        return this.receivedBytes().thenCompose(
+            received -> {
+                if (declaredStart.isPresent() && !declaredStart.get().equals(received)) {
+                    return CompletableFuture.<Long>failedFuture(
+                        new NonContiguousChunkException(received, declaredStart.get())
+                    );
                 }
                 final Key tmp = new Key.From(this.root(), UUID.randomUUID().toString());
-                final DigestedFlowable data = new DigestedFlowable(chunk);
-                return this.storage.save(tmp, new Content.From(chunk.size(), data)).thenCompose(
+                return this.storage.save(tmp, chunk).thenCompose(
                     nothing -> {
-                        final Key key = this.chunk(data.digest());
+                        final Key key = this.chunkKey(received);
                         return this.storage.move(tmp, key).thenApply(ignored -> key);
                     }
                 ).thenCompose(
-                    key -> this.storage.metadata(key)
-                        .thenApply(meta -> new MetaCommon(meta).size())
-                        .thenApply(updated -> updated - 1)
+                    key -> this.storage.metadata(key).thenApply(meta -> new MetaCommon(meta).size())
+                ).thenCompose(
+                    size -> this.setReceivedBytes(received + size)
+                        .thenApply(ignored -> Math.max(received + size - 1, 0))
                 );
             }
         );
@@ -133,58 +171,46 @@ public final class Upload {
     /**
      * Get offset for the uploaded content.
      *
-     * @return Offset.
+     * @return Offset (0-based index of the last received byte), or
+     *         {@code 0} if nothing has been received yet.
      */
     public CompletableFuture<Long> offset() {
-        return this.chunks().thenCompose(
-            chunks -> {
-                final CompletionStage<Long> result;
-                if (chunks.isEmpty()) {
-                    result = CompletableFuture.completedFuture(0L);
-                } else {
-                    final Key key = chunks.iterator().next();
-                    result = this.storage.metadata(key)
-                        .thenApply(meta -> new MetaCommon(meta).size())
-                        .thenApply(size -> Math.max(size - 1, 0));
-                }
-                return result;
-            }
-        );
+        return this.receivedBytes().thenApply(received -> Math.max(received - 1, 0));
     }
 
     /**
      * Puts uploaded data to {@link Layers} creating a {@link Blob} with specified {@link Digest}.
-     * If upload data mismatch provided digest then error occurs and operation does not complete.
+     * Assembles every staged chunk, in the order they were appended, into a single stream and
+     * verifies it against the client-claimed {@code digest} via {@link CheckedBlobSource} — the
+     * same digest-verifying primitive {@code CachingBlob} uses for the proxy cache-store
+     * (WS4-docker.1) — so a mismatch fails explicitly with {@link InvalidDigestException}
+     * carrying both the actually-computed and claimed digests, rather than an opaque
+     * chunk-key lookup miss. The stored/served digest is therefore always the computed one.
      *
      * @param layers Target layers.
-     * @param digest Expected blob digest.
+     * @param digest Client-claimed blob digest.
      * @return Created blob.
      */
     public CompletableFuture<Void> putTo(final Layers layers, final Digest digest) {
-        final Key source = this.chunk(digest);
-        return this.storage.exists(source)
-            .thenCompose(
-                exists -> {
-                    if (exists) {
-                        return layers.put(
-                            new BlobSource() {
-                                @Override
-                                public Digest digest() {
-                                    return digest;
-                                }
-
-                                @Override
-                                public CompletableFuture<Void> saveTo(Storage asto, Key key) {
-                                    return asto.move(source, key);
-                                }
-                            }
-                        ).thenCompose(
-                            blob -> this.delete()
-                        );
-                    }
-                    return CompletableFuture.failedFuture(new InvalidDigestException(digest.toString()));
+        return this.orderedChunkKeys().thenCompose(
+            keys -> {
+                if (keys.isEmpty()) {
+                    return CompletableFuture.failedFuture(
+                        new InvalidDigestException(
+                            String.format("no uploaded data found for digest: %s", digest)
+                        )
+                    );
                 }
-            );
+                return this.receivedBytes().thenCompose(
+                    size -> layers.put(
+                        new CheckedBlobSource(
+                            new Content.From(size, this.assembled(keys)),
+                            digest
+                        )
+                    ).thenCompose(ignored -> this.delete())
+                );
+            }
+        );
     }
 
     public CompletableFuture<Void> putTo(
@@ -193,10 +219,10 @@ public final class Upload {
         final Content body,
         final Headers headers
     ) {
-        return this.chunks().thenCompose(
-            chunks -> {
+        return this.orderedChunkKeys().thenCompose(
+            keys -> {
                 final CompletableFuture<Void> stage;
-                if (chunks.isEmpty() && body != Content.EMPTY) {
+                if (keys.isEmpty() && body != Content.EMPTY) {
                     final ContentWithSize sized = new ContentWithSize(body, headers);
                     stage = this.append(sized).thenApply(ignored -> null);
                 } else {
@@ -226,32 +252,89 @@ public final class Upload {
     }
 
     /**
-     * Build upload chunk key for given digest.
+     * Root under which every chunk is staged, one key per chunk.
      *
-     * @param digest Digest.
-     * @return Chunk key.
+     * @return Chunks root key.
      */
-    private Key chunk(final Digest digest) {
-        return new Key.From(this.root(), digest.alg() + '_' + digest.hex());
+    private Key chunksRoot() {
+        return new Key.From(this.root(), "chunks");
     }
 
     /**
-     * List all chunk keys.
+     * Build a chunk's staging key from its starting byte offset. Zero-padded
+     * to a fixed width so that listing {@link #chunksRoot()} and sorting the
+     * resulting keys lexicographically yields append order, regardless of
+     * the backing storage's own listing order.
      *
-     * @return Chunk keys.
+     * @param start Starting byte offset of this chunk within the final blob.
+     * @return Chunk key.
      */
-    private CompletableFuture<Collection<Key>> chunks() {
-        return this.storage.list(this.root())
-            .thenApply(
-                keys -> keys.stream()
-                    .filter(
-                        key -> {
-                            final String value = key.string();
-                            return !"started".equals(value) && !value.endsWith("/started");
-                        }
-                    )
-                    .toList()
-            );
+    private Key chunkKey(final long start) {
+        return new Key.From(this.chunksRoot(), String.format("%020d", start));
+    }
+
+    /**
+     * Marker key holding the running total byte count received so far, as
+     * a decimal string.
+     *
+     * @return Offset-marker key.
+     */
+    private Key offsetMarker() {
+        return new Key.From(this.root(), "offset");
+    }
+
+    /**
+     * Total bytes received so far across every appended chunk.
+     *
+     * @return Byte count, {@code 0} if no chunk has been appended yet.
+     */
+    private CompletableFuture<Long> receivedBytes() {
+        final Key marker = this.offsetMarker();
+        return this.storage.exists(marker).thenCompose(
+            exists -> exists
+                ? this.storage.value(marker).thenCompose(Content::asStringFuture).thenApply(Long::parseLong)
+                : CompletableFuture.completedFuture(0L)
+        );
+    }
+
+    /**
+     * Records the new running total byte count after a successful append.
+     *
+     * @param total New cumulative byte count.
+     * @return Completion signal.
+     */
+    private CompletableFuture<Void> setReceivedBytes(final long total) {
+        return this.storage.save(
+            this.offsetMarker(),
+            new Content.From(Long.toString(total).getBytes(StandardCharsets.US_ASCII))
+        );
+    }
+
+    /**
+     * Lists every staged chunk key, sorted by starting byte offset (append order).
+     *
+     * @return Ordered chunk keys.
+     */
+    private CompletableFuture<List<Key>> orderedChunkKeys() {
+        return this.storage.list(this.chunksRoot()).thenApply(
+            keys -> keys.stream().sorted(Comparator.comparing(Key::string)).toList()
+        );
+    }
+
+    /**
+     * Builds a single, non-blocking byte stream that concatenates every
+     * chunk's stored bytes in order. Each chunk is fetched from storage
+     * only as the previous one finishes streaming ({@code concatMap}), so
+     * memory use stays bounded to one chunk at a time regardless of how
+     * many chunks (or how large the assembled blob) there are.
+     *
+     * @param keys Ordered chunk keys (see {@link #orderedChunkKeys()}).
+     * @return Concatenated byte stream.
+     */
+    private Flowable<ByteBuffer> assembled(final List<Key> keys) {
+        return Flowable.fromIterable(keys).concatMap(
+            key -> RxFuture.single(this.storage.value(key)).flatMapPublisher(Flowable::fromPublisher)
+        );
     }
 
     /**

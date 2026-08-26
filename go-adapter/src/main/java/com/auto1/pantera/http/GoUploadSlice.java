@@ -171,15 +171,19 @@ final class GoUploadSlice implements Slice {
             // (or its parent paths, e.g. Go's parent-path probing) BEFORE
             // we tell the client the upload succeeded. Otherwise an earlier
             // probe-against-group that cached a 404 keeps shadowing the
-            // newly-published artifact and `go get` returns 404.
-            extra = extra.whenComplete((ignored, error) -> {
-                if (error == null) {
-                    NegativeCacheRegistry.instance()
-                        .invalidateAfterUpload("go-proxy", module);
-                    com.auto1.pantera.cooldown.metadata
-                        .FilteredMetadataCacheRegistry.instance()
-                        .invalidateAfterUpload("go-proxy", module);
-                }
+            // newly-published artifact and `go get` returns 404. Also evict
+            // any go-proxy member's cached @v/list / @latest base document
+            // for this module (WS4-go.2) — a hosted publish inside a
+            // go-group must not stay hidden behind the proxy's 12h TTL.
+            extra = extra.thenCompose(ignored -> {
+                NegativeCacheRegistry.instance()
+                    .invalidateAfterUpload("go-proxy", module);
+                com.auto1.pantera.cooldown.metadata
+                    .FilteredMetadataCacheRegistry.instance()
+                    .invalidateAfterUpload("go-proxy", module);
+                return GoMetadataCacheRegistry.instance()
+                    .invalidateAfterUpload(module)
+                    .exceptionally(err -> null);
             });
         } else {
             extra = stored;
@@ -212,9 +216,13 @@ final class GoUploadSlice implements Slice {
         return this.storage.metadata(key)
             .thenApply(meta -> meta.read(Meta.OP_SIZE).orElseThrow())
             .thenCompose(size -> {
+                // WS4-go.6: decode Go's `!`-escaping before the DB/index/
+                // audit trail sees it — the storage key (already written
+                // above under `key`) stays escaped since that is what
+                // `go get` requests and expects served back.
                 final ArtifactEvent event = new ArtifactEvent(
                     REPO_TYPE, this.repo, owner(headers),
-                    module, version, size
+                    unescapeModulePath(module), version, size
                 );
                 this.events.ifPresent(
                     queue -> queue.add( // ok: unbounded ConcurrentLinkedDeque
@@ -223,6 +231,32 @@ final class GoUploadSlice implements Slice {
                 );
                 return this.syncIndex.recordSync(event);
             });
+    }
+
+    /**
+     * Decode Go's module-path escaping (WS4-go.6): an uppercase letter is
+     * encoded upstream/on-disk as {@code !} followed by its lowercase
+     * form, e.g. {@code github.com/!burnt!sushi/toml} for {@code
+     * github.com/BurntSushi/toml}. Only the DB/index/audit trail should
+     * see the human-readable form.
+     *
+     * @param escaped Module path as it appears on the wire / storage key
+     * @return Decoded module path
+     */
+    private static String unescapeModulePath(final String escaped) {
+        final StringBuilder decoded = new StringBuilder(escaped.length());
+        int idx = 0;
+        while (idx < escaped.length()) {
+            final char current = escaped.charAt(idx);
+            if (current == '!' && idx + 1 < escaped.length()) {
+                decoded.append(Character.toUpperCase(escaped.charAt(idx + 1)));
+                idx += 2;
+            } else {
+                decoded.append(current);
+                idx += 1;
+            }
+        }
+        return decoded.toString();
     }
 
     /**

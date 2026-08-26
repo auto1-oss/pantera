@@ -24,6 +24,8 @@ import java.net.URI;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -196,6 +198,101 @@ class ManifestTest {
             data
         );
         Assertions.assertArrayEquals(data, manifest.content().asBytes());
+    }
+
+    @Test
+    void shouldReadSubjectWhenPresent() {
+        final String digest = "sha256:def";
+        final Manifest manifest = new Manifest(
+            new Digest.Sha256("123"),
+            Json.createObjectBuilder().add(
+                "subject", Json.createObjectBuilder().add("digest", digest)
+            ).build().toString().getBytes()
+        );
+        MatcherAssert.assertThat(
+            manifest.subject().map(Digest::string),
+            new IsEqual<>(Optional.of(digest))
+        );
+    }
+
+    @Test
+    void shouldReturnEmptySubjectWhenAbsent() {
+        final Manifest manifest = new Manifest(
+            new Digest.Sha256("123"),
+            "{}".getBytes()
+        );
+        MatcherAssert.assertThat(
+            manifest.subject(),
+            new IsEqual<>(Optional.empty())
+        );
+    }
+
+    @Test
+    void shouldReadDirectArtifactType() {
+        final Manifest manifest = new Manifest(
+            new Digest.Sha256("123"),
+            "{\"artifactType\":\"application/vnd.example.sig.v1+json\"}".getBytes()
+        );
+        MatcherAssert.assertThat(
+            manifest.artifactType(),
+            new IsEqual<>(Optional.of("application/vnd.example.sig.v1+json"))
+        );
+    }
+
+    @Test
+    void shouldFallBackToConfigMediaTypeForArtifactType() {
+        final Manifest manifest = new Manifest(
+            new Digest.Sha256("123"),
+            Json.createObjectBuilder().add(
+                "config",
+                Json.createObjectBuilder()
+                    .add("mediaType", "application/vnd.oci.image.config.v1+json")
+                    .add("digest", "sha256:abc")
+            ).build().toString().getBytes()
+        );
+        MatcherAssert.assertThat(
+            manifest.artifactType(),
+            new IsEqual<>(Optional.of("application/vnd.oci.image.config.v1+json"))
+        );
+    }
+
+    @Test
+    void shouldReturnEmptyArtifactTypeWhenNeitherPresent() {
+        final Manifest manifest = new Manifest(
+            new Digest.Sha256("123"),
+            "{}".getBytes()
+        );
+        MatcherAssert.assertThat(
+            manifest.artifactType(),
+            new IsEqual<>(Optional.empty())
+        );
+    }
+
+    @Test
+    void shouldReadAnnotations() {
+        final Manifest manifest = new Manifest(
+            new Digest.Sha256("123"),
+            Json.createObjectBuilder().add(
+                "annotations",
+                Json.createObjectBuilder().add("dev.example/key", "value")
+            ).build().toString().getBytes()
+        );
+        MatcherAssert.assertThat(
+            manifest.annotations(),
+            new IsEqual<>(Optional.of(Map.of("dev.example/key", "value")))
+        );
+    }
+
+    @Test
+    void shouldReturnEmptyAnnotationsWhenAbsent() {
+        final Manifest manifest = new Manifest(
+            new Digest.Sha256("123"),
+            "{}".getBytes()
+        );
+        MatcherAssert.assertThat(
+            manifest.annotations(),
+            new IsEqual<>(Optional.empty())
+        );
     }
 
     /**

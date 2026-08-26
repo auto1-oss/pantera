@@ -69,6 +69,14 @@ public final class AuthHandler {
      */
     private static final String SETTING_MAX_TOKEN_DAYS = "max_api_token_days";
 
+    /**
+     * Sentinel key on the worker-pool result of {@link #buildApiToken} marking
+     * that a permanent token was requested while admin policy forbids it, so
+     * {@link #generateTokenEndpoint}'s completion handler can answer {@code
+     * 400} on the event loop rather than blocking to decide it.
+     */
+    private static final String REJECTED_PERMANENT = "__rejected_permanent";
+
     private final Tokens tokens;
     private final Authentication auth;
     private final CrudUsers users;
@@ -755,15 +763,67 @@ public final class AuthHandler {
         final int requestedDays = body != null
             ? body.getInteger("expiry_days", DEFAULT_EXPIRY_DAYS)
             : DEFAULT_EXPIRY_DAYS;
+        final String sub = ctx.user().principal().getString(AuthTokenRest.SUB);
+        final String context = ctx.user().principal().getString(
+            AuthTokenRest.CONTEXT, "local"
+        );
+        // The admin-cap reads (settingsDao) and token persistence (tokenDao /
+        // JwtTokens) are synchronous JDBC — run them on the worker pool, NEVER
+        // the Vert.x event loop (CLAUDE.md thread model), mirroring every other
+        // handler in this class. The response is sent from whenComplete.
+        CompletableFuture.supplyAsync(
+            (java.util.function.Supplier<JsonObject>) () ->
+                this.buildApiToken(label, requestedDays, sub, context),
+            HandlerExecutor.get()
+        ).whenComplete((result, err) -> {
+            if (err != null) {
+                EcsLogger.error("com.auto1.pantera.api.v1")
+                    .message("API token generation failed: "
+                        + (err.getMessage() != null ? err.getMessage() : err.getClass().getSimpleName()))
+                    .eventCategory("authentication")
+                    .eventAction("token_generate")
+                    .eventOutcome("failure")
+                    .error(err)
+                    .field("log.source", "application")
+                    .log();
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
+                    "Token generation is temporarily unavailable. Please try again.");
+            } else if (result.containsKey(REJECTED_PERMANENT)) {
+                ApiResponse.sendError(ctx, 400, "PERMANENT_TOKENS_DISABLED",
+                    "Permanent API tokens are disabled by administrator policy. "
+                        + "Provide a positive expiry_days value.");
+            } else {
+                ctx.response()
+                    .setStatusCode(200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(result.encode());
+            }
+        });
+    }
+
+    /**
+     * Worker-pool body of {@link #generateTokenEndpoint}: reads the
+     * admin-configured token caps, enforces them, and mints + persists the
+     * token — all synchronous JDBC / signing, kept off the Vert.x event loop.
+     * Returns the token JSON, or a sentinel carrying {@link #REJECTED_PERMANENT}
+     * when a permanent token was requested while admin policy forbids it.
+     *
+     * @param label Token label.
+     * @param requestedDays Requested expiry in days ({@code <=0} = permanent).
+     * @param sub Token subject (username).
+     * @param context Auth provider context.
+     * @return Token JSON, or a {@link #REJECTED_PERMANENT} sentinel.
+     */
+    private JsonObject buildApiToken(
+        final String label, final int requestedDays, final String sub, final String context
+    ) {
         // Read the admin-configured caps. Two keys exist for historical
-        // reasons: api_token_max_ttl_seconds is what the UI (SettingsView
-        // + /admin/auth-settings) writes; max_api_token_days is a legacy
-        // key that preceded the UI. Prefer the UI key when present so
-        // flipping the admin slider actually enforces at the server.
-        // Without this, the UI toggle was security theatre — a user
-        // could POST expiry_days=X directly and bypass the configured
-        // cap, or POST expiry_days=0 to mint a permanent token even
-        // when "Allow permanent API tokens" was off.
+        // reasons: api_token_max_ttl_seconds is what the UI (SettingsView +
+        // /admin/auth-settings) writes; max_api_token_days is a legacy key that
+        // preceded the UI. Prefer the UI key so flipping the admin slider
+        // enforces at the server — else a user could POST expiry_days directly
+        // to bypass the cap, or POST expiry_days=0 to mint a permanent token
+        // even when "Allow permanent API tokens" was off.
         int maxTokenDays = 0;
         boolean allowPermanent = true;
         if (this.settingsDao != null) {
@@ -784,10 +844,7 @@ public final class AuthHandler {
                 .field("event.reason", "permanent_tokens_disabled")
                 .field("log.source", "application")
                 .log();
-            ApiResponse.sendError(ctx, 400, "PERMANENT_TOKENS_DISABLED",
-                "Permanent API tokens are disabled by administrator policy. "
-                    + "Provide a positive expiry_days value.");
-            return;
+            return new JsonObject().put(REJECTED_PERMANENT, true);
         }
         final int expiryDays;
         if (maxTokenDays > 0 && requestedDays > 0 && requestedDays > maxTokenDays) {
@@ -802,10 +859,6 @@ public final class AuthHandler {
         } else {
             expiryDays = requestedDays;
         }
-        final String sub = ctx.user().principal().getString(AuthTokenRest.SUB);
-        final String context = ctx.user().principal().getString(
-            AuthTokenRest.CONTEXT, "local"
-        );
         final AuthUser authUser = new AuthUser(sub, context);
         final int expirySecs = expiryDays > 0 ? expiryDays * 86400 : 0;
         final Instant expiresAt = expiryDays > 0
@@ -830,10 +883,7 @@ public final class AuthHandler {
             resp.put("expires_at", expiresAt.toString());
         }
         resp.put("permanent", expiryDays <= 0);
-        ctx.response()
-            .setStatusCode(200)
-            .putHeader("Content-Type", "application/json")
-            .end(resp.encode());
+        return resp;
     }
 
     /**

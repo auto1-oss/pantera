@@ -17,6 +17,7 @@ import com.auto1.pantera.docker.misc.CatalogPage;
 import com.auto1.pantera.docker.misc.Pagination;
 
 import java.util.Collection;
+import java.util.Optional;
 
 /**
  * Asto implementation of {@link Catalog}. Catalog created from list of keys.
@@ -26,15 +27,9 @@ import java.util.Collection;
 final class AstoCatalog implements Catalog {
 
     /**
-     * Repositories root key.
+     * Paginated catalog page, computed eagerly from the given keys.
      */
-    private final Key root;
-
-    /**
-     * List of keys inside repositories root.
-     */
-    private final Collection<Key> keys;
-    private final Pagination pagination;
+    private final CatalogPage page;
 
     /**
      * @param root Repositories root key.
@@ -42,22 +37,21 @@ final class AstoCatalog implements Catalog {
      * @param pagination Pagination parameters.
      */
     AstoCatalog(Key root, Collection<Key> keys, Pagination pagination) {
-        this.root = root;
-        this.keys = keys;
-        this.pagination = pagination;
+        this.page = new CatalogPage(new Children(root, keys).names(), pagination);
     }
 
     @Override
     public Content json() {
-        return new CatalogPage(this.repos(), this.pagination).json();
+        return this.page.json();
     }
 
-    /**
-     * Convert keys to ordered set of repository names.
-     *
-     * @return Ordered repository names.
-     */
-    private Collection<String> repos() {
-        return new Children(this.root, this.keys).names();
+    @Override
+    public boolean hasNext() {
+        return this.page.hasNext();
+    }
+
+    @Override
+    public Optional<String> nextCursor() {
+        return this.page.nextCursor();
     }
 }

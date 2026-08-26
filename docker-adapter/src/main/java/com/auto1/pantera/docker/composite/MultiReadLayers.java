@@ -46,6 +46,13 @@ public final class MultiReadLayers implements Layers {
     }
 
     @Override
+    public CompletableFuture<Void> delete(final Digest digest) {
+        // Deletes target the authoritative (local) store only — see
+        // WS4-docker.5 §3. Maps to 405 via ErrorHandlingSlice.
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public CompletableFuture<Optional<Blob>> get(final Digest digest) {
         final CompletableFuture<Optional<Blob>> promise = new CompletableFuture<>();
         CompletableFuture.allOf(

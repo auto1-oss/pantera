@@ -28,17 +28,28 @@ import java.nio.file.NoSuchFileException;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 /**
  * Test case for {@link FromStorageCache}.
  *
  * @since 0.24
  */
+// SEPARATE_THREAD is deliberate: these tests block on CompletableFuture.join(),
+// which ignores interruption, so a default (same-thread) @Timeout cannot abort a
+// load wedged under severe CPU starvation (a -T8 reactor, or several concurrent
+// local builds sharing cores). A separate watcher thread abandons the wedged
+// test deterministically, turning a hang into a fast, observable failure instead
+// of stalling the whole reactor. The bound is a hang-guard, not a latency
+// assertion.
+@Timeout(value = 90, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
 final class FromStorageCacheTest {
 
     /**
@@ -59,6 +70,35 @@ final class FromStorageCacheTest {
             ).toCompletableFuture().get().get(),
             new ContentIs(data)
         );
+    }
+
+    @Test
+    void doesNotInvokeRemoteOnCacheHit() throws Exception {
+        // Regression test for the eager-remote.get()-on-every-call bug: remote.get()
+        // was a plain method-call argument to switchIfEmpty, so it fired even when
+        // the cache-hit chain above it was going to satisfy the request -- a
+        // side-effecting Remote (e.g. an upstream HTTP fetch) ran needlessly on
+        // every hit. Proven via invocation count, per CLAUDE.md doctrine, not
+        // wall-clock timing.
+        final Key key = new Key.From("key-lazy-hit");
+        final byte[] data = "cached-bytes".getBytes();
+        new BlockingStorage(this.storage).save(key, data);
+        final AtomicInteger remoteCalls = new AtomicInteger();
+        final Remote remote = () -> {
+            remoteCalls.incrementAndGet();
+            return CompletableFuture.completedFuture(
+                Optional.of(new Content.From("should-not-be-used".getBytes()))
+            );
+        };
+        final Optional<? extends Content> result = new FromStorageCache(this.storage)
+            .load(key, remote, CacheControl.Standard.ALWAYS)
+            .toCompletableFuture()
+            .get();
+        MatcherAssert.assertThat(
+            "Remote must not be invoked when the cache already has the value",
+            remoteCalls.get(), Matchers.is(0)
+        );
+        MatcherAssert.assertThat(result.get(), new ContentIs(data));
     }
 
     @Test
@@ -336,38 +376,54 @@ final class FromStorageCacheTest {
     }
 
     @Test
+    @Timeout(value = 60, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
     void processMultipleRequestsSimultaneously() throws Exception {
         final FromStorageCache cache = new FromStorageCache(this.storage);
         final Key key = new Key.From("key4");
         final int count = 100;
-        final CountDownLatch latch = new CountDownLatch(
-            Runtime.getRuntime().availableProcessors() - 1
-        );
+        // The remote bodies below rendezvous on a latch to force genuinely
+        // concurrent cache loads. Running them on CompletableFuture.runAsync's
+        // default ForkJoinPool.commonPool() deadlocks under parallel-JVM load
+        // (a `mvn -T8` reactor, where CI runs): the commonPool is starved by
+        // sibling module forks, so fewer than `parallelism` rendezvous tasks
+        // ever start at once and the latch never trips. A dedicated fixed pool
+        // sized to the parallelism guarantees the rendezvous regardless of
+        // machine load; @Timeout turns any residual hang into a fast failure
+        // instead of blocking the whole reactor.
+        final int parallelism = Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
+        final CountDownLatch latch = new CountDownLatch(parallelism);
+        final ExecutorService rendezvous = Executors.newFixedThreadPool(parallelism);
         final byte[] data = "data".getBytes();
-        final Remote remote =
-            () -> CompletableFuture
-                .runAsync(
-                    () -> {
-                        latch.countDown();
-                        try {
-                            latch.await();
-                        } catch (final InterruptedException ex) {
-                            Thread.currentThread().interrupt();
-                            throw new IllegalStateException(ex);
-                        }
-                    })
-                .thenApply(nothing -> ByteBuffer.wrap(data))
-                .thenApply(Flowable::just)
-                .thenApply(Content.From::new)
-                .thenApply(Optional::of);
-        Observable.range(0, count).flatMapCompletable(
-            num -> com.auto1.pantera.asto.rx.RxFuture.single(cache.load(key, remote, CacheControl.Standard.ALWAYS))
-                .flatMapCompletable(
-                    pub -> CompletableInterop.fromFuture(
-                        this.storage.save(new Key.From("out", num.toString()), pub.get())
+        try {
+            final Remote remote =
+                () -> CompletableFuture
+                    .runAsync(
+                        () -> {
+                            latch.countDown();
+                            try {
+                                latch.await();
+                            } catch (final InterruptedException ex) {
+                                Thread.currentThread().interrupt();
+                                throw new IllegalStateException(ex);
+                            }
+                        },
+                        rendezvous
                     )
-                )
-        ).blockingAwait();
+                    .thenApply(nothing -> ByteBuffer.wrap(data))
+                    .thenApply(Flowable::just)
+                    .thenApply(Content.From::new)
+                    .thenApply(Optional::of);
+            Observable.range(0, count).flatMapCompletable(
+                num -> com.auto1.pantera.asto.rx.RxFuture.single(cache.load(key, remote, CacheControl.Standard.ALWAYS))
+                    .flatMapCompletable(
+                        pub -> CompletableInterop.fromFuture(
+                            this.storage.save(new Key.From("out", num.toString()), pub.get())
+                        )
+                    )
+            ).blockingAwait();
+        } finally {
+            rendezvous.shutdownNow();
+        }
         for (int num = 0; num < count; ++num) {
             MatcherAssert.assertThat(
                 new BlockingStorage(this.storage).value(new Key.From("out", String.valueOf(num))),

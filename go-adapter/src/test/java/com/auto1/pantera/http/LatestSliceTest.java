@@ -18,9 +18,11 @@ import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.KeyFromPath;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutionException;
 
 /**
@@ -60,6 +62,27 @@ public class LatestSliceTest {
         MatcherAssert.assertThat(
             response.headers(),
             Matchers.containsInRelativeOrder(ContentType.json())
+        );
+    }
+
+    @Test
+    void selectsHighestSemverVersionNotLexicographic() throws ExecutionException, InterruptedException {
+        final Storage storage = new InMemoryStorage();
+        for (final String version : new String[]{"v0.2.0", "v0.9.0", "v0.10.0"}) {
+            storage.save(
+                new KeyFromPath("example.com/semver/mod/@v/" + version + ".info"),
+                new Content.From(
+                    ("{\"Version\":\"" + version + "\"}").getBytes(StandardCharsets.UTF_8)
+                )
+            ).get();
+        }
+        final Response response = new LatestSlice(storage).response(
+            RequestLine.from("GET example.com/semver/mod/@latest HTTP/1.1"),
+            Headers.EMPTY, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            new String(response.body().asBytes(), StandardCharsets.UTF_8),
+            new IsEqual<>("{\"Version\":\"v0.10.0\"}")
         );
     }
 

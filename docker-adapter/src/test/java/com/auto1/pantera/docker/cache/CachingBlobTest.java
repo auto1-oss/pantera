@@ -11,11 +11,21 @@
 package com.auto1.pantera.docker.cache;
 
 import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.docker.Blob;
 import com.auto1.pantera.docker.Digest;
 import com.auto1.pantera.docker.Layers;
+import com.auto1.pantera.docker.asto.AstoLayers;
+import com.auto1.pantera.docker.asto.Blobs;
 import com.auto1.pantera.docker.asto.BlobSource;
+import com.auto1.pantera.docker.error.InvalidDigestException;
 import io.reactivex.Flowable;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.collection.IsCollectionWithSize;
+import org.hamcrest.collection.IsEmptyCollection;
+import org.hamcrest.core.IsEqual;
+import org.hamcrest.core.IsInstanceOf;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
@@ -28,6 +38,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -121,7 +132,7 @@ final class CachingBlobTest {
         final byte[] expected = new byte[chunk1.length + chunk2.length];
         System.arraycopy(chunk1, 0, expected, 0, chunk1.length);
         System.arraycopy(chunk2, 0, expected, chunk1.length, chunk2.length);
-        final Digest digest = new Digest.Sha256("multichunk");
+        final Digest digest = new Digest.Sha256(expected);
         final Blob origin = new Blob() {
             @Override public Digest digest() { return digest; }
             @Override public CompletableFuture<Long> size() {
@@ -195,8 +206,110 @@ final class CachingBlobTest {
         );
     }
 
+    /**
+     * WS4-docker.1: a corrupt/truncated upstream body (declared digest does not match
+     * the actual bytes) must never land in the cache store under the declared digest.
+     * The cache write is attempted exactly once and rejected with an
+     * {@link InvalidDigestException}-class failure; the client still receives the
+     * tee'd bytes (cache errors never break client pulls).
+     */
+    @Test
+    void corruptUpstreamBlobIsRejectedAndNotCached() throws Exception {
+        final byte[] data = "corrupted upstream bytes, truncated mid-layer".getBytes();
+        // Declared digest deliberately does not match sha256(data) — simulates a
+        // truncated/corrupted upstream body served under a digest it doesn't own.
+        final Digest claimed = new Digest.Sha256(
+            "0000000000000000000000000000000000000000000000000000000000000000"
+        );
+        final Blob origin = new Blob() {
+            @Override public Digest digest() { return claimed; }
+            @Override public CompletableFuture<Long> size() {
+                return CompletableFuture.completedFuture((long) data.length);
+            }
+            @Override public CompletableFuture<Content> content() {
+                return CompletableFuture.completedFuture(
+                    new Content.From(data.length, Flowable.just(ByteBuffer.wrap(data)))
+                );
+            }
+        };
+        final InMemoryStorage storage = new InMemoryStorage();
+        final InvocationCountingCacheLayers cacheLayers =
+            new InvocationCountingCacheLayers(new AstoLayers(new Blobs(storage)));
+        final CachingBlob blob = new CachingBlob(origin, cacheLayers, "docker-proxy-test");
+        final byte[] received = blob.content()
+            .thenCompose(Content::asBytesFuture)
+            .join();
+        Assertions.assertArrayEquals(
+            data, received, "Client must still receive the tee'd bytes despite cache rejection"
+        );
+        Assertions.assertTrue(
+            cacheLayers.completed.await(5L, TimeUnit.SECONDS),
+            "Cache put() should have completed (with failure)"
+        );
+        Assertions.assertEquals(
+            1, cacheLayers.putCount.get(), "Cache put() must be attempted exactly once"
+        );
+        final Throwable failure = cacheLayers.lastFailure.get();
+        Assertions.assertNotNull(failure, "Cache put() must fail on digest mismatch");
+        MatcherAssert.assertThat(
+            "Rejection must be an InvalidDigestException-class failure",
+            rootCause(failure),
+            new IsInstanceOf(InvalidDigestException.class)
+        );
+        MatcherAssert.assertThat(
+            "Zero bytes must be written to cache storage on digest mismatch",
+            storage.list(Key.ROOT).join(),
+            new IsEmptyCollection<>()
+        );
+    }
+
+    /**
+     * WS4-docker.1: a legitimate (matching-digest) fetch caches exactly once, and the
+     * cached bytes match what the client received.
+     */
+    @Test
+    void matchingDigestBlobCachesExactlyOnce() throws Exception {
+        final byte[] data = "legitimate upstream layer bytes".getBytes();
+        final Blob origin = fakeBlob(data);
+        final InMemoryStorage storage = new InMemoryStorage();
+        final InvocationCountingCacheLayers cacheLayers =
+            new InvocationCountingCacheLayers(new AstoLayers(new Blobs(storage)));
+        final CachingBlob blob = new CachingBlob(origin, cacheLayers, "docker-proxy-test");
+        final byte[] received = blob.content()
+            .thenCompose(Content::asBytesFuture)
+            .join();
+        Assertions.assertArrayEquals(data, received);
+        Assertions.assertTrue(
+            cacheLayers.completed.await(5L, TimeUnit.SECONDS),
+            "Cache put() should have completed"
+        );
+        Assertions.assertEquals(
+            1, cacheLayers.putCount.get(), "Cache put() must be attempted exactly once"
+        );
+        Assertions.assertNull(
+            cacheLayers.lastFailure.get(), "Cache put() must succeed for a matching digest"
+        );
+        MatcherAssert.assertThat(
+            "Exactly one blob must be written to cache storage",
+            storage.list(Key.ROOT).join(),
+            new IsCollectionWithSize<>(new IsEqual<>(1))
+        );
+    }
+
+    private static Throwable rootCause(final Throwable ex) {
+        Throwable cause = ex;
+        while (cause.getCause() != null && cause.getCause() != cause) {
+            cause = cause.getCause();
+        }
+        return cause;
+    }
+
+    /**
+     * Blob whose declared digest is the actual SHA-256 of {@code data} — a
+     * legitimate, uncorrupted upstream blob.
+     */
     private static Blob fakeBlob(final byte[] data) {
-        final Digest digest = new Digest.Sha256("faketest");
+        final Digest digest = new Digest.Sha256(data);
         return new Blob() {
             @Override public Digest digest() { return digest; }
             @Override public CompletableFuture<Long> size() {
@@ -229,6 +342,10 @@ final class CachingBlobTest {
         public CompletableFuture<Optional<Blob>> get(final Digest digest) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
+        @Override
+        public CompletableFuture<Void> delete(final Digest digest) {
+            throw new UnsupportedOperationException();
+        }
     }
 
     /**
@@ -249,6 +366,48 @@ final class CachingBlobTest {
         @Override
         public CompletableFuture<Optional<Blob>> get(final Digest digest) {
             return CompletableFuture.completedFuture(Optional.empty());
+        }
+        @Override
+        public CompletableFuture<Void> delete(final Digest digest) {
+            throw new UnsupportedOperationException();
+        }
+    }
+
+    /**
+     * Layers decorator that counts put() invocations and records the outcome
+     * (success or failure) of the delegated call, without altering behavior.
+     * Wraps a real {@link Layers} (e.g. {@link AstoLayers}) so digest verification
+     * runs for real, unlike {@link RecordingLayers}/{@link NoopLayers}.
+     */
+    private static final class InvocationCountingCacheLayers implements Layers {
+        private final Layers delegate;
+        final AtomicInteger putCount = new AtomicInteger();
+        final AtomicReference<Throwable> lastFailure = new AtomicReference<>();
+        final CountDownLatch completed = new CountDownLatch(1);
+
+        InvocationCountingCacheLayers(final Layers delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public CompletableFuture<Digest> put(final BlobSource source) {
+            this.putCount.incrementAndGet();
+            return this.delegate.put(source).whenComplete((digest, ex) -> {
+                this.lastFailure.set(ex);
+                this.completed.countDown();
+            });
+        }
+        @Override
+        public CompletableFuture<Void> mount(final Blob blob) {
+            throw new UnsupportedOperationException();
+        }
+        @Override
+        public CompletableFuture<Optional<Blob>> get(final Digest digest) {
+            throw new UnsupportedOperationException();
+        }
+        @Override
+        public CompletableFuture<Void> delete(final Digest digest) {
+            throw new UnsupportedOperationException();
         }
     }
 
@@ -278,6 +437,10 @@ final class CachingBlobTest {
         @Override
         public CompletableFuture<Optional<Blob>> get(final Digest digest) {
             return CompletableFuture.completedFuture(Optional.empty());
+        }
+        @Override
+        public CompletableFuture<Void> delete(final Digest digest) {
+            throw new UnsupportedOperationException();
         }
     }
 }

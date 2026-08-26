@@ -45,17 +45,41 @@ public final class FileMetaSlice implements Slice {
     private final Storage storage;
 
     /**
-     * Slice to wrap.
+     * Slice to wrap for ordinary (non-metadata) requests. May be a WS1.7
+     * redirect-eligible {@link com.auto1.pantera.http.slice.StorageArtifactSlice}.
      */
     private final Slice origin;
 
     /**
-     * Ctor.
+     * Slice used for {@code ?meta=true} requests. MUST be a stream-only serve:
+     * a metadata request has to return the object's bytes plus the {@code
+     * X-Pantera-*} headers this slice appends, so it can never be answered by
+     * a presigned 302 (the redirect would drop those headers and the body).
+     */
+    private final Slice metaOrigin;
+
+    /**
+     * Ctor -- one origin used for both metadata and ordinary requests
+     * (backwards-compatible: callers wiring a stream-only origin get the
+     * previous behaviour unchanged).
      * @param origin Slice to wrap
      * @param storage Storage where to find file
      */
     public FileMetaSlice(final Slice origin, final Storage storage) {
+        this(origin, origin, storage);
+    }
+
+    /**
+     * Ctor with a distinct stream-only origin for {@code ?meta=true}. Lets an
+     * ordinary object GET redirect (WS1.7) while a metadata request is always
+     * streamed, so the appended {@code X-Pantera-*} headers survive.
+     * @param origin Slice serving ordinary requests (may redirect)
+     * @param metaOrigin Stream-only slice serving {@code ?meta=true} requests
+     * @param storage Storage where to find file
+     */
+    public FileMetaSlice(final Slice origin, final Slice metaOrigin, final Storage storage) {
         this.origin = origin;
+        this.metaOrigin = metaOrigin;
         this.storage = storage;
     }
 
@@ -67,9 +91,10 @@ public final class FileMetaSlice implements Slice {
     ) {
         final URI uri = line.uri();
         final Optional<String> meta = new RqParams(uri).value(FileMetaSlice.META_PARAM);
-        final CompletableFuture<Response> raw = this.origin.response(line, iterable, publisher);
         final CompletableFuture<Response> result;
         if (meta.isPresent() && Boolean.parseBoolean(meta.get())) {
+            final CompletableFuture<Response> raw =
+                this.metaOrigin.response(line, iterable, publisher);
             final Key key = new KeyFromPath(uri.getPath());
             result = raw.thenCompose(
                 resp -> this.storage.exists(key)
@@ -87,7 +112,7 @@ public final class FileMetaSlice implements Slice {
                         return CompletableFuture.completedFuture(resp);
                     }));
         } else {
-            result = raw;
+            result = this.origin.response(line, iterable, publisher);
         }
         return result;
     }

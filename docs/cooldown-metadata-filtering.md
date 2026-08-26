@@ -25,6 +25,28 @@ This two-layer design prevents build tools from resolving blocked versions
 while providing clear, format-appropriate error signalling when direct access
 is attempted.
 
+## Cooldown / negative-cache coherence (WS5.1)
+
+A "no versions available" outcome caused by cooldown (every version of a
+package currently blocked) is **never** written to the negative (404) cache.
+This matters because PyPI's `/simple/{pkg}/` and `/pypi/{pkg}/json` handlers
+answer an all-blocked package with `404` (carrying `X-Pantera-Cooldown:
+all-blocked`) so pip's normal "package not found" error path applies — but
+that 404 is transient by nature: it should stop the moment the block window
+lapses, not persist for the negative-cache TTL.
+
+The guarantee holds structurally, not by a special-cased check:
+`NegativeCacheKey.fromPath` parses a metadata-surface path (no per-version
+file extension) to an **empty** `artifactVersion`, and
+`NegativeCache.cacheNotFound` unconditionally refuses to write any key whose
+version is empty (the same guard that already protects npm packuments,
+`maven-metadata.xml`, and Go `@latest` from being hard-negative-cached).
+A fully-blocked package therefore re-evaluates cooldown fresh on every
+request and becomes installable again on the very next request once the
+block lifts. This does not reopen the thundering-herd problem the negative
+cache exists to solve for genuine absences: a *versioned* artifact fetch
+(e.g. a specific `.whl`) still negative-caches normally.
+
 ## Supported Adapters
 
 The coverage matrix below is the **final state** for v2.2.0. Every proxy adapter that
@@ -245,9 +267,15 @@ When metadata is fetched and parsed, release dates embedded in the metadata (e.g
 
 Version cooldown evaluation is pure-CPU on the calling thread — Caffeine L1 lookup, then on miss a synchronous `checkExistingBlockWithTimestamp` DB read via the existing executor, then `shouldBlockNewArtifact` against the release date already parsed out of the upstream packument. There is no per-version network I/O on the filter path: dates come from the in-memory `releaseDates` map populated by `MetadataParser.extractReleaseDates`. The previous dedicated 4-thread `cooldown-eval` executor was removed in v2.2.0 when the timeout-wall fix landed (see CHANGELOG); the per-request fan-out cost is now dominated by the bounded number of versions inside the cooldown window (`maxVersionsToEvaluate`, default 50), not by thread-pool dispatch.
 
+Per-endpoint handlers that sit outside `MetadataFilterService` apply the same bound directly (WS5.4, v2.3.0): `GoListHandler` (`/{module}/@v/list`) caps evaluation at the newest 50 versions (by semver), matching `GoLatestHandler`'s pre-existing cap; `ComposerRootPackagesHandler` (`/packages.json`, `/repo.json`) caps evaluation at the newest 50 versions **per package** (by release date, falling back to semver when a version's date is unknown) — a Satis snapshot inlining hundreds of versions for one package no longer fans out a cooldown-service call per version. In both cases, versions beyond the cap are never evaluated and are therefore served as allowed (never filtered), and the handler logs once per request when the cap actually truncated evaluation (`event.action` `list_filter_eval_cap` / `root_filter_eval_cap`) so the truncation is an observable event, not a silent drop.
+
 ### H3: Stale-While-Revalidate (SWR) on FilteredMetadataCache
 
 When a cached metadata entry expires, the stale bytes are returned immediately to the caller while a background task re-evaluates the metadata. This eliminates tail latency spikes at cache expiry boundaries. The SWR grace period is 5 minutes beyond the logical TTL.
+
+**Cache coherence on background refresh (WS5.2, v2.3.0):** for npm, a background refresh that pulls a genuinely changed upstream packument (full re-fetch, or a conditional If-None-Match refresh whose ETag came back different — i.e. anything other than a 304) invalidates the `FilteredMetadataCache` envelope for that package via `FilteredMetadataCacheRegistry.invalidateAfterProxyRefresh` (mirrors the existing invalidation the local upload path already performed). Without this, a version published upstream during a background refresh stayed invisible behind the envelope's own TTL (up to 24h) stacked on top of the packument TTL (12h). A 304 (unchanged) response does not invalidate anything — there is nothing new to reveal.
+
+**PyPI `/simple/` filtered-index cache (WS5.5, v2.3.0):** `PypiSimpleHandler` sits outside `MetadataFilterService`, so its parse + per-version cooldown fan-out + filter + rewrite used to run on **every** `/simple/{pkg}/` request, even when the upstream index was unchanged. It now materialises the cooldown-filtered index into the same shared `FilteredMetadataCache` under the standard `metadata:{repoType}:{repoName}:{packageName}` key, so the cost is paid once per (content, cutoff): a second identical request is served from cache without re-evaluating cooldown. Because the entry lives in the shared cache, every existing invalidation hook drops it — the JDBC block/unblock envelope invalidator, `invalidateAfterUpload`, cross-instance pub/sub, and the policy-change wipe — and the entry TTL is capped by the earliest `blockedUntil` so an aged-out version reappears on the next request after the window passes. Because the shared cache is keyed by package (not content), the handler additionally fingerprints (SHA-256) the upstream index bytes and self-busts the entry the instant the upstream content changes, so a proxy storage-cache refresh cannot leave a stale filtered view behind. The cached bytes are the filtered PEP 691 JSON (the production upstream shape); a PEP 503 HTML client is served the same filtered index re-rendered from cache without re-running cooldown.
 
 ### H4: L1 Cache Capacity (50K entries)
 

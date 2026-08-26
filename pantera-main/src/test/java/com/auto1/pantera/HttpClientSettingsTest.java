@@ -15,7 +15,6 @@ import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.test.TestResource;
 import com.auto1.pantera.http.client.HttpClientSettings;
 import com.auto1.pantera.http.client.ProxySettings;
-import com.auto1.pantera.scheduling.QuartzService;
 import com.auto1.pantera.settings.StorageByAlias;
 import com.auto1.pantera.settings.YamlSettings;
 import com.auto1.pantera.settings.repo.RepoConfig;
@@ -80,7 +79,7 @@ class HttpClientSettingsTest {
         final Path path = new TestResource("pantera_http_client.yaml").asPath();
         final HttpClientSettings stn = new YamlSettings(
             Yaml.createYamlInput(path.toFile()).readYamlMapping(),
-            path.getParent(), new QuartzService()
+            path.getParent()
         ).httpClientSettings();
         Assertions.assertEquals(20_000, stn.connectTimeout());
         Assertions.assertEquals(25, stn.idleTimeout());

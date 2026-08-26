@@ -66,7 +66,7 @@ public final class MavenProxySlice extends Slice.Wrap {
     ) {
         this(client, uri, authenticator, Cache.NOP, Optional.empty(), "*",
             "maven-proxy", com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE, Optional.empty(),
-            Duration.ofHours(24), Duration.ofHours(24), true, null);
+            Duration.ofHours(24), Duration.ofHours(24), true, null, false);
     }
 
     /**
@@ -93,7 +93,7 @@ public final class MavenProxySlice extends Slice.Wrap {
         final Optional<Storage> storage
     ) {
         this(clients, remote, auth, cache, events, rname, rtype, cooldown, storage,
-            Duration.ofHours(24), Duration.ofHours(24), true, null);
+            Duration.ofHours(24), Duration.ofHours(24), true, null, false);
     }
 
     /**
@@ -124,7 +124,44 @@ public final class MavenProxySlice extends Slice.Wrap {
         final com.auto1.pantera.cooldown.metadata.CooldownMetadataService cooldownMetadata
     ) {
         this(clients, remote, auth, cache, events, rname, rtype, cooldown, storage,
-            Duration.ofHours(24), Duration.ofHours(24), true, cooldownMetadata);
+            Duration.ofHours(24), Duration.ofHours(24), true, cooldownMetadata, false);
+    }
+
+    /**
+     * New Maven proxy slice with cache, metadata cooldown filter, AND
+     * PGP signature verification (WS4-maven.1/.2).
+     * @param clients HTTP clients
+     * @param remote Remote URI
+     * @param auth Authenticator
+     * @param cache Repository cache
+     * @param events Artifact events queue
+     * @param rname Repository name
+     * @param rtype Repository type
+     * @param cooldown Cooldown service
+     * @param storage Storage for persisting checksums
+     * @param cooldownMetadata Cooldown metadata filter service, or null to
+     *                         serve upstream {@code maven-metadata.xml}
+     *                         unfiltered (legacy behaviour)
+     * @param verifyPgp Whether to verify {@code .asc} signatures against the
+     *                  admin-managed keyring before committing a fetched
+     *                  primary to cache
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public MavenProxySlice(
+        final ClientSlices clients,
+        final URI remote,
+        final Authenticator auth,
+        final Cache cache,
+        final Optional<Queue<ProxyArtifactEvent>> events,
+        final String rname,
+        final String rtype,
+        final com.auto1.pantera.cooldown.api.CooldownService cooldown,
+        final Optional<Storage> storage,
+        final com.auto1.pantera.cooldown.metadata.CooldownMetadataService cooldownMetadata,
+        final boolean verifyPgp
+    ) {
+        this(clients, remote, auth, cache, events, rname, rtype, cooldown, storage,
+            Duration.ofHours(24), Duration.ofHours(24), true, cooldownMetadata, verifyPgp);
     }
 
     /**
@@ -143,6 +180,10 @@ public final class MavenProxySlice extends Slice.Wrap {
      * @param negativeCacheEnabled Whether negative caching is enabled
      * @param cooldownMetadata Cooldown metadata filter service, or null for
      *                         unfiltered {@code maven-metadata.xml} responses
+     * @param verifyPgp Whether to verify {@code .asc} signatures against the
+     *                  admin-managed keyring before committing a fetched
+     *                  primary to cache (WS4-maven.1/.2)
+     * @checkstyle ParameterNumberCheck (5 lines)
      */
     public MavenProxySlice(
         final ClientSlices clients,
@@ -157,10 +198,11 @@ public final class MavenProxySlice extends Slice.Wrap {
         final Duration metadataTtl,
         final Duration negativeCacheTtl, // NOPMD UnusedFormalParameter - public API; reserved for upcoming negative-cache wiring
         final boolean negativeCacheEnabled, // NOPMD UnusedFormalParameter - public API; reserved for upcoming negative-cache wiring
-        final com.auto1.pantera.cooldown.metadata.CooldownMetadataService cooldownMetadata
+        final com.auto1.pantera.cooldown.metadata.CooldownMetadataService cooldownMetadata,
+        final boolean verifyPgp
     ) {
         this(remote(clients, remote, auth), cache, events, rname, remote.toString(), rtype,
-            cooldown, storage, metadataTtl, cooldownMetadata);
+            cooldown, storage, metadataTtl, cooldownMetadata, verifyPgp);
     }
 
     /**
@@ -175,6 +217,8 @@ public final class MavenProxySlice extends Slice.Wrap {
      * @param storage Storage for persisting checksums
      * @param metadataTtl TTL for metadata cache
      * @param cooldownMetadata Cooldown metadata filter service (nullable)
+     * @param verifyPgp Whether to verify {@code .asc} signatures
+     * @checkstyle ParameterNumberCheck (5 lines)
      */
     private MavenProxySlice(
         final Slice remote,
@@ -186,19 +230,21 @@ public final class MavenProxySlice extends Slice.Wrap {
         final com.auto1.pantera.cooldown.api.CooldownService cooldown,
         final Optional<Storage> storage,
         final Duration metadataTtl,
-        final com.auto1.pantera.cooldown.metadata.CooldownMetadataService cooldownMetadata
+        final com.auto1.pantera.cooldown.metadata.CooldownMetadataService cooldownMetadata,
+        final boolean verifyPgp
     ) {
         super(
             buildRoute(remote, cache, events, rname, upstreamUrl, rtype,
                 cooldown,
                 new RegistryBackedInspector(rtype, PublishDateRegistries.instance()),
                 storage, metadataTtl,
-                cooldownMetadata)
+                cooldownMetadata, verifyPgp)
         );
     }
 
     /**
      * Build the routing slice with ChecksumProxySlice wrapping CachedProxySlice.
+     * @checkstyle ParameterNumberCheck (5 lines)
      */
     private static Slice buildRoute(
         final Slice remote,
@@ -211,7 +257,8 @@ public final class MavenProxySlice extends Slice.Wrap {
         final CooldownInspector inspector,
         final Optional<Storage> storage,
         final Duration metadataTtl,
-        final com.auto1.pantera.cooldown.metadata.CooldownMetadataService cooldownMetadata
+        final com.auto1.pantera.cooldown.metadata.CooldownMetadataService cooldownMetadata,
+        final boolean verifyPgp
     ) {
         // Build ProxyCacheConfig with cooldown enabled so BaseCachedProxySlice
         // delegates to the cooldown service for freshness enforcement.
@@ -254,7 +301,7 @@ public final class MavenProxySlice extends Slice.Wrap {
                     new CachedProxySlice(
                         remote, cache, events, rname, upstreamUrl, rtype,
                         cooldown, inspector, storage, config, metadataCache,
-                        cooldownMetadata
+                        cooldownMetadata, verifyPgp
                     )
                 )
             ),

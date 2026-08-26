@@ -15,9 +15,7 @@ import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.scheduling.ArtifactEvent;
-import com.auto1.pantera.scheduling.JobDataRegistry;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
-import com.auto1.pantera.scheduling.QuartzJob;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -27,15 +25,22 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
-import org.quartz.JobExecutionContext;
 
 /**
  * Processes artifacts uploaded by Go proxy and adds info to artifacts metadata events queue.
  * Go modules use the format: module/path/@v/version.{info|mod|zip}
- * 
+ * <p>
+ * Runs as a per-node periodic {@link Runnable} tick (see
+ * {@code MetadataEventQueues}/{@code LocalEventDrainScheduler}) — never
+ * through the cluster-shared Quartz job store. A repository's proxy-events
+ * queue is only ever populated and drained on the node that owns it, so
+ * scheduling this through clustered Quartz would let another node's
+ * scheduler thread acquire the trigger and find nothing to process (WS2.2b
+ * fix; same class of bug as the WS2.2 artifact-events-drain fix).
+ *
  * @since 1.0
  */
-public final class GoProxyPackageProcessor extends QuartzJob {
+public final class GoProxyPackageProcessor implements Runnable {
 
     /**
      * Repository type.
@@ -66,8 +71,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
     private Storage asto;
 
     @Override
-    public void execute(final JobExecutionContext context) {
-        this.resolveFromRegistry(context);
+    public void run() {
         if (this.asto == null || this.packages == null || this.events == null) {
             EcsLogger.error("com.auto1.pantera.goproxy")
                 .message("Go proxy processor not initialized properly")
@@ -76,7 +80,6 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                 .eventOutcome("failure")
                 .field("log.source", "application")
                 .log();
-            super.stopJob(context);
         } else {
             EcsLogger.debug("com.auto1.pantera.goproxy")
                 .message("Go proxy processor running (queue size: " + this.packages.size() + ")")
@@ -206,6 +209,12 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                     final String owner = event.ownerLogin();
                     final long created = System.currentTimeMillis();
                     final Long release = event.releaseMillis().orElse(null);
+                    // WS4-go.6: decode Go's `!`-escaping (uppercase encoded as
+                    // `!` + lowercase, e.g. "!burnt!sushi" -> "BurntSushi")
+                    // before this reaches the DB/index/audit trail. The
+                    // storage key (zipKey, above) stays escaped — that is
+                    // what the client requested and what serving must match.
+                    final String decodedModule = unescapeModulePath(coords.module());
 
                     this.events.add(
                         new ArtifactEvent(
@@ -214,7 +223,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                             owner == null || owner.isBlank()
                                 ? ArtifactEvent.DEF_OWNER
                                 : owner,
-                            coords.module(),
+                            decodedModule,
                             coords.version(),
                             size.get(),
                             created,
@@ -228,7 +237,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                         .eventCategory("web")
                         .eventAction("proxy_processor")
                         .eventOutcome("success")
-                        .field("package.name", coords.module())
+                        .field("package.name", decodedModule)
                         .field("package.version", coords.version())
                         .field("repository.name", event.repoName())
                         .field("package.size", size.get())
@@ -253,10 +262,38 @@ public final class GoProxyPackageProcessor extends QuartzJob {
 
 
     /**
+     * Decode Go's module-path escaping (WS4-go.6): an uppercase letter is
+     * encoded upstream as {@code !} followed by its lowercase form, e.g.
+     * {@code github.com/!burnt!sushi/toml} for {@code
+     * github.com/BurntSushi/toml}. Only the DB/index/audit trail should
+     * see the human-readable form — the storage key must stay escaped
+     * because that is what {@code go get} actually requests and expects
+     * to be served back.
+     *
+     * @param escaped Module path as it appears on the wire / storage key
+     * @return Decoded module path
+     */
+    private static String unescapeModulePath(final String escaped) {
+        final StringBuilder decoded = new StringBuilder(escaped.length());
+        int idx = 0;
+        while (idx < escaped.length()) {
+            final char current = escaped.charAt(idx);
+            if (current == '!' && idx + 1 < escaped.length()) {
+                decoded.append(Character.toUpperCase(escaped.charAt(idx + 1)));
+                idx += 2;
+            } else {
+                decoded.append(current);
+                idx += 1;
+            }
+        }
+        return decoded.toString();
+    }
+
+    /**
      * Parse module coordinates from Go module event key.
      * Expected format: module/path/@v/version (without 'v' prefix)
      * Example: github.com/google/uuid/@v/1.3.0
-     * 
+     *
      * @param key Artifact key
      * @return Module coordinates or null if parsing fails
      */
@@ -296,51 +333,6 @@ public final class GoProxyPackageProcessor extends QuartzJob {
      */
     public void setStorage(final Storage storage) {
         this.asto = storage;
-    }
-
-    /**
-     * Set registry key for events queue (JDBC mode).
-     * @param key Registry key
-     */
-    public void setEvents_key(final String key) {
-        this.events = JobDataRegistry.lookup(key);
-    }
-
-    /**
-     * Set registry key for packages queue (JDBC mode).
-     * @param key Registry key
-     */
-    public void setPackages_key(final String key) {
-        this.packages = JobDataRegistry.lookup(key);
-    }
-
-    /**
-     * Set registry key for storage (JDBC mode).
-     * @param key Registry key
-     */
-    public void setStorage_key(final String key) {
-        this.asto = JobDataRegistry.lookup(key);
-    }
-
-    /**
-     * Resolve fields from job data registry if registry keys are present
-     * in the context and the fields are not yet set (JDBC mode fallback).
-     * @param context Job execution context
-     */
-    private void resolveFromRegistry(final JobExecutionContext context) {
-        if (context == null) {
-            return;
-        }
-        final org.quartz.JobDataMap data = context.getMergedJobDataMap();
-        if (this.packages == null && data.containsKey("packages_key")) {
-            this.packages = JobDataRegistry.lookup(data.getString("packages_key"));
-        }
-        if (this.asto == null && data.containsKey("storage_key")) {
-            this.asto = JobDataRegistry.lookup(data.getString("storage_key"));
-        }
-        if (this.events == null && data.containsKey("events_key")) {
-            this.events = JobDataRegistry.lookup(data.getString("events_key"));
-        }
     }
 
     /**

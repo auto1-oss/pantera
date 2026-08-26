@@ -10,7 +10,9 @@
  */
 package com.auto1.pantera.rpm.http;
 
+import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blob.DownloadPolicy;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.auth.Authentication;
@@ -32,12 +34,26 @@ import com.auto1.pantera.security.policy.Policy;
 
 import java.util.Optional;
 import java.util.Queue;
+import java.util.function.Predicate;
 
 /**
  * Pantera {@link Slice} for RPM repository HTTP API.
  * @since 0.7
  */
 public final class RpmSlice extends Slice.Wrap {
+
+    /**
+     * WS1.7 redirect gate for the shared catch-all GET route: only binary
+     * packages ({@code .rpm}) and delta packages ({@code .drpm}) are
+     * redirect-eligible. Everything under {@code repodata/} ({@code
+     * repomd.xml}, {@code *-primary.xml.gz}, {@code *.sqlite.bz2}, ...) is
+     * metadata and MUST stream -- none of it ends in {@code .rpm}/{@code
+     * .drpm}, so this predicate never leaks an index into a 302.
+     */
+    private static final Predicate<Key> REDIRECTABLE = key -> {
+        final String path = key.string();
+        return path.endsWith(".rpm") || path.endsWith(".drpm");
+    };
 
     /**
      * Ctor.
@@ -80,7 +96,7 @@ public final class RpmSlice extends Slice.Wrap {
     }
 
     /**
-     * Ctor with synchronous artifact-index writer.
+     * Ctor with synchronous artifact-index writer -- stream-only downloads.
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     public RpmSlice(
@@ -92,9 +108,30 @@ public final class RpmSlice extends Slice.Wrap {
         final Optional<Queue<ArtifactEvent>> events,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
     ) {
+        this(storage, policy, basicAuth, tokenAuth, config, events, syncIndex,
+            DownloadPolicy.streamOnly());
+    }
+
+    /**
+     * Ctor with an explicit WS1.7 download policy: {@code .rpm}/{@code .drpm}
+     * package GETs become redirect-eligible under a non-{@link
+     * DownloadPolicy#streamOnly()} policy, while {@code repodata/} metadata
+     * keeps streaming (see {@link #REDIRECTABLE}).
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public RpmSlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final RepoConfig config,
+        final Optional<Queue<ArtifactEvent>> events,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final DownloadPolicy downloadPolicy
+    ) {
         super(
             RpmSlice.createSliceRoute(
-                storage, policy, basicAuth, tokenAuth, config, events, syncIndex
+                storage, policy, basicAuth, tokenAuth, config, events, syncIndex, downloadPolicy
             )
         );
     }
@@ -107,7 +144,10 @@ public final class RpmSlice extends Slice.Wrap {
      * @param tokenAuth Token authentication
      * @param config Repository configuration
      * @param events Artifact events queue
+     * @param syncIndex Synchronous artifact-index writer
+     * @param downloadPolicy WS1.7 download policy for the catch-all GET route
      * @return Slice route
+     * @checkstyle ParameterNumberCheck (5 lines)
      */
     private static SliceRoute createSliceRoute(
         final Storage storage,
@@ -116,13 +156,14 @@ public final class RpmSlice extends Slice.Wrap {
         final TokenAuthentication tokenAuth,
         final RepoConfig config,
         final Optional<Queue<ArtifactEvent>> events,
-        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final DownloadPolicy downloadPolicy
     ) {
         return new SliceRoute(
             new RtRulePath(
                 MethodRule.GET,
                 RpmSlice.createAuthSlice(
-                    new StorageArtifactSlice(storage),
+                    new StorageArtifactSlice(storage, downloadPolicy, RpmSlice.REDIRECTABLE),
                     basicAuth,
                     tokenAuth,
                     new OperationControl(

@@ -11,6 +11,10 @@
 package com.auto1.pantera.http.cooldown;
 
 import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.cache.Cache;
+import com.auto1.pantera.asto.cache.FromStorageCache;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.cooldown.api.CooldownBlock;
 import com.auto1.pantera.cooldown.api.CooldownDependency;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
@@ -73,11 +77,24 @@ final class GoListHandlerTest {
         this.upstream = new ScriptedSlice();
         this.cooldown = new ScriptedCooldown();
         this.inspector = new NullInspector();
+        final GoMetadataBaseLoader baseLoader = newBaseLoader(this.upstream);
         this.handler = new GoListHandler(
-            this.upstream, this.cooldown, this.inspector, "go-proxy", "go-test"
+            baseLoader, this.cooldown, this.inspector, "go-proxy", "go-test"
         );
         this.latestHandler = new GoLatestHandler(
-            this.upstream, this.cooldown, this.inspector, "go-proxy", "go-test"
+            baseLoader, this.cooldown, this.inspector, "go-proxy", "go-test"
+        );
+    }
+
+    /**
+     * New loader over a fresh {@link InMemoryStorage}-backed cache, so
+     * each test starts with a cold, empty base-document cache.
+     */
+    private static GoMetadataBaseLoader newBaseLoader(final Slice upstream) {
+        final Storage storage = new InMemoryStorage();
+        final Cache cache = new FromStorageCache(storage);
+        return new GoMetadataBaseLoader(
+            upstream, cache, Optional.of(storage), "go-test"
         );
     }
 
@@ -269,6 +286,94 @@ final class GoListHandlerTest {
         assertThat(node.get("Version").asText(), equalTo("v1.2.0"));
     }
 
+    @Test
+    void cooldownAppliedAfterWarmupFiltersWithoutExtraUpstreamCall() throws Exception {
+        // WS4-go.2: the base document is cached unfiltered; cooldown is
+        // re-evaluated on every request against the (cached) base — a
+        // block applied AFTER the base is warm must still be honoured,
+        // with zero additional upstream calls.
+        final String path = "/github.com/foo/bar/@v/list";
+        this.upstream.put(path, "v1.0.0\nv1.1.0\nv1.2.0\n");
+
+        final Response warm = this.handler.handle(
+            new RequestLine(RqMethod.GET, path), Headers.EMPTY, "alice"
+        ).get();
+        assertThat(
+            new String(bodyToBytes(warm), StandardCharsets.UTF_8),
+            equalTo("v1.0.0\nv1.1.0\nv1.2.0\n")
+        );
+        assertThat(this.upstream.hits(path), equalTo(1));
+
+        this.cooldown.block("v1.2.0");
+        final Response afterBlock = this.handler.handle(
+            new RequestLine(RqMethod.GET, path), Headers.EMPTY, "alice"
+        ).get();
+        assertThat(
+            new String(bodyToBytes(afterBlock), StandardCharsets.UTF_8),
+            equalTo("v1.0.0\nv1.1.0\n")
+        );
+        assertThat(
+            "the base document must be served from cache, not re-fetched",
+            this.upstream.hits(path), equalTo(1)
+        );
+    }
+
+    @Test
+    void boundsCooldownEvaluationButServesEveryNonBlockedVersion() throws Exception {
+        // WS4-go.5: a 500-version list must cap cooldown-service calls at
+        // MAX_VERSIONS_TO_EVALUATE (50, mirroring GoLatestHandler) while
+        // still serving every non-blocked version — including versions
+        // far outside the cap, which are never evaluated and therefore
+        // never blocked.
+        final String path = "/github.com/foo/bar/@v/list";
+        final StringBuilder body = new StringBuilder();
+        for (int minor = 0; minor < 500; minor++) {
+            body.append("v0.").append(minor).append(".0\n");
+        }
+        this.upstream.put(path, body.toString());
+        final Response resp = this.handler.handle(
+            new RequestLine(RqMethod.GET, path), Headers.EMPTY, "alice"
+        ).get();
+        assertThat(resp.status().success(), new org.hamcrest.core.Is<>(new org.hamcrest.core.IsEqual<>(true)));
+        assertThat(
+            "cooldown evaluation must be bounded at the shared cap",
+            this.cooldown.evaluateCalls(), new org.hamcrest.core.IsEqual<>(50)
+        );
+        final String out = new String(bodyToBytes(resp), StandardCharsets.UTF_8);
+        final Set<String> served = new HashSet<>(List.of(out.split("\n")));
+        for (int minor = 0; minor < 500; minor++) {
+            assertThat(
+                "every non-blocked version must still be served, capped or not",
+                served,
+                new org.hamcrest.core.IsIterableContaining<>(
+                    new org.hamcrest.core.IsEqual<>("v0." + minor + ".0")
+                )
+            );
+        }
+    }
+
+    @Test
+    void servesWarmCachedListWhenUpstreamGoesDown() throws Exception {
+        // WS4-go.2 tentpole: a cached @v/list must survive an upstream
+        // outage instead of hard-failing "go list -m -versions".
+        final String path = "/github.com/foo/bar/@v/list";
+        this.upstream.put(path, "v1.0.0\nv1.1.0\n");
+
+        this.handler.handle(
+            new RequestLine(RqMethod.GET, path), Headers.EMPTY, "alice"
+        ).get();
+
+        this.upstream.fail(true);
+        final Response resp = this.handler.handle(
+            new RequestLine(RqMethod.GET, path), Headers.EMPTY, "alice"
+        ).get();
+        assertThat(resp.status().success(), is(true));
+        assertThat(
+            new String(bodyToBytes(resp), StandardCharsets.UTF_8),
+            equalTo("v1.0.0\nv1.1.0\n")
+        );
+    }
+
     // ===== Helpers =====
 
     private static byte[] bodyToBytes(final Response resp) throws Exception {
@@ -287,10 +392,20 @@ final class GoListHandlerTest {
     private static final class ScriptedSlice implements Slice {
         private final Map<String, byte[]> script = new HashMap<>();
         private final Map<String, AtomicInteger> hits = new HashMap<>();
+        private volatile boolean failing;
 
         void put(final String path, final String body) {
             this.script.put(path, body.getBytes(StandardCharsets.UTF_8));
             this.hits.put(path, new AtomicInteger(0));
+        }
+
+        void fail(final boolean value) {
+            this.failing = value;
+        }
+
+        int hits(final String path) {
+            final AtomicInteger counter = this.hits.get(path);
+            return counter == null ? 0 : counter.get();
         }
 
         @Override
@@ -298,11 +413,16 @@ final class GoListHandlerTest {
             final RequestLine line, final Headers headers, final Content body
         ) {
             final String path = line.uri().getPath();
-            final byte[] content = this.script.get(path);
             final AtomicInteger counter = this.hits.computeIfAbsent(
                 path, k -> new AtomicInteger(0)
             );
             counter.incrementAndGet();
+            if (this.failing) {
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.badGateway().build()
+                );
+            }
+            final byte[] content = this.script.get(path);
             if (content == null) {
                 return CompletableFuture.completedFuture(
                     ResponseBuilder.notFound().build()
@@ -317,6 +437,7 @@ final class GoListHandlerTest {
     /** Scripted {@link CooldownService}: flags listed versions as blocked. */
     private static final class ScriptedCooldown implements CooldownService {
         private final Set<String> blocked = new HashSet<>();
+        private final AtomicInteger evaluateCalls = new AtomicInteger(0);
 
         void block(final String... versions) {
             for (final String v : versions) {
@@ -324,10 +445,20 @@ final class GoListHandlerTest {
             }
         }
 
+        /**
+         * @return number of times {@link #evaluate} has been invoked —
+         *         proves the WS4-go.5 cooldown-fan-out bound by
+         *         invocation count, never wall-clock.
+         */
+        int evaluateCalls() {
+            return this.evaluateCalls.get();
+        }
+
         @Override
         public CompletableFuture<CooldownResult> evaluate(
             final CooldownRequest request, final CooldownInspector inspector
         ) {
+            this.evaluateCalls.incrementAndGet();
             if (!this.blocked.contains(request.version())) {
                 return CompletableFuture.completedFuture(CooldownResult.allowed());
             }

@@ -127,9 +127,9 @@ Maven, Gradle (Maven-layout), Docker, NPM, PyPI, Composer (PHP), Helm, Go, Gem (
 | `pantera-main` | Application entry point (`VertxMain`), REST API (`AsyncApiVerticle`), database layer (`ArtifactDbFactory`, `DbConsumer`, `DbManager`), Quartz scheduling, repository wiring (`RepositorySlices`), Flyway migrations, health checks, metrics verticle. |
 | `pantera-core` | Core types: `Slice` interface, `Storage` interface, `Key`, `Content`, `Headers`, `Response`, cache infrastructure (`BaseCachedProxySlice`, `NegativeCache`, `RequestDeduplicator`), `StorageExecutors`, `DispatchedStorage`, security/auth framework. |
 | `pantera-storage` | Parent module for storage implementations. Contains three sub-modules. |
-| `pantera-storage-core` | `Storage` interface definition, `Key`, `Content`, `Meta`, `InMemoryStorage`, `BlockingStorage`, storage test verification harness. |
+| `pantera-storage-core` | `Storage` interface definition, `Key`, `Content`, `Meta`, `InMemoryStorage`, `BlockingStorage`, storage test verification harness, backend-agnostic `BlobStore`/`Presigner` (2.3.0). |
 | `pantera-storage-vertx-file` | Filesystem storage using Vert.x NIO. |
-| `pantera-storage-s3` | AWS S3 storage with `DiskCacheStorage` (LRU/LFU on-disk read-through cache with watermark eviction). |
+| `pantera-storage-s3` | `S3Storage` -- AWS S3 and S3-API-compatible storage (also the reference `BlobStore`/`Presigner` implementation, 2.3.0), with `DiskCacheStorage` (LRU/LFU on-disk read-through cache with watermark eviction). |
 | `vertx-server` | `VertxSliceServer` -- adapts a `Slice` into a Vert.x HTTP server handler. |
 | `http-client` | Jetty-based HTTP client (`JettyClientSlices`) used by proxy adapters to fetch from upstream registries. |
 | `pantera-backfill` | Standalone CLI tool (`BackfillCli`) for bulk re-indexing the `artifacts` database table from storage. |
@@ -225,6 +225,57 @@ Key implementations:
 - `S3Storage` -- AWS SDK v2 async S3 client.
 - `InMemoryStorage` -- ConcurrentHashMap-backed, used in tests.
 - `SubStorage` -- Scopes a storage to a key prefix.
+
+**Size-unknown upload streaming (2.3.0, WS3.1).** `S3Storage.save()` needs a
+known content length to decide single-`PutObject` vs multipart before it can
+start uploading. `EstimatedContentCompliment`
+(`pantera-storage-s3/.../asto/s3/EstimatedContentCompliment.java`) makes that
+decision without ever spooling the whole body: when multipart is enabled it
+buffers only up to the multipart threshold (`UnknownSizeProbe`) and, if
+crossed, streams the untouched remainder straight through to the multipart
+uploader with no disk I/O at all; when multipart is disabled (`putObject` is
+the only option, so an exact size is mandatory) it buffers up to a small
+in-memory cap and spills only the excess to a temp file (`KnownSizeProbe`),
+never the whole artifact. Both paths replace the previous unconditional
+whole-body-to-temp-file spool.
+
+#### 4.2.1 BlobStore / Presigner (2.3.0, WS1.0)
+
+`pantera-storage-core`'s `com.auto1.pantera.asto.blob` package adds a
+backend-agnostic pair of interfaces alongside `Storage`, purely additive --
+`S3Storage` implements both without changing its `Storage` behavior:
+
+```java
+public interface BlobStore {
+    CompletableFuture<Boolean> exists(Key key);
+    CompletableFuture<? extends Meta> head(Key key);
+    CompletableFuture<Content> get(Key key);
+    CompletableFuture<Void> put(Key key, Content content);
+    CompletableFuture<Void> delete(Key key);
+    CompletableFuture<Collection<Key>> list(Key prefix);
+    CompletableFuture<ListResult> list(Key prefix, String delimiter); // default, delegates to list(Key)
+}
+
+public interface Presigner {
+    URI presignGet(Key key, long ttlSeconds); // local signing only, never a network round trip
+}
+```
+
+`BlobStore` is deliberately narrower than `Storage` -- no `move`, no `exclusively`
+locking, both Pantera-level concerns rather than object-store primitives. The
+point is that the local metadata index, disk cache, write-back queue, eviction,
+and presigned-redirect machinery planned for WS1.1+ can be built against
+`BlobStore`/`Presigner` alone and stay backend-agnostic; native GCS/Azure
+implementations (WS1.8) implement the same two interfaces without touching any
+consumer.
+
+`pantera-storage-s3`'s `S3StorageFactory` builds an AWS SDK `S3Presigner`
+alongside the `S3AsyncClient`, sharing the same resolved credentials/region so
+both agree; `S3StorageFactory` is also the base class for
+`S3ExpressStorageFactory`, which overrides only two hooks --
+`defaultPathStyle()` (`false`, S3 Express requires virtual-hosted-style) and
+`defaultStorageClass()` (`EXPRESS_ONEZONE`) -- both still overridable per-repo
+via the ordinary `path-style` / `storage-class` config keys.
 
 ### 4.3 DispatchedStorage
 
@@ -400,13 +451,13 @@ The `type` claim is mandatory. Tokens missing the `type` claim are rejected rega
 
 **API and refresh tokens** are revoked by setting `revoked = TRUE` in `user_tokens`. The `jti` check additionally verifies that the `sub` claim matches the token owner, preventing JTI-theft attacks.
 
-**Access tokens** (not DB-stored) are invalidated via a blocklist:
+**Access tokens** (not DB-stored) are invalidated via a `RevocationBlocklist` — DB-durable, Valkey-accelerated (`ValkeyRevocationBlocklist`), or DB-polling-only (`DbRevocationBlocklist`, single-node / Valkey-less deployments):
 
-1. `POST /api/v1/admin/revoke-user/:username` writes a revocation record and publishes a `pantera:revoke:user:{username}` message on the Valkey pub/sub channel.
-3. On each access token validation, the cache is consulted. Tokens issued before the revocation timestamp are rejected.
-4. Without Valkey, nodes poll the `user_tokens` revocation table every 30 seconds.
+1. `POST /api/v1/admin/revoke-user/:username` (and per-JTI revocation on refresh/logout) writes a row to the `revocation_blocklist` table — the durable source of truth on every path — then, when Valkey is configured, publishes an invalidation over `CacheInvalidationPubSub` (cache type `revocation`) carrying the token's real remaining TTL.
+2. A node hydrates its full active-revocation set from the DB on boot (`pollSince(EPOCH)`), so a restart never re-honors an already-revoked, unexpired token.
+3. On each access token validation, the local in-memory cache is consulted; a throttled 5-second DB reconciliation poll (on every `RevocationBlocklist` implementation, with or without Valkey) picks up anything a missed pub/sub message would otherwise have lost.
 
-The in-memory revocation cache has a TTL equal to the access token lifetime (default: 1 hour). After that period no access token from a revoked user can still be valid.
+A Valkey outage degrades revocation checks to DB-poll speed — never to fail-open.
 
 ### 6.4 Adding a New Protected Endpoint
 
@@ -475,6 +526,10 @@ Abstract base class implementing the shared proxy caching pipeline via template 
 9. **Record metrics** -- per-repo phase histograms, outcome counters.
 
 Adapters override hooks: `isCacheable()`, `buildCooldownRequest()`, `digestAlgorithms()`, `buildArtifactEvent()`, `postProcess()`, `generateSidecars()`.
+
+**Streaming cache-write commit (2.3.0, WS3.1).** `ProxyCacheWriter` (`pantera-core/.../http/cache/ProxyCacheWriter.java`) downloads the upstream body to a local temp file while digesting it in one pass (unchanged). The *commit* step -- handing the already-downloaded, already-verified bytes to `Storage#save` -- streams the temp file back out in bounded 64KB chunks via a lazily-opened `FileChannel` (`ProxyCacheWriter.streamingFileContent`, shared by `commitStreamed` -- the Track 4 stream-through path every adapter's `streamThroughAndCommit` call reaches -- the buffered Track 3 `commit()` path, and the `writeAndVerify`/`VerifiedArtifact.commitAsync()` path via `commitVerified`). No commit method ever calls `Files.readAllBytes` on the artifact; heap use during a save is bounded by the chunk size, not the artifact size.
+
+The `writeAndVerify`/`VerifiedArtifact` API (Track 3's predecessor) is the one commit whose temp file is shared by two independent readers at once -- the immediate-serve `Content` (`contentFromTempFile()`) and the streaming `commitVerified` -- so it guards that file with a reference count (`ProxyCacheWriter.RefCountedTempFile`). Each reader retains before it starts and releases on its stream's terminal callback; the file is physically deleted exactly once, on the last release, so neither reader can pull it out from under the other and there is no use-after-delete race and no whole-artifact heap buffer. The wrapper starts with a base reference so the file survives the gap between two sequential readers (a commit that finishes before the client body is subscribed); the serve path drops that base as it takes ownership of the lifecycle, while the commit path never touches it (a commit-only caller therefore leaves the temp file for a later serve, matching the pre-2.3.0 behaviour). This API is the ready-to-wire streaming commit path; it still has no production caller today (only exercised by `ProxyCacheWriterTest`/`ProxyCacheWriterHookTest`/`ProxyCacheWriterRefCountCommitTest`) -- the live adapters reach the equivalent streaming commit through `streamThroughAndCommit`.
 
 ### 7.2 RequestDeduplicator
 

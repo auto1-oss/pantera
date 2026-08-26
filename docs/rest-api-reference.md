@@ -1510,6 +1510,63 @@ curl -X DELETE http://localhost:8086/api/v1/repositories/maven-local/packages \
 
 ---
 
+### POST /api/v1/pypi/:repo/:package/:version/yank
+
+Mark a hosted PyPI distribution version as yanked (PEP 592). Iterates every
+distribution file (`.whl`, `.tar.gz`, `.zip`, `.egg`) under
+`{package}/{version}/` in the target repository and flips the sidecar
+`yanked` flag.
+
+**Authentication:** JWT Bearer token required.
+**Authorization:** the caller must hold **write** authority on `:repo`
+(`AdapterBasicPermission(repo, write)`, the same per-repo permission
+`PySlice` enforces on upload) — checked per request because `:repo` varies.
+Denied → `403 FORBIDDEN` and the repository's sidecar is left untouched.
+Unauthenticated → `401 UNAUTHORIZED`.
+
+**Request Body (optional):**
+
+```json
+{
+  "reason": "Broken build, use 1.0.1 instead"
+}
+```
+
+**Response (204):** No content on success.
+**Response (403):** Caller lacks write authority on `:repo`; nothing is mutated.
+
+**curl example:**
+
+```bash
+curl -X POST http://localhost:8086/api/v1/pypi/pypi-local/my-package/1.0.0/yank \
+  -H "Authorization: Bearer eyJhbGciOi..." \
+  -H "Content-Type: application/json" \
+  -d '{"reason": "Broken build"}'
+```
+
+---
+
+### POST /api/v1/pypi/:repo/:package/:version/unyank
+
+Reverse a yank (PEP 592) on a hosted PyPI distribution version. No request body.
+
+**Authentication:** JWT Bearer token required.
+**Authorization:** same per-repo write check as
+[yank](#post-apiv1pypirepopackageversionyank) above — `403 FORBIDDEN` on
+denial without mutating the sidecar; `401 UNAUTHORIZED` if unauthenticated.
+
+**Response (204):** No content on success.
+**Response (403):** Caller lacks write authority on `:repo`; nothing is mutated.
+
+**curl example:**
+
+```bash
+curl -X POST http://localhost:8086/api/v1/pypi/pypi-local/my-package/1.0.0/unyank \
+  -H "Authorization: Bearer eyJhbGciOi..."
+```
+
+---
+
 ## 9. Search
 
 ### GET /api/v1/search
@@ -2358,7 +2415,7 @@ curl -X PUT http://localhost:8086/api/v1/admin/client-base-url-settings \
 
 ### POST /api/v1/admin/revoke-user/:username
 
-Immediately revoke all tokens (access, refresh, and API) for the specified user. The revocation is propagated to all cluster nodes via Valkey pub/sub (sub-second propagation when Valkey is available; DB polling fallback otherwise).
+Immediately revoke all tokens (access, refresh, and API) for the specified user. The revocation is written to the `revocation_blocklist` table (the durable source of truth on every node) and, when Valkey is available, propagated to all cluster nodes via Valkey pub/sub for sub-second fan-out; every node — with or without Valkey — also reconciles against the DB on a throttled 5-second poll, and a node that boots after the revocation hydrates it immediately, so a restart or a missed pub/sub message never re-honors a revoked token.
 
 > Note: Access tokens (which are not DB-stored) are placed on an in-memory blocklist and will be rejected until they expire naturally. This makes the effective revocation window equal to the access token TTL (default: 1 hour).
 
@@ -2395,6 +2452,103 @@ Immediately revoke all tokens (access, refresh, and API) for the specified user.
 
 ```bash
 curl -X POST http://localhost:8086/api/v1/admin/revoke-user/jdoe \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+---
+
+### GET /api/v1/admin/pgp-keys
+
+List trusted PGP public keys registered for Maven/Gradle `.asc` signature verification (WS4-maven.3). Never returns the armored key material — identity/provenance fields only.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_role_permissions:read`
+
+**Response (200):**
+
+```json
+{
+  "keys": [
+    {
+      "key_id_hex": "DEADBEEF12345678",
+      "fingerprint": "0123456789ABCDEF0123456789ABCDEF01234567",
+      "uploaded_by": "admin",
+      "uploaded_at": "2026-07-25T10:00:00Z",
+      "description": "Release signing key"
+    }
+  ]
+}
+```
+
+**curl example:**
+
+```bash
+curl http://localhost:8086/api/v1/admin/pgp-keys \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+---
+
+### POST /api/v1/admin/pgp-keys
+
+Upload an ASCII-armored PGP public key block. The block may contain a master key plus sub-keys — one row is registered per key found, since a `.asc` signature may be produced by any of them. Repos with `verifyPgp: true` (see `configuration-reference.md`) consult this keyring on every proxy fetch and hosted store; the in-process cache is invalidated immediately so the very next verification sees the new key.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_role_permissions:update`
+
+**Request Body:**
+
+```json
+{
+  "public_key_armored": "-----BEGIN PGP PUBLIC KEY BLOCK-----\n...\n-----END PGP PUBLIC KEY BLOCK-----",
+  "description": "Release signing key"
+}
+```
+
+**Response (201):**
+
+```json
+{
+  "keys": [
+    {"key_id_hex": "DEADBEEF12345678", "fingerprint": "0123456789ABCDEF0123456789ABCDEF01234567"}
+  ]
+}
+```
+
+**Response (400):** malformed or empty `public_key_armored`.
+
+**curl example:**
+
+```bash
+curl -X POST http://localhost:8086/api/v1/admin/pgp-keys \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"public_key_armored\": \"$(cat signer-public-key.asc | sed 's/"/\\"/g')\"}"
+```
+
+---
+
+### DELETE /api/v1/admin/pgp-keys/:keyId
+
+Remove a trusted key by its 16-char hex long key id. The in-process cache is invalidated immediately, so the next verification of that signer returns `UNTRUSTED_KEY`.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_role_permissions:update`
+
+**Path Parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `keyId` | 16-char uppercase hex long key id (the `key_id_hex` from the list response) |
+
+**Response (204):** no body.
+
+**Response (404):** no key with that id.
+
+**curl example:**
+
+```bash
+curl -X DELETE http://localhost:8086/api/v1/admin/pgp-keys/DEADBEEF12345678 \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 

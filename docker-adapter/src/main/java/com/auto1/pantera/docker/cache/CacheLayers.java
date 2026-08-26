@@ -83,6 +83,13 @@ public final class CacheLayers implements Layers {
     }
 
     @Override
+    public CompletableFuture<Void> delete(final Digest digest) {
+        // Deletes target the authoritative (local) store only — see
+        // WS4-docker.5 §3. Maps to 405 via ErrorHandlingSlice.
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public CompletableFuture<Optional<Blob>> get(final Digest digest) {
         return this.cache.get(digest).handle(
             (cached, throwable) -> {
@@ -99,7 +106,7 @@ public final class CacheLayers implements Layers {
                                 if (blob.isPresent()) {
                                     this.recordProxyMetric("success", duration);
                                     return Optional.<Blob>of(
-                                        new CachingBlob(blob.get(), this.cache)
+                                        new CachingBlob(blob.get(), this.cache, this.repoName)
                                     );
                                 } else {
                                     this.recordProxyMetric("not_found", duration);
@@ -122,7 +129,7 @@ public final class CacheLayers implements Layers {
                             if (blob.isPresent()) {
                                 this.recordProxyMetric("success", duration);
                                 return Optional.<Blob>of(
-                                    new CachingBlob(blob.get(), this.cache)
+                                    new CachingBlob(blob.get(), this.cache, this.repoName)
                                 );
                             } else {
                                 this.recordProxyMetric("not_found", duration);

@@ -9,11 +9,11 @@
  * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
  */
 /**
- * Goproxy files, tests.
+ * Tests for {@link com.auto1.pantera.goproxy.GoProxyPackageProcessor}.
+ * The legacy {@code GoproxyTest} / {@code GoproxyITCase} tests were
+ * removed alongside the dead {@code Goproxy} class (WS4-go.7).
  *
- * @author Yegor Bugayenko (yegor256@gmail.com)
- * @version $Id$
- * @since 0.1
+ * @since 2.3.0
  */
 package com.auto1.pantera.goproxy;
 

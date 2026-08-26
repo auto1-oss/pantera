@@ -246,7 +246,7 @@ public final class VertxMain {
             writeDs = Optional.empty();
             quartz = new QuartzService();
         }
-        this.settings = new SettingsFromPath(this.config).find(quartz, sharedDs, writeDs);
+        this.settings = new SettingsFromPath(this.config).find(sharedDs, writeDs);
         // Apply logging configuration from YAML settings
         if (settings.logging().configured()) {
             settings.logging().apply();
@@ -302,22 +302,30 @@ public final class VertxMain {
         } else {
             enabledCheck = com.auto1.pantera.auth.UserEnabledCheck.ALWAYS_ENABLED;
         }
-        // Revocation blocklist — previously never wired: revocation
-        // endpoints persisted to the DB but in-flight access tokens kept
-        // validating until natural expiry. Valkey-backed when the cluster
-        // infra is present (entries in Valkey + cross-node broadcast via
-        // CacheInvalidationPubSub, channel type "revocation"); DB-polling
-        // fallback otherwise; disabled only in storage-less test boots.
+        // Revocation blocklist — DB-durable and Valkey-accelerated (WS2.1,
+        // 2.3.0). The DB row (via RevocationDao, the same table
+        // DbRevocationBlocklist uses) is always the source of truth;
+        // ValkeyRevocationBlocklist additionally hydrates the full
+        // active-revocation set from the DB on boot and broadcasts over
+        // CacheInvalidationPubSub (channel type "revocation", real
+        // remaining TTL embedded in the payload) for near-instant
+        // cross-node fan-out when the cluster infra is present. A Valkey
+        // outage degrades it to DB-poll speed — never fail-open — because
+        // every isRevoked* check still reconciles against the DB on a
+        // throttled interval. DB-polling-only fallback when Valkey/pub-sub
+        // isn't configured; disabled only in storage-less test boots.
         final com.auto1.pantera.auth.RevocationBlocklist revocationBlocklist;
         if (settings.valkeyConnection().isPresent()
-            && settings.cacheInvalidationPubSub().isPresent()) {
+            && settings.cacheInvalidationPubSub().isPresent()
+            && sharedDs.isPresent()) {
             revocationBlocklist = new com.auto1.pantera.auth.ValkeyRevocationBlocklist(
-                settings.valkeyConnection().get(),
                 settings.cacheInvalidationPubSub().get(),
+                new com.auto1.pantera.db.dao.RevocationDao(sharedDs.get()),
                 (int) java.time.Duration.ofHours(2).toSeconds()
             );
             EcsLogger.info("com.auto1.pantera")
-                .message("Valkey-backed token revocation blocklist active (cross-node broadcast)")
+                .message("Valkey-backed token revocation blocklist active "
+                    + "(DB-durable, cross-node broadcast)")
                 .eventCategory("configuration")
                 .eventAction("revocation_blocklist_init")
                 .eventOutcome("success")
@@ -336,7 +344,28 @@ public final class VertxMain {
                 .log();
         } else {
             revocationBlocklist = null;
+            if (settings.valkeyConnection().isPresent()) {
+                EcsLogger.warn("com.auto1.pantera")
+                    .message("Valkey is configured but no DataSource is present — "
+                        + "revocation blocklist disabled (DB durability requires a DataSource)")
+                    .eventCategory("configuration")
+                    .eventAction("revocation_blocklist_init")
+                    .eventOutcome("failure")
+                    .field("log.source", "application")
+                    .log();
+            }
         }
+        // Cross-node disk-cache invalidation (WS1.5): wire the storage
+        // invalidation bus over the same CacheInvalidationPubSub the cluster
+        // already uses (its own "storage" channel), BEFORE RepositorySlices
+        // constructs any CachedBlobStorage — S3StorageFactory reads the active
+        // bus at construction time. Absent Valkey/pub-sub this stays the NOOP
+        // bus and cross-node cache coherence falls back to freshness-ttl expiry.
+        settings.cacheInvalidationPubSub().ifPresent(pubsub ->
+            com.auto1.pantera.asto.blob.StorageInvalidationBusRegistry.install(
+                new com.auto1.pantera.cache.PubSubStorageInvalidationBus(pubsub)
+            )
+        );
         final com.auto1.pantera.auth.JwtTokens jwtTokens = new com.auto1.pantera.auth.JwtTokens(
             rsaKeys.privateKey(), rsaKeys.publicKey(), userTokenDao, null,
             revocationBlocklist, enabledCheck
@@ -413,15 +442,56 @@ public final class VertxMain {
                 .field("log.source", "application")
                 .log();
         }
-        // NOTE (2.2.5 backport): unlike CircuitBreakerSettingsLoader /
-        // UpstreamBreakerSettingsLoader, this setting has no cross-node
-        // pub/sub broadcast wiring here — that pattern (WS2.3) is a 2.3.0
-        // addition out of scope for this backport. A PUT to
-        // client-base-url-settings invalidates the writing node's cache
-        // immediately (see AdminAuthHandler#updateClientBaseUrlSettings);
-        // other nodes pick up the change on their own TTL-less cache miss
-        // path only after a restart, matching this backport's baseline
-        // behaviour for the breaker settings before WS2.3.
+        // WS4-maven.1: install the JDBC-backed PGP keyring store so any repo
+        // with `verifyPgp: true` (parsed by RepositorySlices below) consults
+        // admin-uploaded trusted keys. DB-less boots (tests, embedded) never
+        // install anything — KeyringStoreRegistry.active() then degrades to
+        // an always-empty store, which is the documented fail-closed
+        // behaviour for "verifyPgp enabled without any uploaded keys".
+        sharedDs.ifPresent(ds ->
+            com.auto1.pantera.maven.security.KeyringStoreRegistry.install(
+                new com.auto1.pantera.maven.security.JdbcKeyringStore(ds)
+            )
+        );
+        // WS2.3 (2.3.0): broadcast breaker/bulkhead settings-loader
+        // invalidation cross-node. Previously loader.invalidate() (called
+        // by AdminAuthHandler after a PUT) only ever updated the receiving
+        // node's AtomicReference cache — every peer kept serving stale
+        // breaker thresholds until its own restart. Subscribe here, once,
+        // for the lifetime of the process; AdminAuthHandler publishes on
+        // the same channel after every successful settings write.
+        settings.cacheInvalidationPubSub().ifPresent(pubSub -> {
+            pubSub.subscribe(
+                com.auto1.pantera.circuit.CircuitBreakerSettingsLoader.BROADCAST_CHANNEL,
+                key -> {
+                    final com.auto1.pantera.circuit.CircuitBreakerSettingsLoader loader =
+                        com.auto1.pantera.circuit.CircuitBreakerSettingsLoader.installed();
+                    if (loader != null) {
+                        loader.invalidate();
+                    }
+                }
+            );
+            pubSub.subscribe(
+                com.auto1.pantera.circuit.UpstreamBreakerSettingsLoader.BROADCAST_CHANNEL,
+                key -> {
+                    final com.auto1.pantera.circuit.UpstreamBreakerSettingsLoader loader =
+                        com.auto1.pantera.circuit.UpstreamBreakerSettingsLoader.installed();
+                    if (loader != null) {
+                        loader.invalidate();
+                    }
+                }
+            );
+            pubSub.subscribe(
+                com.auto1.pantera.http.headers.ClientBaseUrlSettingsLoader.BROADCAST_CHANNEL,
+                key -> {
+                    final com.auto1.pantera.http.headers.ClientBaseUrlSettingsLoader loader =
+                        com.auto1.pantera.http.headers.ClientBaseUrlSettingsLoader.installed();
+                    if (loader != null) {
+                        loader.invalidate();
+                    }
+                }
+            );
+        });
         // Install singleton PublishDateRegistry. Each adapter slice now resolves
         // canonical publish dates via RegistryBackedInspector(repoType, registry)
         // instead of HEAD-probing upstream — eliminates the per-cooldown-eval
@@ -1561,6 +1631,10 @@ public final class VertxMain {
                     "pantera.proxy.request.duration",
                     "pantera.upstream.request.duration",
                     "pantera.storage.operation.duration",
+                    // WS1.6 (spec sect 3.G): blob-store GET/HEAD/PUT/DELETE/LIST
+                    // calls stream full artifact bodies on GET/PUT, same
+                    // rationale as the other transfer timers above.
+                    "pantera.storage.blobstore.request.duration",
                     "vertx.http.server.response.time"
                 );
                 final double[] transferSlos = slosNanos(
@@ -1606,6 +1680,17 @@ public final class VertxMain {
 
             // Initialize storage metrics recorder
             com.auto1.pantera.metrics.StorageMetricsRecorder.initialize();
+
+            // WS1.6 (spec sect 3.G): install the BlobStore-tier op recorder and
+            // the CachedBlobStorage cache-tier gauge binder BEFORE startRepos()
+            // constructs any repository storage — mirrors the WS1.5
+            // StorageInvalidationBusRegistry.install() ordering requirement
+            // (this method runs at VertxMain construction, well before
+            // startRepos()). A DB-less/metrics-disabled boot never observes a
+            // behaviour change: every recording call above stays guarded by
+            // MicrometerMetrics.isInitialized().
+            com.auto1.pantera.metrics.BlobStoreMetricsRecorder.initialize();
+            com.auto1.pantera.metrics.CachedBlobStorageMetricsBinder.install();
 
             if (mctx.jvm()) {
                 new ClassLoaderMetrics().bindTo(registry);

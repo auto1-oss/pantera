@@ -12,6 +12,8 @@ package com.auto1.pantera.pypi.cooldown;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Remaining;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.cache.Cache;
 import com.auto1.pantera.audit.AuditContext;
 import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
@@ -88,9 +90,21 @@ public final class PypiJsonHandler {
     private static final String CONTENT_TYPE = "application/json";
 
     /**
-     * Upstream slice (shared with main PyPI proxy).
+     * Upstream slice (shared with main PyPI proxy). Used directly only
+     * when {@link #baseLoader} is absent (no cache/storage configured —
+     * preserves the pre-WS6.3 unconditional-fetch behaviour for callers
+     * that construct this handler without them, e.g. unit tests).
      */
     private final Slice upstream;
+
+    /**
+     * Cache-backed, TTL, single-flighted, serve-stale-on-outage loader
+     * for the JSON-API base document (WS6.3 — brings this resolution
+     * surface under the same contract as Maven metadata / Go
+     * {@code @v/list}). {@code null} when no cache/storage was supplied,
+     * in which case {@link #upstream} is hit directly on every request.
+     */
+    private final PypiJsonBaseLoader baseLoader;
 
     /**
      * Cooldown evaluation service.
@@ -123,7 +137,12 @@ public final class PypiJsonHandler {
     private final ObjectMapper mapper;
 
     /**
-     * Ctor.
+     * Ctor without a resolution-surface cache — the JSON-API document is
+     * fetched from {@code upstream} unconditionally on every request, with
+     * no TTL, single-flighting, or serve-stale-on-outage. Kept for callers
+     * (tests) that have no repository storage to back a cache with; the
+     * cache-backed constructor below is what production wiring
+     * ({@code ProxySlice}) uses.
      *
      * @param upstream Upstream PyPI proxy slice
      * @param cooldown Cooldown evaluation service
@@ -136,13 +155,76 @@ public final class PypiJsonHandler {
         final String repoType,
         final String repoName
     ) {
+        this(upstream, null, null, cooldown, repoType, repoName);
+    }
+
+    /**
+     * Ctor with a cache-backed resolution-surface loader (WS6.3): the
+     * JSON-API base document is TTL-cached, single-flighted, and served
+     * stale on an upstream outage rather than fetched unconditionally on
+     * every request — closing the "public-registry blip breaks resolution
+     * even for cached artifacts" gap for this surface.
+     *
+     * @param upstream Upstream PyPI JSON-API slice
+     * @param cache Storage-backed cache for the base document
+     * @param storage Backing storage (TTL + stale fallback)
+     * @param cooldown Cooldown evaluation service
+     * @param repoType Repository type
+     * @param repoName Repository name
+     */
+    public PypiJsonHandler(
+        final Slice upstream,
+        final Cache cache,
+        final Storage storage,
+        final CooldownService cooldown,
+        final String repoType,
+        final String repoName
+    ) {
         this.upstream = upstream;
+        this.baseLoader = cache == null || storage == null
+            ? null : new PypiJsonBaseLoader(upstream, cache, storage, repoName);
         this.cooldown = cooldown;
         this.repoType = repoType;
         this.repoName = repoName;
         this.detector = new PypiJsonMetadataRequestDetector();
         this.mapper = new ObjectMapper();
         this.filter = new PypiJsonMetadataFilter(this.mapper);
+    }
+
+    /**
+     * Fetch the JSON-API document at {@code line}'s path — through
+     * {@link #baseLoader} when configured (WS6.3: cached, single-flighted,
+     * serve-stale-on-outage), or directly from {@link #upstream} otherwise.
+     * Normalises both paths to a plain {@link Response} so callers
+     * (({@link #handle}, {@link #handleVersion})) don't need to know which
+     * path served it.
+     */
+    private CompletableFuture<Response> fetchUpstream(final RequestLine line) {
+        if (this.baseLoader == null) {
+            return this.upstream.response(line, Headers.EMPTY, Content.EMPTY);
+        }
+        return this.baseLoader.load(line.uri().getPath()).thenApply(outcome -> {
+            if (outcome.isAvailable()) {
+                return ResponseBuilder.ok().body(outcome.body()).build();
+            }
+            final ResponseBuilder unavailable = ResponseBuilder.from(outcome.status())
+                .body(outcome.errorBody());
+            if (outcome.circuitOpen()) {
+                // Preserve the circuit-open marker through this funnel — a
+                // group resolver wrapping this handler must treat a
+                // breaker fast-fail as "member skipped", never "member
+                // failed" (see UpstreamCircuitOpenException).
+                unavailable.header(
+                    com.auto1.pantera.http.UpstreamCircuitOpenException.HEADER, "true"
+                );
+                if (outcome.retryAfterSeconds() > 0) {
+                    unavailable.header(
+                        "Retry-After", Long.toString(outcome.retryAfterSeconds())
+                    );
+                }
+            }
+            return unavailable.build();
+        });
     }
 
     /**
@@ -154,6 +236,17 @@ public final class PypiJsonHandler {
     public boolean matches(final String path) {
         return this.detector.isMetadataRequest(path)
             && this.detector.extractPackageName(path).isPresent();
+    }
+
+    /**
+     * Whether this handler should intercept the given path as the
+     * version-specific legacy JSON endpoint.
+     *
+     * @param path Request path
+     * @return true for {@code /pypi/<name>/<version>/json}
+     */
+    public boolean matchesVersion(final String path) {
+        return this.detector.isVersionMetadataRequest(path);
     }
 
     /**
@@ -189,7 +282,7 @@ public final class PypiJsonHandler {
                 () -> new IllegalArgumentException("Not a /pypi/<name>/json path: " + path)
             )
         ).value();
-        return this.upstream.response(line, Headers.EMPTY, Content.EMPTY)
+        return this.fetchUpstream(line)
             .thenCompose(resp -> {
                 if (!resp.status().success()) {
                     return bodyBytes(resp.body()).thenApply(bytes ->
@@ -203,6 +296,155 @@ public final class PypiJsonHandler {
                     this.processUpstream(bytes, pkg, user, ctx)
                 );
             });
+    }
+
+    /**
+     * Handle a version-specific legacy JSON API request
+     * ({@code /pypi/<name>/<version>/json}). Unlike the package-level
+     * endpoint (which lists every release and must filter blocked
+     * versions out of the list), this document describes a single,
+     * already-known version — so the check is a single cooldown
+     * evaluation: blocked → 404 (consistent with the artifact-layer
+     * block, and with {@link #allBlockedResponse}); allowed → the
+     * upstream bytes, unfiltered.
+     *
+     * <p>Before this method existed, {@link PypiJsonMetadataRequestDetector}
+     * deliberately did NOT match this path, so it fell through to an
+     * unfiltered upstream passthrough — a cooldown-blocked version's
+     * metadata leaked straight to the client (WS4-pypi.9).</p>
+     *
+     * @param line Request line
+     * @param user Authenticated user
+     * @param headers Inbound request headers, used to capture the audit
+     *                correlation context before any async hop
+     * @return Future response
+     */
+    public CompletableFuture<Response> handleVersion(
+        final RequestLine line, final String user, final Headers headers
+    ) {
+        RequestContextHeaders.bindToMdc(headers);
+        final AuditContext ctx = new AuditContext(
+            MDC.get(EcsMdc.TRACE_ID), MDC.get(EcsMdc.CLIENT_IP)
+        );
+        final String path = line.uri().getPath();
+        final PypiJsonMetadataRequestDetector.VersionCoordinates coords = this.detector
+            .extractVersionCoordinates(path)
+            .orElseThrow(() -> new IllegalArgumentException(
+                "Not a /pypi/<name>/<version>/json path: " + path
+            ));
+        final String pkg = new com.auto1.pantera.pypi.NormalizedProjectName.Simple(
+            coords.packageName()
+        ).value();
+        final String version = coords.version();
+        return this.fetchUpstream(line)
+            .thenCompose(resp -> {
+                if (!resp.status().success()) {
+                    return bodyBytes(resp.body()).thenApply(bytes ->
+                        ResponseBuilder.from(resp.status())
+                            .headers(resp.headers())
+                            .body(bytes)
+                            .build()
+                    );
+                }
+                return bodyBytes(resp.body()).thenCompose(
+                    bytes -> this.filterVersionResponse(bytes, pkg, version, user, ctx)
+                );
+            });
+    }
+
+    /**
+     * Parse the version-specific document (best-effort, for its upload
+     * timestamps only), evaluate cooldown for the single known version,
+     * and either 404 (blocked) or pass the upstream bytes through
+     * unfiltered (allowed / unparseable — fail open on parse failure,
+     * matching the package-level handler's passthrough behavior).
+     */
+    private CompletableFuture<Response> filterVersionResponse(
+        final byte[] upstreamBytes, final String pkg, final String version,
+        final String user, final AuditContext ctx
+    ) {
+        final Instant releaseDate = extractVersionUploadTime(parseQuietly(upstreamBytes, this.mapper));
+        return this.isBlocked(pkg, version, releaseDate, user).thenApply(blocked -> {
+            if (blocked) {
+                AuditLogger.resolution(ctx, this.repoType, this.repoName, pkg, user, List.of(version));
+                return this.blockedVersionResponse(pkg, version);
+            }
+            AuditLogger.resolution(ctx, this.repoType, this.repoName, pkg, user, List.of());
+            return ResponseBuilder.ok()
+                .header("Content-Type", CONTENT_TYPE)
+                .body(upstreamBytes)
+                .build();
+        });
+    }
+
+    /**
+     * Parse a JSON document, returning {@code null} rather than throwing
+     * on malformed input — the caller treats a null result as "release
+     * date unknown" and fails open, matching the package-level handler's
+     * passthrough behavior on unparseable upstream JSON.
+     */
+    private static JsonNode parseQuietly(final byte[] bytes, final ObjectMapper mapper) {
+        final JsonNode result;
+        try {
+            result = mapper.readTree(bytes);
+        } catch (final java.io.IOException ex) {
+            return null;
+        }
+        return result;
+    }
+
+    /**
+     * Earliest {@code upload_time_iso_8601}/{@code upload_time} among the
+     * version-specific document's {@code urls} array (the files for THIS
+     * version) — the release date the cooldown gate evaluates against.
+     * Returns {@code null} when the document is unparseable or carries no
+     * usable timestamp; the cooldown evaluator then falls back to its own
+     * inspector lookup rather than silently allowing.
+     */
+    private static Instant extractVersionUploadTime(final JsonNode root) {
+        if (root == null || !root.has("urls")) {
+            return null;
+        }
+        final JsonNode urls = root.get("urls");
+        if (urls == null || !urls.isArray()) {
+            return null;
+        }
+        Instant earliest = null;
+        for (final JsonNode file : urls) {
+            final Instant uploaded = parseUploadTime(file);
+            if (uploaded != null && (earliest == null || uploaded.isBefore(earliest))) {
+                earliest = uploaded;
+            }
+        }
+        return earliest;
+    }
+
+    /**
+     * 404 response for a cooldown-blocked version-specific JSON request —
+     * consistent with the artifact-layer cooldown block and with
+     * {@link #allBlockedResponse}: metadata for a blocked version must
+     * not leak, and 404 is the convention every legacy-JSON-consuming
+     * tool (pip, poetry, pip-tools) already treats cleanly.
+     */
+    private Response blockedVersionResponse(final String pkg, final String version) {
+        EcsLogger.info("com.auto1.pantera.pypi")
+            .message("/pypi/<pkg>/<ver>/json blocked by cooldown — returning 404")
+            .eventCategory("web")
+            .eventAction("json_filter")
+            .eventOutcome("failure")
+            .field("event.reason", "cooldown_active")
+            .field("repository.name", this.repoName)
+            .field("package.name", pkg)
+            .field("package.version", version)
+            .field("log.source", "application")
+            .log();
+        return ResponseBuilder.notFound()
+            .header("X-Pantera-Cooldown", "blocked")
+            .textBody(
+                "Version '" + version + "' of '" + pkg
+                    + "' is under cooldown; not available."
+            )
+            .build();
     }
 
     /**

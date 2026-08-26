@@ -17,9 +17,12 @@ import com.amihaiemil.eoyaml.YamlSequence;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.SubStorage;
+import com.auto1.pantera.asto.blob.DownloadMode;
+import com.auto1.pantera.asto.blob.DownloadPolicy;
 import com.auto1.pantera.cache.StoragesCache;
 import com.auto1.pantera.http.client.HttpClientSettings;
 import com.auto1.pantera.http.client.RemoteConfig;
+import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.settings.StorageByAlias;
 import com.google.common.base.Strings;
 
@@ -30,9 +33,11 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.Set;
 import java.util.stream.Stream;
 
 /**
@@ -59,10 +64,22 @@ public final class RepoConfig {
         Storage storage = null;
         YamlNode storageNode = repoYaml.value("storage");
         if (storageNode != null) {
-            // Direct storage without wrappers:
-            // - No MicrometerStorage (metrics overhead, bypassed by optimized slices)
+            // Direct storage without wrappers at THIS layer:
+            // - No generic MicrometerStorage/LoggingStorage decorator around
+            //   the outer Storage surface (exists/value/save/list/...) --
+            //   that would re-add per-call overhead on the exact hot path
+            //   WS1.1 built CachedBlobStorage's index to avoid (a metrics
+            //   wrapper here cannot tell a zero-round-trip disk hit from a
+            //   genuine blob-store call, so it would only add cost, not signal).
             // - No LoggingStorage (already bypassed, 2-50% overhead on writes)
-            // Request-level logging and metrics still active via Vert.x HTTP
+            // Request-level logging and metrics still active via Vert.x HTTP.
+            // WS1.6 instead meters the ACTUAL blob-store tier (S3 GET/HEAD/
+            // PUT/DELETE/LIST count+latency+error/throttle) one layer lower,
+            // in S3StorageFactory (MeteredBlobStore wraps the reference
+            // BlobStore before CachedBlobStorage/cache.mode:index ever sees
+            // it) plus CachedBlobStorage's own cache-tier gauges/counters
+            // (disk hit ratio, eviction bytes, write-back queue depth) --
+            // see docs/admin-guide/storage-backends.md.
             storage = new SubStorage(prefix, storage(cache, aliases, storageNode));
         }
 
@@ -336,6 +353,96 @@ public final class RepoConfig {
     public Optional<HttpClientSettings> httpClientSettings() {
         final YamlMapping client = this.repoYaml().yamlMapping("http_client");
         return client != null ? Optional.of(HttpClientSettings.from(client)) : Optional.empty();
+    }
+
+    /**
+     * Maven/Gradle {@code .asc} PGP signature verification (WS4-maven.1).
+     * When {@code true}, a proxy fetch or hosted store of a primary artifact
+     * with a detached signature is verified against the admin-managed
+     * {@code pgp_keyring} before the primary is cached/persisted; an empty
+     * keyring rejects every signed artifact (fail-closed). Default
+     * {@code false} — byte-identical to pre-2.3.0 behaviour, no keyring
+     * lookups occur.
+     *
+     * @return True when {@code .asc} verification is required for this repo
+     */
+    public boolean verifyPgp() {
+        return Boolean.parseBoolean(this.repoYaml().string("verifyPgp"));
+    }
+
+    /**
+     * Release-redeploy immutability (WS4-maven.6). When {@code true}, a
+     * hosted deploy that would overwrite an existing non-SNAPSHOT primary
+     * artifact is rejected with 409 Conflict instead of silently
+     * overwriting it. SNAPSHOT redeploys are always allowed regardless of
+     * this setting. Default {@code false} (legacy overwrite behaviour).
+     *
+     * @return True when release redeploys are rejected for this repo
+     */
+    public boolean releaseImmutable() {
+        return Boolean.parseBoolean(this.repoYaml().string("releaseImmutable"));
+    }
+
+    /**
+     * Recognized {@code download-mode} values, used only to distinguish "not
+     * configured" from "configured but unrecognized" for the warning logged
+     * by {@link #downloadMode()} -- the parse itself ({@link
+     * DownloadMode#from}) already defaults either case to {@link
+     * DownloadMode#STREAM}.
+     */
+    private static final Set<String> VALID_DOWNLOAD_MODES = Set.of("redirect", "stream", "auto");
+
+    /**
+     * WS1.7 (spec {@code WS1-storage-for-scale.md} &sect;3.B2): this repo's
+     * presigned-direct-download mode for redirect-eligible immutable byte
+     * routes (Docker blob GET is the first wired case -- see
+     * docker-adapter's {@code AstoDocker}). Default {@link
+     * DownloadMode#STREAM}: byte-identical to pre-2.3.0 behaviour until an
+     * operator opts in. Never applies to metadata routes -- those are never
+     * wired to consult this at all, regardless of value.
+     *
+     * @return Configured download mode, defaulting to {@link
+     *  DownloadMode#STREAM}.
+     */
+    public DownloadMode downloadMode() {
+        final Optional<String> raw = this.stringOpt("download-mode");
+        raw.filter(val -> !VALID_DOWNLOAD_MODES.contains(val.trim().toLowerCase(Locale.ROOT)))
+            .ifPresent(val -> EcsLogger.warn("com.auto1.pantera.settings")
+                .message("Unrecognized download-mode '" + val + "' for repo '" + this.name
+                    + "'; defaulting to stream")
+                .eventCategory("configuration")
+                .eventAction("repo_config_invalid_value")
+                .eventOutcome("failure")
+                .field("repository.name", this.name)
+                .field("log.source", "application")
+                .log());
+        return DownloadMode.from(raw.orElse(null));
+    }
+
+    /**
+     * WS1.7: this repo's presigned-URL validity window, in seconds. Falls
+     * back to {@link DownloadPolicy#DEFAULT_PRESIGN_TTL_SECONDS} when unset
+     * or non-positive.
+     *
+     * @return Configured (or default) presign TTL, in seconds.
+     */
+    public long presignTtlSeconds() {
+        return this.stringOpt("presign-ttl-seconds")
+            .map(Long::parseLong)
+            .filter(val -> val > 0)
+            .orElse(DownloadPolicy.DEFAULT_PRESIGN_TTL_SECONDS);
+    }
+
+    /**
+     * WS1.7: this repo's resolved download policy -- {@link #downloadMode()}
+     * plus {@link #presignTtlSeconds()} -- ready to hand to a serving-side
+     * {@code Docker}/route implementation that has opted into redirect
+     * eligibility.
+     *
+     * @return Resolved download policy.
+     */
+    public DownloadPolicy downloadPolicy() {
+        return new DownloadPolicy(this.downloadMode(), this.presignTtlSeconds());
     }
 
     /**

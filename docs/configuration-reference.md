@@ -38,6 +38,10 @@ routing patterns.
    - [Amazon S3 (s3)](#32-amazon-s3-s3)
    - [S3 Express One Zone (s3-express)](#33-s3-express-one-zone-s3-express)
    - [Disk Hot Cache for S3](#34-disk-hot-cache-for-s3)
+   - [Index Cache Mode for S3](#35-index-cache-mode-for-s3)
+   - [Write-Back (Async Durable Writes) for S3](#36-write-back-async-durable-writes-for-s3)
+   - [Eviction & Admission Control for S3 Index Mode](#37-eviction--admission-control-for-s3-index-mode)
+   - [Presigned Direct-Download (WS1.7)](#38-presigned-direct-download-ws17)
 4. [Storage Aliases (_storages.yaml)](#4-storage-aliases-_storagesyaml)
 5. [User Files](#5-user-files)
 6. [Role / Permission Files](#6-role--permission-files)
@@ -1052,6 +1056,33 @@ repo:
     path: /var/pantera/data
 ```
 
+#### Maven / Gradle (`maven`, `gradle`, `maven-proxy`, `gradle-proxy`)
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `verifyPgp` | bool | No | `false` | Applies to `local` **and** `proxy` modes. When `true`, a detached `.asc`/`.sig` signature is verified against the admin-managed PGP keyring (`/api/v1/admin/pgp-keys`) before the primary artifact is trusted. `proxy` mode: verified before the fetched artifact is committed to cache. `local` (hosted) mode: an uploaded primary's own `PUT` always returns `201 Created`, but the artifact is quarantined (not resolvable by any client, excluded from `maven-metadata.xml`) until a matching signature verifies — regardless of whether the primary or its signature is uploaded first. A primary that never gets a valid signature is never servable. An empty keyring rejects every signed artifact — enabling this without uploading trusted keys blocks all signed fetches/uploads (fail-closed by design, never fail-open). |
+| `releaseImmutable` | bool | No | `false` | `local` mode only. When `true`, redeploying an existing non-SNAPSHOT (release) coordinate is rejected with `409 Conflict` instead of silently overwriting it. SNAPSHOT redeploys are always allowed regardless of this setting. |
+
+```yaml
+repo:
+  type: maven
+  storage:
+    type: fs
+    path: /var/pantera/data
+  verifyPgp: true
+  releaseImmutable: true
+```
+
+```yaml
+repo:
+  type: maven-proxy
+  url: https://repo.maven.apache.org/maven2
+  verifyPgp: true
+  storage:
+    type: fs
+    path: /var/pantera/data
+```
+
 ---
 
 ### 2.6 HTTP/3 Protocol Support (Experimental)
@@ -1161,8 +1192,11 @@ storage:
 | `bucket` | string | Yes | -- | S3 bucket name |
 | `region` | string | No | SDK default | AWS region (e.g., `eu-west-1`) |
 | `endpoint` | string | No | SDK default | Custom S3-compatible endpoint URL |
-| `path-style` | boolean | No | `true` | Use path-style access (required for MinIO, LocalStack) |
+| `path-style` | boolean | No | `true` | Use path-style access (required for MinIO, Ceph/RADOS Gateway, LocalStack; most S3-API-compatible services) |
 | `dualstack` | boolean | No | `false` | Enable IPv4+IPv6 dualstack endpoints |
+| `storage-class` | string | No | S3 default (`STANDARD`) | S3 storage class for uploaded objects, e.g. `STANDARD_IA`, `INTELLIGENT_TIERING`, `GLACIER`, `EXPRESS_ONEZONE` (any value accepted by the AWS SDK's `StorageClass` enum) |
+
+`endpoint` + `path-style` + `credentials` alone are what make this same storage type work against any S3-API-compatible service -- MinIO, Cloudflare R2, Backblaze B2, Wasabi, Ceph/RADOS Gateway, and GCS via its S3 interoperability endpoint -- not just AWS S3. See [Storage Backends](admin-guide/storage-backends.md#s3-api-compatible-object-stores) for per-service example configs.
 
 #### S3 Credentials
 
@@ -1293,23 +1327,33 @@ storage:
   region: eu-west-1
 ```
 
+`s3-express` only changes two defaults relative to plain `s3`: `path-style`
+defaults to `false` (S3 Express One Zone requires virtual-hosted-style access) and
+`storage-class` defaults to `EXPRESS_ONEZONE`. Both remain overridable with the
+ordinary `path-style` / `storage-class` keys above; every other `s3` key (HTTP
+tuning, multipart, parallel download, SSE, credentials, `cache`) works identically.
+
 ---
 
 ### 3.4 Disk Hot Cache for S3
 
 Any S3 storage can be wrapped with a local disk cache to avoid repeated S3 fetches
 for hot artifacts. Configure the `cache` section within the S3 storage block.
+`mode` selects the implementation; the remaining keys in this table apply to
+the default `mode: disk`. See [3.5](#35-index-cache-mode-for-s3) for the
+`mode: index` keys.
 
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
 | `enabled` | boolean | Yes | -- | Must be `true` to activate |
+| `mode` | string | No | `disk` | `disk` (`DiskCacheStorage`) or `index` (`CachedBlobStorage`, see 3.5) |
 | `path` | string | Yes | -- | Local filesystem path for cache files |
-| `max-bytes` | long | No | `10737418240` (10 GiB) | Maximum cache size in bytes |
-| `high-watermark-percent` | int | No | `90` | Cache eviction starts at this percentage |
-| `low-watermark-percent` | int | No | `80` | Eviction stops when cache drops to this percentage |
-| `cleanup-interval-millis` | long | No | `300000` (5 min) | How often to run eviction |
-| `eviction-policy` | string | No | `LRU` | Eviction policy: `LRU` or `LFU` |
-| `validate-on-read` | boolean | No | `true` | Validate cache integrity on every read |
+| `max-bytes` | long | No | `10737418240` (10 GiB) | Maximum cache size in bytes (`mode: disk` only) |
+| `high-watermark-percent` | int | No | `90` | Cache eviction starts at this percentage (`mode: disk` only) |
+| `low-watermark-percent` | int | No | `80` | Eviction stops when cache drops to this percentage (`mode: disk` only) |
+| `cleanup-interval-millis` | long | No | `300000` (5 min) | How often to run eviction (`mode: disk` only) |
+| `eviction-policy` | string | No | `LRU` | Eviction policy: `LRU` or `LFU` (`mode: disk` only) |
+| `validate-on-read` | boolean | No | `true` | Validate cache integrity on every read (`mode: disk` only) |
 
 ```yaml
 storage:
@@ -1325,6 +1369,153 @@ storage:
     cleanup-interval-millis: 300000
     eviction-policy: LRU
     validate-on-read: true
+```
+
+### 3.5 Index Cache Mode for S3
+
+`cache.mode: index` (opt-in; `mode: disk` remains the default) routes through
+`CachedBlobStorage`: an in-memory index answers `exists`/`metadata`/`list`
+with zero S3 round trips, and a disk-served read never issues an inline S3
+HEAD. See `docs/admin-guide/storage-backends.md#index-cache-mode-cachemode-index`
+for the full behavioral write-up (including the current limitation:
+index-scoped `list()` completeness in this phase). Eviction and admission
+control are covered separately in section 3.7 below.
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `enabled` | boolean | Yes | -- | Must be `true` to activate |
+| `mode` | string | Yes | -- | Must be `index` |
+| `path` | string | Yes | -- | Local filesystem path for cache files |
+| `freshness-ttl-millis` | long | No | `300000` (5 min) | How long a disk-cached entry is trusted without S3 re-validation |
+| `negative-ttl-millis` | long | No | `30000` (30 sec) | How long a confirmed S3 miss is cached |
+
+```yaml
+storage:
+  type: s3
+  bucket: my-artifacts
+  region: eu-west-1
+  cache:
+    enabled: true
+    mode: index
+    path: /var/pantera/cache/s3
+    freshness-ttl-millis: 300000
+    negative-ttl-millis: 30000
+```
+
+### 3.6 Write-Back (Async Durable Writes) for S3
+
+Only meaningful under `cache.mode: index`. `cache.write-through: false` (the
+default) acknowledges `save()` from local disk durability and drains the
+upload to S3 asynchronously via a bounded pool of background threads; `true`
+restores the pre-WS1.2 synchronous behaviour (`save()` does not return until
+S3 confirms the write). See
+`docs/admin-guide/storage-backends.md#write-back-async-durable-writes-cachewrite-through`
+for the durability-window and backpressure write-up.
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `write-through` | boolean | No | `false` | `true` restores the pre-WS1.2 synchronous write-through save path |
+| `write-back-queue-capacity` | int | No | `1024` | High-water mark for in-flight (queued + retrying) uploads; a `save()` past this is rejected before any disk write |
+| `write-back-uploader-threads` | int | No | `4` | Size of the dedicated background thread pool draining the queue to S3 |
+| `write-back-max-retries` | int | No | `5` | Retries after the first failed S3 `PUT` before an upload is dead-lettered |
+| `write-back-backoff-millis` | long | No | `500` | Backoff before the first retry; doubles per attempt up to the ceiling below |
+| `write-back-max-backoff-millis` | long | No | `30000` | Backoff ceiling |
+| `write-back-retry-after-seconds` | long | No | `5` | `Retry-After` hint on a saturated-queue rejection |
+
+```yaml
+storage:
+  type: s3
+  bucket: my-artifacts
+  region: eu-west-1
+  cache:
+    enabled: true
+    mode: index
+    path: /var/pantera/cache/s3
+    write-through: false
+    write-back-queue-capacity: 1024
+    write-back-uploader-threads: 4
+    write-back-max-retries: 5
+    write-back-backoff-millis: 500
+    write-back-max-backoff-millis: 30000
+    write-back-retry-after-seconds: 5
+```
+
+### 3.7 Eviction & Admission Control for S3 Index Mode
+
+Only meaningful under `cache.mode: index`. Keeps the disk cache bounded via an
+in-memory running byte counter (never a directory walk) plus LRU/LFU
+eviction; a write that would cross `max-disk-bytes` evicts synchronously
+first and is rejected if it still cannot fit. A `PENDING_WRITE` entry (an
+unconfirmed write-back upload) is never selected for eviction. See
+`docs/admin-guide/storage-backends.md#eviction--admission-control-cachemax-disk-bytes`
+for the full write-up (watermark semantics, the `PENDING_WRITE` durability
+interaction, and the sidecar coldness-signal persistence trade-off).
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `max-disk-bytes` | long | No | `10737418240` (10 GiB) | Hard bound on total disk-cache bytes; `<= 0` disables eviction/admission (unbounded) |
+| `eviction-high-watermark-percent` | int | No | `90` | Percentage of `max-disk-bytes` at which a write proactively triggers eviction |
+| `eviction-low-watermark-percent` | int | No | `80` | Percentage of `max-disk-bytes` eviction works down toward once triggered |
+| `eviction-policy` | string | No | `LRU` | `LRU` or `LFU` -- same vocabulary as `cache.mode: disk`'s `eviction-policy` |
+
+```yaml
+storage:
+  type: s3
+  bucket: my-artifacts
+  region: eu-west-1
+  cache:
+    enabled: true
+    mode: index
+    path: /var/pantera/cache/s3
+    max-disk-bytes: 10737418240
+    eviction-high-watermark-percent: 90
+    eviction-low-watermark-percent: 80
+    eviction-policy: LRU
+```
+
+Cache files under `cache.mode: index` are also sharded on disk (a 2-level hex
+fan-out keyed off a hash of the artifact key) to avoid one huge flat cache
+directory. This has no config key -- it is always on for `cache.mode: index`
+and is purely an on-disk layout detail with no observable API effect.
+
+---
+
+### 3.8 Presigned Direct-Download (WS1.7)
+
+**Repo-level keys** (set on the `repo:` block, not `storage:` -- a
+repository's byte-serving policy is independent of which storage alias backs
+it). Only affects redirect-eligible byte routes; metadata is never
+redirected regardless of value. Wired for the immutable byte route of hosted
+`docker` (blob GET), `npm` (`.tgz` tarball), `pypi` (`.whl`/sdist), `conda`
+(`.tar.bz2`/`.conda` package), `go` (`@v/*.zip` module), `gem` (`.gem`), `rpm`
+(`.rpm`/`.drpm`), `helm` (chart `.tgz`), `deb` (`.deb`/`.udeb`/`.ddeb`),
+generic `file`, `maven`/`gradle` (`.jar`/`.pom`/`.war`/`.aar`/`.zip`/`.module`
+artifacts, incl. classifier jars), `nuget` (`.nupkg`/`.snupkg`), `composer`
+(dist `.zip`/`.tar.gz`/`.tgz`) and `hexpm` (package tarball) repositories --
+every metadata route (packument, PyPI simple index, `repodata.json`, Go
+`@v/list`/`@latest`/`.info`/`.mod`, Gem `specs.4.8*`, RPM `repodata/`, Helm
+`index.yaml`/`.prov`, Debian `Release`/`Packages`, the generic `?meta=true`
+view, `maven-metadata.xml`, NuGet service index/registration/versions/search,
+Composer `packages.json`/provider metadata, Hex registry metadata, and all
+checksum/signature sidecars) always streams. See
+`docs/admin-guide/storage-backends.md#presigned-direct-download-ws17` for the
+full write-up (fallback semantics, client-reachability/air-gap guidance, the
+off-Pantera-metrics observability trade-off, and which routes are wired).
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `download-mode` | string | No | `stream` | `stream`\|`redirect`\|`auto`. An unrecognized value logs a warning and defaults to `stream`. |
+| `presign-ttl-seconds` | long | No | `600` | Presigned URL validity window, in seconds; ignored when `download-mode: stream`. |
+
+```yaml
+repo:
+  type: docker
+  download-mode: redirect
+  presign-ttl-seconds: 600
+  storage:
+    type: s3
+    bucket: my-docker-bucket
+    region: us-east-1
 ```
 
 ---

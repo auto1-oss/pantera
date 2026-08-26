@@ -36,6 +36,12 @@ Add Pantera as a Composer repository in your project's `composer.json`:
 
 Set `secure-http` to `false` only if your Pantera instance does not use HTTPS.
 
+### Using a Standalone Proxy Repository
+
+A `php-proxy` repository also works with no `local` member fronting it — point `composer.json` at it directly (`http://pantera-host:8080/php-proxy`) and `composer install`/`composer update`/`composer require` bootstrap normally from an empty cache.
+
+Every URL Pantera's Composer repository root advertises (`metadata-url`, `search`, `list`, `security-advisories`, etc.) is rewritten to point back at Pantera itself — Composer never resolves directly against the upstream (e.g. Packagist), so cache, cooldown, and authentication stay enforced on every request the client makes.
+
 ### Configure Authentication
 
 Create or edit `~/.composer/auth.json`:
@@ -70,6 +76,26 @@ composer require vendor/package
 ```
 
 Pantera resolves packages through the group repository, checking your local repository first and then falling through to the proxied upstream (Packagist).
+
+### Dist Integrity
+
+Every dist archive Pantera caches from a proxy upstream is verified against the packument's declared `dist.shasum` before it is written to the cache. Despite the field's name, Composer's own client verifies this claim as a **SHA-1** digest (not SHA-256) — Pantera matches that behavior exactly, so a corrupted or tampered upstream archive is rejected (the cache stays empty and the next request re-fetches cleanly) instead of being served to Composer with a false claim. Hosted (`php` / `php-local`) publishes also compute and store `dist.shasum` on the archive Pantera actually serves, so a downstream Composer client — including another Pantera instance mirroring this repository as a proxy — can verify it too.
+
+### Search and Package Discovery
+
+```bash
+composer search <term>
+composer show -a
+```
+
+`composer search`/`show -a` are backed by `GET /packages/list.json` (optionally `?q=<term>`), which — for a `local`/hosted `php` repository — enumerates the packages actually published into that repository. For `php-proxy`, the same path is a live pass-through to the upstream's own `list.json`/`search.json` (not cached — the full upstream catalog is far larger than what any single repository proxies). `GET /p2/available-packages.json` works the same way and backs Composer's wildcard/`show -a` resolution against a local repository.
+
+### Conditional Requests and HEAD
+
+- A proxy repository issues a conditional `If-Modified-Since` request when revalidating already-cached package metadata; a `304` from the upstream is served from cache without re-transferring or re-parsing the metadata body.
+- Package metadata responses (`/p2/<vendor>/<pkg>.json`, `/packages/<vendor>/<pkg>.json`) carry a `Last-Modified` header once Pantera has captured one from the upstream. A client sending its own `If-Modified-Since` matching that value gets a bodiless `304` straight from the warm cache — no upstream call at all.
+- The repository root (`/packages.json`, `/repo.json`) is now cached (TTL, single-flighted) instead of being fetched from the upstream on every request — an upstream blip no longer breaks `composer require` root resolution; the last-known root is served stale until the upstream recovers.
+- `HEAD` is supported everywhere `GET` is — package metadata, dist archives, and the catalog surfaces above — returning the same status and headers as the equivalent `GET`, with no body.
 
 ---
 

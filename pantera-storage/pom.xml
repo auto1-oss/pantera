@@ -6,10 +6,10 @@
     <parent>
         <groupId>com.auto1.pantera</groupId>
         <artifactId>pantera</artifactId>
-        <version>2.2.5</version>
+        <version>2.3.0</version>
     </parent>
     <artifactId>pantera-storage</artifactId>
-    <version>2.2.5</version>
+    <version>2.3.0</version>
     <packaging>pom</packaging>
     <name>asto</name>
     <description>A simple Java storage</description>
@@ -45,7 +45,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-failsafe-plugin</artifactId>
-                <version>3.0.0-M5</version>
+                <version>3.5.2</version>
                 <configuration>
                     <forkCount>1</forkCount>
                     <reuseForks>true</reuseForks>
@@ -59,6 +59,28 @@
                         </goals>
                     </execution>
                 </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <!--
+                      FileStorage's async file I/O runs on ForkJoinPool.commonPool(),
+                      whose default parallelism is (availableProcessors minus 1), i.e. 1
+                      on a 2-core CI runner. Under the -T8 reactor (8 forks contending
+                      for 2 cores) that single commonPool thread is starved, so the
+                      multi-hop CachedBlobStorage save/read chains (FileStorage save,
+                      digest, finalize; all commonPool hops) can wedge indefinitely on
+                      save().join(): they pass on multi-core dev machines but time out
+                      the CI job. Size the common pool for I/O concurrency so the storage
+                      unit tests progress regardless of the runner's core count.
+                      FileStorage now also has its own dedicated I/O executor
+                      (mirroring OptimizedStorageCache BLOCKING_EXECUTOR), which is the
+                      durable fix; this argLine remains as defense-in-depth against any
+                      residual commonPool usage under -T8 on small runners.
+                    -->
+                    <argLine>-Djava.util.concurrent.ForkJoinPool.common.parallelism=8</argLine>
+                </configuration>
             </plugin>
         </plugins>
         <pluginManagement>

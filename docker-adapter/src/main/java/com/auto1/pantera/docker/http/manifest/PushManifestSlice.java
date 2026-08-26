@@ -38,6 +38,12 @@ import java.util.concurrent.CompletableFuture;
 
 public class PushManifestSlice extends DockerActionSlice {
 
+    /**
+     * OCI 1.1 referrers: response header carrying the pushed manifest's
+     * {@code subject} digest, when present.
+     */
+    private static final String OCI_SUBJECT_HEADER = "OCI-Subject";
+
     private final Queue<ArtifactEvent> queue;
 
     /** Synchronous artifact-index writer for read-after-write consistency. */
@@ -92,13 +98,19 @@ public class PushManifestSlice extends DockerActionSlice {
                         } else {
                             indexed = CompletableFuture.completedFuture(null);
                         }
-                        return indexed.thenApply(ignored ->
-                            ResponseBuilder.created()
+                        return indexed.thenApply(ignored -> {
+                            final ResponseBuilder builder = ResponseBuilder.created()
                                 .header(new Location(String.format("/v2/%s/manifests/%s", request.name(), ref.digest())))
                                 .header(new ContentLength("0"))
-                                .header(new DigestHeader(manifest.digest()))
-                                .build()
-                        );
+                                .header(new DigestHeader(manifest.digest()));
+                            // OCI 1.1 referrers: signal the indexed subject so
+                            // oras attach / cosign OCI-mode clients can confirm
+                            // the referrer was linked without a follow-up GET.
+                            manifest.subject().ifPresent(
+                                subject -> builder.header(OCI_SUBJECT_HEADER, subject.string())
+                            );
+                            return builder.build();
+                        });
                     });
                 }
             );

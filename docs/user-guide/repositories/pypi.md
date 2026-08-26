@@ -101,6 +101,94 @@ twine upload \
 
 ---
 
+## Yanking a Release (PEP 592)
+
+Hosted PyPI repositories support yanking a version so pip/uv skip it during
+dependency resolution, without deleting the distribution files:
+
+```bash
+# Yank a version (optionally with a reason)
+curl -X POST http://pantera-host:8080/api/v1/pypi/<repo>/<package>/<version>/yank \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"reason": "broken build"}'
+
+# Reverse it
+curl -X POST http://pantera-host:8080/api/v1/pypi/<repo>/<package>/<version>/unyank \
+  -H "Authorization: Bearer <token>"
+```
+
+The served `/simple/<package>/` index is regenerated immediately, so the
+change is visible on the next request — no re-upload needed. Behavior
+matches PEP 592: `pip install <package>` (no version pin) skips a yanked
+version, while `pip install <package>==<version>` still installs it and
+prints a yank warning.
+
+For **proxy** repositories, an upstream yank is now preserved end-to-end:
+the served `/simple/<package>/` HTML carries `data-yanked` and the JSON
+carries `"yanked"` exactly as the upstream index does, so pip's yank
+warning fires for proxied packages too, not just hosted ones.
+
+---
+
+## Distribution Metadata (PEP 658 / PEP 700 / PEP 714)
+
+Hosted uploads (`twine upload`) automatically extract the distribution's
+core metadata (`METADATA`/`PKG-INFO`) and serve it at
+`GET <file>.metadata` — `pip install --require-hashes` and metadata-only
+resolvers can read this without downloading the wheel body. The simple
+index advertises it via the PEP 714 `core-metadata` key (JSON) /
+`data-core-metadata` attribute (HTML), with the legacy
+`dist-info-metadata` / `data-dist-info-metadata` forms retained for
+older clients.
+
+The PEP 691 JSON detail page (`Accept: application/vnd.pypi.simple.v1+json`)
+also carries the PEP 700 fields: a top-level `versions` array (every
+distinct version present, PEP 440 ordered) and a `size` on every file
+entry, matching the stored artifact's byte size.
+
+Content negotiation honors RFC 9110 `Accept` q-values and the
+`application/vnd.pypi.simple.latest+json` / `…latest+html` aliases, not
+just a bare substring match — a client sending
+`Accept: application/vnd.pypi.simple.v1+json;q=0.1, text/html;q=1.0`
+correctly gets HTML.
+
+---
+
+## Legacy JSON API
+
+Local (hosted) repositories serve the legacy package-level JSON API at
+`GET /pypi/<package>/json` for tools (poetry, pip-tools) that still
+resolve through it — synthesized from the same persisted files and
+`.metadata`/sidecar data the Simple index projects, with
+repository-relative download URLs. The version-specific form
+(`/pypi/<package>/<version>/json`) is not served locally.
+
+For **proxy** repositories, the version-specific
+`/pypi/<package>/<version>/json` endpoint is now cooldown-filtered:
+requesting a cooldown-blocked version returns `404` instead of leaking
+its metadata through an unfiltered upstream passthrough.
+
+For **proxy** repositories, `/pypi/<package>/json` and
+`/pypi/<package>/<version>/json` are now cached (TTL, single-flighted per
+package) instead of being fetched from pypi.org on every request — a
+pypi.org blip no longer breaks `poetry`/`pip-tools` resolution for a
+package Pantera has already cached; the last-known document is served
+stale until upstream recovers.
+
+---
+
+## HEAD Requests
+
+Proxy and group repositories now answer `HEAD` for both artifact and
+simple-index paths with the same status and headers as the equivalent
+`GET` (including `Content-Length`), body omitted — matching hosted
+repositories, which already supported HEAD. A missing artifact returns
+`404`, never `405`. uv and other resolvers that probe with HEAD before
+deciding to download now behave consistently across all three repo modes.
+
+---
+
 ## Common Issues
 
 | Symptom | Cause | Fix |
@@ -109,7 +197,8 @@ twine upload \
 | `SSLError` or certificate errors | pip expects HTTPS by default | Add `trusted-host = pantera-host` to pip.conf or use `--trusted-host` flag |
 | `Could not find a version that satisfies the requirement` | Package not cached in proxy, or wrong index URL | Verify the index-url includes `/simple` at the end |
 | Upload fails with `403 Forbidden` | User lacks write permission on local repo | Contact admin for publish access |
-| Upload fails with `400 Bad Request` | Uploading to a proxy repository | Upload only to a **local** PyPI repository |
+| Upload fails with `400 Bad Request` | Uploading to a proxy repository, or the uploaded bytes don't match twine's declared `sha256_digest` | Upload only to a **local** PyPI repository; if the digest mismatched, re-build and re-upload the distribution |
+| Upload fails with `409 Conflict` | A distribution with this exact filename already exists in the repository (Pantera never silently overwrites) | Bump the version, or re-run with `twine upload --skip-existing` |
 | Package installs old version | pip caching locally | Run with `--no-cache-dir` flag |
 
 ---

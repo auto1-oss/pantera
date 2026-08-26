@@ -30,6 +30,7 @@ import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.cooldown.GoLatestHandler;
 import com.auto1.pantera.http.cooldown.GoListHandler;
+import com.auto1.pantera.http.cooldown.GoMetadataBaseLoader;
 import com.auto1.pantera.http.context.RequestContext;
 import com.auto1.pantera.http.fault.Fault;
 import com.auto1.pantera.http.fault.Fault.ChecksumAlgo;
@@ -39,7 +40,6 @@ import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
-import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.slice.KeyFromPath;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -48,9 +48,7 @@ import org.apache.commons.codec.DecoderException;
 import org.apache.commons.codec.binary.Hex;
 import org.slf4j.MDC;
 
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.Collections;
@@ -66,7 +64,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
-import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.StreamSupport;
@@ -75,12 +72,25 @@ import java.util.stream.StreamSupport;
  * Go proxy slice with cache support.
  *
  * <p>Primary artifact writes (the {@code *.zip} module archives) flow
- * through {@link ProxyCacheWriter} so the Go checksum-database SHA-256
- * sidecar is verified against the downloaded bytes before anything
- * lands in the cache — giving the Go adapter the same primary+sidecar
- * integrity guarantee the Maven adapter received in WI-07 (§9.5).
- * {@code *.info} and {@code *.mod} paths have no upstream sidecars and
+ * through {@link ProxyCacheWriter}, which streams the upstream body to
+ * the client and the on-disk cache in a single pass and single-flights
+ * concurrent cold fetches. There is <strong>no zip integrity
+ * verification</strong>: the GOPROXY protocol defines no checksum
+ * sidecar for module archives — the {@code .ziphash} path this class
+ * previously fetched does not exist upstream, and even where a server
+ * happened to answer it, an {@code h1:} dirhash is not a zip-byte
+ * digest anyway. Genuine archive integrity (verifying the downloaded
+ * bytes' {@code h1:} dirhash against the Go checksum database) is a
+ * deferred follow-on that depends on the sumdb proxy below. {@code
+ * *.info} and {@code *.mod} paths have no upstream sidecars either and
  * are handled by the legacy {@code fetchThroughCache} flow unchanged.
+ *
+ * <p>{@code /sumdb/&lt;name&gt;/...} checksum-database requests are
+ * proxied by {@link GoSumdbHandler} (S6, WS4-go.4): {@code lookup}/
+ * {@code tile} are cached immutably (content-addressed, never expire),
+ * {@code supported} is probed live. This lets clients keep {@code
+ * GOSUMDB} verification on and offline-safe for a previously-seen
+ * module instead of disabling it.</p>
  *
  * @since 1.0
  */
@@ -152,10 +162,11 @@ final class CachedProxySlice implements Slice {
 
     /**
      * Single-source-of-truth cache writer introduced by WI-07 (§9.5 of the
-     * v2.2 target architecture). Fetches the primary {@code *.zip} + the
-     * Go checksum SHA-256 sidecar in one coupled batch, verifies the
-     * declared claim against the bytes we just downloaded, and atomically
-     * commits the pair. Null when {@link #storage} is empty.
+     * v2.2 target architecture). Streams the primary {@code *.zip} to the
+     * client and the on-disk cache in a single pass and commits it
+     * atomically. No sidecar is fetched or verified — the GOPROXY
+     * protocol has no checksum sidecar for module archives; see the
+     * class javadoc. Null when {@link #storage} is empty.
      */
     private final ProxyCacheWriter cacheWriter;
 
@@ -187,6 +198,14 @@ final class CachedProxySlice implements Slice {
      * infrastructure and blocked versions would leak to the client.
      */
     private final GoListHandler listHandler;
+
+    /**
+     * {@code /sumdb/} checksum-database proxy handler (S6, WS4-go.4):
+     * proxies {@code lookup}/{@code tile} through the immutable cache
+     * and {@code supported} via a live probe, so clients can keep
+     * {@code GOSUMDB} verification on instead of disabling it.
+     */
+    private final GoSumdbHandler sumdbHandler;
 
     /**
      * Wraps origin slice with caching layer and default 12h metadata TTL.
@@ -226,12 +245,24 @@ final class CachedProxySlice implements Slice {
             10_000,
             ContextualExecutor.contextualize(ForkJoinPool.commonPool())
         );
+        // WS4-go.2: shared TTL-cached, single-flighted base-document loader
+        // for @v/list / @latest — one instance per repo so both handlers
+        // (and GoLatestHandler's sibling @v/list fallback lookup) coalesce
+        // onto the same cache entry and single-flight gate.
+        final GoMetadataBaseLoader baseLoader = new GoMetadataBaseLoader(
+            client, cache, storage, rname
+        );
         this.latestHandler = new GoLatestHandler(
-            client, cooldown, inspector, rtype, rname
+            baseLoader, cooldown, inspector, rtype, rname
         );
         this.listHandler = new GoListHandler(
-            client, cooldown, inspector, rtype, rname
+            baseLoader, cooldown, inspector, rtype, rname
         );
+        this.sumdbHandler = new GoSumdbHandler(client, cache, rname);
+        // Register this repo's backing storage so a hosted "go" publish
+        // inside a go-group can evict the cached base documents here —
+        // see GoUploadSlice's post-upload invalidation.
+        storage.ifPresent(sto -> GoMetadataCacheRegistry.instance().register(rname, sto));
     }
 
     @Override
@@ -287,6 +318,21 @@ final class CachedProxySlice implements Slice {
                 .field("log.source", "application")
                 .log();
             return this.listHandler.handle(line, headers, user);
+        }
+        // sumdb proxy (S6, WS4-go.4): intercept before the generic
+        // fetchThroughCache fall-through so /sumdb/ requests are proxied
+        // + immutably cached instead of falling through as an accidental,
+        // unbounded "artifact" cached under the raw request path.
+        if (this.sumdbHandler.matches(path)) {
+            EcsLogger.debug("com.auto1.pantera.http")
+                .message("Handling /sumdb/ via checksum-database proxy handler")
+                .eventCategory("web")
+                .eventAction("proxy_request")
+                .field("url.path", path)
+                .field("repository.name", this.rname)
+                .field("log.source", "application")
+                .log();
+            return this.sumdbHandler.handle(line);
         }
         final Key key = new KeyFromPath(path);
         final Matcher matcher = ARTIFACT.matcher(key.string());
@@ -528,9 +574,9 @@ final class CachedProxySlice implements Slice {
         final AtomicReference<Headers> rshdr,
         final AuditContext ctx
     ) {
-        // WI-07 §9.5 — integrity-verified atomic primary+sidecar write for
-        // Go module archives. Only *.zip has an upstream .ziphash (SHA-256)
-        // sidecar; *.info / *.mod have no sidecars and fall through to the
+        // WI-07 §9.5 — atomic stream-through cache write for Go module
+        // archives. No sidecar is fetched or verified (see class javadoc);
+        // *.info / *.mod have no sidecars either and fall through to the
         // legacy flow. Runs only when we have a file-backed storage.
         if (this.cacheWriter != null
             && this.storage.isPresent()
@@ -597,7 +643,7 @@ final class CachedProxySlice implements Slice {
                         return promise;
                     }
                 ),
-                this.cacheControlFor(key, head.orElse(Headers.EMPTY))
+                this.cacheControlFor(head.orElse(Headers.EMPTY))
             )).handle(
                 (content, throwable) -> {
                     if (throwable == null && content.isPresent()) {
@@ -822,40 +868,22 @@ final class CachedProxySlice implements Slice {
     }
 
     /**
-     * Determine cache control strategy for the given key.
-     * Uses TTL-based control for metadata paths (list, @latest),
-     * checksum-based control for artifacts.
+     * Determine cache control strategy for the given key. Only reached
+     * for artifact paths ({@code .info}/{@code .mod}) — {@code @v/list}
+     * and {@code @latest} are intercepted earlier in {@link #response}
+     * and cached by {@link GoMetadataBaseLoader}, the single owner of
+     * metadata caching (WS4-go.2).
      *
-     * @param key Cache key
      * @param head Headers from HEAD request
      * @return Cache control strategy
      */
-    private CacheControl cacheControlFor(final Key key, final Headers head) {
-        final String path = key.string();
-        // Metadata paths need TTL-based expiration to pick up new versions
-        if (this.isMetadataPath(path)) {
-            return this.storage
-                .<CacheControl>map(sto -> new CacheTimeControl(sto))
-                .orElse(CacheControl.Standard.ALWAYS);
-        }
-        // Artifacts use checksum-based validation
+    private CacheControl cacheControlFor(final Headers head) {
         return new CacheControl.All(
             StreamSupport.stream(head.spliterator(), false)
                 .map(Header::new)
                 .map(CachedProxySlice::checksumControl)
                 .toList()
         );
-    }
-
-    /**
-     * Check if path is a metadata path that needs TTL-based caching.
-     * Metadata paths: @v/list (version list), @latest (latest version info)
-     *
-     * @param path Request path
-     * @return true if metadata path
-     */
-    private boolean isMetadataPath(final String path) {
-        return path.endsWith("/@v/list") || path.endsWith("/@latest");
     }
 
     private static CacheControl checksumControl(final Header header) {
@@ -992,9 +1020,6 @@ final class CachedProxySlice implements Slice {
             this.rname,
             key.string()
         );
-        final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> sidecars =
-            new EnumMap<>(ChecksumAlgo.class);
-        sidecars.put(ChecksumAlgo.SHA256, () -> this.fetchSidecar(line, ".ziphash"));
         return this.client.response(line, Headers.EMPTY, Content.EMPTY)
             .thenCompose(resp -> {
                 if (!resp.status().success()) {
@@ -1028,11 +1053,11 @@ final class CachedProxySlice implements Slice {
                     key.string(),
                     resp.body().size(),
                     resp.body(),
-                    sidecars,
-                    // Go's only sidecar is .ziphash (SHA-256), which lives
-                    // in NON_BLOCKING_DEFAULT; pass an empty non-blocking
-                    // set so the verification keeps the cache empty on
-                    // mismatch.
+                    // No sidecar: the GOPROXY protocol has no checksum
+                    // file for module archives (see class javadoc). An
+                    // empty map disables sidecar verification entirely —
+                    // the write commits as soon as the stream completes.
+                    new EnumMap<>(ChecksumAlgo.class),
                     Collections.emptySet(),
                     ctx
                 ).toCompletableFuture().thenApply(result -> {
@@ -1106,31 +1131,6 @@ final class CachedProxySlice implements Slice {
                     .textBody("Upstream temporarily unavailable")
                     .build();
             });
-    }
-
-    /**
-     * Fetch a sidecar for the primary at {@code line}. Returns
-     * {@link Optional#empty()} for 4xx/5xx and I/O errors so the writer
-     * treats the sidecar as absent and a transient sidecar failure never
-     * blocks the primary write.
-     */
-    private CompletionStage<Optional<InputStream>> fetchSidecar(
-        final RequestLine primary, final String extension
-    ) {
-        final String sidecarPath = primary.uri().getPath() + extension;
-        final RequestLine sidecarLine = new RequestLine(RqMethod.GET, sidecarPath);
-        return this.client.response(sidecarLine, Headers.EMPTY, Content.EMPTY)
-            .thenCompose(resp -> {
-                if (!resp.status().success()) {
-                    return resp.body().asBytesFuture()
-                        .thenApply(ignored -> Optional.<InputStream>empty());
-                }
-                return resp.body().asBytesFuture()
-                    .thenApply(bytes -> Optional.<InputStream>of(
-                        new ByteArrayInputStream(bytes)
-                    ));
-            })
-            .exceptionally(ignored -> Optional.<InputStream>empty());
     }
 
     /**
