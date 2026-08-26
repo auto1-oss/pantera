@@ -279,6 +279,15 @@ public class ResponseBuilder {
                 case SERVICE_UNAVAILABLE -> RSP_SERVICE_UNAVAILABLE;
                 case PARTIAL_CONTENT -> RSP_PARTIAL_CONTENT;
                 case GATEWAY_TIMEOUT -> RSP_GATEWAY_TIMEOUT;
+                case PAYMENT_REQUIRED -> RSP_PAYMENT_REQUIRED;
+                case NOT_ACCEPTABLE -> RSP_NOT_ACCEPTABLE;
+                case GONE -> RSP_GONE;
+                case URI_TOO_LONG -> RSP_URI_TOO_LONG;
+                case UNSUPPORTED_MEDIA_TYPE -> RSP_UNSUPPORTED_MEDIA_TYPE;
+                case UNPROCESSABLE_ENTITY -> RSP_UNPROCESSABLE_ENTITY;
+                case PRECONDITION_REQUIRED -> RSP_PRECONDITION_REQUIRED;
+                case UNAVAILABLE_FOR_LEGAL_REASONS -> RSP_UNAVAILABLE_FOR_LEGAL_REASONS;
+                case INSUFFICIENT_STORAGE -> RSP_INSUFFICIENT_STORAGE;
             };
         }
         return new Response(status, new UnmodifiableHeaders(headers.asList()), body);
@@ -319,4 +328,13 @@ public class ResponseBuilder {
     private final static Response RSP_SERVICE_UNAVAILABLE = new Response(RsStatus.SERVICE_UNAVAILABLE, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_PARTIAL_CONTENT = new Response(RsStatus.PARTIAL_CONTENT, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_GATEWAY_TIMEOUT = new Response(RsStatus.GATEWAY_TIMEOUT, Headers.EMPTY, Content.EMPTY);
+    private final static Response RSP_PAYMENT_REQUIRED = new Response(RsStatus.PAYMENT_REQUIRED, Headers.EMPTY, Content.EMPTY);
+    private final static Response RSP_NOT_ACCEPTABLE = new Response(RsStatus.NOT_ACCEPTABLE, Headers.EMPTY, Content.EMPTY);
+    private final static Response RSP_GONE = new Response(RsStatus.GONE, Headers.EMPTY, Content.EMPTY);
+    private final static Response RSP_URI_TOO_LONG = new Response(RsStatus.URI_TOO_LONG, Headers.EMPTY, Content.EMPTY);
+    private final static Response RSP_UNSUPPORTED_MEDIA_TYPE = new Response(RsStatus.UNSUPPORTED_MEDIA_TYPE, Headers.EMPTY, Content.EMPTY);
+    private final static Response RSP_UNPROCESSABLE_ENTITY = new Response(RsStatus.UNPROCESSABLE_ENTITY, Headers.EMPTY, Content.EMPTY);
+    private final static Response RSP_PRECONDITION_REQUIRED = new Response(RsStatus.PRECONDITION_REQUIRED, Headers.EMPTY, Content.EMPTY);
+    private final static Response RSP_UNAVAILABLE_FOR_LEGAL_REASONS = new Response(RsStatus.UNAVAILABLE_FOR_LEGAL_REASONS, Headers.EMPTY, Content.EMPTY);
+    private final static Response RSP_INSUFFICIENT_STORAGE = new Response(RsStatus.INSUFFICIENT_STORAGE, Headers.EMPTY, Content.EMPTY);
 }
