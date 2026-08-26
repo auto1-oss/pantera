@@ -2,12 +2,21 @@
 
 ## Version 2.2.5
 
+### ⚠️ Breaking changes
+
+- **npm version and dist-tag removal now require the `delete` permission instead of `write`** — grant `delete` to any role that needs to run `npm unpublish <pkg>@<version>` or `npm dist-tag rm`.
+  ([@ayd](https://github.com/ayd))
+- **`npm unpublish --force` (whole-package removal) now requires a current packument `_rev`** — a mismatched revision is rejected with `409`, a missing or literal `undefined` value with `428`, and an unknown package with `404`. The npm CLI satisfies this automatically by reading the packument first; hand-rolled requests must read `_rev` and send it too.
+  ([@ayd](https://github.com/ayd))
+
 ### 🌟 New features
 
-- **npm local repositories sign published packages** (ECDSA, served at `/-/npm/v1/keys`), store `--provenance` attestations (`/-/npm/v1/attestations/<spec>`), and support `npm token`/`profile` and single-version fetches.
+- **npm local repositories sign published packages** (ECDSA, served at `/-/npm/v1/keys`), store `--provenance` attestations (`/-/npm/v1/attestations/<spec>`), and support `npm profile` and single-version fetches. *(Correction: this entry originally also claimed `npm token` support — `npm token` is not supported; see the npm user guide.)*
   ([@aydasraf](https://github.com/aydasraf))
 - **Forwarded-header trust is now a DB-backed, hot-reloadable admin setting** — `trust_forwarded_headers` (`GET`/`PUT /api/v1/admin/client-base-url-settings`, admin UI Settings page card) replaces the old env-only `PANTERA_TRUST_FORWARDED_HEADERS` flag, which is now only the fallback tier; a change applies to the very next request on the node that received it, no restart required.
   ([@aydasraf](https://github.com/aydasraf))
+- **npm proxy misses caused by a non-`404` upstream response now name the real status in an `X-Pantera-Upstream-Status` response header** — the response itself stays `404` so multi-remote races and group walks still fall through correctly, but a legally blocked package (upstream `451`) or a throttled one is now distinguishable from one that genuinely doesn't exist.
+  ([@ayd](https://github.com/ayd))
 
 ### 🔧 Bug fixes
 
@@ -37,9 +46,18 @@
   ([@aydasraf](https://github.com/aydasraf))
 - **npm proxy/group `404`s for an unresolved package version carry an honest JSON body** (`{"error":"version not found: ...","package":"..."}`) instead of an empty one, matching local repositories.
   ([@aydasraf](https://github.com/aydasraf))
+- **npm packuments now carry a deterministic `_rev`**, so `npm unpublish --force` validates the caller's revision instead of accepting any value (see Breaking changes above).
+  ([@ayd](https://github.com/ayd))
+- **Unimplemented npm endpoints (currently `npm token`) answer a fast `404` with `X-Pantera-Reason: not_implemented`** instead of a `5xx` that npm clients retried for roughly 70 seconds — npm's retry logic only backs off on `4xx`, so even a semantically-correct `501` would have been retried just as long.
+  ([@ayd](https://github.com/ayd))
+- **`npm profile set` now requires the `write` permission instead of `read`.**
+  ([@ayd](https://github.com/ayd))
 
 - **A `HEAD` probe against any group repository can no longer poison the negative cache for every subsequent `GET`** — `GroupResolver`, the shared resolution path for every group type (Maven, npm, PyPI, Docker, Composer, Go, Gem, generic files), wrote a negative-cache entry off a member's `404` regardless of request method; only a `GET`'s `404` is now trusted, closing the same class of bug already fixed for the npm proxy above.
   ([@aydasraf](https://github.com/aydasraf))
+- **Proxy repositories no longer stall for 60 seconds on an upstream status Pantera didn't recognise** (`410`, `422`, `428`, `451`, `507`) before failing with a `502` — such responses now resolve immediately. This affected every proxy format, not just npm; `451` in particular is what npmjs.org returns for a legally blocked package, so a single blocked transitive dependency could previously stall an entire install.
+  ([@ayd](https://github.com/ayd))
+
 - **`PANTERA_UPSTREAM_BREAKER_*` env vars are no longer silently shadowed by the migration that seeds their defaults, and are honoured on DB-less boots too** — V136 unconditionally wrote `upstream_breaker_*` rows into `auth_settings`, so the DB row was always present and an operator's env vars were ignored from the moment they upgraded; a follow-up migration removes only the rows still holding their untouched default (an admin's own customised value is left alone), and `UpstreamBreakerSettingsLoader` now installs unconditionally at boot like every other DB→env→default settings loader.
   ([@aydasraf](https://github.com/aydasraf))
 
