@@ -34,16 +34,32 @@ public final class MetadataEnhancer {
      * Original metadata.
      */
     private final JsonObject original;
-    
+
     /**
-     * Ctor.
-     * 
+     * Packument revision, or {@code null} to omit {@code _rev}.
+     */
+    private final String revision;
+
+    /**
+     * Ctor without a revision.
+     *
      * @param original Original metadata JSON
      */
     public MetadataEnhancer(final JsonObject original) {
-        this.original = original;
+        this(original, null);
     }
-    
+
+    /**
+     * Primary ctor.
+     *
+     * @param original Original metadata JSON
+     * @param revision Packument revision, or {@code null} to omit {@code _rev}
+     */
+    public MetadataEnhancer(final JsonObject original, final String revision) {
+        this.original = original;
+        this.revision = revision;
+    }
+
     /**
      * Enhance metadata with complete fields.
      *
@@ -78,6 +94,13 @@ public final class MetadataEnhancer {
         // Ensure _attachments exists (some tools depend on it)
         if (!this.original.containsKey("_attachments")) {
             builder.add("_attachments", Json.createObjectBuilder().build());
+        }
+
+        // Emit the deterministic revision so `npm unpublish --force` can be
+        // validated against it (WS-A). Omitted, never fabricated, when the
+        // caller has no revision to offer.
+        if (this.revision != null) {
+            builder.add("_rev", this.revision);
         }
 
         return builder.build();
