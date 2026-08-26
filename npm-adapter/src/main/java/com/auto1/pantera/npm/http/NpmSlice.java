@@ -331,7 +331,7 @@ public final class NpmSlice implements Slice {
                     basicAuth,
                     npmTokenAuth,
                     new OperationControl(
-                        policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
+                        policy, new AdapterBasicPermission(name, Action.Standard.DELETE)
                     )
                 )
             ),
@@ -382,7 +382,7 @@ public final class NpmSlice implements Slice {
                     basicAuth,
                     npmTokenAuth,
                     new OperationControl(
-                        policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
+                        policy, new AdapterBasicPermission(name, Action.Standard.DELETE)
                     )
                 )
             ),
@@ -509,7 +509,10 @@ public final class NpmSlice implements Slice {
                     new RtRule.ByPath(".*/-/npm/v1/tokens$")
                 ),
                 NpmSlice.createAuthSlice(
-                    NpmSlice.tokensSlice(jwtOnly, storage),
+                    new DeclinedEndpointSlice(
+                        "npm token management",
+                        "repositories/npm.md#unsupported-endpoints"
+                    ),
                     basicAuth,
                     npmTokenAuth,
                     new OperationControl(
@@ -523,7 +526,10 @@ public final class NpmSlice implements Slice {
                     new RtRule.ByPath(".*/-/npm/v1/tokens/token/.+$")
                 ),
                 NpmSlice.createAuthSlice(
-                    NpmSlice.tokensSlice(jwtOnly, storage),
+                    new DeclinedEndpointSlice(
+                        "npm token management",
+                        "repositories/npm.md#unsupported-endpoints"
+                    ),
                     basicAuth,
                     npmTokenAuth,
                     new OperationControl(
@@ -533,7 +539,7 @@ public final class NpmSlice implements Slice {
             ),
             new RtRulePath(
                 new RtRule.All(
-                    new RtRule.Any(MethodRule.GET, MethodRule.PUT),
+                    MethodRule.GET,
                     new RtRule.ByPath(".*/-/npm/v1/user$")
                 ),
                 NpmSlice.createAuthSlice(
@@ -542,6 +548,20 @@ public final class NpmSlice implements Slice {
                     npmTokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    )
+                )
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.PUT,
+                    new RtRule.ByPath(".*/-/npm/v1/user$")
+                ),
+                NpmSlice.createAuthSlice(
+                    NpmSlice.profileSlice(jwtOnly, storage),
+                    basicAuth,
+                    npmTokenAuth,
+                    new OperationControl(
+                        policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
                     )
                 )
             ),
@@ -702,27 +722,6 @@ public final class NpmSlice implements Slice {
             slice = new com.auto1.pantera.npm.http.auth.OAuthLoginSlice(basicAuth, this.tokens);
         } else {
             slice = new SliceSimple(ResponseBuilder.notFound().build());
-        }
-        return slice;
-    }
-
-    /**
-     * {@code /-/npm/v1/tokens} is backed by {@code StorageTokenRepository}
-     * outside JWT-only mode; JWT-only repositories have no per-npm-token
-     * storage (see {@code NpmTokensSlice}'s class javadoc).
-     *
-     * @param jwtOnly Whether this repository is JWT-only
-     * @param storage Repository storage
-     * @return Tokens slice
-     */
-    private static Slice tokensSlice(final boolean jwtOnly, final Storage storage) {
-        final Slice slice;
-        if (jwtOnly) {
-            slice = new com.auto1.pantera.npm.http.auth.NpmTokensSlice();
-        } else {
-            slice = new com.auto1.pantera.npm.http.auth.NpmTokensSlice(
-                new StorageTokenRepository(storage)
-            );
         }
         return slice;
     }
