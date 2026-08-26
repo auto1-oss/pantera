@@ -82,7 +82,7 @@ final class GemScanner implements Scanner {
             .filter(Files::isRegularFile)
             .filter(path -> !path.getFileName().toString().startsWith("."))
             .filter(path -> path.getFileName().toString().endsWith(".gem"))
-            .flatMap(path -> this.tryParse(repoName, path));
+            .flatMap(path -> this.tryParse(repoName, path, root));
     }
 
     /**
@@ -90,10 +90,12 @@ final class GemScanner implements Scanner {
      *
      * @param repoName Logical repository name
      * @param path File path to parse
+     * @param root Repository root, used to compute the repo-relative real
+     *     storage key stored as {@code pathPrefix}
      * @return Stream with a single record, or empty if filename does not match
      */
     private Stream<ArtifactRecord> tryParse(final String repoName,
-        final Path path) {
+        final Path path, final Path root) {
         final String filename = path.getFileName().toString();
         final Matcher matcher = GEM_PATTERN.matcher(filename);
         if (!matcher.matches()) {
@@ -108,6 +110,14 @@ final class GemScanner implements Scanner {
             final BasicFileAttributes attrs = Files.readAttributes(
                 path, BasicFileAttributes.class
             );
+            // Real storage key: the scanned file's path relative to the
+            // repo root, e.g. "gems/rails-7.0.4.gem" (or just the filename
+            // for the flat-at-root layout) -- exactly what live uploads
+            // write via Gem.update(), so browse-to-directory can resolve
+            // it without guessing a per-package directory that never
+            // exists.
+            final String pathPrefix = root.relativize(path).toString()
+                .replace('\\', '/');
             return Stream.of(
                 new ArtifactRecord(
                     "gem",
@@ -118,7 +128,7 @@ final class GemScanner implements Scanner {
                     attrs.lastModifiedTime().toMillis(),
                     null,
                     "system",
-                    null
+                    pathPrefix
                 )
             );
         } catch (final IOException ex) {

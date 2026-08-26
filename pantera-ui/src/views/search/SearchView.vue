@@ -189,29 +189,19 @@ function formatUploadedAtAbsolute(iso?: string | null): string {
   })
 }
 
-function normalizePath(path: string): string {
-  if (path.includes('/')) return path
-  const lastDot = path.lastIndexOf('.')
-  if (lastDot <= 0) return path
-  const ext = path.substring(lastDot)
-  if (ext.length > 1 && ext.length <= 8) {
-    const withoutExt = path.substring(0, lastDot)
-    if (withoutExt.includes('.')) {
-      return withoutExt.replace(/\./g, '/') + ext
-    }
-  }
-  return path
-}
-
+// artifact_path is the artifact's real storage key (StorageArtifactSlice
+// populates it straight from the request URI path) -- it is never a dotted
+// encoding of a directory hierarchy, so trust it as-is: a key with slashes
+// is already a real path, a key without slashes is a flat file at the
+// repository root. Guessing dots-as-separators previously turned version
+// strings like "1.0.0-SNAPSHOT" into fake directory levels.
 function artifactName(path: string): string {
-  const normalized = normalizePath(path)
-  const parts = normalized.split('/').filter(Boolean)
+  const parts = path.split('/').filter(Boolean)
   return parts.length > 0 ? parts[parts.length - 1] : path
 }
 
 function parentDir(path: string): string {
-  const normalized = normalizePath(path)
-  const parts = normalized.split('/').filter(Boolean)
+  const parts = path.split('/').filter(Boolean)
   parts.pop()
   return parts.join('/')
 }
@@ -221,33 +211,80 @@ function parentDir(path: string): string {
 function browseUrl(data: SearchResult): string {
   const rtype = (data.repo_type ?? '').toLowerCase()
   const name = data.artifact_path
-  const version = data.version
+  const realKey = data.path_prefix
   let path: string
 
   if (rtype.startsWith('maven') || rtype.startsWith('gradle')) {
-    const slashPath = name.replace(/\./g, '/')
-    path = version ? `/${slashPath}/${version}` : `/${slashPath}`
+    // artifact_path here is the DOTTED GAV coordinate --
+    // "com.fasterxml.jackson.core.jackson-databind" -- not a storage key.
+    // It contains no slashes at all, so taking its parent directory yields
+    // "" and browses to the repository root.
+    //
+    // path_prefix is the real version directory ("com/fasterxml/jackson/
+    // core/jackson-databind/2.22.0") and is already exactly the target, so
+    // it is used verbatim -- no parent, no appended version. It is also the
+    // only correct source when the artifactId itself contains dots
+    // (javax.inject:javax.inject lives at javax/inject/javax.inject/1, not
+    // javax/inject/javax/inject/1), which no dots-to-slashes guess can get
+    // right.
+    //
+    // MavenScanner records path_prefix for proxy repositories only, so
+    // hosted rows fall back to expanding the GAV: groupId dots ARE
+    // directory separators, and the version is appended as its own segment
+    // so it is never itself dot-split.
+    // Leading slashes are normalised because this data model is not
+    // consistent about them -- artifact_path arrives both with and without
+    // one -- and "//com/..." is not the same route as "/com/...".
+    if (realKey) {
+      path = '/' + realKey.replace(/^\/+/, '')
+    } else if (name.includes('/')) {
+      path = '/' + (parentDir(name) || '')
+    } else {
+      const dir = name.replace(/\./g, '/')
+      path = data.version ? `/${dir}/${data.version}` : `/${dir}`
+    }
   } else if (rtype === 'php-proxy') {
     path = '/dist/' + name
   } else if (rtype === 'php') {
     path = '/artifacts'
+  } else if (rtype.startsWith('gem') || rtype.startsWith('hex') || rtype.startsWith('conda')) {
+    // artifact_path is not a real directory for any of these: gem/hex
+    // storage is flat (no per-package directory), and conda's artifact_path
+    // is a synthetic "name_arch" composite unrelated to the real
+    // "<arch>/<filename>" key. When a writer has recorded the real storage
+    // key (path_prefix), browse to ITS parent directory. Rows indexed
+    // before that field existed -- or any writer that still doesn't
+    // populate it -- fall back to the historical '/' + name guess, which is
+    // wrong as often as not but no worse than before this fix.
+    if (realKey) {
+      const dir = parentDir(realKey)
+      path = '/' + (dir || '')
+    } else {
+      path = '/' + name
+    }
+  } else if (rtype.startsWith('conan')) {
+    // Unlike gem/hex/conda, artifact_path IS already the real, exact
+    // upload key here (never a synthetic name) -- it just needs the same
+    // "browse to the parent, not the file itself" treatment as maven/file,
+    // so no path_prefix dependency and no fallback branch needed.
+    const dir = parentDir(name)
+    path = '/' + (dir || '')
   } else if (
     rtype.startsWith('npm') || rtype.startsWith('pypi') ||
     rtype.startsWith('go') ||
-    rtype.startsWith('gem') || rtype.startsWith('hex') ||
-    rtype.startsWith('conan') || rtype.startsWith('conda') ||
     rtype.startsWith('nuget')
   ) {
     path = '/' + name
   } else if (rtype === 'file' || rtype === 'file-proxy' || rtype === 'file-group') {
-    const normalized = normalizePath(name)
-    const dir = normalized.split('/').filter(Boolean).slice(0, -1).join('/')
+    const dir = parentDir(name)
     path = '/' + (dir || '')
   } else if (rtype.startsWith('docker')) {
     path = '/'
   } else {
+    // helm/debian/rpm and any future type land here; the browse path must be
+    // absolute like every other branch's, so the leading slash is not optional.
     const dir = parentDir(name)
-    path = dir || '/'
+    path = '/' + (dir || '')
   }
   return `/repositories/${data.repo_name}?path=${encodeURIComponent(path)}&from=search`
 }
@@ -424,7 +461,7 @@ const SORT_OPTIONS = [
                 {{ artifactName(item.artifact_path) }}
               </div>
               <div class="text-xs text-gray-400 font-mono mt-0.5 truncate">
-                {{ normalizePath(item.artifact_path) }}
+                {{ item.artifact_path }}
               </div>
               <div class="flex items-center gap-2 mt-2 flex-wrap">
                 <RepoTypeBadge :type="item.repo_type" />

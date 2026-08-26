@@ -26,4 +26,14 @@ class RsStatusTest {
             new IsEqual<>(RsStatus.PRECONDITION_FAILED)
         );
     }
+
+    @Test
+    void mapsTheStatusesUpstreamsActuallySend() {
+        for (final int code : new int[]{402, 406, 410, 414, 415, 422, 428, 451, 507}) {
+            MatcherAssert.assertThat(
+                String.format("status %d must map, upstreams send it", code),
+                RsStatus.byCode(code).code(), new IsEqual<>(code)
+            );
+        }
+    }
 }

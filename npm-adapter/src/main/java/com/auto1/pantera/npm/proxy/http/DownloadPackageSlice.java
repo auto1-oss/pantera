@@ -18,6 +18,7 @@ import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.ClientBaseUrl;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.npm.proxy.NpmProxy;
@@ -92,6 +93,12 @@ public final class DownloadPackageSlice implements Slice {
     private final String repoName;
 
     /**
+     * Resolves {@code GET}/{@code HEAD /<pkg>/<version-or-tag>} against the
+     * (cooldown-filtered) packument.
+     */
+    private final VersionManifestResolver resolver;
+
+    /**
      * @param npm NPM Proxy facade
      * @param path Package path helper
      */
@@ -130,14 +137,8 @@ public final class DownloadPackageSlice implements Slice {
         this.cooldownMetadata = cooldownMetadata;
         this.repoType = repoType;
         this.repoName = repoName;
+        this.resolver = new VersionManifestResolver(npm, cooldownMetadata, repoType, repoName);
     }
-
-    /**
-     * Suffix identifying the dist-tag shortcut endpoint
-     * {@code GET /<pkg>/latest}. Older yarn/pnpm/npm versions hit this
-     * directly to fetch only the {@code latest} version's manifest.
-     */
-    private static final String LATEST_SUFFIX = "/latest";
 
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
@@ -166,17 +167,17 @@ public final class DownloadPackageSlice implements Slice {
             final String rawPath = this.path.value(line.uri().getPath());
             final String rawPackageName = URLDecoder.decode(rawPath, StandardCharsets.UTF_8);
 
-            // DIST-TAG SHORTCUT: GET /<pkg>/latest returns only the latest
-            // version's manifest. Strip the /latest suffix, fetch & filter the
-            // packument, then emit the post-filter latest version's manifest.
-            // Covers v1.21.0+ metadata cooldown gap for clients that resolve
-            // via the shortcut instead of the full packument.
-            if (rawPackageName.endsWith(LATEST_SUFFIX)
-                && rawPackageName.length() > LATEST_SUFFIX.length()) {
-                final String packageName = rawPackageName.substring(
-                    0, rawPackageName.length() - LATEST_SUFFIX.length()
+            // Single-version / dist-tag reference: GET /<pkg>/<version> and
+            // /<pkg>/<tag> (including /latest). Resolved from the filtered
+            // packument so cooldown still applies, with the tarball URL
+            // rewritten to the base the client addressed.
+            final Optional<VersionManifestResolver.PackageRef> versionRef =
+                VersionManifestResolver.parse(rawPackageName);
+            if (versionRef.isPresent()) {
+                return this.resolver.resolve(
+                    versionRef.get().pkg(), versionRef.get().ref(),
+                    this.getTarballPrefix(headers), this.vary(headers), clientETag, auditCtx, owner
                 );
-                return this.serveLatestManifest(packageName, auditCtx, owner);
             }
 
             // MEMORY OPTIMIZATION: Use different paths for abbreviated vs full requests
@@ -270,8 +271,16 @@ public final class DownloadPackageSlice implements Slice {
         return this.npm.getPackageMetadataOnly(packageName)
             .doOnEvent((m, e) -> recordPhase("packument_metadata_fetch", metaNs))
             .flatMap(metadata -> {
-                // PERF: Early 304 exit - skip content loading if derived ETag matches
-                if (clientETag.isPresent() && metadata.abbreviatedHash().isPresent()) {
+                // PERF: Early 304 exit — skip content loading when the derived
+                // ETag matches. Valid ONLY when cooldown filtering is inactive:
+                // the derived ETag folds the immutable upstream hash, which does
+                // not change when a version is blocked/unblocked. With cooldown
+                // active we fall through and let buildAbbreviatedResponse
+                // (filtered=true) compute the ETag from the filtered bytes, so a
+                // block-state change busts the client cache instead of returning
+                // a stale 304.
+                if (!this.cooldownActive() && clientETag.isPresent()
+                    && metadata.abbreviatedHash().isPresent()) {
                     final String tarballPrefix = this.getTarballPrefix(headers);
                     final String derivedEtag = MetadataETag.derive(
                         metadata.abbreviatedHash().get(), tarballPrefix
@@ -288,6 +297,7 @@ public final class DownloadPackageSlice implements Slice {
                             ResponseBuilder.from(RsStatus.NOT_MODIFIED)
                                 .header("ETag", derivedEtag)
                                 .header("Cache-Control", "public, max-age=300")
+                                .varyHeader(this.vary(headers))
                                 .build()
                         );
                     }
@@ -315,7 +325,7 @@ public final class DownloadPackageSlice implements Slice {
                                     owner, java.util.List.of()
                                 );
                                 return io.reactivex.Maybe.just(
-                                    this.buildAbbreviatedResponse(abbreviatedBytes, metadata, headers, clientETag)
+                                    this.buildAbbreviatedResponse(abbreviatedBytes, metadata, headers, false, clientETag)
                                 );
                             });
                     })
@@ -342,7 +352,7 @@ public final class DownloadPackageSlice implements Slice {
                                         owner, java.util.List.of()
                                     );
                                     return io.reactivex.Maybe.just(
-                                        this.buildResponse(rawBytes, metadata, headers, true, clientETag)
+                                        this.buildResponse(rawBytes, metadata, headers, true, false, clientETag)
                                     );
                                 });
                         })
@@ -432,9 +442,9 @@ public final class DownloadPackageSlice implements Slice {
                     .error(ex)
                     .field("log.source", "application")
                     .log();
-                return this.buildResponse(fullBytes, metadata, headers, true, clientETag);
+                return this.buildResponse(fullBytes, metadata, headers, true, false, clientETag);
             }
-            return this.buildResponse(filtered, metadata, headers, true, clientETag);
+            return this.buildResponse(filtered, metadata, headers, true, true, clientETag);
         });
         return RxFuture.maybe(filterFuture);
     }
@@ -494,10 +504,10 @@ public final class DownloadPackageSlice implements Slice {
                         .error(ex)
                         .field("log.source", "application")
                         .log();
-                    return this.buildAbbreviatedResponse(abbreviatedBytes, metadata, headers, clientETag);
+                    return this.buildAbbreviatedResponse(abbreviatedBytes, metadata, headers, false, clientETag);
                 }
                 // Success - build response with filtered abbreviated metadata
-                return this.buildAbbreviatedResponse(filtered, metadata, headers, clientETag);
+                return this.buildAbbreviatedResponse(filtered, metadata, headers, true, clientETag);
             });
     }
 
@@ -513,8 +523,14 @@ public final class DownloadPackageSlice implements Slice {
     ) {
         return this.npm.getPackageMetadataOnly(packageName)
             .flatMap(metadata -> {
-                // PERF: Early 304 exit - skip content loading if derived ETag matches
-                if (clientETag.isPresent() && metadata.contentHash().isPresent()) {
+                // PERF: Early 304 exit — skip content loading when the derived
+                // ETag matches. Valid ONLY when cooldown filtering is inactive
+                // (see serveAbbreviated): the derived ETag ignores the filtered
+                // output, so with cooldown active we fall through to
+                // buildResponse (filtered=true) to key the ETag to the served
+                // filtered bytes.
+                if (!this.cooldownActive() && clientETag.isPresent()
+                    && metadata.contentHash().isPresent()) {
                     final String tarballPrefix = this.getTarballPrefix(headers);
                     final String derivedEtag = MetadataETag.derive(
                         metadata.contentHash().get(), tarballPrefix
@@ -531,6 +547,7 @@ public final class DownloadPackageSlice implements Slice {
                             ResponseBuilder.from(RsStatus.NOT_MODIFIED)
                                 .header("ETag", derivedEtag)
                                 .header("Cache-Control", "public, max-age=300")
+                                .varyHeader(this.vary(headers))
                                 .build()
                         );
                     }
@@ -586,9 +603,9 @@ public final class DownloadPackageSlice implements Slice {
                                                 .error(ex)
                                                 .field("log.source", "application")
                                                 .log();
-                                            return this.buildResponse(rawBytes, metadata, headers, false, clientETag);
+                                            return this.buildResponse(rawBytes, metadata, headers, false, false, clientETag);
                                         }
-                                        return this.buildResponse(filtered, metadata, headers, false, clientETag);
+                                        return this.buildResponse(filtered, metadata, headers, false, true, clientETag);
                                     });
                                 return RxFuture.maybe(filterFuture);
                             }
@@ -599,7 +616,7 @@ public final class DownloadPackageSlice implements Slice {
                                 owner, java.util.List.of()
                             );
                             return io.reactivex.Maybe.just(
-                                this.buildResponse(rawBytes, metadata, headers, false, clientETag)
+                                this.buildResponse(rawBytes, metadata, headers, false, false, clientETag)
                             );
                         });
                 });
@@ -610,208 +627,6 @@ public final class DownloadPackageSlice implements Slice {
     }
 
     /**
-     * Serve the dist-tag shortcut endpoint {@code GET /<pkg>/latest}.
-     *
-     * <p>Fetches the packument, applies cooldown filtering (via the same
-     * pipeline used by the full-packument path), resolves the post-filter
-     * {@code dist-tags.latest}, and returns that version's manifest extracted
-     * from {@code versions[latest]}. Behaviour:</p>
-     *
-     * <ul>
-     *   <li>Upstream latest not blocked &rarr; pass-through (just extract the
-     *       entry from the packument).</li>
-     *   <li>Upstream latest blocked, fallback exists &rarr; post-filter
-     *       {@code dist-tags.latest} points at the highest non-blocked stable
-     *       version by release date; we emit that entry.</li>
-     *   <li>All versions blocked &rarr; {@code MetadataFilterService} throws
-     *       {@link AllVersionsBlockedException}; we map to 404 (npm's
-     *       convention for "version not found" on this endpoint).</li>
-     * </ul>
-     *
-     * <p>No URL rewriting is applied to the manifest body — tarball URLs in
-     * the manifest are preserved as-is from upstream. This matches the
-     * behaviour of the upstream npm registry for this endpoint.</p>
-     */
-    private CompletableFuture<Response> serveLatestManifest(
-        final String packageName,
-        final com.auto1.pantera.audit.AuditContext auditCtx,
-        final String owner
-    ) {
-        if (this.cooldownMetadata == null || this.repoType == null) {
-            // Cooldown disabled: pass-through by fetching packument and
-            // returning its current latest manifest. This keeps behaviour
-            // parity with upstream registry even without filtering.
-            return this.resolveLatestFromRaw(packageName, auditCtx, owner);
-        }
-        return this.npm.getPackageMetadataOnly(packageName)
-            .flatMap(metadata -> this.npm.getPackageContentStream(packageName)
-                .flatMap(contentStream -> {
-                    final long contentSize = contentStream.size().orElse(-1L);
-                    return Concatenation.withSize(contentStream, contentSize)
-                        .single()
-                        .map(buf -> new Remaining(buf).bytes())
-                        .toMaybe()
-                        .flatMap(rawBytes -> io.reactivex.Maybe.just(rawBytes));
-                })
-            )
-            .toSingle(new byte[0])
-            .to(SingleInterop.get())
-            .toCompletableFuture()
-            .thenCompose(rawBytes -> {
-                if (rawBytes.length == 0) {
-                    return CompletableFuture.completedFuture(
-                        ResponseBuilder.notFound()
-                            .jsonBody(String.format(
-                                "{\"error\":\"version not found: latest\",\"package\":\"%s\"}",
-                                packageName
-                            ))
-                            .build()
-                    );
-                }
-                return this.cooldownMetadata.filterMetadata(
-                    this.repoType,
-                    this.repoName,
-                    packageName,
-                    rawBytes,
-                    new NpmMetadataParser(),
-                    new NpmMetadataFilter(),
-                    new NpmMetadataRewriter(),
-                    auditCtx,
-                    owner
-                ).handle((filteredBytes, ex) -> {
-                    if (ex != null) {
-                        Throwable cause = ex;
-                        while (cause != null) {
-                            if (cause instanceof AllVersionsBlockedException) {
-                                EcsLogger.info("com.auto1.pantera.npm")
-                                    .message("All versions blocked by cooldown (latest shortcut)")
-                                    .eventCategory("database")
-                                    .eventAction("all_versions_blocked")
-                                    .field("package.name", packageName)
-                                    .field("log.source", "application")
-                                    .log();
-                                return ResponseBuilder.notFound()
-                                    .jsonBody(String.format(
-                                        "{\"error\":\"version not found: latest\",\"package\":\"%s\"}",
-                                        packageName
-                                    ))
-                                    .build();
-                            }
-                            cause = cause.getCause();
-                        }
-                        EcsLogger.warn("com.auto1.pantera.npm")
-                            .message("Cooldown filter error (latest shortcut) - falling back to raw")
-                            .eventCategory("database")
-                            .eventAction("filter_error")
-                            .field("package.name", packageName)
-                            .error(ex)
-                            .field("log.source", "application")
-                            .log();
-                        return this.buildLatestManifestResponse(rawBytes, packageName);
-                    }
-                    return this.buildLatestManifestResponse(filteredBytes, packageName);
-                });
-            });
-    }
-
-    /**
-     * Cooldown-disabled pass-through for {@code /<pkg>/latest}: fetch the
-     * packument and extract its {@code dist-tags.latest} manifest. Still a
-     * metadata listing view — audited with an empty filtered list.
-     */
-    private CompletableFuture<Response> resolveLatestFromRaw(
-        final String packageName,
-        final com.auto1.pantera.audit.AuditContext auditCtx,
-        final String owner
-    ) {
-        return this.npm.getPackageMetadataOnly(packageName)
-            .flatMap(metadata -> this.npm.getPackageContentStream(packageName)
-                .flatMap(contentStream -> {
-                    final long contentSize = contentStream.size().orElse(-1L);
-                    return Concatenation.withSize(contentStream, contentSize)
-                        .single()
-                        .map(buf -> new Remaining(buf).bytes())
-                        .toMaybe();
-                })
-            )
-            .map(rawBytes -> {
-                com.auto1.pantera.audit.AuditLogger.resolution(
-                    auditCtx, this.repoType, this.repoName, packageName,
-                    owner, java.util.List.of()
-                );
-                return this.buildLatestManifestResponse(rawBytes, packageName);
-            })
-            .toSingle(ResponseBuilder.notFound()
-                .jsonBody(String.format(
-                    "{\"error\":\"version not found: latest\",\"package\":\"%s\"}",
-                    packageName
-                ))
-                .build())
-            .to(SingleInterop.get())
-            .toCompletableFuture();
-    }
-
-    /**
-     * Build a {@code /<pkg>/latest} response from (post-filter) packument
-     * bytes: parse JSON, read {@code dist-tags.latest}, look up the
-     * corresponding entry in {@code versions}, and emit it as the body. Returns
-     * 404 if the packument is malformed, has no {@code latest} tag, or the
-     * referenced version is missing (e.g. all blocked and removed).
-     */
-    private Response buildLatestManifestResponse(
-        final byte[] packumentBytes,
-        final String packageName
-    ) {
-        try {
-            final com.fasterxml.jackson.databind.JsonNode root =
-                new com.fasterxml.jackson.databind.ObjectMapper().readTree(packumentBytes);
-            final com.fasterxml.jackson.databind.JsonNode distTags = root.get("dist-tags");
-            if (distTags == null || !distTags.isObject() || !distTags.has("latest")) {
-                return ResponseBuilder.notFound()
-                    .jsonBody(String.format(
-                        "{\"error\":\"version not found: latest\",\"package\":\"%s\"}",
-                        packageName
-                    ))
-                    .build();
-            }
-            final String latest = distTags.get("latest").asText();
-            final com.fasterxml.jackson.databind.JsonNode versions = root.get("versions");
-            if (versions == null || !versions.has(latest)) {
-                return ResponseBuilder.notFound()
-                    .jsonBody(String.format(
-                        "{\"error\":\"version not found: latest\",\"package\":\"%s\"}",
-                        packageName
-                    ))
-                    .build();
-            }
-            final com.fasterxml.jackson.databind.JsonNode manifest = versions.get(latest);
-            final byte[] body = new com.fasterxml.jackson.databind.ObjectMapper()
-                .writeValueAsBytes(manifest);
-            return ResponseBuilder.ok()
-                .header("Content-Type", "application/json; charset=utf-8")
-                .header("Cache-Control", "public, max-age=300")
-                .body(body)
-                .build();
-        } catch (final java.io.IOException ex) {
-            EcsLogger.warn("com.auto1.pantera.npm")
-                .message("Failed to extract /latest manifest from packument")
-                .eventCategory("web")
-                .eventAction("latest_manifest")
-                .eventOutcome("failure")
-                .field("package.name", packageName)
-                .error(ex)
-                .field("log.source", "application")
-                .log();
-            return ResponseBuilder.notFound()
-                .jsonBody(String.format(
-                    "{\"error\":\"version not found: latest\",\"package\":\"%s\"}",
-                    packageName
-                ))
-                .build();
-        }
-    }
-
-    /**
      * Build response from pre-computed abbreviated metadata.
      * MEMORY EFFICIENT: Uses byte-level URL transformation - no JSON parsing.
      */
@@ -819,23 +634,23 @@ public final class DownloadPackageSlice implements Slice {
         final byte[] abbreviatedBytes,
         final com.auto1.pantera.npm.proxy.model.NpmPackage.Metadata metadata,
         final Headers headers,
+        final boolean filtered,
         final Optional<String> clientETag
     ) {
         final String tarballPrefix = this.getTarballPrefix(headers);
-        // PERF: Derive ETag from pre-computed hash + prefix (~100 bytes to hash)
-        // instead of SHA-256 of full transformed content (3-5MB). ~1000x faster.
-        final String etag = metadata.abbreviatedHash()
-            .map(hash -> MetadataETag.derive(hash, tarballPrefix))
-            .orElseGet(() -> {
-                final ByteLevelUrlTransformer transformer = new ByteLevelUrlTransformer();
-                final byte[] transformed = transformer.transform(abbreviatedBytes, tarballPrefix);
-                return new MetadataETag(transformed).calculate();
-            });
+        // A filtered body keys its ETag to the served bytes (they change on
+        // block/unblock); a raw body keeps the fast derive() from the stored
+        // abbreviated hash (~100 bytes to hash, ~1000x faster than SHA-256 of
+        // the full 3-5MB content).
+        final String etag = filtered
+            ? this.filteredEtag(abbreviatedBytes, tarballPrefix)
+            : this.rawAbbreviatedEtag(metadata, abbreviatedBytes, tarballPrefix);
         // Check for 304 Not Modified BEFORE URL transformation
         if (clientETag.isPresent() && clientETag.get().equals(etag)) {
             return ResponseBuilder.from(RsStatus.NOT_MODIFIED)
                 .header("ETag", etag)
                 .header("Cache-Control", "public, max-age=300")
+                .varyHeader(this.vary(headers))
                 .build();
         }
         // Only transform bytes when we actually need to send them
@@ -850,6 +665,7 @@ public final class DownloadPackageSlice implements Slice {
             .header("ETag", etag)
             .header("Cache-Control", "public, max-age=300")
             .header("CDN-Cache-Control", "public, max-age=600")
+            .varyHeader(this.vary(headers))
             .body(streamedContent)
             .build();
     }
@@ -863,24 +679,24 @@ public final class DownloadPackageSlice implements Slice {
         final com.auto1.pantera.npm.proxy.model.NpmPackage.Metadata metadata,
         final Headers headers,
         final boolean abbreviated,
+        final boolean filtered,
         final Optional<String> clientETag
     ) {
         try {
             final String tarballPrefix = this.getTarballPrefix(headers);
             // For full metadata requests (abbreviated=false), we can skip JSON parsing
             if (!abbreviated) {
-                // PERF: Derive ETag from pre-computed hash + prefix (~100 bytes)
-                // instead of SHA-256 of full transformed content (3-5MB). ~1000x faster.
-                final String etag = metadata.contentHash()
-                    .map(hash -> MetadataETag.derive(hash, tarballPrefix))
-                    .orElseGet(() -> {
-                        final ByteLevelUrlTransformer t = new ByteLevelUrlTransformer();
-                        return new MetadataETag(t.transform(rawBytes, tarballPrefix)).calculate();
-                    });
+                // A filtered body keys its ETag to the served bytes (they change
+                // on block/unblock); a raw body keeps the fast derive() from the
+                // stored upstream hash (~1000x faster than SHA-256 of the body).
+                final String etag = filtered
+                    ? this.filteredEtag(rawBytes, tarballPrefix)
+                    : this.rawFullEtag(metadata, rawBytes, tarballPrefix);
                 if (clientETag.isPresent() && clientETag.get().equals(etag)) {
                     return ResponseBuilder.from(RsStatus.NOT_MODIFIED)
                         .header("ETag", etag)
                         .header("Cache-Control", "public, max-age=300")
+                        .varyHeader(this.vary(headers))
                         .build();
                 }
                 final ByteLevelUrlTransformer transformer = new ByteLevelUrlTransformer();
@@ -894,6 +710,7 @@ public final class DownloadPackageSlice implements Slice {
                     .header("ETag", etag)
                     .header("Cache-Control", "public, max-age=300")
                     .header("CDN-Cache-Control", "public, max-age=600")
+                    .varyHeader(this.vary(headers))
                     .body(streamedContent)
                     .build();
             }
@@ -910,6 +727,7 @@ public final class DownloadPackageSlice implements Slice {
                 return ResponseBuilder.from(RsStatus.NOT_MODIFIED)
                     .header("ETag", etag)
                     .header("Cache-Control", "public, max-age=300")
+                    .varyHeader(this.vary(headers))
                     .build();
             }
             final Content streamedContent = new Content.From(
@@ -921,6 +739,7 @@ public final class DownloadPackageSlice implements Slice {
                 .header("ETag", etag)
                 .header("Cache-Control", "public, max-age=300")
                 .header("CDN-Cache-Control", "public, max-age=600")
+                .varyHeader(this.vary(headers))
                 .body(streamedContent)
                 .build();
         } catch (final Exception e) {
@@ -953,6 +772,7 @@ public final class DownloadPackageSlice implements Slice {
             return ResponseBuilder.from(RsStatus.NOT_MODIFIED)
                 .header("ETag", etag)
                 .header("Cache-Control", "public, max-age=300")
+                .varyHeader(this.vary(headers))
                 .build();
         }
 
@@ -968,25 +788,127 @@ public final class DownloadPackageSlice implements Slice {
             .header("ETag", etag)
             .header("Cache-Control", "public, max-age=300")
             .header("CDN-Cache-Control", "public, max-age=600")
+            .varyHeader(this.vary(headers))
             .body(streamedContent)
             .build();
     }
-    
+
     /**
-     * Get tarball URL prefix for streaming transformer.
+     * {@code Vary} header value for a response whose body embeds a base URL
+     * derived (or potentially derivable) from {@code headers} — see
+     * {@link ClientBaseUrl#varyHeaderValue()}.
+     *
+     * @param headers Request headers
+     * @return Vary header value
+     */
+    private String vary(final Headers headers) {
+        return new ClientBaseUrl(headers).varyHeaderValue();
+    }
+
+    /**
+     * Client-facing prefix for tarball URLs, in precedence order: the base
+     * stamped by {@code SliceByPath} for the repository the client actually
+     * addressed (so a group member emits group URLs), then this repository's
+     * configured {@code url:}, then the request's own origin.
+     *
+     * @param headers Request headers
+     * @return Absolute URL prefix
      */
     private String getTarballPrefix(final Headers headers) {
-        if (this.baseUrl.isPresent()) {
-            return this.baseUrl.get().toString();
+        final String result;
+        final Optional<String> stamped = new ClientBaseUrl(headers).stamped();
+        if (stamped.isPresent()) {
+            result = stamped.get();
+        } else if (this.baseUrl.isPresent()) {
+            result = this.baseUrl.get().toString();
+        } else {
+            result = this.assetPrefix(headers);
         }
-        final String host = StreamSupport.stream(headers.spliterator(), false)
-            .filter(e -> "Host".equalsIgnoreCase(e.getKey()))
-            .findAny()
-            .map(Header::getValue)
-            .orElse("localhost");
-        return this.assetPrefix(host);
+        return result;
     }
-    
+
+    /**
+     * Whether cooldown metadata filtering is wired for this slice. When true,
+     * the served body is the filtered packument (blocked versions removed and
+     * {@code dist-tags.latest} possibly re-pointed), so the ETag must be keyed
+     * to the filtered bytes rather than to the immutable upstream content hash.
+     *
+     * @return true if a {@link CooldownMetadataService} and repo type are set
+     */
+    private boolean cooldownActive() {
+        return this.cooldownMetadata != null && this.repoType != null;
+    }
+
+    /**
+     * ETag for a cooldown-FILTERED body. Keyed to the bytes we actually serve
+     * so it changes the instant a version is blocked or unblocked — which is
+     * exactly what a raw-upstream-hash ETag does NOT do, because filtering
+     * removes versions at serve time without touching the stored upstream
+     * bytes. Without this, a client revalidating with {@code If-None-Match}
+     * gets a stale {@code 304} and never sees a version that just aged out of
+     * (or was released from) cooldown until it clears its own cache. Mirrors
+     * the Maven adapter's served-bytes ETag. Hashes the pre-transform filtered
+     * bytes; the tarball prefix is folded in by {@link MetadataETag#derive} so
+     * the {@code 304} comparison still runs before URL transformation.
+     *
+     * @param servedBytes Pre-transform filtered metadata bytes
+     * @param tarballPrefix Tarball URL prefix that the transform will apply
+     * @return ETag derived from the filtered content
+     */
+    private String filteredEtag(final byte[] servedBytes, final String tarballPrefix) {
+        return MetadataETag.derive(new MetadataETag(servedBytes).calculate(), tarballPrefix);
+    }
+
+    /**
+     * ETag for a RAW full-metadata body — the fast path. Derives from the
+     * immutable upstream content hash (~100 bytes hashed) when present, else
+     * falls back to hashing the transformed bytes. Correct only for bytes that
+     * are byte-for-byte the upstream packument (no cooldown, or a filter-error
+     * fallback that serves unfiltered bytes); use {@link #filteredEtag} for any
+     * body that went through the cooldown filter.
+     *
+     * @param metadata Package metadata carrying the stored content hash
+     * @param rawBytes Raw metadata bytes (fallback hash source)
+     * @param tarballPrefix Tarball URL prefix
+     * @return ETag derived from the stored upstream hash
+     */
+    private String rawFullEtag(
+        final com.auto1.pantera.npm.proxy.model.NpmPackage.Metadata metadata,
+        final byte[] rawBytes,
+        final String tarballPrefix
+    ) {
+        return metadata.contentHash()
+            .map(hash -> MetadataETag.derive(hash, tarballPrefix))
+            .orElseGet(() -> {
+                final ByteLevelUrlTransformer transformer = new ByteLevelUrlTransformer();
+                return new MetadataETag(transformer.transform(rawBytes, tarballPrefix)).calculate();
+            });
+    }
+
+    /**
+     * ETag for a RAW abbreviated-metadata body — the fast path, keyed to the
+     * stored abbreviated content hash. See {@link #rawFullEtag}; use
+     * {@link #filteredEtag} for filtered bodies.
+     *
+     * @param metadata Package metadata carrying the stored abbreviated hash
+     * @param abbreviatedBytes Raw abbreviated bytes (fallback hash source)
+     * @param tarballPrefix Tarball URL prefix
+     * @return ETag derived from the stored abbreviated hash
+     */
+    private String rawAbbreviatedEtag(
+        final com.auto1.pantera.npm.proxy.model.NpmPackage.Metadata metadata,
+        final byte[] abbreviatedBytes,
+        final String tarballPrefix
+    ) {
+        return metadata.abbreviatedHash()
+            .map(hash -> MetadataETag.derive(hash, tarballPrefix))
+            .orElseGet(() -> {
+                final ByteLevelUrlTransformer transformer = new ByteLevelUrlTransformer();
+                final byte[] transformed = transformer.transform(abbreviatedBytes, tarballPrefix);
+                return new MetadataETag(transformed).calculate();
+            });
+    }
+
     /**
      * Check if client requests abbreviated manifest.
      * 
@@ -1020,22 +942,8 @@ public final class DownloadPackageSlice implements Slice {
      * @param headers Request headers
      * @return External client package
      */
-    private String clientFormat(final String data,
-        final Iterable<Header> headers) {
-        final String prefix;
-        if (this.baseUrl.isPresent()) {
-            // Use configured repository URL
-            prefix = this.baseUrl.get().toString();
-        } else {
-            // Fall back to Host header
-            final String host = StreamSupport.stream(headers.spliterator(), false)
-                .filter(e -> "Host".equalsIgnoreCase(e.getKey()))
-                .findAny().orElseThrow(
-                    () -> new RuntimeException("Could not find Host header in request")
-                ).getValue();
-            prefix = this.assetPrefix(host);
-        }
-        return new ClientContent(data, prefix).value().toString();
+    private String clientFormat(final String data, final Headers headers) {
+        return new ClientContent(data, this.getTarballPrefix(headers)).value().toString();
     }
 
     /**
@@ -1054,16 +962,24 @@ public final class DownloadPackageSlice implements Slice {
     }
 
     /**
-     * Generates asset base reference.
-     * @param host External host
+     * Generates asset base reference from the request's own origin, honouring
+     * reverse-proxy forwarding headers only when the DB-backed {@code
+     * trust_forwarded_headers} admin setting is enabled (env fallback
+     * {@code PANTERA_TRUST_FORWARDED_HEADERS}, default {@code false});
+     * otherwise the origin is derived from the raw {@code Host} header,
+     * itself gated by the {@code client_base_host_allowlist} setting (env
+     * fallback {@code PANTERA_CLIENT_BASE_HOST_ALLOWLIST}) -- see {@link
+     * ClientBaseUrl#origin()}.
+     * @param headers Request headers
      * @return Asset base reference
      */
-    private String assetPrefix(final String host) {
+    private String assetPrefix(final Headers headers) {
+        final String origin = new ClientBaseUrl(headers).origin();
         final String result;
         if (StringUtils.isEmpty(this.path.prefix())) {
-            result = String.format("http://%s", host);
+            result = origin;
         } else {
-            result = String.format("http://%s/%s", host, this.path.prefix());
+            result = String.format("%s/%s", origin, this.path.prefix());
         }
         return result;
     }

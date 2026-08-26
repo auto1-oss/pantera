@@ -18,6 +18,7 @@ import com.auto1.pantera.cooldown.CooldownCleanupFallback;
 import com.auto1.pantera.cooldown.CooldownRepository;
 import com.auto1.pantera.cooldown.PgCronStatus;
 import com.auto1.pantera.http.BaseSlice;
+import com.auto1.pantera.http.InternalHeaderScrubSlice;
 import com.auto1.pantera.http.MainSlice;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.misc.ConfigDefaults;
@@ -343,23 +344,84 @@ public final class VertxMain {
         // Install the circuit-breaker settings loader BEFORE constructing
         // RepositorySlices so the default-constructor activeSupplier()
         // picks up the DB-backed loader rather than pure hardcoded
-        // defaults. When no DataSource is present (tests, DB-less boot)
-        // RepositorySlices falls back to AutoBlockSettings::defaults
-        // automatically via activeSupplier().
-        sharedDs.ifPresent(ds ->
-            com.auto1.pantera.circuit.CircuitBreakerSettingsLoader.install(
-                new com.auto1.pantera.db.dao.AuthSettingsDao(ds)
-            )
+        // defaults.
+        //
+        // WS8 fixwave-g (2.3.0): installed UNCONDITIONALLY -- dao is null
+        // when sharedDs is absent -- no longer gated behind
+        // sharedDs.ifPresent. Each field resolves DB row -> env var ->
+        // hardcoded default, and a DB-less boot (a documented, supported
+        // mode) must keep resolving PANTERA_CIRCUIT_BREAKER_* exactly as a
+        // DB-backed boot with an absent row would. Gating this behind
+        // sharedDs silently dropped every PANTERA_CIRCUIT_BREAKER_* env var
+        // for a DB-less deployment -- the same regression already fixed for
+        // UpstreamBreakerSettingsLoader and ClientBaseUrlSettingsLoader
+        // below.
+        com.auto1.pantera.circuit.CircuitBreakerSettingsLoader.install(
+            sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
         );
         // Same lifecycle for the OUTBOUND http-client breaker settings
         // (upstream_breaker_* keys) — distinct from the group-member
         // breaker above. RepositorySlices hands the supplier to every
         // JettyClientSlices instance it creates.
-        sharedDs.ifPresent(ds ->
-            com.auto1.pantera.circuit.UpstreamBreakerSettingsLoader.install(
-                new com.auto1.pantera.db.dao.AuthSettingsDao(ds)
-            )
+        //
+        // WS8 fixwave-f (2.3.0): installed UNCONDITIONALLY -- dao is null
+        // when sharedDs is absent -- not gated behind sharedDs.ifPresent
+        // like the group-member breaker above used to be. Each field
+        // resolves DB row -> env var -> hardcoded default, and a DB-less
+        // boot (a documented, supported mode) must keep resolving
+        // PANTERA_UPSTREAM_BREAKER_* exactly as a DB-backed boot with an
+        // absent row would. Gating this behind sharedDs would silently
+        // drop every PANTERA_UPSTREAM_BREAKER_* env var for a DB-less
+        // deployment -- the same regression already fixed for
+        // ClientBaseUrlSettingsLoader below.
+        com.auto1.pantera.circuit.UpstreamBreakerSettingsLoader.install(
+            sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
         );
+        // WS8 fixwave-c (2.3.0): install the client-base URL derivation
+        // settings (trust_forwarded_headers, client_base_host_allowlist)
+        // consumed by pantera-core's ClientBaseUrl. install(...) also feeds
+        // pantera-core's ClientBaseUrlSettingsRegistry — see that loader's
+        // Javadoc for why this crosses the module boundary this way.
+        //
+        // Installed UNCONDITIONALLY -- dao is null when sharedDs is absent
+        // -- not gated behind sharedDs.ifPresent like the breaker loaders
+        // above: both keys resolve DB row -> env var -> hardcoded default
+        // per field, and a DB-less boot (a documented, supported mode) must
+        // keep resolving PANTERA_TRUST_FORWARDED_HEADERS /
+        // PANTERA_CLIENT_BASE_HOST_ALLOWLIST exactly as the pre-2.3.0
+        // static System.getenv read did. Gating this behind sharedDs would
+        // silently drop both env vars for every DB-less deployment.
+        com.auto1.pantera.http.headers.ClientBaseUrlSettingsLoader.install(
+            sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
+        );
+        // Fail LOUD, not closed: an empty/unset host allowlist is
+        // permissive by design (upgrading an existing deployment must not
+        // suddenly reject every Host), but that posture is worth an
+        // operator's attention at every boot, DB-backed or not.
+        if (com.auto1.pantera.http.headers.ClientBaseUrlSettingsLoader.activeSupplier()
+            .get().hostAllowlist().isEmpty()) {
+            EcsLogger.warn("com.auto1.pantera")
+                .message("client_base_host_allowlist is empty — the Host header is trusted "
+                    + "unconditionally to derive client-facing base URLs Pantera emits (e.g. "
+                    + "npm dist.tarball) for any repository without an explicit url:. Configure "
+                    + "client_base_host_allowlist (PUT /api/v1/admin/client-base-url-settings) "
+                    + "or PANTERA_CLIENT_BASE_HOST_ALLOWLIST to restrict which Host values are "
+                    + "honoured.")
+                .eventCategory("configuration")
+                .eventAction("client_base_host_allowlist_permissive")
+                .eventOutcome("success")
+                .field("log.source", "application")
+                .log();
+        }
+        // NOTE (2.2.5 backport): unlike CircuitBreakerSettingsLoader /
+        // UpstreamBreakerSettingsLoader, this setting has no cross-node
+        // pub/sub broadcast wiring here — that pattern (WS2.3) is a 2.3.0
+        // addition out of scope for this backport. A PUT to
+        // client-base-url-settings invalidates the writing node's cache
+        // immediately (see AdminAuthHandler#updateClientBaseUrlSettings);
+        // other nodes pick up the change on their own TTL-less cache miss
+        // path only after a restart, matching this backport's baseline
+        // behaviour for the breaker settings before WS2.3.
         // Install singleton PublishDateRegistry. Each adapter slice now resolves
         // canonical publish dates via RegistryBackedInspector(repoType, registry)
         // instead of HEAD-probing upstream — eliminates the per-cooldown-eval
@@ -644,7 +706,14 @@ public final class VertxMain {
                                             slices.invalidateRepo(name);
                                             repos.config(name).ifPresent(cfg -> cfg.port().ifPresent(
                                                 prt -> {
-                                                    final Slice slice = slices.slice(new Key.From(name), prt);
+                                                    // Dedicated ports bypass MainSlice's
+                                                    // ApiRoutingSlice/SliceByPath pipeline
+                                                    // entirely, so the internal client-base
+                                                    // marker scrub has to be applied here
+                                                    // instead (see InternalHeaderScrubSlice).
+                                                    final Slice slice = new InternalHeaderScrubSlice(
+                                                        slices.slice(new Key.From(name), prt)
+                                                    );
                                                     if (cfg.startOnHttp3()) {
                                                         this.http3.computeIfAbsent(
                                                             prt, key -> {
@@ -1235,7 +1304,12 @@ public final class VertxMain {
                 repo.port().ifPresentOrElse(
                     prt -> {
                         final String name = new ConfigFile(repo.name()).name();
-                        final Slice slice = slices.slice(new Key.From(name), prt);
+                        // Dedicated ports bypass MainSlice's ApiRoutingSlice/SliceByPath
+                        // pipeline entirely, so the internal client-base marker scrub
+                        // has to be applied here instead (see InternalHeaderScrubSlice).
+                        final Slice slice = new InternalHeaderScrubSlice(
+                            slices.slice(new Key.From(name), prt)
+                        );
                         if (repo.startOnHttp3()) {
                             this.http3.computeIfAbsent(
                                 prt, key -> {

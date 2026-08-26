@@ -137,24 +137,6 @@ meta:
         l2Ttl: 5m
 ```
 
-### npm-search -- npm package-search index
-
-Caches the npm `_search` response index.
-
-```yaml
-meta:
-  caches:
-    npm-search:
-      ttl: 24h
-      maxSize: 1000
-      valkey:
-        enabled: true
-        l1MaxSize: 1000
-        l1Ttl: 24h
-        l2MaxSize: 1000000
-        l2Ttl: 72h
-```
-
 ### policy-perms / policy-users / policy-roles -- authorization YAML caches
 
 Cache parsed YAML for the file-backed RBAC policy (permissions, users, roles).

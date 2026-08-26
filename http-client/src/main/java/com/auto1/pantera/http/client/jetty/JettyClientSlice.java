@@ -146,73 +146,94 @@ final class JettyClientSlice implements Slice {
         }
         request.onResponseContentSource(
                 (response, source) -> {
-                    // Bridge Jetty's Content.Source to a Reactive Streams
-                    // Publisher with proper backpressure. The downstream
-                    // subscriber's request(n) flows back to the H2 layer:
-                    // we only release chunks (which triggers WINDOW_UPDATE)
-                    // after copying them out, and we only demand new
-                    // chunks while downstream still wants data.
-                    final RsStatus status = RsStatus.byCode(response.getStatus());
-                    final Headers respHeaders = toHeaders(response.getHeaders());
-                    final Headers sanitizedRespHeaders = LogSanitizer.sanitizeHeaders(respHeaders);
-                    EcsLogger.debug("com.auto1.pantera.http.client")
-                        .message("Received HTTP response headers (streaming body)")
-                        .eventCategory("web")
-                        .eventAction("http_response_receive")
-                        .field("http.response.status_code", response.getStatus())
-                        .field("http.response.headers", sanitizedRespHeaders.toString())
-                        .field("log.source", "http")
-                        .log();
-                    final JettyContentSourcePublisher publisher =
-                        new JettyContentSourcePublisher(source, response);
-                    responseBody.set(publisher);
-                    // Start the eager pre-drain on this I/O thread
-                    // BEFORE delivering the response: the bridge copies
-                    // each chunk into a heap buffer and releases the
-                    // pooled Jetty buffer immediately, which is what
-                    // lets HTTP/1.1 keep-alive reclaim the connection
-                    // even when downstream never subscribes. By the
-                    // time {@code res.complete} fires below, the
-                    // staging buffer already holds whatever bytes were
-                    // ready on the wire, and continuing chunks are
-                    // pulled via {@link Content.Source#demand} on this
-                    // same I/O thread.
-                    publisher.primeOnIoThread();
-                    res.complete(
-                        ResponseBuilder.from(status)
-                            .headers(respHeaders)
-                            .body(publisher)
-                            .build()
-                    );
-                    // Safety net for callers that never subscribe to the
-                    // body publisher. Pool buffers are already released
-                    // by {@link #primeOnIoThread} — this just frees the
-                    // staged heap copies and prevents a late subscriber
-                    // from racing against the discard.
-                    //
-                    // Timer sizing: must accommodate any well-behaved
-                    // subscriber's worst-case attach delay. Pre-2026-06-30
-                    // this was 5 ms tuned for synchronous subscribers
-                    // (test patterns like
-                    // {@code .get().body().asBytes()}). The cooldown-at-
-                    // headers admission gate (maven CachedProxySlice
-                    // post-headers verdict) extracts Last-Modified and
-                    // calls JdbcCooldownService.evaluateWithKnownDate,
-                    // which runs an async DB / Valkey lookup before the
-                    // subscriber attaches — typical wall-time 10–50 ms
-                    // and tail-latency several hundred ms under load.
-                    // 5 ms was too tight: the discard fired first, the
-                    // sentinel filled the subscriber slot, and the real
-                    // subscribe lost the CAS with a "single-subscriber"
-                    // exception (cache_write failure → 500). 30 s is
-                    // longer than any reasonable subscriber-attach window
-                    // and shorter than the connection's idle-close so
-                    // genuinely-abandoned bodies still get cleaned up
-                    // before the connection is reclaimed.
-                    JettyClientSlice.this.client.getScheduler().schedule(
-                        publisher::discardIfUnsubscribed,
-                        30, TimeUnit.SECONDS
-                    );
+                    try {
+                        // Bridge Jetty's Content.Source to a Reactive Streams
+                        // Publisher with proper backpressure. The downstream
+                        // subscriber's request(n) flows back to the H2 layer:
+                        // we only release chunks (which triggers WINDOW_UPDATE)
+                        // after copying them out, and we only demand new
+                        // chunks while downstream still wants data.
+                        final RsStatus status = RsStatus.byCode(response.getStatus());
+                        final Headers respHeaders = toHeaders(response.getHeaders());
+                        final Headers sanitizedRespHeaders = LogSanitizer.sanitizeHeaders(respHeaders);
+                        EcsLogger.debug("com.auto1.pantera.http.client")
+                            .message("Received HTTP response headers (streaming body)")
+                            .eventCategory("web")
+                            .eventAction("http_response_receive")
+                            .field("http.response.status_code", response.getStatus())
+                            .field("http.response.headers", sanitizedRespHeaders.toString())
+                            .field("log.source", "http")
+                            .log();
+                        final JettyContentSourcePublisher publisher =
+                            new JettyContentSourcePublisher(source, response);
+                        responseBody.set(publisher);
+                        // Start the eager pre-drain on this I/O thread
+                        // BEFORE delivering the response: the bridge copies
+                        // each chunk into a heap buffer and releases the
+                        // pooled Jetty buffer immediately, which is what
+                        // lets HTTP/1.1 keep-alive reclaim the connection
+                        // even when downstream never subscribes. By the
+                        // time {@code res.complete} fires below, the
+                        // staging buffer already holds whatever bytes were
+                        // ready on the wire, and continuing chunks are
+                        // pulled via {@link Content.Source#demand} on this
+                        // same I/O thread.
+                        publisher.primeOnIoThread();
+                        res.complete(
+                            ResponseBuilder.from(status)
+                                .headers(respHeaders)
+                                .body(publisher)
+                                .build()
+                        );
+                        // Safety net for callers that never subscribe to the
+                        // body publisher. Pool buffers are already released
+                        // by {@link #primeOnIoThread} — this just frees the
+                        // staged heap copies and prevents a late subscriber
+                        // from racing against the discard.
+                        //
+                        // Timer sizing: must accommodate any well-behaved
+                        // subscriber's worst-case attach delay. Pre-2026-06-30
+                        // this was 5 ms tuned for synchronous subscribers
+                        // (test patterns like
+                        // {@code .get().body().asBytes()}). The cooldown-at-
+                        // headers admission gate (maven CachedProxySlice
+                        // post-headers verdict) extracts Last-Modified and
+                        // calls JdbcCooldownService.evaluateWithKnownDate,
+                        // which runs an async DB / Valkey lookup before the
+                        // subscriber attaches — typical wall-time 10–50 ms
+                        // and tail-latency several hundred ms under load.
+                        // 5 ms was too tight: the discard fired first, the
+                        // sentinel filled the subscriber slot, and the real
+                        // subscribe lost the CAS with a "single-subscriber"
+                        // exception (cache_write failure → 500). 30 s is
+                        // longer than any reasonable subscriber-attach window
+                        // and shorter than the connection's idle-close so
+                        // genuinely-abandoned bodies still get cleaned up
+                        // before the connection is reclaimed.
+                        JettyClientSlice.this.client.getScheduler().schedule(
+                            publisher::discardIfUnsubscribed,
+                            30, TimeUnit.SECONDS
+                        );
+                    } catch (final RuntimeException ex) {
+                        // Without this guard, any throw here (e.g. RsStatus.byCode
+                        // for a status Pantera does not recognise) escapes inside
+                        // Jetty's own callback: res is never completed, the content
+                        // source is never drained, and the exchange hangs until the
+                        // client idle timeout fires. Settling res exceptionally and
+                        // aborting the response turns that into an immediate, logged
+                        // error regardless of cause.
+                        EcsLogger.error("com.auto1.pantera.http.client")
+                            .message("Failed to build response from upstream headers")
+                            .eventCategory("network")
+                            .eventAction("http_response_build")
+                            .eventOutcome("failure")
+                            .field("http.response.status_code", response.getStatus())
+                            .error(ex)
+                            .field("log.source", "application")
+                            .log();
+                        res.completeExceptionally(ex);
+                        response.abort(ex);
+                    }
                 }
         );
         final Headers sanitizedHeaders = LogSanitizer.sanitizeHeaders(toHeaders(request.getHeaders()));
@@ -231,41 +252,65 @@ final class JettyClientSlice implements Slice {
         request.send(
                 result -> {
                     if (result.getFailure() == null) {
-                        // For responses where onResponseContentSource never fired
-                        // (empty body, HEAD, etc.), complete here with empty body.
-                        // If already completed by onResponseContentSource, this is a no-op
-                        // — the JettyContentSourcePublisher handles its own
-                        // completion via Jetty's source.read returning isLast.
-                        if (res.complete(
-                            ResponseBuilder.from(
-                                RsStatus.byCode(result.getResponse().getStatus())
-                            )
-                            .headers(toHeaders(result.getResponse().getHeaders()))
-                            .body(Flowable.empty())
-                            .build()
-                        )) {
-                            EcsLogger.debug("com.auto1.pantera.http.client")
-                                .message("Received HTTP response (no body)")
-                                .eventCategory("web")
-                                .eventAction("http_response_receive")
+                        try {
+                            // For responses where onResponseContentSource never fired
+                            // (empty body, HEAD, etc.), complete here with empty body.
+                            // If already completed by onResponseContentSource, this is a no-op
+                            // — the JettyContentSourcePublisher handles its own
+                            // completion via Jetty's source.read returning isLast.
+                            if (res.complete(
+                                ResponseBuilder.from(
+                                    RsStatus.byCode(result.getResponse().getStatus())
+                                )
+                                .headers(toHeaders(result.getResponse().getHeaders()))
+                                .body(Flowable.empty())
+                                .build()
+                            )) {
+                                EcsLogger.debug("com.auto1.pantera.http.client")
+                                    .message("Received HTTP response (no body)")
+                                    .eventCategory("web")
+                                    .eventAction("http_response_receive")
+                                    .field("http.response.status_code",
+                                        result.getResponse().getStatus())
+                                    .field("log.source", "http")
+                                    .log();
+                            }
+                            // Pool-buffer release is handled by
+                            // {@link JettyContentSourcePublisher#primeOnIoThread}
+                            // during {@code onResponseContentSource} — by
+                            // the time we reach here the source is already
+                            // drained, so there is nothing to discard from
+                            // the success path. The scheduled fallback
+                            // covers the case where the caller never
+                            // subscribes (clears staged heap copies).
+                            // M1 outbound metric: response received, bucket by status.
+                            recordOutboundMetric(
+                                callerTag, repoName, requestStartNanos,
+                                result.getResponse().getStatus(), null
+                            );
+                        } catch (final RuntimeException ex) {
+                            // This is the fallback path the comment above documents:
+                            // for responses where onResponseContentSource never fires,
+                            // this completion listener is the ONLY place that resolves
+                            // res, and it has its own RsStatus.byCode call -- the same
+                            // unguarded-throw hazard as onResponseContentSource, just
+                            // reached a different way. Normally res is already complete
+                            // by the time we get here, so this branch is a no-op; but an
+                            // upstream sending an unmapped status on whichever response
+                            // shape actually takes this fallback must not orphan res
+                            // either. Mirrors the onResponseContentSource guard above.
+                            EcsLogger.error("com.auto1.pantera.http.client")
+                                .message("Failed to build response from upstream headers")
+                                .eventCategory("network")
+                                .eventAction("http_response_build")
+                                .eventOutcome("failure")
                                 .field("http.response.status_code",
                                     result.getResponse().getStatus())
-                                .field("log.source", "http")
+                                .error(ex)
+                                .field("log.source", "application")
                                 .log();
+                            res.completeExceptionally(ex);
                         }
-                        // Pool-buffer release is handled by
-                        // {@link JettyContentSourcePublisher#primeOnIoThread}
-                        // during {@code onResponseContentSource} — by
-                        // the time we reach here the source is already
-                        // drained, so there is nothing to discard from
-                        // the success path. The scheduled fallback
-                        // covers the case where the caller never
-                        // subscribes (clears staged heap copies).
-                        // M1 outbound metric: response received, bucket by status.
-                        recordOutboundMetric(
-                            callerTag, repoName, requestStartNanos,
-                            result.getResponse().getStatus(), null
-                        );
                     } else {
                         final Throwable failure = result.getFailure();
                         // Idle-close is a normal connection-lifecycle event

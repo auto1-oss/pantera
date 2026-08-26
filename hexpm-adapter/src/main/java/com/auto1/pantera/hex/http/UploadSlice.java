@@ -170,10 +170,22 @@ public final class UploadSlice implements Slice {
                     )
                 ).thenCompose(
                     content -> {
+                        // Real storage key: saveTarContentToStorage always
+                        // writes the tarball to "tarballs/<name>-<version>
+                        // .tar" — packages/<name> is a single JSON metadata
+                        // file, not a directory, so pathPrefix lets
+                        // browse-to-directory land on the real flat
+                        // tarballs/ layout instead of a package-name
+                        // directory that never exists.
                         final ArtifactEvent event = new ArtifactEvent(
                             UploadSlice.REPO_TYPE, this.rname,
                             new Login(headers).getValue(),
-                            name.get(), version.get(), tarcontent.get().length
+                            name.get(), version.get(), tarcontent.get().length,
+                            System.currentTimeMillis(), null,
+                            new Key.From(
+                                DownloadSlice.TARBALLS,
+                                String.format("%s-%s.tar", name.get(), version.get())
+                            ).string()
                         );
                         this.events.ifPresent(queue -> queue.add(event));
                         com.auto1.pantera.http.cache.NegativeCacheRegistry.instance()

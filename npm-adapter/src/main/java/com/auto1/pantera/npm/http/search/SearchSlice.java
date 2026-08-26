@@ -11,16 +11,15 @@
 package com.auto1.pantera.npm.http.search;
 
 import com.auto1.pantera.asto.Content;
-import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.index.ArtifactDocument;
+import com.auto1.pantera.index.ArtifactIndex;
 
-
-
-import java.nio.charset.StandardCharsets;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -32,36 +31,52 @@ import javax.json.JsonObjectBuilder;
  * Search slice - handles npm search.
  * Endpoint: GET /-/v1/search?text={query}&size={n}&from={offset}
  *
+ * <p>Backed by the shared, already-populated {@link ArtifactIndex} (the same
+ * index every publish writes to via {@code SyncArtifactIndexer}) instead of a
+ * dedicated in-memory index that nothing ever populated.</p>
+ *
  * @since 1.1
  */
 public final class SearchSlice implements Slice {
-    
+
     /**
      * Query parameter pattern.
      */
     private static final Pattern QUERY_PATTERN = Pattern.compile(
         "text=([^&]+)(?:&size=(\\d+))?(?:&from=(\\d+))?"
     );
-    
+
     /**
      * Default result size.
      */
     private static final int DEFAULT_SIZE = 20;
-    
+
     /**
-     * Package index.
+     * Repo type base filter passed to the index (matches npm, npm-proxy, npm-group).
      */
-    private final PackageIndex index;
+    private static final String REPO_TYPE = "npm";
+
+    /**
+     * Artifact index shared with every other repository/format.
+     */
+    private final ArtifactIndex index;
+
+    /**
+     * This repository's name — scopes search results to packages published
+     * into this repository, not every npm repository on the instance.
+     */
+    private final String repoName;
 
     /**
      * Constructor.
-     * @param storage Storage (reserved for future on-disk index access)
-     * @param index Package index
+     * @param index Shared artifact index
+     * @param repoName Repository name to scope results to
      */
-    public SearchSlice(final Storage storage, final PackageIndex index) { // NOPMD UnusedFormalParameter - public API; storage is reserved for future on-disk index lookups
-        this.index = index;
+    public SearchSlice(final ArtifactIndex index, final String repoName) {
+        this.index = Objects.requireNonNull(index, "index");
+        this.repoName = Objects.requireNonNull(repoName, "repoName");
     }
-    
+
     @Override
     public CompletableFuture<Response> response(
         final RequestLine line,
@@ -96,37 +111,37 @@ public final class SearchSlice implements Slice {
                 ? Integer.parseInt(matcher.group(3))
                 : 0;
 
-            return this.index.search(text, size, from)
-                .thenApply(results -> {
-                    final JsonArrayBuilder objects = Json.createArrayBuilder();
-                    results.forEach(pkg -> objects.add(this.packageToJson(pkg)));
+            return this.index.search(
+                text, size, from, SearchSlice.REPO_TYPE, this.repoName, "relevance", true
+            ).thenApply(result -> {
+                final JsonArrayBuilder objects = Json.createArrayBuilder();
+                result.documents().forEach(doc -> objects.add(SearchSlice.packageToJson(doc)));
 
-                    return ResponseBuilder.ok()
-                        .jsonBody(Json.createObjectBuilder()
-                            .add("objects", objects)
-                            .add("total", results.size())
-                            .add("time", System.currentTimeMillis())
-                            .build())
-                        .build();
-                });
+                return ResponseBuilder.ok()
+                    .jsonBody(Json.createObjectBuilder()
+                        .add("objects", objects)
+                        .add("total", result.totalHits())
+                        .add("time", System.currentTimeMillis())
+                        .build())
+                    .build();
+            });
         });
     }
-    
+
     /**
-     * Convert package to JSON result.
-     * @param pkg Package metadata
+     * Convert an indexed artifact document to the npm search result schema.
+     * @param doc Indexed artifact document
      * @return JSON object builder
      */
-    private JsonObjectBuilder packageToJson(final PackageMetadata pkg) {
-        final JsonArrayBuilder keywords = Json.createArrayBuilder();
-        pkg.keywords().forEach(keywords::add);
-        
+    private static JsonObjectBuilder packageToJson(final ArtifactDocument doc) {
+        final String name = doc.artifactName() != null ? doc.artifactName() : doc.artifactPath();
+        final String version = doc.version() != null ? doc.version() : "";
         return Json.createObjectBuilder()
             .add("package", Json.createObjectBuilder()
-                .add("name", pkg.name())
-                .add("version", pkg.version())
-                .add("description", pkg.description())
-                .add("keywords", keywords)
+                .add("name", name)
+                .add("version", version)
+                .add("description", "")
+                .add("keywords", Json.createArrayBuilder())
             )
             .add("score", Json.createObjectBuilder()
                 .add("final", 1.0)

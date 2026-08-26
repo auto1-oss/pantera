@@ -70,6 +70,8 @@ import com.auto1.pantera.http.slice.SliceSimple;
 import com.auto1.pantera.http.slice.TrimPathSlice;
 import com.auto1.pantera.maven.http.MavenSlice;
 import com.auto1.pantera.npm.http.NpmSlice;
+import com.auto1.pantera.npm.http.PingSlice;
+import com.auto1.pantera.npm.http.RegistryInfoSlice;
 import com.auto1.pantera.npm.proxy.NpmProxy;
 import com.auto1.pantera.npm.proxy.http.NpmProxySlice;
 import com.auto1.pantera.nuget.http.NuGet;
@@ -648,7 +650,7 @@ public class RepositorySlices {
                 slice = browsableTrimPathSlice(
                     new NpmSlice(
                         cfg.url(), cfg.storage(), securityPolicy(), authentication(), tokens.auth(), tokens, cfg.name(), artifactEvents(), true,
-                        this.settings.syncArtifactIndexer()
+                        this.settings.syncArtifactIndexer(), this.settings.artifactIndex()
                     ),
                     cfg.storage()
                 );
@@ -874,6 +876,37 @@ public class RepositorySlices {
                                 .build()
                         )
                     ),
+                    // WS-A: npm token/hook/team have no supported surface on
+                    // this registry (any method); npm org is only declined
+                    // for its write verbs -- GET (e.g. "npm org ls") is a
+                    // genuine upstream passthrough and must keep falling
+                    // through to the FALLBACK route below. Mirrors the
+                    // local-mode wiring in NpmSlice so local/proxy/group
+                    // answer identically. See
+                    // repositories/npm.md#unsupported-endpoints.
+                    this.declinedNpmRoute(
+                        new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/npm/v1/tokens.*"),
+                        "npm token management", Action.Standard.READ, cfg.name()
+                    ),
+                    this.declinedNpmRoute(
+                        new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/npm/v1/hooks.*"),
+                        "npm registry webhooks", Action.Standard.READ, cfg.name()
+                    ),
+                    this.declinedNpmRoute(
+                        new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/team/.*"),
+                        "npm team management", Action.Standard.READ, cfg.name()
+                    ),
+                    this.declinedNpmRoute(
+                        new com.auto1.pantera.http.rt.RtRule.All(
+                            new com.auto1.pantera.http.rt.RtRule.Any(
+                                com.auto1.pantera.http.rt.MethodRule.PUT,
+                                com.auto1.pantera.http.rt.MethodRule.POST,
+                                com.auto1.pantera.http.rt.MethodRule.DELETE
+                            ),
+                            new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/org/.*")
+                        ),
+                        "npm organization management", Action.Standard.WRITE, cfg.name()
+                    ),
                     // Downloads - require Keycloak JWT
                     new com.auto1.pantera.http.rt.RtRulePath(
                         com.auto1.pantera.http.rt.RtRule.FALLBACK,
@@ -938,6 +971,73 @@ public class RepositorySlices {
                                 com.auto1.pantera.http.ResponseBuilder.forbidden()
                                     .textBody("User management not supported on group. Use local npm repository.")
                                     .build()
+                            )
+                        ),
+                        // WS-A: npm token/hook/team have no supported surface
+                        // on this registry (any method); npm org is only
+                        // declined for its write verbs -- GET (e.g. "npm org
+                        // ls") is a genuine passthrough and must keep falling
+                        // through to the FALLBACK route below. Mirrors the
+                        // local-mode wiring in NpmSlice so local/proxy/group
+                        // answer identically. See
+                        // repositories/npm.md#unsupported-endpoints.
+                        this.declinedNpmRoute(
+                            new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/npm/v1/tokens.*"),
+                            "npm token management", Action.Standard.READ, cfg.name()
+                        ),
+                        this.declinedNpmRoute(
+                            new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/npm/v1/hooks.*"),
+                            "npm registry webhooks", Action.Standard.READ, cfg.name()
+                        ),
+                        this.declinedNpmRoute(
+                            new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/team/.*"),
+                            "npm team management", Action.Standard.READ, cfg.name()
+                        ),
+                        this.declinedNpmRoute(
+                            new com.auto1.pantera.http.rt.RtRule.All(
+                                new com.auto1.pantera.http.rt.RtRule.Any(
+                                    com.auto1.pantera.http.rt.MethodRule.PUT,
+                                    com.auto1.pantera.http.rt.MethodRule.POST,
+                                    com.auto1.pantera.http.rt.MethodRule.DELETE
+                                ),
+                                new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/org/.*")
+                            ),
+                            "npm organization management", Action.Standard.WRITE, cfg.name()
+                        ),
+                        // WS8 Bug B3: answered directly from Pantera, not by
+                        // walking group members - a group ping must not
+                        // depend on any one member (or that member's own
+                        // upstream) being reachable.
+                        new com.auto1.pantera.http.rt.RtRulePath(
+                            new com.auto1.pantera.http.rt.RtRule.All(
+                                com.auto1.pantera.http.rt.MethodRule.GET,
+                                new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/ping$")
+                            ),
+                            new CombinedAuthzSliceWrap(
+                                new PingSlice(),
+                                authentication(),
+                                tokens.auth(),
+                                new OperationControl(
+                                    securityPolicy(),
+                                    new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                                )
+                            )
+                        ),
+                        // WS8 Bug B4: the repository root, also answered
+                        // directly from Pantera for the same reason as ping.
+                        new com.auto1.pantera.http.rt.RtRulePath(
+                            new com.auto1.pantera.http.rt.RtRule.All(
+                                com.auto1.pantera.http.rt.MethodRule.GET,
+                                new com.auto1.pantera.http.rt.RtRule.ByPath("^/?$")
+                            ),
+                            new CombinedAuthzSliceWrap(
+                                new RegistryInfoSlice(cfg.name()),
+                                authentication(),
+                                tokens.auth(),
+                                new OperationControl(
+                                    securityPolicy(),
+                                    new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                                )
                             )
                         ),
                         // All other operations - require JWT
@@ -1269,6 +1369,47 @@ public class RepositorySlices {
 
     private Policy<?> securityPolicy() {
         return this.settings.authz().policy();
+    }
+
+    /**
+     * Builds one declined-endpoint route for an npm-proxy or npm-group
+     * repository, mirroring the local-mode wiring in {@link
+     * com.auto1.pantera.npm.http.NpmSlice} so that npm token management,
+     * npm registry webhooks, npm team management and npm organization
+     * write endpoints answer a fast {@code 404} with {@code
+     * X-Pantera-Reason: not_implemented} in every repository mode,
+     * instead of an upstream-shaped 404 with no reason header, or (for
+     * {@code /-/team/...}) a {@code 5xx} that npm clients retry for
+     * roughly 70 seconds. Extracted so the four routes are written once
+     * and shared by both {@code npm-proxy} and {@code npm-group} rather
+     * than duplicated across the two cases.
+     *
+     * @param rule Routing rule selecting which requests are declined
+     * @param feature Human-readable feature name for the decline message
+     * @param action Permission required to reach the decline response
+     * @param name Repository name
+     * @return Auth-wrapped, permission-checked declined route
+     * @checkstyle ParameterNumberCheck (3 lines)
+     */
+    private com.auto1.pantera.http.rt.RtPath declinedNpmRoute(
+        final com.auto1.pantera.http.rt.RtRule rule,
+        final String feature,
+        final Action action,
+        final String name
+    ) {
+        return new com.auto1.pantera.http.rt.RtRulePath(
+            rule,
+            new CombinedAuthzSliceWrap(
+                new com.auto1.pantera.npm.http.DeclinedEndpointSlice(
+                    feature, "repositories/npm.md#unsupported-endpoints"
+                ),
+                authentication(),
+                tokens.auth(),
+                new OperationControl(
+                    securityPolicy(), new AdapterBasicPermission(name, action)
+                )
+            )
+        );
     }
 
     private SharedJettyClients.Lease jettyClientSlices(final RepoConfig cfg) {

@@ -40,12 +40,12 @@ agents/
 !docs/pantera-banner.png
 !pantera-ui/public/*.png
 /.superpowers
+/.remember
 /pantera-ui/mockups
 pantera-backfill/dependency-reduced-pom.xml
 pantera-main/docker-compose/pantera/artifacts/npm/package-lock.json
 pantera-main/docker-compose/pantera/artifacts/php/composer.lock
 /pantera-main/docker-compose/pantera/security
-/pantera-backfill
 pantera-main/docker-compose/pantera/keys/
 logs/.analysis/
 # Working / transient analysis + audit directories — never committed.

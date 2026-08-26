@@ -113,10 +113,22 @@ final class SubmitGemSlice implements Slice {
                                 () -> this.storage.metadata(key)
                                     .thenApply(mets -> mets.read(Meta.OP_SIZE).get())
                             ).thenCompose(size -> {
+                                // Real storage key: Gem.update() always
+                                // writes the final file to "gems/<name>-
+                                // <version>.gem" (Gem.RevisionFormat),
+                                // regardless of the temp upload key. Storing
+                                // it as pathPrefix lets browse-to-directory
+                                // resolve the flat gems/ layout instead of
+                                // guessing a per-package directory that
+                                // never exists.
                                 final ArtifactEvent event = new ArtifactEvent(
                                     SubmitGemSlice.REPO_TYPE, this.name,
                                     new Login(headers).getValue(),
-                                    pair.getKey(), pair.getValue(), size
+                                    pair.getKey(), pair.getValue(), size,
+                                    System.currentTimeMillis(), null,
+                                    new Key.From(
+                                        "gems", pair.getKey() + "-" + pair.getValue() + ".gem"
+                                    ).string()
                                 );
                                 this.events.ifPresent(queue -> queue.add(event));
                                 com.auto1.pantera.http.cache.NegativeCacheRegistry.instance()

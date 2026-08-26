@@ -29,12 +29,12 @@ import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
 import com.auto1.pantera.http.slice.StorageArtifactSlice;
 import com.auto1.pantera.http.slice.SliceSimple;
+import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.npm.http.auth.AddUserSlice;
 import com.auto1.pantera.npm.http.auth.PanteraAddUserSlice;
 import com.auto1.pantera.npm.http.auth.NpmTokenAuthentication;
 import com.auto1.pantera.npm.http.auth.WhoAmISlice;
 import com.auto1.pantera.npm.http.search.SearchSlice;
-import com.auto1.pantera.npm.http.search.InMemoryPackageIndex;
 import com.auto1.pantera.npm.repository.StorageUserRepository;
 import com.auto1.pantera.npm.repository.StorageTokenRepository;
 import com.auto1.pantera.npm.security.BCryptPasswordHasher;
@@ -51,13 +51,6 @@ import java.util.concurrent.CompletableFuture;
 
 /**
  * NpmSlice is a http layer in npm adapter.
- *
- * @todo #340:30min Implement `/npm` endpoint properly: for now `/npm` simply returns 200 OK
- *  status without any body. We need to figure out what information can (or should) be returned
- *  by registry on this request and add it. Here are several links that might be useful
- *  https://github.com/npm/cli
- *  https://github.com/npm/registry
- *  https://docs.npmjs.com/cli/v8
  */
 public final class NpmSlice implements Slice {
 
@@ -123,9 +116,9 @@ public final class NpmSlice implements Slice {
         final Optional<Queue<ArtifactEvent>> events
     ) {
         this(base, storage, policy, basicAuth, tokenAuth, name, events, false, null,
-            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP);
     }
-    
+
     /**
      * Ctor with JWT-only option.
      * @param base Base URL.
@@ -148,7 +141,7 @@ public final class NpmSlice implements Slice {
         final boolean jwtOnly
     ) {
         this(base, storage, policy, basicAuth, tokenAuth, name, events, jwtOnly, null,
-            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP);
     }
 
     /**
@@ -176,11 +169,11 @@ public final class NpmSlice implements Slice {
         final boolean jwtOnly
     ) {
         this(base, storage, policy, basicAuth, tokenAuth, name, events, jwtOnly, tokens,
-            com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP);
     }
 
     /**
-     * Ctor with synchronous artifact-index writer for read-after-write consistency.
+     * Ctor with synchronous artifact-index writer and the shared search index.
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     public NpmSlice(
@@ -193,10 +186,11 @@ public final class NpmSlice implements Slice {
         final String name,
         final Optional<Queue<ArtifactEvent>> events,
         final boolean jwtOnly,
-        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final ArtifactIndex artifactIndex
     ) {
         this(base, storage, policy, basicAuth, tokenAuth, name, events, jwtOnly, tokens,
-            syncIndex);
+            syncIndex, artifactIndex);
     }
 
     /**
@@ -210,6 +204,9 @@ public final class NpmSlice implements Slice {
      * @param events Events queue.
      * @param jwtOnly Use JWT-only mode.
      * @param tokens Token service (optional).
+     * @param syncIndex Synchronous artifact-index writer.
+     * @param artifactIndex Shared search index backing {@code /-/v1/search}.
+     * @checkstyle ParameterNumberCheck (5 lines)
      */
     private NpmSlice(
         final URL base,
@@ -221,7 +218,8 @@ public final class NpmSlice implements Slice {
         final Optional<Queue<ArtifactEvent>> events,
         final boolean jwtOnly,
         final Tokens tokens,
-        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final ArtifactIndex artifactIndex
     ) {
         this.tokens = tokens;
         final TokenAuthentication npmTokenAuth = jwtOnly
@@ -229,13 +227,41 @@ public final class NpmSlice implements Slice {
             : new NpmTokenAuthentication(new StorageTokenRepository(storage), tokenAuth);
 
         this.route = new SliceRoute(
+            // SECURITY: reserved internal keys (the registry signing keypair,
+            // user/token records) live in this same repository Storage; block
+            // them from the raw content routes here, first, before any content
+            // route or auth can serve them. See ReservedKeyGuardSlice.
+            new RtRulePath(
+                new RtRule.ByPath(ReservedKeyGuardSlice.RESERVED_PATH),
+                new ReservedKeyGuardSlice()
+            ),
             new RtRulePath(
                 new RtRule.All(
                     MethodRule.GET,
-                    new RtRule.ByPath("/npm")
+                    // WS8 Bug B4: the repository root, once TrimPathSlice
+                    // (wired one layer up, in RepositorySlices) has already
+                    // stripped the repository-name segment -- always a bare
+                    // "/" (never a literal "/npm", which only "matched" by
+                    // the accident of a repo being named exactly "npm" plus
+                    // a spurious extra "/npm" path segment).
+                    new RtRule.ByPath("^/?$")
                 ),
                 NpmSlice.createAuthSlice(
-                    new SliceSimple(ResponseBuilder.ok().build()),
+                    new RegistryInfoSlice(name),
+                    basicAuth,
+                    npmTokenAuth,
+                    new OperationControl(
+                        policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    )
+                )
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.GET,
+                    new RtRule.ByPath(".*/-/ping$")
+                ),
+                NpmSlice.createAuthSlice(
+                    new PingSlice(),
                     basicAuth,
                     npmTokenAuth,
                     new OperationControl(
@@ -305,7 +331,7 @@ public final class NpmSlice implements Slice {
                     basicAuth,
                     npmTokenAuth,
                     new OperationControl(
-                        policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
+                        policy, new AdapterBasicPermission(name, Action.Standard.DELETE)
                     )
                 )
             ),
@@ -356,7 +382,7 @@ public final class NpmSlice implements Slice {
                     basicAuth,
                     npmTokenAuth,
                     new OperationControl(
-                        policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
+                        policy, new AdapterBasicPermission(name, Action.Standard.DELETE)
                     )
                 )
             ),
@@ -462,7 +488,121 @@ public final class NpmSlice implements Slice {
                     new RtRule.ByPath(".*/-/v1/search")
                 ),
                 NpmSlice.createAuthSlice(
-                    new SearchSlice(storage, new InMemoryPackageIndex()),
+                    new SearchSlice(artifactIndex, name),
+                    basicAuth,
+                    npmTokenAuth,
+                    new OperationControl(
+                        policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    )
+                )
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.POST,
+                    new RtRule.ByPath(".*/-/v1/login$")
+                ),
+                this.webLoginSlice(jwtOnly, basicAuth)
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    new RtRule.Any(MethodRule.GET, MethodRule.POST),
+                    new RtRule.ByPath(".*/-/npm/v1/tokens$")
+                ),
+                NpmSlice.createAuthSlice(
+                    new DeclinedEndpointSlice(
+                        "npm token management",
+                        "repositories/npm.md#unsupported-endpoints"
+                    ),
+                    basicAuth,
+                    npmTokenAuth,
+                    new OperationControl(
+                        policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    )
+                )
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.DELETE,
+                    new RtRule.ByPath(".*/-/npm/v1/tokens/token/.+$")
+                ),
+                NpmSlice.createAuthSlice(
+                    new DeclinedEndpointSlice(
+                        "npm token management",
+                        "repositories/npm.md#unsupported-endpoints"
+                    ),
+                    basicAuth,
+                    npmTokenAuth,
+                    new OperationControl(
+                        policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
+                    )
+                )
+            ),
+            // WS-A: npm hook and npm team have no supported surface at all
+            // (any method); npm org is only declined for its write verbs --
+            // GET (e.g. "npm org ls") is a genuine passthrough on proxy and
+            // group repositories and must keep falling through to the
+            // package routes below. See repositories/npm.md#unsupported-endpoints.
+            new RtRulePath(
+                new RtRule.ByPath(".*/-/npm/v1/hooks.*"),
+                this.declinedRoute(
+                    "npm registry webhooks", Action.Standard.READ,
+                    basicAuth, npmTokenAuth, policy, name
+                )
+            ),
+            new RtRulePath(
+                new RtRule.ByPath(".*/-/team/.*"),
+                this.declinedRoute(
+                    "npm team management", Action.Standard.READ,
+                    basicAuth, npmTokenAuth, policy, name
+                )
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    new RtRule.Any(MethodRule.PUT, MethodRule.POST, MethodRule.DELETE),
+                    new RtRule.ByPath(".*/-/org/.*")
+                ),
+                this.declinedRoute(
+                    "npm organization management", Action.Standard.WRITE,
+                    basicAuth, npmTokenAuth, policy, name
+                )
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.GET,
+                    new RtRule.ByPath(".*/-/npm/v1/user$")
+                ),
+                NpmSlice.createAuthSlice(
+                    NpmSlice.profileSlice(jwtOnly, storage),
+                    basicAuth,
+                    npmTokenAuth,
+                    new OperationControl(
+                        policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    )
+                )
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.PUT,
+                    new RtRule.ByPath(".*/-/npm/v1/user$")
+                ),
+                NpmSlice.createAuthSlice(
+                    NpmSlice.profileSlice(jwtOnly, storage),
+                    basicAuth,
+                    npmTokenAuth,
+                    new OperationControl(
+                        policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
+                    )
+                )
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.GET,
+                    new RtRule.ByPath(".*/-/npm/v1/attestations/.+$")
+                ),
+                NpmSlice.createAuthSlice(
+                    new com.auto1.pantera.npm.http.attestation.AttestationsSlice(
+                        new com.auto1.pantera.npm.http.attestation.AttestationStore(storage), name
+                    ),
                     basicAuth,
                     npmTokenAuth,
                     new OperationControl(
@@ -473,6 +613,47 @@ public final class NpmSlice implements Slice {
             new RtRulePath(
                 new RtRule.All(
                     MethodRule.GET,
+                    new RtRule.ByPath(".*/-/npm/v1/keys$")
+                ),
+                NpmSlice.createAuthSlice(
+                    new com.auto1.pantera.npm.http.attestation.KeysSlice(
+                        new com.auto1.pantera.npm.security.NpmSigningKeys(storage), name
+                    ),
+                    basicAuth,
+                    npmTokenAuth,
+                    new OperationControl(
+                        policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    )
+                )
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    new RtRule.Any(MethodRule.GET, MethodRule.HEAD),
+                    // WS8 Bug B1: the old pattern "^/(@[^/]+/)?[^/]+/[^/]+$"
+                    // let its optional scope group not participate, so
+                    // "[^/]+/[^/]+" alone matched a bare 2-segment scoped
+                    // PACKAGE NAME ("/@scope/pkg") as if it were
+                    // package+version ("/pkg/version") -- routing a
+                    // packument request here, where SingleVersionSlice#parse
+                    // correctly refuses that shape and 404s instead of
+                    // letting it fall through to the packument route below.
+                    // Mirrors SingleVersionSlice#parse exactly: an unscoped
+                    // pair is 2 segments whose first does not start with
+                    // "@"; a scoped pair is 3 segments whose first does.
+                    new RtRule.ByPath("^/(?:@[^/]+/[^/]+/[^/]+|[^/@][^/]*/[^/]+)$")
+                ),
+                NpmSlice.createAuthSlice(
+                    new SingleVersionSlice(base, storage, name),
+                    basicAuth,
+                    npmTokenAuth,
+                    new OperationControl(
+                        policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    )
+                )
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    new RtRule.Any(MethodRule.GET, MethodRule.HEAD),
                     new RtRule.ByPath(".*\\.json$")
                 ),
                 NpmSlice.createAuthSlice(
@@ -486,7 +667,7 @@ public final class NpmSlice implements Slice {
             ),
             new RtRulePath(
                 new RtRule.All(
-                    MethodRule.GET,
+                    new RtRule.Any(MethodRule.GET, MethodRule.HEAD),
                     new RtRule.ByPath(".*(?<!\\.tgz)$")
                 ),
                 NpmSlice.createAuthSlice(
@@ -500,7 +681,7 @@ public final class NpmSlice implements Slice {
             ),
             new RtRulePath(
                 new RtRule.All(
-                    MethodRule.GET,
+                    new RtRule.Any(MethodRule.GET, MethodRule.HEAD),
                     new RtRule.ByPath(".*\\.tgz$")
                 ),
                 NpmSlice.createAuthSlice(
@@ -546,12 +727,84 @@ public final class NpmSlice implements Slice {
      * @return Auth slice
      */
     private static Slice createAuthSlice(
-        final Slice origin, final Authentication basicAuth, 
+        final Slice origin, final Authentication basicAuth,
         final TokenAuthentication tokenAuth, final OperationControl control
     ) {
         if (basicAuth != null) {
             return new CombinedAuthzSliceWrap(origin, basicAuth, tokenAuth, control);
         }
         return new BearerAuthzSlice(origin, tokenAuth, control);
+    }
+
+    /**
+     * Web login (`npm login --auth-type=web`) is only meaningful for
+     * JWT-only repos with a Pantera authentication backend wired; other
+     * modes keep the pre-existing 404 (no route existed before this).
+     *
+     * @param jwtOnly Whether this repository is JWT-only
+     * @param basicAuth Basic authentication, or {@code null}
+     * @return Login slice
+     */
+    private Slice webLoginSlice(final boolean jwtOnly, final Authentication basicAuth) {
+        final Slice slice;
+        if (jwtOnly && basicAuth != null) {
+            slice = new com.auto1.pantera.npm.http.auth.OAuthLoginSlice(basicAuth, this.tokens);
+        } else {
+            slice = new SliceSimple(ResponseBuilder.notFound().build());
+        }
+        return slice;
+    }
+
+    /**
+     * Wraps a {@link DeclinedEndpointSlice} the same way every other route
+     * in this class wraps its handler: shared auth, then a permission
+     * check against {@code name}. Pulled out purely to keep the declined
+     * npm-platform routes (webhooks, team, organization writes) from
+     * lengthening the primary constructor further -- see {@code
+     * repositories/npm.md#unsupported-endpoints}.
+     *
+     * @param feature Human-readable feature name for the decline message
+     * @param action Permission required to reach the decline response
+     * @param basicAuth Basic authentication
+     * @param tokenAuth Token authentication
+     * @param policy Access permissions
+     * @param name Repository name
+     * @return Auth-wrapped declined-endpoint slice
+     * @checkstyle ParameterNumberCheck (3 lines)
+     */
+    private Slice declinedRoute(
+        final String feature,
+        final Action action,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final Policy<?> policy,
+        final String name
+    ) {
+        return NpmSlice.createAuthSlice(
+            new DeclinedEndpointSlice(feature, "repositories/npm.md#unsupported-endpoints"),
+            basicAuth,
+            tokenAuth,
+            new OperationControl(policy, new AdapterBasicPermission(name, action))
+        );
+    }
+
+    /**
+     * {@code /-/npm/v1/user} is enriched with a stored email address outside
+     * JWT-only mode; JWT-only repositories have no local user record.
+     *
+     * @param jwtOnly Whether this repository is JWT-only
+     * @param storage Repository storage
+     * @return Profile slice
+     */
+    private static Slice profileSlice(final boolean jwtOnly, final Storage storage) {
+        final Slice slice;
+        if (jwtOnly) {
+            slice = new com.auto1.pantera.npm.http.auth.ProfileSlice();
+        } else {
+            slice = new com.auto1.pantera.npm.http.auth.ProfileSlice(
+                new StorageUserRepository(storage, new BCryptPasswordHasher())
+            );
+        }
+        return slice;
     }
 }

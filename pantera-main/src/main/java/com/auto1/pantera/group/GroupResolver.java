@@ -28,6 +28,7 @@ import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.slice.EcsLoggingSlice;
 import com.auto1.pantera.http.slice.KeyFromPath;
 import com.auto1.pantera.index.ArtifactIndex;
@@ -730,14 +731,29 @@ public final class GroupResolver implements Slice {
             .filter(MemberSlice::isProxy)
             .toList();
         if (fanoutMembers.isEmpty()) {
-            this.negativeCache.cacheNotFound(negCacheKey);
-            EcsLogger.debug("com.auto1.pantera.group")
-                .message("No proxy members, caching 404 and returning")
-                .eventCategory("web")
-                .eventAction("group_index_miss")
-                .field("url.path", line.uri().getPath())
-                .field("log.source", "application")
-                .log();
+            // WS8 Bug 2: a HEAD probe (proxy, scanner, health check, or a
+            // client's routine existence check) hitting an index-miss dead
+            // end must not poison the negative cache for a following real
+            // GET -- mirrors the HEAD guard in
+            // CachedNpmProxySlice#doFetch. Only a GET's 404 is trusted.
+            if (line.method() == RqMethod.HEAD) {
+                EcsLogger.debug("com.auto1.pantera.group")
+                    .message("No proxy members on HEAD probe; not negative-caching")
+                    .eventCategory("web")
+                    .eventAction("group_negative_cache_skip_head")
+                    .field("url.path", line.uri().getPath())
+                    .field("log.source", "application")
+                    .log();
+            } else {
+                this.negativeCache.cacheNotFound(negCacheKey);
+                EcsLogger.debug("com.auto1.pantera.group")
+                    .message("No proxy members, caching 404 and returning")
+                    .eventCategory("web")
+                    .eventAction("group_index_miss")
+                    .field("url.path", line.uri().getPath())
+                    .field("log.source", "application")
+                    .log();
+            }
             return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
         }
 
@@ -822,21 +838,35 @@ public final class GroupResolver implements Slice {
                     // 404 — the artifact may exist and the upstream was merely
                     // throttling; caching it would produce a long-lived false
                     // 404. Still return the 404 to the client.
-                    if (resp.headers().values(
-                            com.auto1.pantera.http.cache.NegativeCache.SKIP_HEADER).isEmpty()) {
-                        this.negativeCache.cacheNotFound(negCacheKey);
-                        EcsLogger.debug("com.auto1.pantera.group")
-                            .message("All proxies returned 404, caching negative result")
-                            .eventCategory("database")
-                            .eventAction("group_negative_cache_populate")
-                            .field("log.source", "application")
-                            .log();
-                    } else {
+                    final boolean unverified = !resp.headers().values(
+                        com.auto1.pantera.http.cache.NegativeCache.SKIP_HEADER).isEmpty();
+                    // WS8 Bug 2: a HEAD probe reaching an authoritative
+                    // all-members-404 must not poison the cache for a
+                    // following real GET -- same rationale as the
+                    // fanoutMembers.isEmpty() branch above and
+                    // CachedNpmProxySlice#doFetch's HEAD guard.
+                    if (unverified) {
                         EcsLogger.debug("com.auto1.pantera.group")
                             .message("Member 404 marked non-authoritative "
                                 + "(upstream throttle); not negative-caching")
                             .eventCategory("database")
                             .eventAction("group_negative_cache_skip_unverified")
+                            .field("log.source", "application")
+                            .log();
+                    } else if (line.method() == RqMethod.HEAD) {
+                        EcsLogger.debug("com.auto1.pantera.group")
+                            .message("All proxies returned 404 on a HEAD probe; "
+                                + "not negative-caching")
+                            .eventCategory("database")
+                            .eventAction("group_negative_cache_skip_head")
+                            .field("log.source", "application")
+                            .log();
+                    } else {
+                        this.negativeCache.cacheNotFound(negCacheKey);
+                        EcsLogger.debug("com.auto1.pantera.group")
+                            .message("All proxies returned 404, caching negative result")
+                            .eventCategory("database")
+                            .eventAction("group_negative_cache_populate")
                             .field("log.source", "application")
                             .log();
                     }
@@ -966,13 +996,20 @@ public final class GroupResolver implements Slice {
                 // Fix 2: every member 404'd but at least one 404 was a laundered
                 // upstream throttle, not an authoritative absence. Return 404 but
                 // re-carry the marker so the caller does not negative-cache it.
+                // WS8 Bug B5: still reuse a captured member 404 body when one
+                // exists, same as the plain-404 branch below.
                 result.complete(
-                    ResponseBuilder.notFound()
+                    walk.notFoundResponse()
                         .header(com.auto1.pantera.http.cache.NegativeCache.SKIP_HEADER, "true")
                         .build()
                 );
             } else {
-                result.complete(ResponseBuilder.notFound().build());
+                // WS8 Bug B5: every member 404'd -- reuse the first member's
+                // own honest 404 body/headers (captured above as each 404 was
+                // observed) instead of manufacturing a bare empty one. This is
+                // the terminal that a live /<pkg>/<bad-version> lookup against
+                // npm_group (and, via RaceSlice, npm_proxy) actually reaches.
+                result.complete(walk.notFoundResponse().build());
             }
             return;
         }
@@ -1051,7 +1088,6 @@ public final class GroupResolver implements Slice {
                         com.auto1.pantera.http.cache.NegativeCache.SKIP_HEADER).isEmpty()) {
                     walk.anyUnverified.set(true);
                 }
-                drainBody(resp.body());
                 recordMemberOutcome(member, "not_found", memberLatency);
                 // RCA-6 (v2.2.0): keep member fall-through investigable. A
                 // maven_proxy 404 silently falling through to groovy once hid
@@ -1071,8 +1107,18 @@ public final class GroupResolver implements Slice {
                     .field("url.path", line.uri().getPath())
                     .field("log.source", "application")
                     .log();
-                tryNextSequentialMember(iter, line, headers, requestBytes,
-                    isTargetedLocalRead, walk, result, pinArtifactName);
+                // WS8 Bug B5: capture this member's own 404 body (e.g. a
+                // proxy member's honest "version not found" JSON) instead of
+                // the old fire-and-forget drainBody(), so the terminal 404
+                // built once every member is exhausted (below) can reuse it
+                // rather than manufacturing a bare empty-body response.
+                resp.body().asBytesFuture().whenComplete((bytes, drainErr) -> {
+                    if (drainErr == null && bytes.length > 0) {
+                        walk.noteNotFoundBody(resp.headers(), bytes);
+                    }
+                    tryNextSequentialMember(iter, line, headers, requestBytes,
+                        isTargetedLocalRead, walk, result, pinArtifactName);
+                });
                 return;
             }
             // Outbound-breaker fast-fail (X-Pantera-Circuit-Open marker):
@@ -1218,6 +1264,14 @@ public final class GroupResolver implements Slice {
             new java.util.concurrent.atomic.AtomicLong(0L);
 
         /**
+         * First member's own honest 404 body/headers captured during the walk
+         * (WS8 Bug B5), reused as the walk's terminal 404 instead of
+         * manufacturing an empty one once every member is exhausted.
+         */
+        private final java.util.concurrent.atomic.AtomicReference<NotFoundSnapshot> notFoundSnapshot =
+            new java.util.concurrent.atomic.AtomicReference<>();
+
+        /**
          * Track the largest positive Retry-After hint.
          * @param seconds Hint in seconds; ignored when not positive.
          */
@@ -1225,6 +1279,56 @@ public final class GroupResolver implements Slice {
             if (seconds > 0L) {
                 this.retryAfterHint.accumulateAndGet(seconds, Math::max);
             }
+        }
+
+        /**
+         * Capture the first non-empty 404 body/headers seen during the walk.
+         * CAS — only the FIRST member's 404 body is kept; later ones are
+         * dropped (they were already drained into {@code bytes} by the caller
+         * before this is invoked, so nothing leaks).
+         *
+         * @param headers Member's response headers.
+         * @param bytes Member's response body bytes.
+         */
+        void noteNotFoundBody(final Headers headers, final byte[] bytes) {
+            this.notFoundSnapshot.compareAndSet(null, new NotFoundSnapshot(headers, bytes));
+        }
+
+        /**
+         * Build a 404 {@link ResponseBuilder} for the walk terminal: reuses
+         * the first captured member 404 body/headers (WS8 Bug B5) when one
+         * exists, otherwise falls back to the bare empty-body 404. Strips any
+         * pre-existing {@link NegativeCache#SKIP_HEADER} from the captured
+         * headers so the caller can decide fresh whether to re-attach it.
+         *
+         * @return A 404 builder, pre-populated with a body when one was captured.
+         */
+        ResponseBuilder notFoundResponse() {
+            final NotFoundSnapshot snapshot = this.notFoundSnapshot.get();
+            if (snapshot == null) {
+                return ResponseBuilder.notFound();
+            }
+            final Headers filtered = new Headers(
+                snapshot.headers.asList().stream()
+                    .filter(h -> !NegativeCache.SKIP_HEADER.equalsIgnoreCase(h.getKey()))
+                    .toList()
+            );
+            return ResponseBuilder.notFound().headers(filtered).body(snapshot.bytes);
+        }
+    }
+
+    /**
+     * Snapshot of a group member's own honest 404 response body, captured so
+     * the sequential walk's terminal 404 can reuse it (WS8 Bug B5) instead of
+     * manufacturing an empty one after every member has 404'd.
+     */
+    private static final class NotFoundSnapshot {
+        private final Headers headers;
+        private final byte[] bytes;
+
+        NotFoundSnapshot(final Headers headers, final byte[] bytes) {
+            this.headers = headers;
+            this.bytes = bytes; // NOPMD ArrayIsStoredDirectly - private capture; bytes are an already-drained immutable HTTP body
         }
     }
 

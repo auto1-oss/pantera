@@ -118,6 +118,40 @@ public enum RsStatus {
      */
     TOO_MANY_REQUESTS(HttpStatus.SC_TOO_MANY_REQUESTS),
     /**
+     * Payment Required.
+     */
+    PAYMENT_REQUIRED(HttpStatus.SC_PAYMENT_REQUIRED),
+    /**
+     * Not Acceptable.
+     */
+    NOT_ACCEPTABLE(HttpStatus.SC_NOT_ACCEPTABLE),
+    /**
+     * Gone.
+     */
+    GONE(HttpStatus.SC_GONE),
+    /**
+     * URI Too Long.
+     */
+    URI_TOO_LONG(HttpStatus.SC_REQUEST_URI_TOO_LONG),
+    /**
+     * Unsupported Media Type.
+     */
+    UNSUPPORTED_MEDIA_TYPE(HttpStatus.SC_UNSUPPORTED_MEDIA_TYPE),
+    /**
+     * Unprocessable Entity.
+     */
+    UNPROCESSABLE_ENTITY(HttpStatus.SC_UNPROCESSABLE_ENTITY),
+    /**
+     * Status <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/428">
+     * Precondition Required</a>.
+     */
+    PRECONDITION_REQUIRED(HttpStatus.SC_PRECONDITION_REQUIRED),
+    /**
+     * Status <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/451">
+     * Unavailable For Legal Reasons</a>.
+     */
+    UNAVAILABLE_FOR_LEGAL_REASONS(HttpStatus.SC_UNAVAILABLE_FOR_LEGAL_REASONS),
+    /**
      * Internal Server Error.
      */
     INTERNAL_ERROR(HttpStatus.SC_INTERNAL_SERVER_ERROR),
@@ -136,7 +170,11 @@ public enum RsStatus {
     /**
      * Gateway Timeout (504).
      */
-    GATEWAY_TIMEOUT(HttpStatus.SC_GATEWAY_TIMEOUT);
+    GATEWAY_TIMEOUT(HttpStatus.SC_GATEWAY_TIMEOUT),
+    /**
+     * Insufficient Storage (507).
+     */
+    INSUFFICIENT_STORAGE(HttpStatus.SC_INSUFFICIENT_STORAGE);
 
     /**
      * Code value.

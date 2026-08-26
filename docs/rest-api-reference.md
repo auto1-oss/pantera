@@ -1567,7 +1567,8 @@ spring boot
       "version": "1.0",
       "size": 15234,
       "created_at": "2026-03-20T14:30:00Z",
-      "owner": "admin"
+      "owner": "admin",
+      "path_prefix": "com/example/lib/1.0/lib-1.0.jar"
     }
   ],
   "page": 0,
@@ -1576,6 +1577,8 @@ spring boot
   "hasMore": false
 }
 ```
+
+`path_prefix` is present only when the indexing writer recorded the artifact's real storage key. `artifact_path` is always a display name (a package name, a synthetic identifier, or a real path depending on the format) and must not be assumed to be resolvable to a storage location; `path_prefix`, when present, always is. Currently populated by the npm/pypi/go/maven-or-gradle/composer proxy processors and by gem, hexpm, and conda uploads; absent for other writers (older rows, local/hosted uploads of other formats, docker, helm, debian, rpm, files, conan, and the bulk importer) — clients must fall back to `artifact_path`-based logic when it is absent.
 
 **Response (400):**
 
@@ -2268,6 +2271,87 @@ curl -X PUT http://localhost:8086/api/v1/admin/auth-settings \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"access_token_expiry_seconds": 1800, "allow_permanent_tokens": false}'
+```
+
+---
+
+### GET /api/v1/admin/client-base-url-settings
+
+Retrieve the current client-facing base URL derivation settings — governs how `ClientBaseUrl` (pantera-core) builds absolute URLs Pantera emits (e.g. npm `dist.tarball`) for a repository with no explicit `url:` configured.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin`
+
+**Response (200):**
+
+```json
+{
+  "trust_forwarded_headers": "false",
+  "client_base_host_allowlist": "",
+  "client_base_url": ""
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `client_base_url` | string (absolute URL) | Canonical origin (+ optional path prefix), e.g. `https://reg.example.com/artifactory`. Empty string is unset (the default). When non-empty it is ENFORCED for every repository without an explicit `url:` — `trust_forwarded_headers` and `client_base_host_allowlist` below stop being consulted for those repositories. Takes precedence over both fields below; a repository's own `url:` still wins over this setting. |
+| `trust_forwarded_headers` | string (`"true"`/`"false"`) | Whether `X-Forwarded-Proto`/`-Host`/`-Prefix` are honoured. Default `"false"`. Ignored while `client_base_url` is set. |
+| `client_base_host_allowlist` | string (comma-separated) | `Host` header values permitted for base-URL derivation. Empty string is PERMISSIVE — any `Host` is honoured (the default). Ignored while `client_base_url` is set. |
+
+**curl example:**
+
+```bash
+curl http://localhost:8086/api/v1/admin/client-base-url-settings \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+---
+
+### PUT /api/v1/admin/client-base-url-settings
+
+Update the client-facing base URL derivation settings. All three fields are optional — partial updates are accepted; omitted fields retain their current values. Values are validated (round-tripped through the settings record) before anything is written; an invalid `trust_forwarded_headers` (anything other than `"true"`/`"false"`) or a `client_base_url` that doesn't parse as an absolute `http`/`https` URL is rejected with `400` and nothing is persisted. Takes effect on the very next request — every `ClientBaseUrl` reads the current settings on construction, no restart required; in a cluster, the change is broadcast to every node.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin`
+
+**Request Body:**
+
+```json
+{
+  "client_base_url": "https://reg.example.com/artifactory",
+  "trust_forwarded_headers": "false",
+  "client_base_host_allowlist": "registry.example.com,registry.example.com:8443"
+}
+```
+
+**Response (204):** No content.
+
+**Response (400):**
+
+```json
+{
+  "error": "BAD_REQUEST",
+  "message": "trust_forwarded_headers must be \"true\" or \"false\"",
+  "status": 400
+}
+```
+
+**curl example:**
+
+```bash
+curl -X PUT http://localhost:8086/api/v1/admin/client-base-url-settings \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"client_base_host_allowlist": "registry.example.com"}'
+```
+
+**curl example (canonical override):**
+
+```bash
+curl -X PUT http://localhost:8086/api/v1/admin/client-base-url-settings \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"client_base_url": "https://reg.example.com/artifactory"}'
 ```
 
 ---

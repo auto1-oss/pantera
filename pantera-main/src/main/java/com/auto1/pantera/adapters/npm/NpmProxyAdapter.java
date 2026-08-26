@@ -29,6 +29,8 @@ import com.auto1.pantera.npm.proxy.http.NpmProxySlice;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 import com.auto1.pantera.settings.repo.RepoConfig;
 
+import java.net.MalformedURLException;
+import java.net.URI;
 import java.net.URL;
 import java.util.Optional;
 import java.util.Queue;
@@ -65,7 +67,13 @@ public final class NpmProxyAdapter implements Slice {
         final CooldownMetadataService cooldownMetadata
     ) {
         final Optional<Storage> asto = cfg.storageOpt();
-        final Optional<URL> baseUrl = Optional.of(cfg.url());
+        // `url:` is optional for npm-proxy (unlike local npm -- see NpmSlice's
+        // consumers): every downstream consumer of baseUrl (NpmProxySlice,
+        // DownloadPackageSlice) already falls back to the client-facing base
+        // stamped by SliceByPath/ClientBaseUrl when this is empty. Only
+        // absence is tolerated here; a configured-but-malformed value still
+        // fails fast the same way RepoConfig#url() does.
+        final Optional<URL> baseUrl = cfg.urlOpt().map(NpmProxyAdapter::toUrl);
         
         // Support multiple remotes with GroupResolver (similar to maven-proxy).
         // Each remote gets its own NpmProxy + NpmProxySlice, evaluated in
@@ -80,12 +88,17 @@ public final class NpmProxyAdapter implements Slice {
                     );
                     
                     // Create NpmProxy for this remote with 12h metadata TTL.
-                    // The cache-write and packument hooks are passed as null:
-                    // their only previous consumer was the speculative prefetch
+                    // The cache-write hook is passed as null: its only
+                    // previous consumer was the speculative prefetch
                     // subsystem, deleted wholesale in M2 (analysis/plan/v1/PLAN.md).
-                    // The hook surface on NpmProxy is retained so a future
-                    // observed-coordinate prewarming feature (Phase 4c, 2.3.0)
-                    // can wire in without redesigning the adapter.
+                    // The packument-write hook IS wired (WS5.2, 2.3.0):
+                    // every genuine packument save (cold fetch or a
+                    // stale-while-revalidate refresh whose ETag came back
+                    // changed) drops the cooldown FilteredMetadataCache
+                    // envelope for the package so a version published
+                    // upstream during a background refresh is visible on
+                    // the next request instead of waiting out the
+                    // envelope's own TTL on top of the packument TTL.
                     final Storage npmStorage = asto.orElseThrow(
                         () -> new IllegalStateException(
                             "npm-proxy requires storage to be set"
@@ -102,12 +115,16 @@ public final class NpmProxyAdapter implements Slice {
                                     .recordProxyPhaseDuration(repoName, phase, durationNs);
                             }
                         };
+                    final java.util.function.Consumer<String> packumentWriteHook = name ->
+                        com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry
+                            .instance()
+                            .invalidateAfterProxyRefresh(cfg.type(), name);
                     final NpmProxy npmProxy = new NpmProxy(
                         npmStorage,
                         remoteSlice,
                         NpmProxy.DEFAULT_METADATA_TTL,
                         null,
-                        null,
+                        packumentWriteHook,
                         phaseRecorder
                     );
                     
@@ -144,5 +161,25 @@ public final class NpmProxyAdapter implements Slice {
         final Content body
     ) {
         return this.slice.response(line, headers, body);
+    }
+
+    /**
+     * Convert a configured {@code url:} string to a {@link URL}, mirroring
+     * {@code RepoConfig#url()}'s conversion and exception behaviour exactly
+     * -- the difference is only that this is called from inside {@code
+     * Optional#map}, so it never runs for an absent value in the first place.
+     *
+     * @param str Configured URL string
+     * @return Parsed URL
+     */
+    private static URL toUrl(final String str) {
+        try {
+            return URI.create(str).toURL();
+        } catch (final MalformedURLException ex) {
+            throw new IllegalArgumentException(
+                String.format("Failed to build URL from '%s'", str),
+                ex
+            );
+        }
     }
 }

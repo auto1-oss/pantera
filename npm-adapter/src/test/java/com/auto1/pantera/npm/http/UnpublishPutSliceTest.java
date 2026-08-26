@@ -23,7 +23,9 @@ import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.npm.JsonFromMeta;
+import com.auto1.pantera.npm.PerVersionLayout;
 import com.auto1.pantera.scheduling.ArtifactEvent;
+import javax.json.Json;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.hamcrest.core.IsEqual;
@@ -156,6 +158,78 @@ final class UnpublishPutSliceTest {
             new IsInstanceOf(PanteraException.class)
         );
         MatcherAssert.assertThat("Events queue is empty", this.events.isEmpty());
+    }
+
+    /**
+     * Split-brain regression guard (WS4-npm.3): single-version unpublish must
+     * be <em>effective</em> for a package published purely through the
+     * per-version layout — the removed version's {@code .versions/<v>.json}
+     * file must be genuinely deleted (not merely absent from a regenerated
+     * meta.json that would re-derive it from a surviving file), and the
+     * {@code latest} dist-tag must recompute once its target is gone.
+     */
+    @Test
+    void unpublishSingleVersionDeletesPerVersionFileAndRecomputesLatest() {
+        final Key pkg = new Key.From(UnpublishPutSliceTest.PROJ);
+        final PerVersionLayout layout = new PerVersionLayout(this.storage);
+        layout.addVersion(
+            pkg, "1.0.1",
+            Json.createObjectBuilder()
+                .add("name", UnpublishPutSliceTest.PROJ).add("version", "1.0.1").build()
+        ).toCompletableFuture().join();
+        layout.addVersion(
+            pkg, "1.0.2",
+            Json.createObjectBuilder()
+                .add("name", UnpublishPutSliceTest.PROJ).add("version", "1.0.2").build()
+        ).toCompletableFuture().join();
+        layout.mergeDistTags(
+            pkg, Json.createObjectBuilder().add("latest", "1.0.2").build()
+        ).toCompletableFuture().join();
+        MatcherAssert.assertThat(
+            "Response status is OK",
+            new UnpublishPutSlice(
+                this.storage, Optional.of(this.events), UnpublishPutSliceTest.REPO
+            ),
+            new SliceHasResponse(
+                new RsHasStatus(RsStatus.OK),
+                new RequestLine(RqMethod.PUT, "/@hello%2fsimple-npm-project/-rev/undefined"),
+                Headers.from("referer", "unpublish"),
+                new Content.From(
+                    Json.createObjectBuilder()
+                        .add(
+                            "versions",
+                            Json.createObjectBuilder().add(
+                                "1.0.1",
+                                Json.createObjectBuilder()
+                                    .add("name", UnpublishPutSliceTest.PROJ)
+                                    .add("version", "1.0.1")
+                            )
+                        ).build().toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)
+                )
+            )
+        );
+        MatcherAssert.assertThat(
+            "No meta.json crutch is written",
+            this.storage.exists(new Key.From(pkg, "meta.json")).join(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "1.0.2 per-version file is genuinely deleted",
+            layout.listVersions(pkg).toCompletableFuture().join().contains("1.0.2"),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "1.0.1 survives",
+            layout.listVersions(pkg).toCompletableFuture().join().contains("1.0.1"),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "latest recomputes to the remaining version now that its target is gone",
+            layout.generateMetaJson(pkg).toCompletableFuture().join()
+                .getJsonObject("dist-tags").getString("latest"),
+            new IsEqual<>("1.0.1")
+        );
+        MatcherAssert.assertThat("Events queue has one item", this.events.size() == 1);
     }
 
     private void saveSourceMeta() {

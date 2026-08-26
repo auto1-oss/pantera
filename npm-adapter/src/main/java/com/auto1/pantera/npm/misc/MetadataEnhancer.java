@@ -34,16 +34,32 @@ public final class MetadataEnhancer {
      * Original metadata.
      */
     private final JsonObject original;
-    
+
     /**
-     * Ctor.
-     * 
+     * Packument revision, or {@code null} to omit {@code _rev}.
+     */
+    private final String revision;
+
+    /**
+     * Ctor without a revision.
+     *
      * @param original Original metadata JSON
      */
     public MetadataEnhancer(final JsonObject original) {
-        this.original = original;
+        this(original, null);
     }
-    
+
+    /**
+     * Primary ctor.
+     *
+     * @param original Original metadata JSON
+     * @param revision Packument revision, or {@code null} to omit {@code _rev}
+     */
+    public MetadataEnhancer(final JsonObject original, final String revision) {
+        this.original = original;
+        this.revision = revision;
+    }
+
     /**
      * Enhance metadata with complete fields.
      *
@@ -68,8 +84,9 @@ public final class MetadataEnhancer {
             builder.add("time", this.generateTimeObject());
         }
 
-        // Add users object if missing (empty by default)
-        // P1.2: Can be populated with real star data via NpmStarRepository
+        // Add users object if missing (empty by default). npm's `star`/`unstar`
+        // subsystem is not implemented (WS4-npm.2, 2.3.0) — clients still expect
+        // the field to be present, so it is always emitted, always empty.
         if (!this.original.containsKey("users")) {
             builder.add("users", Json.createObjectBuilder().build());
         }
@@ -79,31 +96,13 @@ public final class MetadataEnhancer {
             builder.add("_attachments", Json.createObjectBuilder().build());
         }
 
-        return builder.build();
-    }
-    
-    /**
-     * Enhance metadata with complete fields and star data.
-     * 
-     * @param usersObject Users object from star repository
-     * @return Enhanced metadata with real star data
-     */
-    public JsonObject enhanceWithStars(final JsonObject usersObject) {
-        final JsonObjectBuilder builder = Json.createObjectBuilder(this.original);
-        
-        // Add time object if missing
-        if (!this.original.containsKey("time")) {
-            builder.add("time", this.generateTimeObject());
+        // Emit the deterministic revision so `npm unpublish --force` can be
+        // validated against it (WS-A). Omitted, never fabricated, when the
+        // caller has no revision to offer.
+        if (this.revision != null) {
+            builder.add("_rev", this.revision);
         }
-        
-        // P1.2: Add users object with real star data
-        builder.add("users", usersObject);
-        
-        // Ensure _attachments exists
-        if (!this.original.containsKey("_attachments")) {
-            builder.add("_attachments", Json.createObjectBuilder().build());
-        }
-        
+
         return builder.build();
     }
     

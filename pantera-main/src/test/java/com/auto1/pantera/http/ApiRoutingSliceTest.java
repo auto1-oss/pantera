@@ -11,15 +11,18 @@
 package com.auto1.pantera.http;
 
 import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.headers.ClientBaseUrl;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
 import java.net.URI;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -134,6 +137,67 @@ class ApiRoutingSliceTest {
             "Non-API paths should pass through unchanged",
             captured.get(),
             Matchers.equalTo("/direct/repo/path")
+        );
+    }
+
+    /**
+     * {@code X-Original-Path} is an internal signal {@code SliceByPath}
+     * trusts to derive the client-facing base URL used in {@code
+     * dist.tarball} links. Before this fix, {@link ApiRoutingSlice} only
+     * ever appended its own value with plain {@code Headers.add}, so a
+     * client-forged copy would still be present — and read first, since
+     * {@code Headers.values} preserves insertion order and the forged entry
+     * arrived before the slice's own. Any inbound copy must be discarded so
+     * only the slice's own, authoritative value survives.
+     */
+    @Test
+    void clientSuppliedOriginalPathIsDiscardedBeforeRewriting() {
+        final AtomicReference<Headers> captured = new AtomicReference<>();
+        final Headers inbound = new Headers()
+            .add(ClientBaseUrl.ORIGINAL_PATH, "/evil/forged/path")
+            .add("Host", "reg.example.com");
+        new ApiRoutingSlice(
+            (line, headers, body) -> {
+                captured.set(headers);
+                return ResponseBuilder.ok().completedFuture();
+            }
+        ).response(
+            new RequestLine(RqMethod.GET, "/api/npm/npm_repo"),
+            inbound,
+            Content.EMPTY
+        ).join();
+
+        MatcherAssert.assertThat(
+            captured.get().values(ClientBaseUrl.ORIGINAL_PATH),
+            new IsEqual<>(List.of("/api/npm/npm_repo"))
+        );
+    }
+
+    /**
+     * Same forged-header risk as above, but for a request that does not
+     * match the {@code /api/} pattern at all: {@link ApiRoutingSlice} passed
+     * such requests through untouched, so a client-forged
+     * {@code X-Original-Path} would reach {@code SliceByPath} verbatim.
+     */
+    @Test
+    void clientSuppliedOriginalPathIsDiscardedOnDirectPassThrough() {
+        final AtomicReference<Headers> captured = new AtomicReference<>();
+        final Headers inbound = new Headers()
+            .add(ClientBaseUrl.ORIGINAL_PATH, "/evil/forged/path");
+        new ApiRoutingSlice(
+            (line, headers, body) -> {
+                captured.set(headers);
+                return ResponseBuilder.ok().completedFuture();
+            }
+        ).response(
+            new RequestLine(RqMethod.GET, "/direct/repo/path"),
+            inbound,
+            Content.EMPTY
+        ).join();
+
+        MatcherAssert.assertThat(
+            captured.get().values(ClientBaseUrl.ORIGINAL_PATH),
+            new IsEqual<>(List.of())
         );
     }
 

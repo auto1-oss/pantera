@@ -42,6 +42,8 @@ vi.mock('@/api/auth', () => ({
   updateCircuitBreakerSettings: vi.fn().mockResolvedValue(undefined),
   getUpstreamBreakerSettings: () => Promise.resolve({}),
   updateUpstreamBreakerSettings: vi.fn().mockResolvedValue(undefined),
+  getClientBaseUrlSettings: () => Promise.resolve({}),
+  updateClientBaseUrlSettings: vi.fn().mockResolvedValue(undefined),
 }))
 
 vi.mock('@/composables/useRuntimeSettings', async () => {
@@ -200,6 +202,29 @@ describe('SettingsView — unified save bar', () => {
     await flushPromises()
     expect(wrapper.find('[data-testid="save-bar-chip-upstream_breaker"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="save-bar-chip-circuit_breaker"]').exists()).toBe(false)
+  })
+
+  it('tracks the client-facing base URL settings as their own section', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.text()).toContain('Client-Facing Base URL')
+    const vm = wrapper.vm as unknown as { trustForwardedHeaders: boolean }
+    vm.trustForwardedHeaders = true
+    await flushPromises()
+    expect(wrapper.find('[data-testid="save-bar-chip-client_base_url"]').exists()).toBe(true)
+    // Hot-reload section: no "restart" suffix.
+    expect(wrapper.find('[data-testid="save-bar-chip-client_base_url"]').text())
+      .not.toContain('restart')
+  })
+
+  it('shows the permissive-allowlist warning until an allowlist entry is added', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.text()).toContain('PERMISSIVE')
+    const vm = wrapper.vm as unknown as { clientBaseHostAllowlist: string }
+    vm.clientBaseHostAllowlist = 'registry.example.com'
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('PERMISSIVE')
   })
 
   it('clicking Discard reverts the edited section back to its baseline', async () => {

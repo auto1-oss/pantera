@@ -157,6 +157,19 @@ public final class RepoConfig {
     }
 
     /**
+     * Repository URL, if explicitly configured.
+     *
+     * <p>Unlike {@link #url()} this never throws: group repositories have no
+     * {@code url:} key, and callers deriving a client-facing base must be able
+     * to ask without handling an exception.</p>
+     *
+     * @return Configured URL, or empty
+     */
+    public Optional<String> urlOpt() {
+        return this.stringOpt("url");
+    }
+
+    /**
      * Read maximum allowed Content-Length value for incoming requests.
      *
      * @return Maximum allowed value, empty if none specified.

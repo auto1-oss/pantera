@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -216,6 +217,34 @@ final class GemScannerTest {
             "Should produce 0 records for empty directory",
             records,
             Matchers.empty()
+        );
+    }
+
+    @Test
+    void populatesPathPrefixWithRealStorageKey(@TempDir final Path temp)
+        throws IOException {
+        final Path gems = temp.resolve("gems");
+        Files.createDirectories(gems);
+        Files.write(gems.resolve("rake-13.0.6.gem"), new byte[100]);
+        final GemScanner scanner = new GemScanner();
+        final List<ArtifactRecord> records = scanner.scan(temp, "gem-repo")
+            .collect(Collectors.toList());
+        MatcherAssert.assertThat(
+            records.get(0).pathPrefix(),
+            new IsEqual<>("gems/rake-13.0.6.gem")
+        );
+    }
+
+    @Test
+    void populatesPathPrefixForFlatRootLayout(@TempDir final Path temp)
+        throws IOException {
+        Files.write(temp.resolve("rake-13.0.6.gem"), new byte[100]);
+        final GemScanner scanner = new GemScanner();
+        final List<ArtifactRecord> records = scanner.scan(temp, "gem-repo")
+            .collect(Collectors.toList());
+        MatcherAssert.assertThat(
+            records.get(0).pathPrefix(),
+            new IsEqual<>("rake-13.0.6.gem")
         );
     }
 

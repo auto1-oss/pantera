@@ -262,17 +262,5 @@ meta:
       ttl: 5m
       maxSize: 2000                 # ≈ repo count
 
-    # npm-search — npm /-/v1/search response cache.
-    # Large entries (~20-50 KB each), low change frequency. Keep L1 lean.
-    npm-search:
-      ttl: 6h
-      maxSize: 5000
-      valkey:
-        enabled: true
-        l1MaxSize: 2000             # ~50 MB L1 — large entries
-        l1Ttl: 1h
-        l2MaxSize: 30000
-        l2Ttl: 12h
-
   global_prefixes:
     - ${PANTERA_URL_PREFIX:-pantera}

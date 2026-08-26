@@ -69,9 +69,16 @@ public class AsyncApiTestBase {
     private static HikariDataSource sharedDs;
 
     /**
-     * Test timeout in seconds.
+     * Per-request timeout, in seconds. This is a hang-detector, NOT a latency
+     * assertion (CLAUDE.md): these Vert.x API tests share one server + rate
+     * limiter + pool across a class and run under a {@code -T8} reactor where
+     * a request that normally completes in well under a second can be starved
+     * far longer by sibling JVMs. Set generously (~30x the idle latency) so
+     * contention slowness is never a false failure, while a genuinely hung
+     * request still fails deterministically. Bumped from 5s after
+     * {@code SearchHandlerTest} flaked with {@code TimeoutException} under load.
      */
-    static final long TEST_TIMEOUT = Duration.ofSeconds(5).toSeconds();
+    static final long TEST_TIMEOUT = Duration.ofSeconds(30).toSeconds();
 
     /**
      * Service host.
@@ -127,7 +134,7 @@ public class AsyncApiTestBase {
 
             @Override
             public Policy<?> policy() {
-                return Policy.FREE;
+                return AsyncApiTestBase.this.testPolicy();
             }
 
             @Override
@@ -168,7 +175,7 @@ public class AsyncApiTestBase {
             Optional.empty(),
             NoopCooldownService.INSTANCE,
             new TestSettings(),
-            ArtifactIndex.NOP,
+            this.testIndex(),
             sharedDs,
             jwtTokens
         );
@@ -183,6 +190,30 @@ public class AsyncApiTestBase {
      */
     final int port() {
         return this.port;
+    }
+
+    /**
+     * Security policy applied to the deployed verticle for this test class.
+     * Defaults to {@link Policy#FREE} (implies every permission) — override
+     * to exercise authorization-denial paths (e.g. a per-repo write check)
+     * without standing up a full DB-backed roles/users fixture.
+     * @return Policy used by {@code PanteraSecurity.policy()}
+     */
+    protected Policy<?> testPolicy() {
+        return Policy.FREE;
+    }
+
+    /**
+     * Search index backing the deployed verticle for this test class.
+     * Defaults to {@link ArtifactIndex#NOP} (search always empty) so
+     * existing subclasses that only exercise non-search endpoints are
+     * unaffected — override to exercise search-response content against a
+     * real, seeded index (e.g. a {@code DbArtifactIndex} bound to
+     * {@link #sharedDs()}).
+     * @return Artifact index used to construct the verticle
+     */
+    protected ArtifactIndex testIndex() {
+        return ArtifactIndex.NOP;
     }
 
     /**

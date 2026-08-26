@@ -18,6 +18,10 @@ import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.npm.PerVersionLayout;
+import javax.json.Json;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -70,6 +74,58 @@ class GetDistTagsSliceTest {
                 new RequestLine(RqMethod.GET, "/-/package/@hello%2fanother-npm-project/dist-tags"),
                 Headers.EMPTY, Content.EMPTY
             ).join().status()
+        );
+    }
+
+    /**
+     * The split-brain regression guard (WS4-npm.3): dist-tag reads must work
+     * for a package published purely through the per-version layout — no
+     * hand-planted {@code meta.json} crutch — proving custom tags set at
+     * publish time surface correctly.
+     */
+    @Test
+    void readsDistTagsFromPerVersionLayoutWithoutMetaJsonCrutch() {
+        final Key pkg = new Key.From("@hello/published-project");
+        final PerVersionLayout layout = new PerVersionLayout(this.storage);
+        layout.addVersion(
+            pkg, "1.0.0",
+            Json.createObjectBuilder().add("name", pkg.string()).add("version", "1.0.0").build()
+        ).toCompletableFuture().join();
+        layout.mergeDistTags(
+            pkg, Json.createObjectBuilder().add("latest", "1.0.0").build()
+        ).toCompletableFuture().join();
+        layout.addVersion(
+            pkg, "1.1.0-beta.1",
+            Json.createObjectBuilder()
+                .add("name", pkg.string()).add("version", "1.1.0-beta.1").build()
+        ).toCompletableFuture().join();
+        layout.mergeDistTags(
+            pkg, Json.createObjectBuilder().add("beta", "1.1.0-beta.1").build()
+        ).toCompletableFuture().join();
+        MatcherAssert.assertThat(
+            "meta.json is never written by this flow",
+            this.storage.exists(new Key.From(pkg, "meta.json")).join(),
+            new IsEqual<>(false)
+        );
+        final javax.json.JsonObject tags = Json.createReader(
+            new java.io.StringReader(
+                new GetDistTagsSlice(this.storage).response(
+                    new RequestLine(
+                        RqMethod.GET, "/-/package/@hello%2fpublished-project/dist-tags"
+                    ),
+                    Headers.EMPTY, Content.EMPTY
+                ).join().body().asString()
+            )
+        ).readObject();
+        MatcherAssert.assertThat(
+            "latest survives from publish",
+            tags.getString("latest"),
+            new IsEqual<>("1.0.0")
+        );
+        MatcherAssert.assertThat(
+            "custom beta tag surfaces alongside latest",
+            tags.getString("beta"),
+            new IsEqual<>("1.1.0-beta.1")
         );
     }
 

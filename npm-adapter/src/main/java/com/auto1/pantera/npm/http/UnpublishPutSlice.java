@@ -20,6 +20,7 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.npm.PackageNameFromUrl;
+import com.auto1.pantera.npm.PerVersionLayout;
 import com.auto1.pantera.npm.misc.DateTimeNowStr;
 import com.auto1.pantera.npm.misc.DescSortedVersions;
 import com.auto1.pantera.scheduling.ArtifactEvent;
@@ -40,6 +41,13 @@ import java.util.regex.Pattern;
  * Slice to handle `npm unpublish package@0.0.0` command requests.
  * It unpublishes a single version of package when multiple
  * versions are published.
+ *
+ * <p>For packages published through the per-version layout, the removed
+ * version's {@code .versions/<v>.json} file is genuinely deleted (so it
+ * cannot be re-added by the next {@code generateMetaJson} call) and any
+ * dist-tag pointing at it — including {@code latest} — is dropped from the
+ * sidecar. Falls back to a legacy {@code meta.json} patch for packages that
+ * predate the per-version layout.</p>
  */
 final class UnpublishPutSlice implements Slice {
     /**
@@ -85,27 +93,105 @@ final class UnpublishPutSlice implements Slice {
         final String pkg = new PackageNameFromUrl(
             RequestLine.from(line.toString().replaceFirst("/-rev/[^\\s]+", ""))
         ).value();
+        final Key packageKey = new Key.From(pkg);
+        final PerVersionLayout layout = new PerVersionLayout(this.asto);
+        return layout.hasVersions(packageKey).thenCompose(
+            hasVersions -> {
+                if (hasVersions) {
+                    return this.unpublishFromLayout(layout, packageKey, pkg, publisher);
+                }
+                return this.unpublishLegacy(pkg, publisher);
+            }
+        ).toCompletableFuture();
+    }
+
+    /**
+     * Single-version unpublish for packages on the per-version layout.
+     *
+     * @param layout Per-version layout
+     * @param packageKey Package key
+     * @param pkg Package name (for the ArtifactEvent)
+     * @param publisher Request body
+     * @return Completion stage with the response
+     */
+    private CompletableFuture<Response> unpublishFromLayout(
+        final PerVersionLayout layout, final Key packageKey, final String pkg,
+        final Content publisher
+    ) {
+        return new Content.From(publisher).asJsonObjectFuture()
+            .thenCompose(update -> this.unpublishVersion(layout, packageKey, update))
+            .thenApply(
+                ver -> {
+                    this.emitEvent(pkg, ver);
+                    return ResponseBuilder.ok().build();
+                }
+            ).toCompletableFuture();
+    }
+
+    /**
+     * Resolve which version the client removed (by symmetric difference
+     * against the currently published versions), delete its per-version file,
+     * and drop any dist-tag that pointed at it.
+     *
+     * @param layout Per-version layout
+     * @param packageKey Package key
+     * @param update Client's updated packument (with the version removed)
+     * @return Completion stage with the removed version
+     */
+    private CompletionStage<String> unpublishVersion(
+        final PerVersionLayout layout, final Key packageKey, final JsonObject update
+    ) {
+        return layout.listVersions(packageKey).thenCompose(
+            existing -> {
+                final String removed = UnpublishPutSlice.versionToRemove(existing, update);
+                return layout.deleteVersion(packageKey, removed)
+                    .thenCompose(ignored -> layout.removeTagsPointingAt(packageKey, removed))
+                    .thenApply(ignored -> removed);
+            }
+        );
+    }
+
+    /**
+     * Legacy fallback for packages published before the per-version layout
+     * existed: patch {@code meta.json} directly.
+     *
+     * @param pkg Package name
+     * @param publisher Request body
+     * @return Completion stage with the response
+     */
+    private CompletableFuture<Response> unpublishLegacy(final String pkg, final Content publisher) {
         final Key key = new Key.From(pkg, "meta.json");
         return this.asto.exists(key).thenCompose(
             exists -> {
-                final CompletableFuture<Response> res;
                 if (exists) {
-                    res = new Content.From(publisher).asJsonObjectFuture()
+                    return new Content.From(publisher).asJsonObjectFuture()
                         .thenCompose(update -> this.updateMeta(update, key))
-                        .thenAccept(
-                            ver -> this.events.ifPresent(
-                                queue -> queue.add( // ok: unbounded ConcurrentLinkedDeque (ArtifactEvent queue)
-                                    new ArtifactEvent(
-                                        UploadSlice.REPO_TYPE, this.rname, pkg, ver
-                                    )
-                                )
-                            )
-                        ).thenApply(nothing -> ResponseBuilder.ok().build());
-                } else {
-                    res = ResponseBuilder.notFound().completedFuture();
+                        .thenApply(
+                            ver -> {
+                                this.emitEvent(pkg, ver);
+                                return ResponseBuilder.ok().build();
+                            }
+                        );
                 }
-                return res;
+                // Consume request body to prevent Vert.x request leak
+                return new Content.From(publisher).asBytesFuture().thenApply(ignored ->
+                    ResponseBuilder.notFound().build()
+                );
             }
+        );
+    }
+
+    /**
+     * Emit the unpublish {@link ArtifactEvent}, if an events queue is wired.
+     *
+     * @param pkg Package name
+     * @param version Removed version
+     */
+    private void emitEvent(final String pkg, final String version) {
+        this.events.ifPresent(
+            queue -> queue.add( // ok: unbounded ConcurrentLinkedDeque (ArtifactEvent queue)
+                new ArtifactEvent(UploadSlice.REPO_TYPE, this.rname, pkg, version)
+            )
         );
     }
 
@@ -123,7 +209,9 @@ final class UnpublishPutSlice implements Slice {
             .thenCompose(Content::asJsonObjectFuture).thenCompose(
                 source -> {
                     final JsonPatchBuilder patch = Json.createPatchBuilder();
-                    final String diff = versionToRemove(update, source);
+                    final String diff = UnpublishPutSlice.versionToRemove(
+                        source.getJsonObject("versions").keySet(), update
+                    );
                     patch.remove(String.format("/versions/%s", diff));
                     patch.remove(String.format("/time/%s", diff));
                     if (source.getJsonObject("dist-tags").containsKey(diff)) {
@@ -147,16 +235,16 @@ final class UnpublishPutSlice implements Slice {
     }
 
     /**
-     * Compare two meta files and identify which version does not exist in one of meta files.
+     * Compare the currently existing version set against the client's updated
+     * packument and identify which single version was removed.
+     * @param existing Currently existing version identifiers
      * @param update Meta json file (usually this file is received from body)
-     * @param source Meta json from storage
      * @return Version to unpublish.
      */
-    private static String versionToRemove(final JsonObject update, final JsonObject source) {
-        final String field = "versions";
+    private static String versionToRemove(final Set<String> existing, final JsonObject update) {
         final Set<String> diff = Sets.symmetricDifference(
-            source.getJsonObject(field).keySet(),
-            update.getJsonObject(field).keySet()
+            existing,
+            update.getJsonObject("versions").keySet()
         );
         if (diff.size() != 1) {
             throw new PanteraException(

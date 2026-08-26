@@ -20,6 +20,8 @@ import com.auto1.pantera.http.hm.SliceHasResponse;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.npm.PerVersionLayout;
+import javax.json.Json;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.BeforeEach;
@@ -104,6 +106,44 @@ class AddDistTagsSliceTest {
                 new RsHasStatus(RsStatus.BAD_REQUEST),
                 new RequestLine(RqMethod.GET, "/abc/123")
             )
+        );
+    }
+
+    /**
+     * Split-brain regression guard (WS4-npm.3): {@code npm dist-tag add} must
+     * work for a package published purely through the per-version layout —
+     * writing into the durable {@code .dist-tags.json} sidecar, not a
+     * hand-planted {@code meta.json}.
+     */
+    @Test
+    void addsCustomTagOnPerVersionLayoutPackage() {
+        final Key pkg = new Key.From("@hello/published-project");
+        new PerVersionLayout(this.storage).addVersion(
+            pkg, "1.0.0",
+            Json.createObjectBuilder().add("name", pkg.string()).add("version", "1.0.0").build()
+        ).toCompletableFuture().join();
+        MatcherAssert.assertThat(
+            "Response status is OK",
+            new AddDistTagsSlice(this.storage),
+            new SliceHasResponse(
+                new RsHasStatus(RsStatus.OK),
+                new RequestLine(
+                    RqMethod.GET, "/-/package/@hello%2fpublished-project/dist-tags/beta"
+                ),
+                Headers.EMPTY,
+                new Content.From("1.0.0".getBytes(StandardCharsets.UTF_8))
+            )
+        );
+        MatcherAssert.assertThat(
+            "No meta.json crutch is written",
+            this.storage.exists(new Key.From(pkg, "meta.json")).join(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "Sidecar persists the new tag",
+            new PerVersionLayout(this.storage).readDistTags(pkg)
+                .toCompletableFuture().join().getString("beta"),
+            new IsEqual<>("1.0.0")
         );
     }
 
