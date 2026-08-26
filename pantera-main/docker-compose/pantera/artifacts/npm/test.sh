@@ -211,13 +211,21 @@ section_corepack() {
   # <package>@<version>:<integrity>, so Pantera's dist.tarball rewrite must
   # leave dist.signatures and dist.integrity untouched. Setting
   # COREPACK_INTEGRITY_KEYS=0 here would delete the only assertion that matters.
-  local creds_b64=$(base64_creds "$CREDS")
+  #
+  # corepack does not read .npmrc credentials at all -- unlike the npm/yarn/
+  # pnpm blocks above, it authenticates only via its own COREPACK_NPM_TOKEN or
+  # COREPACK_NPM_USERNAME/COREPACK_NPM_PASSWORD env vars. Do not "simplify"
+  # this to an .npmrc _auth entry to match those blocks: it silently no-ops.
+  # COREPACK_HOME is pointed at a fresh scratch dir so this stays a real,
+  # cold fetch through Pantera rather than a hit on corepack's shared cache.
   local npmrc="$dir/.npmrc"
-  {
-    printf 'registry=%s\n' "$CLIENT_GROUP/"
-    printf '//localhost:8081/:_auth=%s\n' "$creds_b64"
-  } > "$npmrc"
+  printf 'registry=%s\n' "$CLIENT_GROUP/" > "$npmrc"
+  local corepack_username="${CREDS%%:*}"
+  local corepack_password="${CREDS#*:}"
   if ( cd "$dir" && COREPACK_NPM_REGISTRY="$CLIENT_GROUP/" \
+        COREPACK_NPM_USERNAME="$corepack_username" \
+        COREPACK_NPM_PASSWORD="$corepack_password" \
+        COREPACK_HOME="$dir/.corepack-home" \
         corepack prepare pnpm@11.17.0 --activate >/dev/null 2>&1 ); then
     pass "corepack prepare through Pantera with integrity verification enabled"
   else
