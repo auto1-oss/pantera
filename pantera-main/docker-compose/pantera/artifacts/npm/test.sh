@@ -44,11 +44,17 @@ base64_creds() {
   printf '%s' "$1" | base64
 }
 
-# expect_status <label> <method> <url> <expected-code>
+# expect_status <label> <method> <url> <expected-code> [json-body]
 expect_status() {
-  local label=$1 method=$2 url=$3 want=$4 got
-  got=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
-        -u "$CREDS" -X "$method" "$url" 2>/dev/null || echo "000")
+  local label=$1 method=$2 url=$3 want=$4 body=${5:-} got
+  if [ -n "$body" ]; then
+    got=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+          -u "$CREDS" -X "$method" -H 'Content-Type: application/json' \
+          -d "$body" "$url" 2>/dev/null || echo "000")
+  else
+    got=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+          -u "$CREDS" -X "$method" "$url" 2>/dev/null || echo "000")
+  fi
   if [ "$got" = "$want" ]; then pass "$label ($got)"; else
     fail "$label: expected $want, got $got"
   fi
@@ -80,7 +86,7 @@ section_endpoints() {
     expect_status "search             $base" GET "$base/-/v1/search?text=lodash" 200
     expect_status "keys               $base" GET "$base/-/npm/v1/keys" 200
     expect_status "audit bulk         $base" POST \
-      "$base/-/npm/v1/security/advisories/bulk" 200
+      "$base/-/npm/v1/security/advisories/bulk" 200 '{"lodash":["4.17.21"]}'
   done
 
   # Package resolution: each mode against a package it owns.
@@ -131,7 +137,7 @@ section_rev() {
 }
 
 section_clients() {
-  echo "--- 3. Clients: npm / yarn 1.x / yarn berry / pnpm ---"
+  echo "--- 3. Clients: npm / yarn 1.x / pnpm ---"
   local reg="$CLIENT_GROUP/"
   local creds_b64=$(base64_creds "$CREDS")
   for client in npm yarn pnpm; do
@@ -141,10 +147,17 @@ section_clients() {
     printf '{"name":"h-%s","version":"1.0.0","dependencies":{"is-positive":"3.1.0"}}\n' \
       "$client" > "$dir/package.json"
 
-    # Yarn 1.x requires different .npmrc scoping than npm/pnpm:
-    # - yarn needs always-auth=true and credentials scoped to the full registry path
-    # - npm tolerates host-scoped creds (walks upward) and deprecates always-auth
-    # - pnpm works with host-scoped creds
+    # npm and yarn both require credentials scoped to the full registry
+    # path, not just the host. npm's fetch layer does walk the request
+    # path upward looking for credentials, but its config layer
+    # (getCredentialsByURI), which actually builds the request's auth,
+    # does an exact match against the registry URI with no walk-up, so
+    # host-root-scoped credentials are silently never applied. yarn 1.x
+    # has the same full-path requirement, plus always-auth=true (npm
+    # does not need always-auth; it is deprecated/removed in npm 7+).
+    # pnpm gets the same full-path scoping here for consistency: a
+    # host-root pass in this harness could just as easily mean a warm
+    # local store as a correct config.
     # Each client gets its own .npmrc to avoid cross-client compatibility issues.
     if [ "$client" = "yarn" ]; then
       {
@@ -157,7 +170,7 @@ section_clients() {
       {
         printf 'registry=%s\n' "$reg"
         printf 'cache=%s/.cache\n' "$dir"
-        printf '//localhost:8081/:_auth=%s\n' "$creds_b64"
+        printf '//localhost:8081/npm_group/:_auth=%s\n' "$creds_b64"
         printf 'store-dir=%s/.pnpm-store\n' "$dir"
       } > "$dir/.npmrc"
     else
@@ -165,7 +178,7 @@ section_clients() {
       {
         printf 'registry=%s\n' "$reg"
         printf 'cache=%s/.cache\n' "$dir"
-        printf '//localhost:8081/:_auth=%s\n' "$creds_b64"
+        printf '//localhost:8081/npm_group/:_auth=%s\n' "$creds_b64"
       } > "$dir/.npmrc"
     fi
 
