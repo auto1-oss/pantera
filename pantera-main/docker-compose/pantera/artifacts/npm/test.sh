@@ -140,18 +140,35 @@ section_clients() {
     mkdir -p "$dir"
     printf '{"name":"h-%s","version":"1.0.0","dependencies":{"is-positive":"3.1.0"}}\n' \
       "$client" > "$dir/package.json"
-    # Write credentials scoped to localhost:8081 and local store directories
-    {
-      printf 'registry=%s\n' "$reg"
-      printf 'cache=%s/.cache\n' "$dir"
-      printf '//localhost:8081/:_auth=%s\n' "$creds_b64"
-      # Force local store for pnpm and yarn to prevent global cache bypass
-      if [ "$client" = "pnpm" ]; then
-        printf 'store-dir=%s/.pnpm-store\n' "$dir"
-      elif [ "$client" = "yarn" ]; then
+
+    # Yarn 1.x requires different .npmrc scoping than npm/pnpm:
+    # - yarn needs always-auth=true and credentials scoped to the full registry path
+    # - npm tolerates host-scoped creds (walks upward) and deprecates always-auth
+    # - pnpm works with host-scoped creds
+    # Each client gets its own .npmrc to avoid cross-client compatibility issues.
+    if [ "$client" = "yarn" ]; then
+      {
+        printf 'registry=%s\n' "$reg"
         printf 'cache-folder=%s/.yarn-cache\n' "$dir"
-      fi
-    } > "$dir/.npmrc"
+        printf '//localhost:8081/npm_group/:_auth=%s\n' "$creds_b64"
+        printf 'always-auth=true\n'
+      } > "$dir/.npmrc"
+    elif [ "$client" = "pnpm" ]; then
+      {
+        printf 'registry=%s\n' "$reg"
+        printf 'cache=%s/.cache\n' "$dir"
+        printf '//localhost:8081/:_auth=%s\n' "$creds_b64"
+        printf 'store-dir=%s/.pnpm-store\n' "$dir"
+      } > "$dir/.npmrc"
+    else
+      # npm
+      {
+        printf 'registry=%s\n' "$reg"
+        printf 'cache=%s/.cache\n' "$dir"
+        printf '//localhost:8081/:_auth=%s\n' "$creds_b64"
+      } > "$dir/.npmrc"
+    fi
+
     if ( cd "$dir" && "$client" install --silent >/dev/null 2>&1 ); then
       pass "$client install"
     else
