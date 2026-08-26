@@ -21,10 +21,13 @@ cd "$SCRIPT_DIR"
 
 # Backend directly, bypassing the nginx artifact cache.
 HOST="${PANTERA_HOST:-http://localhost:8088}"
+# Clients need port 8081 for correct tarball URLs (in client_base_host_allowlist)
+CLIENT_HOST="${PANTERA_CLIENT_HOST:-http://localhost:8081}"
 CREDS="${PANTERA_CREDS:-ayd:ayd}"
 LOCAL="$HOST/test_prefix/api/npm"
 PROXY="$HOST/npm_proxy"
 GROUP="$HOST/npm_group"
+CLIENT_GROUP="$CLIENT_HOST/npm_group"
 PKG='@ayd/npm-proxy-test'
 PKG_ENC='@ayd%2fnpm-proxy-test'
 UPSTREAM_PKG='lodash'
@@ -35,6 +38,11 @@ trap 'rm -rf "$SCRATCH"' EXIT
 
 pass() { printf '  \033[32mPASS\033[0m %s\n' "$1"; }
 fail() { printf '  \033[31mFAIL\033[0m %s\n' "$1"; FAILURES=$((FAILURES + 1)); }
+
+# Encode credentials as base64 for .npmrc
+base64_creds() {
+  printf '%s' "$1" | base64
+}
 
 # expect_status <label> <method> <url> <expected-code>
 expect_status() {
@@ -124,25 +132,37 @@ section_rev() {
 
 section_clients() {
   echo "--- 3. Clients: npm / yarn 1.x / yarn berry / pnpm ---"
-  local reg="$GROUP/"
+  local reg="$CLIENT_GROUP/"
+  local creds_b64=$(base64_creds "$CREDS")
   for client in npm yarn pnpm; do
     command -v "$client" >/dev/null 2>&1 || { fail "$client not installed"; continue; }
     local dir="$SCRATCH/$client"
     mkdir -p "$dir"
     printf '{"name":"h-%s","version":"1.0.0","dependencies":{"is-positive":"3.1.0"}}\n' \
       "$client" > "$dir/package.json"
-    printf 'registry=%s\ncache=%s/.cache\n' "$reg" "$dir" > "$dir/.npmrc"
+    # Write credentials scoped to localhost:8081 and local store directories
+    {
+      printf 'registry=%s\n' "$reg"
+      printf 'cache=%s/.cache\n' "$dir"
+      printf '//localhost:8081/:_auth=%s\n' "$creds_b64"
+      # Force local store for pnpm and yarn to prevent global cache bypass
+      if [ "$client" = "pnpm" ]; then
+        printf 'store-dir=%s/.pnpm-store\n' "$dir"
+      elif [ "$client" = "yarn" ]; then
+        printf 'cache-folder=%s/.yarn-cache\n' "$dir"
+      fi
+    } > "$dir/.npmrc"
     if ( cd "$dir" && "$client" install --silent >/dev/null 2>&1 ); then
       pass "$client install"
     else
-      fail "$client install"
+      fail "$client install: exit code $?"
       continue
     fi
     # The failure mode a plain exit code cannot see: a lockfile whose
     # resolved URL points upstream, silently bypassing the registry.
     if [ -f "$dir/package-lock.json" ] \
        && grep -q '"resolved": "http' "$dir/package-lock.json" \
-       && ! grep -q '"resolved": "'"$HOST" "$dir/package-lock.json"; then
+       && ! grep -q '"resolved": "'"$CLIENT_HOST" "$dir/package-lock.json"; then
       fail "$client resolved a tarball from a host other than Pantera"
     else
       pass "$client resolved through Pantera"
@@ -161,7 +181,13 @@ section_corepack() {
   # <package>@<version>:<integrity>, so Pantera's dist.tarball rewrite must
   # leave dist.signatures and dist.integrity untouched. Setting
   # COREPACK_INTEGRITY_KEYS=0 here would delete the only assertion that matters.
-  if ( cd "$dir" && COREPACK_NPM_REGISTRY="$GROUP" \
+  local creds_b64=$(base64_creds "$CREDS")
+  local npmrc="$dir/.npmrc"
+  {
+    printf 'registry=%s\n' "$CLIENT_GROUP/"
+    printf '//localhost:8081/:_auth=%s\n' "$creds_b64"
+  } > "$npmrc"
+  if ( cd "$dir" && COREPACK_NPM_REGISTRY="$CLIENT_GROUP/" \
         corepack prepare pnpm@11.17.0 --activate >/dev/null 2>&1 ); then
     pass "corepack prepare through Pantera with integrity verification enabled"
   else
