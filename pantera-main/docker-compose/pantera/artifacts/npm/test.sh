@@ -105,10 +105,21 @@ section_endpoints() {
     fi
   done
 
-  # Identity is user-scoped: same answer in every mode.
-  for base in "$LOCAL" "$PROXY" "$GROUP"; do
-    expect_status "whoami             $base" GET "$base/-/whoami" 200
-    expect_status "profile get        $base" GET "$base/-/npm/v1/user" 200
+  # Identity on the hosted repo: answered from the caller's own credentials.
+  expect_status "whoami             $LOCAL" GET "$LOCAL/-/whoami" 200
+  expect_status "profile get        $LOCAL" GET "$LOCAL/-/npm/v1/user" 200
+
+  # Identity on proxy and group is not user-scoped yet. Both modes forbid
+  # /-/whoami outright, and /-/npm/v1/user has no route at all, so it falls
+  # through to the upstream passthrough and 404s. That is defect 7 in
+  # docs/superpowers/specs/2026-08-26-npm-cli-conformance-design.md; the fix
+  # (answer both from the JWT -- identity involves no member walk) is designed
+  # but belongs to WS-B, not to this release. These pin the shipped shape so a
+  # change in either direction is caught: WS-B flips these four to 200 in the
+  # same PR that changes the behaviour.
+  for base in "$PROXY" "$GROUP"; do
+    expect_status "whoami [WS-B]      $base" GET "$base/-/whoami" 403
+    expect_status "profile get [WS-B] $base" GET "$base/-/npm/v1/user" 404
   done
 
   # Declined endpoints: fast, explicit, never 5xx.
