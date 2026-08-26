@@ -537,6 +537,35 @@ public final class NpmSlice implements Slice {
                     )
                 )
             ),
+            // WS-A: npm hook and npm team have no supported surface at all
+            // (any method); npm org is only declined for its write verbs --
+            // GET (e.g. "npm org ls") is a genuine passthrough on proxy and
+            // group repositories and must keep falling through to the
+            // package routes below. See repositories/npm.md#unsupported-endpoints.
+            new RtRulePath(
+                new RtRule.ByPath(".*/-/npm/v1/hooks.*"),
+                this.declinedRoute(
+                    "npm registry webhooks", Action.Standard.READ,
+                    basicAuth, npmTokenAuth, policy, name
+                )
+            ),
+            new RtRulePath(
+                new RtRule.ByPath(".*/-/team/.*"),
+                this.declinedRoute(
+                    "npm team management", Action.Standard.READ,
+                    basicAuth, npmTokenAuth, policy, name
+                )
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    new RtRule.Any(MethodRule.PUT, MethodRule.POST, MethodRule.DELETE),
+                    new RtRule.ByPath(".*/-/org/.*")
+                ),
+                this.declinedRoute(
+                    "npm organization management", Action.Standard.WRITE,
+                    basicAuth, npmTokenAuth, policy, name
+                )
+            ),
             new RtRulePath(
                 new RtRule.All(
                     MethodRule.GET,
@@ -724,6 +753,39 @@ public final class NpmSlice implements Slice {
             slice = new SliceSimple(ResponseBuilder.notFound().build());
         }
         return slice;
+    }
+
+    /**
+     * Wraps a {@link DeclinedEndpointSlice} the same way every other route
+     * in this class wraps its handler: shared auth, then a permission
+     * check against {@code name}. Pulled out purely to keep the declined
+     * npm-platform routes (webhooks, team, organization writes) from
+     * lengthening the primary constructor further -- see {@code
+     * repositories/npm.md#unsupported-endpoints}.
+     *
+     * @param feature Human-readable feature name for the decline message
+     * @param action Permission required to reach the decline response
+     * @param basicAuth Basic authentication
+     * @param tokenAuth Token authentication
+     * @param policy Access permissions
+     * @param name Repository name
+     * @return Auth-wrapped declined-endpoint slice
+     * @checkstyle ParameterNumberCheck (3 lines)
+     */
+    private Slice declinedRoute(
+        final String feature,
+        final Action action,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final Policy<?> policy,
+        final String name
+    ) {
+        return NpmSlice.createAuthSlice(
+            new DeclinedEndpointSlice(feature, "repositories/npm.md#unsupported-endpoints"),
+            basicAuth,
+            tokenAuth,
+            new OperationControl(policy, new AdapterBasicPermission(name, action))
+        );
     }
 
     /**
