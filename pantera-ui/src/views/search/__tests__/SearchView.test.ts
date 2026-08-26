@@ -108,6 +108,88 @@ describe('SearchView', () => {
       expect(to).not.toContain('31/0-jre')
     })
 
+    // maven/gradle artifact_path is the DOTTED GAV coordinate
+    // ("com.fasterxml.jackson.core.jackson-databind"), never a slashed
+    // storage key -- MavenScanner records the real version directory in
+    // path_prefix instead, and only for proxy repositories.
+    it('maven proxy browses to the version directory recorded in path_prefix', async () => {
+      const wrapper = await mountWithResult(makeResult({
+        repo_type: 'maven-proxy',
+        repo_name: 'maven_proxy',
+        artifact_path: 'com.fasterxml.jackson.core.jackson-databind',
+        version: '2.22.0',
+        path_prefix: 'com/fasterxml/jackson/core/jackson-databind/2.22.0',
+      }))
+
+      const link = wrapper.findComponent(RouterLinkStub)
+      expect(link.props('to')).toBe(
+        '/repositories/maven_proxy?path=%2Fcom%2Ffasterxml%2Fjackson%2Fcore%2Fjackson-databind%2F2.22.0&from=search',
+      )
+    })
+
+    // An artifactId that itself contains dots is why path_prefix must win
+    // over any dots-to-slashes guess: "javax.inject:javax.inject" lives at
+    // javax/inject/javax.inject/1, not javax/inject/javax/inject/1.
+    it('maven proxy path_prefix beats the dotted guess for a dotted artifactId', async () => {
+      const wrapper = await mountWithResult(makeResult({
+        repo_type: 'maven-proxy',
+        repo_name: 'maven_proxy',
+        artifact_path: 'javax.inject.javax.inject',
+        version: '1',
+        path_prefix: 'javax/inject/javax.inject/1',
+      }))
+
+      const link = wrapper.findComponent(RouterLinkStub)
+      expect(link.props('to')).toBe(
+        '/repositories/maven_proxy?path=%2Fjavax%2Finject%2Fjavax.inject%2F1&from=search',
+      )
+    })
+
+    // Hosted maven records no path_prefix by design, so the GAV must be
+    // expanded: groupId dots are directory separators and the version is a
+    // separate segment (the version itself is never dot-split).
+    it('maven local expands the dotted GAV and appends the version', async () => {
+      const wrapper = await mountWithResult(makeResult({
+        repo_type: 'maven',
+        repo_name: 'maven',
+        artifact_path: 'com.example.sample-fatjar',
+        version: '1.3.0',
+      }))
+
+      const link = wrapper.findComponent(RouterLinkStub)
+      expect(link.props('to')).toBe(
+        '/repositories/maven?path=%2Fcom%2Fexample%2Fsample-fatjar%2F1.3.0&from=search',
+      )
+    })
+
+    it('maven local with no version browses to the artifact directory', async () => {
+      const wrapper = await mountWithResult(makeResult({
+        repo_type: 'maven',
+        repo_name: 'maven',
+        artifact_path: 'com.example.sample-fatjar',
+      }))
+
+      const link = wrapper.findComponent(RouterLinkStub)
+      expect(link.props('to')).toBe(
+        '/repositories/maven?path=%2Fcom%2Fexample%2Fsample-fatjar&from=search',
+      )
+    })
+
+    it('maven path_prefix with a leading slash does not produce a doubled root', async () => {
+      const wrapper = await mountWithResult(makeResult({
+        repo_type: 'maven-proxy',
+        repo_name: 'maven_proxy',
+        artifact_path: 'com.example.thing',
+        version: '1.0.0',
+        path_prefix: '/com/example/thing/1.0.0',
+      }))
+
+      const link = wrapper.findComponent(RouterLinkStub)
+      expect(link.props('to')).toBe(
+        '/repositories/maven_proxy?path=%2Fcom%2Fexample%2Fthing%2F1.0.0&from=search',
+      )
+    })
+
     it('npm scoped package path is unchanged', async () => {
       const wrapper = await mountWithResult(makeResult({
         repo_type: 'npm',

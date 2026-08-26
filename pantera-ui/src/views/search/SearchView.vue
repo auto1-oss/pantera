@@ -215,13 +215,34 @@ function browseUrl(data: SearchResult): string {
   let path: string
 
   if (rtype.startsWith('maven') || rtype.startsWith('gradle')) {
-    // artifact_path is already the real repository key, e.g.
-    // "/com/google/guava/guava/31.0-jre/guava-31.0-jre.jar" -- its parent
-    // directory IS the version directory, so no extra "+ version" segment
-    // is needed (that used to compensate for a dotted GAV coordinate that
-    // never actually reached this code).
-    const dir = parentDir(name)
-    path = '/' + (dir || '')
+    // artifact_path here is the DOTTED GAV coordinate --
+    // "com.fasterxml.jackson.core.jackson-databind" -- not a storage key.
+    // It contains no slashes at all, so taking its parent directory yields
+    // "" and browses to the repository root.
+    //
+    // path_prefix is the real version directory ("com/fasterxml/jackson/
+    // core/jackson-databind/2.22.0") and is already exactly the target, so
+    // it is used verbatim -- no parent, no appended version. It is also the
+    // only correct source when the artifactId itself contains dots
+    // (javax.inject:javax.inject lives at javax/inject/javax.inject/1, not
+    // javax/inject/javax/inject/1), which no dots-to-slashes guess can get
+    // right.
+    //
+    // MavenScanner records path_prefix for proxy repositories only, so
+    // hosted rows fall back to expanding the GAV: groupId dots ARE
+    // directory separators, and the version is appended as its own segment
+    // so it is never itself dot-split.
+    // Leading slashes are normalised because this data model is not
+    // consistent about them -- artifact_path arrives both with and without
+    // one -- and "//com/..." is not the same route as "/com/...".
+    if (realKey) {
+      path = '/' + realKey.replace(/^\/+/, '')
+    } else if (name.includes('/')) {
+      path = '/' + (parentDir(name) || '')
+    } else {
+      const dir = name.replace(/\./g, '/')
+      path = data.version ? `/${dir}/${data.version}` : `/${dir}`
+    }
   } else if (rtype === 'php-proxy') {
     path = '/dist/' + name
   } else if (rtype === 'php') {
