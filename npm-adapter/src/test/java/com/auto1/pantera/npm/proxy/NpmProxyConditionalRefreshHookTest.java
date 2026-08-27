@@ -56,15 +56,25 @@ final class NpmProxyConditionalRefreshHookTest {
     private static final String LAST_MODIFIED = "Tue, 24 Mar 2020 12:15:16 GMT";
 
     @Test
-    @Timeout(5)
+    // Hang guard, deliberately an order of magnitude above the real cost, NOT a
+    // latency assertion: the method runs in ~0.25-0.5s on an idle machine. The
+    // previous 5s bound (with a 4s latch wait below) timed out in 2 of 4 full
+    // `mvn install -T8` runs on a loaded machine, at 5.3s elapsed — i.e. setup
+    // starvation before the latch was even reached, which is scheduler noise on
+    // a shared runner, not a regression. The latch below is what proves the
+    // semantics; this only converts a genuine hang into a deterministic failure.
+    @Timeout(30)
     void conditionalRefreshFiresPackumentWriteHookWhenEtagChanged() throws Exception {
         final String name = "asdas";
         final AtomicInteger upstreamCalls = new AtomicInteger();
         final AtomicReference<String> ifNoneMatchSeen = new AtomicReference<>();
         final byte[] packument = new TestResource("json/original.json").asBytes();
         final Slice upstream = (line, headers, body) -> {
-            upstreamCalls.incrementAndGet();
+            // Same ordering rule as NpmProxyConditionalRefreshTest's stub: record
+            // the request first, publish the counter last, so a reader that
+            // polls on the counter cannot observe a stale header value.
             ifNoneMatchSeen.set(headerValue(headers, "If-None-Match"));
+            upstreamCalls.incrementAndGet();
             // Always 200 with a NEW ETag — simulates upstream content that
             // genuinely changed since the stored ETag was captured (never
             // 304 Not Modified).
@@ -120,7 +130,7 @@ final class NpmProxyConditionalRefreshHookTest {
                 + "refresh path (WS5.2) — without it, invalidateAfterProxyRefresh "
                 + "never runs and a stale FilteredMetadataCache envelope survives "
                 + "a genuine upstream content change",
-            hookFired.await(4, TimeUnit.SECONDS),
+            hookFired.await(20, TimeUnit.SECONDS),
             new IsEqual<>(true)
         );
         MatcherAssert.assertThat(

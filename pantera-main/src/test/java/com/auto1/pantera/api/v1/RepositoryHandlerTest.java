@@ -298,4 +298,95 @@ public final class RepositoryHandlerTest extends AsyncApiTestBase {
         );
     }
 
+    @Test
+    void putWithRelativeUrlReturns400(
+        final Vertx vertx, final VertxTestContext ctx
+    ) throws Exception {
+        // `url:` is parsed with URI#toURL() when the repository is wired, so a
+        // malformed value would fail every later request rather than this write.
+        final JsonObject body = new JsonObject()
+            .put(
+                "repo",
+                new JsonObject()
+                    .put("type", "maven")
+                    .put("storage", new JsonObject().put("type", "fs").put("path", "/tmp"))
+                    .put("url", "packages.example.com/maven")
+            );
+        this.request(
+            vertx, ctx,
+            HttpMethod.PUT, "/api/v1/repositories/bad-url-relative",
+            body,
+            res -> {
+                Assertions.assertEquals(400, res.statusCode());
+                final JsonObject resp = res.bodyAsJsonObject();
+                Assertions.assertEquals("BAD_REQUEST", resp.getString("error"));
+                Assertions.assertTrue(
+                    resp.getString("message").contains("url"),
+                    "Error message should mention 'url'"
+                );
+            }
+        );
+    }
+
+    @Test
+    void putWithNonStringUrlReturns400(
+        final Vertx vertx, final VertxTestContext ctx
+    ) throws Exception {
+        final JsonObject body = new JsonObject()
+            .put(
+                "repo",
+                new JsonObject()
+                    .put("type", "maven")
+                    .put("storage", new JsonObject().put("type", "fs").put("path", "/tmp"))
+                    .put("url", 8081)
+            );
+        this.request(
+            vertx, ctx,
+            HttpMethod.PUT, "/api/v1/repositories/bad-url-number",
+            body,
+            res -> Assertions.assertEquals(400, res.statusCode())
+        );
+    }
+
+    @Test
+    void putWithAbsoluteUrlIsAccepted(
+        final Vertx vertx, final VertxTestContext ctx
+    ) throws Exception {
+        final JsonObject body = new JsonObject()
+            .put(
+                "repo",
+                new JsonObject()
+                    .put("type", "maven")
+                    .put("storage", new JsonObject().put("type", "fs").put("path", "/tmp"))
+                    .put("url", "https://packages.example.com/maven")
+            );
+        this.request(
+            vertx, ctx,
+            HttpMethod.PUT, "/api/v1/repositories/good-url",
+            body,
+            res -> Assertions.assertEquals(200, res.statusCode())
+        );
+    }
+
+    @Test
+    void putWithoutUrlIsAccepted(
+        final Vertx vertx, final VertxTestContext ctx
+    ) throws Exception {
+        // A hosted npm repository with no url: is valid since 2.2.6 — the
+        // client-facing base is resolved per request instead.
+        final JsonObject body = new JsonObject()
+            .put(
+                "repo",
+                new JsonObject()
+                    .put("type", "npm")
+                    .put("storage", new JsonObject().put("type", "fs").put("path", "/tmp"))
+            );
+        this.request(
+            vertx, ctx,
+            HttpMethod.PUT, "/api/v1/repositories/npm-no-url",
+            body,
+            res -> Assertions.assertEquals(200, res.statusCode())
+        );
+    }
+
 }

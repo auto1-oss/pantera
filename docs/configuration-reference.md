@@ -805,16 +805,25 @@ the inbound request -- scheme `http` and the `Host` header by default
 admin setting is enabled (see [7.8](#78-miscellaneous)). All three settings
 are DB-backed and hot-reloadable via the admin API/UI -- see [Client-facing
 base URL settings](#client-facing-base-url-settings-auth_settings-table)
-below. `url:` remains hard-required for repository types whose adapter constructs absolute
-URLs without this derivation ([2.5](#25-type-specific-settings): `php`,
-`helm`, `nuget`, `conan`, `conda` -- and, for local `npm` specifically, its
-`.npmrc`-auth endpoint has not yet been migrated to the derivation path, so a
-**local** `npm` repository still needs `url:` configured regardless. Its
-full-packument and single-version endpoints additionally honour the
+below. `url:` remains hard-required for exactly four repository types, whose adapters
+construct absolute URLs without this derivation
+([2.5](#25-type-specific-settings)): `php`, `helm`, `nuget`, `conda`. Every
+other type works with no `url:` at all. (`conan` is not among them despite
+emitting absolute `download_urls`: it builds them from the request `Host`
+directly -- note that this bypasses `client_base_url` and
+`client_base_host_allowlist`, unlike every adapter that goes through
+`ClientBaseUrl`.)
+
+Since 2.2.6 hosted **`npm`** is no longer one of them. All three of its
+base-URL consumers -- the full packument, the single-version manifest, and the
+`.npmrc` the `/.auth` endpoint emits -- resolve the base per request: the
 client-base header a group stamps for the repository actually addressed
-([2.4](#24-group-repository)), but still fall back to this required `url:`
--- never to `Host`-derivation -- when no header is stamped. `npm-proxy` and
-`npm-group` derive correctly and do not).
+([2.4](#24-group-repository)) first, then this repository's `url:` if it has
+one, then the request's own origin. So a hosted npm repository served over
+more than one hostname should leave `url:` unset, and each client gets
+`dist.tarball` links under the hostname it used; setting `url:` pins every
+client to that one host, whatever hostname they asked for. `npm-proxy` and
+`npm-group` behaved this way already.
 
 ```yaml
 # File: maven.yaml
@@ -829,6 +838,9 @@ repo:
 # File: npm.yaml
 repo:
   type: npm
+  # Optional since 2.2.6. Set it only to PIN every client's dist.tarball links
+  # to this exact base; omit it to have them follow the hostname each client
+  # actually used.
   url: http://localhost:8081/test_prefix/api/npm/npm
   storage:
     type: fs

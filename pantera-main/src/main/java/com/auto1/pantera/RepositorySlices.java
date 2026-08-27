@@ -647,9 +647,15 @@ public class RepositorySlices {
                 slice = trimPathSlice(fileProxySlice);
                 break;
             case "npm":
+                // `url:` is OPTIONAL for hosted npm since 2.2.6: when absent the
+                // client-facing base for dist.tarball and the .npmrc registry line
+                // is resolved per request (stamped base -> client_base_url setting
+                // -> request origin), which is what lets one hosted repository be
+                // served over more than one hostname. A configured url: still wins
+                // and still pins every client to that host.
                 slice = browsableTrimPathSlice(
                     new NpmSlice(
-                        cfg.url(), cfg.storage(), securityPolicy(), authentication(), tokens.auth(), tokens, cfg.name(), artifactEvents(), true,
+                        RepositorySlices.optionalUrl(cfg), cfg.storage(), securityPolicy(), authentication(), tokens.auth(), tokens, cfg.name(), artifactEvents(), true,
                         this.settings.syncArtifactIndexer(), this.settings.artifactIndex()
                     ),
                     cfg.storage()
@@ -1361,6 +1367,34 @@ public class RepositorySlices {
         final boolean read = readYaml != null && Boolean.parseBoolean(readYaml);
         final boolean write = writeYaml != null && Boolean.parseBoolean(writeYaml);
         return new AnonymousAccessSlice.Policy(read, write);
+    }
+
+    /**
+     * The repository's configured {@code url:} as a {@link java.net.URL}, or
+     * empty when the key is absent -- unlike {@link RepoConfig#url()}, which
+     * throws. Adapters taking this can derive the client-facing base from the
+     * request instead (see {@code com.auto1.pantera.npm.RepoBaseUrl}), which is
+     * what makes {@code url:} optional for hosted npm repositories.
+     *
+     * <p>A present-but-malformed value still fails fast, exactly as
+     * {@link RepoConfig#url()} does: a typo in {@code url:} must surface as a
+     * configuration error, never as silent fallback to request-derived URLs.</p>
+     *
+     * @param cfg Repo config.
+     * @return Configured URL, or empty when unset.
+     */
+    private static Optional<java.net.URL> optionalUrl(final RepoConfig cfg) {
+        return cfg.urlOpt().map(
+            str -> {
+                try {
+                    return java.net.URI.create(str).toURL();
+                } catch (final java.net.MalformedURLException ex) {
+                    throw new IllegalArgumentException(
+                        String.format("Failed to build URL from '%s'", str), ex
+                    );
+                }
+            }
+        );
     }
 
     private Authentication authentication() {

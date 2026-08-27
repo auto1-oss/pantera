@@ -1,5 +1,30 @@
 # Changelog
 
+## Version 2.2.6
+
+### 🌟 New features
+
+- **`url:` is now optional for hosted (`npm`) repositories** — the client-facing base for `dist.tarball` and for the `.npmrc` the `/.auth` endpoint emits is resolved per request (the base stamped for the repository the client addressed, else the canonical `client_base_url` setting, else the request's own origin), so one hosted repository can serve several hostnames and hand each client links under the name it used. A configured `url:` still wins and still pins every client to that host.
+  ([@aydasraf](https://github.com/aydasraf))
+- **The repository form exposes the client-facing base URL** — `repo.url` is now editable in the admin UI (its own "Client-Facing Base URL" card, deliberately separate from a proxy's upstream `remotes`), and clearing the field removes the key.
+  ([@aydasraf](https://github.com/aydasraf))
+- **`scripts/audit-repo-base-urls.sh` finds repositories pinned to a stale host** — reports every configured `url:` (optionally filtered by hostname), refuses to touch the types whose adapters still require one (`helm`, `php`, `nuget`, `conda`), and with `--apply` clears the clearable keys after writing a revert script. Useful after importing configs from another registry, where the old base URL comes across verbatim.
+  ([@aydasraf](https://github.com/aydasraf))
+
+### 🔧 Bug fixes
+
+- **Log4j2 artifacts are all on one version again (2.25.5).** The tree had drifted to `log4j-api` 2.25.3 + `log4j-core` 2.25.4 + `log4j-slf4j2-impl` 2.25.3 (and 2.24.3 for two of the three in `pantera-backfill`). Log4j2 does not support mixing its own artifact versions, and the API/core pairing is exactly where that surfaces as a runtime `NoSuchMethodError` rather than a build failure.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Saving a repository from the admin UI no longer deletes config keys the form does not show** — repository configs are stored as one JSONB document that `PUT` replaces wholesale, and the form rebuilt that document from the handful of fields it models, so opening a repository and saving it (without editing anything) silently dropped `url`, `path` and the `deb`/`rpm` `settings` block. Unmodelled keys are now round-tripped verbatim, and a storage-less group repository no longer gains an invented `storage` block.
+  ([@aydasraf](https://github.com/aydasraf))
+
+### 🔒 Security
+
+- **`brace-expansion` updated to 5.0.9 / 2.1.4 (UI build dependency), clearing three high-severity denial-of-service advisories** — `GHSA-3jxr-9vmj-r5cp`, `GHSA-mh99-v99m-4gvg`, `GHSA-rgw5-rvv9-x895`. `npm audit` on `pantera-ui` goes from one high finding to zero. Build-time only; it is not part of any shipped artifact.
+  ([@dependabot](https://github.com/dependabot))
+- **Routine dependency updates**, none of which address an advisory in the version they replace: `axios` 1.18.0, `postcss` 8.5.26, `nanoid` 3.3.18 (UI), PostgreSQL JDBC driver 42.7.12, Log4j2 2.25.5.
+  ([@dependabot](https://github.com/dependabot))
+
 ## Version 2.2.5
 
 ### ⚠️ Breaking changes

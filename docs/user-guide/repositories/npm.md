@@ -262,14 +262,16 @@ Point your `.npmrc` registry at the group, and Pantera handles resolution order 
 <details>
 <summary>Server-Side Repository Configuration (Admin Reference)</summary>
 
-**Local repository:** `url:` is required here (used for `.npmrc` auth
-responses and full-packument tarball rewriting).
+**Local repository:** `url:` is optional since 2.2.6. Omit it and Pantera
+derives the client-facing base (tarball links, and the `.npmrc` the `/.auth`
+endpoint returns) from each request, so a repository reachable on several
+hostnames hands each client links under the name it used. Set it only to pin
+every client to one base regardless of the hostname they asked for.
 
 ```yaml
 # npm-local.yaml
 repo:
   type: npm
-  url: "http://pantera-host:8080/npm-local"
   storage:
     type: fs
     path: /var/pantera/data
