@@ -269,6 +269,17 @@ New versions may introduce new configuration keys with sensible defaults. Existi
 
 > **v2.2.5 requires a DB migration and a UI redeploy.** `V137__client_base_url_settings.sql` adds the `trust_forwarded_headers` / `client_base_host_allowlist` admin settings (additive; runs automatically at startup like any other Flyway migration). `pantera-ui` must be redeployed alongside the backend — the new Settings page card (forwarded-header trust / host allowlist) requires the matching UI build; running the 2.2.5 backend against an older UI build simply hides the new card, it is not unsafe, but the setting is only reachable via the raw `GET`/`PUT /api/v1/admin/client-base-url-settings` API until the UI catches up.
 
+
+> **v2.2.6 needs no migration, but redeploy `pantera-ui` with the backend.** The
+> repository form previously rebuilt each repo's config from the fields it
+> modelled, so saving a repository through the old UI dropped keys it did not
+> show (`url`, `path`, the `deb`/`rpm` `settings` block) -- an older UI build
+> against a 2.2.6 backend still does. Redeploying the UI is the fix; to find
+> repositories whose `url:` was lost or points at a stale host, run
+> `scripts/audit-repo-base-urls.sh` (reports by default, `--apply` to clear).
+> Hosted `npm` repositories no longer require `url:` -- existing ones keep
+> working unchanged, since a configured `url:` still wins.
+
 ---
 
 ## JWT Migration (HS256 to RS256)

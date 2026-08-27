@@ -39,6 +39,44 @@ const repoType = ref('file')
 const storageType = ref('fs')
 const storagePath = ref('/var/pantera/data')
 
+// Client-facing base URL of the repository itself (`repo.url`) — the absolute
+// prefix Pantera embeds in the links it emits (npm dist.tarball, Composer
+// provider URLs, Helm chart URLs). NOT an upstream: that is remotes[].url
+// below. Empty means unset, which lets the server derive the base per request
+// (client_base_url admin setting, else Host/X-Forwarded-*).
+const clientBaseUrl = ref('')
+
+// A non-empty base URL must be absolute http(s) — the server rejects anything
+// else, and a relative value would silently produce broken tarball links.
+const baseUrlInvalid = computed(() => {
+  const value = clientBaseUrl.value.trim()
+  if (!value) return false
+  try {
+    const parsed = new URL(value)
+    return parsed.protocol !== 'http:' && parsed.protocol !== 'https:'
+  } catch {
+    return true
+  }
+})
+
+// Keys of `repo` this form does not model (e.g. `path`, the deb/rpm
+// `settings` block, anything a future server version adds). The server keeps
+// each repo config as ONE JSONB document and PUT replaces it wholesale, so a
+// key this form failed to re-emit would be permanently deleted on save —
+// which is exactly how repo-level `url:` used to be lost. They are captured
+// on load and spread back in buildConfig().
+const preservedKeys = ref<Record<string, unknown>>({})
+
+// Whether the loaded config carried a `storage` block. Group repos legitimately
+// have none, and inventing one on save is a silent config change.
+const hadStorage = ref(true)
+
+// Keys buildConfig() owns outright — everything else is preserved verbatim.
+const OWNED_KEYS = [
+  'type', 'url', 'storage', 'remotes', 'members', 'cooldown',
+  'anonymous_read', 'anonymous_write',
+]
+
 // S3 alias selection
 const allStorages = ref<StorageAlias[]>([])
 const s3Storages = computed(() =>
@@ -223,6 +261,7 @@ const isValid = computed<boolean>(() => {
   if (isProxy.value && !remotes.value.some(r => r.url.trim())) return false
   if (isGroup.value && groupMembers.value.length === 0) return false
   if (cooldownEnabled.value && !cooldownDuration.value) return false
+  if (baseUrlInvalid.value) return false
   return true
 })
 
@@ -284,6 +323,15 @@ function decomposeConfig(raw: RepoConfigEnvelope) {
   const repo = raw.repo
 
   repoType.value = repo.type ?? 'file'
+
+  // Repo-level client-facing base URL, and every key this form does not model.
+  clientBaseUrl.value = typeof repo.url === 'string' ? repo.url : ''
+  hadStorage.value = repo.storage !== undefined && repo.storage !== null
+  const preserved: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(repo)) {
+    if (!OWNED_KEYS.includes(key)) preserved[key] = value
+  }
+  preservedKeys.value = preserved
 
   // Anonymous access is deny-by-default for every repo type. An admin
   // must explicitly enable anonymous reads (typical for curlable
@@ -376,9 +424,25 @@ function buildConfig(): RepoConfigEnvelope {
     storage = { type: 'fs', path: storagePath.value }
   }
 
+  // Spread the preserved keys FIRST so the owned keys below always win.
   const repo: RepoConfigEnvelope['repo'] = {
+    ...preservedKeys.value,
     type: repoType.value,
-    storage,
+  }
+
+  // A group repo has no storage of its own; only emit one if the loaded
+  // config actually had it, so saving never invents a storage block.
+  if (!isGroup.value || hadStorage.value) {
+    repo.storage = storage
+  }
+
+  // Repo-level base URL: emitted only when non-empty, so clearing the field
+  // removes the key (and hands base-URL derivation back to the server).
+  const base = clientBaseUrl.value.trim()
+  if (base) {
+    repo.url = base
+  } else {
+    delete repo.url
   }
 
   if (isProxy.value) {
@@ -432,6 +496,7 @@ watch(
     s3Bucket, s3Region, s3Endpoint,
     cooldownEnabled, cooldownDuration,
     anonymousRead, anonymousWrite,
+    clientBaseUrl,
   ],
   () => { emitConfig() },
 )
@@ -533,6 +598,37 @@ defineExpose({
             </div>
           </div>
         </template>
+      </div>
+    </template>
+  </Card>
+
+  <!-- Client-facing base URL of this repository (repo.url) -->
+  <Card class="shadow-sm">
+    <template #title>Client-Facing Base URL</template>
+    <template #content>
+      <div class="space-y-2">
+        <label class="block text-xs text-gray-500 mb-1">
+          Base URL (optional — this is NOT an upstream)
+        </label>
+        <InputText
+          v-model="clientBaseUrl"
+          class="w-full"
+          placeholder="e.g. https://packages.example.com/api/npm/npm-local"
+        />
+        <p v-if="baseUrlInvalid" class="text-xs text-red-400">
+          Must be an absolute <code>http://</code> or <code>https://</code> URL.
+        </p>
+        <p class="text-xs text-gray-400">
+          The absolute prefix Pantera embeds in the links this repository emits
+          (npm <code>dist.tarball</code>, Composer provider URLs, Helm chart
+          URLs). When set it pins those links to this host for every client,
+          overriding the <code>client_base_url</code> admin setting and
+          <code>Host</code>/<code>X-Forwarded-*</code> derivation — leave it
+          empty if you serve the same repository over more than one domain.
+          Required for local <code>helm</code>, <code>php</code>,
+          <code>nuget</code>, <code>conan</code> and <code>conda</code>
+          repositories, whose adapters build absolute URLs directly.
+        </p>
       </div>
     </template>
   </Card>

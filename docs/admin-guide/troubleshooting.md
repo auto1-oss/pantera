@@ -405,6 +405,64 @@ docker exec -it pantera-db psql -U pantera -d pantera \
 3. If Valkey is configured, the L2 entry will also need to expire or be cleared.
 4. To reduce future impact, lower the negative cache TTL in `meta.caches.negative.ttl`.
 
+### Emitted Links Point at the Wrong Hostname
+
+**Symptoms:** Clients reaching Pantera on one hostname receive absolute links
+(npm `dist.tarball`, Composer provider URLs, Helm chart URLs) pointing at a
+different host -- often a previous registry's hostname, or one of two DNS names
+serving the same instance. `npm install` then fetches tarballs from the wrong
+host, and strict clients (corepack) reject the response outright.
+
+**Cause:** The repository has an explicit `url:` in its config. That is tier 1
+of the base-URL chain: it beats the `client_base_url` admin setting *and*
+`Host`/`X-Forwarded-*` derivation, for every client, whatever hostname they
+used. A `url:` carried over by an import from another registry keeps pointing
+at the old host indefinitely.
+
+**Resolution:**
+
+1. Find the pinned repositories -- reports only, changes nothing:
+
+   ```bash
+   scripts/audit-repo-base-urls.sh --stale-host old-registry.example.com
+   ```
+
+2. Clear the ones that can be cleared (the script refuses `helm`, `php`,
+   `nuget` and `conda`, whose adapters still require a `url:`, and writes a
+   revert script before touching anything):
+
+   ```bash
+   scripts/audit-repo-base-urls.sh --stale-host old-registry.example.com --apply
+   ```
+
+   The same field is editable per repository in the admin UI, under the
+   repository's "Client-Facing Base URL" card.
+
+3. Decide what the base should be derived from instead:
+
+   - **One hostname:** set `client_base_url` (Settings -> Client-Facing Base
+     URL). It is enforced for every repository without its own `url:`, and
+     `Host`/`X-Forwarded-*` are then not consulted at all.
+   - **Several hostnames:** leave `client_base_url` empty, set
+     `trust_forwarded_headers` to `true`, and list every hostname you serve in
+     `client_base_host_allowlist`. Host-only derivation forces scheme `http`,
+     so HTTPS clients need the forwarded headers -- which means the fronting
+     proxy MUST overwrite `X-Forwarded-Proto` and `X-Forwarded-Host` on every
+     inbound request, or a client can steer the emitted links itself.
+
+4. Verify against the backend directly (bypassing any caching proxy):
+
+   ```bash
+   curl -s -H 'Host: packages.example.com' \
+     http://localhost:8088/api/npm/<repo>/<package> \
+     | jq -r '.versions[].dist.tarball' | head -3
+   ```
+
+Responses that embed a derived base carry `Vary: Host` (plus the
+`X-Forwarded-*` triplet when forwarded headers are trusted), so a shared cache
+in front of Pantera must honour `Vary` or it will cross-serve one hostname's
+links to the other.
+
 ---
 
 ## Key Metrics for Troubleshooting

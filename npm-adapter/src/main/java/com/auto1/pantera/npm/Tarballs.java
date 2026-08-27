@@ -36,9 +36,13 @@ public final class Tarballs {
     private final Content original;
 
     /**
-     * URL prefix.
+     * Absolute URL prefix the rewritten tarball links are rooted at. Held as
+     * a string because that is all {@link #updateJson(JsonObject, String)}
+     * ever needs, and because callers now resolve it per request (it may come
+     * from a stamped header rather than a configured {@code url:}) -- see
+     * {@link com.auto1.pantera.npm.RepoBaseUrl}.
      */
-    private final URL prefix;
+    private final String prefix;
 
     /**
      * Ctor.
@@ -46,6 +50,16 @@ public final class Tarballs {
      * @param prefix URL prefix
      */
     public Tarballs(final Content original, final URL prefix) {
+        this(original, prefix.toString());
+    }
+
+    /**
+     * Ctor taking an already-resolved prefix; the single field-initializing
+     * constructor.
+     * @param original Original content
+     * @param prefix Absolute URL prefix
+     */
+    public Tarballs(final Content original, final String prefix) {
         this.original = original;
         this.prefix = prefix;
     }
@@ -63,7 +77,7 @@ public final class Tarballs {
                 .map(buf -> new Remaining(buf).bytes())
                 .map(bytes -> new String(bytes, StandardCharsets.UTF_8))
                 .map(json -> Json.createReader(new StringReader(json)).readObject())
-                .map(json -> Tarballs.updateJson(json, this.prefix.toString()))
+                .map(json -> Tarballs.updateJson(json, this.prefix))
                 .flatMapPublisher(
                     json -> new Content.From(
                         Flowable.fromArray(

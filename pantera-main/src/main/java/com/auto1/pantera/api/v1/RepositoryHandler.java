@@ -331,6 +331,11 @@ public final class RepositoryHandler {
                 return;
             }
         }
+        final Optional<String> urlError = RepositoryHandler.urlError(repo);
+        if (urlError.isPresent()) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", urlError.get());
+            return;
+        }
         final boolean exists = this.crs.exists(rname);
         final ApiRepositoryPermission needed;
         if (exists) {
@@ -369,6 +374,43 @@ public final class RepositoryHandler {
                 ctx.response().setStatusCode(200).end();
             }
         });
+    }
+
+    /**
+     * Validate the optional client-facing {@code url:} of a repo config body.
+     *
+     * <p>{@code url:} is the absolute base Pantera embeds in the links this
+     * repository emits, and the adapters parse it with {@code URI#toURL()} when
+     * the repository is wired -- so a malformed value stored here does not fail
+     * the write, it fails every later request to that repository. Rejecting it
+     * at the boundary keeps a typo from taking a repository down; this became
+     * reachable from the admin UI in 2.2.6, which is why it is checked here
+     * rather than only in the adapters.</p>
+     *
+     * @param repo The {@code repo} object of the request body
+     * @return Error message when the value is present and invalid, else empty
+     */
+    private static Optional<String> urlError(final javax.json.JsonObject repo) {
+        Optional<String> result = Optional.empty();
+        if (repo.containsKey("url")) {
+            final String message = "url must be an absolute http(s) URL with a host";
+            if (repo.get("url").getValueType() != javax.json.JsonValue.ValueType.STRING) {
+                result = Optional.of(message);
+            } else {
+                try {
+                    final java.net.URI uri = new java.net.URI(repo.getString("url"));
+                    final String scheme = uri.getScheme();
+                    final boolean http = "http".equalsIgnoreCase(scheme)
+                        || "https".equalsIgnoreCase(scheme);
+                    if (!http || uri.getHost() == null || uri.getHost().isBlank()) {
+                        result = Optional.of(message);
+                    }
+                } catch (final java.net.URISyntaxException ex) {
+                    result = Optional.of(message);
+                }
+            }
+        }
+        return result;
     }
 
     /**

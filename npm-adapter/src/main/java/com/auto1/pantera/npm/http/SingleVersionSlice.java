@@ -19,7 +19,6 @@ import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
-import com.auto1.pantera.http.headers.ClientBaseUrl;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsMdc;
@@ -27,6 +26,7 @@ import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.npm.PerVersionLayout;
+import com.auto1.pantera.npm.RepoBaseUrl;
 import com.auto1.pantera.npm.Tarballs;
 import com.auto1.pantera.npm.misc.MetadataETag;
 
@@ -58,9 +58,9 @@ import org.slf4j.MDC;
 public final class SingleVersionSlice implements Slice {
 
     /**
-     * Base URL for tarball rewriting.
+     * Client-facing base URL resolver for tarball rewriting.
      */
-    private final URL base;
+    private final RepoBaseUrl base;
 
     /**
      * Storage backing the repository.
@@ -73,14 +73,28 @@ public final class SingleVersionSlice implements Slice {
     private final String repoName;
 
     /**
-     * Ctor.
+     * Ctor for a repository with a configured {@code url:}.
      *
      * @param base Base URL
      * @param storage Storage
      * @param repoName Repository name
      */
     public SingleVersionSlice(final URL base, final Storage storage, final String repoName) {
-        this.base = base;
+        this(Optional.of(base), storage, repoName);
+    }
+
+    /**
+     * Ctor; the single field-initializing constructor.
+     *
+     * @param base Configured {@code url:}, or empty -- in which case the
+     *  client-facing base is resolved per request, see {@link RepoBaseUrl}
+     * @param storage Storage
+     * @param repoName Repository name
+     */
+    public SingleVersionSlice(
+        final Optional<URL> base, final Storage storage, final String repoName
+    ) {
+        this.base = new RepoBaseUrl(base);
         this.storage = storage;
         this.repoName = repoName;
     }
@@ -161,8 +175,7 @@ public final class SingleVersionSlice implements Slice {
         final JsonObjectBuilder builder = Json.createObjectBuilder(versionJson);
         builder.remove("_publishTime");
         if (versionJson.containsKey("dist") && versionJson.getJsonObject("dist").containsKey("tarball")) {
-            final String prefix = new ClientBaseUrl(headers).stamped()
-                .orElseGet(() -> this.base.toString());
+            final String prefix = this.base.resolve(headers);
             final String rewritten = Tarballs.rewriteTarball(
                 versionJson.getJsonObject("dist").getString("tarball"), prefix
             );
@@ -175,7 +188,7 @@ public final class SingleVersionSlice implements Slice {
         }
         final String responseBody = builder.build().toString();
         final String etag = new MetadataETag(responseBody).calculate();
-        final String vary = new ClientBaseUrl(headers).varyHeaderValue();
+        final String vary = this.base.vary(headers);
         if (clientETag.isPresent() && clientETag.get().equals(etag)) {
             return ResponseBuilder.from(RsStatus.NOT_MODIFIED)
                 .header("ETag", etag)

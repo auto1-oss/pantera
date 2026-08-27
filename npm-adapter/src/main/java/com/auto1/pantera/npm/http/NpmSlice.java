@@ -115,8 +115,8 @@ public final class NpmSlice implements Slice {
         final String name,
         final Optional<Queue<ArtifactEvent>> events
     ) {
-        this(base, storage, policy, basicAuth, tokenAuth, name, events, false, null,
-            com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP);
+        this(Optional.of(base), storage, policy, basicAuth, tokenAuth, name, events, false,
+            null, com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP);
     }
 
     /**
@@ -140,8 +140,8 @@ public final class NpmSlice implements Slice {
         final Optional<Queue<ArtifactEvent>> events,
         final boolean jwtOnly
     ) {
-        this(base, storage, policy, basicAuth, tokenAuth, name, events, jwtOnly, null,
-            com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP);
+        this(Optional.of(base), storage, policy, basicAuth, tokenAuth, name, events, jwtOnly,
+            null, com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP);
     }
 
     /**
@@ -168,8 +168,8 @@ public final class NpmSlice implements Slice {
         final Optional<Queue<ArtifactEvent>> events,
         final boolean jwtOnly
     ) {
-        this(base, storage, policy, basicAuth, tokenAuth, name, events, jwtOnly, tokens,
-            com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP);
+        this(Optional.of(base), storage, policy, basicAuth, tokenAuth, name, events, jwtOnly,
+            tokens, com.auto1.pantera.index.SyncArtifactIndexer.NOOP, ArtifactIndex.NOP);
     }
 
     /**
@@ -189,13 +189,38 @@ public final class NpmSlice implements Slice {
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
         final ArtifactIndex artifactIndex
     ) {
+        this(Optional.of(base), storage, policy, basicAuth, tokenAuth, name, events, jwtOnly,
+            tokens, syncIndex, artifactIndex);
+    }
+
+    /**
+     * Ctor for a repository whose {@code url:} may be absent -- the client-facing
+     * base for emitted links ({@code dist.tarball}, the {@code .npmrc} registry
+     * line) is then resolved per request instead of being pinned to one host.
+     * See {@link com.auto1.pantera.npm.RepoBaseUrl}.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public NpmSlice(
+        final Optional<URL> base,
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final Tokens tokens,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final boolean jwtOnly,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final ArtifactIndex artifactIndex
+    ) {
         this(base, storage, policy, basicAuth, tokenAuth, name, events, jwtOnly, tokens,
             syncIndex, artifactIndex);
     }
 
     /**
      * Primary ctor.
-     * @param base Base URL.
+     * @param base Configured {@code url:}, or empty when the repository has
+     *  none -- see {@link com.auto1.pantera.npm.RepoBaseUrl}.
      * @param storage Storage.
      * @param policy Policy.
      * @param basicAuth Basic auth.
@@ -209,7 +234,7 @@ public final class NpmSlice implements Slice {
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     private NpmSlice(
-        final URL base,
+        final Optional<URL> base,
         final Storage storage,
         final Policy<?> policy,
         final Authentication basicAuth,

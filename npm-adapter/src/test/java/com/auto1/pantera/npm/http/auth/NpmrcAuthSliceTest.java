@@ -17,6 +17,7 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.headers.Authorization;
+import com.auto1.pantera.http.headers.ClientBaseUrl;
 import com.auto1.pantera.http.hm.RsHasStatus;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
@@ -184,5 +185,103 @@ class NpmrcAuthSliceTest {
             body,
             Matchers.containsString("//pantera.example.com/:_authToken=")
         );
+    }
+    @Test
+    void derivesRegistryFromStampedBaseWhenNoUrlConfigured() throws Exception {
+        // 2.2.6: hosted npm no longer requires `url:`. With none configured the
+        // emitted .npmrc must follow the base the request actually addressed --
+        // this endpoint's dependency on a fixed URL is what used to force every
+        // hosted npm repository to pin one hostname.
+        final Response response = NpmrcAuthSliceTest.npmrcFor(
+            Optional.empty(),
+            Headers.from(new Authorization(NpmrcAuthSliceTest.basic()))
+                .add(ClientBaseUrl.HEADER, "https://packages.example.com:8443/api/npm/npm-local")
+        );
+        final String body = new String(response.body().asBytes(), StandardCharsets.UTF_8);
+        MatcherAssert.assertThat(
+            "registry line must follow the addressed base",
+            body,
+            Matchers.containsString(
+                "registry=https://packages.example.com:8443/api/npm/npm-local"
+            )
+        );
+        MatcherAssert.assertThat(
+            "auth lines must be keyed by host:port only, never the path",
+            body,
+            Matchers.containsString("//packages.example.com:8443/:_authToken=")
+        );
+    }
+
+    @Test
+    void derivesRegistryFromHostWhenNothingIsConfiguredOrStamped() throws Exception {
+        final Response response = NpmrcAuthSliceTest.npmrcFor(
+            Optional.empty(),
+            Headers.from(new Authorization(NpmrcAuthSliceTest.basic()))
+                .add("Host", "packages.example.com")
+        );
+        MatcherAssert.assertThat(
+            new String(response.body().asBytes(), StandardCharsets.UTF_8),
+            Matchers.containsString("registry=http://packages.example.com")
+        );
+    }
+
+    @Test
+    void configuredUrlStillWinsOverTheRequestHost() throws Exception {
+        final Response response = NpmrcAuthSliceTest.npmrcFor(
+            Optional.of(new URL("https://pinned.example.com/npm_repo")),
+            Headers.from(new Authorization(NpmrcAuthSliceTest.basic()))
+                .add("Host", "packages.example.com")
+        );
+        MatcherAssert.assertThat(
+            new String(response.body().asBytes(), StandardCharsets.UTF_8),
+            Matchers.containsString("registry=https://pinned.example.com/npm_repo")
+        );
+    }
+
+    @Test
+    void npmrcResponseVariesOnHost() throws Exception {
+        // The body embeds a Host-derived base, so a shared cache must not
+        // cross-serve it between hostnames.
+        final Response response = NpmrcAuthSliceTest.npmrcFor(
+            Optional.empty(),
+            Headers.from(new Authorization(NpmrcAuthSliceTest.basic()))
+                .add("Host", "packages.example.com")
+        );
+        MatcherAssert.assertThat(
+            response.headers().single("Vary").getValue(),
+            Matchers.equalTo("Host")
+        );
+    }
+
+    /**
+     * Basic-auth header value for the fixture credentials.
+     *
+     * @return Authorization header value
+     */
+    private static String basic() {
+        return "Basic " + Base64.getEncoder().encodeToString(
+            "testuser:testpass".getBytes(StandardCharsets.UTF_8)
+        );
+    }
+
+    /**
+     * Drive an authenticated {@code GET /.auth} through the slice.
+     *
+     * @param base Configured {@code url:}, or empty
+     * @param headers Request headers
+     * @return Response
+     */
+    private static Response npmrcFor(final Optional<URL> base, final Headers headers) {
+        final NpmrcAuthSlice slice = new NpmrcAuthSlice(
+            base,
+            (user, pass) -> "testuser".equals(user) && "testpass".equals(pass)
+                ? Optional.of(new AuthUser("testuser", "test"))
+                : Optional.empty(),
+            MOCK_TOKENS,
+            MOCK_TOKENS.auth()
+        );
+        return slice.response(
+            new RequestLine(RqMethod.GET, "/.auth"), headers, Content.EMPTY
+        ).join();
     }
 }

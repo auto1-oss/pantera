@@ -33,6 +33,7 @@ import java.io.StringReader;
 import java.net.URI;
 import java.net.URL;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * I3 regression coverage: {@code npm.http.DownloadPackageSlice} is the LOCAL
@@ -120,14 +121,90 @@ final class DownloadPackageSliceClientBaseTest {
         );
     }
 
+    @Test
+    void stampedHeaderUsedWhenRepositoryHasNoConfiguredUrl() throws Exception {
+        // 2.2.6: `url:` is optional for hosted npm. With none configured the
+        // stamped base is the only source of the tarball prefix.
+        final Response response = this.responseFor(
+            Headers.from(ClientBaseUrl.HEADER, "https://packages.example.com/api/npm/npm-local"),
+            Optional.empty()
+        );
+        MatcherAssert.assertThat(
+            tarballOf(response),
+            new IsEqual<>("https://packages.example.com/api/npm/npm-local" + TARBALL_SUFFIX)
+        );
+    }
+
+    @Test
+    void requestOriginUsedWhenNeitherUrlNorStampIsPresent() throws Exception {
+        // Last-resort tier: no configured url:, no stamp (slice driven without
+        // SliceByPath in front). The served link must still be absolute and
+        // rooted at the host the client actually asked for, NOT dropped or
+        // rooted at localhost.
+        final Response response = this.responseFor(
+            new Headers().add("Host", "packages.example.com"), Optional.empty()
+        );
+        MatcherAssert.assertThat(
+            tarballOf(response),
+            new IsEqual<>("http://packages.example.com" + TARBALL_SUFFIX)
+        );
+    }
+
+    @Test
+    void twoHostsGetTheirOwnTarballUrlsFromOneRepository() throws Exception {
+        // The whole point of making url: optional: one hosted repository served
+        // over two DNS names hands each client links under the name it used.
+        final String first = tarballOf(
+            this.responseFor(
+                Headers.from(ClientBaseUrl.HEADER, "https://packages.example.com/api/npm/npm-local"),
+                Optional.empty()
+            )
+        );
+        final String second = tarballOf(
+            this.responseFor(
+                Headers.from(ClientBaseUrl.HEADER, "https://artifactory.example.com/api/npm/npm-local"),
+                Optional.empty()
+            )
+        );
+        MatcherAssert.assertThat(
+            "first host must get its own base",
+            first,
+            new IsEqual<>("https://packages.example.com/api/npm/npm-local" + TARBALL_SUFFIX)
+        );
+        MatcherAssert.assertThat(
+            "second host must get its own base from the same repository",
+            second,
+            new IsEqual<>("https://artifactory.example.com/api/npm/npm-local" + TARBALL_SUFFIX)
+        );
+    }
+
     /**
-     * Drive a packument request through a freshly-seeded slice.
+     * Drive a packument request through a freshly-seeded slice with a
+     * configured {@code url:}.
      *
      * @param headers Request headers
      * @return Response
      * @throws Exception On any I/O failure building the response
      */
     private Response responseFor(final Headers headers) throws Exception {
+        return this.responseFor(
+            headers,
+            Optional.of(
+                DownloadPackageSliceClientBaseTest.url("http://localhost:8081/npm_local")
+            )
+        );
+    }
+
+    /**
+     * Drive a packument request through a freshly-seeded slice.
+     *
+     * @param headers Request headers
+     * @param base Configured {@code url:}, or empty
+     * @return Response
+     * @throws Exception On any I/O failure building the response
+     */
+    private Response responseFor(final Headers headers, final Optional<URL> base)
+        throws Exception {
         final Storage storage = new InMemoryStorage();
         storage.save(
             new Key.From("@hello", "simple-npm-project", "meta.json"),
@@ -135,9 +212,7 @@ final class DownloadPackageSliceClientBaseTest {
                 IOUtils.resourceToByteArray("/storage/@hello/simple-npm-project/meta.json")
             )
         ).join();
-        final DownloadPackageSlice slice = new DownloadPackageSlice(
-            DownloadPackageSliceClientBaseTest.url("http://localhost:8081/npm_local"), storage
-        );
+        final DownloadPackageSlice slice = new DownloadPackageSlice(base, storage);
         return slice.response(
             new RequestLine(RqMethod.GET, "/" + PKG), headers, Content.EMPTY
         ).get();

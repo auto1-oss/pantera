@@ -23,6 +23,10 @@ import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.auth.TokenAuthentication;
 import com.auto1.pantera.http.auth.Tokens;
 
+import com.auto1.pantera.npm.RepoBaseUrl;
+
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
@@ -72,9 +76,9 @@ public final class NpmrcAuthSlice implements Slice {
     public static final Pattern AUTH_SCOPE_PATTERN = Pattern.compile("^.*/\\.auth/(@?[^/]+)/?$");
 
     /**
-     * Repository base URL.
+     * Client-facing base URL resolver for the emitted registry lines.
      */
-    private final URL baseUrl;
+    private final RepoBaseUrl baseUrl;
 
     /**
      * Pantera authentication.
@@ -97,7 +101,7 @@ public final class NpmrcAuthSlice implements Slice {
     private static final String DEFAULT_EMAIL_DOMAIN = "pantera.local";
 
     /**
-     * Constructor.
+     * Constructor for a repository with a configured {@code url:}.
      * @param baseUrl Repository base URL
      * @param auth Pantera authentication
      * @param tokens Token service to generate JWT tokens
@@ -109,7 +113,29 @@ public final class NpmrcAuthSlice implements Slice {
         final Tokens tokens,
         final TokenAuthentication tokenAuth
     ) {
-        this.baseUrl = baseUrl;
+        this(Optional.of(baseUrl), auth, tokens, tokenAuth);
+    }
+
+    /**
+     * Constructor; the single field-initializing constructor.
+     *
+     * <p>An empty {@code baseUrl} makes the emitted {@code registry=} line
+     * follow the base the request actually addressed rather than a fixed
+     * configured one -- which is what lets a hosted npm repository be served
+     * over more than one hostname. See {@link RepoBaseUrl}.</p>
+     *
+     * @param baseUrl Configured {@code url:}, or empty when absent
+     * @param auth Pantera authentication
+     * @param tokens Token service to generate JWT tokens
+     * @param tokenAuth Token authentication for Bearer tokens
+     */
+    public NpmrcAuthSlice(
+        final Optional<URL> baseUrl,
+        final Authentication auth,
+        final Tokens tokens,
+        final TokenAuthentication tokenAuth
+    ) {
+        this.baseUrl = new RepoBaseUrl(baseUrl);
         this.auth = auth;
         this.tokens = tokens;
         this.tokenAuth = tokenAuth;
@@ -146,7 +172,7 @@ public final class NpmrcAuthSlice implements Slice {
                 // If Bearer token provided, reuse it; otherwise generate JWT token
                 if (result.token != null) {
                     return CompletableFuture.completedFuture(
-                        this.generateNpmrc(user, result.token, scope)
+                        this.generateNpmrc(user, result.token, scope, headers)
                     );
                 }
                 
@@ -154,7 +180,7 @@ public final class NpmrcAuthSlice implements Slice {
                 try {
                     final String jwtToken = this.tokens.generate(user);
                     return CompletableFuture.completedFuture(
-                        this.generateNpmrc(user, jwtToken, scope)
+                        this.generateNpmrc(user, jwtToken, scope, headers)
                     );
                 } catch (Exception err) {
                     return CompletableFuture.completedFuture(
@@ -234,20 +260,18 @@ public final class NpmrcAuthSlice implements Slice {
      * @param user Authenticated user
      * @param token Generated NPM token
      * @param scope Optional scope
+     * @param headers Request headers, used to resolve the client-facing base
      * @return Response with .npmrc content
      */
     private Response generateNpmrc(
         final AuthUser user,
         final String token,
-        final Optional<String> scope
+        final Optional<String> scope,
+        final Headers headers
     ) {
-        final String registryUrl = this.baseUrl.toString().replaceAll("/$", "");
-        final String registryHost = this.baseUrl.getHost();
-        final String port = this.baseUrl.getPort() > 0 && this.baseUrl.getPort() != 80 && this.baseUrl.getPort() != 443
-            ? ":" + this.baseUrl.getPort()
-            : "";
+        final String registryUrl = this.baseUrl.resolve(headers).replaceAll("/$", "");
         // Auth base uses only host:port, not the full path
-        final String registryAuthBase = "//" + registryHost + port;
+        final String registryAuthBase = NpmrcAuthSlice.authBase(registryUrl);
         
         // AuthUser doesn't have email, use default format
         final String email = user.name() + "@" + DEFAULT_EMAIL_DOMAIN;
@@ -270,7 +294,41 @@ public final class NpmrcAuthSlice implements Slice {
 
         return ResponseBuilder.ok()
             .header("Content-Type", "text/plain; charset=utf-8")
+            .varyHeader(this.baseUrl.vary(headers))
             .body(npmrc.toString().getBytes(StandardCharsets.UTF_8))
             .build();
+    }
+
+    /**
+     * The {@code //host[:port]} prefix the per-registry auth lines are keyed
+     * by: host and a non-default port only, never the path. Defensive against
+     * an unparseable base -- the whole string is used verbatim rather than
+     * emitting a broken {@code //null} line.
+     *
+     * @param registryUrl Resolved registry URL, trailing slash already dropped
+     * @return Auth base, e.g. {@code //packages.example.com:8081}
+     */
+    private static String authBase(final String registryUrl) {
+        String authority;
+        try {
+            final URI uri = new URI(registryUrl);
+            final String host = uri.getHost();
+            if (host == null) {
+                authority = uri.getAuthority();
+            } else {
+                final int port = uri.getPort();
+                if (port > 0 && port != 80 && port != 443) {
+                    authority = host + ":" + port;
+                } else {
+                    authority = host;
+                }
+            }
+        } catch (final URISyntaxException ex) {
+            authority = null;
+        }
+        if (authority == null) {
+            authority = registryUrl.replaceFirst("^[a-zA-Z][a-zA-Z0-9+.-]*://", "");
+        }
+        return "//" + authority;
     }
 }
