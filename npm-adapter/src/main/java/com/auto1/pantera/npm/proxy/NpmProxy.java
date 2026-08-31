@@ -26,7 +26,7 @@ import java.io.IOException;
 import java.net.URI;
 import java.time.Duration;
 import java.time.OffsetDateTime;
-import java.util.concurrent.ConcurrentHashMap;
+import com.auto1.pantera.http.resilience.InFlightGuard;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
 import java.util.function.BiConsumer;
@@ -61,10 +61,22 @@ public class NpmProxy {
     private final Duration metadataTtl;
 
     /**
-     * Packages currently being refreshed in background (stale-while-revalidate).
-     * Prevents duplicate refresh operations for the same package.
+     * Age past which an in-flight background refresh is considered
+     * abandoned (hung upstream connection, dropped subscription) and its
+     * dedup entry may be taken over by the next request. Before 2.2.7 a
+     * refresh that never reached a terminal event pinned its package in
+     * the dedup set until restart — every later refresh was silently
+     * skipped and the packument was served stale forever with no log
+     * trace.
      */
-    private final ConcurrentHashMap.KeySetView<String, Boolean> refreshing;
+    private static final Duration REFRESH_STUCK_AGE = Duration.ofMinutes(10);
+
+    /**
+     * Packages currently being refreshed in background (stale-while-revalidate).
+     * Prevents duplicate refresh operations for the same package; entries
+     * older than {@link #REFRESH_STUCK_AGE} are treated as abandoned.
+     */
+    private final InFlightGuard refreshing;
 
     /**
      * Contextualised RxJava scheduler for background refresh.
@@ -345,7 +357,7 @@ public class NpmProxy {
         this.storage = storage;
         this.remote = remote;
         this.metadataTtl = metadataTtl;
-        this.refreshing = ConcurrentHashMap.newKeySet();
+        this.refreshing = new InFlightGuard(REFRESH_STUCK_AGE);
         // Wrap ForkJoinPool.commonPool with ContextualExecutor so background
         // refresh callbacks inherit the caller's ThreadContext (trace.id etc.)
         // and APM span. This replaces the per-call MDC capture/restore.
@@ -460,7 +472,9 @@ public class NpmProxy {
     /**
      * Trigger background refresh of a package (stale-while-revalidate pattern).
      * Serves stale content immediately while refreshing in background.
-     * Uses a ConcurrentHashMap.KeySetView to deduplicate in-flight refreshes.
+     * Uses an {@link InFlightGuard} to deduplicate in-flight refreshes,
+     * with a staleness takeover so a hung refresh cannot pin its package
+     * until restart.
      *
      * <p>Uses a {@link ContextualExecutor}-wrapped scheduler so that
      * background callbacks inherit the caller's ThreadContext (trace.id,
@@ -469,12 +483,12 @@ public class NpmProxy {
      * @param name Package name
      */
     private void backgroundRefresh(final String name) {
-        if (this.refreshing.add(name)) {
+        if (this.refreshing.tryBegin(name)) {
             // Try conditional request first if we have a stored upstream ETag.
             // The backgroundScheduler propagates ThreadContext automatically.
             this.conditionalRefresh(name)
                 .subscribeOn(this.backgroundScheduler)
-                .doFinally(() -> this.refreshing.remove(name))
+                .doFinally(() -> this.refreshing.end(name))
                 .subscribe(
                     saved ->
                         EcsLogger.debug("com.auto1.pantera.npm.proxy")
@@ -483,6 +497,7 @@ public class NpmProxy {
                             .eventAction("stale_while_revalidate")
                             .eventOutcome("success")
                             .field("package.name", name)
+                            .field("log.source", "application")
                             .log(),
                     err ->
                         EcsLogger.warn("com.auto1.pantera.npm.proxy")
@@ -492,8 +507,9 @@ public class NpmProxy {
                             .eventOutcome("failure")
                             .field("package.name", name)
                             .error(err)
+                            .field("log.source", "application")
                             .log(),
-                    () -> this.refreshing.remove(name)
+                    () -> { }
                 );
         }
     }
@@ -523,10 +539,17 @@ public class NpmProxy {
                             // filtered-metadata envelope cached from the
                             // stale content, hiding the new version behind
                             // the envelope's own TTL.
-                            .doOnComplete(() -> this.firePackumentWriteHook(pkg.name()))
+                            .doOnComplete(() -> {
+                                this.firePackumentWriteHook(pkg.name());
+                                this.logRefreshOutcome(name, "content_changed");
+                            })
                             .andThen(Maybe.just(Boolean.TRUE)))
                         .switchIfEmpty(Maybe.defer(() -> {
-                            // 304 Not Modified — just update refresh timestamp
+                            // 304 Not Modified — just update refresh timestamp.
+                            // (An upstream 404 no longer lands here: since
+                            // 2.2.7 loadPackageConditional propagates it as an
+                            // error, so it cannot masquerade as "not modified"
+                            // and re-arm the TTL on stale bytes.)
                             final NpmPackage.Metadata updated = new NpmPackage.Metadata(
                                 metadata.lastModified(),
                                 OffsetDateTime.now(),
@@ -535,14 +558,53 @@ public class NpmProxy {
                                 metadata.upstreamEtag().orElse(null)
                             );
                             return this.storage.saveMetadataOnly(name, updated)
+                                .doOnComplete(() -> this.logRefreshOutcome(name, "not_modified"))
                                 .andThen(Maybe.just(Boolean.TRUE));
                         }));
                 }
-                // No stored ETag or not HttpNpmRemote — do full refresh
+                // No stored ETag or not HttpNpmRemote — do full refresh. An
+                // upstream 404 leaves the timestamp untouched (so the next
+                // request retries) and is WARN-logged: a package we HAVE
+                // cached vanishing upstream is operationally significant.
                 return this.remotePackageAndSave(name)
-                    .defaultIfEmpty(Boolean.FALSE);
+                    .doOnSuccess(saved -> this.logRefreshOutcome(name, "full_refetch"))
+                    .switchIfEmpty(Maybe.fromCallable(() -> {
+                        EcsLogger.warn("com.auto1.pantera.npm.proxy")
+                            .message("Previously cached packument now 404s upstream — keeping stale cache, will retry")
+                            .eventCategory("database")
+                            .eventAction("stale_while_revalidate")
+                            .eventOutcome("failure")
+                            .field("event.reason", "upstream_gone")
+                            .field("package.name", name)
+                            .field("log.source", "application")
+                            .log();
+                        return Boolean.FALSE;
+                    }));
             })
-            .switchIfEmpty(Maybe.defer(() -> this.remotePackageAndSave(name)));
+            .switchIfEmpty(Maybe.defer(() -> this.remotePackageAndSave(name)
+                .doOnSuccess(saved -> this.logRefreshOutcome(name, "full_refetch"))));
+    }
+
+    /**
+     * INFO-log a completed background refresh with its outcome. Refreshes
+     * fire at most once per package per metadata-TTL window, so the volume
+     * is negligible — and their absence from the log stream is exactly what
+     * made the 2.2.6 stale-metadata incident undiagnosable from ELK.
+     *
+     * @param name Package name
+     * @param outcome One of {@code content_changed}, {@code not_modified},
+     *  {@code full_refetch}
+     */
+    private void logRefreshOutcome(final String name, final String outcome) {
+        EcsLogger.info("com.auto1.pantera.npm.proxy")
+            .message("Packument background refresh: " + outcome)
+            .eventCategory("database")
+            .eventAction("stale_while_revalidate")
+            .eventOutcome("success")
+            .field("event.reason", outcome)
+            .field("package.name", name)
+            .field("log.source", "application")
+            .log();
     }
 
     /**

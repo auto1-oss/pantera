@@ -185,9 +185,12 @@ public final class HttpNpmRemote implements NpmRemote {
                 if (HttpNpmRemote.isNotModified(throwable)) {
                     return Maybe.empty();
                 }
-                if (HttpNpmRemote.isNotFoundError(throwable)) {
-                    return Maybe.empty();
-                }
+                // A 404 is NOT "not modified". Before 2.2.7 it was collapsed
+                // into the same empty signal, and NpmProxy.conditionalRefresh
+                // answered an upstream 404 by bumping the refresh timestamp —
+                // silently re-arming the metadata TTL on stale content with
+                // no log trace. Propagate it (like every other failure) so
+                // the caller logs the outcome and retries on a later request.
                 return Maybe.error(throwable);
             }
         );
