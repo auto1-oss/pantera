@@ -1,5 +1,20 @@
 # Changelog
 
+## Version 2.2.7
+
+### 🔧 Bug fixes
+
+- **Proxy metadata no longer serves a stale cooldown-filtered listing after the underlying metadata refreshes** — invalidating the shared filtered-metadata envelope by package name only deleted Valkey (L2) entries whose in-memory (L1) twin was still present, so after a background refresh pulled a changed npm packument the pre-refresh version list kept being served out of Valkey for up to the full L2 TTL (and in L2-only mode the invalidation did nothing at all). The L2 sweep now runs independently of L1 via cursor-based SCAN, and every dropped key is broadcast to peer instances over the existing `cooldown-envelope` pub/sub channel. The same fix applies to the upload path used by all format adapters, so publishing to a local repository reliably drops group/proxy envelopes again.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Maven proxies now drop the cooldown-filtered envelope when upstream `maven-metadata.xml` changes** — the metadata cache fires a refreshed-content hook on every 200 that replaces cached bytes (never on a 304), invalidating the package's filtered envelope and materialised filtered outputs. Previously nothing on the maven proxy path invalidated envelopes after a refresh, so a new upstream version could stay hidden behind the previously cached filtered listing until its TTL expired.
+  ([@aydasraf](https://github.com/aydasraf))
+- **An upstream 404 during an npm background metadata refresh is no longer treated as "not modified"** — it previously bumped the refresh timestamp, silently re-arming the metadata TTL on stale content with no log trace. The 404 now keeps the cached packument (fail-open), leaves the timestamp untouched so the next request retries, and is logged.
+  ([@aydasraf](https://github.com/aydasraf))
+- **A hung background metadata refresh can no longer permanently block refreshes for its package** — the npm and pypi proxies deduplicate in-flight refreshes with a guard that treats entries older than ten minutes as abandoned and lets the next request take over; previously a refresh that never reached a terminal event pinned its package until restart.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Background metadata refreshes are visible in logs** — npm logs each refresh outcome (`content_changed`, `not_modified`, `full_refetch`) and pypi logs replaced indexes and non-success upstream statuses (previously swallowed silently); envelope invalidations log their L1 and L2 outcomes. The whole stale-while-revalidate pipeline was previously DEBUG-only or unlogged, which is what made stale-metadata incidents undiagnosable from the log stream.
+  ([@aydasraf](https://github.com/aydasraf))
+
 ## Version 2.2.6
 
 ### 🌟 New features
