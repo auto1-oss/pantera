@@ -2,7 +2,15 @@
 
 ## Version 2.2.7
 
+### ⚡ Performance
+
+- **Filtered-metadata envelopes are gzip-compressed in Valkey, and the L2 read no longer gives up after 100 ms** — a multi-megabyte envelope (a full npm packument runs to tens of MB) could never arrive inside the old timeout, so every serve paid the full stall, discarded the in-flight transfer, re-ran the filter and re-wrote the value. Compression (5–10x on packument JSON) plus a 500 ms ceiling makes those reads complete; a read breaker skips L2 for 10 s after three consecutive failures so a degraded Valkey never adds latency to every metadata serve. Pre-existing uncompressed entries remain readable.
+  ([@aydasraf](https://github.com/aydasraf))
+
 ### 🔧 Bug fixes
+
+- **An npm install-v1 (abbreviated) metadata request can no longer be answered with the full packument, or vice versa** — both body shapes of a package shared one filtered-envelope cache key, so whichever was filtered first was served to both kinds of request for the envelope's TTL. Envelope keys now carry a variant segment (`full` / `abbreviated`), and block-state changes invalidate every variant of the package.
+  ([@aydasraf](https://github.com/aydasraf))
 
 - **Proxy metadata no longer serves a stale cooldown-filtered listing after the underlying metadata refreshes** — invalidating the shared filtered-metadata envelope by package name only deleted Valkey (L2) entries whose in-memory (L1) twin was still present, so after a background refresh pulled a changed npm packument the pre-refresh version list kept being served out of Valkey for up to the full L2 TTL (and in L2-only mode the invalidation did nothing at all). The L2 sweep now runs independently of L1 via cursor-based SCAN, and every dropped key is broadcast to peer instances over the existing `cooldown-envelope` pub/sub channel. The same fix applies to the upload path used by all format adapters, so publishing to a local repository reliably drops group/proxy envelopes again.
   ([@aydasraf](https://github.com/aydasraf))
