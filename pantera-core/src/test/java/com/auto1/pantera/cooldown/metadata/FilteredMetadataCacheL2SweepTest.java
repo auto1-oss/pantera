@@ -57,7 +57,9 @@ final class FilteredMetadataCacheL2SweepTest {
             final byte[] seed = "stale-envelope".getBytes(StandardCharsets.UTF_8);
             final List<String> victims = List.of(
                 "metadata:npm-proxy:sweep-repo-a:sweep-openai",
-                "metadata:npm-group:sweep-repo-b:sweep-openai"
+                "metadata:npm-group:sweep-repo-b:sweep-openai",
+                "metadata:npm-proxy:sweep-repo-a:full:sweep-openai",
+                "metadata:npm-proxy:sweep-repo-a:abbreviated:sweep-openai"
             );
             final String survivor = "metadata:npm-proxy:sweep-repo-a:sweep-not-openai";
             for (final String key : victims) {
@@ -109,6 +111,83 @@ final class FilteredMetadataCacheL2SweepTest {
             );
             cache.invalidateByPackageName("sweep-axios");
             awaitGone(conn, List.of(key));
+        }
+    }
+
+    @Test
+    @EnabledIfEnvironmentVariable(named = "VALKEY_HOST", matches = ".+")
+    void compressesL2ValuesAndReadsLegacyRaw() throws Exception {
+        final String host = System.getenv("VALKEY_HOST");
+        final int port = Integer.parseInt(
+            System.getenv().getOrDefault("VALKEY_PORT", "6379")
+        );
+        try (ValkeyConnection conn = new ValkeyConnection(
+            host, port, Duration.ofSeconds(2)
+        )) {
+            // >1KB so the codec compresses; repetitive so it visibly shrinks.
+            final byte[] original = ("{\"versions\":{"
+                + "\"1.0.0\":{\"x\":\"" + "y".repeat(4096) + "\"}}}"
+            ).getBytes(StandardCharsets.UTF_8);
+            final String key = "metadata:npm-proxy:rt-repo:full:rt-pkg";
+            conn.async().del(key).get(2, TimeUnit.SECONDS);
+
+            final FilteredMetadataCache writer = new FilteredMetadataCache(
+                100, Duration.ofMinutes(5), Duration.ofMinutes(5), conn
+            );
+            writer.getEntry(
+                "npm-proxy", "rt-repo", "full", "rt-pkg",
+                () -> java.util.concurrent.CompletableFuture.completedFuture(
+                    FilteredMetadataCache.CacheEntry.noBlockedVersions(
+                        original, Duration.ofMinutes(5)
+                    )
+                )
+            ).get(5, TimeUnit.SECONDS);
+            // The L2 write is async — poll for the key.
+            final long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+            byte[] stored = null;
+            while (stored == null) {
+                stored = conn.async().get(key).get(2, TimeUnit.SECONDS);
+                if (stored == null && System.nanoTime() > deadline) {
+                    throw new AssertionError("L2 envelope write never landed");
+                }
+            }
+            MatcherAssert.assertThat(
+                "the stored L2 value must be gzip-compressed (magic bytes) and smaller",
+                (stored[0] & 0xFF) == 0x1F && stored.length < original.length,
+                new IsEqual<>(true)
+            );
+
+            // A COLD instance (empty L1) must decode the L2 hit back to the
+            // original bytes — the loader must not run.
+            final FilteredMetadataCache reader = new FilteredMetadataCache(
+                100, Duration.ofMinutes(5), Duration.ofMinutes(5), conn
+            );
+            final byte[] served = reader.getEntry(
+                "npm-proxy", "rt-repo", "full", "rt-pkg",
+                () -> {
+                    throw new AssertionError("loader must not run on an L2 hit");
+                }
+            ).get(5, TimeUnit.SECONDS).data();
+            MatcherAssert.assertThat(
+                "the decoded L2 hit must be byte-identical to the original envelope",
+                served, new IsEqual<>(original)
+            );
+
+            // Legacy (pre-compression) raw value: must pass through unchanged.
+            final String legacyKey = "metadata:npm-proxy:rt-repo:full:rt-legacy";
+            final byte[] legacy = "{\"legacy\":true}".getBytes(StandardCharsets.UTF_8);
+            conn.async().setex(legacyKey, 60L, legacy).get(2, TimeUnit.SECONDS);
+            final byte[] legacyServed = reader.getEntry(
+                "npm-proxy", "rt-repo", "full", "rt-legacy",
+                () -> {
+                    throw new AssertionError("loader must not run on a legacy L2 hit");
+                }
+            ).get(5, TimeUnit.SECONDS).data();
+            MatcherAssert.assertThat(
+                "a raw legacy L2 value must be served unchanged",
+                legacyServed, new IsEqual<>(legacy)
+            );
+            conn.async().del(key, legacyKey).get(2, TimeUnit.SECONDS);
         }
     }
 

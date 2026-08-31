@@ -114,6 +114,51 @@ public interface CooldownMetadataService {
     }
 
     /**
+     * Variant-aware filtering: like {@link #filterMetadata(String, String,
+     * String, byte[], MetadataParser, MetadataFilter, MetadataRewriter,
+     * AuditContext, String)} but with a body-shape discriminator so two
+     * shapes of the same package's metadata (npm full vs abbreviated
+     * packument) cache separate envelopes. Without it, whichever shape was
+     * filtered first was served to BOTH kinds of request for the envelope's
+     * whole TTL. The default implementation ignores the variant and
+     * delegates — correct for {@link NoopCooldownMetadataService} (nothing
+     * is cached) and for single-shape formats; {@code MetadataFilterService}
+     * overrides it to key the envelope cache by variant.
+     *
+     * @param repoType Repository type (e.g., "npm", "maven")
+     * @param repoName Repository name
+     * @param variant Body-shape discriminator (e.g. {@code "full"},
+     *  {@code "abbreviated"})
+     * @param packageName Package name
+     * @param rawMetadata Raw metadata bytes from upstream
+     * @param parser Parser for this metadata format
+     * @param filter Filter for this metadata format
+     * @param rewriter Rewriter for this metadata format
+     * @param ctx Request correlation context (trace id / client IP)
+     * @param owner Requesting user name
+     * @param <T> Type of parsed metadata
+     * @return CompletableFuture with filtered metadata bytes
+     * @throws AllVersionsBlockedException If all versions are blocked
+     */
+    default <T> CompletableFuture<byte[]> filterMetadata(
+        final String repoType,
+        final String repoName,
+        final String variant,
+        final String packageName,
+        final byte[] rawMetadata,
+        final MetadataParser<T> parser,
+        final MetadataFilter<T> filter,
+        final MetadataRewriter<T> rewriter,
+        final AuditContext ctx,
+        final String owner
+    ) {
+        return this.filterMetadata(
+            repoType, repoName, packageName, rawMetadata, parser, filter,
+            rewriter, ctx, owner
+        );
+    }
+
+    /**
      * Invalidate cached metadata for a package.
      * Called when a version is blocked or unblocked.
      *
