@@ -461,9 +461,30 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
     private CompletableFuture<Response> handleMetadata(
         final RequestLine line, final Headers inboundHeaders, final Key key
     ) {
+        // Refreshed-content hook: when a 200 replaces the cached
+        // maven-metadata.xml (cold miss, SWR background refresh, or
+        // hard-TTL fall-through alike), drop the package's cooldown
+        // filtered-metadata envelope — shared L1+L2, all repos — and this
+        // slice's materialised filtered-output entries. Without this, a
+        // refreshed upstream version list kept serving the PRE-refresh
+        // filtered envelope for the envelope's own TTL (the maven twin of
+        // the npm 2.2.6 stale-packument incident); nothing on the maven
+        // proxy path ever called invalidateAfterProxyRefresh before 2.2.7.
+        // Same dotted coordinate as applyMetadataCooldown passes to
+        // filterMetadata, so the envelope key shapes match exactly.
+        final Optional<String> dottedPkg = new MavenMetadataRequestDetector()
+            .extractPackageName(line.uri().getPath())
+            .map(name -> name.replace('/', '.'));
+        final Runnable onRefreshed = () -> dottedPkg.ifPresent(pkg -> {
+            com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry
+                .instance()
+                .invalidateAfterProxyRefresh(this.repoType(), pkg);
+            this.materialisedCache.invalidate(this.repoType(), this.repoName(), pkg);
+        });
         final CompletableFuture<Optional<Content>> loaded = this.metadataCache.load(
             key,
-            request -> this.fetchMetadata(line, request)
+            request -> this.fetchMetadata(line, request),
+            onRefreshed
         );
         return loaded.thenCompose(opt -> {
             if (opt.isEmpty()) {
