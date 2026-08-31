@@ -119,6 +119,16 @@ public class FilteredMetadataCache implements Cleanable<String> {
     private final ConcurrentMap<String, CompletableFuture<CacheEntry>> inflight;
 
     /**
+     * Optional per-key invalidation publisher. Wired by
+     * {@code CooldownSupport} to broadcast dropped envelope keys on the
+     * {@code cooldown-envelope} pub/sub channel so peer instances drop
+     * their L1 entries too. The receive side ({@link #invalidate(String)})
+     * never re-publishes — that is the no-loop guarantee. {@code null}
+     * (default) = single-instance deployments and tests: no fan-out.
+     */
+    private volatile java.util.function.Consumer<String> invalidationPublisher;
+
+    /**
      * Statistics.
      */
     private volatile long l1Hits;
@@ -456,14 +466,27 @@ public class FilteredMetadataCache implements Cleanable<String> {
      * cache TTL (default 30 days when no blocks are active).
      *
      * <p>Match shape: the cache key is
-     * {@code metadata:{repoType}:{repoName}:{packageName}}, so we
-     * check {@code key.endsWith(":" + packageName)} — exact suffix
-     * match on the package-name segment. Package names that don't
-     * contain colons (the universal case in Pantera-supported
+     * {@code metadata:{repoType}:{repoName}:{packageName}}, so L1 keys are
+     * matched with {@code key.endsWith(":" + packageName)} and L2 keys with
+     * the anchored glob {@code metadata:*:{packageName}} — exact suffix
+     * match on the package-name segment either way. Package names that
+     * don't contain colons (the universal case in Pantera-supported
      * registries) round-trip cleanly.
      *
+     * <p><b>The L2 sweep is independent of L1.</b> Before 2.2.7 the Valkey
+     * {@code DEL} was issued only for keys found in the local L1 scan — but
+     * by the time a background refresh fires this invalidation, the short-
+     * lived L1 twin of the envelope is typically already evicted (and in
+     * L2-only mode never existed), so the stale envelope survived in Valkey
+     * for the full L2 TTL and was re-promoted into L1 on every serve. That
+     * was the 2.2.6 "npm metadata never refreshes" incident. The sweep now
+     * SCANs L2 by pattern regardless of L1 state, deletes every match, and
+     * publishes each dropped key to peers via the configured
+     * {@link #setInvalidationPublisher(java.util.function.Consumer)}.
+     *
      * @param packageName Canonical package name as the cache stores it.
-     * @return number of L1 entries invalidated (0 if disabled / nothing matched).
+     * @return number of L1 entries invalidated on this instance; the L2
+     *  sweep completes asynchronously and logs its own outcome.
      */
     public int invalidateByPackageName(final String packageName) {
         if (packageName == null || packageName.isEmpty()) {
@@ -480,12 +503,140 @@ public class FilteredMetadataCache implements Cleanable<String> {
             for (final String key : matched) {
                 this.l1Cache.invalidate(key);
                 this.inflight.remove(key);
+                this.publishInvalidation(key);
             }
         }
-        if (this.l2Connection != null && !matched.isEmpty()) {
-            this.l2Connection.async().del(matched.toArray(new String[0]));
+        if (this.l2Connection != null) {
+            this.sweepL2(packageName);
         }
         return matched.size();
+    }
+
+    /**
+     * Register the cross-instance invalidation publisher — called once at
+     * boot by {@code CooldownSupport} when pub/sub is wired.
+     *
+     * @param publisher Consumer receiving each dropped canonical cache key;
+     *  {@code null} disables fan-out (tests)
+     */
+    public void setInvalidationPublisher(final java.util.function.Consumer<String> publisher) {
+        this.invalidationPublisher = publisher;
+    }
+
+    /**
+     * Publish one dropped key to peers; never throws into the caller.
+     *
+     * @param key Canonical cache key that was invalidated locally
+     */
+    private void publishInvalidation(final String key) {
+        final java.util.function.Consumer<String> publisher = this.invalidationPublisher;
+        if (publisher != null) {
+            try {
+                publisher.accept(key);
+            } catch (final RuntimeException ex) {
+                com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.cooldown.metadata")
+                    .message("Envelope invalidation pub/sub publish failed; peers rely on TTL")
+                    .eventCategory("database")
+                    .eventAction("envelope_invalidate_publish")
+                    .eventOutcome("failure")
+                    .error(ex)
+                    .field("log.source", "application")
+                    .log();
+            }
+        }
+    }
+
+    /**
+     * Asynchronously delete every L2 envelope whose package-name segment
+     * matches, via cursor-based SCAN (never the blocking KEYS command).
+     * Each deleted key is also dropped from L1/in-flight and published to
+     * peers. The final outcome is logged so a refresh-driven invalidation
+     * is visible in the log stream even when this instance's L1 held
+     * nothing.
+     *
+     * @param packageName Canonical package name (last key segment)
+     */
+    private void sweepL2(final String packageName) {
+        final String pattern = "metadata:*:" + escapeGlob(packageName);
+        this.sweepL2Step(io.lettuce.core.ScanCursor.INITIAL, pattern, packageName, 0);
+    }
+
+    /**
+     * One SCAN page of {@link #sweepL2(String)}; recurses until the cursor
+     * finishes.
+     *
+     * @param cursor Scan cursor position
+     * @param pattern Anchored glob pattern for the envelope keys
+     * @param packageName Package name, for logging
+     * @param deleted Keys deleted by previous pages
+     */
+    private void sweepL2Step(
+        final io.lettuce.core.ScanCursor cursor,
+        final String pattern,
+        final String packageName,
+        final int deleted
+    ) {
+        this.l2Connection.async()
+            .scan(cursor, io.lettuce.core.ScanArgs.Builder.matches(pattern).limit(500))
+            .whenComplete((result, error) -> {
+                if (error != null) {
+                    com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.cooldown.metadata")
+                        .message("L2 envelope sweep failed; stale entries expire via TTL")
+                        .eventCategory("database")
+                        .eventAction("envelope_invalidate_l2")
+                        .eventOutcome("failure")
+                        .field("package.name", packageName)
+                        .error(error)
+                        .field("log.source", "application")
+                        .log();
+                    return;
+                }
+                final java.util.List<String> keys = result.getKeys();
+                if (!keys.isEmpty()) {
+                    this.l2Connection.async().del(keys.toArray(new String[0]));
+                    for (final String key : keys) {
+                        if (this.l1Cache != null) {
+                            this.l1Cache.invalidate(key);
+                        }
+                        this.inflight.remove(key);
+                        this.publishInvalidation(key);
+                    }
+                }
+                final int total = deleted + keys.size();
+                if (result.isFinished()) {
+                    if (total > 0) {
+                        com.auto1.pantera.http.log.EcsLogger.info("com.auto1.pantera.cooldown.metadata")
+                            .message("L2 envelope sweep dropped " + total + " stale entrie(s)")
+                            .eventCategory("database")
+                            .eventAction("envelope_invalidate_l2")
+                            .eventOutcome("success")
+                            .field("package.name", packageName)
+                            .field("log.source", "application")
+                            .log();
+                    }
+                } else {
+                    this.sweepL2Step(result, pattern, packageName, total);
+                }
+            });
+    }
+
+    /**
+     * Escape Redis glob metacharacters so a literal package name cannot be
+     * misread as a pattern.
+     *
+     * @param raw Package name
+     * @return Glob-safe literal
+     */
+    private static String escapeGlob(final String raw) {
+        final StringBuilder out = new StringBuilder(raw.length());
+        for (int idx = 0; idx < raw.length(); idx = idx + 1) {
+            final char chr = raw.charAt(idx);
+            if (chr == '*' || chr == '?' || chr == '[' || chr == ']' || chr == '\\') {
+                out.append('\\');
+            }
+            out.append(chr);
+        }
+        return out.toString();
     }
 
     /**
