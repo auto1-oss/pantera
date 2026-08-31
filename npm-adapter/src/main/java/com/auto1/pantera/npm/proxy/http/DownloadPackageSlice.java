@@ -405,6 +405,7 @@ public final class DownloadPackageSlice implements Slice {
         final CompletableFuture<Response> filterFuture = this.cooldownMetadata.filterMetadata(
             this.repoType,
             this.repoName,
+            "full",
             packageName,
             fullBytes,
             new NpmMetadataParser(),
@@ -467,6 +468,7 @@ public final class DownloadPackageSlice implements Slice {
         return this.cooldownMetadata.filterMetadata(
             this.repoType,
             this.repoName,
+            "abbreviated",
             packageName,
             abbreviatedBytes,
             new NpmMetadataParser(),
@@ -566,6 +568,7 @@ public final class DownloadPackageSlice implements Slice {
                                     this.cooldownMetadata.filterMetadata(
                                         this.repoType,
                                         this.repoName,
+                                        "full",
                                         packageName,
                                         rawBytes,
                                         new NpmMetadataParser(),
