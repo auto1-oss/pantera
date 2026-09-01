@@ -386,5 +386,23 @@ describe('SearchView', () => {
       const link = wrapper.findComponent(RouterLinkStub)
       expect(link.props('to')).toBe(`/repositories/${repo}?path=${expected}&from=search`)
     })
+
+    // Docker images live under the registry's "repositories/" root, so the
+    // image name is enough. path_prefix points at the tag's manifest link,
+    // whose parent holds only a link file, so it is deliberately unused here.
+    it('docker browses to the image directory, not the manifest link', async () => {
+      const wrapper = await mountWithResult(makeResult({
+        repo_type: 'docker',
+        repo_name: 'docker_local',
+        artifact_path: 'auto1/hello',
+        version: 'sha256:abc',
+        path_prefix: 'repositories/auto1/hello/_manifests/tags/1.0.0/current/link',
+      }))
+
+      const link = wrapper.findComponent(RouterLinkStub)
+      expect(link.props('to')).toBe(
+        '/repositories/docker_local?path=%2Frepositories%2Fauto1%2Fhello&from=search',
+      )
+    })
   })
 })

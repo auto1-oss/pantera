@@ -290,14 +290,12 @@ function browseUrl(data: SearchResult): string {
       path = '/' + (dir || '')
     }
   } else if (rtype.startsWith('docker')) {
-    // artifact_path is the image name, never a storage path. path_prefix is
-    // the manifest key, whose parent is the image's manifest directory.
-    if (realKey) {
-      const dir = parentDir(realKey.replace(/^\/+/, ''))
-      path = '/' + (dir || '')
-    } else {
-      path = '/'
-    }
+    // artifact_path is the image name; images live under the registry's
+    // "repositories/" root, so that prefix plus the name IS the image's
+    // directory. path_prefix is deliberately not used here: it points at the
+    // tag's manifest link (repositories/<img>/_manifests/tags/<tag>/current/
+    // link), whose parent holds a single link file and is of no use to browse.
+    path = '/repositories/' + name.replace(/^\/+/, '')
   } else {
     // helm/debian/rpm and any future type land here; the browse path must be
     // absolute like every other branch's, so the leading slash is not optional.
