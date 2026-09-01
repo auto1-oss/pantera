@@ -461,6 +461,24 @@ public final class YamlToDbMigrator {
      * forcing a password change on first login (Pantera blocks all other
      * API calls until that's done).
      */
+    /**
+     * Resolve the bootstrap admin password: the explicitly configured value
+     * (env {@code PANTERA_BOOTSTRAP_ADMIN_PASSWORD}) when set and non-blank,
+     * otherwise a securely-generated random password. Never the source-known
+     * literal {@code admin} (SecOps bootstrap-admin).
+     *
+     * @param configured Configured password (may be {@code null}/blank)
+     * @return Password to seed
+     */
+    String resolveBootstrapPassword(final String configured) {
+        if (configured != null && !configured.isBlank()) {
+            return configured;
+        }
+        final byte[] rnd = new byte[24];
+        new java.security.SecureRandom().nextBytes(rnd);
+        return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(rnd);
+    }
+
     private void bootstrapDefaultAdmin() {
         try (Connection conn = this.source.getConnection()) {
             // 1a. Bail out if a user named 'admin' already exists.
@@ -495,10 +513,16 @@ public final class YamlToDbMigrator {
             ))) {
                 role.executeUpdate();
             }
-            // 3. Insert the admin user. Hash 'admin' with bcrypt and flag
-            //    must_change_password = true so first login is gated.
+            // 3. Insert the admin user. SECURITY (2.2.9, SecOps bootstrap-admin):
+            //    never seed the source-known password 'admin' — take
+            //    PANTERA_BOOTSTRAP_ADMIN_PASSWORD when set, else generate a
+            //    random one and surface it once in the logs. must_change_password
+            //    is still TRUE so the operator is prompted to rotate it.
+            final String configured = System.getenv("PANTERA_BOOTSTRAP_ADMIN_PASSWORD");
+            final boolean generated = configured == null || configured.isBlank();
+            final String bootstrapPassword = this.resolveBootstrapPassword(configured);
             final String bcryptHash = org.mindrot.jbcrypt.BCrypt.hashpw(
-                "admin", org.mindrot.jbcrypt.BCrypt.gensalt()
+                bootstrapPassword, org.mindrot.jbcrypt.BCrypt.gensalt()
             );
             final int userId;
             try (PreparedStatement user = conn.prepareStatement(String.join(" ",
@@ -524,9 +548,15 @@ public final class YamlToDbMigrator {
                 assign.setInt(1, userId);
                 assign.executeUpdate();
             }
-            LOG.warn("Bootstrapped default admin user — username='<redacted>' "
-                + "password='<redacted>' (must_change_password=TRUE on first login). "
-                + "CHANGE THIS IMMEDIATELY in production.");
+            if (generated) {
+                LOG.warn("Bootstrapped admin user 'admin' with a GENERATED password: {} "
+                    + "(must_change_password=TRUE). Log in and change it immediately, or set "
+                    + "PANTERA_BOOTSTRAP_ADMIN_PASSWORD to control it. This is printed once.",
+                    bootstrapPassword);
+            } else {
+                LOG.warn("Bootstrapped admin user 'admin' from PANTERA_BOOTSTRAP_ADMIN_PASSWORD "
+                    + "(must_change_password=TRUE). Change it after first login.");
+            }
         } catch (final Exception ex) {
             LOG.error("Failed to bootstrap default admin user", ex);
         }
