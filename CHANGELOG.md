@@ -2,6 +2,11 @@
 
 ## Version 2.2.8
 
+### 🌟 New features
+
+- **`client_base_scheme` controls the scheme in emitted URLs** — a new admin setting (`auto` / `http` / `https`, DB-backed and hot-reloaded like its siblings, env fallback `PANTERA_CLIENT_BASE_SCHEME`, admin UI card). `auto` keeps today's behaviour of deriving from `X-Forwarded-Proto`. That derivation cannot work behind a TLS-terminating **layer-4** load balancer — an AWS NLB with a TLS listener forwarding to a TCP target group gives Pantera neither a TLS connection of its own nor a forwarded-proto header, so every emitted link said `http` with no way to correct it short of pinning `client_base_url`, which also fixes the host. Setting this to `https` fixes the scheme while the host keeps deriving per request, so several client-facing DNS names each keep their own URLs. `ClientBaseUrl` now also logs a warning (once per cause) when it falls back on the scheme or the host, instead of degrading silently.
+  ([@aydasraf](https://github.com/aydasraf))
+
 ### 🔧 Bug fixes
 
 - **Client-facing URLs are correct for HTTP/2 clients** — HTTP/2 forbids a `Host` header and carries the authority in the `:authority` pseudo-header, which Vert.x keeps out of the request's header map. Every base-URL derivation reads `Host`, so an h2 request looked hostless and fell through to a literal `localhost`, publishing unreachable `http://localhost/...` links in package metadata — including on correctly configured, allowlisted hostnames, since the host allowlist was never reached. Only clients that negotiated h2 were affected, which is what made it look intermittent. The authority is now restored as a `Host` header at the edge, so every slice behaves the same on both protocols.

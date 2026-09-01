@@ -1,0 +1,37 @@
+-- V141__client_base_scheme.sql
+-- Documents -- but deliberately does NOT seed -- the client-facing scheme
+-- setting in the auth_settings key/value store. Consumed by
+-- ClientBaseUrlSettingsLoader (pantera-main) via ClientBaseUrlSettingsRegistry
+-- into pantera-core's ClientBaseUrl, exactly like the trust_forwarded_headers
+-- / client_base_host_allowlist keys V137 documents and the client_base_url key
+-- V140 documents.
+--
+--   client_base_scheme  (no row here -- see below)
+--     Scheme used in client-facing URLs (npm dist.tarball, .npmrc, and every
+--     other absolute link Pantera emits) for repositories with no explicit
+--     `url:` and no canonical client_base_url. One of:
+--
+--       auto   (default) Derive from the request: X-Forwarded-Proto when
+--              forwarded headers are trusted, else http.
+--       https  Always emit https.
+--       http   Always emit http.
+--
+--     'auto' cannot work behind a TLS-terminating layer-4 load balancer -- an
+--     AWS NLB with a TLS listener forwarding to a TCP target group, say. Such
+--     a deployment gives Pantera neither a TLS connection of its own nor an
+--     X-Forwarded-Proto header, so there is no signal to derive from and every
+--     emitted URL says http. Setting this to https is the only fix; the host
+--     continues to derive per request, so several client-facing DNS names each
+--     keep their own URLs.
+--
+--     Env fallback PANTERA_CLIENT_BASE_SCHEME. Hardcoded default 'auto'.
+--
+-- DELIBERATELY NOT SEEDED, for the identical reason V137 and V140 do not seed
+-- their keys: this tree has been burned three times (V107, V122, V136) by a
+-- migration unconditionally writing a row that then permanently shadows an
+-- operator's env var, needing V138/V139 as follow-up corrections. The loader
+-- resolves DB row -> env var -> hardcoded default; an unconditional seed here
+-- would fire on every fresh migration run and shadow PANTERA_CLIENT_BASE_SCHEME
+-- from the moment an operator upgrades. A row is created only when an admin
+-- writes through PUT /api/v1/admin/client-base-url-settings, at which point the
+-- DB row correctly takes precedence by design.

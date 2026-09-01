@@ -368,7 +368,8 @@ public final class AdminAuthHandler {
     private static final java.util.Set<String> CLIENT_BASE_KEYS = java.util.Set.of(
         "trust_forwarded_headers",
         "client_base_host_allowlist",
-        "client_base_url"
+        "client_base_url",
+        "client_base_scheme"
     );
 
     /**
@@ -388,7 +389,8 @@ public final class AdminAuthHandler {
             return new JsonObject()
                 .put("trust_forwarded_headers", String.valueOf(current.trustForwardedHeaders()))
                 .put("client_base_host_allowlist", String.join(",", current.hostAllowlist()))
-                .put("client_base_url", current.canonicalBaseUrl());
+                .put("client_base_url", current.canonicalBaseUrl())
+                .put("client_base_scheme", current.clientBaseScheme());
         }, HandlerExecutor.get()).whenComplete((settings, err) -> {
             if (err != null) {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
@@ -441,9 +443,10 @@ public final class AdminAuthHandler {
             .filter(host -> !host.isEmpty())
             .toList();
         final String canonicalRaw = body.getString("client_base_url", current.canonicalBaseUrl());
+        final String schemeRaw = body.getString("client_base_scheme", current.clientBaseScheme());
         try {
             new com.auto1.pantera.http.headers.ClientBaseUrlSettings(
-                Boolean.parseBoolean(trustRaw), allowlist, canonicalRaw
+                Boolean.parseBoolean(trustRaw), allowlist, canonicalRaw, schemeRaw
             );
         } catch (final IllegalArgumentException ex) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
