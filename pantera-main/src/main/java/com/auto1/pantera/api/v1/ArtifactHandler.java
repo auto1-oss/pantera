@@ -11,6 +11,7 @@
 package com.auto1.pantera.api.v1;
 
 import com.auto1.pantera.api.AuthzHandler;
+import com.auto1.pantera.api.RepoAuthzHandler;
 import com.auto1.pantera.api.RepositoryName;
 import com.auto1.pantera.api.perms.ApiRepositoryPermission;
 import com.auto1.pantera.asto.Key;
@@ -19,6 +20,7 @@ import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.index.ArtifactIndex;
+import com.auto1.pantera.security.perms.Action;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.RepoData;
 import com.auto1.pantera.settings.repo.CrudRepoSettings;
@@ -183,25 +185,40 @@ public final class ArtifactHandler {
             new ApiRepositoryPermission(ApiRepositoryPermission.RepositoryAction.READ);
         final ApiRepositoryPermission delete =
             new ApiRepositoryPermission(ApiRepositoryPermission.RepositoryAction.DELETE);
+        // SECURITY (2.2.9, artifact-repo-authz): the global api_repository
+        // bit alone is repository-agnostic. Every route below names a
+        // repository in the URL, so it ALSO requires the per-repository
+        // AdapterBasicPermission(name, read|delete) the data plane enforces
+        // — otherwise a coarse global grant reads/deletes artifacts of
+        // repositories the principal has no grant on (BOLA).
+        final RepoAuthzHandler repoRead =
+            new RepoAuthzHandler(this.policy, "name", Action.Standard.READ);
+        final RepoAuthzHandler repoDelete =
+            new RepoAuthzHandler(this.policy, "name", Action.Standard.DELETE);
         // GET /api/v1/repositories/:name/tree — directory listing (cursor-based)
         router.get("/api/v1/repositories/:name/tree")
             .handler(new AuthzHandler(this.policy, read))
+            .handler(repoRead)
             .handler(this::treeHandler);
         // GET /api/v1/repositories/:name/artifact — artifact detail
         router.get("/api/v1/repositories/:name/artifact")
             .handler(new AuthzHandler(this.policy, read))
+            .handler(repoRead)
             .handler(this::artifactDetailHandler);
         // GET /api/v1/repositories/:name/artifact/pull — pull instructions
         router.get("/api/v1/repositories/:name/artifact/pull")
             .handler(new AuthzHandler(this.policy, read))
+            .handler(repoRead)
             .handler(this::pullInstructionsHandler);
         // GET /api/v1/repositories/:name/artifact/download — download artifact (JWT auth)
         router.get("/api/v1/repositories/:name/artifact/download")
             .handler(new AuthzHandler(this.policy, read))
+            .handler(repoRead)
             .handler(this::downloadHandler);
         // POST /api/v1/repositories/:name/artifact/download-token — issue single-use token
         router.post("/api/v1/repositories/:name/artifact/download-token")
             .handler(new AuthzHandler(this.policy, read))
+            .handler(repoRead)
             .handler(this::downloadTokenHandler);
         // GET /api/v1/repositories/:name/artifact/download-direct — download via token (no JWT)
         router.get("/api/v1/repositories/:name/artifact/download-direct")
@@ -209,10 +226,12 @@ public final class ArtifactHandler {
         // DELETE /api/v1/repositories/:name/artifacts — delete artifact
         router.delete("/api/v1/repositories/:name/artifacts")
             .handler(new AuthzHandler(this.policy, delete))
+            .handler(repoDelete)
             .handler(this::deleteArtifactHandler);
         // DELETE /api/v1/repositories/:name/packages — delete package folder
         router.delete("/api/v1/repositories/:name/packages")
             .handler(new AuthzHandler(this.policy, delete))
+            .handler(repoDelete)
             .handler(this::deletePackageFolderHandler);
     }
 
