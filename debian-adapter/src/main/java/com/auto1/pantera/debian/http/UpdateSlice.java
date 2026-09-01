@@ -199,7 +199,8 @@ public final class UpdateSlice implements Slice {
                 archs.forEach(val -> {
                     final ArtifactEvent event = new ArtifactEvent(
                         UpdateSlice.REPO_TYPE, this.config.codename(), owner,
-                        String.join("_", name, val), version, size
+                        String.join("_", name, val), version, size,
+                        System.currentTimeMillis(), null, artifact.string()
                     );
                     this.events.ifPresent(queue -> queue.add(event));
                     syncs.add(this.syncIndex.recordSync(event));

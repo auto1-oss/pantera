@@ -38,6 +38,35 @@ import java.util.concurrent.CompletableFuture;
 class TrimmedDockerTest {
 
     /**
+     * The name a client sends and the name storage uses differ for a
+     * path-hosted repository. Anything recording the artifact's real storage
+     * key has to resolve through here — building it from the request's own
+     * name records a path that does not exist.
+     */
+    @ParameterizedTest
+    @CsvSource({
+        "docker_local,docker_local/auto1/hello,auto1/hello",
+        "docker_local,docker_local/ubuntu,ubuntu",
+        "my/repo,my/repo/some/image,some/image"
+    })
+    void resolvesTheStorageFacingName(final String prefix, final String sent,
+        final String expected) {
+        MatcherAssert.assertThat(
+            new TrimmedDocker(new FakeCatalogDocker(() -> null), prefix).resolveName(sent),
+            Matchers.equalTo(expected)
+        );
+    }
+
+    @Test
+    void resolveNameIsIdentityWithoutTrimming() {
+        MatcherAssert.assertThat(
+            "A registry with no path prefix stores under the name as sent",
+            new FakeCatalogDocker(() -> null).resolveName("auto1/hello"),
+            Matchers.equalTo("auto1/hello")
+        );
+    }
+
+    /**
      * Fake docker.
      */
     private static final Docker FAKE = new Docker() {

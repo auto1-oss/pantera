@@ -357,14 +357,17 @@ public final class FileProxySlice implements Slice {
                                             final String finalArtifact = key.string();
                                             term.thenRun(() -> {
                                                 final long size = totalSize.get();
-                                                String aname = finalArtifact;
+                                                String relative = finalArtifact;
                                                 // Exclude repo name prefix if present
                                                 if (this.rname != null && !this.rname.isEmpty()
-                                                    && aname.startsWith(this.rname + "/")) {
-                                                    aname = aname.substring(this.rname.length() + 1);
+                                                    && relative.startsWith(this.rname + "/")) {
+                                                    relative =
+                                                        relative.substring(this.rname.length() + 1);
                                                 }
-                                                // Replace folder separators with dots
-                                                aname = aname.replace('/', '.');
+                                                // Replace folder separators with dots. The real
+                                                // key is kept as the event's pathPrefix — a dotted
+                                                // name cannot be reversed into a path.
+                                                final String aname = relative.replace('/', '.');
                                                 this.events.get().add(
                                                     new ArtifactEvent(
                                                         FileProxySlice.REPO_TYPE, this.rname, user,
@@ -372,7 +375,8 @@ public final class FileProxySlice implements Slice {
                                                         RepositoryEvents.detectFileVersion(
                                                             FileProxySlice.REPO_TYPE, aname
                                                         ),
-                                                        size
+                                                        size, System.currentTimeMillis(), null,
+                                                        relative
                                                     )
                                                 );
                                             });

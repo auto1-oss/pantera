@@ -249,7 +249,10 @@ final class WheelSlice implements Slice {
                     new Login(headers).getValue(),
                     normalized,
                     info.version(),
-                    size
+                    size,
+                    System.currentTimeMillis(),
+                    null,
+                    key.string()
                 );
                 this.events.ifPresent(queue -> queue.add(event));
                 // Drop any cached 404 for this package so requests that

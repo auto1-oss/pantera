@@ -20,6 +20,7 @@ import Button from 'primevue/button'
 import InputText from 'primevue/inputtext'
 import InputNumber from 'primevue/inputnumber'
 import InputSwitch from 'primevue/inputswitch'
+import Dropdown from 'primevue/dropdown'
 import AutoComplete from 'primevue/autocomplete'
 import Tag from 'primevue/tag'
 import type { Settings, CooldownConfig } from '@/types'
@@ -167,6 +168,12 @@ const ubMaxBackoffSeconds = ref(3600)
 const trustForwardedHeaders = ref(false)
 const clientBaseHostAllowlist = ref('')
 const clientBaseUrl = ref('')
+const clientBaseScheme = ref('auto')
+const CLIENT_BASE_SCHEMES = [
+  { label: 'auto — derive from the request', value: 'auto' },
+  { label: 'https — always emit https', value: 'https' },
+  { label: 'http — always emit http', value: 'http' },
+]
 
 // Cooldown config
 const cooldownConfig = ref<CooldownConfig | null>(null)
@@ -335,6 +342,7 @@ onMounted(async () => {
         trustForwardedHeaders.value = s.trust_forwarded_headers === 'true'
         clientBaseHostAllowlist.value = s.client_base_host_allowlist ?? ''
         clientBaseUrl.value = s.client_base_url ?? ''
+        clientBaseScheme.value = s.client_base_scheme ?? 'auto'
       }),
       runtime.load(),
     ])
@@ -540,6 +548,7 @@ async function saveClientBaseUrlSettings() {
       trust_forwarded_headers: String(trustForwardedHeaders.value),
       client_base_host_allowlist: allowlist,
       client_base_url: canonical,
+      client_base_scheme: clientBaseScheme.value,
     })
     clientBaseHostAllowlist.value = allowlist
     clientBaseUrl.value = canonical
@@ -702,6 +711,7 @@ interface Baseline {
   trustForwardedHeaders: boolean
   clientBaseHostAllowlist: string
   clientBaseUrl: string
+  clientBaseScheme: string
   cooldownEnabled: boolean
   cooldownAge: string
   cooldownHistoryRetentionDays: number
@@ -745,6 +755,7 @@ function snapshot(): Baseline {
     trustForwardedHeaders: trustForwardedHeaders.value,
     clientBaseHostAllowlist: clientBaseHostAllowlist.value,
     clientBaseUrl: clientBaseUrl.value,
+    clientBaseScheme: clientBaseScheme.value,
     cooldownEnabled: cooldownEnabled.value,
     cooldownAge: cooldownAge.value,
     cooldownHistoryRetentionDays: cooldownHistoryRetentionDays.value,
@@ -798,7 +809,8 @@ const isDirtyClientBaseUrl = computed(() =>
   !!baseline.value
     && (baseline.value.trustForwardedHeaders !== trustForwardedHeaders.value
       || baseline.value.clientBaseHostAllowlist !== clientBaseHostAllowlist.value
-      || baseline.value.clientBaseUrl !== clientBaseUrl.value))
+      || baseline.value.clientBaseUrl !== clientBaseUrl.value
+      || baseline.value.clientBaseScheme !== clientBaseScheme.value))
 const isDirtyCooldown = computed(() =>
   !!baseline.value
     && (baseline.value.cooldownEnabled !== cooldownEnabled.value
@@ -1230,7 +1242,7 @@ const SectionHeader = (props: { id: SectionId; dirty: boolean }) => {
           Governs how Pantera derives the absolute base URL it embeds in links it
           emits (e.g. npm <code>dist.tarball</code>) for a repository with no
           explicit <code>url:</code> configured. A repository's own
-          <code>url:</code> always wins over all three settings below. Distinct
+          <code>url:</code> always wins over all settings below. Distinct
           from — and unrelated to — the circuit breaker cards above.
         </template>
         <template #content>
@@ -1267,6 +1279,40 @@ const SectionHeader = (props: { id: SectionId; dirty: boolean }) => {
                 Empty (default) leaves derivation to <code>Host</code> /
                 <code>X-Forwarded-*</code> below, exactly as before this setting
                 existed.
+              </span>
+            </div>
+            <div class="flex flex-col gap-2">
+              <label class="text-sm text-gray-500">
+                Client-facing scheme
+              </label>
+              <Dropdown
+                v-model="clientBaseScheme"
+                :options="CLIENT_BASE_SCHEMES"
+                option-label="label"
+                option-value="value"
+                class="w-full md:w-80"
+              />
+              <span v-if="clientBaseScheme === 'auto'" class="text-xs text-gray-400">
+                Derives the scheme from the request:
+                <code>X-Forwarded-Proto</code> when forwarded headers are
+                trusted, otherwise <code>http</code>.
+              </span>
+              <div
+                v-else
+                class="text-xs text-blue-400 bg-blue-500/10 border border-blue-500/20 rounded p-2"
+              >
+                <i class="pi pi-info-circle mr-1" />
+                Every emitted URL uses <code>{{ clientBaseScheme }}://</code>
+                regardless of the request. The host is still derived per
+                request, so several client-facing DNS names each keep their
+                own URLs.
+              </div>
+              <span class="text-xs text-gray-400">
+                Set this to <code>https</code> when Pantera sits behind a
+                TLS-terminating layer-4 load balancer (an AWS NLB with a TLS
+                listener, say): it forwards neither TLS nor
+                <code>X-Forwarded-Proto</code>, so <code>auto</code> has no
+                signal and emits <code>http</code> links.
               </span>
             </div>
             <div class="flex items-center gap-3">

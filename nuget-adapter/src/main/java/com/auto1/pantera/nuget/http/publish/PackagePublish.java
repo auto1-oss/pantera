@@ -150,7 +150,8 @@ public final class PackagePublish implements Route {
                     final ArtifactEvent event = new ArtifactEvent(
                         PackagePublish.REPO_TYPE, this.name,
                         new Login(headers).getValue(), info.packageName(),
-                        info.packageVersion(), info.zipSize()
+                        info.packageVersion(), info.zipSize(),
+                        System.currentTimeMillis(), null, info.packagePath()
                     );
                     this.events.ifPresent(queue -> queue.add(event));
                     return this.syncIndex.recordSync(event)

@@ -78,15 +78,33 @@ public interface Repository {
         private final long size;
 
         /**
+         * Repo-relative storage path of the nupkg, or null when unknown.
+         */
+        private final String path;
+
+        /**
          * Ctor.
          * @param name Package name
          * @param version Version
          * @param size Package tar archive size
          */
         public PackageInfo(final NuspecField name, final NuspecField version, final long size) {
+            this(name, version, size, null);
+        }
+
+        /**
+         * Primary ctor.
+         * @param name Package name
+         * @param version Version
+         * @param size Package tar archive size
+         * @param path Repo-relative storage path of the nupkg, or null
+         */
+        public PackageInfo(final NuspecField name, final NuspecField version, final long size,
+            final String path) {
             this.name = name.normalized();
             this.version = version.normalized();
             this.size = size;
+            this.path = path;
         }
 
         /**
@@ -111,6 +129,14 @@ public interface Repository {
          */
         public long zipSize() {
             return this.size;
+        }
+
+        /**
+         * Repo-relative storage path of the nupkg.
+         * @return Storage path, or null when the source recorded none
+         */
+        public String packagePath() {
+            return this.path;
         }
     }
 }

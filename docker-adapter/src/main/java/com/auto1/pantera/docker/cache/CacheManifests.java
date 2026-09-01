@@ -369,7 +369,15 @@ public final class CacheManifests implements Manifests {
                             ref.digest(),
                             size,
                             created,
-                            effectiveRelease.orElse(null)
+                            effectiveRelease.orElse(null),
+                            // Relative to the adapter's SubStorage
+                            // (RegistryRoot.V2) — restore the prefix so the key
+                            // resolves from the repository root.
+                            new com.auto1.pantera.asto.Key.From(
+                                com.auto1.pantera.docker.asto.RegistryRoot.V2,
+                                com.auto1.pantera.docker.asto.Layout
+                                    .manifest(this.name, ref)
+                            ).string()
                         ).withContext(traceId, clientIp)
                     );
                 });

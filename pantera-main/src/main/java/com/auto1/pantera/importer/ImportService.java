@@ -1267,6 +1267,8 @@ public final class ImportService {
     private void enqueueEvent(final ImportRequest request, final long size) {
         this.events.ifPresent(queue -> request.artifact().ifPresent(name -> {
             final long created = request.created().orElse(System.currentTimeMillis());
+            // The import target path is the artifact's real storage key.
+            final String prefix = request.path();
             final ArtifactEvent event = request.release()
                 .map(release -> new ArtifactEvent(
                     request.repoType(),
@@ -1276,7 +1278,8 @@ public final class ImportService {
                     request.version().orElse(""),
                     size,
                     created,
-                    release
+                    release,
+                    prefix
                 ))
                 .orElse(
                     new ArtifactEvent(
@@ -1286,7 +1289,9 @@ public final class ImportService {
                         name,
                         request.version().orElse(""),
                         size,
-                        created
+                        created,
+                        null,
+                        prefix
                     )
                 );
             queue.offer(event);

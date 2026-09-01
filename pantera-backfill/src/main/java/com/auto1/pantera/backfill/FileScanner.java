@@ -88,7 +88,14 @@ final class FileScanner implements Scanner {
         final Path path) {
         try {
             final Path rel = root.relativize(path);
-            final String name = rel.toString().replace('\\', '/').replace('/', '.');
+            final String relative = rel.toString().replace('\\', '/');
+            // The display name flattens separators into dots and cannot be
+            // reversed (filenames and versions contain dots of their own), so
+            // the real repo-relative key is recorded alongside it. This is what
+            // lets the tree browser open the artifact's directory, and it is
+            // recoverable for already-indexed rows precisely because the
+            // scanner reads it back off disk.
+            final String name = relative.replace('/', '.');
             final String version = detectVersion(rel);
             return new ArtifactRecord(
                 this.repoType,
@@ -99,7 +106,7 @@ final class FileScanner implements Scanner {
                 Files.getLastModifiedTime(path).toMillis(),
                 null,
                 this.owner,
-                null
+                relative
             );
         } catch (final IOException ex) {
             throw new UncheckedIOException(ex);

@@ -98,7 +98,8 @@ public final class RepositoryEvents {
         this.queue.add( // ok: unbounded ConcurrentLinkedDeque (ArtifactEvent queue)
             new ArtifactEvent(
                 this.rtype, this.rname, new Login(headers).getValue(),
-                aname, version, size
+                aname, version, size, System.currentTimeMillis(), null,
+                this.storagePath(key)
             )
         );
     }
@@ -141,20 +142,32 @@ public final class RepositoryEvents {
      * @return Formatted artifact name
      */
     private String formatArtifactName(final Key key) {
-        final String raw = key.string();
         if ("file".equals(this.rtype) || "file-proxy".equals(this.rtype)) {
-            String name = raw;
-            // Strip leading slash if any (defensive; KeyFromPath already removes it)
-            if (name.startsWith("/")) {
-                name = name.substring(1);
-            }
-            // Exclude repo name prefix if present
-            if (this.rname != null && !this.rname.isEmpty() && name.startsWith(this.rname + "/")) {
-                name = name.substring(this.rname.length() + 1);
-            }
-            // Replace folder separators with dots
-            return name.replace('/', '.');
+            // Flattened display name. The separators are destroyed here, which
+            // is why the real key is carried alongside as the event's
+            // pathPrefix — a dotted name cannot be reversed into a path
+            // (filenames and versions legitimately contain dots).
+            return this.storagePath(key).replace('/', '.');
         }
-        return raw;
+        return key.string();
+    }
+
+    /**
+     * The artifact's real repo-relative storage key — what the tree browser
+     * needs to navigate to the artifact's directory.
+     * @param key Storage key
+     * @return Repo-relative path, no leading slash, no repository-name prefix
+     */
+    private String storagePath(final Key key) {
+        String name = key.string();
+        // Strip leading slash if any (defensive; KeyFromPath already removes it)
+        if (name.startsWith("/")) {
+            name = name.substring(1);
+        }
+        // Exclude repo name prefix if present
+        if (this.rname != null && !this.rname.isEmpty() && name.startsWith(this.rname + "/")) {
+            name = name.substring(this.rname.length() + 1);
+        }
+        return name;
     }
 }

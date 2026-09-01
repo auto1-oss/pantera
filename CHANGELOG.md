@@ -1,5 +1,22 @@
 # Changelog
 
+## Version 2.2.8
+
+### 🌟 New features
+
+- **`client_base_scheme` controls the scheme in emitted URLs** — a new admin setting (`auto` / `http` / `https`, DB-backed and hot-reloaded like its siblings, env fallback `PANTERA_CLIENT_BASE_SCHEME`, admin UI card). `auto` keeps today's behaviour of deriving from `X-Forwarded-Proto`. That derivation cannot work behind a TLS-terminating **layer-4** load balancer — an AWS NLB with a TLS listener forwarding to a TCP target group gives Pantera neither a TLS connection of its own nor a forwarded-proto header, so every emitted link said `http` with no way to correct it short of pinning `client_base_url`, which also fixes the host. Setting this to `https` fixes the scheme while the host keeps deriving per request, so several client-facing DNS names each keep their own URLs. `ClientBaseUrl` now also logs a warning (once per cause) when it falls back on the scheme or the host, instead of degrading silently.
+  ([@aydasraf](https://github.com/aydasraf))
+
+### 🔧 Bug fixes
+
+- **Client-facing URLs are correct for HTTP/2 clients** — HTTP/2 forbids a `Host` header and carries the authority in the `:authority` pseudo-header, which Vert.x keeps out of the request's header map. Every base-URL derivation reads `Host`, so an h2 request looked hostless and fell through to a literal `localhost`, publishing unreachable `http://localhost/...` links in package metadata — including on correctly configured, allowlisted hostnames, since the host allowlist was never reached. Only clients that negotiated h2 were affected, which is what made it look intermittent. The authority is now restored as a `Host` header at the edge, so every slice behaves the same on both protocols.
+  ([@aydasraf](https://github.com/aydasraf))
+
+- **Browsing from a search result lands on the artifact's real directory for every remaining format** — 2.2.5 gave search results a `path_prefix` (the writer's real storage key) and taught the UI to prefer it, but only the proxy cache-write paths and three local formats (gem, hex, conda) ever recorded one. Every other upload path passed `null`, so the field was absent and the UI fell back to guessing from the display name. For generic-file repositories that name is the storage path with every separator flattened to a dot — unreversible, since filenames and versions contain dots of their own — leaving no directory to browse to and sending every result to the repository root. All fifteen upload paths now record the key (maven, npm, pypi, go, composer, debian, docker, helm, nuget, rpm, generic files, conan, the docker proxy cache and both importer paths), and the UI consults it for file, docker and helm/debian/rpm results instead of guessing. Rows indexed earlier keep the old fallback until re-indexed.
+  ([@aydasraf](https://github.com/aydasraf))
+- **`pantera-backfill` records the real storage key for generic-file, helm, debian and docker repositories** — `FileScanner` flattened the on-disk path into the dotted display name and discarded the original, so no amount of re-indexing could repair an affected row; the helm and debian scanners recorded nothing at all. All three now record it (helm from the index entry's `urls`, resolving the per-chart layout and falling back to the flat one; debian from the stanza's `Filename:` pool path; docker from the tag's manifest link, which carries the `docker/registry/v2` layout prefix that no amount of guessing from an image name can reconstruct). Docker keys are additionally resolved through the registry rather than built from the request's own image name: a path-hosted repository strips its name prefix before touching storage, so `docker_local/auto1/hello` on the wire is `auto1/hello` on disk, and a key built from the request pointed at a directory that does not exist, and each records a key only when it resolves to a file that is actually present — a fabricated path browses to nothing, which is the bug being fixed. This is what makes existing rows recoverable: re-run the backfill and their browse links resolve. The upsert is a `COALESCE`, so a re-run never clears a key another writer recorded.
+  ([@aydasraf](https://github.com/aydasraf))
+
 ## Version 2.2.7
 
 ### ⚡ Performance

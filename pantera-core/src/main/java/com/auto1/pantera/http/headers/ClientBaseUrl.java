@@ -11,6 +11,7 @@
 package com.auto1.pantera.http.headers;
 
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.log.EcsLogger;
 
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -73,6 +74,23 @@ public final class ClientBaseUrl {
     public static final String HEADER = "X-Pantera-Client-Base";
 
     /**
+     * Host emitted when none can be determined — never reachable by a client.
+     */
+    private static final String FALLBACK_HOST = "localhost";
+
+    /**
+     * Scheme emitted when none can be determined.
+     */
+    private static final String FALLBACK_SCHEME = "http";
+
+    /**
+     * Degradation reasons already warned about, so a standing
+     * misconfiguration logs once rather than once per request.
+     */
+    private static final java.util.Set<String> WARNED =
+        java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
      * Header stamped by {@code ApiRoutingSlice} with the pre-rewrite client
      * path; preferred over the live request path because it still carries the
      * {@code /api/<type>} segment the client configured as its registry.
@@ -109,6 +127,12 @@ public final class ClientBaseUrl {
     private final String canonicalPrefix;
 
     /**
+     * Client-facing scheme: {@code auto} (derive from the request), or a
+     * forced {@code http} / {@code https}.
+     */
+    private final String schemeSetting;
+
+    /**
      * Ctor. Reads the CURRENT {@code trustForwardedHeaders}, {@code
      * hostAllowlist}, and {@code canonicalBaseUrl} settings from {@link
      * ClientBaseUrlSettingsRegistry} — dynamically, on every call, so a
@@ -129,7 +153,7 @@ public final class ClientBaseUrl {
     private ClientBaseUrl(final Headers headers, final ClientBaseUrlSettings settings) {
         this(
             headers, settings.trustForwardedHeaders(), settings.hostAllowlist(),
-            settings.canonicalBaseUrl()
+            settings.canonicalBaseUrl(), settings.clientBaseScheme()
         );
     }
 
@@ -143,7 +167,10 @@ public final class ClientBaseUrl {
      *  {@code X-Forwarded-Host}, and {@code X-Forwarded-Prefix}
      */
     public ClientBaseUrl(final Headers headers, final boolean trustForwarded) {
-        this(headers, trustForwarded, List.of(), "");
+        this(
+            headers, trustForwarded, List.of(), "",
+            ClientBaseUrlSettings.SCHEME_AUTO
+        );
     }
 
     /**
@@ -159,13 +186,14 @@ public final class ClientBaseUrl {
      */
     private ClientBaseUrl(
         final Headers headers, final boolean trustForwarded, final List<String> hostAllowlist,
-        final String canonicalBaseUrl
+        final String canonicalBaseUrl, final String schemeSetting
     ) {
         this.headers = headers;
         this.trustForwarded = trustForwarded;
         this.hostAllowlist = hostAllowlist;
         this.canonicalOrigin = ClientBaseUrl.originOf(canonicalBaseUrl);
         this.canonicalPrefix = ClientBaseUrl.pathOf(canonicalBaseUrl);
+        this.schemeSetting = schemeSetting;
     }
 
     /**
@@ -176,17 +204,82 @@ public final class ClientBaseUrl {
      * @return e.g. {@code https://reg.example.com}
      */
     public String origin() {
-        final String result;
+        final Optional<String> host;
         if (this.trustForwarded) {
-            result = String.format(
-                "%s://%s",
-                this.first("X-Forwarded-Proto").orElse("http"),
-                this.first("X-Forwarded-Host").or(this::allowedHost).orElse("localhost")
-            );
+            host = this.first("X-Forwarded-Host").or(this::allowedHost);
         } else {
-            result = String.format("http://%s", this.allowedHost().orElse("localhost"));
+            host = this.allowedHost();
+        }
+        if (host.isEmpty()) {
+            // Emitting a literal localhost produces a URL no client can
+            // reach. It is always a misconfiguration (or an HTTP/2 request
+            // whose authority never became a Host header), and it used to be
+            // entirely silent — which is how it reached production.
+            ClientBaseUrl.warnOnce(
+                "host_fallback",
+                String.format(
+                    "No usable Host for client-facing URLs; emitting '%s'. Set the canonical"
+                        + " base URL, or add the client-facing hostname to the host allowlist.",
+                    ClientBaseUrl.FALLBACK_HOST
+                )
+            );
+        }
+        return String.format(
+            "%s://%s", this.scheme(), host.orElse(ClientBaseUrl.FALLBACK_HOST)
+        );
+    }
+
+    /**
+     * Client-facing scheme. The {@code client_base_scheme} setting wins when
+     * it forces a value; otherwise {@code X-Forwarded-Proto} is honoured when
+     * trusted, and failing that the scheme is {@code http}.
+     *
+     * <p>A deployment behind a TLS-terminating layer-4 load balancer (an AWS
+     * NLB with a TLS listener, say) receives neither TLS nor {@code
+     * X-Forwarded-Proto}: there is no signal to derive from, and the setting
+     * is the only way to advertise {@code https}.</p>
+     *
+     * @return {@code http} or {@code https}
+     */
+    private String scheme() {
+        final String result;
+        if (!ClientBaseUrlSettings.SCHEME_AUTO.equals(this.schemeSetting)) {
+            result = this.schemeSetting;
+        } else if (this.trustForwarded) {
+            final Optional<String> forwarded = this.first("X-Forwarded-Proto");
+            if (forwarded.isEmpty()) {
+                ClientBaseUrl.warnOnce(
+                    "scheme_fallback",
+                    "No X-Forwarded-Proto; client-facing URLs will say http. Set"
+                        + " client_base_scheme=https if clients reach Pantera over TLS."
+                );
+            }
+            result = forwarded.orElse(ClientBaseUrl.FALLBACK_SCHEME);
+        } else {
+            result = ClientBaseUrl.FALLBACK_SCHEME;
         }
         return result;
+    }
+
+    /**
+     * Warn once per distinct reason, so a permanent misconfiguration does not
+     * emit a line per request. The set is bounded because its keys are a
+     * fixed, small vocabulary.
+     *
+     * @param reason Stable key identifying the degradation
+     * @param message Operator-facing explanation
+     */
+    private static void warnOnce(final String reason, final String message) {
+        if (ClientBaseUrl.WARNED.add(reason)) {
+            EcsLogger.warn("com.auto1.pantera.http")
+                .message(message)
+                .eventCategory("configuration")
+                .eventAction("client_base_url_derive")
+                .eventOutcome("failure")
+                .field("event.reason", reason)
+                .field("log.source", "application")
+                .log();
+        }
     }
 
     /**

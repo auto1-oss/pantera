@@ -92,9 +92,8 @@ final class HelmScanner implements Scanner {
                 final long createdDate = HelmScanner.parseCreated(
                     versionMap.get("created"), indexMtime
                 );
-                final long size = HelmScanner.resolveSize(
-                    root, versionMap.get("urls")
-                );
+                final Object urls = versionMap.get("urls");
+                final long size = HelmScanner.resolveSize(root, urls);
                 records.add(
                     new ArtifactRecord(
                         "helm",
@@ -105,7 +104,7 @@ final class HelmScanner implements Scanner {
                         createdDate,
                         null,
                         "system",
-                        null
+                        HelmScanner.resolveChartKey(root, urls)
                     )
                 );
             }
@@ -148,38 +147,78 @@ final class HelmScanner implements Scanner {
      */
     @SuppressWarnings("unchecked")
     private static long resolveSize(final Path root, final Object urlsObj) {
-        if (!(urlsObj instanceof List)) {
-            return 0L;
-        }
-        final List<Object> urls = (List<Object>) urlsObj;
-        if (urls.isEmpty()) {
-            return 0L;
-        }
-        final Object firstUrl = urls.get(0);
-        if (firstUrl == null) {
-            return 0L;
-        }
-        String filename = firstUrl.toString();
-        if (filename.startsWith("http://") || filename.startsWith("https://")) {
+        long result = 0L;
+        final String key = HelmScanner.resolveChartKey(root, urlsObj);
+        if (key != null) {
             try {
-                final String path = URI.create(filename).getPath();
-                final int lastSlash = path.lastIndexOf('/');
-                filename = lastSlash >= 0 ? path.substring(lastSlash + 1) : path;
-            } catch (final IllegalArgumentException ex) {
-                LOG.debug("Cannot parse URL '{}': {}", filename, ex.getMessage());
-                return 0L;
-            }
-        }
-        final Path tgzPath = root.resolve(filename);
-        if (Files.isRegularFile(tgzPath)) {
-            try {
-                return Files.size(tgzPath);
+                result = Files.size(root.resolve(key));
             } catch (final IOException ex) {
-                LOG.debug("Cannot stat {}: {}", tgzPath, ex.getMessage());
-                return 0L;
+                LOG.debug("Cannot stat {}: {}", key, ex.getMessage());
             }
         }
-        return 0L;
+        return result;
+    }
+
+    /**
+     * Resolve the chart tarball's repo-relative storage key from an index.yaml
+     * {@code urls} entry.
+     *
+     * <p>Recorded as the record's path prefix so the tree browser can open the
+     * chart's directory. Only ever returns a key that resolves to a file that
+     * is actually there — a fabricated path would browse to nothing, which is
+     * the very bug this guards against.</p>
+     *
+     * @param root Repository root
+     * @param urlsObj The {@code urls} value from the index entry
+     * @return Repo-relative key, or null when no file matches
+     */
+    private static String resolveChartKey(final Path root, final Object urlsObj) {
+        String result = null;
+        if (urlsObj instanceof List) {
+            final List<Object> urls = (List<Object>) urlsObj;
+            if (!urls.isEmpty() && urls.get(0) != null) {
+                result = HelmScanner.existingKey(root, urls.get(0).toString());
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Pick whichever of the URL's full path or its bare filename exists under
+     * the repository root. Charts are written per-chart
+     * ({@code <chart>/<chart>-<version>.tgz}) but older layouts are flat.
+     *
+     * @param root Repository root
+     * @param url Raw url value from index.yaml
+     * @return Repo-relative key of an existing file, or null
+     */
+    private static String existingKey(final Path root, final String url) {
+        String candidate = url;
+        if (candidate.startsWith("http://") || candidate.startsWith("https://")) {
+            try {
+                candidate = URI.create(candidate).getPath();
+            } catch (final IllegalArgumentException ex) {
+                LOG.debug("Cannot parse URL '{}': {}", candidate, ex.getMessage());
+                candidate = "";
+            }
+        }
+        final String relative = candidate.replaceFirst("^/+", "");
+        String result = null;
+        if (!relative.isEmpty() && Files.isRegularFile(root.resolve(relative))) {
+            result = relative;
+        } else {
+            final int slash = relative.lastIndexOf('/');
+            final String base;
+            if (slash >= 0) {
+                base = relative.substring(slash + 1);
+            } else {
+                base = relative;
+            }
+            if (!base.isEmpty() && Files.isRegularFile(root.resolve(base))) {
+                result = base;
+            }
+        }
+        return result;
     }
 
     /**

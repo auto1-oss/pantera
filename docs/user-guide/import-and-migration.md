@@ -157,6 +157,30 @@ java -jar pantera-backfill.jar \
 | `--batch-size` | Insert batch size | 1000 |
 | `--log-interval` | Progress log interval (rows) | 10000 |
 
+### Re-running to repair browse links
+
+Search results carry the artifact's real storage key so the UI can open its
+directory. Rows indexed before 2.2.8 by a writer that did not record one browse
+to the repository root instead of the artifact's folder. Re-running the backfill
+against a repository repairs those rows: the scanner reads the key back off
+disk, and the insert uses `COALESCE`, so a re-run never clears a key another
+writer already recorded.
+
+This applies to repositories indexed before 2.2.8 for the generic-file, helm,
+debian and docker types.
+
+**Conan, RPM and NuGet** have no scanner at all, so the backfill cannot
+re-index them. Their rows are repaired by re-uploading the artifact, which
+records the key on the upload path.
+
+The backfill derives an artifact's version from its parent directory, while
+the server derives it from the artifact name. The two agree whenever the
+artifact sits in a version directory. Where they disagree — a version that
+appears only in the filename, such as `foo/bar/thing-2.0.jar` — the upsert key
+does not match the existing row, so the re-run inserts a second row instead of
+repairing the first. Use `--dry-run` and compare row counts before committing
+to a large re-index.
+
 ---
 
 ## Migrating from Other Registries
