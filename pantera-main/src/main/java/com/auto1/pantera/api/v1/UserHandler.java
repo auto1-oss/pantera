@@ -58,6 +58,12 @@ public final class UserHandler {
     /**
      * Create user permission constant.
      */
+    /**
+     * Change-password permission — required to reset an existing user's password.
+     */
+    private static final ApiUserPermission CHANGE_PASSWORD =
+        new ApiUserPermission(ApiUserPermission.UserAction.CHANGE_PASSWORD);
+
     private static final ApiUserPermission CREATE =
         new ApiUserPermission(UserAction.CREATE);
 
@@ -280,6 +286,45 @@ public final class UserHandler {
         });
     }
 
+
+    /**
+     * Privilege-ceiling check for the user upsert. Returns a refusal message,
+     * or {@code null} when the write is within the caller's authority.
+     * @param caller Authenticated caller's username
+     * @param body Submitted user document
+     * @param perms Caller's effective permissions
+     * @param passwordReplaced Whether an existing user's password is being reset
+     * @return Refusal reason or {@code null}
+     */
+    private String escalationRefusal(
+        final String caller, final JsonObject body,
+        final PermissionCollection perms, final boolean passwordReplaced
+    ) {
+        if (perms.implies(new java.security.AllPermission())) {
+            return null;
+        }
+        if (passwordReplaced && !perms.implies(UserHandler.CHANGE_PASSWORD)) {
+            return "Resetting a password requires the change-password permission";
+        }
+        if (body.containsKey("roles")) {
+            final java.util.Set<String> own = new java.util.HashSet<>();
+            this.users.get(caller).ifPresent(me -> {
+                if (me.containsKey("roles")) {
+                    for (final javax.json.JsonValue role : me.getJsonArray("roles")) {
+                        own.add(((javax.json.JsonString) role).getString());
+                    }
+                }
+            });
+            for (final javax.json.JsonValue role : body.getJsonArray("roles")) {
+                final String name = ((javax.json.JsonString) role).getString();
+                if (!own.contains(name)) {
+                    return "Cannot assign a role you do not hold yourself: " + name;
+                }
+            }
+        }
+        return null;
+    }
+
     /**
      * PUT /api/v1/users/:name — create or update user.
      * @param ctx Routing context
@@ -320,14 +365,44 @@ public final class UserHandler {
         );
         if (existing.isPresent() && perms.implies(UserHandler.UPDATE)
             || existing.isEmpty() && perms.implies(UserHandler.CREATE)) {
-            // SECURITY (2.2.9, SecOps #38): an upsert that replaces the
-            // password is a credential change — evict every live token.
+            // SECURITY (2.2.9, privesc-role): user CREATE/UPDATE is not a
+            // credential or role authority. Resetting an EXISTING user's
+            // password additionally needs CHANGE_PASSWORD and goes through
+            // alterPassword (PasswordPolicy-enforced); assigning roles is
+            // capped at the caller's own roles unless they are an
+            // administrator (no self-escalation, admin stays protected).
             final boolean passwordReplaced = existing.isPresent() && body.containsKey("pass");
+            final String refusal = this.escalationRefusal(
+                ctx.user().principal().getString(AuthTokenRest.SUB), body, perms, passwordReplaced
+            );
+            if (refusal != null) {
+                ApiResponse.sendError(ctx, 403, "FORBIDDEN", refusal);
+                return;
+            }
+            if (existing.isEmpty() && body.containsKey("pass")) {
+                final String failure = com.auto1.pantera.auth.PasswordPolicy
+                    .validate(uname, body.getString("pass"));
+                if (failure != null) {
+                    ApiResponse.sendError(ctx, 400, "BAD_REQUEST", failure);
+                    return;
+                }
+            }
             CompletableFuture.runAsync(
                 () -> {
-                    this.users.addOrUpdate(body, uname);
                     if (passwordReplaced) {
+                        // Policy-enforced path; strip the credential from the
+                        // generic upsert so it is never BCrypt'd unvalidated.
+                        final javax.json.JsonObjectBuilder rest = Json.createObjectBuilder(body);
+                        rest.remove("pass");
+                        rest.remove("type");
+                        this.users.addOrUpdate(rest.build(), uname);
+                        this.users.alterPassword(
+                            uname, Json.createObjectBuilder()
+                                .add("new_pass", body.getString("pass")).build()
+                        );
                         this.revoker.revokeAll(uname);
+                    } else {
+                        this.users.addOrUpdate(body, uname);
                     }
                 },
                 HandlerExecutor.get()

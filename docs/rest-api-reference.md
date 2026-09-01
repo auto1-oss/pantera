@@ -755,6 +755,11 @@ Create a new user or update an existing one. If the user exists, the `update` pe
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_user_permissions:create` (new) or `api_user_permissions:update` (existing)
 
+**Privilege ceiling (2.2.9).** `create`/`update` is a delegated authoring right, not root; unless the caller holds `all_permission`:
+- Resetting an **existing** user's password (`pass`/`password` on an existing user) additionally requires `api_user_permissions:change_password`, and the new password is validated by the same password policy as self-service changes; it also revokes that user's live tokens.
+- `roles` may only name roles the caller **already holds** — a caller cannot assign (to themselves or anyone) a role above their own, so the built-in `admin` role cannot be self-assigned. Requests exceeding the ceiling are refused with `403`.
+- An initial password on user **creation** must satisfy the password policy (`400` otherwise).
+
 **Request Body:**
 
 ```json
@@ -1000,6 +1005,8 @@ Create a new role or update an existing one. If the role exists, the `update` pe
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_role_permissions:create` (new) or `api_role_permissions:update` (existing)
+
+**Privilege ceiling (2.2.9).** Unless the caller holds `all_permission`: the built-in `admin` role cannot be modified; `all_permission` cannot be authored into a role; and every permission the role would grant must already be implied by the caller's own effective permissions (evaluated on the materialised permissions, not the raw JSON). A role editor therefore cannot grant themselves or others anything above what they hold. Requests exceeding the ceiling are refused with `403`.
 
 **Request Body:**
 
