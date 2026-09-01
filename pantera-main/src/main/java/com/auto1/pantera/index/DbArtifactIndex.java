@@ -433,6 +433,7 @@ public final class DbArtifactIndex implements ArtifactIndex, ScopedSearchIndex {
      * @param allowedRepos Allowed repository names; null means no restriction
      * @return Search result with matching documents
      */
+    @Override
     public CompletableFuture<SearchResult> search(
         final String query, final int maxResults, final int offset,
         final String repoType, final String repoName, final String sortBy, final boolean sortAsc,
