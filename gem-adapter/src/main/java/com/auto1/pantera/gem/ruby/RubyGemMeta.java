@@ -45,10 +45,20 @@ public final class RubyGemMeta implements GemMeta, SharedRuntime.RubyPlugin {
 
     @Override
     public MetaInfo info(final Path gem) {
-        final RubyObject spec = (RubyObject) JavaEmbedUtils.newRuntimeAdapter().eval(
-            this.ruby, String.format(
-                "Gem::Package.new('%s').spec", gem.toString()
-            )
+        // SECURITY (2.2.9): the gem path is an attacker-influenced stored key.
+        // It MUST be passed as a Ruby data object, never string-interpolated
+        // into eval'd source — the old `Gem::Package.new('<path>').spec` let a
+        // path containing a single quote inject arbitrary Ruby (RCE). Only the
+        // static class constant is evaluated; the path crosses as a String.
+        final IRubyObject pkgclass = JavaEmbedUtils.newRuntimeAdapter()
+            .eval(this.ruby, "Gem::Package");
+        final IRubyObject pkg = JavaEmbedUtils.invokeMethod(
+            this.ruby, pkgclass, "new",
+            new Object[]{JavaEmbedUtils.javaToRuby(this.ruby, gem.toString())},
+            IRubyObject.class
+        );
+        final RubyObject spec = (RubyObject) JavaEmbedUtils.invokeMethod(
+            this.ruby, pkg, "spec", new Object[0], IRubyObject.class
         );
         return new RubyMetaInfo(spec);
     }
