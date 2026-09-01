@@ -25,8 +25,13 @@ import java.nio.file.Paths;
 public final class FileStorageFactory implements StorageFactory {
     @Override
     public Storage newStorage(final Config cfg) {
+        // SECURITY (2.2.9): collapse `..` segments in a configured root so
+        // the storage root cannot differ from what the containment guards
+        // (FileStorage.keyPath and, for REST-managed repositories,
+        // FsStorageRootPolicy) reason about. Relative roots stay relative —
+        // the identifier used for cache keys must not change shape.
         return new FileStorage(
-            Paths.get(new Config.StrictStorageConfig(cfg).string("path"))
+            Paths.get(new Config.StrictStorageConfig(cfg).string("path")).normalize()
         );
     }
 }

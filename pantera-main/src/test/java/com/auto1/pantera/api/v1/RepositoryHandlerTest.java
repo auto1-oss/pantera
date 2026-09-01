@@ -82,6 +82,30 @@ public final class RepositoryHandlerTest extends AsyncApiTestBase {
     }
 
     @Test
+    void hostRootCannotBecomeARepository(final Vertx vertx, final VertxTestContext ctx)
+        throws Exception {
+        // SECURITY (2.2.9): a repo manager submitting {type: fs, path: "/"}
+        // used to mount the host filesystem as a repository.
+        final JsonObject hostRoot = new JsonObject().put(
+            "repo",
+            new JsonObject()
+                .put("type", "file")
+                .put("storage", new JsonObject().put("type", "fs").put("path", "/"))
+        );
+        final HttpResponse<Buffer> put = WebClient.create(vertx)
+            .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/host-root")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(hostRoot)
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(
+            400, put.statusCode(),
+            "an inline fs storage root outside the approved base must be refused"
+        );
+        ctx.completeNow();
+    }
+
+    @Test
     void headReturns200IfExists(final Vertx vertx, final VertxTestContext ctx) throws Exception {
         final WebClient client = WebClient.create(vertx);
         // Step 1: PUT the repo

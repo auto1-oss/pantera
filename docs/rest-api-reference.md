@@ -1410,7 +1410,7 @@ curl -OJ "http://localhost:8086/api/v1/repositories/maven-local/artifact/downloa
 
 ### POST /api/v1/repositories/:name/artifact/download-token
 
-Generate a short-lived (60 seconds), stateless HMAC-signed download token. This enables native browser downloads without requiring the JWT in the URL. The UI calls this first, then opens the `download-direct` URL in a new tab.
+Generate a short-lived (60 seconds), **single-use** HMAC-signed download token bound to the repository, the path and the issuing user. This enables native browser downloads without requiring the JWT in the URL. The UI calls this first, then opens the `download-direct` URL in a new tab. The signing key comes from `PANTERA_DOWNLOAD_TOKEN_SECRET` or a persisted random key shared by all nodes (see the environment-variables reference); it is never derived from process metadata.
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_repository_permissions:read`
@@ -1440,7 +1440,7 @@ curl -X POST "http://localhost:8086/api/v1/repositories/maven-local/artifact/dow
 
 ### GET /api/v1/repositories/:name/artifact/download-direct
 
-Download an artifact using an HMAC download token instead of JWT authentication. Tokens are valid for 60 seconds and are scoped to a specific repository and path.
+Download an artifact using an HMAC download token instead of JWT authentication. Tokens are valid for 60 seconds (future-dated timestamps are rejected), are scoped to a specific repository and path, are spent on first use, and the user who issued the token must still hold read permission on the repository at redemption — a token proves possession, not authorization.
 
 **Authentication:** HMAC token in query parameter (no JWT required).
 
@@ -1455,7 +1455,9 @@ Download an artifact using an HMAC download token instead of JWT authentication.
 - `Content-Type: application/octet-stream`
 - `Content-Length: <size>` (when available)
 
-**Response (401):** Token expired, invalid signature, or malformed token.
+**Response (401):** Token expired, not yet valid, already used, invalid signature, or malformed token.
+
+**Response (403):** Token issued for a different repository, or the issuing user no longer holds read permission on this repository.
 
 **curl example:**
 

@@ -27,6 +27,7 @@ import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.RepoData;
 import com.auto1.pantera.settings.cache.FiltersCache;
 import com.auto1.pantera.settings.repo.CrudRepoSettings;
+import com.auto1.pantera.settings.repo.FsStorageRootPolicy;
 import io.vertx.core.eventbus.EventBus;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
@@ -84,6 +85,12 @@ public final class RepositoryHandler {
     private final EventBus eventBus;
 
     /**
+     * Approved roots for inline {@code fs} storage submitted through this
+     * API (SECURITY, 2.2.9 — see {@link FsStorageRootPolicy}).
+     */
+    private final FsStorageRootPolicy fsRoots;
+
+    /**
      * Ctor.
      * @param filtersCache Pantera filters cache
      * @param crs Repository settings CRUD
@@ -105,6 +112,7 @@ public final class RepositoryHandler {
         this.policy = policy;
         this.events = events;
         this.eventBus = eventBus;
+        this.fsRoots = FsStorageRootPolicy.fromEnvironment();
     }
 
     /**
@@ -326,6 +334,13 @@ public final class RepositoryHandler {
         } else if (!repo.containsKey("storage")) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
                 "Repository storage is required for non-group repositories");
+            return;
+        }
+        // SECURITY (2.2.9): a raw fs path must sit under an approved root —
+        // otherwise repository CREATE/UPDATE mounted the host filesystem.
+        final Optional<String> badRoot = this.fsRoots.rejectStorage(repo);
+        if (badRoot.isPresent()) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", badRoot.get());
             return;
         }
         if (repo.containsKey("anonymous_read")) {

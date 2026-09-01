@@ -1561,7 +1561,8 @@ a Java system property using the lowercase, dot-separated equivalent (e.g.,
 | `PANTERA_SEARCH_MAX_PAGE` | `500` | Maximum page number for search pagination |
 | `PANTERA_SEARCH_MAX_SIZE` | `100` | Maximum results per search page |
 | `PANTERA_SEARCH_OVERFETCH` | `10` | Over-fetch multiplier for permission-filtered search results. The DB fetches `page_size * N` rows so that after dropping rows the user has no access to, the page can still be filled. Increase for deployments with many repos where users only access a few. |
-| `PANTERA_DOWNLOAD_TOKEN_SECRET` | auto-generated | HMAC secret for download token signing |
+| `PANTERA_DOWNLOAD_TOKEN_SECRET` | persisted random / ephemeral random | HMAC key for direct-download tokens; ≥32 random bytes. Unset → generated once and stored in `auth_settings` (DB-backed, shared by HA nodes) or ephemeral per process (DB-less). Never derived from process metadata (2.2.9). |
+| `PANTERA_FS_STORAGE_ROOTS` | `/var/pantera/data` | Approved base directories for inline `fs` storage paths submitted via the repository REST API/UI; paths outside are rejected with `400` (2.2.9). |
 
 ### 7.8 Miscellaneous
 
