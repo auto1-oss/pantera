@@ -69,6 +69,8 @@ For auth-related 4xx, see [Troubleshooting](troubleshooting.md).
 
 **What it means:** Catch-all for anything the fault could not be typed to more specifically. Every `internal` fault is logged on the server side with a full stack trace.
 
+The response body is always the fixed text `Internal Server Error` — it never carries exception detail, so there is nothing diagnostic to read from it. The detail is server-side only; quote the trace ID when escalating.
+
 **Client action:** Retry once; if it recurs, escalate to your administrator with the request's trace ID (carried in the `X-Request-Id` / `trace.id` field).
 
 ---

@@ -188,7 +188,7 @@ public final class FileSystemBrowseSlice implements Slice {
                     .field("log.source", "application")
                     .log();
                 return ResponseBuilder.internalError()
-                    .textBody("Failed to browse directory: " + e.getMessage())
+                    .textBody("Failed to browse directory")
                     .build();
             }
         }, BLOCKING_EXECUTOR);  // Use dedicated blocking executor

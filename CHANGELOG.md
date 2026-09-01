@@ -7,6 +7,11 @@
 - **Filtered-metadata envelopes are gzip-compressed in Valkey, and the L2 read no longer gives up after 100 ms** — a multi-megabyte envelope (a full npm packument runs to tens of MB) could never arrive inside the old timeout, so every serve paid the full stall, discarded the in-flight transfer, re-ran the filter and re-wrote the value. Compression (5–10x on packument JSON) plus a 500 ms ceiling makes those reads complete; a read breaker skips L2 for 10 s after three consecutive failures so a degraded Valkey never adds latency to every metadata serve. Pre-existing uncompressed entries remain readable.
   ([@aydasraf](https://github.com/aydasraf))
 
+### 🔒 Security
+
+- **Error responses no longer disclose exception detail** — any request that failed server-side answered with the rendered throwable in the response body, disclosing internal class names, package layout and absolute filesystem paths to the client. The same held, in smaller form, for ten slice-level error paths that appended the exception message (routinely an absolute path) to their 500 body — artifact serving, directory browsing, maven group metadata, hexpm upload, npm auth config and the proxy bulkhead fallback. Every error body now names only the operation that failed; the detail goes to the ERROR log. Two npm auth paths and the hexpm upload path were not logging their failure at all, so that detail was previously lost entirely once removed from the body — they now log it.
+  ([@aydasraf](https://github.com/aydasraf))
+
 ### 🔧 Bug fixes
 
 - **An npm install-v1 (abbreviated) metadata request can no longer be answered with the full packument, or vice versa** — both body shapes of a package shared one filtered-envelope cache key, so whichever was filtered first was served to both kinds of request for the envelope's TTL. Envelope keys now carry a variant segment (`full` / `abbreviated`), and block-state changes invalidate every variant of the package.

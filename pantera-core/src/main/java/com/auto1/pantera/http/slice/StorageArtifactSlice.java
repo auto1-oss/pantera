@@ -269,7 +269,7 @@ public final class StorageArtifactSlice implements Slice {
                     .field("log.source", "application")
                     .log();
                 return ResponseBuilder.internalError()
-                    .textBody("Failed to serve artifact: " + throwable.getMessage())
+                    .textBody("Failed to serve artifact")
                     .build();
             });
         }

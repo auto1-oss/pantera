@@ -500,8 +500,19 @@ public abstract class BaseCachedProxySlice implements Slice {
                 .textBody("Per-repo bulkhead is full")
                 .build();
         }
+        // Defensively unreachable: if it ever fires, the fault kind must reach
+        // the log — the response body deliberately names nothing internal.
+        com.auto1.pantera.http.log.EcsLogger.error("com.auto1.pantera.http")
+            .message("Bulkhead dispatch failed with an unexpected fault kind")
+            .eventCategory("web")
+            .eventAction("bulkhead_dispatch")
+            .eventOutcome("failure")
+            .field("repository.name", this.repoName)
+            .field("event.reason", fault.getClass().getSimpleName())
+            .field("log.source", "application")
+            .log();
         return ResponseBuilder.from(RsStatus.INTERNAL_ERROR)
-            .textBody("Bulkhead dispatch failed: " + fault.getClass().getSimpleName())
+            .textBody("Bulkhead dispatch failed")
             .build();
     }
 
