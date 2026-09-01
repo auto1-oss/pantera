@@ -83,6 +83,22 @@ public final class AuthHandler {
     private final com.auto1.pantera.auth.LoginThrottle loginThrottle =
         new com.auto1.pantera.auth.LoginThrottle();
 
+    /**
+     * Per-login OIDC nonces keyed by OAuth state (SecOps sso-oidc): the
+     * id_token must carry the nonce this node issued for the browser's
+     * authorization request.
+     */
+    private final com.auto1.pantera.auth.oidc.SsoNonceStore nonces =
+        new com.auto1.pantera.auth.oidc.SsoNonceStore(java.time.Duration.ofMinutes(10));
+
+    /**
+     * Cached JWKS clients per provider JWKS endpoint, so the provider key
+     * set is fetched once per TTL rather than once per login.
+     */
+    private final java.util.concurrent.ConcurrentHashMap<String,
+        com.auto1.pantera.auth.oidc.HttpJwkSource> jwkSources =
+        new java.util.concurrent.ConcurrentHashMap<>();
+
     public AuthHandler(final Tokens tokens, final Authentication auth,
         final CrudUsers users, final Policy<?> policy,
         final AuthProviderDao providerDao, final UserTokenDao tokenDao,
@@ -254,9 +270,10 @@ public final class AuthHandler {
             }
             final javax.json.JsonObject config = provider.getJsonObject("config");
             final String type = provider.getString("type", "");
-            final String state = Long.toHexString(
-                Double.doubleToLongBits(Math.random())
-            ) + Long.toHexString(System.nanoTime());
+            // SECURITY (2.2.9): cryptographically random state, plus a nonce
+            // bound to it that the id_token must echo back.
+            final String state = this.nonces.newState();
+            final String nonce = this.nonces.issue(state);
             final String authorizeUrl;
             final String clientId;
             final String scope;
@@ -285,7 +302,8 @@ public final class AuthHandler {
                 + "&response_type=code"
                 + "&scope=" + enc(scope)
                 + "&redirect_uri=" + enc(callbackUrl)
-                + "&state=" + enc(state);
+                + "&state=" + enc(state)
+                + "&nonce=" + enc(nonce);
             return new JsonObject().put("url", url).put("state", state);
         }, HandlerExecutor.get()).whenComplete((result, err) -> {
             if (err != null) {
@@ -333,6 +351,7 @@ public final class AuthHandler {
         final String code = body.getString("code");
         final String provider = body.getString("provider");
         final String callbackUrl = body.getString("callback_url");
+        final String state = body.getString("state");
         if (code == null || code.isBlank() || provider == null || provider.isBlank()) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
                 "Fields 'code' and 'provider' are required");
@@ -341,6 +360,22 @@ public final class AuthHandler {
         if (callbackUrl == null || callbackUrl.isBlank()) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
                 "Field 'callback_url' is required");
+            return;
+        }
+        // SECURITY (2.2.9, SecOps sso-oidc): the callback must present the
+        // state of a login THIS server started; its nonce is consumed here
+        // (single use, bounded lifetime) and must match the id_token's nonce.
+        final Optional<String> expectedNonce = this.nonces.consume(state);
+        if (expectedNonce.isEmpty()) {
+            EcsLogger.warn("com.auto1.pantera.api.v1")
+                .message("SSO callback rejected: unknown, reused or expired state")
+                .eventCategory("authentication")
+                .eventAction("sso_callback")
+                .eventOutcome("failure")
+                .field("log.source", "application")
+                .log();
+            ApiResponse.sendError(ctx, 401, "UNAUTHORIZED",
+                "Sign-in session is invalid or expired. Please start again.");
             return;
         }
         CompletableFuture.supplyAsync(
@@ -424,20 +459,18 @@ public final class AuthHandler {
                 if (idToken == null) {
                     throw new IllegalStateException("No id_token in response");
                 }
-                // Parse id_token JWT payload for username
-                final String[] parts = idToken.split("\\.");
-                if (parts.length < 2) {
-                    throw new IllegalStateException("Invalid id_token format");
-                }
-                final byte[] payload = Base64.getUrlDecoder().decode(parts[1]);
-                final javax.json.JsonObject claims;
-                try (javax.json.JsonReader reader = Json.createReader(
-                    new StringReader(new String(payload, StandardCharsets.UTF_8)))) {
-                    claims = reader.readObject();
-                }
-                String username = claims.getString("preferred_username", null);
+                // SECURITY (2.2.9, SecOps sso-oidc): the id_token is VERIFIED
+                // — RS256 signature against the provider JWKS, exact issuer,
+                // this client as audience, expiry, and the nonce bound to this
+                // login — before any claim is trusted. Before 2.2.9 the payload
+                // was merely base64-decoded.
+                final com.auth0.jwt.interfaces.DecodedJWT verified =
+                    this.verifyIdToken(type, config, idToken, expectedNonce.get());
+                final String issuer = verified.getIssuer();
+                final String subject = verified.getSubject();
+                String username = verified.getClaim("preferred_username").asString();
                 if (username == null || username.isEmpty()) {
-                    username = claims.getString("sub", null);
+                    username = subject;
                 }
                 if (username == null || username.isEmpty()) {
                     throw new IllegalStateException("Cannot determine username from id_token");
@@ -446,24 +479,13 @@ public final class AuthHandler {
                 // regardless of how Okta capitalizes preferred_username.
                 username = username.toLowerCase(java.util.Locale.ROOT);
                 // Extract email from id_token
-                final String email = claims.getString("email", null);
+                final String email = verified.getClaim("email").asString();
                 // Extract groups from id_token using the configured groups-claim
                 final String groupsClaim = config.getString("groups-claim", "groups");
-                final List<String> groups = new ArrayList<>();
-                if (claims.containsKey(groupsClaim)) {
-                    final javax.json.JsonValue gval = claims.get(groupsClaim);
-                    if (gval.getValueType() == javax.json.JsonValue.ValueType.ARRAY) {
-                        final javax.json.JsonArray garr = claims.getJsonArray(groupsClaim);
-                        for (int gi = 0; gi < garr.size(); gi++) {
-                            groups.add(garr.getString(gi, ""));
-                        }
-                    } else if (gval.getValueType() == javax.json.JsonValue.ValueType.STRING) {
-                        groups.add(claims.getString(groupsClaim));
-                    }
-                } else {
+                final List<String> groups = AuthHandler.groupsFrom(verified, groupsClaim);
+                if (verified.getClaim(groupsClaim).isMissing()) {
                     EcsLogger.warn("com.auto1.pantera.api.v1")
-                        .message("SSO id_token has no groups claim, groups_claim=" + groupsClaim
-                            + " claims_keys=[" + String.join(",", claims.keySet()) + "]")
+                        .message("SSO id_token has no groups claim, groups_claim=" + groupsClaim)
                         .eventCategory("authentication")
                         .eventAction("sso_groups")
                         .field("user.name", username)
@@ -531,6 +553,7 @@ public final class AuthHandler {
                 // the login regardless of what Okta says. This lets admins
                 // revoke a user's access without needing to remove them from
                 // the IdP. New users (no DB row yet) pass this check.
+                final com.auto1.pantera.auth.oidc.SsoIdentityBinding.Decision binding;
                 if (AuthHandler.this.users != null) {
                     final Optional<javax.json.JsonObject> existing =
                         AuthHandler.this.users.get(username);
@@ -548,6 +571,28 @@ public final class AuthHandler {
                             "Access denied: user is disabled"
                         );
                     }
+                    // ACCESS GATE 3 (2.2.9): the login must map to the identity
+                    // (provider, issuer, subject) this username is bound to —
+                    // a colliding IdP username must never inherit an existing
+                    // local or other-provider account's roles.
+                    binding = com.auto1.pantera.auth.oidc.SsoIdentityBinding.resolve(
+                        existing, type, issuer, subject
+                    );
+                    if (binding.kind() == com.auto1.pantera.auth.oidc.SsoIdentityBinding.Kind.REJECT) {
+                        EcsLogger.warn("com.auto1.pantera.api.v1")
+                            .message("SSO login rejected: identity collision — " + binding.reason())
+                            .eventCategory("authentication")
+                            .eventAction("sso_callback")
+                            .eventOutcome("failure")
+                            .field("user.name", username)
+                            .field("log.source", "application")
+                            .log();
+                        throw new IllegalStateException(
+                            "Access denied: username is bound to a different identity"
+                        );
+                    }
+                } else {
+                    binding = null;
                 }
                 // Map Okta/IdP groups to Pantera roles using group-roles config.
                 // Groups with an explicit mapping use the mapped role name.
@@ -592,46 +637,24 @@ public final class AuthHandler {
                         .field("log.source", "application")
                         .log();
                 }
-                for (final String grp : groups) {
-                    if (grp.isEmpty()) {
-                        continue;
-                    }
-                    final String mapped;
-                    if (groupRolesMap.containsKey(grp)) {
-                        mapped = groupRolesMap.get(grp);
-                    } else {
-                        // No explicit mapping — use group name as role name
-                        mapped = grp;
-                    }
-                    roles.add(mapped);
-                    EcsLogger.info("com.auto1.pantera.api.v1")
-                        .message("SSO group mapped to role: group=" + grp
-                            + " role=" + mapped
-                            + " mapping=" + (groupRolesMap.containsKey(grp) ? "explicit" : "auto"))
-                        .eventCategory("authentication")
-                        .eventAction("sso_role_mapping")
-                        .field("user.name", username)
-                        .field("log.source", "application")
-                        .log();
-                }
-                // If Okta sent groups but none mapped to a role AND there's
-                // a configured default-role, fall back to that. Note: if
-                // Okta sent NO groups at all, we deliberately skip default-role
-                // for existing users to preserve any manually-assigned roles.
+                // SECURITY (2.2.9, SecOps sso-oidc): DEFAULT DENY — only
+                // explicitly mapped groups grant roles; an unmapped IdP group
+                // (e.g. one named 'admin') no longer becomes a role. Groups
+                // present but none mapped fall to the configured default role.
+                // If the IdP sent NO groups at all, default-role is skipped so
+                // an existing user's manually-assigned roles are preserved.
                 final boolean idTokenHasGroups = !groups.isEmpty();
-                if (roles.isEmpty() && idTokenHasGroups) {
-                    final String defaultRole = config.getString("default-role", "reader");
-                    if (defaultRole != null && !defaultRole.isEmpty()) {
-                        roles.add(defaultRole);
-                        EcsLogger.info("com.auto1.pantera.api.v1")
-                            .message("SSO using default role (no group match): default_role=" + defaultRole)
-                            .eventCategory("authentication")
-                            .eventAction("sso_role_mapping")
-                            .field("user.name", username)
-                            .field("log.source", "application")
-                            .log();
-                    }
-                }
+                roles.addAll(com.auto1.pantera.auth.oidc.SsoRoleMapper.map(
+                    groups, groupRolesMap, config.getString("default-role", "reader")
+                ));
+                EcsLogger.info("com.auto1.pantera.api.v1")
+                    .message("SSO roles resolved (default-deny mapping): roles=["
+                        + String.join(",", roles) + "]")
+                    .eventCategory("authentication")
+                    .eventAction("sso_role_mapping")
+                    .field("user.name", username)
+                    .field("log.source", "application")
+                    .log();
                 // Provision user in the database/storage.
                 //
                 // CRITICAL: only include "roles" in the userInfo when Okta
@@ -642,7 +665,9 @@ public final class AuthHandler {
                 // existing role assignments are preserved.
                 if (AuthHandler.this.users != null) {
                     final javax.json.JsonObjectBuilder userInfo = Json.createObjectBuilder()
-                        .add("type", type);
+                        .add("type", type)
+                        .add(com.auto1.pantera.auth.oidc.SsoIdentityBinding.SUBJECT_KEY,
+                            binding.subject());
                     if (idTokenHasGroups) {
                         final javax.json.JsonArrayBuilder rolesArr = Json.createArrayBuilder();
                         for (final String role : roles) {
@@ -732,6 +757,99 @@ public final class AuthHandler {
                 }
             }
         });
+    }
+
+    /**
+     * Verify an OIDC id_token against the provider's JWKS, issuer, this
+     * client's audience, expiry and the login's nonce. Fails closed on any
+     * error (SecOps sso-oidc).
+     *
+     * @param type Provider type (okta / keycloak)
+     * @param config Provider config
+     * @param idToken Compact JWS from the token endpoint
+     * @param nonce Nonce issued at redirect time
+     * @return Verified token
+     */
+    private com.auth0.jwt.interfaces.DecodedJWT verifyIdToken(
+        final String type, final javax.json.JsonObject config,
+        final String idToken, final String nonce
+    ) {
+        final String[] endpoints = AuthHandler.oidcEndpoints(type, config);
+        final String expectedIssuer = config.getString("expected-issuer", endpoints[0]);
+        final String jwksUri = config.getString("jwks-uri", endpoints[1]);
+        final String clientId = config.getString("client-id", "");
+        final com.auto1.pantera.auth.oidc.HttpJwkSource keys = this.jwkSources
+            .computeIfAbsent(jwksUri, uri ->
+                new com.auto1.pantera.auth.oidc.HttpJwkSource(URI.create(uri))
+            );
+        try {
+            return new com.auto1.pantera.auth.oidc.OidcIdTokenVerifier(
+                keys, expectedIssuer, clientId
+            ).verify(idToken, nonce);
+        } catch (final com.auto1.pantera.auth.oidc.OidcVerificationException ex) {
+            EcsLogger.error("com.auto1.pantera.api.v1")
+                .message("SSO id_token verification failed: " + ex.getMessage())
+                .eventCategory("authentication")
+                .eventAction("sso_callback")
+                .eventOutcome("failure")
+                .field("log.source", "application")
+                .log();
+            throw new IllegalStateException("id_token verification failed", ex);
+        }
+    }
+
+    /**
+     * Expected issuer and JWKS endpoint for a provider type, derived from the
+     * same base the token endpoint uses.
+     *
+     * @param type Provider type
+     * @param config Provider config
+     * @return {@code [issuer, jwksUri]}
+     */
+    private static String[] oidcEndpoints(final String type, final javax.json.JsonObject config) {
+        if ("okta".equals(type)) {
+            final String issuer = config.getString("issuer", "");
+            final String base = issuer.endsWith("/")
+                ? issuer.substring(0, issuer.length() - 1) : issuer;
+            final String oidcBase = base.contains("/oauth2") ? base : base + "/oauth2";
+            return new String[]{base, oidcBase + "/v1/keys"};
+        }
+        if ("keycloak".equals(type)) {
+            final String url = config.getString("url", "");
+            final String realm = config.getString("realm", "");
+            final String base = url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
+            final String realmBase = base + "/realms/" + realm;
+            return new String[]{realmBase, realmBase + "/protocol/openid-connect/certs"};
+        }
+        throw new IllegalStateException("Unsupported provider type: " + type);
+    }
+
+    /**
+     * Groups from a verified id_token claim (array or single string).
+     *
+     * @param jwt Verified token
+     * @param claim Groups claim name
+     * @return Groups (never null; empty when absent)
+     */
+    private static List<String> groupsFrom(
+        final com.auth0.jwt.interfaces.DecodedJWT jwt, final String claim
+    ) {
+        final com.auth0.jwt.interfaces.Claim value = jwt.getClaim(claim);
+        final List<String> groups = new ArrayList<>();
+        if (value.isMissing() || value.isNull()) {
+            return groups;
+        }
+        final List<String> list = value.asList(String.class);
+        if (list != null) {
+            for (final String group : list) {
+                if (group != null && !group.isEmpty()) {
+                    groups.add(group);
+                }
+            }
+        } else if (value.asString() != null && !value.asString().isEmpty()) {
+            groups.add(value.asString());
+        }
+        return groups;
     }
 
     /**

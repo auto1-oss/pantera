@@ -72,11 +72,16 @@ export async function exchangeOAuthCode(
   code: string,
   provider: string,
   callbackUrl: string,
+  state: string,
 ): Promise<TokenResponse> {
+  // `state` binds this exchange to the login the server started: the
+  // server consumes the nonce it issued for this state and requires the
+  // id_token to carry it (2.2.9).
   const { data } = await getApiClient().post<TokenResponse>('/auth/callback', {
     code,
     provider,
     callback_url: callbackUrl,
+    state,
   })
   return data
 }
