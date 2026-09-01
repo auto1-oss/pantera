@@ -1,5 +1,12 @@
 # Changelog
 
+## Version 2.2.9
+
+### 🔧 Bug fixes
+
+- **`npm unpublish <pkg>@<version>` no longer fails with `409 Conflict` after removing the version** — the CLI finishes a single-version unpublish by deleting the version's tarball at `<pkg>/-/<file>.tgz/-rev/<revision>`, and that request was handled by the whole-package unpublish path, which read the tarball path as the package name, computed a revision for a package that does not exist, and rejected the client's current revision as stale. The preceding PUT had already removed the version from the packument, so the CLI reported failure while the registry had in fact unpublished the version and left the tarball blob orphaned in storage. The tarball step is now recognised, validated against the real package's revision with the same 409/428/404 semantics as force-unpublish, and removes only that blob.
+  ([@aydasraf](https://github.com/aydasraf))
+
 ## Version 2.2.8
 
 ### 🌟 New features
