@@ -18,6 +18,7 @@ import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.asto.SubStorage;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.ResponseException;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.importer.api.ChecksumPolicy;
@@ -110,6 +111,35 @@ final class ImportServiceTest {
             )
         );
         Assertions.assertTrue(this.events.isEmpty());
+    }
+
+    @Test
+    void callerSuppliedRepositoryTypeCannotOverrideTheConfiguredType() {
+        // SECURITY (2.2.9): the repository's type comes from its authoritative
+        // configuration ("file" here). Before the fix the X-Artipie-Repo-Type
+        // header was trusted verbatim and drove path rewriting, digest policy,
+        // shard writers and the metadata-regeneration switch — so declaring
+        // "gem" against a file repository routed the import into the RubyGems
+        // (JRuby) indexer. A mismatched declaration must be refused up front.
+        final Headers headers = new Headers()
+            .add(ImportHeaders.REPO_TYPE, "gem")
+            .add(ImportHeaders.IDEMPOTENCY_KEY, "id-type-confusion")
+            .add(ImportHeaders.CHECKSUM_POLICY, ChecksumPolicy.METADATA.name());
+        final ImportRequest request = ImportRequest.parse(
+            new RequestLine(RqMethod.PUT, "/.import/my-repo/gems/evil-1.0.0.gem"),
+            headers
+        );
+        final ResponseException rejected = Assertions.assertThrows(
+            ResponseException.class,
+            () -> this.service.importArtifact(
+                request, new Content.From("x".getBytes(StandardCharsets.UTF_8))
+            ).toCompletableFuture().join()
+        );
+        Assertions.assertEquals(400, rejected.response().status().code());
+        Assertions.assertFalse(
+            this.repoStorage.exists(new Key.From("gems/evil-1.0.0.gem")).join(),
+            "nothing may be written for a type-confused import"
+        );
     }
 
     private static RepoConfig repoConfig(final Storage storage) throws Exception {
