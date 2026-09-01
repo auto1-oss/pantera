@@ -14,6 +14,9 @@
 
 ### 🔧 Bug fixes
 
+- **A failed request is now visible in the access log** — the access record for a request that ended in an unhandled server-side error carried no `http.response.status_code`, so it never matched a 5xx query and was emitted below ERROR. Every dashboard and alert counting server errors from the access log therefore read zero during an outage. The record now carries status 500 and `event.outcome: failure`.
+  ([@aydasraf](https://github.com/aydasraf))
+
 - **An npm install-v1 (abbreviated) metadata request can no longer be answered with the full packument, or vice versa** — both body shapes of a package shared one filtered-envelope cache key, so whichever was filtered first was served to both kinds of request for the envelope's TTL. Envelope keys now carry a variant segment (`full` / `abbreviated`), and block-state changes invalidate every variant of the package.
   ([@aydasraf](https://github.com/aydasraf))
 
