@@ -61,3 +61,6 @@ docs/superpowers/
 
 # build.sh runtime staging (created when building the itcase client images)
 test_images/_context/
+
+# Revert scripts written by scripts/audit-repo-base-urls.sh
+pantera-url-audit-backups/
