@@ -119,7 +119,8 @@ public final class UploadSlice implements Slice {
                             final ArtifactEvent event = new ArtifactEvent(
                                 UploadSlice.REPO_TYPE, this.rname,
                                 new Login(headers).getValue(),
-                                info.packageName(), info.packageVersion(), info.tarSize()
+                                info.packageName(), info.packageVersion(), info.tarSize(),
+                                System.currentTimeMillis(), null, info.packagePath()
                             );
                             queue.add(event);
                             return this.syncIndex.recordSync(event);

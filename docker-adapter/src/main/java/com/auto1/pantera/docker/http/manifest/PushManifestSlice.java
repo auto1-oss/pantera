@@ -83,7 +83,9 @@ public class PushManifestSlice extends DockerActionSlice {
                                 docker.registryName(),
                                 new Login(headers).getValue(),
                                 request.name(), ref.digest(),
-                                size
+                                size, System.currentTimeMillis(), null,
+                                com.auto1.pantera.docker.asto.Layout
+                                    .manifest(request.name(), ref).string()
                             );
                             if (queue != null) {
                                 queue.add(event);

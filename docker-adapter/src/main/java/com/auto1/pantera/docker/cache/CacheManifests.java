@@ -369,7 +369,9 @@ public final class CacheManifests implements Manifests {
                             ref.digest(),
                             size,
                             created,
-                            effectiveRelease.orElse(null)
+                            effectiveRelease.orElse(null),
+                            com.auto1.pantera.docker.asto.Layout
+                                .manifest(this.name, ref).string()
                         ).withContext(traceId, clientIp)
                     );
                 });

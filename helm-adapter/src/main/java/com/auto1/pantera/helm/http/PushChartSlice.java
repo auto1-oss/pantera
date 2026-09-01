@@ -118,7 +118,9 @@ final class PushChartSlice implements Slice {
                                     final ArtifactEvent event = new ArtifactEvent(
                                         PushChartSlice.REPO_TYPE, this.rname,
                                         new Login(headers).getValue(),
-                                        chart.name(), chart.version(), tgz.size()
+                                        chart.name(), chart.version(), tgz.size(),
+                                        System.currentTimeMillis(), null,
+                                        artifactKey.string()
                                     );
                                     this.events.ifPresent(queue -> queue.add(event));
                                     com.auto1.pantera.http.cache.NegativeCacheRegistry.instance()

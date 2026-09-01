@@ -214,7 +214,8 @@ final class GoUploadSlice implements Slice {
             .thenCompose(size -> {
                 final ArtifactEvent event = new ArtifactEvent(
                     REPO_TYPE, this.repo, owner(headers),
-                    module, version, size
+                    module, version, size,
+                    System.currentTimeMillis(), null, key.string()
                 );
                 this.events.ifPresent(
                     queue -> queue.add( // ok: unbounded ConcurrentLinkedDeque

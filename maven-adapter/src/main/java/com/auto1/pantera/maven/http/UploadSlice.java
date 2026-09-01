@@ -586,7 +586,11 @@ public final class UploadSlice implements Slice {
             version,
             size,
             System.currentTimeMillis(),
-            (Long) null  // No release date for uploads
+            null,  // No release date for uploads
+            // The version directory, matching what MavenProxyPackageProcessor
+            // records and what the UI browses to verbatim. Deliberately not
+            // the file key: for maven the browse target is the directory.
+            pkg
         );
         final ArtifactEvent event = sha256 == null ? base : base.withChecksum(sha256);
         // Async path: queue for audit/metrics consumers (DbConsumer batches).

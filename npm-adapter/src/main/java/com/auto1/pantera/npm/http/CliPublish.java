@@ -87,7 +87,14 @@ public final class CliPublish implements Publish {
                 .thenApply(
                     size -> new PackageInfo(
                         prefix.toString(),
-                        CliPublish.packageVersion(uploaded), size
+                        CliPublish.packageVersion(uploaded), size,
+                        new Key.From(
+                            prefix.string(), "-",
+                            String.format(
+                                "%s-%s.tgz", prefix.string(),
+                                CliPublish.packageVersion(uploaded)
+                            )
+                        ).string()
                     )
                 )
         );

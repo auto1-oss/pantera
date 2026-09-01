@@ -109,7 +109,8 @@ public final class AstoRepository implements Repository {
                                                     .FilteredMetadataCacheRegistry.instance()
                                                     .invalidateAfterUpload("nuget", pkgId);
                                                 return new PackageInfo(
-                                                    nuspec.id(), nuspec.version(), size
+                                                    nuspec.id(), nuspec.version(), size,
+                                                    id.nupkgKey().string()
                                                 );
                                             }
                                         )

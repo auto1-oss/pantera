@@ -319,7 +319,8 @@ final class AddArchiveSlice implements Slice {
                             version,
                             size,
                             created,
-                            (Long) null  // No release date for local uploads
+                            null,  // No release date for local uploads
+                            archive.name().artifact().string()
                         );
                         this.events.ifPresent(queue -> queue.add(event));
                         EcsLogger.info("com.auto1.pantera.composer")

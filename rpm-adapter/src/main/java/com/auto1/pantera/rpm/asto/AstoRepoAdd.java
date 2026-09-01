@@ -83,7 +83,11 @@ public final class AstoRepoAdd {
                 .thenCompose(this::generateRepomdAndMoveXmls)
                 .thenApply(
                     nothing -> list.stream()
-                        .map(info -> new PackageInfo(new HeaderTags(info), info.size()))
+                        .map(
+                            info -> new PackageInfo(
+                                new HeaderTags(info), info.size(), info.href()
+                            )
+                        )
                         .collect(Collectors.toList())
                 )
         );

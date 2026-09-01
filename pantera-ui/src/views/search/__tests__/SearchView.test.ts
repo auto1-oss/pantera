@@ -324,5 +324,67 @@ describe('SearchView', () => {
       const link = wrapper.findComponent(RouterLinkStub)
       expect(link.props('to')).toBe(`/repositories/${repo}?path=${expected}&from=search`)
     })
+
+    // A generic-file artifact_path is the DOTTED display name: the writer
+    // flattens every separator into a dot, and that cannot be reversed
+    // because filenames and versions carry dots of their own. It holds no
+    // slashes, so the pre-fix parentDir() guess returned '' and every result
+    // browsed to the repository root. path_prefix is the real key.
+    it('file repo browses to the real directory recorded in path_prefix', async () => {
+      const wrapper = await mountWithResult(makeResult({
+        repo_type: 'file',
+        repo_name: 'services',
+        artifact_path:
+          'wkda.services.b2x-vehicle-store-service.1.0.0-SNAPSHOT.b2x-vehicle-store-service-1.0.0-20210414.085244-1.pom',
+        version: '1.0.0-SNAPSHOT',
+        path_prefix:
+          'wkda/services/b2x-vehicle-store-service/1.0.0-SNAPSHOT/b2x-vehicle-store-service-1.0.0-20210414.085244-1.pom',
+      }))
+
+      const link = wrapper.findComponent(RouterLinkStub)
+      expect(link.props('to')).toBe(
+        '/repositories/services?path=%2Fwkda%2Fservices%2Fb2x-vehicle-store-service%2F1.0.0-SNAPSHOT&from=search',
+      )
+    })
+
+    it('file repo with a leading slash in path_prefix does not double the root', async () => {
+      const wrapper = await mountWithResult(makeResult({
+        repo_type: 'file-proxy',
+        repo_name: 'files',
+        artifact_path: 'a.b.thing-1.0.jar',
+        path_prefix: '/a/b/thing-1.0.jar',
+      }))
+
+      const link = wrapper.findComponent(RouterLinkStub)
+      expect(link.props('to')).toBe('/repositories/files?path=%2Fa%2Fb&from=search')
+    })
+
+    it('file repo falls back to the historical guess without path_prefix', async () => {
+      const wrapper = await mountWithResult(makeResult({
+        repo_type: 'file',
+        repo_name: 'services',
+        artifact_path: 'wkda.services.thing.pom',
+      }))
+
+      const link = wrapper.findComponent(RouterLinkStub)
+      expect(link.props('to')).toBe('/repositories/services?path=%2F&from=search')
+    })
+
+    // helm/debian/rpm artifact_path is a package name or a name_arch
+    // composite, never a directory, so these landed on the root too.
+    it.each([
+      ['helm', 'charts', 'nginx', 'nginx/nginx-1.2.3.tgz', '%2Fnginx'],
+      ['debian', 'deb', 'nginx_amd64', 'pool/main/n/nginx/nginx_1.2.3_amd64.deb', '%2Fpool%2Fmain%2Fn%2Fnginx'],
+    ])('%s browses to the directory from path_prefix', async (rtype, repo, name, prefix, expected) => {
+      const wrapper = await mountWithResult(makeResult({
+        repo_type: rtype,
+        repo_name: repo,
+        artifact_path: name,
+        path_prefix: prefix,
+      }))
+
+      const link = wrapper.findComponent(RouterLinkStub)
+      expect(link.props('to')).toBe(`/repositories/${repo}?path=${expected}&from=search`)
+    })
   })
 })

@@ -128,7 +128,9 @@ public final class RpmUpload implements Slice {
                                                 RpmUpload.REPO_TYPE, this.config.name(),
                                                 new Login(headers).getValue(),
                                                 info.name(), info.version(),
-                                                info.packageSize()
+                                                info.packageSize(),
+                                                System.currentTimeMillis(), null,
+                                                info.packagePath()
                                             );
                                             this.events.ifPresent(queue -> queue.add(event));
                                             syncs.add(this.syncIndex.recordSync(event));
