@@ -10,6 +10,9 @@
  */
 package com.auto1.pantera.importer;
 
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.ResponseException;
+import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.importer.api.ChecksumPolicy;
 import com.auto1.pantera.importer.api.DigestType;
 import java.sql.Connection;
@@ -19,6 +22,7 @@ import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import javax.sql.DataSource;
 
@@ -55,6 +59,7 @@ public final class ImportSessionStore {
             final long now = System.currentTimeMillis();
             insertIfAbsent(conn, request, now);
             final ImportSession existing = selectForUpdate(conn, request.idempotency());
+            assertBoundTo(existing, request);
             final ImportSession session;
             if (existing.status() == ImportSessionStatus.IN_PROGRESS) {
                 // Only update metadata and bump attempt when actively in progress.
@@ -142,8 +147,8 @@ public final class ImportSessionStore {
                 "INSERT INTO import_sessions(",
                 " idempotency_key, repo_name, repo_type, artifact_path, artifact_name, artifact_version,",
                 " size_bytes, checksum_sha1, checksum_sha256, checksum_md5, checksum_policy, status,",
-                " attempt_count, created_at, updated_at",
-                ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,?,?) ON CONFLICT (idempotency_key) DO NOTHING"
+                " attempt_count, created_at, updated_at, caller",
+                ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?) ON CONFLICT (idempotency_key) DO NOTHING"
             )
         )) {
             int idx = 1;
@@ -164,8 +169,42 @@ public final class ImportSessionStore {
             stmt.setString(idx++, request.policy().name());
             stmt.setString(idx++, ImportSessionStatus.IN_PROGRESS.name());
             stmt.setTimestamp(idx++, new Timestamp(now));
-            stmt.setTimestamp(idx, new Timestamp(now));
+            stmt.setTimestamp(idx++, new Timestamp(now));
+            stmt.setString(idx, request.caller());
             stmt.executeUpdate();
+        }
+    }
+
+    /**
+     * Refuse to touch a session through an idempotency key that belongs to a
+     * different import target or a different principal.
+     *
+     * <p>SECURITY (2.2.9): the store keyed sessions on the idempotency key
+     * alone and returned whatever terminal state it found, so a key created
+     * for repo A / path P by caller X could be replayed by anyone, against
+     * any target, to inherit or short-circuit that session (the importer
+     * answers ALREADY_PRESENT for a COMPLETED session without importing).
+     * The key is now a capability bound to (repository, path, caller).
+     * Rows written before the caller column existed have no caller and are
+     * matched on target only.</p>
+     *
+     * @param existing Locked session row for the key
+     * @param request Incoming request presenting the key
+     */
+    private static void assertBoundTo(final ImportSession existing, final ImportRequest request) {
+        final boolean sameTarget = Objects.equals(existing.repo(), request.repo())
+            && Objects.equals(existing.path(), request.path());
+        final boolean sameCaller = existing.caller() == null
+            || existing.caller().isEmpty()
+            || existing.caller().equals(request.caller());
+        if (!sameTarget || !sameCaller) {
+            throw new ResponseException(
+                ResponseBuilder.from(RsStatus.CONFLICT)
+                    .textBody(
+                        "Idempotency key is already bound to a different import target or caller"
+                    )
+                    .build()
+            );
         }
     }
 
@@ -184,7 +223,7 @@ public final class ImportSessionStore {
                 " ",
                 "SELECT id, idempotency_key, status, repo_name, repo_type, artifact_path, artifact_name,",
                 " artifact_version, size_bytes, checksum_sha1, checksum_sha256, checksum_md5,",
-                " checksum_policy, attempt_count",
+                " checksum_policy, attempt_count, caller",
                 " FROM import_sessions WHERE idempotency_key = ? FOR UPDATE"
             )
         )) {
@@ -249,7 +288,7 @@ public final class ImportSessionStore {
         try (PreparedStatement stmt = conn.prepareStatement(
             "SELECT id, idempotency_key, status, repo_name, repo_type, artifact_path, artifact_name," +
                 " artifact_version, size_bytes, checksum_sha1, checksum_sha256, checksum_md5," +
-                " checksum_policy, attempt_count FROM import_sessions WHERE id = ?"
+                " checksum_policy, attempt_count, caller FROM import_sessions WHERE id = ?"
         )) {
             stmt.setLong(1, existing.id());
             try (ResultSet rs = stmt.executeQuery()) {
@@ -333,7 +372,8 @@ public final class ImportSessionStore {
             rs.getString("checksum_sha256"),
             rs.getString("checksum_md5"),
             ChecksumPolicy.valueOf(rs.getString("checksum_policy")),
-            rs.getInt("attempt_count")
+            rs.getInt("attempt_count"),
+            rs.getString("caller")
         );
     }
 

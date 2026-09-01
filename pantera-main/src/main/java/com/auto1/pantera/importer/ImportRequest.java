@@ -11,6 +11,7 @@
 package com.auto1.pantera.importer;
 
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.ResponseException;
 import com.auto1.pantera.http.rq.RequestLine;
@@ -239,6 +240,25 @@ public final class ImportRequest {
         return this.repoType;
     }
 
+    /**
+     * Copy of this request bound to the given repository type.
+     *
+     * <p>SECURITY (2.2.9): the importer rebinds every request to the type
+     * from the target repository's authoritative configuration (see
+     * {@link ImportRepoType}) so the caller's declared type never drives
+     * format-specific behaviour.</p>
+     *
+     * @param type Authoritative repository type
+     * @return Rebound request
+     */
+    ImportRequest withRepoType(final String type) {
+        return new ImportRequest(
+            this.repo, type, this.path, this.artifact, this.version, this.size,
+            this.owner, this.created, this.release, this.sha1, this.sha256, this.md5,
+            this.idempotency, this.policy, this.metadata, this.headers
+        );
+    }
+
     public String path() {
         return this.path;
     }
@@ -281,6 +301,18 @@ public final class ImportRequest {
 
     public String idempotency() {
         return this.idempotency;
+    }
+
+    /**
+     * The authenticated principal this import runs as, resolved from the
+     * {@code pantera_login} header the authorization slice stamps after a
+     * successful credential check (never from a caller-supplied metadata
+     * header). Used to bind the idempotency key to its creator.
+     *
+     * @return Caller name
+     */
+    public String caller() {
+        return new Login(this.headers).getValue();
     }
 
     public ChecksumPolicy policy() {
