@@ -77,6 +77,12 @@ public final class AuthHandler {
     private final UserTokenDao tokenDao;
     private final AuthSettingsDao settingsDao;
 
+    /**
+     * Per-(username, client IP) login attempt throttle (SecOps import-misc).
+     */
+    private final com.auto1.pantera.auth.LoginThrottle loginThrottle =
+        new com.auto1.pantera.auth.LoginThrottle();
+
     public AuthHandler(final Tokens tokens, final Authentication auth,
         final CrudUsers users, final Policy<?> policy,
         final AuthProviderDao providerDao, final UserTokenDao tokenDao,
@@ -140,6 +146,16 @@ public final class AuthHandler {
         final String name = body.getString("name");
         final String pass = body.getString("pass");
         final String mfa = body.getString("mfa_code");
+        // SECURITY (2.2.9, SecOps import-misc): throttle online password
+        // guessing per (username, client IP). Never reveals whether the user
+        // exists — an unknown user is throttled the same as a real one.
+        final String throttleKey = name + "|" + clientIp(ctx);
+        if (this.loginThrottle.isThrottled(throttleKey)) {
+            ctx.response().putHeader("Retry-After", "900");
+            ApiResponse.sendError(ctx, 429, "TOO_MANY_REQUESTS",
+                "Too many sign-in attempts. Please wait and try again.");
+            return;
+        }
         CompletableFuture.supplyAsync(
             (java.util.function.Supplier<Optional<AuthUser>>) () -> {
                 // Also set user.name in MDC so logs from inside the
@@ -161,6 +177,7 @@ public final class AuthHandler {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
                     "Sign-in is temporarily unavailable. Please try again.");
             } else if (user.isPresent()) {
+                this.loginThrottle.recordSuccess(throttleKey);
                 final Tokens.TokenPair pair = this.tokens.generatePair(user.get());
                 ctx.response()
                     .setStatusCode(200)
@@ -171,6 +188,7 @@ public final class AuthHandler {
                         .put("expires_in", pair.expiresIn())
                         .encode());
             } else {
+                this.loginThrottle.recordFailure(throttleKey);
                 // Generic message — never disclose whether the user
                 // exists, the password is wrong, or MFA failed. Detail
                 // is in the server logs from the auth chain.
@@ -726,11 +744,25 @@ public final class AuthHandler {
             return null; // NOPMD ReturnEmptyCollectionRatherThanNull - JsonObject is a single record, not a collection; null signals "no provider configured"
         }
         for (final javax.json.JsonObject prov : this.providerDao.list()) {
-            if (name.equals(prov.getString("type", ""))) {
+            // SECURITY (2.2.9, SecOps sso-oidc): a DISABLED provider must not
+            // be usable for login — match on type AND the enabled flag.
+            if (name.equals(prov.getString("type", "")) && this.providerEnabled(prov)) {
                 return prov;
             }
         }
         return null; // NOPMD ReturnEmptyCollectionRatherThanNull - JsonObject is a single record, not a collection; null signals "not found"
+    }
+
+    /**
+     * Whether an SSO provider record is enabled (and non-null). A provider
+     * with {@code enabled=false} must not authenticate anyone; a record
+     * without the flag defaults to enabled for back-compat.
+     *
+     * @param prov Provider record, or {@code null}
+     * @return {@code true} iff the provider may be used for login
+     */
+    boolean providerEnabled(final javax.json.JsonObject prov) {
+        return prov != null && prov.getBoolean("enabled", true);
     }
 
     /**
@@ -1095,5 +1127,30 @@ public final class AuthHandler {
             }
         }
         return result;
+    }
+
+    /**
+     * Best-effort client IP for login throttling (SecOps import-misc).
+     * Honours forwarding hints when present, else the socket peer.
+     *
+     * @param ctx Routing context
+     * @return Client IP, or {@code null} when indeterminable
+     */
+    private static String clientIp(final RoutingContext ctx) {
+        final io.vertx.core.http.HttpServerRequest req = ctx.request();
+        String hint = req.getHeader("X-Forwarded-For");
+        if (hint != null && hint.contains(",")) {
+            hint = hint.substring(0, hint.indexOf(',')).trim();
+        }
+        if (hint == null || hint.isBlank()) {
+            hint = req.getHeader("X-Real-IP");
+        }
+        if (hint == null || hint.isBlank()) {
+            final io.vertx.core.net.SocketAddress remote = req.remoteAddress();
+            if (remote != null) {
+                hint = remote.host();
+            }
+        }
+        return hint != null && !hint.isBlank() ? hint : null;
     }
 }

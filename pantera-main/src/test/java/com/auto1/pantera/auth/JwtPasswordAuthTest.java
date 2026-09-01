@@ -228,7 +228,8 @@ class JwtPasswordAuthTest {
     void defaultContextWhenNotInToken() {
         final String username = "testuser";
         final String token = this.jwtProvider.generateToken(
-            new JsonObject().put(AuthTokenRest.SUB, username),
+            new JsonObject().put(AuthTokenRest.SUB, username)
+                .put(AuthTokenRest.TYPE, "api"),
             new JWTOptions().setAlgorithm("RS256")
         );
         final Optional<AuthUser> result = this.auth.user(username, token);
@@ -241,10 +242,14 @@ class JwtPasswordAuthTest {
     // ─── helpers ─────────────────────────────────────────────────────────────
 
     private String mint(final String subject, final String context) {
+        // Real Pantera tokens always carry a `type` claim (the Bearer path
+        // requires it); 2.2.9 makes the jwt-password path require it too, so
+        // these fixtures mint a realistic API token.
         return this.jwtProvider.generateToken(
             new JsonObject()
                 .put(AuthTokenRest.SUB, subject)
-                .put(AuthTokenRest.CONTEXT, context),
+                .put(AuthTokenRest.CONTEXT, context)
+                .put(AuthTokenRest.TYPE, "api"),
             new JWTOptions().setAlgorithm("RS256")
         );
     }
