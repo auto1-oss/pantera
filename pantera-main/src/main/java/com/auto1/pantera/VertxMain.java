@@ -343,8 +343,14 @@ public final class VertxMain {
         // subjected to the same checks as a Bearer token.
         com.auto1.pantera.auth.TokenRevocationRegistry.instance()
             .install(revocationBlocklist, userTokenDao, enabledCheck);
+        // SECURITY (2.2.9, SecOps token-revocation #9): the issuer must read
+        // the admin-configured access/refresh TTLs (AuthSettingsDao) — it was
+        // wired with null, so the admin API's TTL settings never applied.
+        final com.auto1.pantera.db.dao.AuthSettingsDao authSettingsDao = sharedDs
+            .map(com.auto1.pantera.db.dao.AuthSettingsDao::new)
+            .orElse(null);
         final com.auto1.pantera.auth.JwtTokens jwtTokens = new com.auto1.pantera.auth.JwtTokens(
-            rsaKeys.privateKey(), rsaKeys.publicKey(), userTokenDao, null,
+            rsaKeys.privateKey(), rsaKeys.publicKey(), userTokenDao, authSettingsDao,
             revocationBlocklist, enabledCheck
         );
         // Install the circuit-breaker settings loader BEFORE constructing
