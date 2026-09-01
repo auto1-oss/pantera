@@ -11,6 +11,7 @@
 package com.auto1.pantera.api.v1;
 
 import com.auto1.pantera.api.AuthzHandler;
+import com.auto1.pantera.api.RepoAuthzHandler;
 import com.auto1.pantera.api.ManageStorageAliases;
 import com.auto1.pantera.api.perms.ApiAliasPermission;
 import com.auto1.pantera.asto.Key;
@@ -18,6 +19,7 @@ import com.auto1.pantera.asto.blocking.BlockingStorage;
 import com.auto1.pantera.cache.StoragesCache;
 import com.auto1.pantera.db.dao.StorageAliasDao;
 import com.auto1.pantera.http.context.HandlerExecutor;
+import com.auto1.pantera.security.perms.Action;
 import com.auto1.pantera.security.policy.Policy;
 import io.vertx.core.json.JsonArray;
 import io.vertx.ext.web.Router;
@@ -94,17 +96,31 @@ public final class StorageAliasHandler {
         router.delete("/api/v1/storages/:name")
             .handler(new AuthzHandler(this.policy, delete))
             .handler(this::deleteGlobalAlias);
+        // SECURITY (2.2.9, storage-alias-authz): the per-repository routes
+        // name a repository, so they also require the per-repo grant — an
+        // alias mutation rewrites that repository's backing storage. The
+        // PUT was composed with READ (its global sibling above correctly uses
+        // CREATE), letting a read-only alias principal persist backend config.
+        final RepoAuthzHandler repoRead =
+            new RepoAuthzHandler(this.policy, "name", Action.Standard.READ);
+        final RepoAuthzHandler repoWrite =
+            new RepoAuthzHandler(this.policy, "name", Action.Standard.WRITE);
+        final RepoAuthzHandler repoDelete =
+            new RepoAuthzHandler(this.policy, "name", Action.Standard.DELETE);
         // GET /api/v1/repositories/:name/storages — list per-repo aliases
         router.get("/api/v1/repositories/:name/storages")
             .handler(new AuthzHandler(this.policy, read))
+            .handler(repoRead)
             .handler(this::listRepoAliases);
         // PUT /api/v1/repositories/:name/storages/:alias — create/update repo alias
         router.put("/api/v1/repositories/:name/storages/:alias")
-            .handler(new AuthzHandler(this.policy, read))
+            .handler(new AuthzHandler(this.policy, create))
+            .handler(repoWrite)
             .handler(this::putRepoAlias);
         // DELETE /api/v1/repositories/:name/storages/:alias — delete repo alias
         router.delete("/api/v1/repositories/:name/storages/:alias")
             .handler(new AuthzHandler(this.policy, delete))
+            .handler(repoDelete)
             .handler(this::deleteRepoAlias);
     }
 

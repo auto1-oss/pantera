@@ -1189,7 +1189,7 @@ curl -X DELETE http://localhost:8086/api/v1/storages/old-storage \
 List storage aliases scoped to a specific repository.
 
 **Authentication:** JWT Bearer token required.
-**Permission:** `api_alias_permissions:read`
+**Permission:** `api_alias_permissions:read` **and** `adapter_basic_permissions` `read` on `:name` (2.2.9 — per-repository scope is enforced in addition to the global bit).
 
 **Response (200):**
 
@@ -1219,7 +1219,7 @@ curl http://localhost:8086/api/v1/repositories/maven-central/storages \
 Create or update a storage alias scoped to a repository.
 
 **Authentication:** JWT Bearer token required.
-**Permission:** `api_alias_permissions:read`
+**Permission:** `api_alias_permissions:create` **and** `adapter_basic_permissions` `write` on `:name` (2.2.9 — this route previously accepted the read-only alias grant; an alias write rewrites the repository's backing storage and now requires the create bit plus repository-scoped write).
 
 **Request Body:**
 
@@ -1248,7 +1248,7 @@ curl -X PUT http://localhost:8086/api/v1/repositories/maven-central/storages/loc
 Delete a repository-scoped storage alias.
 
 **Authentication:** JWT Bearer token required.
-**Permission:** `api_alias_permissions:delete`
+**Permission:** `api_alias_permissions:delete` **and** `adapter_basic_permissions` `delete` on `:name` (2.2.9).
 
 **Response (200):** Empty body on success.
 
