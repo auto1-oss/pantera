@@ -380,6 +380,36 @@ public class MetadataCache {
         final Key key,
         final ConditionalRemote remote
     ) {
+        return this.load(key, remote, MetadataCache.NO_HOOK);
+    }
+
+    /**
+     * Conditional load with a refreshed-content hook.
+     *
+     * <p>Same behaviour as {@link #load(Key, ConditionalRemote)}, plus:
+     * {@code onModified} runs after a 200 response replaces the cached
+     * bytes — cold miss, hard-TTL fall-through, or stale-window background
+     * refresh alike. A 304 (validator match) and a 404 (entry cleared) do
+     * NOT fire it. The caller uses it to drop derived caches keyed by
+     * package rather than by content — the cooldown filtered-metadata
+     * envelope above all: without this hook, a refreshed
+     * {@code maven-metadata.xml} kept serving the pre-refresh filtered
+     * version list out of the envelope cache for the envelope's own TTL
+     * (the same class of bug as the npm 2.2.6 stale-packument incident).
+     * The hook must never throw into the serve path; throwables are
+     * swallowed and logged by the commit point.</p>
+     *
+     * @param key Metadata key.
+     * @param remote Conditional loader.
+     * @param onModified Runs after new bytes are committed to the cache.
+     * @return Future with cached or fetched content; empty when upstream
+     *         returns 404 and there is no usable cached entry.
+     */
+    public CompletableFuture<Optional<Content>> load(
+        final Key key,
+        final ConditionalRemote remote,
+        final Runnable onModified
+    ) {
         final CachedMetadata l1Cached = this.cache.getIfPresent(key);
         if (l1Cached != null) {
             final Duration age = Duration.between(l1Cached.lastVerified, Instant.now(this.clock));
@@ -392,13 +422,13 @@ public class MetadataCache {
                 // background refresh. SingleFlight collapses concurrent
                 // staleness-triggered refreshes for the same key into one
                 // upstream call. We do not wait for the refresh.
-                this.swrRefresh.load(key, () -> this.fetchAndCache(key, l1Cached, remote));
+                this.swrRefresh.load(key, () -> this.fetchAndCache(key, l1Cached, remote, onModified));
                 return CompletableFuture.completedFuture(Optional.of(l1Cached.content()));
             }
             // Past hard TTL — entry is too old to serve stale. Block on
             // upstream with the cached validators so a 304 still avoids
             // a blob rewrite (and preserves lastVerified bump semantics).
-            return this.fetchAndCacheBlocking(key, l1Cached, remote);
+            return this.fetchAndCacheBlocking(key, l1Cached, remote, onModified);
         }
         // L2: Check Valkey (if enabled)
         if (this.twoTier) {
@@ -420,11 +450,11 @@ public class MetadataCache {
                         this.cache.put(key, metadata);
                         return CompletableFuture.completedFuture(Optional.of(metadata.content()));
                     }
-                    return this.fetchAndCacheBlocking(key, null, remote);
+                    return this.fetchAndCacheBlocking(key, null, remote, onModified);
                 });
         }
         // Single-tier cold miss: block on upstream.
-        return this.fetchAndCacheBlocking(key, null, remote);
+        return this.fetchAndCacheBlocking(key, null, remote, onModified);
     }
 
     private String l2Key(final Key key) {
@@ -432,14 +462,20 @@ public class MetadataCache {
     }
 
     /**
+     * No-op refreshed-content hook for the two-arg {@link #load} overloads.
+     */
+    private static final Runnable NO_HOOK = () -> { };
+
+    /**
      * Block on the upstream fetcher: cold miss or hard-TTL fallthrough.
      */
     private CompletableFuture<Optional<Content>> fetchAndCacheBlocking(
         final Key key,
         final CachedMetadata existing,
-        final ConditionalRemote remote
+        final ConditionalRemote remote,
+        final Runnable onModified
     ) {
-        return this.fetchAndApply(key, existing, remote)
+        return this.fetchAndApply(key, existing, remote, onModified)
             .thenApply(updated ->
                 updated == null
                     ? Optional.<Content>empty()
@@ -455,9 +491,10 @@ public class MetadataCache {
     private CompletionStage<Void> fetchAndCache(
         final Key key,
         final CachedMetadata existing,
-        final ConditionalRemote remote
+        final ConditionalRemote remote,
+        final Runnable onModified
     ) {
-        return this.fetchAndApply(key, existing, remote)
+        return this.fetchAndApply(key, existing, remote, onModified)
             .thenApply(ignored -> null);
     }
 
@@ -470,22 +507,25 @@ public class MetadataCache {
     private CompletableFuture<CachedMetadata> fetchAndApply(
         final Key key,
         final CachedMetadata existing,
-        final ConditionalRemote remote
+        final ConditionalRemote remote,
+        final Runnable onModified
     ) {
         final ConditionalRequest req = new ConditionalRequest(
             existing == null ? null : existing.etag,
             existing == null ? null : existing.lastModified
         );
-        return remote.fetch(req).thenCompose(result -> this.applyResult(key, existing, result));
+        return remote.fetch(req)
+            .thenCompose(result -> this.applyResult(key, existing, result, onModified));
     }
 
     private CompletableFuture<CachedMetadata> applyResult(
         final Key key,
         final CachedMetadata existing,
-        final MetadataFetchResult result
+        final MetadataFetchResult result,
+        final Runnable onModified
     ) {
         return switch (result.kind()) {
-            case MODIFIED -> this.applyModified(key, result);
+            case MODIFIED -> this.applyModified(key, result, onModified);
             case UNMODIFIED -> this.applyUnmodified(key, existing);
             case NOT_FOUND -> this.applyNotFound(key);
         };
@@ -493,7 +533,8 @@ public class MetadataCache {
 
     private CompletableFuture<CachedMetadata> applyModified(
         final Key key,
-        final MetadataFetchResult result
+        final MetadataFetchResult result,
+        final Runnable onModified
     ) {
         final CompletableFuture<byte[]> bytesFuture;
         if (result.bytes() != null) {
@@ -514,8 +555,29 @@ public class MetadataCache {
                 final long seconds = this.hardTtl.getSeconds();
                 this.l2.setex(redisKey, seconds, bytes);
             }
+            this.runModifiedHook(key, onModified);
             return updated;
         });
+    }
+
+    /**
+     * Fire the refreshed-content hook; a throwing hook must never break
+     * the serve or refresh path.
+     */
+    private void runModifiedHook(final Key key, final Runnable onModified) {
+        try {
+            onModified.run();
+        } catch (final RuntimeException ex) {
+            com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.maven")
+                .message("Metadata refreshed-content hook threw; serve path unaffected")
+                .eventCategory("database")
+                .eventAction("metadata_refresh_hook")
+                .eventOutcome("failure")
+                .field("url.path", key.string())
+                .error(ex)
+                .field("log.source", "application")
+                .log();
+        }
     }
 
     private CompletableFuture<CachedMetadata> applyUnmodified(

@@ -1,5 +1,36 @@
 # Changelog
 
+## Version 2.2.7
+
+### ⚡ Performance
+
+- **Filtered-metadata envelopes are gzip-compressed in Valkey, and the L2 read no longer gives up after 100 ms** — a multi-megabyte envelope (a full npm packument runs to tens of MB) could never arrive inside the old timeout, so every serve paid the full stall, discarded the in-flight transfer, re-ran the filter and re-wrote the value. Compression (5–10x on packument JSON) plus a 500 ms ceiling makes those reads complete; a read breaker skips L2 for 10 s after three consecutive failures so a degraded Valkey never adds latency to every metadata serve. Pre-existing uncompressed entries remain readable.
+  ([@aydasraf](https://github.com/aydasraf))
+
+### 🔒 Security
+
+- **Error responses no longer disclose exception detail** — any request that failed server-side answered with the rendered throwable in the response body, disclosing internal class names, package layout and absolute filesystem paths to the client. The same held, in smaller form, for ten slice-level error paths that appended the exception message (routinely an absolute path) to their 500 body — artifact serving, directory browsing, maven group metadata, hexpm upload, npm auth config and the proxy bulkhead fallback. Every error body now names only the operation that failed; the detail goes to the ERROR log. Two npm auth paths and the hexpm upload path were not logging their failure at all, so that detail was previously lost entirely once removed from the body — they now log it.
+  ([@aydasraf](https://github.com/aydasraf))
+
+### 🔧 Bug fixes
+
+- **A failed request is now visible in the access log** — the access record for a request that ended in an unhandled server-side error carried no `http.response.status_code`, so it never matched a 5xx query and was emitted below ERROR. Every dashboard and alert counting server errors from the access log therefore read zero during an outage. The record now carries status 500 and `event.outcome: failure`.
+  ([@aydasraf](https://github.com/aydasraf))
+
+- **An npm install-v1 (abbreviated) metadata request can no longer be answered with the full packument, or vice versa** — both body shapes of a package shared one filtered-envelope cache key, so whichever was filtered first was served to both kinds of request for the envelope's TTL. Envelope keys now carry a variant segment (`full` / `abbreviated`), and block-state changes invalidate every variant of the package.
+  ([@aydasraf](https://github.com/aydasraf))
+
+- **Proxy metadata no longer serves a stale cooldown-filtered listing after the underlying metadata refreshes** — invalidating the shared filtered-metadata envelope by package name only deleted Valkey (L2) entries whose in-memory (L1) twin was still present, so after a background refresh pulled a changed npm packument the pre-refresh version list kept being served out of Valkey for up to the full L2 TTL (and in L2-only mode the invalidation did nothing at all). The L2 sweep now runs independently of L1 via cursor-based SCAN, and every dropped key is broadcast to peer instances over the existing `cooldown-envelope` pub/sub channel. The same fix applies to the upload path used by all format adapters, so publishing to a local repository reliably drops group/proxy envelopes again.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Maven proxies now drop the cooldown-filtered envelope when upstream `maven-metadata.xml` changes** — the metadata cache fires a refreshed-content hook on every 200 that replaces cached bytes (never on a 304), invalidating the package's filtered envelope and materialised filtered outputs. Previously nothing on the maven proxy path invalidated envelopes after a refresh, so a new upstream version could stay hidden behind the previously cached filtered listing until its TTL expired.
+  ([@aydasraf](https://github.com/aydasraf))
+- **An upstream 404 during an npm background metadata refresh is no longer treated as "not modified"** — it previously bumped the refresh timestamp, silently re-arming the metadata TTL on stale content with no log trace. The 404 now keeps the cached packument (fail-open), leaves the timestamp untouched so the next request retries, and is logged.
+  ([@aydasraf](https://github.com/aydasraf))
+- **A hung background metadata refresh can no longer permanently block refreshes for its package** — the npm and pypi proxies deduplicate in-flight refreshes with a guard that treats entries older than ten minutes as abandoned and lets the next request take over; previously a refresh that never reached a terminal event pinned its package until restart.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Background metadata refreshes are visible in logs** — npm logs each refresh outcome (`content_changed`, `not_modified`, `full_refetch`) and pypi logs replaced indexes and non-success upstream statuses (previously swallowed silently); envelope invalidations log their L1 and L2 outcomes. The whole stale-while-revalidate pipeline was previously DEBUG-only or unlogged, which is what made stale-metadata incidents undiagnosable from the log stream.
+  ([@aydasraf](https://github.com/aydasraf))
+
 ## Version 2.2.6
 
 ### 🌟 New features

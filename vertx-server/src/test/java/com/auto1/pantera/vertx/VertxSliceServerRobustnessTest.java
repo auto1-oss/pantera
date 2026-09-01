@@ -209,11 +209,12 @@ final class VertxSliceServerRobustnessTest {
             .rxSend()
             .blockingGet();
 
-        // Should get 500 error response
+        // Should get 500 error response, disclosing nothing about the failure —
+        // the throwable goes to the ERROR log, never to the client.
         assertThat("Should return 500 on body error", response.statusCode(), equalTo(500));
-        assertTrue(
-            response.bodyAsString().contains("RuntimeException"),
-            "Body should contain error info"
+        assertThat(
+            "Body should be the fixed safe text",
+            response.bodyAsString(), equalTo("Internal Server Error")
         );
     }
 

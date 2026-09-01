@@ -100,11 +100,14 @@ final class JdbcCooldownService implements CooldownService {
 
     /**
      * Optional cross-instance pub/sub for cache invalidation fan-out. When
-     * non-null, every block state change broadcasts on two channels —
-     * {@link #CHANNEL_DECISIONS} keyed by {@link CooldownCache#blockKey}
-     * and {@link #CHANNEL_ENVELOPE} keyed by {@link
-     * FilteredMetadataCache#cacheKey} — so peers' Caffeine L1 entries drop
-     * immediately rather than waiting on per-entry TTL.
+     * non-null, every block state change broadcasts the per-version block
+     * decision on {@link #CHANNEL_DECISIONS} (keyed by {@link
+     * CooldownCache#blockKey}) so peers' Caffeine L1 entries drop
+     * immediately rather than waiting on per-entry TTL. Envelope drops are
+     * broadcast by {@link FilteredMetadataCache} itself (its invalidation
+     * publisher, wired in {@code CooldownSupport}) with the exact dropped
+     * keys — including every variant — so no per-key publish lives here
+     * any more.
      *
      * <p>Nullable: single-instance deployments and unit tests leave this
      * as null. Self-message filtering is handled by {@code
@@ -124,7 +127,9 @@ final class JdbcCooldownService implements CooldownService {
 
     /**
      * Pub/sub channel name for filtered-metadata envelope invalidations.
-     * Keys are {@link FilteredMetadataCache#cacheKey} outputs.
+     * Used here only for the bulk ({@code publishAll}) broadcast on
+     * {@code unblockAll}; per-key envelope drops are published by
+     * {@link FilteredMetadataCache} itself with the exact dropped keys.
      */
     private static final String CHANNEL_ENVELOPE = "cooldown-envelope";
 
@@ -271,47 +276,6 @@ final class JdbcCooldownService implements CooldownService {
                 .field("repository.name", repoName)
                 .field("package.name", artifact)
                 .field("package.version", version)
-                .error(ex)
-                .field("log.source", "application")
-                .log();
-        }
-    }
-
-    /**
-     * Broadcast a per-key cooldown-envelope invalidation. No-op if pub/sub
-     * is unwired.
-     */
-    private void publishEnvelopeInvalidation(
-        final String repoType, final String repoName, final String artifact
-    ) {
-        final CacheInvalidationPubSub bus = this.pubsub; // NOPMD CloseResource - lifecycle owned by YamlSettings.cachePubSub (closed on shutdown); this is just a snapshot of the volatile field
-        if (bus == null) {
-            return;
-        }
-        try {
-            bus.publish(
-                CHANNEL_ENVELOPE,
-                FilteredMetadataCache.cacheKey(repoType, repoName, artifact)
-            );
-            EcsLogger.debug("com.auto1.pantera.cooldown")
-                .message("Published cooldown-envelope invalidation")
-                .eventCategory("database")
-                .eventAction("pubsub_publish")
-                .eventOutcome("success")
-                .field("repository.type", repoType)
-                .field("repository.name", repoName)
-                .field("package.name", artifact)
-                .field("log.source", "application")
-                .log();
-        } catch (final Exception ex) {
-            EcsLogger.debug("com.auto1.pantera.cooldown")
-                .message("Failed to publish cooldown-envelope invalidation; peers will TTL-expire")
-                .eventCategory("database")
-                .eventAction("pubsub_publish")
-                .eventOutcome("failure")
-                .field("repository.type", repoType)
-                .field("repository.name", repoName)
-                .field("package.name", artifact)
                 .error(ex)
                 .field("log.source", "application")
                 .log();
@@ -1261,7 +1225,6 @@ final class JdbcCooldownService implements CooldownService {
         // Peer fan-out: local L1+L2 are already updated; broadcast so other
         // instances drop their L1 immediately rather than waiting on TTL.
         this.publishDecisionInvalidation(record.repoName(), record.artifact(), record.version());
-        this.publishEnvelopeInvalidation(record.repoType(), record.repoName(), record.artifact());
     }
 
     private void unblockSingle(
@@ -1355,7 +1318,6 @@ final class JdbcCooldownService implements CooldownService {
         // Peer fan-out: local L1+L2 are already updated; broadcast so other instances drop
         // their L1 immediately rather than waiting on TTL.
         this.publishDecisionInvalidation(record.repoName(), record.artifact(), record.version());
-        this.publishEnvelopeInvalidation(record.repoType(), record.repoName(), record.artifact());
     }
 
     private CooldownBlock toCooldownBlock(final DbBlockRecord record) {

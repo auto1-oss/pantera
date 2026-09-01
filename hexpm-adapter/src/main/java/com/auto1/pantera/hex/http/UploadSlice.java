@@ -203,11 +203,19 @@ public final class UploadSlice implements Slice {
                                 .build()
                         );
                     }
-                ).exceptionally(throwable ->
-                    ResponseBuilder.internalError()
-                        .body(throwable.getMessage().getBytes())
-                        .build()
-                ).toCompletableFuture();
+                ).exceptionally(throwable -> {
+                    com.auto1.pantera.http.log.EcsLogger.error("com.auto1.pantera.hex")
+                        .message("Failed to upload package")
+                        .eventCategory("web")
+                        .eventAction("package_upload")
+                        .eventOutcome("failure")
+                        .error(throwable)
+                        .field("log.source", "application")
+                        .log();
+                    return ResponseBuilder.internalError()
+                        .textBody("Failed to upload package")
+                        .build();
+                }).toCompletableFuture();
         } else {
             res = ResponseBuilder.badRequest().completedFuture();
         }

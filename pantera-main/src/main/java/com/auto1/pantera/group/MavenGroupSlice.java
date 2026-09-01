@@ -440,7 +440,7 @@ public final class MavenGroupSlice implements Slice {
                         .field("log.source", "application")
                         .log();
                     return ResponseBuilder.internalError()
-                        .textBody("Failed to fetch metadata: " + cause.getMessage())
+                        .textBody("Failed to fetch metadata")
                         .build();
                 });
         });

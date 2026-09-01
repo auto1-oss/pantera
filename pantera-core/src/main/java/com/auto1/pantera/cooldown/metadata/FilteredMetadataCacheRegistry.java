@@ -67,12 +67,12 @@ public final class FilteredMetadataCacheRegistry {
      * {@code metadata:{repoType}:{repoName}:{packageName}}, so an
      * upload to {@code local_b} also drops envelopes cached for
      * {@code group_a} (which contains {@code local_b} as a member).
-     *
-     * <p>The invalidation is also published on the
-     * {@code cooldown-envelope} pub/sub channel (via the existing
-     * {@code CacheInvalidationPubSub} wiring registered in
-     * {@code CooldownSupport}), so peer instances drop their L1
-     * entries too.
+     * The L1 scan and the asynchronous L2 (Valkey) SCAN sweep are
+     * independent — an envelope whose L1 twin already expired is still
+     * removed from L2 (the 2.2.6 stale-metadata bug was exactly this
+     * coupling), and each dropped key is published on the
+     * {@code cooldown-envelope} pub/sub channel so peer instances drop
+     * their L1 entries too.
      *
      * <p>No-op if the shared cache has not been initialized (tests,
      * deployments without cooldown, early startup). Never throws —
@@ -129,17 +129,20 @@ public final class FilteredMetadataCacheRegistry {
         }
         try {
             final int count = cache.invalidateByPackageName(packageName);
-            if (count > 0) {
-                com.auto1.pantera.http.log.EcsLogger.info("com.auto1.pantera.cooldown.metadata")
-                    .message("Filtered-metadata envelope invalidated after " + verb + " (n=" + count + ")")
-                    .eventCategory("database")
-                    .eventAction(eventAction)
-                    .eventOutcome("success")
-                    .field("package.name", packageName)
-                    .field("repository.type", repoType == null ? "unknown" : repoType)
-                    .field("log.source", "application")
-                    .log();
-            }
+            // Always log — the pre-2.2.7 count>0 gate hid exactly the
+            // failure mode that mattered: the L1 scan matching nothing
+            // while a stale envelope survived in Valkey. The L2 sweep is
+            // asynchronous and logs its own outcome (envelope_invalidate_l2).
+            com.auto1.pantera.http.log.EcsLogger.info("com.auto1.pantera.cooldown.metadata")
+                .message("Filtered-metadata envelope invalidation after " + verb
+                    + " (l1_dropped=" + count + ", l2 sweep async)")
+                .eventCategory("database")
+                .eventAction(eventAction)
+                .eventOutcome("success")
+                .field("package.name", packageName)
+                .field("repository.type", repoType == null ? "unknown" : repoType)
+                .field("log.source", "application")
+                .log();
             return count;
         } catch (final RuntimeException ex) {
             com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.cooldown.metadata")

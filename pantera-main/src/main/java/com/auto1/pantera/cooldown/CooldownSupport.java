@@ -218,6 +218,13 @@ public final class CooldownSupport {
             jdbc.setCacheInvalidationPubSub(bus);
             bus.register("cooldown-decisions", jdbc.cache());
             bus.register("cooldown-envelope", metadataCache);
+            // Fan out registry-driven envelope drops (upload / proxy-refresh
+            // invalidations) to peers on the same channel the receive side
+            // is registered on above. The receive path (Cleanable#invalidate)
+            // never re-publishes, so there is no loop.
+            metadataCache.setInvalidationPublisher(
+                key -> bus.publish("cooldown-envelope", key)
+            );
             EcsLogger.info("com.auto1.pantera.cooldown")
                 .message("Wired cooldown pub/sub fan-out (channels: cooldown-decisions, cooldown-envelope)")
                 .eventCategory("configuration")

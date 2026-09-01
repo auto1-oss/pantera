@@ -870,8 +870,13 @@ public final class VertxSliceServerTest {
          */
         IsErrorResponse(final Throwable throwable) {
             this.status = new IsEqual<>(HttpURLConnection.HTTP_INTERNAL_ERROR);
-            // Check for exception class name - message format may vary depending on wrapping
-            this.body = new StringContains(false, throwable.getClass().getSimpleName());
+            // The body must disclose nothing about the failure: no exception
+            // class name, no message, no stack frames. Detail belongs in the
+            // ERROR log. Asserting the absence here makes these cases guards
+            // against a re-introduced leak.
+            this.body = new IsNot<>(
+                new StringContains(false, throwable.getClass().getSimpleName())
+            );
         }
 
         @Override

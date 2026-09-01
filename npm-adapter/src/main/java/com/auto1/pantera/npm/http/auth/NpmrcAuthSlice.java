@@ -19,6 +19,7 @@ import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.http.headers.Authorization;
 import com.auto1.pantera.http.headers.Login;
+import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.auth.TokenAuthentication;
 import com.auto1.pantera.http.auth.Tokens;
@@ -183,17 +184,36 @@ public final class NpmrcAuthSlice implements Slice {
                         this.generateNpmrc(user, jwtToken, scope, headers)
                     );
                 } catch (Exception err) {
+                    // Was neither logged nor safe: the body carried the
+                    // exception message to the client and nothing recorded it
+                    // server-side. The detail now goes to the log only.
+                    EcsLogger.error("com.auto1.pantera.npm")
+                        .message("Failed to generate JWT token")
+                        .eventCategory("authentication")
+                        .eventAction("token_generate")
+                        .eventOutcome("failure")
+                        .error(err)
+                        .field("log.source", "application")
+                        .log();
                     return CompletableFuture.completedFuture(
                         ResponseBuilder.internalError()
-                            .textBody("Failed to generate JWT token: " + err.getMessage())
+                            .textBody("Failed to generate JWT token")
                             .build()
                     );
                 }
             })
             .exceptionally(err -> {
                 final Throwable cause = err.getCause() != null ? err.getCause() : err;
+                EcsLogger.error("com.auto1.pantera.npm")
+                    .message("Failed to generate npm auth config")
+                    .eventCategory("authentication")
+                    .eventAction("auth_config_generate")
+                    .eventOutcome("failure")
+                    .error(cause)
+                    .field("log.source", "application")
+                    .log();
                 return ResponseBuilder.internalError()
-                    .textBody("Error generating auth config: " + cause.getMessage())
+                    .textBody("Error generating auth config")
                     .build();
             });
     }

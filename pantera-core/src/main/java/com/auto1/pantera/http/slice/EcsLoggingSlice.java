@@ -13,6 +13,7 @@ package com.auto1.pantera.http.slice;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.context.RequestContext;
 import com.auto1.pantera.http.headers.Header;
@@ -242,12 +243,20 @@ public final class EcsLoggingSlice implements Slice {
 
                 // Log error with ECS fields
                 // NOTE: client.ip, user.name, trace.id are in MDC — not added here
+                // httpStatus is mandatory: without it the record carries no
+                // http.response.status_code, so a failed request is invisible to
+                // every 5xx query and dashboard built on the access log, and
+                // EcsLogEvent emits it below ERROR. A throwable escaping the
+                // slice chain is answered 500 by VertxSliceServer (timeouts are
+                // handled above this slice and never reach here).
                 new EcsLogEvent()
                     .httpMethod(line.method().value())
                     .httpVersion(line.version())
+                    .httpStatus(RsStatus.INTERNAL_ERROR)
                     .urlPath(line.uri().getPath())
                     .userAgent(headers)
                     .duration(duration)
+                    .outcome("failure")
                     .error(error)
                     .message("Request processing failed")
                     .log();

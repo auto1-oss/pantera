@@ -64,7 +64,6 @@ import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -180,9 +179,11 @@ final class ProxySlice implements Slice {
 
     /**
      * Index pages currently being refreshed in background (stale-while-revalidate).
-     * Prevents duplicate refresh operations for the same index.
+     * Prevents duplicate refresh operations for the same index; entries older
+     * than ten minutes are treated as abandoned (a hung refresh must not pin
+     * its key until restart — see {@link com.auto1.pantera.http.resilience.InFlightGuard}).
      */
-    private final ConcurrentHashMap.KeySetView<String, Boolean> refreshing;
+    private final com.auto1.pantera.http.resilience.InFlightGuard refreshing;
 
     /**
      * Cached Last-Modified headers from upstream for conditional requests.
@@ -276,7 +277,7 @@ final class ProxySlice implements Slice {
             .build();
         this.asyncStorage = backend;
         this.indexCacheControl = new CacheTimeControl(backend, metadataTtl);
-        this.refreshing = ConcurrentHashMap.newKeySet();
+        this.refreshing = new com.auto1.pantera.http.resilience.InFlightGuard(Duration.ofMinutes(10));
         this.lastModifiedCache = Caffeine.newBuilder()
             .maximumSize(10_000)
             .expireAfterWrite(Duration.ofHours(24))
@@ -774,7 +775,7 @@ final class ProxySlice implements Slice {
         final RequestLine upstream, final SimpleApiFormat format
     ) {
         final String keyStr = key.string();
-        if (!this.refreshing.add(keyStr)) {
+        if (!this.refreshing.tryBegin(keyStr)) {
             return;
         }
         CompletableFuture.runAsync(() -> {
@@ -805,6 +806,24 @@ final class ProxySlice implements Slice {
                             return CompletableFuture.completedFuture((Void) null);
                         }
                         if (!response.status().success()) {
+                            // Keep the stale index (fail-open), but say so:
+                            // before 2.2.7 a persistently failing upstream
+                            // (404/5xx) was swallowed here with no log at all
+                            // — the completion handler even reported success
+                            // — leaving silently frozen simple indexes with
+                            // zero ELK trace. The timestamp is NOT bumped, so
+                            // the next request retries.
+                            EcsLogger.warn("com.auto1.pantera.pypi")
+                                .message(String.format(
+                                    "Background refresh got non-success upstream status for key '%s' — keeping stale index, will retry",
+                                    keyStr
+                                ))
+                                .eventCategory("database")
+                                .eventAction("stale_while_revalidate")
+                                .eventOutcome("failure")
+                                .field("http.response.status_code", response.status().code())
+                                .field("log.source", "application")
+                                .log();
                             return CompletableFuture.completedFuture((Void) null);
                         }
                         // Store new Last-Modified
@@ -826,13 +845,31 @@ final class ProxySlice implements Slice {
                                 return opt.get().asBytesFuture().thenCompose(bytes ->
                                     this.asyncStorage.save(
                                         key, new Content.From(bytes)
+                                    ).thenRun(() ->
+                                        // One INFO per genuine content refresh
+                                        // (at most once per index per TTL
+                                        // window) so refresh activity is
+                                        // visible in ELK — its total absence
+                                        // is what made the 2.2.6 stale-
+                                        // metadata incident undiagnosable.
+                                        EcsLogger.info("com.auto1.pantera.pypi")
+                                            .message(String.format(
+                                                "Background refresh replaced cached index for key '%s'",
+                                                keyStr
+                                            ))
+                                            .eventCategory("database")
+                                            .eventAction("stale_while_revalidate")
+                                            .eventOutcome("success")
+                                            .field("event.reason", "content_changed")
+                                            .field("log.source", "application")
+                                            .log()
                                     )
                                 );
                             }
                             return CompletableFuture.completedFuture(null);
                         });
                     }).whenComplete((v, err) -> {
-                        this.refreshing.remove(keyStr);
+                        this.refreshing.end(keyStr);
                         if (err != null) {
                             EcsLogger.warn("com.auto1.pantera.pypi")
                                 .message(String.format("Background refresh failed for key '%s'", keyStr))
@@ -853,7 +890,7 @@ final class ProxySlice implements Slice {
                         }
                     });
             } catch (final Exception ex) {
-                this.refreshing.remove(keyStr);
+                this.refreshing.end(keyStr);
                 EcsLogger.warn("com.auto1.pantera.pypi")
                     .message(String.format("Background refresh exception for key '%s'", keyStr))
                     .eventCategory("database")

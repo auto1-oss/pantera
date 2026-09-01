@@ -40,8 +40,6 @@ import io.vertx.reactivex.core.http.HttpServerRequest;
 import io.vertx.reactivex.core.http.HttpServerResponse;
 
 import java.io.Closeable;
-import java.io.PrintWriter;
-import java.io.StringWriter;
 import java.net.HttpURLConnection;
 import java.nio.ByteBuffer;
 import java.time.Duration;
@@ -72,6 +70,22 @@ import java.util.Objects;
  * See audit/aggressive-items.md (Tier 4 B7 duplicate-error bucket).
  */
 public final class VertxSliceServer implements Closeable {
+
+    /**
+     * Body returned to the client for any unhandled server-side failure.
+     *
+     * <p>Deliberately carries no exception detail. A rendered throwable
+     * discloses internal class names, package layout and absolute filesystem
+     * paths to anyone able to provoke an error. The full stack trace is written
+     * to the ERROR log instead, where it stays server-side.</p>
+     */
+    private static final String INTERNAL_ERROR_BODY = "Internal Server Error";
+
+    /**
+     * Body returned when an upstream stream dies mid-response.
+     */
+    private static final String BAD_GATEWAY_BODY =
+        "Bad Gateway: upstream stream closed prematurely";
 
     /**
      * Default maximum time to wait for slice response.
@@ -627,7 +641,7 @@ public final class VertxSliceServer implements Closeable {
                                         guardedResponse.safeSendError(
                                             "proxyHandler.serveWithBody.error",
                                             HttpURLConnection.HTTP_INTERNAL_ERROR,
-                                            formatError(throwable)
+                                            INTERNAL_ERROR_BODY
                                         );
                                     } else {
                                         transaction.setResult("success");
@@ -663,7 +677,7 @@ public final class VertxSliceServer implements Closeable {
                                     guardedResponse.safeSendError(
                                         "proxyHandler.serveWithStream.error",
                                         HttpURLConnection.HTTP_INTERNAL_ERROR,
-                                        formatError(throwable)
+                                        INTERNAL_ERROR_BODY
                                     );
                                 } else {
                                     transaction.setResult("success");
@@ -692,7 +706,7 @@ public final class VertxSliceServer implements Closeable {
                                 guardedResponse.safeSendError(
                                     "proxyHandler.serve.error",
                                     HttpURLConnection.HTTP_INTERNAL_ERROR,
-                                    formatError(throwable)
+                                    INTERNAL_ERROR_BODY
                                 );
                             } else {
                                 transaction.setResult("success");
@@ -719,20 +733,10 @@ public final class VertxSliceServer implements Closeable {
                 guardedResponse.safeSendError(
                     "proxyHandler.exception",
                     HttpURLConnection.HTTP_INTERNAL_ERROR,
-                    formatError(ex)
+                    INTERNAL_ERROR_BODY
                 );
             }
         };
-    }
-
-    /**
-     * Format exception for error response.
-     */
-    private static String formatError(final Throwable throwable) {
-        final StringWriter body = new StringWriter();
-        body.append(throwable.toString()).append("\n");
-        throwable.printStackTrace(new PrintWriter(body));
-        return body.toString();
     }
 
     /**
@@ -1619,19 +1623,15 @@ public final class VertxSliceServer implements Closeable {
                             final int status = upstreamTransient
                                 ? HttpURLConnection.HTTP_BAD_GATEWAY
                                 : HttpURLConnection.HTTP_INTERNAL_ERROR;
+                            // Bodies carry no exception detail — the throwable is
+                            // already on the ERROR record logged above, and an
+                            // exception message can hold internal paths.
                             final String errorMsg;
                             if (upstreamTransient) {
-                                errorMsg = String.format(
-                                    "Bad Gateway: upstream stream closed prematurely (%s)",
-                                    error.getClass().getSimpleName()
-                                );
+                                errorMsg = BAD_GATEWAY_BODY;
                                 this.response.putHeader("Retry-After", "2");
                             } else {
-                                errorMsg = String.format(
-                                    "Internal Server Error: %s: %s",
-                                    error.getClass().getSimpleName(),
-                                    error.getMessage()
-                                );
+                                errorMsg = INTERNAL_ERROR_BODY;
                             }
                             this.guardedResponse.safeSendError(
                                 "ResponseTerminator.fail",

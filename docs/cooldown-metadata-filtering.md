@@ -355,6 +355,53 @@ When the cooldown duration is changed (e.g., 30d to 7d):
 - `FilteredMetadataCache.clearAll()` is called to flush all cached filtered metadata
 - Subsequent requests re-evaluate all versions against the new policy
 
+### Refresh- and Upload-Driven Invalidation (2.2.7)
+
+The filtered envelope is a materialisation of *(source metadata bytes ×
+block state)* — so it must also drop when the **source bytes** change, not
+only on block-state changes:
+
+- **Proxy refresh**: when a background stale-while-revalidate refresh lands
+  changed content (npm: the packument write hook; maven: the
+  `MetadataCache` refreshed-content hook), the adapter calls
+  `FilteredMetadataCacheRegistry.invalidateAfterProxyRefresh(type, package)`.
+- **Upload/publish**: every adapter's upload path calls
+  `invalidateAfterUpload(type, package)` so group/proxy envelopes stop
+  hiding a version just published to a member local repository.
+
+Both funnel into `FilteredMetadataCache.invalidateByPackageName`, which
+drops matching L1 entries, sweeps L2 (Valkey) by key pattern via cursor-based
+SCAN **independently of what L1 holds** (in L2-only mode L1 holds nothing),
+and broadcasts every dropped key on the `cooldown-envelope` pub/sub channel
+so peer nodes drop their L1 too. Outcomes are logged as
+`envelope_invalidate_on_refresh` / `envelope_invalidate_on_upload` (L1) and
+`envelope_invalidate_l2` (async L2 sweep).
+
+### Envelope Key Shape and L2 Transport (2.2.7)
+
+Envelope keys are `metadata:{repoType}:{repoName}:{variant}:{packageName}`.
+The **variant** names the body shape being cached — the npm proxy uses
+`full` and `abbreviated` (before the variant existed, both shapes shared
+one key and whichever was filtered first was served to both kinds of
+request); callers with a single shape use `default`. The package name is
+always the **last** segment: both by-package invalidation paths match on
+that suffix, so any key change must preserve its position. Block-state
+invalidation (`invalidate(type, name, pkg)`) drops **every** variant of the
+package.
+
+L2 values above 1 KB are stored gzip-compressed (packument JSON shrinks
+5–10x), which keeps even tens-of-MB envelopes inside the 500 ms L2 read
+timeout; raw pre-2.2.7 values are still readable (the decoder detects the
+gzip magic). Three consecutive failed L2 reads (timeout or transport
+error) open a 10-second read breaker (`envelope_l2_degraded` WARN) so a
+degraded Valkey never adds the read timeout to every metadata serve —
+serves fall through to a local recompute, and writes stay enabled.
+
+> Before 2.2.7 the L2 deletion only covered keys still present in L1, so a
+> refreshed packument could keep serving its pre-refresh filtered envelope
+> out of Valkey for the full L2 TTL — the "npm metadata never refreshes"
+> incident.
+
 ### Cache Invalidation
 
 Manual full cache invalidation:
