@@ -119,7 +119,7 @@ final class DockerScanner implements Scanner {
                     .toList();
                 for (final Path tagDir : tagList) {
                     final ArtifactRecord record = this.processTag(
-                        blobsRoot, repoName, imageName, tagDir
+                        root, blobsRoot, repoName, imageName, tagDir
                     );
                     if (record != null) {
                         records.add(record);
@@ -192,13 +192,14 @@ final class DockerScanner implements Scanner {
     /**
      * Process a single tag directory and produce an artifact record.
      *
+     * @param root Repository storage root, for the relative key
      * @param blobsRoot Path to the blobs directory
      * @param repoName Logical repository name
      * @param imageName Image name (relative path from repositories dir)
      * @param tagDir Tag directory path
      * @return ArtifactRecord, or null if tag should be skipped
      */
-    private ArtifactRecord processTag(final Path blobsRoot,
+    private ArtifactRecord processTag(final Path root, final Path blobsRoot,
         final String repoName, final String imageName, final Path tagDir) {
         final String tag = tagDir.getFileName().toString();
         final Path linkFile = tagDir.resolve("current").resolve("link");
@@ -228,7 +229,11 @@ final class DockerScanner implements Scanner {
             createdDate,
             null,
             "system",
-            null
+            // The tag's link, relative to the repository root — the browser
+            // cuts it at _manifests to reach the image directory. The registry
+            // layout prefix (docker/registry/v2) is not derivable from the
+            // image name, which is why the key has to be recorded.
+            root.relativize(linkFile).toString().replace('\\', '/')
         );
     }
 

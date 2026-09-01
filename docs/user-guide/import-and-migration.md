@@ -166,15 +166,12 @@ against a repository repairs those rows: the scanner reads the key back off
 disk, and the insert uses `COALESCE`, so a re-run never clears a key another
 writer already recorded.
 
-This applies to repositories indexed before 2.2.8 for the generic-file, helm
-and debian types. Two types are repaired differently:
+This applies to repositories indexed before 2.2.8 for the generic-file, helm,
+debian and docker types.
 
-- **Docker** needs no key. Images live under the registry's `repositories/`
-  root, so the image name alone identifies the directory and the browser uses
-  it directly.
-- **Conan, RPM and NuGet** have no scanner at all, so the backfill cannot
-  re-index them. Their rows are repaired by re-uploading the artifact, which
-  records the key on the upload path.
+**Conan, RPM and NuGet** have no scanner at all, so the backfill cannot
+re-index them. Their rows are repaired by re-uploading the artifact, which
+records the key on the upload path.
 
 The backfill derives an artifact's version from its parent directory, while
 the server derives it from the artifact name. The two agree whenever the

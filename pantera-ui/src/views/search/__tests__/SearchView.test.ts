@@ -396,13 +396,26 @@ describe('SearchView', () => {
         repo_name: 'docker_local',
         artifact_path: 'auto1/hello',
         version: 'sha256:abc',
-        path_prefix: 'repositories/auto1/hello/_manifests/tags/1.0.0/current/link',
+        path_prefix:
+          'docker/registry/v2/repositories/auto1/hello/_manifests/tags/1.0.0/current/link',
       }))
 
       const link = wrapper.findComponent(RouterLinkStub)
       expect(link.props('to')).toBe(
-        '/repositories/docker_local?path=%2Frepositories%2Fauto1%2Fhello&from=search',
+        '/repositories/docker_local?path=%2Fdocker%2Fregistry%2Fv2%2Frepositories%2Fauto1%2Fhello&from=search',
       )
+    })
+
+    // Rows indexed before the key was recorded keep the previous behaviour.
+    it('docker falls back to the repository root without path_prefix', async () => {
+      const wrapper = await mountWithResult(makeResult({
+        repo_type: 'docker',
+        repo_name: 'docker_local',
+        artifact_path: 'auto1/hello',
+      }))
+
+      const link = wrapper.findComponent(RouterLinkStub)
+      expect(link.props('to')).toBe('/repositories/docker_local?path=%2F&from=search')
     })
   })
 })

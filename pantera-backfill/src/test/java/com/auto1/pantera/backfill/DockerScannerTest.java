@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -21,6 +22,39 @@ import org.junit.jupiter.api.io.TempDir;
  * @since 1.20.13
  */
 final class DockerScannerTest {
+
+    @Test
+    void recordsTheTagLinkKeyForTheV2Layout(@TempDir final Path temp) throws IOException {
+        // Real registries store under docker/registry/v2/. That prefix is not
+        // derivable from the image name, which is why the key is recorded.
+        final Path linkDir = temp
+            .resolve("docker/registry/v2/repositories/auto1/hello/_manifests/tags/1.0.0/current");
+        Files.createDirectories(linkDir);
+        Files.writeString(
+            linkDir.resolve("link"), "sha256:abc123", StandardCharsets.UTF_8
+        );
+        final ArtifactRecord record = new DockerScanner("docker", false)
+            .scan(temp, "docker_local").collect(Collectors.toList()).get(0);
+        MatcherAssert.assertThat(
+            "The key must be relative to the repository root, prefix included",
+            record.pathPrefix(),
+            new IsEqual<>(
+                "docker/registry/v2/repositories/auto1/hello/_manifests/tags/1.0.0/current/link"
+            )
+        );
+    }
+
+    @Test
+    void recordsTheTagLinkKeyForTheFlatLayout(@TempDir final Path temp) throws IOException {
+        DockerScannerTest.createTagLink(temp, "nginx", "latest", "sha256:def456");
+        final ArtifactRecord record = new DockerScanner("docker", false)
+            .scan(temp, "docker_local").collect(Collectors.toList()).get(0);
+        MatcherAssert.assertThat(
+            "A flat layout records its own key just the same",
+            record.pathPrefix(),
+            new IsEqual<>("repositories/nginx/_manifests/tags/latest/current/link")
+        );
+    }
 
     @Test
     void scansImageWithTag(@TempDir final Path temp) throws IOException {

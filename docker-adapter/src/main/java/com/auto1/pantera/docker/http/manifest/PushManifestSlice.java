@@ -84,8 +84,15 @@ public class PushManifestSlice extends DockerActionSlice {
                                 new Login(headers).getValue(),
                                 request.name(), ref.digest(),
                                 size, System.currentTimeMillis(), null,
-                                com.auto1.pantera.docker.asto.Layout
-                                    .manifest(request.name(), ref).string()
+                                // Layout keys are relative to the adapter's
+                                // SubStorage (RegistryRoot.V2), so the prefix
+                                // must be restored to make the key resolvable
+                                // from the repository root.
+                                new com.auto1.pantera.asto.Key.From(
+                                    com.auto1.pantera.docker.asto.RegistryRoot.V2,
+                                    com.auto1.pantera.docker.asto.Layout
+                                        .manifest(request.name(), ref)
+                                ).string()
                             );
                             if (queue != null) {
                                 queue.add(event);
