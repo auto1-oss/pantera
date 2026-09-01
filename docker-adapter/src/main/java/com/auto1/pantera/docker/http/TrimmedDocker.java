@@ -67,6 +67,11 @@ public final class TrimmedDocker implements Docker {
     }
 
     @Override
+    public String resolveName(final String name) {
+        return this.origin.resolveName(this.trim(name));
+    }
+
+    @Override
     public CompletableFuture<Catalog> catalog(Pagination pagination) {
         Pagination trimmed = new Pagination(
             trim(pagination.last()), pagination.limit()

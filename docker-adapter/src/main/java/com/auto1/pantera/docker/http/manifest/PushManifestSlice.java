@@ -90,8 +90,9 @@ public class PushManifestSlice extends DockerActionSlice {
                                 // from the repository root.
                                 new com.auto1.pantera.asto.Key.From(
                                     com.auto1.pantera.docker.asto.RegistryRoot.V2,
-                                    com.auto1.pantera.docker.asto.Layout
-                                        .manifest(request.name(), ref)
+                                    com.auto1.pantera.docker.asto.Layout.manifest(
+                                        this.docker.resolveName(request.name()), ref
+                                    )
                                 ).string()
                             );
                             if (queue != null) {
