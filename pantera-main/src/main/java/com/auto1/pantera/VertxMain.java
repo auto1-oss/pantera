@@ -337,6 +337,12 @@ public final class VertxMain {
         } else {
             revocationBlocklist = null;
         }
+        // SECURITY (2.2.9, SecOps #40): expose the same revocation /
+        // JTI-ownership / enabled-state validators to the reflectively-built
+        // jwt-password auth provider so a token used as a Basic password is
+        // subjected to the same checks as a Bearer token.
+        com.auto1.pantera.auth.TokenRevocationRegistry.instance()
+            .install(revocationBlocklist, userTokenDao, enabledCheck);
         final com.auto1.pantera.auth.JwtTokens jwtTokens = new com.auto1.pantera.auth.JwtTokens(
             rsaKeys.privateKey(), rsaKeys.publicKey(), userTokenDao, null,
             revocationBlocklist, enabledCheck
