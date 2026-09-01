@@ -740,6 +740,44 @@ public final class VertxSliceServer implements Closeable {
     }
 
     /**
+     * Request headers with the authority normalised into a {@code Host} header.
+     *
+     * <p>HTTP/2 carries the authority in the {@code :authority} pseudo-header,
+     * which Vert.x deliberately keeps out of {@link
+     * io.vertx.reactivex.core.http.HttpServerRequest#headers()} — h2 forbids
+     * {@code Host} on the wire. Every slice that derives a client-facing URL
+     * reads {@code Host}, so an h2 request otherwise looks hostless and the
+     * derivation falls back to a literal {@code localhost}, emitting
+     * unreachable URLs in package metadata. Restoring it here keeps every
+     * downstream slice protocol-agnostic.</p>
+     *
+     * <p>The port is carried only when the client sent one, so the value
+     * matches what the same client would have put in an HTTP/1.1 {@code Host}
+     * header — host-allowlist comparisons are exact, including any port.</p>
+     *
+     * @param req Inbound request
+     * @return Headers, with {@code Host} present whenever an authority is known
+     */
+    private static Headers requestHeaders(final HttpServerRequest req) {
+        Headers result = Headers.from(req.headers());
+        if (result.values("Host").isEmpty()) {
+            final io.vertx.reactivex.core.net.HostAndPort authority = req.authority();
+            if (authority != null && authority.host() != null && !authority.host().isEmpty()) {
+                final String value;
+                if (authority.port() >= 0) {
+                    value = String.format("%s:%d", authority.host(), authority.port());
+                } else {
+                    value = authority.host();
+                }
+                // Headers.from() backs itself with an immutable list; copy()
+                // is what makes it appendable. Only the h2 path pays for it.
+                result = result.copy().add(new Header("Host", value));
+            }
+        }
+        return result;
+    }
+
+    /**
      * Extract route name from URI for transaction naming.
      * Simplifies paths like /maven-central/com/foo/bar/1.0/artifact.jar to /maven-central/*
      */
@@ -773,7 +811,7 @@ public final class VertxSliceServer implements Closeable {
         final long contentLength,
         final GuardedHttpServerResponse guardedResponse
     ) {
-        final Headers requestHeaders = Headers.from(req.headers());
+        final Headers requestHeaders = VertxSliceServer.requestHeaders(req);
         final RequestLogContext ctx = RequestLogContext.from(req, requestHeaders);
         final Slice loggedSlice = new EcsLoggingSlice(this.served, ctx.remoteHost());
 
@@ -906,7 +944,7 @@ public final class VertxSliceServer implements Closeable {
         final Buffer body,
         final GuardedHttpServerResponse guardedResponse
     ) {
-        final Headers requestHeaders = Headers.from(req.headers());
+        final Headers requestHeaders = VertxSliceServer.requestHeaders(req);
         final RequestLogContext ctx = RequestLogContext.from(req, requestHeaders);
         final Slice loggedSlice = new EcsLoggingSlice(this.served, ctx.remoteHost());
 
@@ -1032,7 +1070,7 @@ public final class VertxSliceServer implements Closeable {
         final Buffer unused,
         final GuardedHttpServerResponse guardedResponse
     ) {
-        final Headers requestHeaders = Headers.from(req.headers());
+        final Headers requestHeaders = VertxSliceServer.requestHeaders(req);
         final RequestLogContext ctx = RequestLogContext.from(req, requestHeaders);
         final Slice loggedSlice = new EcsLoggingSlice(this.served, ctx.remoteHost());
 
@@ -1166,7 +1204,7 @@ public final class VertxSliceServer implements Closeable {
             }
             final Throwable cause = unwrapCompletionCause(error);
             if (cause instanceof RequestTimeoutException timeout) {
-                final RequestLogContext timeoutCtx = RequestLogContext.from(req, Headers.from(req.headers()));
+                final RequestLogContext timeoutCtx = RequestLogContext.from(req, VertxSliceServer.requestHeaders(req));
                 addRequestContext(
                     EcsLogger.warn("com.auto1.pantera.vertx")
                         .message("Upstream processing timeout exceeded (" + timeout.timeout.toMillis() + "ms)")
