@@ -385,15 +385,30 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                 return;
             }
             final String rawToken = authHeader.substring(7);
-            unifiedAuth.user(rawToken).toCompletableFuture()
-                .thenAccept(userOpt -> {
-                    if (userOpt.isPresent()) {
-                        final com.auto1.pantera.http.auth.AuthUser authUser = userOpt.get();
+            unifiedAuth.validatedAsync(rawToken).toCompletableFuture()
+                .thenAccept(validOpt -> {
+                    if (validOpt.isPresent()) {
+                        final com.auto1.pantera.auth.UnifiedJwtAuthHandler.ValidatedToken valid =
+                            validOpt.get();
+                        // SECURITY (2.2.9, SecOps jwt-token-confusion): enforce
+                        // token-purpose scope per route. A REFRESH token only
+                        // reaches /auth/refresh; ordinary routes take ACCESS/API.
+                        if (!com.auto1.pantera.auth.ApiTokenTypeGate.allows(path, valid.type())) {
+                            ApiResponse.sendError(
+                                ctx, 401, "UNAUTHORIZED", "Token type not valid for this route"
+                            );
+                            return;
+                        }
+                        final com.auto1.pantera.http.auth.AuthUser authUser = valid.user();
                         // Bridge into Vert.x User so ctx.user().principal() works
                         // for all downstream handlers (me, generate, list, settings, etc.)
+                        // The verified type and JTI ride along so /auth/refresh can
+                        // rotate exactly the presented refresh token.
                         final io.vertx.core.json.JsonObject principal = new io.vertx.core.json.JsonObject()
                             .put(com.auto1.pantera.api.AuthTokenRest.SUB, authUser.name())
-                            .put(com.auto1.pantera.api.AuthTokenRest.CONTEXT, authUser.authContext());
+                            .put(com.auto1.pantera.api.AuthTokenRest.CONTEXT, authUser.authContext())
+                            .put(com.auto1.pantera.api.AuthTokenRest.TYPE, valid.type().value())
+                            .put(com.auto1.pantera.api.AuthTokenRest.JTI, valid.jti());
                         ctx.setUser(io.vertx.ext.auth.User.fromToken(rawToken));
                         ctx.user().principal().mergeIn(principal);
                         ctx.next();

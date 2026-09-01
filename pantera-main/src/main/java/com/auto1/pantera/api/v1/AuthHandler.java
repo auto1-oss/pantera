@@ -887,7 +887,22 @@ public final class AuthHandler {
             ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "No subject in token");
             return;
         }
-        final Tokens.TokenPair pair = this.tokens.generatePair(new AuthUser(sub, context));
+        // SECURITY (2.2.9): only a REFRESH token may refresh (the /api/v1
+        // filter already gates this; re-checked here so the endpoint fails
+        // closed even if the filter wiring changes), and the presented
+        // refresh JTI is consumed atomically — a replayed refresh token
+        // mints nothing (SecOps token-revocation #23).
+        final String type = ctx.user().principal().getString(AuthTokenRest.TYPE, "");
+        final String jti = ctx.user().principal().getString(AuthTokenRest.JTI, "");
+        if (!com.auto1.pantera.auth.TokenType.REFRESH.value().equals(type) || jti.isBlank()) {
+            ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "A refresh token is required");
+            return;
+        }
+        final Tokens.TokenPair pair = this.tokens.rotate(new AuthUser(sub, context), jti);
+        if (pair == null) {
+            ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Refresh token is no longer valid");
+            return;
+        }
         EcsLogger.debug("com.auto1.pantera.api.v1")
             .message("JWT refresh issued for user: " + sub)
             .eventCategory("authentication")

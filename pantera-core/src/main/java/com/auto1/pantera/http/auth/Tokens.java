@@ -49,6 +49,23 @@ public interface Tokens {
     }
 
     /**
+     * Rotate a refresh token: consume the presented refresh token (by JTI)
+     * and issue a successor access + refresh pair. Implementations MUST
+     * refuse (return {@code null}) when the presented JTI is not a live
+     * refresh token owned by {@code user}, so a replayed or stolen refresh
+     * token cannot mint new credentials. The default keeps pre-2.2.9
+     * behaviour for implementations without a token store.
+     *
+     * @param user Authenticated user (subject of the presented token)
+     * @param refreshJti JTI of the presented refresh token
+     * @return Successor pair, or {@code null} when the presented token was
+     *  not acceptable
+     */
+    default TokenPair rotate(AuthUser user, String refreshJti) {
+        return generatePair(user);
+    }
+
+    /**
      * Token pair containing both access and refresh tokens.
      */
     record TokenPair(String accessToken, String refreshToken, int expiresIn) {}
