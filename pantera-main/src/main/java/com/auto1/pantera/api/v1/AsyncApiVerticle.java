@@ -359,13 +359,11 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                 : null;
         router.route("/api/v1/*").handler(ctx -> {
             final String path = ctx.request().path();
-            // Skip JWT auth for public endpoints (registered before this filter)
-            if (path.contains("/artifact/download-direct")
-                || path.endsWith("/auth/token")
-                || path.endsWith("/auth/callback")
-                || path.endsWith("/auth/providers")
-                || path.contains("/auth/providers/")
-                || path.endsWith("/health")) {
+            // Skip JWT auth ONLY for the exact public routes (registered before
+            // this filter). SECURITY (2.2.9): this used to be a substring match,
+            // which exempted any protected route whose path merely embedded
+            // "/artifact/download-direct" — see PublicApiRoutes.
+            if (PublicApiRoutes.exempt(ctx.request().method(), path)) {
                 ctx.next();
                 return;
             }
