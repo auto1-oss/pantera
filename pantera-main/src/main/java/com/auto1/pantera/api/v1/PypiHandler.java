@@ -18,6 +18,9 @@ import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.pypi.meta.PypiSidecar;
 import com.auto1.pantera.settings.RepoData;
+import com.auto1.pantera.api.RepoAuthzHandler;
+import com.auto1.pantera.security.perms.Action;
+import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.repo.CrudRepoSettings;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
@@ -61,24 +64,45 @@ public final class PypiHandler {
     private final RepoData repoData;
 
     /**
+     * Pantera security policy — yank/unyank are lifecycle WRITES on the
+     * named repository and must be authorized as such.
+     */
+    private final Policy<?> policy;
+
+    /**
      * Ctor.
      * @param crs  Repository settings CRUD
      * @param repoData Repository data management
+     * @param policy Pantera security policy
      */
-    public PypiHandler(final CrudRepoSettings crs, final RepoData repoData) {
+    public PypiHandler(
+        final CrudRepoSettings crs, final RepoData repoData, final Policy<?> policy
+    ) {
         this.crs = crs;
         this.repoData = repoData;
+        this.policy = policy;
     }
 
     /**
      * Register yank/unyank routes on the router.
-     * Both routes are placed after the JWT filter and therefore protected.
+     *
+     * <p>SECURITY (2.2.9, pypi-yank-authz): the {@code /api/v1/*} JWT filter
+     * only AUTHENTICATES. Before this fix the routes carried no authorization
+     * handler, so any authenticated user could yank/unyank any release in
+     * any PyPI repository. Yanking is a lifecycle write that changes
+     * {@code pip} resolution for every consumer (PEP 592), so it requires the
+     * same repo-scoped WRITE grant the data-plane upload path enforces.</p>
+     *
      * @param router Vert.x router
      */
     public void register(final Router router) {
+        final RepoAuthzHandler repoWrite =
+            new RepoAuthzHandler(this.policy, "repo", Action.Standard.WRITE);
         router.post("/api/v1/pypi/:repo/:package/:version/yank")
+            .handler(repoWrite)
             .handler(this::yankHandler);
         router.post("/api/v1/pypi/:repo/:package/:version/unyank")
+            .handler(repoWrite)
             .handler(this::unyankHandler);
     }
 
