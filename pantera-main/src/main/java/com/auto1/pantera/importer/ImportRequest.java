@@ -314,21 +314,27 @@ public final class ImportRequest {
     private static String normalizePath(final String path) {
         final String[] segments = path.split("/");
         final StringBuilder normalized = new StringBuilder();
-        for (final String segment : segments) {
+        for (final String raw : segments) {
+            // SECURITY (2.2.9): decode BEFORE the containment check. The old
+            // code checked the still-encoded segment for a literal ".." then
+            // decoded afterwards, so a double-encoded parent (%252e%252e ->
+            // %2e%2e -> "..") or separator (%252f -> "/") survived and escaped
+            // the repository root.
+            final String segment = decode(raw);
             if (segment.isEmpty() || ".".equals(segment)) {
                 continue;
             }
-            if ("..".equals(segment)) {
+            if ("..".equals(segment) || segment.indexOf('/') >= 0 || segment.indexOf('\\') >= 0) {
                 throw new ResponseException(
                     ResponseBuilder.badRequest()
-                        .textBody("Parent directory segments are not allowed in paths")
+                        .textBody("Parent directory or separator segments are not allowed in paths")
                         .build()
                 );
             }
             if (!normalized.isEmpty()) {
                 normalized.append('/');
             }
-            normalized.append(decode(segment));
+            normalized.append(segment);
         }
         if (normalized.isEmpty()) {
             throw new ResponseException(
