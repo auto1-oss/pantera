@@ -1518,7 +1518,7 @@ curl -X DELETE http://localhost:8086/api/v1/repositories/maven-local/packages \
 
 ### GET /api/v1/search
 
-Full-text search across all indexed artifacts. Results are filtered by the caller's `read` permission on each repository. Supports plain full-text search and structured field filters.
+Full-text search across all indexed artifacts. Results are filtered by the caller's `read` permission on each repository — and since 2.2.9 that scope also governs `total`, `hasMore`, `type_counts` and `repo_counts` (they are computed over the authorised set, so a caller with no repository read grant receives empty aggregates rather than global counts or the names of restricted repositories). Supports plain full-text search and structured field filters.
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_search_permissions:read`

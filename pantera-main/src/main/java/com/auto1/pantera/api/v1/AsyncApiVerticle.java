@@ -482,7 +482,7 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             crs, this.settings.cooldown(), this.dataSource,
             this.security.policy()
         ).register(router);
-        new SearchHandler(this.artifactIndex, this.security.policy()).register(router);
+        new SearchHandler(this.artifactIndex, this.security.policy(), crs::listAll).register(router);
         new PypiHandler(
             crs, new RepoData(this.configsStorage, this.caches.storagesCache()),
             this.security.policy()

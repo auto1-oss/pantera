@@ -56,7 +56,7 @@ import com.auto1.pantera.index.SearchQueryParser.MatchType;
  *
  * @since 1.20.13
  */
-public final class DbArtifactIndex implements ArtifactIndex {
+public final class DbArtifactIndex implements ArtifactIndex, ScopedSearchIndex {
 
     /**
      * Sort field enum — Fix 1: replaces raw String in buildOrderBy.
@@ -1556,6 +1556,19 @@ public final class DbArtifactIndex implements ArtifactIndex {
                 params.add(bound);
             }
         }
+    }
+
+    @Override
+    public CompletableFuture<SearchResult> searchScoped(
+        final String query, final int maxResults, final int offset,
+        final String repoType, final String repoName, final String sortBy,
+        final boolean sortAsc, final List<String> allowedRepos,
+        final List<FieldFilter> fieldFilters
+    ) {
+        return this.search(
+            query, maxResults, offset, repoType, repoName, sortBy, sortAsc,
+            allowedRepos, fieldFilters
+        );
     }
 
     @Override
