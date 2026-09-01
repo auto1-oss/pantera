@@ -12,6 +12,7 @@ package com.auto1.pantera.api.v1;
 
 import com.auto1.pantera.api.AuthzHandler;
 import com.auto1.pantera.api.RepoAuthzHandler;
+import com.auto1.pantera.api.SecretRedactor;
 import com.auto1.pantera.api.ManageStorageAliases;
 import com.auto1.pantera.api.perms.ApiAliasPermission;
 import com.auto1.pantera.asto.Key;
@@ -316,8 +317,12 @@ public final class StorageAliasHandler {
      */
     private static JsonArray aliasesToArray(final Collection<JsonObject> aliases) {
         final JsonArray arr = new JsonArray();
+        // SECURITY (2.2.9, repo-config-secret): alias configs carry backend
+        // credentials (S3 secretAccessKey / sessionToken, tokens). Redact
+        // before they cross the read API — secrets are write-only.
+        final SecretRedactor redactor = new SecretRedactor();
         for (final JsonObject alias : aliases) {
-            arr.add(new io.vertx.core.json.JsonObject(alias.toString()));
+            arr.add(new io.vertx.core.json.JsonObject(redactor.redact(alias).toString()));
         }
         return arr;
     }
@@ -337,7 +342,7 @@ public final class StorageAliasHandler {
             if (alias.containsKey("storage")) {
                 entry.put("config",
                     new io.vertx.core.json.JsonObject(
-                        alias.getJsonObject("storage").toString()));
+                        new SecretRedactor().redact(alias.getJsonObject("storage")).toString()));
             }
             arr.add(entry);
         }

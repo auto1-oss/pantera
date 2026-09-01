@@ -12,6 +12,8 @@ package com.auto1.pantera.api.v1;
 
 import com.auto1.pantera.api.AuthTokenRest;
 import com.auto1.pantera.api.AuthzHandler;
+import com.auto1.pantera.api.RepoAuthzHandler;
+import com.auto1.pantera.api.SecretRedactor;
 import com.auto1.pantera.api.RepositoryEvents;
 import com.auto1.pantera.api.RepositoryName;
 import com.auto1.pantera.api.perms.ApiRepositoryPermission;
@@ -20,6 +22,7 @@ import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.scheduling.MetadataEventQueues;
 import com.auto1.pantera.security.perms.AdapterBasicPermission;
+import com.auto1.pantera.security.perms.Action;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.RepoData;
 import com.auto1.pantera.settings.cache.FiltersCache;
@@ -119,13 +122,21 @@ public final class RepositoryHandler {
         router.get("/api/v1/repositories")
             .handler(new AuthzHandler(this.policy, read))
             .handler(this::listRepositories);
+        // SECURITY (2.2.9): the list route filters by the per-repository read
+        // grant; the detail/HEAD/members routes must apply the same filter or
+        // they become a visibility bypass for repositories the caller cannot
+        // list.
+        final RepoAuthzHandler repoRead =
+            new RepoAuthzHandler(this.policy, "name", Action.Standard.READ);
         // GET /api/v1/repositories/:name — get repo config
         router.get("/api/v1/repositories/:name")
             .handler(new AuthzHandler(this.policy, read))
+            .handler(repoRead)
             .handler(this::getRepository);
         // HEAD /api/v1/repositories/:name — check existence
         router.head("/api/v1/repositories/:name")
             .handler(new AuthzHandler(this.policy, read))
+            .handler(repoRead)
             .handler(this::headRepository);
         // PUT /api/v1/repositories/:name — create or update
         router.put("/api/v1/repositories/:name")
@@ -141,6 +152,7 @@ public final class RepositoryHandler {
         // GET /api/v1/repositories/:name/members — group repo members
         router.get("/api/v1/repositories/:name/members")
             .handler(new AuthzHandler(this.policy, read))
+            .handler(repoRead)
             .handler(this::getMembers);
     }
 
@@ -231,7 +243,10 @@ public final class RepositoryHandler {
             if (!this.crs.exists(rname)) {
                 return null;
             }
-            return this.crs.value(rname);
+            // SECURITY (2.2.9, repo-config-secret): the persisted document
+            // carries upstream passwords and backend credentials. The read
+            // API is a redaction boundary — secrets are write-only.
+            return new SecretRedactor().redact(this.crs.value(rname));
         }, HandlerExecutor.get()).whenComplete((config, err) -> {
             if (err != null) {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
@@ -356,7 +371,14 @@ public final class RepositoryHandler {
         final String actor = ctx.user().principal().getString(AuthTokenRest.SUB);
         final String auditAction = exists ? "REPO_UPDATE" : "REPO_CREATE";
         CompletableFuture.runAsync(
-            () -> this.crs.save(rname, body, actor),
+            () -> {
+                // Secrets are write-only on the read API (masked as "***"). A
+                // client that round-trips the masked document must not
+                // overwrite the real stored secret with the sentinel.
+                final javax.json.JsonObject stored = exists
+                    ? RepositoryHandler.asObject(this.crs.value(rname)) : null;
+                this.crs.save(rname, new SecretRedactor().restoreMasked(body, stored), actor);
+            },
             HandlerExecutor.get()
         ).whenComplete((ignored, err) -> {
             if (err != null) {
@@ -374,6 +396,16 @@ public final class RepositoryHandler {
                 ctx.response().setStatusCode(200).end();
             }
         });
+    }
+
+    /**
+     * Narrow a stored config structure to an object (group members etc. are
+     * always objects; anything else yields {@code null} so no merge runs).
+     * @param value Stored structure
+     * @return The object, or {@code null}
+     */
+    private static javax.json.JsonObject asObject(final JsonStructure value) {
+        return value instanceof javax.json.JsonObject ? (javax.json.JsonObject) value : null;
     }
 
     /**

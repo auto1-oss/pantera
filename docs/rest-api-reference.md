@@ -446,10 +446,12 @@ curl "http://localhost:8086/api/v1/repositories?type=maven&page=0&size=10" \
 
 ### GET /api/v1/repositories/:name
 
-Get the full configuration of a specific repository.
+Get the configuration of a specific repository.
 
 **Authentication:** JWT Bearer token required.
-**Permission:** `api_repository_permissions:read`
+**Permission:** `api_repository_permissions:read` **and** `adapter_basic_permissions` `read` on `:name` (2.2.9 — the same per-repository filter the list endpoint applies; a repository the caller cannot list cannot be read here either).
+
+**Secrets are write-only (2.2.9).** Secret-bearing fields anywhere in the returned document — `remotes[].password`, storage `credentials.secretAccessKey` / `sessionToken`, tokens, API keys — are returned as the mask `"***"`, never in plaintext. Submitting a document that still contains `"***"` in a secret field via `PUT` keeps the stored value (so an edit of an unrelated field does not clobber the secret); submitting a new value replaces it.
 
 **Path Parameters:**
 
@@ -1095,6 +1097,8 @@ List all global storage aliases.
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_alias_permissions:read`
+
+Backend credentials in each alias `config` (`secretAccessKey`, `sessionToken`, tokens, passwords) are returned masked as `"***"` (2.2.9) — the same write-only rule as repository configuration.
 
 **Response (200):**
 
