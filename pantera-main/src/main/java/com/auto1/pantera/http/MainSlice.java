@@ -36,6 +36,16 @@ import java.util.regex.Pattern;
 public final class MainSlice extends Slice.Wrap {
 
     /**
+     * Captures the repository name from an {@code /.import/<repo>/<path>} URL.
+     */
+    private static final Pattern IMPORT_REPO = Pattern.compile("^/\\.import/([^/]+)");
+
+    /**
+     * Captures the repository name from a {@code /.merge/<repo>} URL.
+     */
+    private static final Pattern MERGE_REPO = Pattern.compile("^/\\.merge/([^/]+)");
+
+    /**
      * Route path returns {@code NO_CONTENT} status if path is empty.
      */
     private static final RtPath EMPTY_PATH = (line, headers, body) -> {
@@ -91,14 +101,19 @@ public final class MainSlice extends Slice.Wrap {
                     new RtRule.ByPath("/\\.import/.*"),
                     new RtRule.Any(MethodRule.PUT, MethodRule.POST)
                 ),
-                new ImportSlice(imports)
+                // Security (2.2.9): the global import route is authenticated
+                // and authorized for repository-scoped WRITE on the repo named
+                // in the URL. Previously mounted unauthenticated ahead of the
+                // auth chain — an anonymous artifact-overwrite / metadata-merge
+                // primitive and the entry point for the gem-path RCE.
+                slices.repoScopedWrite(new ImportSlice(imports), MainSlice.IMPORT_REPO)
             ),
             new RtRulePath(
                 new RtRule.All(
                     new RtRule.ByPath("/\\.merge/.*"),
                     MethodRule.POST
                 ),
-                new MergeShardsSlice(slices)
+                slices.repoScopedWrite(new MergeShardsSlice(slices), MainSlice.MERGE_REPO)
             ),
             new RtRulePath(
                 RtRule.FALLBACK,

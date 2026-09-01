@@ -1397,6 +1397,34 @@ public class RepositorySlices {
         );
     }
 
+    /**
+     * Wrap a global maintenance origin (import / merge) so that each request
+     * is authenticated and authorized for a repository-scoped {@code WRITE}
+     * on the repository named in the request path.
+     *
+     * <p>Exposed so {@link com.auto1.pantera.http.MainSlice} can protect the
+     * {@code /.import} and {@code /.merge} routes with the same combined
+     * Basic/token authentication and repository-scoped authorization every
+     * adapter upload path already enforces — without leaking the private
+     * authentication / policy primitives.</p>
+     *
+     * @param origin Origin slice to protect
+     * @param repoInPath Pattern capturing the repository name in group 1
+     * @return Authenticating, repository-scoped-write decorator
+     */
+    public Slice repoScopedWrite(
+        final Slice origin, final java.util.regex.Pattern repoInPath
+    ) {
+        return new com.auto1.pantera.http.RepoScopedAuthSlice(
+            origin,
+            authentication(),
+            tokens.auth(),
+            securityPolicy(),
+            repoInPath,
+            com.auto1.pantera.security.perms.Action.Standard.WRITE
+        );
+    }
+
     private Authentication authentication() {
         return new LoggingAuth(settings.authz().authentication());
     }
