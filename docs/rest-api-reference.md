@@ -446,10 +446,12 @@ curl "http://localhost:8086/api/v1/repositories?type=maven&page=0&size=10" \
 
 ### GET /api/v1/repositories/:name
 
-Get the full configuration of a specific repository.
+Get the configuration of a specific repository.
 
 **Authentication:** JWT Bearer token required.
-**Permission:** `api_repository_permissions:read`
+**Permission:** `api_repository_permissions:read` **and** `adapter_basic_permissions` `read` on `:name` (2.2.9 — the same per-repository filter the list endpoint applies; a repository the caller cannot list cannot be read here either).
+
+**Secrets are write-only (2.2.9).** Secret-bearing fields anywhere in the returned document — `remotes[].password`, storage `credentials.secretAccessKey` / `sessionToken`, tokens, API keys — are returned as the mask `"***"`, never in plaintext. Submitting a document that still contains `"***"` in a secret field via `PUT` keeps the stored value (so an edit of an unrelated field does not clobber the secret); submitting a new value replaces it.
 
 **Path Parameters:**
 
@@ -753,6 +755,11 @@ Create a new user or update an existing one. If the user exists, the `update` pe
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_user_permissions:create` (new) or `api_user_permissions:update` (existing)
 
+**Privilege ceiling (2.2.9).** `create`/`update` is a delegated authoring right, not root; unless the caller holds `all_permission`:
+- Resetting an **existing** user's password (`pass`/`password` on an existing user) additionally requires `api_user_permissions:change_password`, and the new password is validated by the same password policy as self-service changes; it also revokes that user's live tokens.
+- `roles` may only name roles the caller **already holds** — a caller cannot assign (to themselves or anyone) a role above their own, so the built-in `admin` role cannot be self-assigned. Requests exceeding the ceiling are refused with `403`.
+- An initial password on user **creation** must satisfy the password policy (`400` otherwise).
+
 **Request Body:**
 
 ```json
@@ -999,6 +1006,8 @@ Create a new role or update an existing one. If the role exists, the `update` pe
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_role_permissions:create` (new) or `api_role_permissions:update` (existing)
 
+**Privilege ceiling (2.2.9).** Unless the caller holds `all_permission`: the built-in `admin` role cannot be modified; `all_permission` cannot be authored into a role; and every permission the role would grant must already be implied by the caller's own effective permissions (evaluated on the materialised permissions, not the raw JSON). A role editor therefore cannot grant themselves or others anything above what they hold. Requests exceeding the ceiling are refused with `403`.
+
 **Request Body:**
 
 ```json
@@ -1096,6 +1105,8 @@ List all global storage aliases.
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_alias_permissions:read`
 
+Backend credentials in each alias `config` (`secretAccessKey`, `sessionToken`, tokens, passwords) are returned masked as `"***"` (2.2.9) — the same write-only rule as repository configuration.
+
 **Response (200):**
 
 ```json
@@ -1189,7 +1200,7 @@ curl -X DELETE http://localhost:8086/api/v1/storages/old-storage \
 List storage aliases scoped to a specific repository.
 
 **Authentication:** JWT Bearer token required.
-**Permission:** `api_alias_permissions:read`
+**Permission:** `api_alias_permissions:read` **and** `adapter_basic_permissions` `read` on `:name` (2.2.9 — per-repository scope is enforced in addition to the global bit).
 
 **Response (200):**
 
@@ -1219,7 +1230,7 @@ curl http://localhost:8086/api/v1/repositories/maven-central/storages \
 Create or update a storage alias scoped to a repository.
 
 **Authentication:** JWT Bearer token required.
-**Permission:** `api_alias_permissions:read`
+**Permission:** `api_alias_permissions:create` **and** `adapter_basic_permissions` `write` on `:name` (2.2.9 — this route previously accepted the read-only alias grant; an alias write rewrites the repository's backing storage and now requires the create bit plus repository-scoped write).
 
 **Request Body:**
 
@@ -1248,7 +1259,7 @@ curl -X PUT http://localhost:8086/api/v1/repositories/maven-central/storages/loc
 Delete a repository-scoped storage alias.
 
 **Authentication:** JWT Bearer token required.
-**Permission:** `api_alias_permissions:delete`
+**Permission:** `api_alias_permissions:delete` **and** `adapter_basic_permissions` `delete` on `:name` (2.2.9).
 
 **Response (200):** Empty body on success.
 
@@ -1399,7 +1410,7 @@ curl -OJ "http://localhost:8086/api/v1/repositories/maven-local/artifact/downloa
 
 ### POST /api/v1/repositories/:name/artifact/download-token
 
-Generate a short-lived (60 seconds), stateless HMAC-signed download token. This enables native browser downloads without requiring the JWT in the URL. The UI calls this first, then opens the `download-direct` URL in a new tab.
+Generate a short-lived (60 seconds), **single-use** HMAC-signed download token bound to the repository, the path and the issuing user. This enables native browser downloads without requiring the JWT in the URL. The UI calls this first, then opens the `download-direct` URL in a new tab. The signing key comes from `PANTERA_DOWNLOAD_TOKEN_SECRET` or a persisted random key shared by all nodes (see the environment-variables reference); it is never derived from process metadata.
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_repository_permissions:read`
@@ -1429,7 +1440,7 @@ curl -X POST "http://localhost:8086/api/v1/repositories/maven-local/artifact/dow
 
 ### GET /api/v1/repositories/:name/artifact/download-direct
 
-Download an artifact using an HMAC download token instead of JWT authentication. Tokens are valid for 60 seconds and are scoped to a specific repository and path.
+Download an artifact using an HMAC download token instead of JWT authentication. Tokens are valid for 60 seconds (future-dated timestamps are rejected), are scoped to a specific repository and path, are spent on first use, and the user who issued the token must still hold read permission on the repository at redemption — a token proves possession, not authorization.
 
 **Authentication:** HMAC token in query parameter (no JWT required).
 
@@ -1444,7 +1455,9 @@ Download an artifact using an HMAC download token instead of JWT authentication.
 - `Content-Type: application/octet-stream`
 - `Content-Length: <size>` (when available)
 
-**Response (401):** Token expired, invalid signature, or malformed token.
+**Response (401):** Token expired, not yet valid, already used, invalid signature, or malformed token.
+
+**Response (403):** Token issued for a different repository, or the issuing user no longer holds read permission on this repository.
 
 **curl example:**
 
@@ -1514,7 +1527,7 @@ curl -X DELETE http://localhost:8086/api/v1/repositories/maven-local/packages \
 
 ### GET /api/v1/search
 
-Full-text search across all indexed artifacts. Results are filtered by the caller's `read` permission on each repository. Supports plain full-text search and structured field filters.
+Full-text search across all indexed artifacts. Results are filtered by the caller's `read` permission on each repository — and since 2.2.9 that scope also governs `total`, `hasMore`, `type_counts` and `repo_counts` (they are computed over the authorised set, so a caller with no repository read grant receives empty aggregates rather than global counts or the names of restricted repositories). Supports plain full-text search and structured field filters.
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_search_permissions:read`
@@ -2352,6 +2365,164 @@ curl -X PUT http://localhost:8086/api/v1/admin/client-base-url-settings \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"client_base_url": "https://reg.example.com/artifactory"}'
+```
+
+---
+
+### GET /api/v1/admin/request-limits-settings
+
+Retrieve the request &amp; storage limits (2.2.9): the hard cap on a single request body and the directories an inline `fs` repository storage path may live under. Environment fallbacks `PANTERA_MAX_REQUEST_BODY_BYTES` / `PANTERA_FS_STORAGE_ROOTS` apply only while no row has been saved.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin`
+
+**Response (200):** every key is always present; all values are strings.
+
+```json
+{
+  "max_request_body_bytes": "10737418240",
+  "fs_storage_roots": "/var/pantera/data"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `max_request_body_bytes` | string (integer bytes, ≥ 1048576) | Hard cap on a single request body; a declared size above it answers `413` before any byte is read, chunked bodies are metered as they stream. Default `10737418240` (10 GiB). |
+| `fs_storage_roots` | string (path-separator delimited absolute directories) | Approved roots for inline `fs` storage paths submitted through `PUT /api/v1/repositories/<name>` or the UI; symlinks are followed before the containment check. Default `/var/pantera/data`. |
+
+**curl example:**
+
+```bash
+curl http://localhost:8086/api/v1/admin/request-limits-settings \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+---
+
+### PUT /api/v1/admin/request-limits-settings
+
+Partial updates are accepted; omitted keys keep their current values. The merged result is validated (round-tripped through the setting's constructor) before anything is written: an unknown key, or a cap below 1 MiB, a non-integer, an empty root list or a relative root, is rejected with `400` and nothing is persisted. Takes effect on the very next request on every node: the HTTP server reads the cap per request and the repository API reads the roots per write. Every successful update is audit-logged (`event.category=configuration`).
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin`
+
+**Request Body:** any subset of the fields above, values as strings.
+
+**Response (204):** No content.
+
+**Response (400):**
+
+```json
+{
+  "error": "BAD_REQUEST",
+  "message": "Invalid request-limits setting: ..."
+}
+```
+
+---
+
+### GET /api/v1/admin/egress-settings
+
+Retrieve the outbound egress policy (2.2.9) applied to every connection Pantera makes on its own behalf (proxy remotes, index links, bearer-token realms, storage-alias endpoints) and the hosts trusted to receive upstream credentials. Link-local and cloud-metadata destinations are refused regardless of these settings. Environment fallbacks `PANTERA_EGRESS_BLOCK_PRIVATE` / `PANTERA_EGRESS_ALLOW_HOSTS` / `PANTERA_UPSTREAM_CREDENTIAL_ALLOW_HOSTS` apply only while no row has been saved.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin`
+
+**Response (200):** every key is always present; all values are strings.
+
+```json
+{
+  "egress_block_private": "false",
+  "egress_allow_hosts": "",
+  "upstream_credential_allow_hosts": ""
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `egress_block_private` | string (`"true"`/`"false"`) | Also refuse loopback and private ranges. Default `"false"`. |
+| `egress_allow_hosts` | string (comma-separated host names) | Hosts exempt from the private-destination refusal. Default empty. |
+| `upstream_credential_allow_hosts` | string (comma-separated host names) | Additional hosts a bearer-token realm may live on before an upstream's credentials are released to it; by default only the upstream host or a host under its parent domain. Default empty. |
+
+**curl example:**
+
+```bash
+curl http://localhost:8086/api/v1/admin/egress-settings \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+---
+
+### PUT /api/v1/admin/egress-settings
+
+Partial updates are accepted; omitted keys keep their current values. The merged result is validated (round-tripped through the setting's constructor) before anything is written: an unknown key, or a boolean other than `"true"`/`"false"` or an entry that is not a host name, is rejected with `400` and nothing is persisted. Takes effect on the next outbound connection and credential decision on every node; repository and storage-alias writes are validated against the same policy. Every successful update is audit-logged (`event.category=configuration`).
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin`
+
+**Request Body:** any subset of the fields above, values as strings.
+
+**Response (204):** No content.
+
+**Response (400):**
+
+```json
+{
+  "error": "BAD_REQUEST",
+  "message": "Invalid egress setting: ..."
+}
+```
+
+---
+
+### GET /api/v1/admin/login-throttle-settings
+
+Retrieve the password-login throttle (2.2.9): failures per (user, client IP) tolerated before further attempts are refused, and the window they count in. Environment fallbacks `PANTERA_LOGIN_THROTTLE_MAX_FAILURES` / `PANTERA_LOGIN_THROTTLE_WINDOW_SECONDS` apply only while no row has been saved.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin`
+
+**Response (200):** every key is always present; all values are strings.
+
+```json
+{
+  "login_throttle_max_failures": "5",
+  "login_throttle_window_seconds": "900"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `login_throttle_max_failures` | string (integer ≥ 1) | Failures before lockout. Default `"5"`. |
+| `login_throttle_window_seconds` | string (integer ≥ 1) | Window in seconds; a successful login clears the counter. Counters are per node. Default `"900"`. |
+
+**curl example:**
+
+```bash
+curl http://localhost:8086/api/v1/admin/login-throttle-settings \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+---
+
+### PUT /api/v1/admin/login-throttle-settings
+
+Partial updates are accepted; omitted keys keep their current values. The merged result is validated (round-tripped through the setting's constructor) before anything is written: an unknown key, or a non-integer or a value below 1, is rejected with `400` and nothing is persisted. Takes effect on the next login attempt on every node. Every successful update is audit-logged (`event.category=configuration`).
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin`
+
+**Request Body:** any subset of the fields above, values as strings.
+
+**Response (204):** No content.
+
+**Response (400):**
+
+```json
+{
+  "error": "BAD_REQUEST",
+  "message": "Invalid login-throttle setting: ..."
+}
 ```
 
 ---

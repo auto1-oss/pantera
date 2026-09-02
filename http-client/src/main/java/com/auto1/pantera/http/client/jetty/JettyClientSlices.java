@@ -653,6 +653,18 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
         // Idle timeout can safely be 0 (infinite)
         result.setIdleTimeout(settings.idleTimeout());
         result.setAddressResolutionTimeout(5_000L);
+        // SECURITY (2.2.9): every outbound connect — proxy upstreams,
+        // upstream index links, Bearer token realms, redirect hops — resolves
+        // through the egress policy, AFTER DNS, so a destination in a denied
+        // range (cloud metadata, link-local, ...) is refused even when it
+        // hides behind a benign hostname. The real async resolver is built
+        // lazily from the started client's executor/scheduler.
+        result.setSocketAddressResolver(
+            new com.auto1.pantera.http.client.egress.EgressFilteringResolver(
+                com.auto1.pantera.http.client.egress.EgressSettingsRegistry.policy(),
+                new LazyAsyncResolver(result)
+            )
+        );
 
         // Connection pool limits to prevent resource exhaustion. The
         // per-destination cap is the HTTP/1.1 keep-alive pool size —
@@ -669,5 +681,52 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
         result.setUserAgentField(null);
 
         return result;
+    }
+
+    /**
+     * Jetty's own async resolver, created on first use from the (by then
+     * started) client's executor and scheduler — the same resolver the
+     * client would have installed itself in {@code doStart()} had none
+     * been set.
+     */
+    private static final class LazyAsyncResolver implements org.eclipse.jetty.util.SocketAddressResolver {
+
+        /**
+         * Owning client.
+         */
+        private final HttpClient owner;
+
+        /**
+         * Lazily-built delegate.
+         */
+        private volatile org.eclipse.jetty.util.SocketAddressResolver delegate;
+
+        /**
+         * Ctor.
+         *
+         * @param owner Owning client
+         */
+        LazyAsyncResolver(final HttpClient owner) {
+            this.owner = owner;
+        }
+
+        @Override
+        public void resolve(
+            final String host,
+            final int port,
+            final java.util.Map<String, Object> context,
+            final org.eclipse.jetty.util.Promise<java.util.List<java.net.InetSocketAddress>> promise
+        ) {
+            org.eclipse.jetty.util.SocketAddressResolver current = this.delegate;
+            if (current == null) {
+                current = new org.eclipse.jetty.util.SocketAddressResolver.Async(
+                    this.owner.getExecutor(),
+                    this.owner.getScheduler(),
+                    this.owner.getAddressResolutionTimeout()
+                );
+                this.delegate = current;
+            }
+            current.resolve(host, port, context, promise);
+        }
     }
 }

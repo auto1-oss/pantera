@@ -51,6 +51,15 @@ final class PushChartSlice implements Slice {
     static final String REPO_TYPE = "helm";
 
     /**
+     * Default cap on an uploaded chart archive (128 MiB). Before 2.2.9 the
+     * whole request body was collected into one contiguous array with no
+     * bound at all, so an authenticated writer could push an arbitrarily
+     * large "chart" straight into the heap (resource-dos F45). Real charts
+     * are KBs to a few MBs; the cap leaves ample room for CRD-heavy ones.
+     */
+    static final long DEFAULT_MAX_CHART_BYTES = 128L * 1024L * 1024L;
+
+    /**
      * The Storage.
      */
     private final Storage storage;
@@ -69,6 +78,11 @@ final class PushChartSlice implements Slice {
     private final com.auto1.pantera.index.SyncArtifactIndexer syncIndex;
 
     /**
+     * Cap on an uploaded chart archive, in bytes.
+     */
+    private final long maxChartBytes;
+
+    /**
      * Legacy ctor (no synchronous index writer).
      * @param storage The storage.
      * @param events Events queue
@@ -77,6 +91,21 @@ final class PushChartSlice implements Slice {
     PushChartSlice(final Storage storage, final Optional<Queue<ArtifactEvent>> events,
         final String rname) {
         this(storage, events, rname, com.auto1.pantera.index.SyncArtifactIndexer.NOOP);
+    }
+
+    /**
+     * Ctor with an explicit chart cap and no synchronous index writer (tests).
+     * @param storage The storage.
+     * @param events Events queue
+     * @param rname Repository name
+     * @param maxChartBytes Cap on an uploaded chart archive, in bytes
+     */
+    PushChartSlice(final Storage storage, final Optional<Queue<ArtifactEvent>> events,
+        final String rname, final long maxChartBytes) {
+        this(
+            storage, events, rname,
+            com.auto1.pantera.index.SyncArtifactIndexer.NOOP, maxChartBytes
+        );
     }
 
     /**
@@ -89,10 +118,26 @@ final class PushChartSlice implements Slice {
     PushChartSlice(final Storage storage, final Optional<Queue<ArtifactEvent>> events,
         final String rname,
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex) {
+        this(storage, events, rname, syncIndex, PushChartSlice.DEFAULT_MAX_CHART_BYTES);
+    }
+
+    /**
+     * Canonical ctor.
+     * @param storage The storage.
+     * @param events Events queue
+     * @param rname Repository name
+     * @param syncIndex Synchronous artifact-index writer
+     * @param maxChartBytes Cap on an uploaded chart archive, in bytes
+     */
+    PushChartSlice(final Storage storage, final Optional<Queue<ArtifactEvent>> events,
+        final String rname,
+        final com.auto1.pantera.index.SyncArtifactIndexer syncIndex,
+        final long maxChartBytes) {
         this.storage = storage;
         this.events = events;
         this.rname = rname;
         this.syncIndex = syncIndex;
+        this.maxChartBytes = maxChartBytes;
     }
 
     @Override
@@ -102,7 +147,13 @@ final class PushChartSlice implements Slice {
         final Content body
     ) {
         final Optional<String> upd = new RqParams(line.uri()).value("updateIndex");
-        return memory(body).flatMapCompletable(
+        // Meter the upload against the chart cap: the body used to be collected
+        // whole with no bound (resource-dos F45). A metered overflow surfaces
+        // as RequestBodyTooLargeException -> 413 below.
+        final Content bounded = new com.auto1.pantera.http.body.BoundedContent(
+            body, this.maxChartBytes
+        );
+        return memory(bounded).flatMapCompletable(
                 tgz -> {
                     // Organize by chart name: <chart_name>/<chart_name>-<version>.tgz
                     final ChartYaml chart = tgz.chartYaml();
@@ -149,7 +200,19 @@ final class PushChartSlice implements Slice {
                 }
             ).andThen(Single.just(ResponseBuilder.ok().build()))
             .to(SingleInterop.get())
-            .toCompletableFuture();
+            .toCompletableFuture()
+            .handle((response, error) -> {
+                if (error == null) {
+                    return response;
+                }
+                if (com.auto1.pantera.http.RequestBodyTooLargeException.isCause(error)) {
+                    return ResponseBuilder.payloadTooLarge().build();
+                }
+                if (error instanceof RuntimeException runtime) {
+                    throw runtime;
+                }
+                throw new java.util.concurrent.CompletionException(error);
+            });
     }
 
     /**

@@ -286,6 +286,24 @@ Precedence for the base used to build a repository's emitted URLs:
 | `client_base_host_allowlist` | string (comma-separated) | `` (empty) | `Host` header values permitted for derivation, matched case-insensitively including port. **Empty is PERMISSIVE**: any `Host` is honoured -- this is the default so upgrading an existing deployment never breaks it, but it means a client can steer emitted URLs at any host it supplies. A non-matching `Host` is treated exactly as an absent one (falls through to the repository's configured `url:` or the request's own further fallback), never emitted verbatim. Pantera logs a startup WARN (`event.action=client_base_host_allowlist_permissive`) while this stays empty. Ignored entirely while `client_base_url` is set. |
 | `client_base_scheme` | `auto` \| `http` \| `https` | `auto` | Scheme used in the absolute links Pantera emits. `auto` derives it from the request: `X-Forwarded-Proto` when `trust_forwarded_headers` is on, otherwise `http`. Set to `https` when Pantera sits behind a TLS-terminating **layer-4** load balancer (an AWS NLB with a TLS listener forwarding to a TCP target group, say): such a deployment gives Pantera neither a TLS connection of its own nor an `X-Forwarded-Proto` header, so `auto` has no signal and every emitted link says `http`. The host is still derived per request, so several client-facing DNS names each keep their own URLs -- which is what distinguishes this from `client_base_url`, which pins host and scheme together. Ignored entirely while `client_base_url` is set. |
 
+#### Security policy settings (auth_settings table)
+
+Since 2.2.9 the security limits introduced in that release are DB-backed admin settings, editable in the admin UI (Settings → *Request & Storage Limits*, *Outbound Egress Policy*, *Login Throttling*) or through `GET`/`PUT /api/v1/admin/request-limits-settings`, `/egress-settings` and `/login-throttle-settings` (see the [REST API reference](rest-api-reference.md)). Each key resolves **DB row → `PANTERA_<KEY>` environment variable → default**; the environment variable is a fallback consulted only while no row has been saved (rows are deliberately not seeded, so an existing env-driven deployment keeps working unchanged). A write reloads the node that served it and broadcasts the reload to peer nodes over Valkey (the shared cache-invalidation channel), and every consumer reads the setting per decision, so changes apply on the next request cluster-wide without a restart. Keys are validated independently: a value that fails validation (a body cap below the 1 MiB floor, a relative root, a malformed host list, a non-positive throttle value) is rejected with `400` by the admin endpoints and UI; if one nevertheless reaches the store or environment, only that key falls back to its default -- logged as `event.action=<section>_settings_load` with `event.reason=<key>` -- and its sibling keys keep their configured values.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `max_request_body_bytes` | integer (bytes, ≥ 1048576) | `10737418240` (10 GiB) | Hard cap on a single request body, applied to every request regardless of per-repository `content-length-max`. A declared `Content-Length` above it is rejected with `413` before any body byte is read; a chunked body is metered as it streams. Set it above your largest artifact. Env fallback `PANTERA_MAX_REQUEST_BODY_BYTES`. |
+| `fs_storage_roots` | string (path-separator delimited absolute directories) | `/var/pantera/data` | Directories under which an inline `fs` storage `path` submitted through the repository REST API or admin UI may live. The check follows symlinks: a path is accepted only when its real location is under an approved root. Existing repositories are not re-validated. Env fallback `PANTERA_FS_STORAGE_ROOTS`. |
+| `egress_block_private` | boolean | `false` | Outbound egress strictness for every connection Pantera makes on its own behalf (proxy remotes, index links, bearer realms, storage-alias endpoints). Link-local, cloud-metadata, any-local and multicast destinations are always refused; `true` also refuses loopback and private ranges. Enforced after DNS resolution on every connect. Env fallback `PANTERA_EGRESS_BLOCK_PRIVATE`. |
+| `egress_allow_hosts` | string (comma-separated host names) | `` (empty) | Hosts exempt from the private-destination refusal, e.g. an internal mirror that must stay reachable in strict mode. Env fallback `PANTERA_EGRESS_ALLOW_HOSTS`. |
+| `upstream_credential_allow_hosts` | string (comma-separated host names) | `` (empty) | Additional hosts a bearer-token realm may live on before an upstream's configured credentials are released to it; by default only the upstream host itself or a host under its parent domain qualifies. Env fallback `PANTERA_UPSTREAM_CREDENTIAL_ALLOW_HOSTS`. |
+| `login_throttle_max_failures` | integer (≥ 1) | `5` | Failed password logins per (user, client IP) before further attempts are refused for the window. Env fallback `PANTERA_LOGIN_THROTTLE_MAX_FAILURES`. |
+| `login_throttle_window_seconds` | integer (≥ 1) | `900` | Window, in seconds, in which those failures are counted; a successful login clears the counter. Counters are per node. Env fallback `PANTERA_LOGIN_THROTTLE_WINDOW_SECONDS`. |
+
+A `PUT` with an unknown key, or a value the setting refuses (a body cap below 1 MiB, a relative storage root, a malformed host, a zero threshold), answers `400` and writes nothing.
+
+**Deliberately env-only (boot-time) settings.** A few 2.2.9 knobs stay environment variables because they are needed before the database is reachable, or because storing them in the settings table would defeat their purpose: `PANTERA_BOOTSTRAP_ADMIN_PASSWORD` (consumed once, on the first database-backed start, before any admin exists), `PANTERA_DOWNLOAD_TOKEN_SECRET` (a signing secret; the table holds only the generated key when the variable is unset), `PANTERA_METRICS_BIND` (a listener bind address, fixed when the socket is opened at boot), and the dev-compose-only `KEYCLOAK_CLIENT_SECRET` / `PANTERA_DEV_SSO_USER_PASSWORD` (secrets injected into third-party containers, never Pantera settings).
+
 ---
 
 ### 1.5 meta.metrics
@@ -1531,6 +1549,7 @@ a Java system property using the lowercase, dot-separated equivalent (e.g.,
 | `PANTERA_DEDUP_MAX_AGE_MS` | `300000` | Maximum age of in-flight dedup entries (ms) -- 5 minutes |
 | `PANTERA_DOCKER_CACHE_EXPIRY_HOURS` | `24` | Docker proxy cache entry lifetime (hours) |
 | `PANTERA_BODY_BUFFER_THRESHOLD` | `1048576` | Request body size threshold (bytes). Below this: buffered in memory. Above: streamed from disk. |
+| `PANTERA_MAX_REQUEST_BODY_BYTES` | `10737418240` (10 GiB) | **Fallback tier only** -- the DB-backed `max_request_body_bytes` admin setting (see [Security policy settings](#security-policy-settings-auth_settings-table)) is primary; this variable is consulted only while no row has been saved. Hard cap on a single request body (bytes), metered on actual bytes for declared and chunked framing alike; exceeding it answers `413`. Applies regardless of per-repository `content-length-max`. |
 
 ### 7.4 Metrics
 
@@ -1561,7 +1580,14 @@ a Java system property using the lowercase, dot-separated equivalent (e.g.,
 | `PANTERA_SEARCH_MAX_PAGE` | `500` | Maximum page number for search pagination |
 | `PANTERA_SEARCH_MAX_SIZE` | `100` | Maximum results per search page |
 | `PANTERA_SEARCH_OVERFETCH` | `10` | Over-fetch multiplier for permission-filtered search results. The DB fetches `page_size * N` rows so that after dropping rows the user has no access to, the page can still be filled. Increase for deployments with many repos where users only access a few. |
-| `PANTERA_DOWNLOAD_TOKEN_SECRET` | auto-generated | HMAC secret for download token signing |
+| `PANTERA_DOWNLOAD_TOKEN_SECRET` | persisted random / ephemeral random | HMAC key for direct-download tokens; ≥32 random bytes. Unset → generated once and stored in `auth_settings` (DB-backed, shared by HA nodes) or ephemeral per process (DB-less). Never derived from process metadata (2.2.9). |
+| `PANTERA_FS_STORAGE_ROOTS` | `/var/pantera/data` | **Fallback tier only** -- the DB-backed `fs_storage_roots` admin setting (see [Security policy settings](#security-policy-settings-auth_settings-table)) is primary; this variable is consulted only while no row has been saved. Approved base directories for inline `fs` storage paths submitted via the repository REST API/UI; paths outside are rejected with `400` (2.2.9). |
+| `PANTERA_METRICS_BIND` | `0.0.0.0` | Interface the unauthenticated Prometheus metrics listener binds to; restrict to a private address on hosts with a public interface (2.2.9). |
+| `PANTERA_EGRESS_BLOCK_PRIVATE` | `false` | **Fallback tier only** -- the DB-backed `egress_block_private` admin setting (see [Security policy settings](#security-policy-settings-auth_settings-table)) is primary; this variable is consulted only while no row has been saved. Egress policy strictness: link-local/metadata/any-local/multicast destinations are always denied; `true` also denies loopback and private ranges (2.2.9). |
+| `PANTERA_EGRESS_ALLOW_HOSTS` | *(empty)* | **Fallback tier only** -- the DB-backed `egress_allow_hosts` admin setting (see [Security policy settings](#security-policy-settings-auth_settings-table)) is primary; this variable is consulted only while no row has been saved. Hostnames exempt from the egress deny list (2.2.9). |
+| `PANTERA_UPSTREAM_CREDENTIAL_ALLOW_HOSTS` | *(empty)* | **Fallback tier only** -- the DB-backed `upstream_credential_allow_hosts` admin setting (see [Security policy settings](#security-policy-settings-auth_settings-table)) is primary; this variable is consulted only while no row has been saved. Extra hosts allowed to receive an upstream's credentials on Bearer realms / mirror links; default is same host or parent domain only (2.2.9). |
+| `PANTERA_LOGIN_THROTTLE_MAX_FAILURES` | `5` | **Fallback tier only** -- the DB-backed `login_throttle_max_failures` admin setting (see [Security policy settings](#security-policy-settings-auth_settings-table)) is primary. Failed password logins per (user, client IP) before further attempts are refused (2.2.9). |
+| `PANTERA_LOGIN_THROTTLE_WINDOW_SECONDS` | `900` | **Fallback tier only** -- the DB-backed `login_throttle_window_seconds` admin setting is primary. Window, in seconds, in which login failures are counted (2.2.9). |
 
 ### 7.8 Miscellaneous
 
@@ -1697,7 +1723,8 @@ complete variable reference for the Docker Compose stack.
 | `KC_HOSTNAME_STRICT` | `false` | Keycloak hostname strict mode |
 | `KC_HOSTNAME_STRICT_HTTPS` | `false` | Keycloak HTTPS strict mode |
 | `KC_HTTP_ENABLED` | `true` | Enable Keycloak HTTP |
-| `KEYCLOAK_CLIENT_SECRET` | `your_secret` | Pantera Keycloak client secret |
+| `KEYCLOAK_CLIENT_SECRET` | `your_secret` | Pantera Keycloak client secret (also seeds the bundled dev realm on import) |
+| `PANTERA_DEV_SSO_USER_PASSWORD` | `changeme` | Temporary password of the dev realm's sample user, seeded on import (dev stack only) |
 | **Grafana** | | |
 | `GF_SECURITY_ADMIN_USER` | `admin` | Grafana admin username |
 | `GF_SECURITY_ADMIN_PASSWORD` | `changeme` | Grafana admin password |

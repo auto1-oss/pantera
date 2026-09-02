@@ -633,15 +633,30 @@ public class RepositorySlices {
                         cfg.name(),
                         artifactEvents()
                     ),
-                    cfg.storage()
+                    cfg
                 );
                 break;
             case "file-proxy":
                 clientLease = jettyClientSlices(cfg);
                 clientSlices = clientLease.client();
-                final Slice fileProxySlice = new TimeoutSlice(
-                    new FileProxy(clientSlices, cfg, artifactEvents(), this.cooldown),
-                    settings.httpClientSettings().proxyTimeout()
+                // SECURITY (2.2.9): CombinedAuthzSliceWrap mirrors php-proxy /
+                // maven-proxy / go-proxy. file-proxy was the ONLY proxy type
+                // wired without it: the outer AnonymousAccessSlice gate only
+                // challenges requests with NO Authorization header and defers
+                // validation downstream, so `Authorization: Bearer garbage`
+                // sailed straight into the upstream fetch of a deny-by-default
+                // private mirror (read + cache population, no credentials).
+                final Slice fileProxySlice = new CombinedAuthzSliceWrap(
+                    new TimeoutSlice(
+                        new FileProxy(clientSlices, cfg, artifactEvents(), this.cooldown),
+                        settings.httpClientSettings().proxyTimeout()
+                    ),
+                    authentication(),
+                    tokens.auth(),
+                    new OperationControl(
+                        securityPolicy(),
+                        new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                    )
                 );
                 // Browsing disabled for proxy repos - files are fetched on-demand from upstream
                 slice = trimPathSlice(fileProxySlice);
@@ -658,7 +673,7 @@ public class RepositorySlices {
                         RepositorySlices.optionalUrl(cfg), cfg.storage(), securityPolicy(), authentication(), tokens.auth(), tokens, cfg.name(), artifactEvents(), true,
                         this.settings.syncArtifactIndexer(), this.settings.artifactIndex()
                     ),
-                    cfg.storage()
+                    cfg
                 );
                 break;
             case "gem":
@@ -672,7 +687,7 @@ public class RepositorySlices {
                         artifactEvents(),
                         this.settings.syncArtifactIndexer()
                     ),
-                    cfg.storage()
+                    cfg
                 );
                 break;
             case "helm":
@@ -681,7 +696,7 @@ public class RepositorySlices {
                         cfg.storage(), cfg.url().toString(), securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents(),
                         this.settings.syncArtifactIndexer()
                     ),
-                    cfg.storage()
+                    cfg
                 );
                 break;
             case "rpm":
@@ -690,7 +705,7 @@ public class RepositorySlices {
                         tokens.auth(), new com.auto1.pantera.rpm.RepoConfig.FromYaml(cfg.settings(), cfg.name()),
                         artifactEvents(),
                         this.settings.syncArtifactIndexer()),
-                    cfg.storage()
+                    cfg
                 );
                 break;
             case "php":
@@ -727,7 +742,7 @@ public class RepositorySlices {
                         ),
                         "direct-dists"
                     ),
-                    cfg.storage()
+                    cfg
                 );
                 break;
             case "php-proxy":
@@ -768,7 +783,7 @@ public class RepositorySlices {
                         securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents(),
                         this.settings.syncArtifactIndexer()
                     ),
-                    cfg.storage()
+                    cfg
                 );
                 break;
             case "gradle":
@@ -777,7 +792,7 @@ public class RepositorySlices {
                     new MavenSlice(cfg.storage(), securityPolicy(),
                         authentication(), tokens.auth(), cfg.name(), artifactEvents(),
                         this.settings.syncArtifactIndexer()),
-                    cfg.storage()
+                    cfg
                 );
                 break;
             case "gradle-proxy":
@@ -817,7 +832,7 @@ public class RepositorySlices {
                         artifactEvents(),
                         this.settings.syncArtifactIndexer()
                     ),
-                    cfg.storage()
+                    cfg
                 );
                 break;
             case "go-proxy":
@@ -1397,6 +1412,34 @@ public class RepositorySlices {
         );
     }
 
+    /**
+     * Wrap a global maintenance origin (import / merge) so that each request
+     * is authenticated and authorized for a repository-scoped {@code WRITE}
+     * on the repository named in the request path.
+     *
+     * <p>Exposed so {@link com.auto1.pantera.http.MainSlice} can protect the
+     * {@code /.import} and {@code /.merge} routes with the same combined
+     * Basic/token authentication and repository-scoped authorization every
+     * adapter upload path already enforces — without leaking the private
+     * authentication / policy primitives.</p>
+     *
+     * @param origin Origin slice to protect
+     * @param repoInPath Pattern capturing the repository name in group 1
+     * @return Authenticating, repository-scoped-write decorator
+     */
+    public Slice repoScopedWrite(
+        final Slice origin, final java.util.regex.Pattern repoInPath
+    ) {
+        return new com.auto1.pantera.http.RepoScopedAuthSlice(
+            origin,
+            authentication(),
+            tokens.auth(),
+            securityPolicy(),
+            repoInPath,
+            com.auto1.pantera.security.perms.Action.Standard.WRITE
+        );
+    }
+
     private Authentication authentication() {
         return new LoggingAuth(settings.authz().authentication());
     }
@@ -1465,9 +1508,23 @@ public class RepositorySlices {
      * @param storage Repository storage for directory listings
      * @return Slice chain: TrimPathSlice(BrowsableSlice(origin))
      */
-    private static Slice browsableTrimPathSlice(final Slice origin, final com.auto1.pantera.asto.Storage storage) {
+    private Slice browsableTrimPathSlice(final Slice origin, final RepoConfig cfg) {
+        // SECURITY (2.2.9): the directory listing is a repository READ and
+        // must be served only after credential VALIDATION — BrowsableSlice
+        // used to infer "auth passed" from an origin 404, which an
+        // unmatched route hands out before any auth slice runs.
+        final java.util.function.UnaryOperator<Slice> gate = browse ->
+            new CombinedAuthzSliceWrap(
+                browse,
+                authentication(),
+                tokens.auth(),
+                new OperationControl(
+                    securityPolicy(),
+                    new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                )
+            );
         return trimPathSlice(
-            new com.auto1.pantera.http.slice.BrowsableSlice(origin, storage)
+            new com.auto1.pantera.http.slice.BrowsableSlice(origin, cfg.storage(), gate)
         );
     }
 

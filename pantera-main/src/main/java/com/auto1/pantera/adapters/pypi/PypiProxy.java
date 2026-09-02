@@ -64,7 +64,7 @@ public final class PypiProxy implements Slice {
                     final Slice pyProxySlice = new PyProxySlice(
                         client,
                         remote.uri(),
-                        GenericAuthenticator.create(client, remote.username(), remote.pwd()),
+                        GenericAuthenticator.create(client, remote.uri(), remote.username(), remote.pwd()),
                         storage,
                         queue,
                         cfg.name(),

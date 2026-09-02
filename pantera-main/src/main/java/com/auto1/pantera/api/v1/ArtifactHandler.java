@@ -11,14 +11,20 @@
 package com.auto1.pantera.api.v1;
 
 import com.auto1.pantera.api.AuthzHandler;
+import com.auto1.pantera.api.RepoAuthzHandler;
 import com.auto1.pantera.api.RepositoryName;
 import com.auto1.pantera.api.perms.ApiRepositoryPermission;
+import com.auto1.pantera.http.auth.OperationControl;
+import com.auto1.pantera.api.v1.download.DownloadTokens;
+import com.auto1.pantera.api.v1.download.DownloadTokenSupport;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.index.ArtifactIndex;
+import com.auto1.pantera.security.perms.Action;
+import com.auto1.pantera.security.perms.AdapterBasicPermission;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.RepoData;
 import com.auto1.pantera.settings.repo.CrudRepoSettings;
@@ -35,15 +41,12 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
 import javax.json.Json;
 import javax.json.JsonStructure;
 import javax.sql.DataSource;
@@ -55,29 +58,15 @@ import javax.sql.DataSource;
 public final class ArtifactHandler {
 
     /**
-     * Download token TTL in milliseconds.
+     * Direct-download capability tokens (SECURITY, 2.2.9). Replaces the
+     * static HMAC key that fell back to the predictable
+     * {@code pantera-download-<pid>-<user.name>} — see
+     * {@link com.auto1.pantera.api.v1.download.DownloadTokenKey} for the
+     * resolution rules and {@link DownloadTokens} for the verification
+     * contract (constant-time signature check, two-sided timestamp, true
+     * single use, repository + issuer binding).
      */
-    private static final long TOKEN_TTL_MS = 60_000L;
-
-    /**
-     * HMAC algorithm for stateless token signing.
-     */
-    private static final String HMAC_ALGO = "HmacSHA256";
-
-    /**
-     * HMAC secret key — derived from system identity at startup.
-     * Stateless tokens allow any instance behind NLB to validate.
-     */
-    private static final byte[] HMAC_SECRET;
-
-    static {
-        final String seed = System.getenv().getOrDefault(
-            "PANTERA_DOWNLOAD_TOKEN_SECRET", // NOPMD HardCodedCryptoKey - env var name, not key material
-            "pantera-download-" + ProcessHandle.current().pid()
-                + "-" + System.getProperty("user.name", "default")
-        );
-        HMAC_SECRET = seed.getBytes(StandardCharsets.UTF_8);
-    }
+    private final DownloadTokens tokens;
 
     /**
      * Repository settings create/read/update/delete.
@@ -145,12 +134,34 @@ public final class ArtifactHandler {
     ArtifactHandler(final CrudRepoSettings crs, final RepoData repoData,
         final Policy<?> policy, final DataSource dataSource,
         final ArtifactIndex artifactIndex, final StorageMetaCache metaCache) {
+        this(
+            crs, repoData, policy, dataSource, artifactIndex, metaCache,
+            DownloadTokenSupport.create(dataSource)
+        );
+    }
+
+    /**
+     * Ctor with an explicit token component (tests inject a known key,
+     * clock and nonce ledger).
+     * @param crs Repository settings CRUD
+     * @param repoData Repository data management
+     * @param policy Pantera security policy
+     * @param dataSource Artifacts DB DataSource (nullable)
+     * @param artifactIndex Index used by delete handlers to cascade DB removal
+     * @param metaCache Caffeine-backed storage metadata cache
+     * @param tokens Direct-download token component
+     */
+    ArtifactHandler(final CrudRepoSettings crs, final RepoData repoData,
+        final Policy<?> policy, final DataSource dataSource,
+        final ArtifactIndex artifactIndex, final StorageMetaCache metaCache,
+        final DownloadTokens tokens) {
         this.crs = crs;
         this.repoData = repoData;
         this.policy = policy;
         this.dataSource = dataSource;
         this.artifactIndex = artifactIndex == null ? ArtifactIndex.NOP : artifactIndex;
         this.metaCache = metaCache == null ? new StorageMetaCache() : metaCache;
+        this.tokens = tokens;
     }
 
     /**
@@ -183,25 +194,40 @@ public final class ArtifactHandler {
             new ApiRepositoryPermission(ApiRepositoryPermission.RepositoryAction.READ);
         final ApiRepositoryPermission delete =
             new ApiRepositoryPermission(ApiRepositoryPermission.RepositoryAction.DELETE);
+        // SECURITY (2.2.9, artifact-repo-authz): the global api_repository
+        // bit alone is repository-agnostic. Every route below names a
+        // repository in the URL, so it ALSO requires the per-repository
+        // AdapterBasicPermission(name, read|delete) the data plane enforces
+        // — otherwise a coarse global grant reads/deletes artifacts of
+        // repositories the principal has no grant on (BOLA).
+        final RepoAuthzHandler repoRead =
+            new RepoAuthzHandler(this.policy, "name", Action.Standard.READ);
+        final RepoAuthzHandler repoDelete =
+            new RepoAuthzHandler(this.policy, "name", Action.Standard.DELETE);
         // GET /api/v1/repositories/:name/tree — directory listing (cursor-based)
         router.get("/api/v1/repositories/:name/tree")
             .handler(new AuthzHandler(this.policy, read))
+            .handler(repoRead)
             .handler(this::treeHandler);
         // GET /api/v1/repositories/:name/artifact — artifact detail
         router.get("/api/v1/repositories/:name/artifact")
             .handler(new AuthzHandler(this.policy, read))
+            .handler(repoRead)
             .handler(this::artifactDetailHandler);
         // GET /api/v1/repositories/:name/artifact/pull — pull instructions
         router.get("/api/v1/repositories/:name/artifact/pull")
             .handler(new AuthzHandler(this.policy, read))
+            .handler(repoRead)
             .handler(this::pullInstructionsHandler);
         // GET /api/v1/repositories/:name/artifact/download — download artifact (JWT auth)
         router.get("/api/v1/repositories/:name/artifact/download")
             .handler(new AuthzHandler(this.policy, read))
+            .handler(repoRead)
             .handler(this::downloadHandler);
         // POST /api/v1/repositories/:name/artifact/download-token — issue single-use token
         router.post("/api/v1/repositories/:name/artifact/download-token")
             .handler(new AuthzHandler(this.policy, read))
+            .handler(repoRead)
             .handler(this::downloadTokenHandler);
         // GET /api/v1/repositories/:name/artifact/download-direct — download via token (no JWT)
         router.get("/api/v1/repositories/:name/artifact/download-direct")
@@ -209,10 +235,12 @@ public final class ArtifactHandler {
         // DELETE /api/v1/repositories/:name/artifacts — delete artifact
         router.delete("/api/v1/repositories/:name/artifacts")
             .handler(new AuthzHandler(this.policy, delete))
+            .handler(repoDelete)
             .handler(this::deleteArtifactHandler);
         // DELETE /api/v1/repositories/:name/packages — delete package folder
         router.delete("/api/v1/repositories/:name/packages")
             .handler(new AuthzHandler(this.policy, delete))
+            .handler(repoDelete)
             .handler(this::deletePackageFolderHandler);
     }
 
@@ -818,24 +846,34 @@ public final class ArtifactHandler {
             return;
         }
         final String repoName = ctx.pathParam("name");
-        // Build stateless HMAC-signed token: payload.signature
-        // Any instance behind NLB can validate without shared state
-        final long now = System.currentTimeMillis();
-        final String payload = repoName + "\n" + path + "\n" + now;
-        final String payloadB64 = Base64.getUrlEncoder().withoutPadding()
-            .encodeToString(payload.getBytes(StandardCharsets.UTF_8));
-        final String signature = hmacSign(payload);
-        final String token = payloadB64 + "." + signature;
-        ctx.response()
-            .setStatusCode(200)
-            .putHeader("Content-Type", "application/json")
-            .end(new JsonObject().put("token", token).encode());
+        // The token names its issuer so redemption can re-check that the
+        // issuer still holds repository READ (possession is not authorization).
+        final JsonObject principal = ctx.user().principal();
+        final String user = principal.getString(com.auto1.pantera.api.AuthTokenRest.SUB);
+        final String context = principal.getString(
+            com.auto1.pantera.api.AuthTokenRest.CONTEXT, "api"
+        );
+        this.tokens.issue(repoName, path, user, context)
+            .thenAccept(token -> ctx.response()
+                .setStatusCode(200)
+                .putHeader("Content-Type", "application/json")
+                .end(new JsonObject().put("token", token).encode()))
+            .exceptionally(err -> {
+                ApiResponse.sendError(ctx, 503, "UNAVAILABLE", "Download tokens unavailable");
+                return null;
+            });
     }
 
     /**
      * GET /api/v1/repositories/:name/artifact/download-direct — download via
      * single-use token. No JWT required. The browser navigates here directly,
      * so the native download manager handles progress and disk streaming.
+     *
+     * <p>SECURITY (2.2.9): the token is verified by {@link DownloadTokens}
+     * (constant-time signature, bounded timestamp, repository match, nonce
+     * spent before streaming) and THEN the issuer named in the token must
+     * still hold repository READ — a token proves possession, not
+     * authorization.</p>
      * @param ctx Routing context
      */
     private void downloadDirectHandler(final RoutingContext ctx) {
@@ -844,44 +882,59 @@ public final class ArtifactHandler {
             ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Download token is required");
             return;
         }
-        // Validate stateless HMAC token: payloadB64.signature
-        final int dot = token.indexOf('.');
-        if (dot < 0) {
-            ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Malformed download token");
-            return;
-        }
-        final String payloadB64 = token.substring(0, dot);
-        final String signature = token.substring(dot + 1);
-        final String payload;
-        try {
-            payload = new String(
-                Base64.getUrlDecoder().decode(payloadB64), StandardCharsets.UTF_8
-            );
-        } catch (final IllegalArgumentException ex) {
-            ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Invalid download token encoding");
-            return;
-        }
-        if (!hmacSign(payload).equals(signature)) {
-            ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Invalid download token signature");
-            return;
-        }
-        final String[] parts = payload.split("\n");
-        if (parts.length != 3) {
-            ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Invalid download token payload");
-            return;
-        }
-        final String tokenRepo = parts[0];
-        final long tokenTime = Long.parseLong(parts[2]);
-        if (System.currentTimeMillis() - tokenTime > TOKEN_TTL_MS) {
-            ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Download token has expired");
-            return;
-        }
         final String repoName = ctx.pathParam("name");
-        if (!repoName.equals(tokenRepo)) {
+        this.tokens.verify(token, repoName)
+            .thenAccept(verified -> {
+                if (verified.status() != DownloadTokens.Status.OK) {
+                    ArtifactHandler.rejectToken(ctx, verified.status());
+                    return;
+                }
+                final OperationControl control = new OperationControl(
+                    this.policy, new AdapterBasicPermission(repoName, Action.Standard.READ)
+                );
+                if (!control.allowed(verified.user())) {
+                    ApiResponse.sendError(
+                        ctx, 403, "FORBIDDEN", "Token issuer may not read this repository"
+                    );
+                    return;
+                }
+                this.streamArtifact(ctx, repoName, verified.path());
+            })
+            .exceptionally(err -> {
+                ApiResponse.sendError(ctx, 503, "UNAVAILABLE", "Download tokens unavailable");
+                return null;
+            });
+    }
+
+    /**
+     * Map a failed token verification to its response.
+     * @param ctx Routing context
+     * @param status Failure reason
+     */
+    private static void rejectToken(final RoutingContext ctx, final DownloadTokens.Status status) {
+        if (status == DownloadTokens.Status.REPO_MISMATCH) {
             ApiResponse.sendError(ctx, 403, "FORBIDDEN", "Token does not match repository");
             return;
         }
-        final String path = parts[1];
+        final String reason = switch (status) {
+            case MALFORMED -> "Malformed download token";
+            case EXPIRED -> "Download token has expired";
+            case FUTURE_DATED -> "Download token is not yet valid";
+            case REPLAYED -> "Download token already used";
+            default -> "Invalid download token signature";
+        };
+        ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", reason);
+    }
+
+    /**
+     * Stream the artifact named by a verified, authorized download token.
+     * @param ctx Routing context
+     * @param repoName Repository name
+     * @param path Artifact path within the repository
+     */
+    private void streamArtifact(
+        final RoutingContext ctx, final String repoName, final String path
+    ) {
         final String filename = path.contains("/")
             ? path.substring(path.lastIndexOf('/') + 1)
             : path;
@@ -1345,19 +1398,4 @@ public final class ArtifactHandler {
         return -1;
     }
 
-    /**
-     * Compute HMAC-SHA256 signature for the given payload.
-     * @param payload Data to sign
-     * @return URL-safe Base64 encoded signature
-     */
-    private static String hmacSign(final String payload) {
-        try {
-            final Mac mac = Mac.getInstance(HMAC_ALGO);
-            mac.init(new SecretKeySpec(HMAC_SECRET, HMAC_ALGO));
-            final byte[] sig = mac.doFinal(payload.getBytes(StandardCharsets.UTF_8));
-            return Base64.getUrlEncoder().withoutPadding().encodeToString(sig);
-        } catch (final Exception ex) {
-            throw new IllegalStateException("HMAC signing failed", ex);
-        }
-    }
 }

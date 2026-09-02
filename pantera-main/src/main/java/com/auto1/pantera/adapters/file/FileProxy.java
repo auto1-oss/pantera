@@ -60,7 +60,7 @@ public final class FileProxy implements Slice {
                 remote -> new FileProxySlice(
                     new AuthClientSlice(
                         new UriClientSlice(client, remote.uri()),
-                        GenericAuthenticator.create(client, remote.username(), remote.pwd())
+                        GenericAuthenticator.create(client, remote.uri(), remote.username(), remote.pwd())
                     ),
                     asto.<Cache>map(FromStorageCache::new).orElse(Cache.NOP),
                     asto.<Queue<ArtifactEvent>>flatMap(ignored -> events),

@@ -97,6 +97,13 @@ public class AsyncApiTestBase {
 
     @BeforeAll
     static void initDb() {
+        // API fixtures create fs repositories under /tmp and the JVM temp dir;
+        // approve those roots for the FsStorageRootPolicy (2.2.9), whose
+        // production default is the documented /var/pantera/data only.
+        System.setProperty(
+            com.auto1.pantera.settings.repo.FsStorageRootPolicy.PROPERTY,
+            "/tmp" + java.io.File.pathSeparator + System.getProperty("java.io.tmpdir")
+        );
         final HikariConfig cfg = new HikariConfig();
         cfg.setJdbcUrl(PG.getJdbcUrl());
         cfg.setUsername(PG.getUsername());

@@ -27,14 +27,13 @@ import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.Collections;
+import java.nio.file.StandardCopyOption;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.function.BiFunction;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.tuple.ImmutablePair;
 import org.apache.commons.lang3.tuple.Pair;
@@ -47,16 +46,6 @@ import org.apache.commons.lang3.tuple.Pair;
  * @since 1.0
  */
 public final class Gem {
-
-    /**
-     * Read only set of metadata item names.
-     */
-    private static final Set<Key> META_NAMES = Collections.unmodifiableSet(
-        Stream.of(
-            "latest_specs.4.8", "latest_specs.4.8.gz", "prerelease_specs.4.8",
-            "prerelease_specs.4.8.gz", "specs.4.8", "specs.4.8.gz"
-        ).map(Key.From::new).collect(Collectors.toSet())
-    );
 
     /**
      * Gem repository storage.
@@ -80,13 +69,24 @@ public final class Gem {
     /**
      * Batch update Ruby gems for repository.
      *
+     * <p>SECURITY (2.2.9): the snapshot handed to the indexer contains every
+     * stored {@code .gem} plus the gem being indexed — and deliberately NOT
+     * the stored {@code specs.4.8} / {@code latest_specs.4.8} index blobs.
+     * Those blobs are repository-writable, and the previous implementation
+     * {@code Marshal.load}-ed them to merge the new entry, which let a
+     * planted stream drive arbitrary class instantiation in the JRuby
+     * runtime. The index is now rebuilt from the trusted gem specs, which
+     * also means every {@code quick/} spec is regenerated consistently. The
+     * cost is copying all gems per update rather than one; correctness of
+     * the index no longer depends on bytes an attacker can write.</p>
+     *
      * @param gem Ruby gem for indexing
      * @return Completable action
      */
     public CompletionStage<Pair<String, String>> update(final Key gem) {
         return newTempDir().thenCompose(
             tmp -> new Copy(
-                this.storage, key -> META_NAMES.contains(key) || key.equals(gem)
+                this.storage, key -> key.string().endsWith(".gem") || key.equals(gem)
             ).copy(new FileStorage(tmp)).thenCompose(
                 ignore -> this.shared.apply(RubyGemMeta::new)
                     .thenApply(meta -> meta.info(tmp.resolve(gem.string())))
@@ -94,12 +94,14 @@ public final class Gem {
                         info -> {
                             final RevisionFormat fmt = new RevisionFormat();
                             final String name = info.toString(fmt);
+                            final Path dir = gem.parent()
+                                .map(key -> tmp.resolve(key.string())).orElse(tmp);
                             return CompletableFuture.supplyAsync(
                                 new UncheckedSupplier<>(
                                     () -> Files.move(
                                         tmp.resolve(gem.string()),
-                                        gem.parent().map(key -> tmp.resolve(key.string()))
-                                            .orElse(tmp).resolve(name)
+                                        contained(dir, name),
+                                        StandardCopyOption.REPLACE_EXISTING
                                     )
                                 )
                             ).thenCompose(
@@ -158,6 +160,38 @@ public final class Gem {
                 )
             ).handle(removeTempDir(tmp))
         );
+    }
+
+    /**
+     * Resolve a gem file name inside its directory and refuse anything that
+     * would leave it.
+     *
+     * <p>SECURITY (2.2.9): the name is {@code <name>-<version>.gem} built from
+     * the uploaded gem's OWN spec. RubyGems validates spec names only when
+     * building a gem, not when reading one, so an uploader who builds with
+     * validation skipped can ship a spec named {@code ../../x}; without this
+     * check {@code Files.move} wrote the blob to a host path of the
+     * uploader's choosing. A single plain file name is the only accepted
+     * shape: no path separators, no parent segments, and the normalised
+     * result must stay under {@code dir}.</p>
+     *
+     * @param dir Directory the gem must land in
+     * @param name Spec-derived file name
+     * @return The contained destination path
+     */
+    private static Path contained(final Path dir, final String name) {
+        final Path root = dir.toAbsolutePath().normalize();
+        final Path dest = root.resolve(name).normalize();
+        if (name.isEmpty()
+            || name.indexOf('/') >= 0
+            || name.indexOf('\\') >= 0
+            || !dest.startsWith(root)
+            || !root.equals(dest.getParent())) {
+            throw new PanteraIOException(
+                "Gem file name escapes the indexing directory: " + name
+            );
+        }
+        return dest;
     }
 
     /**

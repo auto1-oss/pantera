@@ -236,22 +236,21 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                     span.parentSpanId()
                 );
             }
-            // Extract client IP. X-Forwarded-For (comma-separated, first
-            // entry is the real client), fall back to X-Real-IP, then
-            // the TCP remote address.
-            String clientIp = req.getHeader("X-Forwarded-For");
-            if (clientIp != null && clientIp.contains(",")) {
-                clientIp = clientIp.substring(0, clientIp.indexOf(',')).trim();
-            }
-            if (clientIp == null || clientIp.isBlank()) {
-                clientIp = req.getHeader("X-Real-IP");
-            }
-            if (clientIp == null || clientIp.isBlank()) {
-                final io.vertx.core.net.SocketAddress remote = req.remoteAddress();
-                if (remote != null) {
-                    clientIp = remote.host();
-                }
-            }
+            // Client IP for logs/audit. SECURITY (2.2.9): forwarding
+            // headers are client-supplied and were honoured unconditionally,
+            // letting any caller falsify the audited source address. They
+            // count only when the deployment declares a trusted proxy
+            // (trust_forwarded_headers, the same setting the client-facing
+            // base URL uses); otherwise the TCP peer is recorded.
+            final io.vertx.core.net.SocketAddress remote = req.remoteAddress();
+            final String clientIp = new com.auto1.pantera.api.ClientIpResolver(
+                com.auto1.pantera.http.headers.ClientBaseUrlSettingsLoader.activeSupplier()
+                    .get().trustForwardedHeaders()
+            ).resolve(
+                remote == null ? null : remote.host(),
+                req.getHeader("X-Forwarded-For"),
+                req.getHeader("X-Real-IP")
+            );
             if (clientIp != null && !clientIp.isBlank()) {
                 org.slf4j.MDC.put(
                     com.auto1.pantera.http.log.EcsMdc.CLIENT_IP, clientIp
@@ -359,13 +358,11 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                 : null;
         router.route("/api/v1/*").handler(ctx -> {
             final String path = ctx.request().path();
-            // Skip JWT auth for public endpoints (registered before this filter)
-            if (path.contains("/artifact/download-direct")
-                || path.endsWith("/auth/token")
-                || path.endsWith("/auth/callback")
-                || path.endsWith("/auth/providers")
-                || path.contains("/auth/providers/")
-                || path.endsWith("/health")) {
+            // Skip JWT auth ONLY for the exact public routes (registered before
+            // this filter). SECURITY (2.2.9): this used to be a substring match,
+            // which exempted any protected route whose path merely embedded
+            // "/artifact/download-direct" — see PublicApiRoutes.
+            if (PublicApiRoutes.exempt(ctx.request().method(), path)) {
                 ctx.next();
                 return;
             }
@@ -385,15 +382,30 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                 return;
             }
             final String rawToken = authHeader.substring(7);
-            unifiedAuth.user(rawToken).toCompletableFuture()
-                .thenAccept(userOpt -> {
-                    if (userOpt.isPresent()) {
-                        final com.auto1.pantera.http.auth.AuthUser authUser = userOpt.get();
+            unifiedAuth.validatedAsync(rawToken).toCompletableFuture()
+                .thenAccept(validOpt -> {
+                    if (validOpt.isPresent()) {
+                        final com.auto1.pantera.auth.UnifiedJwtAuthHandler.ValidatedToken valid =
+                            validOpt.get();
+                        // SECURITY (2.2.9, SecOps jwt-token-confusion): enforce
+                        // token-purpose scope per route. A REFRESH token only
+                        // reaches /auth/refresh; ordinary routes take ACCESS/API.
+                        if (!com.auto1.pantera.auth.ApiTokenTypeGate.allows(path, valid.type())) {
+                            ApiResponse.sendError(
+                                ctx, 401, "UNAUTHORIZED", "Token type not valid for this route"
+                            );
+                            return;
+                        }
+                        final com.auto1.pantera.http.auth.AuthUser authUser = valid.user();
                         // Bridge into Vert.x User so ctx.user().principal() works
                         // for all downstream handlers (me, generate, list, settings, etc.)
+                        // The verified type and JTI ride along so /auth/refresh can
+                        // rotate exactly the presented refresh token.
                         final io.vertx.core.json.JsonObject principal = new io.vertx.core.json.JsonObject()
                             .put(com.auto1.pantera.api.AuthTokenRest.SUB, authUser.name())
-                            .put(com.auto1.pantera.api.AuthTokenRest.CONTEXT, authUser.authContext());
+                            .put(com.auto1.pantera.api.AuthTokenRest.CONTEXT, authUser.authContext())
+                            .put(com.auto1.pantera.api.AuthTokenRest.TYPE, valid.type().value())
+                            .put(com.auto1.pantera.api.AuthTokenRest.JTI, valid.jti());
                         ctx.setUser(io.vertx.ext.auth.User.fromToken(rawToken));
                         ctx.user().principal().mergeIn(principal);
                         ctx.next();
@@ -409,16 +421,23 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         // Register protected auth routes (requires JWT)
         authHandler.registerProtected(router);
         // Register all handler groups
+        // Repository lifecycle events reach the local consumer AND every
+        // peer node (HA): a security-tightening change must not keep
+        // applying on one node only until restart (2.2.9).
+        final com.auto1.pantera.api.RepositoryEventBroadcaster repoEvents =
+            com.auto1.pantera.api.RepositoryEventBroadcaster.attach(
+                this.vertx.eventBus(), this.settings.cacheInvalidationPubSub()
+            );
         new RepositoryHandler(
             this.caches.filtersCache(), crs,
             new RepoData(this.configsStorage, this.caches.storagesCache()),
             this.security.policy(), this.events,
             this.cooldown,
-            this.vertx.eventBus()
+            repoEvents
         ).register(router);
         new BulkAccessPolicyHandler(
             crs, this.security.policy(),
-            this.caches.filtersCache(), this.vertx.eventBus()
+            this.caches.filtersCache(), repoEvents
         ).register(router);
         if (users != null) {
             // Wire the revocation blocklist + token DAO so that
@@ -456,7 +475,7 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                     this.security.authentication()
                 : null
         ).register(router);
-        new DashboardHandler(crs, this.dataSource).register(router);
+        new DashboardHandler(crs, this.dataSource, this.security.policy()).register(router);
         new ArtifactHandler(
             crs, new RepoData(this.configsStorage, this.caches.storagesCache()),
             this.security.policy(), this.dataSource, this.artifactIndex
@@ -467,9 +486,10 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             crs, this.settings.cooldown(), this.dataSource,
             this.security.policy()
         ).register(router);
-        new SearchHandler(this.artifactIndex, this.security.policy()).register(router);
+        new SearchHandler(this.artifactIndex, this.security.policy(), crs::listAll).register(router);
         new PypiHandler(
-            crs, new RepoData(this.configsStorage, this.caches.storagesCache())
+            crs, new RepoData(this.configsStorage, this.caches.storagesCache()),
+            this.security.policy()
         ).register(router);
         if (this.dataSource != null) {
             new AdminAuthHandler(
@@ -477,6 +497,12 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                 new UserTokenDao(this.dataSource),
                 this.jwtTokens != null ? this.jwtTokens.blocklist() : null,
                 this.security.policy()
+            ).register(router);
+            new SecurityPolicySettingsHandler(
+                new AuthSettingsDao(this.dataSource), this.security.policy(),
+                com.auto1.pantera.settings.policy.SecurityPolicySettingsSync.attach(
+                    this.settings.cacheInvalidationPubSub()
+                )
             ).register(router);
         }
         new com.auto1.pantera.api.v1.admin.NegativeCacheAdminResource(

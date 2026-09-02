@@ -337,8 +337,20 @@ public final class VertxMain {
         } else {
             revocationBlocklist = null;
         }
+        // SECURITY (2.2.9, SecOps #40): expose the same revocation /
+        // JTI-ownership / enabled-state validators to the reflectively-built
+        // jwt-password auth provider so a token used as a Basic password is
+        // subjected to the same checks as a Bearer token.
+        com.auto1.pantera.auth.TokenRevocationRegistry.instance()
+            .install(revocationBlocklist, userTokenDao, enabledCheck);
+        // SECURITY (2.2.9, SecOps token-revocation #9): the issuer must read
+        // the admin-configured access/refresh TTLs (AuthSettingsDao) — it was
+        // wired with null, so the admin API's TTL settings never applied.
+        final com.auto1.pantera.db.dao.AuthSettingsDao authSettingsDao = sharedDs
+            .map(com.auto1.pantera.db.dao.AuthSettingsDao::new)
+            .orElse(null);
         final com.auto1.pantera.auth.JwtTokens jwtTokens = new com.auto1.pantera.auth.JwtTokens(
-            rsaKeys.privateKey(), rsaKeys.publicKey(), userTokenDao, null,
+            rsaKeys.privateKey(), rsaKeys.publicKey(), userTokenDao, authSettingsDao,
             revocationBlocklist, enabledCheck
         );
         // Install the circuit-breaker settings loader BEFORE constructing
@@ -375,6 +387,20 @@ public final class VertxMain {
         // deployment -- the same regression already fixed for
         // ClientBaseUrlSettingsLoader below.
         com.auto1.pantera.circuit.UpstreamBreakerSettingsLoader.install(
+            sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
+        );
+        // 2.2.9 security policy settings (request-body cap + fs storage
+        // roots, outbound egress policy, login throttling): DB row -> env
+        // -> default per key, admin-editable at runtime. Installed
+        // unconditionally for the same DB-less-boot reason as above; the
+        // egress loader also feeds http-client's EgressSettingsRegistry.
+        com.auto1.pantera.settings.policy.RequestLimitsSettingsLoader.install(
+            sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
+        );
+        com.auto1.pantera.settings.policy.EgressSettingsLoader.install(
+            sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
+        );
+        com.auto1.pantera.settings.policy.LoginThrottleSettingsLoader.install(
             sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
         );
         // WS8 fixwave-c (2.3.0): install the client-base URL derivation
@@ -1443,7 +1469,8 @@ public final class VertxMain {
             vertx,
             new BaseSlice(mctx, slice),
             opts,
-            requestTimeout
+            requestTimeout,
+            com.auto1.pantera.settings.policy.RequestLimitsSettingsLoader.maxRequestBodyBytes()
         );
         this.servers.add(server);
         return server.start();

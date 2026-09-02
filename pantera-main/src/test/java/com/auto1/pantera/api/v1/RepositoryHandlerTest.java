@@ -82,6 +82,83 @@ public final class RepositoryHandlerTest extends AsyncApiTestBase {
     }
 
     @Test
+    void hostRootCannotBecomeARepository(final Vertx vertx, final VertxTestContext ctx)
+        throws Exception {
+        // SECURITY (2.2.9): a repo manager submitting {type: fs, path: "/"}
+        // used to mount the host filesystem as a repository.
+        final JsonObject hostRoot = new JsonObject().put(
+            "repo",
+            new JsonObject()
+                .put("type", "file")
+                .put("storage", new JsonObject().put("type", "fs").put("path", "/"))
+        );
+        final HttpResponse<Buffer> put = WebClient.create(vertx)
+            .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/host-root")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(hostRoot)
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(
+            400, put.statusCode(),
+            "an inline fs storage root outside the approved base must be refused"
+        );
+        ctx.completeNow();
+    }
+
+    @Test
+    void remotePointingAtCloudMetadataIsRefused(final Vertx vertx, final VertxTestContext ctx)
+        throws Exception {
+        // SECURITY (2.2.9): remotes[].url was never validated, so a repo
+        // manager could point a proxy at the cloud metadata service and have
+        // Pantera fetch it server-side on the next read (SSRF).
+        final JsonObject body = new JsonObject().put(
+            "repo",
+            new JsonObject()
+                .put("type", "file-proxy")
+                .put("storage", new JsonObject().put("type", "fs").put("path", "/tmp"))
+                .put("remotes", new JsonArray().add(
+                    new JsonObject().put("url", "http://169.254.169.254/latest/meta-data/")
+                ))
+        );
+        final HttpResponse<Buffer> put = WebClient.create(vertx)
+            .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/ssrf-remote")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(body)
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(
+            400, put.statusCode(),
+            "a remote on the cloud metadata address must be refused at config write"
+        );
+        ctx.completeNow();
+    }
+
+    @Test
+    void remoteWithoutHttpSchemeIsRefused(final Vertx vertx, final VertxTestContext ctx)
+        throws Exception {
+        final JsonObject body = new JsonObject().put(
+            "repo",
+            new JsonObject()
+                .put("type", "file-proxy")
+                .put("storage", new JsonObject().put("type", "fs").put("path", "/tmp"))
+                .put("remotes", new JsonArray().add(
+                    new JsonObject().put("url", "file:///etc/passwd")
+                ))
+        );
+        final HttpResponse<Buffer> put = WebClient.create(vertx)
+            .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/ssrf-scheme")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(body)
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(
+            400, put.statusCode(),
+            "a non-http(s) remote must be refused at config write"
+        );
+        ctx.completeNow();
+    }
+
+    @Test
     void headReturns200IfExists(final Vertx vertx, final VertxTestContext ctx) throws Exception {
         final WebClient client = WebClient.create(vertx);
         // Step 1: PUT the repo

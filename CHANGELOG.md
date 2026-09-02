@@ -1,5 +1,43 @@
 # Changelog
 
+## Version 2.2.9
+
+This release contains security hardening fixes. Upgrading is recommended. Specifics are intentionally withheld here to protect deployments that have not yet upgraded; the operational changes an administrator must be aware of are listed below. For coordinated-disclosure details, contact the maintainers.
+
+### ⚠️ Breaking changes
+
+- **The bundled bootstrap administrator is no longer created with a fixed default password.** On a database-backed first start the password is taken from `PANTERA_BOOTSTRAP_ADMIN_PASSWORD`, or a random one is generated and written to the log once. Existing installations are unaffected; automation that assumed the old default must set the variable.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Filesystem repository roots must sit under an approved base directory.** The approved roots (default `/var/pantera/data`) are an admin setting (Settings → *Request & Storage Limits*, or `PUT /api/v1/admin/request-limits-settings`), with `PANTERA_FS_STORAGE_ROOTS` as the fallback while none is saved. They are enforced when a repository is created or updated through the API or UI: an `fs` path outside them (symlinks followed) is rejected with `400` until a root covering it is added. Existing repositories keep serving.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Direct download tokens are now single-use and are re-checked against the issuer’s repository permission at redemption.** `PANTERA_DOWNLOAD_TOKEN_SECRET`, when set, must be at least 32 bytes; when unset, a database-backed deployment generates and shares a key across nodes and a database-less one uses a per-process key.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Changing or resetting a password now ends that user’s existing sessions and API tokens**, including the caller’s own session on a self-service change. Refresh tokens are single-use and are accepted only at `/auth/refresh`.
+  ([@aydasraf](https://github.com/aydasraf))
+- **The SSO callback (`/auth/callback`) now requires the `state` parameter**; the bundled UI already sends it. Pending logins are shared across cluster nodes over Valkey, so the callback may land on any node. Only explicitly mapped identity-provider groups grant roles.
+  ([@aydasraf](https://github.com/aydasraf))
+- **The dev Docker Compose stack no longer ships fixed secrets.** Set `KEYCLOAK_CLIENT_SECRET` and `PANTERA_DEV_SSO_USER_PASSWORD` before starting it. The nginx TLS material is generated on first container start. A stack brought up from an older checkout should be re-provisioned and its Keycloak client secret rotated.
+  ([@aydasraf](https://github.com/aydasraf))
+- **A request-body size cap now applies to every request**, measured on the bytes actually received (so chunked uploads are bounded too). The cap is an admin setting (Settings → *Request & Storage Limits*, or `PUT /api/v1/admin/request-limits-settings`), default 10 GiB, with `PANTERA_MAX_REQUEST_BODY_BYTES` as the fallback while none is saved; raise it if you publish larger artifacts. A per-repository `content-length-max`, where configured, also applies to chunked bodies.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Outbound connections are subject to an egress policy.** Link-local and cloud-metadata addresses are always refused. The admin setting *Outbound Egress Policy* (or `PUT /api/v1/admin/egress-settings`) can extend this to loopback and private ranges with per-host exceptions, and lists the hosts that may receive an upstream's credentials beyond its own host; `PANTERA_EGRESS_BLOCK_PRIVATE`, `PANTERA_EGRESS_ALLOW_HOSTS` and `PANTERA_UPSTREAM_CREDENTIAL_ALLOW_HOSTS` are the fallback while nothing is saved. The metrics listener bind address is configurable via `PANTERA_METRICS_BIND`.
+  ([@aydasraf](https://github.com/aydasraf))
+
+### 🌟 New features
+
+- **The 2.2.9 security limits are database-backed admin settings, editable in the UI** — three new Settings cards (*Request & Storage Limits*, *Outbound Egress Policy*, *Login Throttling*) with matching `GET`/`PUT /api/v1/admin/request-limits-settings`, `/egress-settings` and `/login-throttle-settings` endpoints. Changes apply on the next request on every node without a restart; the corresponding `PANTERA_*` variables remain as the fallback while no value has been saved. Login throttling (failures per user and client IP, and the window) is tunable for the first time.
+  ([@aydasraf](https://github.com/aydasraf))
+
+### 🔧 Bug fixes
+
+- **`npm unpublish <pkg>@<version>` no longer fails with `409 Conflict` after removing the version** — the CLI finishes a single-version unpublish by deleting the version’s tarball at `<pkg>/-/<file>.tgz/-rev/<revision>`, and that request was handled by the whole-package unpublish path, which read the tarball path as the package name, computed a revision for a package that does not exist, and rejected the client’s current revision as stale. The preceding PUT had already removed the version from the packument, so the CLI reported failure while the registry had in fact unpublished the version and left the tarball blob orphaned in storage. The tarball step is now recognised, validated against the real package’s revision with the same 409/428/404 semantics as force-unpublish, and removes only that blob.
+  ([@aydasraf](https://github.com/aydasraf))
+
+### 🔒 Security
+
+- **Hardening across authentication, authorization, input validation, request-egress, resource limits, and output encoding**, addressing issues raised in an external review. Each fix ships with a regression test. Deployments should upgrade; details are withheld pending broad adoption.
+  ([@aydasraf](https://github.com/aydasraf))
+
 ## Version 2.2.8
 
 ### 🌟 New features

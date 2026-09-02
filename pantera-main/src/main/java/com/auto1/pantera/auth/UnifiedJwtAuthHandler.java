@@ -98,8 +98,47 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
             ? enabledCheck : UserEnabledCheck.ALWAYS_ENABLED;
     }
 
+    /**
+     * A fully validated token: the principal plus the verified purpose
+     * claim and JTI. Since 2.2.9 the {@code type} survives validation so the
+     * management-API filter can enforce token-type scope (a REFRESH token
+     * is not a Bearer credential for ordinary routes) and the refresh
+     * endpoint can rotate the exact JTI that was presented
+     * (SecOps jwt-token-confusion).
+     *
+     * @param user Authenticated principal
+     * @param type Verified token purpose
+     * @param jti Verified token id
+     */
+    public record ValidatedToken(AuthUser user, TokenType type, String jti) {
+    }
+
     @Override
     public CompletionStage<Optional<AuthUser>> user(final String token) {
+        return this.validatedAsync(token)
+            .thenApply(opt -> opt.map(ValidatedToken::user));
+    }
+
+    /**
+     * Full validation returning the verified type and JTI alongside the
+     * principal. Same signature / expiry / JTI-ownership / blocklist /
+     * enabled checks as {@link #user(String)}.
+     *
+     * @param token JWT string
+     * @return Validated token, or empty when the token is not acceptable
+     */
+    public Optional<ValidatedToken> validated(final String token) {
+        return this.validate(token);
+    }
+
+    /**
+     * Asynchronous form of {@link #validated(String)}; the validation may
+     * touch the DB (JTI lookup) so it never runs on the event loop.
+     *
+     * @param token JWT string
+     * @return Future with the validated token, or empty
+     */
+    public CompletionStage<Optional<ValidatedToken>> validatedAsync(final String token) {
         return CompletableFuture.supplyAsync(
             () -> this.validate(token),
             ForkJoinPool.commonPool()
@@ -128,9 +167,9 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
      * Perform full token validation: signature, expiry, required claims, and
      * type-specific revocation/DB checks.
      * @param token JWT string
-     * @return Authenticated user if valid, empty otherwise
+     * @return Validated token if acceptable, empty otherwise
      */
-    private Optional<AuthUser> validate(final String token) {
+    private Optional<ValidatedToken> validate(final String token) {
         final DecodedJWT decoded;
         try {
             decoded = this.verifier.verify(token);
@@ -205,6 +244,6 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
                 .log();
             return Optional.empty();
         }
-        return Optional.of(new AuthUser(sub, context));
+        return Optional.of(new ValidatedToken(new AuthUser(sub, context), type, jti));
     }
 }

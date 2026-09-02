@@ -35,6 +35,7 @@ public final class ImportSession {
     private final String md5;
     private final ChecksumPolicy policy;
     private final int attempts;
+    private final String caller;
 
     ImportSession(
         final long id,
@@ -50,7 +51,8 @@ public final class ImportSession {
         final String sha256,
         final String md5,
         final ChecksumPolicy policy,
-        final int attempts
+        final int attempts,
+        final String caller
     ) {
         this.id = id;
         this.key = Objects.requireNonNull(key);
@@ -66,6 +68,7 @@ public final class ImportSession {
         this.md5 = md5;
         this.policy = policy;
         this.attempts = attempts;
+        this.caller = caller;
     }
 
     long id() {
@@ -78,6 +81,16 @@ public final class ImportSession {
 
     ImportSessionStatus status() {
         return this.status;
+    }
+
+    /**
+     * Principal that created the session, or {@code null} for rows that
+     * predate the caller binding.
+     *
+     * @return Caller name
+     */
+    String caller() {
+        return this.caller;
     }
 
     String repo() {
@@ -145,7 +158,8 @@ public final class ImportSession {
             request.sha256().orElse(null),
             request.md5().orElse(null),
             request.policy(),
-            1
+            1,
+            request.caller()
         );
     }
 }

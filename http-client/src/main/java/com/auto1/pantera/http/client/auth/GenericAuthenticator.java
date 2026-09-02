@@ -27,6 +27,30 @@ import java.util.stream.StreamSupport;
 public final class GenericAuthenticator implements Authenticator {
 
     public static Authenticator create(ClientSlices client, String username, String pwd) {
+        return GenericAuthenticator.create(client, null, username, pwd);
+    }
+
+    /**
+     * Authenticator for a configured upstream. The Basic credentials are
+     * bound to that upstream: on a Bearer challenge they are released only
+     * to a realm {@link RealmTrust} accepts for it (same host, its parent
+     * domain, or the allowlist) — a foreign realm gets an anonymous token
+     * request, never the upstream's credentials (2.2.9). Callers that
+     * cannot name the upstream get {@link RealmTrust#none()}: credentials
+     * are then never forwarded to any Bearer realm.
+     *
+     * @param client Client slices
+     * @param upstream The upstream the credentials belong to (nullable)
+     * @param username Username (nullable with pwd)
+     * @param pwd Password (nullable with username)
+     * @return Authenticator
+     */
+    public static GenericAuthenticator create(
+        final ClientSlices client,
+        final java.net.URI upstream,
+        final String username,
+        final String pwd
+    ) {
         if (username == null && pwd == null) {
             return new GenericAuthenticator(client);
         }
@@ -36,7 +60,15 @@ public final class GenericAuthenticator implements Authenticator {
         if (pwd == null) {
             throw new IllegalStateException("`password` is not specified for remote");
         }
-        return new GenericAuthenticator(client, username, pwd);
+        return new GenericAuthenticator(
+            new BasicAuthenticator(username, pwd),
+            new BearerAuthenticator(
+                client,
+                new OAuthTokenFormat(),
+                new BasicAuthenticator(username, pwd),
+                RealmTrust.forUpstream(upstream)
+            )
+        );
     }
 
     /**

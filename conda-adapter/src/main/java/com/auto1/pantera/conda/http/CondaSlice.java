@@ -176,7 +176,19 @@ public final class CondaSlice extends Slice.Wrap {
                         new RtRule.ByPath("/?[a-z0-9-._]*/[a-z0-9-._]*/[a-z0-9-._]*(\\.tar\\.bz2|\\.conda)$"),
                         MethodRule.POST
                     ),
-                    new UpdateSlice(storage, events, repo, syncIndex)
+                    // SECURITY (2.2.9): the package upload was the only route
+                    // without a credential-validating wrapper. Behind the
+                    // presence-only AnonymousAccessSlice gate, any bogus
+                    // `Authorization: token x` uploaded an attacker-crafted
+                    // package into a private channel (repodata merge + index
+                    // event). Mirror the sibling write route: token auth +
+                    // repository-scoped WRITE.
+                    new TokenAuthSlice(
+                        new UpdateSlice(storage, events, repo, syncIndex),
+                        new OperationControl(
+                            policy, new AdapterBasicPermission(repo, Action.Standard.WRITE)
+                        ), tokens.auth()
+                    )
                 ),
                 new RtRulePath(MethodRule.HEAD, new SliceSimple(ResponseBuilder.ok().build())),
                 new RtRulePath(

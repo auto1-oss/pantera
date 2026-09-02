@@ -59,6 +59,11 @@ public final class JwtPasswordAuth implements Authentication {
     private final boolean requireUsernameMatch;
 
     /**
+     * Revocation / token-type gate applied after signature verification.
+     */
+    private final PasswordTokenGate gate;
+
+    /**
      * Ctor with username matching enabled.
      *
      * @param jwtAuth JWT authentication provider
@@ -68,14 +73,30 @@ public final class JwtPasswordAuth implements Authentication {
     }
 
     /**
-     * Ctor.
+     * Ctor using the process-wide revocation registry as the gate.
      *
      * @param jwtAuth JWT authentication provider
      * @param requireUsernameMatch Whether to require username to match token subject
      */
     public JwtPasswordAuth(final JWTAuth jwtAuth, final boolean requireUsernameMatch) {
+        this(jwtAuth, requireUsernameMatch, TokenRevocationRegistry.instance());
+    }
+
+    /**
+     * Ctor with an explicit gate (tests + wiring).
+     *
+     * @param jwtAuth JWT authentication provider
+     * @param requireUsernameMatch Whether to require username to match token subject
+     * @param gate Revocation / token-type gate applied after signature verification
+     */
+    public JwtPasswordAuth(
+        final JWTAuth jwtAuth,
+        final boolean requireUsernameMatch,
+        final PasswordTokenGate gate
+    ) {
         this.jwtAuth = jwtAuth;
         this.requireUsernameMatch = requireUsernameMatch;
+        this.gate = gate;
     }
 
     @Override
@@ -110,6 +131,24 @@ public final class JwtPasswordAuth implements Authentication {
             if (this.requireUsernameMatch && !username.equals(tokenSubject)) {
                 EcsLogger.warn("com.auto1.pantera.auth")
                     .message(String.format("JWT token subject does not match provided username (subject=%s)", tokenSubject))
+                    .eventCategory("authentication")
+                    .eventAction("jwt_password_auth")
+                    .eventOutcome("failure")
+                    .field("user.name", username)
+                    .field("log.source", "application")
+                    .log();
+                return Optional.empty();
+            }
+            // SECURITY (2.2.9, SecOps #40): a valid signature is not enough.
+            // Apply the same revocation / JTI-ownership / enabled-state /
+            // token-type checks the Bearer path enforces, so a revoked or
+            // blocklisted API token — or a refresh token — can no longer
+            // authorize as a repository password.
+            final TokenType type = TokenType.fromClaim(principal.getString(AuthTokenRest.TYPE));
+            final String jti = principal.getString(AuthTokenRest.JTI);
+            if (!this.gate.allows(type, jti, tokenSubject)) {
+                EcsLogger.warn("com.auto1.pantera.auth")
+                    .message("JWT-as-password rejected: token revoked, disabled, or wrong type")
                     .eventCategory("authentication")
                     .eventAction("jwt_password_auth")
                     .eventOutcome("failure")

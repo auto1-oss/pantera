@@ -432,7 +432,18 @@ public final class VertxFileStorage implements Storage {
      * @return Path created from key.
      */
     private Path path(final Key key) {
-        return Paths.get(this.dir.toString(), key.string());
+        // SECURITY (2.2.9): contain the resolved path within the storage root.
+        // Previously a bare Paths.get(dir, key) let a key with parent segments
+        // (or an encoded separator that decoded to one) escape the root for
+        // read/write/list/delete on a `type: vertx-file` repository. Mirrors
+        // the FileStorage.keyPath containment guard.
+        final Path resolved = Paths.get(this.dir.toString(), key.string()).normalize();
+        if (!resolved.startsWith(this.dir.normalize())) {
+            throw new PanteraIOException(
+                String.format("Entry path is out of storage: %s", key.string())
+            );
+        }
+        return resolved;
     }
 
     /**

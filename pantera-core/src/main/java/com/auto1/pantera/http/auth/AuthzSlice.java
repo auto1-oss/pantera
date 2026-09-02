@@ -82,8 +82,10 @@ public final class AuthzSlice implements Slice {
                                 body
                             );
                         }
-                        // Consume request body to prevent Vert.x request leak
-                        return body.asBytesFuture().thenApply(ignored ->
+                        // Drain (never materialise) the body: prevents the
+                        // Vert.x request leak without pre-allocating from the
+                        // attacker-declared Content-Length (resource-dos F31).
+                        return body.discard().thenApply(ignored ->
                             ResponseBuilder.forbidden().build()
                         );
                     }
@@ -109,8 +111,8 @@ public final class AuthzSlice implements Slice {
                                 body
                             );
                         }
-                        // Consume request body to prevent Vert.x request leak
-                        return body.asBytesFuture().thenApply(ignored2 ->
+                        // Drain (never materialise) — see the 403 path above.
+                        return body.discard().thenApply(ignored2 ->
                             ResponseBuilder.forbidden().build()
                         );
                     }

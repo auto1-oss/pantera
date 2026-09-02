@@ -13,6 +13,7 @@
 #   ./test.sh --clients       # npm / yarn / pnpm installs only
 #   ./test.sh --corepack      # corepack only
 #   ./test.sh --rev           # packument revision lifecycle only
+#   ./test.sh --unpublish     # single-version unpublish via the npm CLI only
 # =================================================================
 set -euo pipefail
 
@@ -147,6 +148,70 @@ section_rev() {
   expect_status "package survived both refusals" GET "$LOCAL/$PKG" 200
 }
 
+section_unpublish() {
+  echo "--- 2b. Single-version unpublish: PUT packument, then DELETE tarball ---"
+  command -v npm >/dev/null 2>&1 || { fail "npm not installed"; return; }
+  local reg="$CLIENT_HOST/test_prefix/api/npm/"
+  local creds_b64
+  creds_b64=$(base64_creds "$CREDS")
+  local probe='@ayd/unpublish-probe'
+  local dir="$SCRATCH/unpublish"
+  mkdir -p "$dir"
+  {
+    printf 'registry=%s\n' "$reg"
+    printf 'cache=%s/.cache\n' "$dir"
+    printf '//localhost:8081/test_prefix/api/npm/:_auth=%s\n' "$creds_b64"
+  } > "$dir/.npmrc"
+  # Also use that file as the *user* config: npm resolves credentials by the
+  # longest matching nerf-dart key across every config level, so a stale
+  # //localhost:8081/...:_authToken in ~/.npmrc would silently replace these
+  # credentials on whichever request happens to match it best.
+  local npm_env="NPM_CONFIG_USERCONFIG=$dir/.npmrc"
+  # A leftover from an aborted run would make the publishes below collide.
+  local rev
+  rev=$(curl -s --max-time 30 -u "$CREDS" "$LOCAL/$probe" 2>/dev/null \
+        | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("_rev",""))
+except Exception: print("")')
+  if [ -n "$rev" ]; then
+    curl -s -o /dev/null --max-time 30 -u "$CREDS" -X DELETE "$LOCAL/$probe/-rev/$rev"
+  fi
+  for v in 1.0.0 2.0.0; do
+    printf '{"name":"%s","version":"%s","description":"unpublish probe"}\n' \
+      "$probe" "$v" > "$dir/package.json"
+    if ( cd "$dir" && env "$npm_env" npm publish --access public --silent >/dev/null 2>&1 ); then
+      pass "publish $probe@$v"
+    else
+      fail "publish $probe@$v"
+      return
+    fi
+  done
+  # The CLI reads the packument, PUTs it minus the version, re-reads it for
+  # the new revision, then DELETEs the version's tarball with that revision.
+  # Before 2.2.9 the last leg was answered 409 (the tarball path was taken
+  # for a package name), so the CLI reported failure after the version had
+  # already been removed and the tarball blob stayed behind.
+  if ( cd "$dir" && env "$npm_env" npm unpublish "$probe@1.0.0" --silent >/dev/null 2>&1 ); then
+    pass "npm unpublish $probe@1.0.0 exits 0"
+  else
+    fail "npm unpublish $probe@1.0.0"
+  fi
+  local has
+  has=$(curl -s --max-time 30 -u "$CREDS" "$LOCAL/$probe" \
+        | python3 -c 'import json,sys; print("1.0.0" in json.load(sys.stdin).get("versions",{}))')
+  if [ "$has" = "False" ]; then pass "1.0.0 is gone from the packument"; else
+    fail "1.0.0 is still in the packument"
+  fi
+  expect_status "1.0.0 tarball removed"  GET "$LOCAL/$probe/-/$probe-1.0.0.tgz" 404
+  expect_status "2.0.0 tarball survives" GET "$LOCAL/$probe/-/$probe-2.0.0.tgz" 200
+  if ( cd "$dir" && env "$npm_env" npm unpublish "$probe" --force --silent >/dev/null 2>&1 ); then
+    pass "npm unpublish $probe --force (cleanup)"
+  else
+    fail "npm unpublish $probe --force (cleanup)"
+  fi
+  expect_status "probe package fully removed" GET "$LOCAL/$probe" 404
+}
+
 section_clients() {
   echo "--- 3. Clients: npm / yarn 1.x / pnpm ---"
   local reg="$CLIENT_GROUP/"
@@ -250,9 +315,10 @@ case "${1:-}" in
   --clients)   RUN_ALL=0; section_clients ;;
   --corepack)  RUN_ALL=0; section_corepack ;;
   --rev)       RUN_ALL=0; section_rev ;;
+  --unpublish) RUN_ALL=0; section_unpublish ;;
 esac
 if [ "$RUN_ALL" = "1" ]; then
-  section_endpoints; section_rev; section_clients; section_corepack
+  section_endpoints; section_rev; section_unpublish; section_clients; section_corepack
 fi
 
 echo

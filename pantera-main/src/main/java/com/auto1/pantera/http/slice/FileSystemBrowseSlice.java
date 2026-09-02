@@ -139,8 +139,18 @@ public final class FileSystemBrowseSlice implements Slice {
             try {
                 // Get the actual filesystem path using reflection
                 final Path basePath = getBasePath(this.storage);
-                final Path dirPath = basePath.resolve(key.string());
-                
+                final Path dirPath = basePath.resolve(key.string()).normalize();
+
+                // SECURITY (2.2.9): contain the resolved directory within the
+                // repository root. Without this a request path with parent
+                // segments listed arbitrary process-readable directories
+                // (names, sizes, mtimes) outside the repo — an info-disclosure
+                // on default type: fs repositories. Answer 404 (not 403) so the
+                // response does not confirm whether the escaped path exists.
+                if (!dirPath.startsWith(basePath.normalize())) {
+                    return ResponseBuilder.notFound().build();
+                }
+
                 if (!Files.exists(dirPath)) {
                     return ResponseBuilder.notFound().build();
                 }

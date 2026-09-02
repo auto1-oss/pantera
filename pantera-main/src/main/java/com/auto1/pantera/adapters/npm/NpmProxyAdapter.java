@@ -84,7 +84,7 @@ public final class NpmProxyAdapter implements Slice {
                     // Create authenticated client slice for this remote
                     final Slice remoteSlice = new AuthClientSlice(
                         new UriClientSlice(client, remote.uri()),
-                        GenericAuthenticator.create(client, remote.username(), remote.pwd())
+                        GenericAuthenticator.create(client, remote.uri(), remote.username(), remote.pwd())
                     );
                     
                     // Create NpmProxy for this remote with 12h metadata TTL.

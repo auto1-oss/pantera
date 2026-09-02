@@ -95,6 +95,43 @@ public interface ArtifactIndex extends Closeable {
     }
 
     /**
+     * Permission-scoped search: results, {@code totalHits} and the
+     * type/repository facets are all restricted to {@code allowedRepos}.
+     *
+     * <p>SECURITY (2.2.9, search-authz): every implementation MUST honour the
+     * scope for the aggregates, not only the documents — serving
+     * {@code total}/{@code repo_counts} from an unscoped query leaks the
+     * existence and size of repositories the caller cannot read. The
+     * default here is scope-safe for any implementation: it runs the
+     * unscoped search and then filters documents AND recomputes the
+     * facets from the surviving documents. Implementations that can push
+     * the scope into their query (the DB index) override it.</p>
+     *
+     * @param query Search query string
+     * @param maxResults Maximum results to return
+     * @param offset Starting offset for pagination
+     * @param repoType Optional repo type base filter
+     * @param repoName Optional exact repository name filter
+     * @param sortBy Sort field
+     * @param sortAsc True for ascending
+     * @param allowedRepos Repositories the caller may read: {@code null} =
+     *  unrestricted, empty = deny everything, else the allow-list
+     * @return Scoped search result
+     */
+    default CompletableFuture<SearchResult> search(
+        final String query, final int maxResults, final int offset,
+        final String repoType, final String repoName, final String sortBy,
+        final boolean sortAsc, final List<String> allowedRepos
+    ) {
+        if (allowedRepos == null) {
+            return search(query, maxResults, offset, repoType, repoName, sortBy, sortAsc);
+        }
+        final java.util.Set<String> allowed = new java.util.HashSet<>(allowedRepos);
+        return search(query, maxResults, offset, repoType, repoName, sortBy, sortAsc)
+            .thenApply(result -> SearchResult.scopedTo(result, allowed));
+    }
+
+    /**
      * Locate which repositories contain a given artifact path.
      * Uses path_prefix matching — slower, used as fallback.
      *

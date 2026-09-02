@@ -103,4 +103,26 @@ public final class StorageAliasHandlerTest extends AsyncApiTestBase {
         Assertions.assertEquals(200, del.statusCode());
         ctx.completeNow();
     }
+
+    @Test
+    void s3EndpointOnCloudMetadataIsRefused(final Vertx vertx, final VertxTestContext ctx)
+        throws Exception {
+        // SECURITY (2.2.9): an alias endpoint was never validated, so an alias
+        // writer could point S3 traffic at the cloud metadata service (SSRF).
+        final HttpResponse<Buffer> put = WebClient.create(vertx)
+            .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/storages/ssrf")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(new JsonObject()
+                .put("type", "s3")
+                .put("bucket", "b")
+                .put("region", "eu-west-1")
+                .put("endpoint", "http://169.254.169.254/"))
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(
+            400, put.statusCode(),
+            "an alias endpoint on the cloud metadata address must be refused"
+        );
+        ctx.completeNow();
+    }
 }

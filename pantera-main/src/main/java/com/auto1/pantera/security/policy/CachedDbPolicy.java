@@ -146,12 +146,16 @@ public final class CachedDbPolicy implements Policy<UserPermissions>, Cleanable<
 
     @Override
     public void invalidate(final String key) {
-        if (this.cache.getIfPresent(key) != null || this.users.getIfPresent(key) != null) {
-            this.cache.invalidate(key);
-            this.users.invalidate(key);
-        } else {
-            this.roles.invalidate(key);
-        }
+        // SECURITY (2.2.9, privesc-role): the three caches are keyed by
+        // name in one shared namespace. The old branch cleared the ROLE
+        // entry only when the key was absent from both user caches — so on
+        // a user/role name collision (the bootstrap seeds both a user and a
+        // role named "admin") a role update/disable/downgrade left the
+        // warm role cache authorising indefinitely. Drop the key from every
+        // tier unconditionally; an unnecessary invalidation is just a miss.
+        this.cache.invalidate(key);
+        this.users.invalidate(key);
+        this.roles.invalidate(key);
     }
 
     /**
@@ -268,7 +272,7 @@ public final class CachedDbPolicy implements Policy<UserPermissions>, Cleanable<
      * @param stored The JSON object from the permissions column
      * @return Permission collection
      */
-    private static PermissionCollection readPermissionsFromJson(final JsonObject stored) {
+    static PermissionCollection readPermissionsFromJson(final JsonObject stored) {
         final JsonObject all;
         if (stored.containsKey("permissions")) {
             all = stored.getJsonObject("permissions");

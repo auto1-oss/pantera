@@ -26,24 +26,44 @@ import com.auto1.pantera.scheduling.ArtifactEvent;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
 /**
- * Slice to handle `npm unpublish` command requests.
- * Request line to this slice looks like `/[<@scope>/]pkg/-rev/&lt;revision&gt;`.
- * The revision is validated against {@link PackumentRevision} before anything is
- * deleted: a match deletes the package and answers 200, a parseable-but-stale
- * revision answers 409, and an absent, literal {@code undefined}, or malformed
- * revision answers 428 -- npm clients driven by {@code libnpmpublish} always read
- * the packument before unpublishing, so they send a real revision; a hand-rolled
- * request that skips that step now gets rejected instead of silently deleting the
- * package.
+ * Slice to handle `npm unpublish` command requests. Two request shapes reach it,
+ * both carrying the packument revision the client last read:
+ * <ul>
+ *   <li>{@code /[<@scope>/]pkg/-rev/<revision>} -- whole-package removal
+ *   ({@code npm unpublish <pkg> --force});</li>
+ *   <li>{@code /[<@scope>/]pkg/-/<tarball>.tgz/-rev/<revision>} -- the final leg of
+ *   single-version removal ({@code npm unpublish <pkg>@<version>}): the client first
+ *   PUTs the packument minus the version, re-reads the packument for its new
+ *   revision, then deletes that version's tarball with it. Only the one blob is
+ *   removed here; the version's index event was already emitted by the PUT.</li>
+ * </ul>
+ * In both shapes the revision is validated against the package's
+ * {@link PackumentRevision} before anything is deleted: a match deletes and answers
+ * 200, a parseable-but-stale revision answers 409, and an absent, literal
+ * {@code undefined}, or malformed revision answers 428 -- npm clients driven by
+ * {@code libnpmpublish} always read the packument before unpublishing, so they send
+ * a real revision; a hand-rolled request that skips that step gets rejected instead
+ * of silently deleting.
  */
 final class UnpublishForceSlice implements Slice {
     /**
      * Endpoint request line pattern.
      */
     static final Pattern PTRN = Pattern.compile("/.*/-rev/.*$");
+
+    /**
+     * Path segment that precedes the revision.
+     */
+    private static final String REV_MARKER = "/-rev/";
+
+    /**
+     * Path segment that separates a package name from its tarball file name.
+     */
+    private static final String TARBALL_MARKER = "/-/";
 
     /**
      * Abstract Storage.
@@ -85,14 +105,23 @@ final class UnpublishForceSlice implements Slice {
             ignored -> {
                 final CompletableFuture<Response> result;
                 if (UnpublishForceSlice.PTRN.matcher(uri).matches()) {
-                    final int marker = uri.indexOf("/-rev/");
-                    final String pkg = new PackageNameFromUrl(
-                        String.format(
-                            "%s %s %s", line.method(), uri.substring(0, marker), line.version()
-                        )
-                    ).value();
-                    final String sent = uri.substring(marker + "/-rev/".length());
-                    result = this.deleteIfCurrent(pkg, sent);
+                    final int marker = uri.indexOf(UnpublishForceSlice.REV_MARKER);
+                    final String target = uri.substring(0, marker);
+                    final String sent = uri.substring(
+                        marker + UnpublishForceSlice.REV_MARKER.length()
+                    );
+                    final int tarball = target.indexOf(UnpublishForceSlice.TARBALL_MARKER);
+                    if (tarball > 0) {
+                        result = this.deleteTarball(
+                            UnpublishForceSlice.name(line, target.substring(0, tarball)),
+                            new Key.From(UnpublishForceSlice.name(line, target)),
+                            sent
+                        );
+                    } else {
+                        result = this.deletePackage(
+                            UnpublishForceSlice.name(line, target), sent
+                        );
+                    }
                 } else {
                     result = ResponseBuilder.badRequest().completedFuture();
                 }
@@ -102,39 +131,85 @@ final class UnpublishForceSlice implements Slice {
     }
 
     /**
-     * Delete the package only when the supplied revision is current.
+     * Delete the whole package only when the supplied revision is current.
      * @param pkg Package name
      * @param sent Revision supplied by the client
      * @return Response
      */
-    private CompletableFuture<Response> deleteIfCurrent(final String pkg, final String sent) {
+    private CompletableFuture<Response> deletePackage(final String pkg, final String sent) {
         return this.storage.list(new Key.From(pkg)).thenCompose(
             keys -> {
                 final CompletableFuture<Response> result;
                 if (keys.isEmpty()) {
                     result = ResponseBuilder.notFound().completedFuture();
-                } else if (sent.isEmpty() || "undefined".equals(sent) || sent.indexOf('-') < 1) {
-                    result = ResponseBuilder.from(RsStatus.PRECONDITION_REQUIRED)
-                        .header("X-Pantera-Reason", "revision_required")
-                        .completedFuture();
                 } else {
-                    result = new PackumentRevision(this.storage, pkg).value().thenCompose(
-                        current -> {
-                            final CompletableFuture<Response> answer;
-                            if (current.equals(sent)) {
-                                answer = this.purge(pkg);
-                            } else {
-                                answer = ResponseBuilder.from(RsStatus.CONFLICT)
-                                    .header("X-Pantera-Reason", "revision_mismatch")
-                                    .completedFuture();
-                            }
-                            return answer;
-                        }
-                    );
+                    result = this.whenCurrent(pkg, sent, () -> this.purge(pkg));
                 }
                 return result;
             }
         );
+    }
+
+    /**
+     * Delete a single version's tarball only when the supplied revision is
+     * current for its package. Nothing else about the package is touched.
+     * @param pkg Package name the tarball belongs to
+     * @param tarball Storage key of the tarball
+     * @param sent Revision supplied by the client
+     * @return Response
+     */
+    private CompletableFuture<Response> deleteTarball(
+        final String pkg, final Key tarball, final String sent
+    ) {
+        return this.storage.exists(tarball).thenCompose(
+            exists -> {
+                final CompletableFuture<Response> result;
+                if (exists) {
+                    result = this.whenCurrent(
+                        pkg, sent,
+                        () -> this.storage.delete(tarball)
+                            .thenApply(nothing -> ResponseBuilder.ok().build())
+                    );
+                } else {
+                    result = ResponseBuilder.notFound().completedFuture();
+                }
+                return result;
+            }
+        );
+    }
+
+    /**
+     * Run the deletion only when the supplied revision matches the package's
+     * current one; otherwise answer 428 (unusable revision) or 409 (stale).
+     * @param pkg Package name whose revision is checked
+     * @param sent Revision supplied by the client
+     * @param action Deletion to run on a match
+     * @return Response
+     */
+    private CompletableFuture<Response> whenCurrent(
+        final String pkg, final String sent, final Supplier<CompletableFuture<Response>> action
+    ) {
+        final CompletableFuture<Response> result;
+        if (sent.isEmpty() || "undefined".equals(sent) || sent.indexOf('-') < 1) {
+            result = ResponseBuilder.from(RsStatus.PRECONDITION_REQUIRED)
+                .header("X-Pantera-Reason", "revision_required")
+                .completedFuture();
+        } else {
+            result = new PackumentRevision(this.storage, pkg).value().thenCompose(
+                current -> {
+                    final CompletableFuture<Response> answer;
+                    if (current.equals(sent)) {
+                        answer = action.get();
+                    } else {
+                        answer = ResponseBuilder.from(RsStatus.CONFLICT)
+                            .header("X-Pantera-Reason", "revision_mismatch")
+                            .completedFuture();
+                    }
+                    return answer;
+                }
+            );
+        }
+        return result;
     }
 
     /**
@@ -154,5 +229,18 @@ final class UnpublishForceSlice implements Slice {
             );
         }
         return res.thenApply(nothing -> ResponseBuilder.ok().build());
+    }
+
+    /**
+     * Package (or tarball) name from a request path, with the leading slash
+     * stripped, using the same parser as the rest of the adapter.
+     * @param line Request line the path came from (method and version reused)
+     * @param path Path to parse
+     * @return Name
+     */
+    private static String name(final RequestLine line, final String path) {
+        return new PackageNameFromUrl(
+            String.format("%s %s %s", line.method(), path, line.version())
+        ).value();
     }
 }

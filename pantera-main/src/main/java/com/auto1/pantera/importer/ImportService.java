@@ -220,13 +220,19 @@ public final class ImportService {
      * @param content Body content
      * @return Import result
      */
-    public CompletionStage<ImportResult> importArtifact(final ImportRequest request, final Content content) {
-        final RepoConfig config = this.repositories.config(request.repo())
+    public CompletionStage<ImportResult> importArtifact(final ImportRequest declared, final Content content) {
+        final RepoConfig config = this.repositories.config(declared.repo())
             .orElseThrow(() -> new ResponseException(
                 ResponseBuilder.notFound()
-                    .textBody(String.format("Repository '%s' not found", request.repo()))
+                    .textBody(String.format("Repository '%s' not found", declared.repo()))
                     .build()
             ));
+        // SECURITY (2.2.9): the repository's configured type is authoritative.
+        // A caller-declared type is only ever a consistency check, never the
+        // value that selects path rewriting, digests, shards or regeneration.
+        final ImportRequest request = declared.withRepoType(
+            new ImportRepoType(config.type(), declared.repoType()).effective()
+        );
         final Storage storage = config.storageOpt()
             .orElseThrow(() -> new ResponseException(
                 ResponseBuilder.internalError()

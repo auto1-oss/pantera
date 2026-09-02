@@ -45,7 +45,7 @@ public final class UserDao implements CrudUsers {
     public JsonArray list() {
         final JsonArrayBuilder arr = Json.createArrayBuilder();
         final String sql = String.join(" ",
-            "SELECT u.username, u.email, u.enabled, u.auth_provider, u.must_change_password,",
+            "SELECT u.username, u.email, u.enabled, u.auth_provider, u.must_change_password, u.sso_subject,",
             "COALESCE(json_agg(r.name) FILTER (WHERE r.name IS NOT NULL), '[]') AS roles",
             "FROM users u",
             "LEFT JOIN user_roles ur ON u.id = ur.user_id",
@@ -79,7 +79,7 @@ public final class UserDao implements CrudUsers {
         final String col = allowed.contains(sortField) ? sortField : "username";
         final String dir = ascending ? "ASC" : "DESC";
         final String sql = String.join(" ",
-            "SELECT u.username, u.email, u.enabled, u.auth_provider, u.must_change_password,",
+            "SELECT u.username, u.email, u.enabled, u.auth_provider, u.must_change_password, u.sso_subject,",
             "COALESCE(json_agg(r.name) FILTER (WHERE r.name IS NOT NULL), '[]') AS roles,",
             "COUNT(*) OVER() AS total_count",
             "FROM users u",
@@ -117,7 +117,7 @@ public final class UserDao implements CrudUsers {
     @Override
     public Optional<JsonObject> get(final String uname) {
         final String sql = String.join(" ",
-            "SELECT u.username, u.email, u.enabled, u.auth_provider, u.must_change_password,",
+            "SELECT u.username, u.email, u.enabled, u.auth_provider, u.must_change_password, u.sso_subject,",
             "COALESCE(json_agg(r.name) FILTER (WHERE r.name IS NOT NULL), '[]') AS roles",
             "FROM users u",
             "LEFT JOIN user_roles ur ON u.id = ur.user_id",
@@ -141,12 +141,13 @@ public final class UserDao implements CrudUsers {
     @Override
     public void addOrUpdate(final JsonObject info, final String uname) {
         final String sql = String.join(" ",
-            "INSERT INTO users (username, password_hash, email, auth_provider)",
-            "VALUES (?, ?, ?, ?)",
+            "INSERT INTO users (username, password_hash, email, auth_provider, sso_subject)",
+            "VALUES (?, ?, ?, ?, ?)",
             "ON CONFLICT (username) DO UPDATE SET",
             "password_hash = COALESCE(?, users.password_hash),",
             "email = COALESCE(?, users.email),",
             "auth_provider = COALESCE(?, users.auth_provider),",
+            "sso_subject = COALESCE(?, users.sso_subject),",
             "updated_at = NOW()"
         );
         try (Connection conn = this.source.getConnection()) {
@@ -170,14 +171,20 @@ public final class UserDao implements CrudUsers {
                     ? info.getString("type") : "local";
                 final String provider = "plain".equals(rawType) || "sha256".equals(rawType)
                     ? "local" : rawType;
+                // SSO identity binding (2.2.9): only the SSO callback supplies
+                // this; it is never cleared by a later upsert without it.
+                final String ssoSubject = info.containsKey("sso_subject")
+                    ? info.getString("sso_subject") : null;
                 try (PreparedStatement ps = conn.prepareStatement(sql)) {
                     ps.setString(1, uname);
                     ps.setString(2, pass);
                     ps.setString(3, email);
                     ps.setString(4, provider);
-                    ps.setString(5, pass);
-                    ps.setString(6, email);
-                    ps.setString(7, provider);
+                    ps.setString(5, ssoSubject);
+                    ps.setString(6, pass);
+                    ps.setString(7, email);
+                    ps.setString(8, provider);
+                    ps.setString(9, ssoSubject);
                     ps.executeUpdate();
                 }
                 // Update role assignments if roles are provided
@@ -408,6 +415,10 @@ public final class UserDao implements CrudUsers {
         final String email = rs.getString("email");
         if (email != null) {
             bld.add("email", email);
+        }
+        final String ssoSubject = rs.getString("sso_subject");
+        if (ssoSubject != null) {
+            bld.add("sso_subject", ssoSubject);
         }
         final String rolesJson = rs.getString("roles");
         if (rolesJson != null) {

@@ -18,6 +18,7 @@ import com.auto1.pantera.db.dao.UserTokenDao;
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.auth.TokenAuthentication;
 import com.auto1.pantera.http.auth.Tokens;
+import com.auto1.pantera.http.log.EcsLogger;
 import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
 import java.time.Instant;
@@ -156,6 +157,43 @@ public final class JwtTokens implements Tokens {
             ? this.settingsDao.getInt("access_token_ttl_seconds", 3600)
             : this.defaultAccessTtl;
         return new Tokens.TokenPair(access, refresh, ttl);
+    }
+
+    /**
+     * Rotate: consume the presented refresh JTI, then issue a successor
+     * pair. The consume is an atomic DB update (live + owned + type
+     * refresh), so a replayed refresh token — or one belonging to another
+     * subject — is refused and mints nothing (SecOps token-revocation #23).
+     * Without a token store (no-DB boot) there is nothing to consume, so
+     * rotation degrades to plain issuance, matching pre-2.2.9 behaviour in
+     * that mode.
+     *
+     * @param user Authenticated subject of the presented refresh token
+     * @param refreshJti JTI of the presented refresh token
+     * @return Successor pair, or {@code null} when refused
+     */
+    @Override
+    public Tokens.TokenPair rotate(final AuthUser user, final String refreshJti) {
+        if (this.tokenDao != null) {
+            final UUID jti;
+            try {
+                jti = UUID.fromString(refreshJti);
+            } catch (final IllegalArgumentException ex) {
+                return null;
+            }
+            if (!this.tokenDao.consumeRefresh(jti, user.name())) {
+                EcsLogger.warn("com.auto1.pantera.auth")
+                    .message("Refresh rotation refused: presented JTI is not a live refresh token of this user")
+                    .eventCategory("authentication")
+                    .eventAction("token_refresh")
+                    .eventOutcome("failure")
+                    .field("user.name", user.name())
+                    .field("log.source", "application")
+                    .log();
+                return null;
+            }
+        }
+        return this.generatePair(user);
     }
 
     /**

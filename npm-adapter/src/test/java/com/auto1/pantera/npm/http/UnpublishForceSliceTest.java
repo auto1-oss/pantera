@@ -108,4 +108,108 @@ final class UnpublishForceSliceTest {
             response.status(), new IsEqual<>(RsStatus.NOT_FOUND)
         );
     }
+
+    @Test
+    void deletesOnlyTheTarballOnTheTarballForm() {
+        final Storage storage = new InMemoryStorage();
+        storage.save(new Key.From("pkg", ".versions", "2.0.0.json"),
+            new Content.From("{}".getBytes(StandardCharsets.UTF_8))).join();
+        storage.save(new Key.From("pkg/-/pkg-1.0.0.tgz"),
+            new Content.From("tgz".getBytes(StandardCharsets.UTF_8))).join();
+        final String rev = new PackumentRevision(storage, "pkg").value().join();
+        final Response response = new UnpublishForceSlice(storage, Optional.empty(), "npm")
+            .response(
+                new RequestLine(
+                    RqMethod.DELETE, String.format("/pkg/-/pkg-1.0.0.tgz/-rev/%s", rev)
+                ),
+                Headers.EMPTY, Content.EMPTY
+            ).join();
+        MatcherAssert.assertThat(
+            "deletes the tarball on a matching revision",
+            response.status(), new IsEqual<>(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "tarball is gone",
+            storage.exists(new Key.From("pkg/-/pkg-1.0.0.tgz")).join(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "the package's remaining versions survive",
+            storage.exists(new Key.From("pkg", ".versions", "2.0.0.json")).join(),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void deletesAScopedTarballOnTheTarballForm() {
+        final Storage storage = new InMemoryStorage();
+        storage.save(new Key.From("@scope/pkg", ".versions", "2.0.0.json"),
+            new Content.From("{}".getBytes(StandardCharsets.UTF_8))).join();
+        storage.save(new Key.From("@scope/pkg/-/@scope/pkg-1.0.0.tgz"),
+            new Content.From("tgz".getBytes(StandardCharsets.UTF_8))).join();
+        final String rev = new PackumentRevision(storage, "@scope/pkg").value().join();
+        final Response response = new UnpublishForceSlice(storage, Optional.empty(), "npm")
+            .response(
+                new RequestLine(
+                    RqMethod.DELETE,
+                    String.format("/@scope/pkg/-/@scope/pkg-1.0.0.tgz/-rev/%s", rev)
+                ),
+                Headers.EMPTY, Content.EMPTY
+            ).join();
+        MatcherAssert.assertThat(
+            "deletes the scoped tarball on a matching revision",
+            response.status(), new IsEqual<>(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "scoped tarball is gone",
+            storage.exists(new Key.From("@scope/pkg/-/@scope/pkg-1.0.0.tgz")).join(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "the scoped package's remaining versions survive",
+            storage.exists(new Key.From("@scope/pkg", ".versions", "2.0.0.json")).join(),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void refusesTheTarballFormOnRevisionMismatch() {
+        final Storage storage = new InMemoryStorage();
+        storage.save(new Key.From("pkg", ".versions", "2.0.0.json"),
+            new Content.From("{}".getBytes(StandardCharsets.UTF_8))).join();
+        storage.save(new Key.From("pkg/-/pkg-1.0.0.tgz"),
+            new Content.From("tgz".getBytes(StandardCharsets.UTF_8))).join();
+        final Response response = new UnpublishForceSlice(storage, Optional.empty(), "npm")
+            .response(
+                new RequestLine(RqMethod.DELETE, "/pkg/-/pkg-1.0.0.tgz/-rev/9-deadbeef"),
+                Headers.EMPTY, Content.EMPTY
+            ).join();
+        MatcherAssert.assertThat(
+            "answers 409 on a stale revision",
+            response.status(), new IsEqual<>(RsStatus.CONFLICT)
+        );
+        MatcherAssert.assertThat(
+            "tarball survives",
+            storage.exists(new Key.From("pkg/-/pkg-1.0.0.tgz")).join(),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void answersNotFoundForAnAbsentTarball() {
+        final Storage storage = new InMemoryStorage();
+        storage.save(new Key.From("pkg", ".versions", "2.0.0.json"),
+            new Content.From("{}".getBytes(StandardCharsets.UTF_8))).join();
+        final String rev = new PackumentRevision(storage, "pkg").value().join();
+        final Response response = new UnpublishForceSlice(storage, Optional.empty(), "npm")
+            .response(
+                new RequestLine(
+                    RqMethod.DELETE, String.format("/pkg/-/pkg-1.0.0.tgz/-rev/%s", rev)
+                ),
+                Headers.EMPTY, Content.EMPTY
+            ).join();
+        MatcherAssert.assertThat(
+            response.status(), new IsEqual<>(RsStatus.NOT_FOUND)
+        );
+    }
 }

@@ -129,6 +129,13 @@ final class ProxySlice implements Slice {
     private final Authenticator auth;
 
     /**
+     * Which mirror hosts may receive {@link #auth}: the configured upstream
+     * host, its parent domain, or the allowlist. Unknown upstream (legacy
+     * ctors) = credentials never leave for a mirror (2.2.9).
+     */
+    private final com.auto1.pantera.http.client.auth.RealmTrust mirrorTrust;
+
+    /**
      * Cache.
      */
     private final Cache cache;
@@ -262,6 +269,38 @@ final class ProxySlice implements Slice {
         final CooldownInspector inspector,
         final Slice jsonApiUpstream,
         final Duration metadataTtl) {
+        this(clients, auth, origin, backend, cache, events, rname, rtype,
+            cooldown, inspector, jsonApiUpstream, metadataTtl, null);
+    }
+
+    /**
+     * Canonical ctor, aware of the configured upstream so mirror fetches can
+     * bind the upstream credentials to trusted hosts only.
+     * @param clients HTTP clients
+     * @param auth Authenticator
+     * @param origin Origin slice
+     * @param backend Backend storage
+     * @param cache Cache
+     * @param events Artifact events queue
+     * @param rname Repository name
+     * @param rtype Repository type
+     * @param cooldown Cooldown service
+     * @param inspector Cooldown inspector
+     * @param jsonApiUpstream Direct upstream slice for /pypi/{pkg}/{ver}/json
+     * @param metadataTtl TTL for index page cache
+     * @param upstream Configured upstream URI the credentials belong to (nullable)
+     */
+    ProxySlice(final ClientSlices clients, final Authenticator auth,
+        final Slice origin, final Storage backend, final Cache cache,
+        final Optional<Queue<ProxyArtifactEvent>> events,
+        final String rname,
+        final String rtype,
+        final CooldownService cooldown,
+        final CooldownInspector inspector,
+        final Slice jsonApiUpstream,
+        final Duration metadataTtl,
+        final java.net.URI upstream) {
+        this.mirrorTrust = com.auto1.pantera.http.client.auth.RealmTrust.forUpstream(upstream);
         this.origin = origin;
         this.clients = clients;
         this.auth = auth;
@@ -1448,7 +1487,30 @@ final class ProxySlice implements Slice {
                 String.format("Unsupported mirror scheme: %s", scheme)
             );
         }
-        return new com.auto1.pantera.http.client.auth.AuthClientSlice(base, this.auth);
+        // SECURITY (2.2.9): the mirror host comes from an upstream-supplied
+        // index link. The configured upstream credentials are released only
+        // to a host the upstream is trusted for; any other mirror is fetched
+        // anonymously — never with another registry's credentials.
+        final Authenticator mirrorAuth;
+        if (this.mirrorTrust.trusts(uri)) {
+            mirrorAuth = this.auth;
+        } else {
+            mirrorAuth = Authenticator.ANONYMOUS;
+            if (this.auth != Authenticator.ANONYMOUS) {
+                EcsLogger.warn("com.auto1.pantera.pypi")
+                    .message("Mirror host is not the configured upstream; fetching anonymously")
+                    .eventCategory("network")
+                    .eventAction("mirror_credentials_withheld")
+                    .eventOutcome("success")
+                    .field("url.full", uri.toString())
+                    .field("destination.address", uri.getHost())
+                    .field("event.reason", "mirror_origin_untrusted")
+                    .field("repository.name", this.rname)
+                    .field("log.source", "application")
+                    .log();
+            }
+        }
+        return new com.auto1.pantera.http.client.auth.AuthClientSlice(base, mirrorAuth);
     }
 
     private void storeMirror(final String path, final URI upstream) {

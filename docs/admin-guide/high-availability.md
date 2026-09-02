@@ -91,6 +91,14 @@ All nodes must connect to the same Valkey instance (or cluster) for cache invali
 4. Nodes B and C receive the message and evict the matching entry from their local Caffeine caches.
 5. Each node filters out its own messages (by instanceId) to avoid double-processing.
 
+### Repository lifecycle events (2.2.9)
+
+Repository create / update / delete / move — including security-tightening changes such as revoking `anonymous_read` / `anonymous_write` and the bulk access-policy endpoint — are published on the `repo-config` namespace of the same channel. A peer re-injects the received event onto its local Vert.x event bus, so it reloads its repository snapshot, drops the cached slice for that repository and (re)starts any dedicated port exactly as the originating node does. Convergence is **eventual**: it takes one pub/sub round trip plus the peer's reload.
+
+Before 2.2.9 these events stayed on the originating node's local (non-clustered) event bus, so a security change applied on one node only until the others restarted.
+
+Limits: propagation requires Valkey. A multi-node deployment **without** Valkey has no cross-node repository-config propagation — peers pick up a change only on restart. A pub/sub message lost while a peer is disconnected is not replayed; re-saving the repository re-publishes it.
+
 ### L2 Cache
 
 Beyond pub/sub invalidation, Valkey also serves as the L2 tier for several caches (negative cache, auth cache, cooldown cache). This means cache hits can be served from Valkey when the local L1 (Caffeine) cache has evicted the entry.

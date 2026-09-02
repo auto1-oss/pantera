@@ -12,6 +12,9 @@ package com.auto1.pantera.api.v1;
 
 import com.auto1.pantera.api.AuthTokenRest;
 import com.auto1.pantera.api.AuthzHandler;
+import com.auto1.pantera.api.RepoAuthzHandler;
+import com.auto1.pantera.api.SecretRedactor;
+import com.auto1.pantera.api.RepositoryEventBroadcaster;
 import com.auto1.pantera.api.RepositoryEvents;
 import com.auto1.pantera.api.RepositoryName;
 import com.auto1.pantera.api.perms.ApiRepositoryPermission;
@@ -20,11 +23,12 @@ import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.scheduling.MetadataEventQueues;
 import com.auto1.pantera.security.perms.AdapterBasicPermission;
+import com.auto1.pantera.security.perms.Action;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.RepoData;
 import com.auto1.pantera.settings.cache.FiltersCache;
 import com.auto1.pantera.settings.repo.CrudRepoSettings;
-import io.vertx.core.eventbus.EventBus;
+import com.auto1.pantera.settings.repo.FsStorageRootPolicy;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
@@ -78,7 +82,19 @@ public final class RepositoryHandler {
     /**
      * Vert.x event bus.
      */
-    private final EventBus eventBus;
+    private final RepositoryEventBroadcaster eventBus;
+
+    /**
+     * Approved roots for inline {@code fs} storage submitted through this
+     * API (SECURITY, 2.2.9 — see {@link FsStorageRootPolicy}).
+     */
+    private final java.util.function.Supplier<FsStorageRootPolicy> fsRoots;
+
+    /**
+     * Outbound-URL policy for {@code remotes[].url} (SECURITY, 2.2.9 — see
+     * {@link RemoteUrlPolicy}).
+     */
+    private final RemoteUrlPolicy remoteUrls;
 
     /**
      * Ctor.
@@ -88,20 +104,22 @@ public final class RepositoryHandler {
      * @param policy Pantera security policy
      * @param events Artifact events queue
      * @param cooldown Cooldown service
-     * @param eventBus Vert.x event bus
+     * @param events2 Repository lifecycle event broadcaster (local bus + peers)
      * @checkstyle ParameterNumberCheck (10 lines)
      */
     public RepositoryHandler(final FiltersCache filtersCache,
         final CrudRepoSettings crs, final RepoData repoData,
         final Policy<?> policy, final Optional<MetadataEventQueues> events,
         final CooldownService cooldown, // NOPMD UnusedFormalParameter - public API; reserved for upcoming cooldown integration in repo CRUD endpoints
-        final EventBus eventBus) {
+        final RepositoryEventBroadcaster events2) {
         this.filtersCache = filtersCache;
         this.crs = crs;
         this.repoData = repoData;
         this.policy = policy;
         this.events = events;
-        this.eventBus = eventBus;
+        this.eventBus = events2;
+        this.fsRoots = com.auto1.pantera.settings.policy.RequestLimitsSettingsLoader.fsRootPolicy();
+        this.remoteUrls = RemoteUrlPolicy.fromRegistry();
     }
 
     /**
@@ -119,13 +137,21 @@ public final class RepositoryHandler {
         router.get("/api/v1/repositories")
             .handler(new AuthzHandler(this.policy, read))
             .handler(this::listRepositories);
+        // SECURITY (2.2.9): the list route filters by the per-repository read
+        // grant; the detail/HEAD/members routes must apply the same filter or
+        // they become a visibility bypass for repositories the caller cannot
+        // list.
+        final RepoAuthzHandler repoRead =
+            new RepoAuthzHandler(this.policy, "name", Action.Standard.READ);
         // GET /api/v1/repositories/:name — get repo config
         router.get("/api/v1/repositories/:name")
             .handler(new AuthzHandler(this.policy, read))
+            .handler(repoRead)
             .handler(this::getRepository);
         // HEAD /api/v1/repositories/:name — check existence
         router.head("/api/v1/repositories/:name")
             .handler(new AuthzHandler(this.policy, read))
+            .handler(repoRead)
             .handler(this::headRepository);
         // PUT /api/v1/repositories/:name — create or update
         router.put("/api/v1/repositories/:name")
@@ -141,6 +167,7 @@ public final class RepositoryHandler {
         // GET /api/v1/repositories/:name/members — group repo members
         router.get("/api/v1/repositories/:name/members")
             .handler(new AuthzHandler(this.policy, read))
+            .handler(repoRead)
             .handler(this::getMembers);
     }
 
@@ -231,7 +258,10 @@ public final class RepositoryHandler {
             if (!this.crs.exists(rname)) {
                 return null;
             }
-            return this.crs.value(rname);
+            // SECURITY (2.2.9, repo-config-secret): the persisted document
+            // carries upstream passwords and backend credentials. The read
+            // API is a redaction boundary — secrets are write-only.
+            return new SecretRedactor().redact(this.crs.value(rname));
         }, HandlerExecutor.get()).whenComplete((config, err) -> {
             if (err != null) {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
@@ -313,6 +343,13 @@ public final class RepositoryHandler {
                 "Repository storage is required for non-group repositories");
             return;
         }
+        // SECURITY (2.2.9): a raw fs path must sit under an approved root —
+        // otherwise repository CREATE/UPDATE mounted the host filesystem.
+        final Optional<String> badRoot = this.fsRoots.get().rejectStorage(repo);
+        if (badRoot.isPresent()) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", badRoot.get());
+            return;
+        }
         if (repo.containsKey("anonymous_read")) {
             final javax.json.JsonValue.ValueType vt = repo.get("anonymous_read").getValueType();
             if (vt != javax.json.JsonValue.ValueType.TRUE
@@ -336,6 +373,16 @@ public final class RepositoryHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", urlError.get());
             return;
         }
+        // SECURITY (2.2.9): remotes[].url is an outbound destination Pantera
+        // will dial on the next read. Syntax + literal/name egress check here
+        // (no DNS on the event loop); the resolving check runs on the worker
+        // right before the save.
+        final java.util.List<String> outbound = RemoteUrlPolicy.remoteUrls(repo);
+        final Optional<String> remoteError = this.remoteUrls.syntaxError(outbound);
+        if (remoteError.isPresent()) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", remoteError.get());
+            return;
+        }
         final boolean exists = this.crs.exists(rname);
         final ApiRepositoryPermission needed;
         if (exists) {
@@ -356,10 +403,26 @@ public final class RepositoryHandler {
         final String actor = ctx.user().principal().getString(AuthTokenRest.SUB);
         final String auditAction = exists ? "REPO_UPDATE" : "REPO_CREATE";
         CompletableFuture.runAsync(
-            () -> this.crs.save(rname, body, actor),
+            () -> {
+                // Resolving egress check — blocks on DNS, hence on the worker.
+                final Optional<String> resolved = this.remoteUrls.resolvedError(outbound);
+                if (resolved.isPresent()) {
+                    throw new RemoteUrlRejected(resolved.get());
+                }
+                // Secrets are write-only on the read API (masked as "***"). A
+                // client that round-trips the masked document must not
+                // overwrite the real stored secret with the sentinel.
+                final javax.json.JsonObject stored = exists
+                    ? RepositoryHandler.asObject(this.crs.value(rname)) : null;
+                this.crs.save(rname, new SecretRedactor().restoreMasked(body, stored), actor);
+            },
             HandlerExecutor.get()
         ).whenComplete((ignored, err) -> {
-            if (err != null) {
+            if (err != null && RepositoryHandler.rootCause(err) instanceof RemoteUrlRejected) {
+                ApiResponse.sendError(
+                    ctx, 400, "BAD_REQUEST", RepositoryHandler.rootCause(err).getMessage()
+                );
+            } else if (err != null) {
                 RepositoryHandler.audit(actor, auditAction, name,
                     java.util.Map.of(
                         "repository.type", repoType,
@@ -368,12 +431,46 @@ public final class RepositoryHandler {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
             } else {
                 this.filtersCache.invalidate(rname.toString());
-                this.eventBus.publish(RepositoryEvents.ADDRESS, RepositoryEvents.upsert(name));
+                this.eventBus.publish(RepositoryEvents.upsert(name));
                 RepositoryHandler.audit(actor, auditAction, name,
                     java.util.Map.of("repository.type", repoType), true);
                 ctx.response().setStatusCode(200).end();
             }
         });
+    }
+
+    /**
+     * Unwrap {@link java.util.concurrent.CompletionException} layers.
+     * @param err Failure
+     * @return Root cause
+     */
+    private static Throwable rootCause(final Throwable err) {
+        Throwable cause = err;
+        while (cause instanceof java.util.concurrent.CompletionException && cause.getCause() != null) {
+            cause = cause.getCause();
+        }
+        return cause;
+    }
+
+    /**
+     * A {@code remotes[].url} refused by the resolving egress check.
+     */
+    private static final class RemoteUrlRejected extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        RemoteUrlRejected(final String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * Narrow a stored config structure to an object (group members etc. are
+     * always objects; anything else yields {@code null} so no merge runs).
+     * @param value Stored structure
+     * @return The object, or {@code null}
+     */
+    private static javax.json.JsonObject asObject(final JsonStructure value) {
+        return value instanceof javax.json.JsonObject ? (javax.json.JsonObject) value : null;
     }
 
     /**
@@ -448,7 +545,7 @@ public final class RepositoryHandler {
                     return null;
                 });
             this.filtersCache.invalidate(rname.toString());
-            this.eventBus.publish(RepositoryEvents.ADDRESS, RepositoryEvents.remove(name));
+            this.eventBus.publish(RepositoryEvents.remove(name));
             this.events.ifPresent(item -> item.stopProxyMetadataProcessing(name));
             RepositoryHandler.audit(actor, "REPO_DELETE", name,
                 java.util.Map.of(), true);
@@ -499,8 +596,7 @@ public final class RepositoryHandler {
             this.repoData.move(rname, newrname)
                 .thenRun(() -> this.crs.move(rname, newrname));
             this.filtersCache.invalidate(rname.toString());
-            this.eventBus.publish(
-                RepositoryEvents.ADDRESS, RepositoryEvents.move(name, newName)
+            this.eventBus.publish(RepositoryEvents.move(name, newName)
             );
             ctx.response().setStatusCode(200).end();
         });
