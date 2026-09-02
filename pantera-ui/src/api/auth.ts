@@ -171,6 +171,78 @@ export async function updateUpstreamBreakerSettings(
   await getApiClient().put('/admin/upstream-breaker-settings', settings)
 }
 
+// --- Security policy settings (2.2.9): request limits, egress, login throttle ---
+
+/**
+ * GET/PUT /admin/request-limits-settings. All values are strings, like
+ * every other settings endpoint. `max_request_body_bytes` is the hard cap
+ * on a single request body (bytes, >= 1 MiB); `fs_storage_roots` lists the
+ * directories an inline `fs` repository storage path may live under
+ * (path-separator delimited absolute paths).
+ */
+export interface RequestLimitsSettings {
+  max_request_body_bytes: string
+  fs_storage_roots: string
+}
+
+export async function getRequestLimitsSettings(): Promise<RequestLimitsSettings> {
+  const { data } = await getApiClient().get<RequestLimitsSettings>(
+    '/admin/request-limits-settings',
+  )
+  return data
+}
+
+export async function updateRequestLimitsSettings(
+  settings: Partial<RequestLimitsSettings>,
+): Promise<void> {
+  await getApiClient().put('/admin/request-limits-settings', settings)
+}
+
+/**
+ * GET/PUT /admin/egress-settings. `egress_block_private` ("true"/"false")
+ * refuses outbound connections to private, loopback and link-local
+ * destinations; `egress_allow_hosts` exempts listed hosts from that;
+ * `upstream_credential_allow_hosts` lists hosts a bearer-token realm may
+ * live on before upstream credentials are released to it. Comma-separated.
+ */
+export interface EgressSettings {
+  egress_block_private: string
+  egress_allow_hosts: string
+  upstream_credential_allow_hosts: string
+}
+
+export async function getEgressSettings(): Promise<EgressSettings> {
+  const { data } = await getApiClient().get<EgressSettings>('/admin/egress-settings')
+  return data
+}
+
+export async function updateEgressSettings(settings: Partial<EgressSettings>): Promise<void> {
+  await getApiClient().put('/admin/egress-settings', settings)
+}
+
+/**
+ * GET/PUT /admin/login-throttle-settings. Failed password logins per
+ * (user, client IP) before further attempts are refused, and the window
+ * (seconds) those failures count in.
+ */
+export interface LoginThrottleSettings {
+  login_throttle_max_failures: string
+  login_throttle_window_seconds: string
+}
+
+export async function getLoginThrottleSettings(): Promise<LoginThrottleSettings> {
+  const { data } = await getApiClient().get<LoginThrottleSettings>(
+    '/admin/login-throttle-settings',
+  )
+  return data
+}
+
+export async function updateLoginThrottleSettings(
+  settings: Partial<LoginThrottleSettings>,
+): Promise<void> {
+  await getApiClient().put('/admin/login-throttle-settings', settings)
+}
+
 // --- Client-Facing Base URL Settings ---
 
 /**

@@ -9,6 +9,9 @@ import {
   getCircuitBreakerSettings, updateCircuitBreakerSettings,
   getUpstreamBreakerSettings, updateUpstreamBreakerSettings,
   getClientBaseUrlSettings, updateClientBaseUrlSettings,
+  getRequestLimitsSettings, updateRequestLimitsSettings,
+  getEgressSettings, updateEgressSettings,
+  getLoginThrottleSettings, updateLoginThrottleSettings,
 } from '@/api/auth'
 import type { RuntimeSettingKey } from '@/api/runtimeSettings'
 import { useRuntimeSettings } from '@/composables/useRuntimeSettings'
@@ -42,6 +45,7 @@ type SectionId =
   | 'prefixes' | 'jwt' | 'auth' | 'circuit_breaker' | 'upstream_breaker'
   | 'cooldown' | 'http_client' | 'bulkhead' | 'http_server'
   | 'external_links' | 'client_base_url'
+  | 'request_limits' | 'egress' | 'login_throttle'
 
 interface SectionMeta {
   /** Human-readable name shown in toasts and the dirty list. */
@@ -90,6 +94,18 @@ const SECTION_META: Record<SectionId, SectionMeta> = {
   },
   upstream_breaker: {
     label: 'Upstream HTTP Circuit Breaker',
+    hotReload: true,
+  },
+  request_limits: {
+    label: 'Request & Storage Limits',
+    hotReload: true,
+  },
+  egress: {
+    label: 'Outbound Egress Policy',
+    hotReload: true,
+  },
+  login_throttle: {
+    label: 'Login Throttling',
     hotReload: true,
   },
   cooldown: {
@@ -155,6 +171,25 @@ const ubMinCalls = ref(10)
 const ubWindowSeconds = ref(30)
 const ubSeedBackoffSeconds = ref(2)
 const ubMaxBackoffSeconds = ref(3600)
+
+// Security policy settings (2.2.9) — DB-backed, env vars are the fallback
+// tier only. Request & storage limits: the body cap is stored in bytes on
+// the server and edited here in MiB; fs storage roots is the
+// path-separator delimited list of directories an inline `fs` repository
+// path may live under.
+const MIB = 1024 * 1024
+const maxRequestBodyMiB = ref(10240)
+const fsStorageRoots = ref('/var/pantera/data')
+// Outbound egress policy: refuse private/loopback/link-local destinations,
+// with host exemptions; and the hosts a bearer-token realm may live on
+// before upstream credentials are released to it.
+const egressBlockPrivate = ref(false)
+const egressAllowHosts = ref('')
+const upstreamCredentialAllowHosts = ref('')
+// Login throttling: failed password logins per (user, client IP) before
+// further attempts are refused, and the window they count in.
+const loginThrottleMaxFailures = ref(5)
+const loginThrottleWindowSeconds = ref(900)
 
 // Client-facing base URL derivation (ClientBaseUrl, pantera-core) — governs
 // absolute URLs Pantera emits (e.g. npm dist.tarball) when a repository has
@@ -344,6 +379,21 @@ onMounted(async () => {
         clientBaseUrl.value = s.client_base_url ?? ''
         clientBaseScheme.value = s.client_base_scheme ?? 'auto'
       }),
+      getRequestLimitsSettings().then(s => {
+        maxRequestBodyMiB.value = Math.max(
+          1, Math.round(parseInt(s.max_request_body_bytes ?? String(10240 * MIB)) / MIB),
+        )
+        fsStorageRoots.value = s.fs_storage_roots ?? '/var/pantera/data'
+      }),
+      getEgressSettings().then(s => {
+        egressBlockPrivate.value = s.egress_block_private === 'true'
+        egressAllowHosts.value = s.egress_allow_hosts ?? ''
+        upstreamCredentialAllowHosts.value = s.upstream_credential_allow_hosts ?? ''
+      }),
+      getLoginThrottleSettings().then(s => {
+        loginThrottleMaxFailures.value = parseInt(s.login_throttle_max_failures ?? '5')
+        loginThrottleWindowSeconds.value = parseInt(s.login_throttle_window_seconds ?? '900')
+      }),
       runtime.load(),
     ])
   } catch {
@@ -506,6 +556,69 @@ async function saveUpstreamBreakerSettings() {
     notify.success('Upstream HTTP breaker settings saved')
   } catch {
     notify.error('Failed to save upstream HTTP breaker settings')
+  } finally {
+    saving.value = null
+  }
+}
+
+async function saveRequestLimitsSettings() {
+  if (!Number.isFinite(maxRequestBodyMiB.value) || maxRequestBodyMiB.value < 1) {
+    notify.error('Request body cap must be at least 1 MiB')
+    return
+  }
+  const roots = fsStorageRoots.value.split(':').map(r => r.trim()).filter(Boolean)
+  if (roots.length === 0 || roots.some(r => !r.startsWith('/'))) {
+    notify.error('Filesystem storage roots must be one or more absolute directories')
+    return
+  }
+  saving.value = 'request-limits'
+  try {
+    await updateRequestLimitsSettings({
+      max_request_body_bytes: String(Math.round(maxRequestBodyMiB.value) * MIB),
+      fs_storage_roots: roots.join(':'),
+    })
+    notify.success('Request & storage limits saved')
+  } catch {
+    notify.error('Failed to save request & storage limits')
+  } finally {
+    saving.value = null
+  }
+}
+
+function normaliseHosts(raw: string): string {
+  return raw.split(',').map(h => h.trim()).filter(Boolean).join(',')
+}
+
+async function saveEgressSettings() {
+  saving.value = 'egress'
+  try {
+    await updateEgressSettings({
+      egress_block_private: String(egressBlockPrivate.value),
+      egress_allow_hosts: normaliseHosts(egressAllowHosts.value),
+      upstream_credential_allow_hosts: normaliseHosts(upstreamCredentialAllowHosts.value),
+    })
+    notify.success('Outbound egress policy saved')
+  } catch {
+    notify.error('Failed to save outbound egress policy')
+  } finally {
+    saving.value = null
+  }
+}
+
+async function saveLoginThrottleSettings() {
+  if (loginThrottleMaxFailures.value < 1 || loginThrottleWindowSeconds.value < 1) {
+    notify.error('Login throttle failures and window must both be at least 1')
+    return
+  }
+  saving.value = 'login-throttle'
+  try {
+    await updateLoginThrottleSettings({
+      login_throttle_max_failures: String(loginThrottleMaxFailures.value),
+      login_throttle_window_seconds: String(loginThrottleWindowSeconds.value),
+    })
+    notify.success('Login throttling settings saved')
+  } catch {
+    notify.error('Failed to save login throttling settings')
   } finally {
     saving.value = null
   }
@@ -712,6 +825,13 @@ interface Baseline {
   clientBaseHostAllowlist: string
   clientBaseUrl: string
   clientBaseScheme: string
+  maxRequestBodyMiB: number
+  fsStorageRoots: string
+  egressBlockPrivate: boolean
+  egressAllowHosts: string
+  upstreamCredentialAllowHosts: string
+  loginThrottleMaxFailures: number
+  loginThrottleWindowSeconds: number
   cooldownEnabled: boolean
   cooldownAge: string
   cooldownHistoryRetentionDays: number
@@ -756,6 +876,13 @@ function snapshot(): Baseline {
     clientBaseHostAllowlist: clientBaseHostAllowlist.value,
     clientBaseUrl: clientBaseUrl.value,
     clientBaseScheme: clientBaseScheme.value,
+    maxRequestBodyMiB: maxRequestBodyMiB.value,
+    fsStorageRoots: fsStorageRoots.value,
+    egressBlockPrivate: egressBlockPrivate.value,
+    egressAllowHosts: egressAllowHosts.value,
+    upstreamCredentialAllowHosts: upstreamCredentialAllowHosts.value,
+    loginThrottleMaxFailures: loginThrottleMaxFailures.value,
+    loginThrottleWindowSeconds: loginThrottleWindowSeconds.value,
     cooldownEnabled: cooldownEnabled.value,
     cooldownAge: cooldownAge.value,
     cooldownHistoryRetentionDays: cooldownHistoryRetentionDays.value,
@@ -811,6 +938,19 @@ const isDirtyClientBaseUrl = computed(() =>
       || baseline.value.clientBaseHostAllowlist !== clientBaseHostAllowlist.value
       || baseline.value.clientBaseUrl !== clientBaseUrl.value
       || baseline.value.clientBaseScheme !== clientBaseScheme.value))
+const isDirtyRequestLimits = computed(() =>
+  !!baseline.value
+    && (baseline.value.maxRequestBodyMiB !== maxRequestBodyMiB.value
+      || baseline.value.fsStorageRoots !== fsStorageRoots.value))
+const isDirtyEgress = computed(() =>
+  !!baseline.value
+    && (baseline.value.egressBlockPrivate !== egressBlockPrivate.value
+      || baseline.value.egressAllowHosts !== egressAllowHosts.value
+      || baseline.value.upstreamCredentialAllowHosts !== upstreamCredentialAllowHosts.value))
+const isDirtyLoginThrottle = computed(() =>
+  !!baseline.value
+    && (baseline.value.loginThrottleMaxFailures !== loginThrottleMaxFailures.value
+      || baseline.value.loginThrottleWindowSeconds !== loginThrottleWindowSeconds.value))
 const isDirtyCooldown = computed(() =>
   !!baseline.value
     && (baseline.value.cooldownEnabled !== cooldownEnabled.value
@@ -851,6 +991,9 @@ const DIRTY_PER_SECTION: Record<SectionId, { value: boolean }> = {
   circuit_breaker: isDirtyCircuitBreaker,
   upstream_breaker: isDirtyUpstreamBreaker,
   client_base_url: isDirtyClientBaseUrl,
+  request_limits: isDirtyRequestLimits,
+  egress: isDirtyEgress,
+  login_throttle: isDirtyLoginThrottle,
   cooldown: isDirtyCooldown,
   http_client: isDirtyHttpClient,
   bulkhead: isDirtyBulkhead,
@@ -877,6 +1020,9 @@ async function saveSectionById(id: SectionId): Promise<void> {
     case 'circuit_breaker': await saveCircuitBreakerSettings(); break
     case 'upstream_breaker': await saveUpstreamBreakerSettings(); break
     case 'client_base_url': await saveClientBaseUrlSettings(); break
+    case 'request_limits': await saveRequestLimitsSettings(); break
+    case 'egress': await saveEgressSettings(); break
+    case 'login_throttle': await saveLoginThrottleSettings(); break
     case 'cooldown': await saveCooldown(); break
     case 'http_client': await Promise.resolve(saveHttpClient()); break
     case 'bulkhead': await runtime.saveAllDirty(); break
@@ -1350,6 +1496,133 @@ const SectionHeader = (props: { id: SectionId; dirty: boolean }) => {
               <span v-else class="text-xs text-gray-400">
                 Exact match, case-insensitive, including port if the client sends one.
               </span>
+            </div>
+          </div>
+        </template>
+      </Card>
+
+      <!-- Request & Storage Limits (2.2.9) -->
+      <Card class="shadow-sm">
+        <template #title>
+          <SectionHeader id="request_limits" :dirty="isDirtyRequestLimits" />
+        </template>
+        <template #subtitle>
+          Hard cap on a single request body (uploads, imports) and the
+          directories an inline filesystem repository path may live under.
+          Stored in the database; the PANTERA_MAX_REQUEST_BODY_BYTES and
+          PANTERA_FS_STORAGE_ROOTS environment variables are only consulted
+          when no value has been saved here.
+        </template>
+        <template #content>
+          <div class="space-y-4">
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Request body cap (MiB)</label>
+                <InputNumber v-model="maxRequestBodyMiB" :min="1" :max="1048576" suffix=" MiB" class="w-full" />
+                <span class="text-xs text-gray-400">
+                  Default: 10240 MiB (10 GiB). A declared size above the cap is refused
+                  with 413 before any body byte is read; chunked bodies are metered as
+                  they stream. Set it above your largest artifact.
+                </span>
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Filesystem storage roots</label>
+                <InputText v-model="fsStorageRoots" class="w-full" placeholder="/var/pantera/data" />
+                <span class="text-xs text-gray-400">
+                  Default: /var/pantera/data. Absolute directories separated by ":".
+                  An inline <code>fs</code> storage path submitted through the API or UI
+                  must resolve under one of them (symlinks are followed).
+                </span>
+              </div>
+            </div>
+            <div class="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded p-2">
+              <i class="pi pi-info-circle mr-1" />
+              Applies to the next request on every node — no restart needed. Existing
+              repositories are not re-validated; only new or edited configurations are.
+            </div>
+          </div>
+        </template>
+      </Card>
+
+      <!-- Outbound Egress Policy (2.2.9) -->
+      <Card class="shadow-sm">
+        <template #title>
+          <SectionHeader id="egress" :dirty="isDirtyEgress" />
+        </template>
+        <template #subtitle>
+          Where Pantera may connect to when it fetches from proxy remotes and
+          S3 endpoints, and which hosts may receive upstream credentials.
+          Cloud-metadata addresses are always refused. Stored in the database;
+          the PANTERA_EGRESS_* and PANTERA_UPSTREAM_CREDENTIAL_ALLOW_HOSTS
+          environment variables are only the fallback.
+        </template>
+        <template #content>
+          <div class="space-y-4">
+            <div class="flex items-center gap-3">
+              <InputSwitch v-model="egressBlockPrivate" />
+              <div>
+                <div class="text-sm">Block private, loopback and link-local destinations</div>
+                <div class="text-xs text-gray-400">
+                  Default: off. Turn on when every legitimate upstream is public; list
+                  internal mirrors below to exempt them.
+                </div>
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Allowed private hosts</label>
+                <InputText v-model="egressAllowHosts" class="w-full" placeholder="mirror.internal, nexus.corp" />
+                <span class="text-xs text-gray-400">
+                  Comma-separated host names exempt from the private-destination block.
+                </span>
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Credential-trusted realm hosts</label>
+                <InputText v-model="upstreamCredentialAllowHosts" class="w-full" placeholder="auth.docker.io" />
+                <span class="text-xs text-gray-400">
+                  Comma-separated hosts a bearer-token realm may live on besides the
+                  upstream itself and its parent domain.
+                </span>
+              </div>
+            </div>
+            <div class="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded p-2">
+              <i class="pi pi-info-circle mr-1" />
+              Enforced on every outbound connection and credential decision — no
+              restart needed. Repository and storage-alias writes are validated
+              against the same policy.
+            </div>
+          </div>
+        </template>
+      </Card>
+
+      <!-- Login Throttling (2.2.9) -->
+      <Card class="shadow-sm">
+        <template #title>
+          <SectionHeader id="login_throttle" :dirty="isDirtyLoginThrottle" />
+        </template>
+        <template #subtitle>
+          Failed password logins tolerated per user and client IP before further
+          attempts are refused for the window. Stored in the database; the
+          PANTERA_LOGIN_THROTTLE_* environment variables are only the fallback.
+        </template>
+        <template #content>
+          <div class="space-y-4">
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Failures before lockout</label>
+                <InputNumber v-model="loginThrottleMaxFailures" :min="1" :max="1000" class="w-full" />
+                <span class="text-xs text-gray-400">Default: 5.</span>
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Window (seconds)</label>
+                <InputNumber v-model="loginThrottleWindowSeconds" :min="1" :max="86400" suffix=" s" class="w-full" />
+                <span class="text-xs text-gray-400">Default: 900s (15 minutes).</span>
+              </div>
+            </div>
+            <div class="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded p-2">
+              <i class="pi pi-info-circle mr-1" />
+              Applies to the next login attempt — no restart needed. Counters are kept
+              per node and clear on a successful login.
             </div>
           </div>
         </template>

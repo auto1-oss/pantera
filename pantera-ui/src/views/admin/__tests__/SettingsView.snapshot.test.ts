@@ -43,6 +43,12 @@ vi.mock('@/api/auth', () => ({
   getUpstreamBreakerSettings: () => Promise.resolve({}),
   updateUpstreamBreakerSettings: vi.fn().mockResolvedValue(undefined),
   getClientBaseUrlSettings: () => Promise.resolve({}),
+  getRequestLimitsSettings: () => Promise.resolve({}),
+  updateRequestLimitsSettings: vi.fn().mockResolvedValue(undefined),
+  getEgressSettings: () => Promise.resolve({}),
+  updateEgressSettings: vi.fn().mockResolvedValue(undefined),
+  getLoginThrottleSettings: () => Promise.resolve({}),
+  updateLoginThrottleSettings: vi.fn().mockResolvedValue(undefined),
   updateClientBaseUrlSettings: vi.fn().mockResolvedValue(undefined),
 }))
 
@@ -202,6 +208,31 @@ describe('SettingsView — unified save bar', () => {
     await flushPromises()
     expect(wrapper.find('[data-testid="save-bar-chip-upstream_breaker"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="save-bar-chip-circuit_breaker"]').exists()).toBe(false)
+  })
+
+  it('tracks the three 2.2.9 security policy cards as their own hot-reload sections', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.text()).toContain('Request & Storage Limits')
+    expect(wrapper.text()).toContain('Outbound Egress Policy')
+    expect(wrapper.text()).toContain('Login Throttling')
+    const vm = wrapper.vm as unknown as {
+      maxRequestBodyMiB: number
+      egressBlockPrivate: boolean
+      loginThrottleMaxFailures: number
+    }
+    vm.maxRequestBodyMiB = 512
+    await flushPromises()
+    expect(wrapper.find('[data-testid="save-bar-chip-request_limits"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="save-bar-chip-egress"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="save-bar-chip-login_throttle"]').exists()).toBe(false)
+    vm.egressBlockPrivate = true
+    vm.loginThrottleMaxFailures = 3
+    await flushPromises()
+    expect(wrapper.find('[data-testid="save-bar-chip-egress"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="save-bar-chip-login_throttle"]').exists()).toBe(true)
+    // All three apply on save without a restart: no restart pill.
+    expect(wrapper.find('[data-testid="section-pill-egress"]').text()).not.toContain('Restart')
   })
 
   it('tracks the client-facing base URL settings as their own section', async () => {
