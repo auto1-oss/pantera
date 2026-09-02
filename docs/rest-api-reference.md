@@ -2369,6 +2369,164 @@ curl -X PUT http://localhost:8086/api/v1/admin/client-base-url-settings \
 
 ---
 
+### GET /api/v1/admin/request-limits-settings
+
+Retrieve the request &amp; storage limits (2.2.9): the hard cap on a single request body and the directories an inline `fs` repository storage path may live under. Environment fallbacks `PANTERA_MAX_REQUEST_BODY_BYTES` / `PANTERA_FS_STORAGE_ROOTS` apply only while no row has been saved.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin`
+
+**Response (200):** every key is always present; all values are strings.
+
+```json
+{
+  "max_request_body_bytes": "10737418240",
+  "fs_storage_roots": "/var/pantera/data"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `max_request_body_bytes` | string (integer bytes, ≥ 1048576) | Hard cap on a single request body; a declared size above it answers `413` before any byte is read, chunked bodies are metered as they stream. Default `10737418240` (10 GiB). |
+| `fs_storage_roots` | string (path-separator delimited absolute directories) | Approved roots for inline `fs` storage paths submitted through `PUT /api/v1/repositories/<name>` or the UI; symlinks are followed before the containment check. Default `/var/pantera/data`. |
+
+**curl example:**
+
+```bash
+curl http://localhost:8086/api/v1/admin/request-limits-settings \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+---
+
+### PUT /api/v1/admin/request-limits-settings
+
+Partial updates are accepted; omitted keys keep their current values. The merged result is validated (round-tripped through the setting's constructor) before anything is written: an unknown key, or a cap below 1 MiB, a non-integer, an empty root list or a relative root, is rejected with `400` and nothing is persisted. Takes effect on the very next request on every node: the HTTP server reads the cap per request and the repository API reads the roots per write. Every successful update is audit-logged (`event.category=configuration`).
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin`
+
+**Request Body:** any subset of the fields above, values as strings.
+
+**Response (204):** No content.
+
+**Response (400):**
+
+```json
+{
+  "error": "BAD_REQUEST",
+  "message": "Invalid request-limits setting: ..."
+}
+```
+
+---
+
+### GET /api/v1/admin/egress-settings
+
+Retrieve the outbound egress policy (2.2.9) applied to every connection Pantera makes on its own behalf (proxy remotes, index links, bearer-token realms, storage-alias endpoints) and the hosts trusted to receive upstream credentials. Link-local and cloud-metadata destinations are refused regardless of these settings. Environment fallbacks `PANTERA_EGRESS_BLOCK_PRIVATE` / `PANTERA_EGRESS_ALLOW_HOSTS` / `PANTERA_UPSTREAM_CREDENTIAL_ALLOW_HOSTS` apply only while no row has been saved.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin`
+
+**Response (200):** every key is always present; all values are strings.
+
+```json
+{
+  "egress_block_private": "false",
+  "egress_allow_hosts": "",
+  "upstream_credential_allow_hosts": ""
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `egress_block_private` | string (`"true"`/`"false"`) | Also refuse loopback and private ranges. Default `"false"`. |
+| `egress_allow_hosts` | string (comma-separated host names) | Hosts exempt from the private-destination refusal. Default empty. |
+| `upstream_credential_allow_hosts` | string (comma-separated host names) | Additional hosts a bearer-token realm may live on before an upstream's credentials are released to it; by default only the upstream host or a host under its parent domain. Default empty. |
+
+**curl example:**
+
+```bash
+curl http://localhost:8086/api/v1/admin/egress-settings \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+---
+
+### PUT /api/v1/admin/egress-settings
+
+Partial updates are accepted; omitted keys keep their current values. The merged result is validated (round-tripped through the setting's constructor) before anything is written: an unknown key, or a boolean other than `"true"`/`"false"` or an entry that is not a host name, is rejected with `400` and nothing is persisted. Takes effect on the next outbound connection and credential decision on every node; repository and storage-alias writes are validated against the same policy. Every successful update is audit-logged (`event.category=configuration`).
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin`
+
+**Request Body:** any subset of the fields above, values as strings.
+
+**Response (204):** No content.
+
+**Response (400):**
+
+```json
+{
+  "error": "BAD_REQUEST",
+  "message": "Invalid egress setting: ..."
+}
+```
+
+---
+
+### GET /api/v1/admin/login-throttle-settings
+
+Retrieve the password-login throttle (2.2.9): failures per (user, client IP) tolerated before further attempts are refused, and the window they count in. Environment fallbacks `PANTERA_LOGIN_THROTTLE_MAX_FAILURES` / `PANTERA_LOGIN_THROTTLE_WINDOW_SECONDS` apply only while no row has been saved.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin`
+
+**Response (200):** every key is always present; all values are strings.
+
+```json
+{
+  "login_throttle_max_failures": "5",
+  "login_throttle_window_seconds": "900"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `login_throttle_max_failures` | string (integer ≥ 1) | Failures before lockout. Default `"5"`. |
+| `login_throttle_window_seconds` | string (integer ≥ 1) | Window in seconds; a successful login clears the counter. Counters are per node. Default `"900"`. |
+
+**curl example:**
+
+```bash
+curl http://localhost:8086/api/v1/admin/login-throttle-settings \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+---
+
+### PUT /api/v1/admin/login-throttle-settings
+
+Partial updates are accepted; omitted keys keep their current values. The merged result is validated (round-tripped through the setting's constructor) before anything is written: an unknown key, or a non-integer or a value below 1, is rejected with `400` and nothing is persisted. Takes effect on the next login attempt on every node. Every successful update is audit-logged (`event.category=configuration`).
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_admin_permissions:admin`
+
+**Request Body:** any subset of the fields above, values as strings.
+
+**Response (204):** No content.
+
+**Response (400):**
+
+```json
+{
+  "error": "BAD_REQUEST",
+  "message": "Invalid login-throttle setting: ..."
+}
+```
+
+---
+
 ### POST /api/v1/admin/revoke-user/:username
 
 Immediately revoke all tokens (access, refresh, and API) for the specified user. The revocation is propagated to all cluster nodes via Valkey pub/sub (sub-second propagation when Valkey is available; DB polling fallback otherwise).
