@@ -11,11 +11,11 @@
 package com.auto1.pantera.http.client.auth;
 
 import java.net.URI;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Locale;
 import java.util.Set;
+import java.util.function.Supplier;
 
 /**
  * Decides which secondary hosts may receive the credentials configured for
@@ -47,7 +47,7 @@ public final class RealmTrust {
     /**
      * Explicitly trusted realm hosts (lower-case).
      */
-    private final Set<String> allowed;
+    private final Supplier<Set<String>> allowed;
 
     /**
      * Ctor.
@@ -56,15 +56,20 @@ public final class RealmTrust {
      * @param allowed Explicitly trusted realm hosts
      */
     public RealmTrust(final URI upstream, final Set<String> allowed) {
+        this(upstream, RealmTrust.constant(allowed));
+    }
+
+    /**
+     * Ctor reading the allowlist through a supplier on every decision, so
+     * an admin edit applies to the next challenge without re-wiring.
+     *
+     * @param upstream Upstream registry URI, may be null
+     * @param allowed Live allowlist source (host names, any case)
+     */
+    public RealmTrust(final URI upstream, final Supplier<Set<String>> allowed) {
         this.upstream = upstream == null || upstream.getHost() == null
             ? null : upstream.getHost().toLowerCase(Locale.ROOT);
-        final Set<String> lower = new HashSet<>();
-        for (final String host : allowed) {
-            if (host != null && !host.isBlank()) {
-                lower.add(host.trim().toLowerCase(Locale.ROOT));
-            }
-        }
-        this.allowed = Collections.unmodifiableSet(lower);
+        this.allowed = allowed;
     }
 
     /**
@@ -75,8 +80,10 @@ public final class RealmTrust {
      * @return Realm trust
      */
     public static RealmTrust forUpstream(final URI upstream) {
-        final String env = System.getenv().getOrDefault("PANTERA_UPSTREAM_CREDENTIAL_ALLOW_HOSTS", "");
-        return new RealmTrust(upstream, new HashSet<>(Arrays.asList(env.split(","))));
+        return new RealmTrust(
+            upstream,
+            com.auto1.pantera.http.client.egress.EgressSettingsRegistry.credentialAllowHosts()
+        );
     }
 
     /**
@@ -101,7 +108,7 @@ public final class RealmTrust {
             return false;
         }
         final String lower = host.toLowerCase(Locale.ROOT);
-        if (this.allowed.contains(lower)) {
+        if (RealmTrust.listed(this.allowed.get(), lower)) {
             return true;
         }
         if (this.upstream == null) {
@@ -116,5 +123,38 @@ public final class RealmTrust {
         }
         final String parent = this.upstream.substring(dot + 1);
         return parent.indexOf('.') >= 0 && lower.endsWith("." + parent);
+    }
+
+    /**
+     * Fixed allowlist as a supplier.
+     *
+     * @param allowed Hosts, any case
+     * @return Supplier of the normalised set
+     */
+    private static Supplier<Set<String>> constant(final Set<String> allowed) {
+        final Set<String> lower = new HashSet<>();
+        for (final String host : allowed) {
+            if (host != null && !host.isBlank()) {
+                lower.add(host.trim().toLowerCase(Locale.ROOT));
+            }
+        }
+        final Set<String> fixed = Collections.unmodifiableSet(lower);
+        return () -> fixed;
+    }
+
+    /**
+     * Case-insensitive membership.
+     *
+     * @param hosts Allowlist as supplied
+     * @param lower Lower-cased realm host
+     * @return True when listed
+     */
+    private static boolean listed(final Set<String> hosts, final String lower) {
+        for (final String host : hosts) {
+            if (host != null && host.trim().toLowerCase(Locale.ROOT).equals(lower)) {
+                return true;
+            }
+        }
+        return false;
     }
 }

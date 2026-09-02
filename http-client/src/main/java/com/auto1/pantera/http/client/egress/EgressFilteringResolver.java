@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Supplier;
 import org.eclipse.jetty.util.Promise;
 import org.eclipse.jetty.util.SocketAddressResolver;
 
@@ -34,7 +35,7 @@ public final class EgressFilteringResolver implements SocketAddressResolver {
     /**
      * Policy to apply.
      */
-    private final EgressPolicy policy;
+    private final Supplier<EgressPolicy> policy;
 
     /**
      * Real resolver (Jetty's async resolver in production).
@@ -48,6 +49,19 @@ public final class EgressFilteringResolver implements SocketAddressResolver {
      * @param delegate Underlying resolver
      */
     public EgressFilteringResolver(final EgressPolicy policy, final SocketAddressResolver delegate) {
+        this(() -> policy, delegate);
+    }
+
+    /**
+     * Ctor reading the policy through a supplier on every resolve, so an
+     * admin edit applies to the next outbound connect without a restart.
+     *
+     * @param policy Live policy source
+     * @param delegate Real resolver
+     */
+    public EgressFilteringResolver(
+        final Supplier<EgressPolicy> policy, final SocketAddressResolver delegate
+    ) {
         this.policy = policy;
         this.delegate = delegate;
     }
@@ -59,7 +73,8 @@ public final class EgressFilteringResolver implements SocketAddressResolver {
         final Map<String, Object> context,
         final Promise<List<InetSocketAddress>> promise
     ) {
-        final Optional<String> byName = this.policy.hostRejection(host);
+        final EgressPolicy current = this.policy.get();
+        final Optional<String> byName = current.hostRejection(host);
         if (byName.isPresent()) {
             promise.failed(this.deny(host, port, byName.get()));
             return;
@@ -72,7 +87,7 @@ public final class EgressFilteringResolver implements SocketAddressResolver {
                 for (final InetSocketAddress address : resolved) {
                     final Optional<String> rejection = address.getAddress() == null
                         ? Optional.of("unresolved address")
-                        : EgressFilteringResolver.this.policy.rejection(host, address.getAddress());
+                        : current.rejection(host, address.getAddress());
                     if (rejection.isPresent()) {
                         reason = rejection.get();
                     } else {

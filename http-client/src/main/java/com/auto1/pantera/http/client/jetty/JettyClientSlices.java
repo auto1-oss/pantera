@@ -661,7 +661,7 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
         // lazily from the started client's executor/scheduler.
         result.setSocketAddressResolver(
             new com.auto1.pantera.http.client.egress.EgressFilteringResolver(
-                com.auto1.pantera.http.client.egress.EgressPolicy.fromEnvironment(),
+                com.auto1.pantera.http.client.egress.EgressSettingsRegistry.policy(),
                 new LazyAsyncResolver(result)
             )
         );

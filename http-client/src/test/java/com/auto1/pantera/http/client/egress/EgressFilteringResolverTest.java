@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.eclipse.jetty.util.Promise;
 import org.eclipse.jetty.util.SocketAddressResolver;
 import org.hamcrest.MatcherAssert;
@@ -81,6 +82,29 @@ final class EgressFilteringResolverTest {
         MatcherAssert.assertThat(
             "a name-denied host must never reach DNS",
             delegated[0], new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void policyIsReReadOnEveryResolve() throws Exception {
+        final InetSocketAddress internal =
+            new InetSocketAddress(InetAddress.getByName("10.0.0.7"), 443);
+        final AtomicReference<EgressPolicy> policy = new AtomicReference<>(EgressPolicy.defaults());
+        final EgressFilteringResolver resolver = new EgressFilteringResolver(
+            policy::get, stub(List.of(internal))
+        );
+        final CompletableFuture<List<InetSocketAddress>> before = new CompletableFuture<>();
+        resolver.resolve("intranet.example", 443, Map.of(), promise(before));
+        MatcherAssert.assertThat(
+            "a private address passes while the policy is not strict",
+            before.get(5, TimeUnit.SECONDS), new IsEqual<>(List.of(internal))
+        );
+        policy.set(new EgressPolicy(true, java.util.Set.of()));
+        final CompletableFuture<List<InetSocketAddress>> after = new CompletableFuture<>();
+        resolver.resolve("intranet.example", 443, Map.of(), promise(after));
+        MatcherAssert.assertThat(
+            "tightening the policy must apply to the next connect without a restart",
+            after.isCompletedExceptionally(), new IsEqual<>(true)
         );
     }
 
