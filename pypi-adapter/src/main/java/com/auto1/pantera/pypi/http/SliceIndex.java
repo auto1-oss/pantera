@@ -425,20 +425,9 @@ final class SliceIndex implements Slice {
      * @return Attribute string (may be empty)
      */
     private static String buildHtmlAttributes(final PypiSidecar.Meta meta) {
-        final StringBuilder attrs = new StringBuilder();
-        if (meta.requiresPython() != null && !meta.requiresPython().isEmpty()) {
-            attrs.append(String.format(" data-requires-python=\"%s\"",
-                meta.requiresPython().replace(">", "&gt;").replace("<", "&lt;")));
-        }
-        if (meta.yanked()) {
-            final String reason = meta.yankedReason().orElse("");
-            attrs.append(String.format(" data-yanked=\"%s\"", reason));
-        }
-        if (meta.distInfoMetadata().isPresent()) {
-            attrs.append(String.format(" data-dist-info-metadata=\"sha256=%s\"",
-                meta.distInfoMetadata().get()));
-        }
-        return attrs.toString();
+        // SECURITY (2.2.9): every value is untrusted; the shared renderer
+        // entity-escapes all of them (the yank reason used to be emitted raw).
+        return PypiHtmlAttributes.of(meta);
     }
 
     /**

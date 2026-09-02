@@ -86,13 +86,6 @@ public final class PypiMetadataRewriter implements MetadataRewriter<PypiSimpleIn
      * @return HTML-escaped string
      */
     private static String escapeHtml(final String value) {
-        if (value == null) {
-            return "";
-        }
-        return value
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace("\"", "&quot;");
+        return com.auto1.pantera.http.html.HtmlEscape.escape(value);
     }
 }

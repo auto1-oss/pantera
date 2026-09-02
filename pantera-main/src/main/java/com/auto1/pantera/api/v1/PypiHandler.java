@@ -48,6 +48,13 @@ import java.util.concurrent.CompletableFuture;
 public final class PypiHandler {
 
     /**
+     * Longest yank reason accepted (chars) — PEP 592 reasons are short
+     * human notes; anything longer is not a reason.
+     */
+    private static final int MAX_REASON = 512;
+
+
+    /**
      * Distribution file suffixes that carry PyPI sidecar metadata.
      */
     private static final List<String> DIST_SUFFIXES =
@@ -279,7 +286,14 @@ public final class PypiHandler {
         try {
             final JsonObject json = new JsonObject(body);
             final String reason = json.getString("reason");
-            return reason == null || reason.isBlank() ? null : reason;
+            if (reason == null || reason.isBlank()) {
+                return null;
+            }
+            // SECURITY (2.2.9): the reason is rendered into every later
+            // index page. Rendering escapes it; here we bound it and drop
+            // control characters so a payload cannot even be stored.
+            final String clean = reason.replaceAll("\\p{Cntrl}", " ").strip();
+            return clean.length() > MAX_REASON ? clean.substring(0, MAX_REASON) : clean;
         } catch (final Exception ex) {
             // EXPECTED: reason is optional metadata — malformed JSON or
             // missing field returns null and the action proceeds.

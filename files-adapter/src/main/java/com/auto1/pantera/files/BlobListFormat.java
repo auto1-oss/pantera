@@ -65,10 +65,12 @@ interface BlobListFormat {
                     "</html>"
                 ),
                 keys.stream().map(
+                    // SECURITY (2.2.9): the key is writer-controlled; escape it
+                    // for both the attribute and the text position.
                     key -> String.format(
                         "      <li><a href=\"/%s\">%s</a></li>",
-                        key.string(),
-                        key.string()
+                        com.auto1.pantera.http.html.HtmlEscape.escape(key.string()),
+                        com.auto1.pantera.http.html.HtmlEscape.escape(key.string())
                     )
                 ).collect(Collectors.joining("\n"))
             )
