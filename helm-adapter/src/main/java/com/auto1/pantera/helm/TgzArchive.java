@@ -44,8 +44,17 @@ public final class TgzArchive {
     private final ChartYaml chart;
 
     /**
+     * Upper bound on a materialised {@code Chart.yaml} (1 MiB). The entry is
+     * inflated from the uploaded archive and joined into one String; before
+     * 2.2.9 that join was unbounded, so a highly repetitive Chart.yaml —
+     * tiny once gzipped — expanded into a heap-sized String on every push
+     * (resource-dos F45). Real charts are a few KB.
+     */
+    public static final long MAX_CHART_YAML_BYTES = 1024L * 1024L;
+
+    /**
      * Ctor.
-     * @param content The archive content.
+     * @param content Archive bytes
      */
     public TgzArchive(final byte[] content) {
         this.content = content; // NOPMD ArrayIsStoredDirectly - immutable archive holder; bytes() returns a defensive copy
@@ -112,6 +121,39 @@ public final class TgzArchive {
     }
 
     /**
+     * Read the current tar entry as text, refusing it once it inflates past
+     * {@link #MAX_CHART_YAML_BYTES} — the bound is on INFLATED bytes, which
+     * is what a decompression bomb attacks.
+     *
+     * @param taris Tar stream positioned at the entry
+     * @param name Entry name, for the error message
+     * @return Entry text with line endings normalised to {@code \n}
+     * @throws IOException On read failure or when the entry exceeds the cap
+     */
+    private static String readBounded(
+        final TarArchiveInputStream taris, final String name
+    ) throws IOException {
+        final java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        final byte[] chunk = new byte[8192];
+        int read;
+        while ((read = taris.read(chunk)) != -1) {
+            if (out.size() + read > MAX_CHART_YAML_BYTES) {
+                throw new IOException(
+                    String.format(
+                        "'%s' inflates past the %d-byte limit", name, MAX_CHART_YAML_BYTES
+                    )
+                );
+            }
+            out.write(chunk, 0, read);
+        }
+        return new BufferedReader(
+            new InputStreamReader(
+                new ByteArrayInputStream(out.toByteArray()), java.nio.charset.StandardCharsets.UTF_8
+            )
+        ).lines().collect(Collectors.joining("\n"));
+    }
+
+    /**
      * Obtain file by name.
      *
      * @param name The name of a file.
@@ -130,9 +172,7 @@ public final class TgzArchive {
             TarArchiveEntry entry;
             while ((entry = taris.getNextTarEntry()) != null) {
                 if (entry.getName().endsWith(name)) {
-                    return new BufferedReader(new InputStreamReader(taris))
-                        .lines()
-                        .collect(Collectors.joining("\n"));
+                    return TgzArchive.readBounded(taris, name);
                 }
             }
             throw new IllegalStateException(String.format("'%s' file wasn't found", name));
