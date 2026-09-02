@@ -2,9 +2,63 @@
 
 ## Version 2.2.9
 
+This release remediates the findings of an external security review of 2.2.6. Upgrade promptly; several items are reachable without credentials on a default deployment. See the Security section for the full list.
+
+### ⚠️ Breaking changes
+
+- **The bootstrap administrator is no longer seeded with the password `admin`.** On a DB-backed first start the password comes from `PANTERA_BOOTSTRAP_ADMIN_PASSWORD`, or a random one is generated and logged once. Existing installations are unaffected (the account already exists); automation that relied on `admin/admin` must set the variable.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Filesystem-backed repository roots must sit under an approved base directory.** `PANTERA_FS_STORAGE_ROOTS` (default `/var/pantera/data`) is now enforced when a repository is created or updated through the API; a repository whose `fs` path lies outside it is rejected with `400` until the variable includes that root. Existing repositories keep serving.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Direct download tokens are single-use and are re-authorized at redemption.** A token can be redeemed once; redeeming it requires the issuing user to still hold read on the repository. `PANTERA_DOWNLOAD_TOKEN_SECRET` must be at least 32 bytes when set; when unset, DB-backed deployments generate and share a random key, DB-less ones use an ephemeral random key.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Changing or resetting a password revokes that user's existing sessions and API tokens**, including the caller's own session on a self-service change. Refresh tokens are rotated: a refresh token is invalidated when it is used, and a refresh token is only accepted at `/auth/refresh`.
+  ([@aydasraf](https://github.com/aydasraf))
+- **The SSO callback (`/auth/callback`) now requires the `state` parameter** and completes on the node that started the login (stickiness or a single node); the bundled UI already sends it. Only explicitly mapped IdP groups grant roles — unmapped groups no longer confer anything.
+  ([@aydasraf](https://github.com/aydasraf))
+- **The bundled Keycloak realm no longer ships a client secret or user password.** Set `KEYCLOAK_CLIENT_SECRET` and `PANTERA_DEV_SSO_USER_PASSWORD` in the dev compose. A realm imported from an older checkout keeps the old values — re-import it and rotate the secret. The committed nginx TLS key pair was removed; a self-signed pair is generated at container start.
+  ([@aydasraf](https://github.com/aydasraf))
+- **A hard request-body cap now applies to every request**, metered on actual bytes so chunked uploads are bounded too: `PANTERA_MAX_REQUEST_BODY_BYTES` (default 10 GiB). Per-repository `content-length-max`, where set, also holds for chunked bodies and rejects malformed `Content-Length` headers.
+  ([@aydasraf](https://github.com/aydasraf))
+
 ### 🔧 Bug fixes
 
 - **`npm unpublish <pkg>@<version>` no longer fails with `409 Conflict` after removing the version** — the CLI finishes a single-version unpublish by deleting the version's tarball at `<pkg>/-/<file>.tgz/-rev/<revision>`, and that request was handled by the whole-package unpublish path, which read the tarball path as the package name, computed a revision for a package that does not exist, and rejected the client's current revision as stale. The preceding PUT had already removed the version from the packument, so the CLI reported failure while the registry had in fact unpublished the version and left the tarball blob orphaned in storage. The tarball step is now recognised, validated against the real package's revision with the same 409/428/404 semantics as force-unpublish, and removes only that blob.
+  ([@aydasraf](https://github.com/aydasraf))
+
+### 🔒 Security
+
+Each item below ships with a regression test that reproduces the original attack and proves it is now rejected.
+
+- **The global `/.import` and `/.merge` maintenance routes were reachable without credentials.** They were mounted ahead of the authentication chain, allowing unauthenticated artifact overwrite, metadata merges and, through a stored gem key, remote code execution. Both routes now require a credential holding repository-scoped write on the repository named in the URL.
+  ([@aydasraf](https://github.com/aydasraf))
+- **RubyGems metadata extraction no longer evaluates the gem's file path as Ruby source.** The path crossed into the embedded JRuby runtime by string interpolation, so a crafted stored key executed arbitrary Ruby. It is now passed as a data value; the gem key matcher is anchored to a whole file name; and the index is rebuilt from validated gem specifications instead of deserialising stored `Marshal` data.
+  ([@aydasraf](https://github.com/aydasraf))
+- **A bogus `Authorization` header no longer bypasses authentication on private file-proxy, conda upload and gem metadata routes.** These routes lacked the credential-validating wrapper the other adapters use; the directory browser also treated an unauthenticated `404` as proof of authorization. All now validate the credential, and JWT-exempt API routes are an exact allowlist instead of a substring match.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Direct download tokens could be forged.** The signing key fell back to a value derived from the process id and OS user (fixed in the shipped image), the comparison was not constant-time, and future-dated tokens were accepted. The key is now random and shared, comparison uses `MessageDigest.isEqual`, and timestamps are bounded on both sides. Two documentation pages that claimed a random default were corrected.
+  ([@aydasraf](https://github.com/aydasraf))
+- **A revoked API token remained valid as a repository password.** The Basic-auth `jwt-password` path verified only the signature; it now applies the same revocation blocklist, ownership and token-type checks as bearer authentication. Admin-configured access and refresh lifetimes are honoured on issuance.
+  ([@aydasraf](https://github.com/aydasraf))
+- **OIDC id_tokens are cryptographically verified.** The SSO callback trusted the token payload without checking its signature, issuer, audience, expiry or nonce, and keyed the identity by username. Tokens are now verified against the provider's JWKS; SSO identities are bound to `(provider, issuer, subject)` so a colliding username cannot inherit a local account's roles; disabled providers are refused; login attempts are throttled per user and address.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Management API routes now enforce per-repository authorization.** Artifact browsing and deletion, PyPI yank/unyank, per-repository storage-alias writes, search aggregates and dashboard statistics authorized on a global permission or on authentication alone, so a low-privileged user could act on or enumerate repositories they had no grant for. Each applies the repository-scoped grant; storage-alias writes require the create permission.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Repository and storage-alias read endpoints redact secrets.** Upstream passwords and backend credentials were returned verbatim to any holder of a read grant; they are now masked, and submitting the mask preserves the stored value.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Users cannot escalate their own privileges through the user and role endpoints.** A caller may not assign a role or author a permission they do not hold, may not reset passwords without the change-password permission, and may not alter the built-in `admin` role. Role-cache invalidation now clears every tier, closing a stale-privilege window on name reuse.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Path traversal in the filesystem directory browser, the vertx-file and S3 disk-cache backends, the importer and the gem indexer.** A key containing parent segments could list directories outside a repository root, and — on the non-default `vertx-file` backend — read or delete files outside it; the importer checked for `..` before decoding. Every sink now normalises and confines the path to its root. The default `fs` artifact-read path was already guarded.
+  ([@aydasraf](https://github.com/aydasraf))
+- **An unauthenticated request could exhaust the heap by declaring a large `Content-Length`.** Denied requests pre-allocated a buffer of the declared size before answering `401`; that path now drains the body without materialising it, and buffers never pre-allocate from an untrusted declared size. npm and helm uploads bound their archive entries, and the Composer proxy streams upstream artifacts instead of buffering them.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Outbound requests are subject to an egress policy and upstream credentials are bound to trusted hosts.** Link-local and cloud-metadata addresses are always refused after DNS resolution (`PANTERA_EGRESS_BLOCK_PRIVATE` extends this to loopback and private ranges; `PANTERA_EGRESS_ALLOW_HOSTS` exempts hosts). A `WWW-Authenticate` challenge, a PyPI mirror link or a Composer `dist` URL pointing at a different origin no longer receives the configured upstream credentials (`PANTERA_UPSTREAM_CREDENTIAL_ALLOW_HOSTS`). Remote and alias URLs are validated when written.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Stored cross-site scripting in the Files listing and the PyPI simple index.** Uploaded file names and yank reasons were rendered into HTML unescaped; every untrusted value now passes through one escaping helper.
+  ([@aydasraf](https://github.com/aydasraf))
+- **HA peers apply repository security-setting changes immediately.** Changes were announced only on the local event bus, so other nodes kept stale access rules until restart; they are now broadcast over Valkey pub/sub.
+  ([@aydasraf](https://github.com/aydasraf))
+- **The import idempotency key is bound to its target repository and caller, and the importer derives the repository type from configuration** rather than from the request. Client IPs in audit records honour forwarding headers only when `trust_forwarded_headers` is enabled; the metrics listener bind address is configurable (`PANTERA_METRICS_BIND`).
   ([@aydasraf](https://github.com/aydasraf))
 
 ## Version 2.2.8
