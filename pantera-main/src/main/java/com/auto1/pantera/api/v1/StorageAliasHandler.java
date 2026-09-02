@@ -59,6 +59,11 @@ public final class StorageAliasHandler {
     private final StorageAliasDao aliasDao;
 
     /**
+     * Outbound-URL policy for the S3 {@code endpoint} (SECURITY, 2.2.9).
+     */
+    private final RemoteUrlPolicy endpoints;
+
+    /**
      * Ctor.
      * @param storagesCache Pantera settings storage cache
      * @param asto Pantera settings storage
@@ -72,6 +77,7 @@ public final class StorageAliasHandler {
         this.asto = asto;
         this.policy = policy;
         this.aliasDao = aliasDao;
+        this.endpoints = RemoteUrlPolicy.fromEnvironment();
     }
 
     /**
@@ -159,7 +165,16 @@ public final class StorageAliasHandler {
         if (body == null) {
             return;
         }
+        final java.util.List<String> outbound = StorageAliasHandler.endpointUrls(body);
+        final java.util.Optional<String> syntax = this.endpoints.syntaxError(outbound);
+        if (syntax.isPresent()) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", syntax.get());
+            return;
+        }
         CompletableFuture.runAsync(() -> {
+            this.endpoints.resolvedError(outbound).ifPresent(reason -> {
+                throw new EndpointRejected(reason);
+            });
             if (this.aliasDao != null) {
                 this.aliasDao.put(name, null, body);
             }
@@ -170,7 +185,11 @@ public final class StorageAliasHandler {
             }
             this.storagesCache.invalidateAll();
         }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
-            if (err != null) {
+            if (err != null && StorageAliasHandler.rootCause(err) instanceof EndpointRejected) {
+                ApiResponse.sendError(
+                    ctx, 400, "BAD_REQUEST", StorageAliasHandler.rootCause(err).getMessage()
+                );
+            } else if (err != null) {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
             } else {
                 ctx.response().setStatusCode(200).end();
@@ -258,7 +277,16 @@ public final class StorageAliasHandler {
         if (body == null) {
             return;
         }
+        final java.util.List<String> outbound = StorageAliasHandler.endpointUrls(body);
+        final java.util.Optional<String> syntax = this.endpoints.syntaxError(outbound);
+        if (syntax.isPresent()) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", syntax.get());
+            return;
+        }
         CompletableFuture.runAsync(() -> {
+            this.endpoints.resolvedError(outbound).ifPresent(reason -> {
+                throw new EndpointRejected(reason);
+            });
             if (this.aliasDao != null) {
                 this.aliasDao.put(aliasName, repoName, body);
             }
@@ -270,7 +298,11 @@ public final class StorageAliasHandler {
             }
             this.storagesCache.invalidateAll();
         }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
-            if (err != null) {
+            if (err != null && StorageAliasHandler.rootCause(err) instanceof EndpointRejected) {
+                ApiResponse.sendError(
+                    ctx, 400, "BAD_REQUEST", StorageAliasHandler.rootCause(err).getMessage()
+                );
+            } else if (err != null) {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
             } else {
                 ctx.response().setStatusCode(200).end();
@@ -355,6 +387,47 @@ public final class StorageAliasHandler {
      * @param ctx Routing context
      * @return Parsed object, or null if invalid (response already sent)
      */
+    /**
+     * Outbound URLs an alias body can carry: the S3 {@code endpoint}.
+     * @param body Alias body
+     * @return Endpoint URLs (empty when absent)
+     */
+    private static java.util.List<String> endpointUrls(final JsonObject body) {
+        final java.util.List<String> urls = new java.util.ArrayList<>();
+        if (body.containsKey("endpoint")) {
+            if (body.get("endpoint").getValueType() == javax.json.JsonValue.ValueType.STRING) {
+                urls.add(body.getString("endpoint"));
+            } else {
+                urls.add("");
+            }
+        }
+        return urls;
+    }
+
+    /**
+     * Unwrap {@link java.util.concurrent.CompletionException} layers.
+     * @param err Failure
+     * @return Root cause
+     */
+    private static Throwable rootCause(final Throwable err) {
+        Throwable cause = err;
+        while (cause instanceof java.util.concurrent.CompletionException && cause.getCause() != null) {
+            cause = cause.getCause();
+        }
+        return cause;
+    }
+
+    /**
+     * An alias {@code endpoint} refused by the resolving egress check.
+     */
+    private static final class EndpointRejected extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        EndpointRejected(final String message) {
+            super(message);
+        }
+    }
+
     private static JsonObject bodyAsJson(final RoutingContext ctx) {
         final String raw = ctx.body().asString();
         if (raw == null || raw.isBlank()) {

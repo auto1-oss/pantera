@@ -91,6 +91,12 @@ public final class RepositoryHandler {
     private final FsStorageRootPolicy fsRoots;
 
     /**
+     * Outbound-URL policy for {@code remotes[].url} (SECURITY, 2.2.9 — see
+     * {@link RemoteUrlPolicy}).
+     */
+    private final RemoteUrlPolicy remoteUrls;
+
+    /**
      * Ctor.
      * @param filtersCache Pantera filters cache
      * @param crs Repository settings CRUD
@@ -113,6 +119,7 @@ public final class RepositoryHandler {
         this.events = events;
         this.eventBus = eventBus;
         this.fsRoots = FsStorageRootPolicy.fromEnvironment();
+        this.remoteUrls = RemoteUrlPolicy.fromEnvironment();
     }
 
     /**
@@ -366,6 +373,16 @@ public final class RepositoryHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", urlError.get());
             return;
         }
+        // SECURITY (2.2.9): remotes[].url is an outbound destination Pantera
+        // will dial on the next read. Syntax + literal/name egress check here
+        // (no DNS on the event loop); the resolving check runs on the worker
+        // right before the save.
+        final java.util.List<String> outbound = RemoteUrlPolicy.remoteUrls(repo);
+        final Optional<String> remoteError = this.remoteUrls.syntaxError(outbound);
+        if (remoteError.isPresent()) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", remoteError.get());
+            return;
+        }
         final boolean exists = this.crs.exists(rname);
         final ApiRepositoryPermission needed;
         if (exists) {
@@ -387,6 +404,11 @@ public final class RepositoryHandler {
         final String auditAction = exists ? "REPO_UPDATE" : "REPO_CREATE";
         CompletableFuture.runAsync(
             () -> {
+                // Resolving egress check — blocks on DNS, hence on the worker.
+                final Optional<String> resolved = this.remoteUrls.resolvedError(outbound);
+                if (resolved.isPresent()) {
+                    throw new RemoteUrlRejected(resolved.get());
+                }
                 // Secrets are write-only on the read API (masked as "***"). A
                 // client that round-trips the masked document must not
                 // overwrite the real stored secret with the sentinel.
@@ -396,7 +418,11 @@ public final class RepositoryHandler {
             },
             HandlerExecutor.get()
         ).whenComplete((ignored, err) -> {
-            if (err != null) {
+            if (err != null && RepositoryHandler.rootCause(err) instanceof RemoteUrlRejected) {
+                ApiResponse.sendError(
+                    ctx, 400, "BAD_REQUEST", RepositoryHandler.rootCause(err).getMessage()
+                );
+            } else if (err != null) {
                 RepositoryHandler.audit(actor, auditAction, name,
                     java.util.Map.of(
                         "repository.type", repoType,
@@ -411,6 +437,30 @@ public final class RepositoryHandler {
                 ctx.response().setStatusCode(200).end();
             }
         });
+    }
+
+    /**
+     * Unwrap {@link java.util.concurrent.CompletionException} layers.
+     * @param err Failure
+     * @return Root cause
+     */
+    private static Throwable rootCause(final Throwable err) {
+        Throwable cause = err;
+        while (cause instanceof java.util.concurrent.CompletionException && cause.getCause() != null) {
+            cause = cause.getCause();
+        }
+        return cause;
+    }
+
+    /**
+     * A {@code remotes[].url} refused by the resolving egress check.
+     */
+    private static final class RemoteUrlRejected extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        RemoteUrlRejected(final String message) {
+            super(message);
+        }
     }
 
     /**

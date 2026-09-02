@@ -80,7 +80,7 @@ public final class MavenProxy implements Slice {
             cfg.remotes().stream().map(
                 remote -> new MavenProxySlice(
                     client, remote.uri(),
-                    GenericAuthenticator.create(client, remote.username(), remote.pwd()),
+                    GenericAuthenticator.create(client, remote.uri(), remote.username(), remote.pwd()),
                     asto.<Cache>map(FromStorageCache::new).orElse(Cache.NOP),
                     asto.flatMap(ignored -> queue),
                     cfg.name(),

@@ -67,7 +67,7 @@ public final class ComposerProxy implements Slice {
             cfg.remotes().stream().map(
                 remote -> {
                     final com.auto1.pantera.http.client.auth.Authenticator auth =
-                        GenericAuthenticator.create(client, remote.username(), remote.pwd());
+                        GenericAuthenticator.create(client, remote.uri(), remote.username(), remote.pwd());
 
                     return asto.map(
                         cache -> new ComposerProxySlice(

@@ -332,6 +332,29 @@ public final class ProxyDownloadSlice implements Slice {
             if (sameHost(this.remoteBase, ouri)) {
                 target = this.remote;
             } else {
+                // SECURITY (2.2.9): dist.url is publisher-influenced metadata.
+                // A cross-host dist is only dialed when the egress policy
+                // allows the destination (the Jetty resolver re-checks after
+                // DNS); a denied destination is an upstream failure.
+                final java.util.Optional<String> denied = ProxyDownloadSlice.egressDenial(ouri);
+                if (denied.isPresent()) {
+                    EcsLogger.warn("com.auto1.pantera.composer")
+                        .message("dist.url refused by egress policy: " + denied.get())
+                        .eventCategory("network")
+                        .eventAction("egress_denied")
+                        .eventOutcome("failure")
+                        .field("url.full", orig)
+                        .field("destination.address", ouri.getHost())
+                        .field("event.reason", denied.get())
+                        .field("repository.name", this.rname)
+                        .field("log.source", "application")
+                        .log();
+                    return CompletableFuture.completedFuture(
+                        ResponseBuilder.from(com.auto1.pantera.http.RsStatus.byCode(502))
+                            .textBody("dist destination not allowed")
+                            .build()
+                    );
+                }
                 target = new UriClientSlice(this.clients, baseOf(ouri));
             }
             final String pathWithQuery = buildPathWithQuery(ouri);
@@ -453,6 +476,37 @@ public final class ProxyDownloadSlice implements Slice {
      * @param uri Input URI
      * @return Base URI
      */
+    /**
+     * Name-level / literal-IP egress check for a cross-host dist (no DNS —
+     * this runs on the reactive path; the resolver guards resolved names).
+     * @param uri Dist URI
+     * @return Reason when denied, else empty
+     */
+    private static java.util.Optional<String> egressDenial(final URI uri) {
+        final com.auto1.pantera.http.client.egress.EgressPolicy policy =
+            com.auto1.pantera.http.client.egress.EgressPolicy.fromEnvironment();
+        final String host = uri.getHost();
+        final java.util.Optional<String> byName = policy.hostRejection(host);
+        if (byName.isPresent()) {
+            return byName;
+        }
+        if (host == null) {
+            return java.util.Optional.of("missing host");
+        }
+        final String bare = host.startsWith("[") && host.endsWith("]")
+            ? host.substring(1, host.length() - 1) : host;
+        final boolean literal = bare.indexOf(':') >= 0
+            || bare.chars().allMatch(c -> Character.isDigit(c) || c == '.');
+        if (!literal) {
+            return java.util.Optional.empty();
+        }
+        try {
+            return policy.rejection(host, java.net.InetAddress.getByName(bare));
+        } catch (final java.net.UnknownHostException ex) {
+            return java.util.Optional.empty();
+        }
+    }
+
     private static URI baseOf(final URI uri) {
         final int port = uri.getPort();
         final String auth = (port == -1)

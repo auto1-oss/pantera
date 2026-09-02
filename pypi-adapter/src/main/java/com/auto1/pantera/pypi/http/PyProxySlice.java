@@ -132,7 +132,12 @@ public final class PyProxySlice extends Slice.Wrap {
                         // PyPI JSON API upstream — always pypi.org, regardless of the
                         // Simple-API mirror configured. Used by PypiJsonHandler to
                         // serve cooldown-filtered /pypi/{pkg}/{ver}/json responses.
-                        new UriClientSlice(clients, jsonApiUri(remote))
+                        new UriClientSlice(clients, jsonApiUri(remote)),
+                        // Mirror credential binding (2.2.9): index links may name
+                        // any host; the upstream credentials go only to hosts
+                        // trusted for THIS remote.
+                        CacheTimeControl.DEFAULT_TTL,
+                        remote
                     )
                 ),
                 new RtRulePath(

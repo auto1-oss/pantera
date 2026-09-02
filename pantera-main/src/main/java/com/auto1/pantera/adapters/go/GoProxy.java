@@ -68,7 +68,7 @@ public final class GoProxy implements Slice {
                     client,
                     remote.uri(),
                     // Support per-remote authentication (like maven-proxy)
-                    GenericAuthenticator.create(client, remote.username(), remote.pwd()),
+                    GenericAuthenticator.create(client, remote.uri(), remote.username(), remote.pwd()),
                     asto.<Cache>map(FromStorageCache::new).orElse(Cache.NOP),
                     events,
                     asto,  // Pass storage for TTL-based metadata caching
