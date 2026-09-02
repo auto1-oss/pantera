@@ -88,8 +88,8 @@ public final class AuthHandler {
      * id_token must carry the nonce this node issued for the browser's
      * authorization request.
      */
-    private final com.auto1.pantera.auth.oidc.SsoNonceStore nonces =
-        new com.auto1.pantera.auth.oidc.SsoNonceStore(java.time.Duration.ofMinutes(10));
+    private final com.auto1.pantera.auth.oidc.SsoLoginStateStore logins =
+        com.auto1.pantera.auth.oidc.SsoLoginStateStore.forRuntime(java.time.Duration.ofMinutes(10));
 
     /**
      * Cached JWKS clients per provider JWKS endpoint, so the provider key
@@ -272,8 +272,11 @@ public final class AuthHandler {
             final String type = provider.getString("type", "");
             // SECURITY (2.2.9): cryptographically random state, plus a nonce
             // bound to it that the id_token must echo back.
-            final String state = this.nonces.newState();
-            final String nonce = this.nonces.issue(state);
+            final String state = this.logins.newState();
+            // Worker thread (supplyAsync on HandlerExecutor), so waiting for
+            // the store write here is allowed; the redirect must not be
+            // returned before the state is durably recorded.
+            final String nonce = this.logins.issue(state).toCompletableFuture().join();
             final String authorizeUrl;
             final String clientId;
             final String scope;
@@ -363,21 +366,41 @@ public final class AuthHandler {
             return;
         }
         // SECURITY (2.2.9, SecOps sso-oidc): the callback must present the
-        // state of a login THIS server started; its nonce is consumed here
-        // (single use, bounded lifetime) and must match the id_token's nonce.
-        final Optional<String> expectedNonce = this.nonces.consume(state);
-        if (expectedNonce.isEmpty()) {
-            EcsLogger.warn("com.auto1.pantera.api.v1")
-                .message("SSO callback rejected: unknown, reused or expired state")
-                .eventCategory("authentication")
-                .eventAction("sso_callback")
-                .eventOutcome("failure")
-                .field("log.source", "application")
-                .log();
-            ApiResponse.sendError(ctx, 401, "UNAUTHORIZED",
-                "Sign-in session is invalid or expired. Please start again.");
-            return;
-        }
+        // state of a login THIS cluster started; its nonce is consumed here
+        // (single use, bounded lifetime, shared across nodes over Valkey)
+        // and must match the id_token's nonce. The lookup is asynchronous:
+        // this handler runs on the event loop and must never block.
+        this.logins.consume(state).whenComplete((expectedNonce, lookupErr) -> {
+            if (lookupErr != null || expectedNonce.isEmpty()) {
+                EcsLogger.warn("com.auto1.pantera.api.v1")
+                    .message("SSO callback rejected: unknown, reused or expired state")
+                    .eventCategory("authentication")
+                    .eventAction("sso_callback")
+                    .eventOutcome("failure")
+                    .field("log.source", "application")
+                    .log();
+                ApiResponse.sendError(ctx, 401, "UNAUTHORIZED",
+                    "Sign-in session is invalid or expired. Please start again.");
+                return;
+            }
+            this.completeSsoLogin(ctx, code, provider, callbackUrl, expectedNonce.get());
+        });
+    }
+
+    /**
+     * Second half of the callback, entered once the login state was
+     * consumed: code exchange, id_token verification, identity binding and
+     * token issue.
+     * @param ctx Routing context
+     * @param code Authorization code
+     * @param provider Provider name
+     * @param callbackUrl Redirect URI used for the authorize request
+     * @param expectedNonce Nonce bound to this login
+     */
+    private void completeSsoLogin(
+        final RoutingContext ctx, final String code, final String provider,
+        final String callbackUrl, final String expectedNonce
+    ) {
         CompletableFuture.supplyAsync(
             (java.util.function.Supplier<Tokens.TokenPair>) () -> {
                 final javax.json.JsonObject prov = findProvider(provider);
@@ -465,7 +488,7 @@ public final class AuthHandler {
                 // login — before any claim is trusted. Before 2.2.9 the payload
                 // was merely base64-decoded.
                 final com.auth0.jwt.interfaces.DecodedJWT verified =
-                    this.verifyIdToken(type, config, idToken, expectedNonce.get());
+                    this.verifyIdToken(type, config, idToken, expectedNonce);
                 final String issuer = verified.getIssuer();
                 final String subject = verified.getSubject();
                 String username = verified.getClaim("preferred_username").asString();
