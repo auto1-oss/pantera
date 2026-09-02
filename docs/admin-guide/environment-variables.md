@@ -41,6 +41,7 @@ All `PANTERA_*` variables can also be set as Java system properties using the lo
 | `PANTERA_DEDUP_MAX_AGE_MS` | `300000` | Maximum age of in-flight dedup entries (ms) -- 5 minutes. Stale entries are cleaned up by a background thread. |
 | `PANTERA_DOCKER_CACHE_EXPIRY_HOURS` | `24` | Docker proxy cache entry lifetime (hours) |
 | `PANTERA_BODY_BUFFER_THRESHOLD` | `1048576` | Request body size threshold (bytes). Bodies smaller than this are buffered in memory; larger bodies are streamed from disk. |
+| `PANTERA_MAX_REQUEST_BODY_BYTES` | `10737418240` (10 GiB) | Hard cap on a single request body, applied to every request regardless of per-repository `content-length-max`. A declared `Content-Length` above it is rejected with `413` before any byte is read; a chunked body is metered as it streams and rejected with `413` once it exceeds the cap. |
 
 ---
 

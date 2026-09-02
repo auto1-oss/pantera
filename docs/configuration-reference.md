@@ -1531,6 +1531,7 @@ a Java system property using the lowercase, dot-separated equivalent (e.g.,
 | `PANTERA_DEDUP_MAX_AGE_MS` | `300000` | Maximum age of in-flight dedup entries (ms) -- 5 minutes |
 | `PANTERA_DOCKER_CACHE_EXPIRY_HOURS` | `24` | Docker proxy cache entry lifetime (hours) |
 | `PANTERA_BODY_BUFFER_THRESHOLD` | `1048576` | Request body size threshold (bytes). Below this: buffered in memory. Above: streamed from disk. |
+| `PANTERA_MAX_REQUEST_BODY_BYTES` | `10737418240` (10 GiB) | Hard cap on a single request body (bytes), metered on actual bytes for declared and chunked framing alike; exceeding it answers `413`. Applies regardless of per-repository `content-length-max`. |
 
 ### 7.4 Metrics
 
