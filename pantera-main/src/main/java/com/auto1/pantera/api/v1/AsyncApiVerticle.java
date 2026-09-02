@@ -422,16 +422,23 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         // Register protected auth routes (requires JWT)
         authHandler.registerProtected(router);
         // Register all handler groups
+        // Repository lifecycle events reach the local consumer AND every
+        // peer node (HA): a security-tightening change must not keep
+        // applying on one node only until restart (2.2.9).
+        final com.auto1.pantera.api.RepositoryEventBroadcaster repoEvents =
+            com.auto1.pantera.api.RepositoryEventBroadcaster.attach(
+                this.vertx.eventBus(), this.settings.cacheInvalidationPubSub()
+            );
         new RepositoryHandler(
             this.caches.filtersCache(), crs,
             new RepoData(this.configsStorage, this.caches.storagesCache()),
             this.security.policy(), this.events,
             this.cooldown,
-            this.vertx.eventBus()
+            repoEvents
         ).register(router);
         new BulkAccessPolicyHandler(
             crs, this.security.policy(),
-            this.caches.filtersCache(), this.vertx.eventBus()
+            this.caches.filtersCache(), repoEvents
         ).register(router);
         if (users != null) {
             // Wire the revocation blocklist + token DAO so that

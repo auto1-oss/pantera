@@ -12,6 +12,7 @@ package com.auto1.pantera.api.v1;
 
 import com.auto1.pantera.api.AuthTokenRest;
 import com.auto1.pantera.api.AuthzHandler;
+import com.auto1.pantera.api.RepositoryEventBroadcaster;
 import com.auto1.pantera.api.RepositoryEvents;
 import com.auto1.pantera.api.RepositoryName;
 import com.auto1.pantera.api.perms.ApiRepositoryPermission;
@@ -21,7 +22,6 @@ import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.cache.FiltersCache;
 import com.auto1.pantera.settings.repo.CrudRepoSettings;
-import io.vertx.core.eventbus.EventBus;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
@@ -120,23 +120,23 @@ public final class BulkAccessPolicyHandler {
      * {@code ConfigWatchService} listeners and other in-process
      * subscribers rebuild affected slices.
      */
-    private final EventBus eventBus;
+    private final RepositoryEventBroadcaster eventBus;
 
     /**
      * Ctor.
      * @param crs Repository settings CRUD
      * @param policy Security policy
      * @param filtersCache Filters cache
-     * @param eventBus Event bus
+     * @param events Repository lifecycle event broadcaster (local bus + peers)
      * @checkstyle ParameterNumberCheck (5 lines)
      */
     public BulkAccessPolicyHandler(final CrudRepoSettings crs,
         final Policy<?> policy, final FiltersCache filtersCache,
-        final EventBus eventBus) {
+        final RepositoryEventBroadcaster events) {
         this.crs = crs;
         this.policy = policy;
         this.filtersCache = filtersCache;
-        this.eventBus = eventBus;
+        this.eventBus = events;
     }
 
     /**
@@ -274,8 +274,7 @@ public final class BulkAccessPolicyHandler {
                 this.filtersCache.invalidate(rname.toString());
             }
             if (this.eventBus != null) {
-                this.eventBus.publish(
-                    RepositoryEvents.ADDRESS, RepositoryEvents.upsert(name));
+                this.eventBus.publish(RepositoryEvents.upsert(name));
             }
             final JsonObject prev = new JsonObject()
                 .put(BulkAccessPolicyHandler.AREAD, prevRead)

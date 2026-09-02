@@ -14,6 +14,7 @@ import com.auto1.pantera.api.AuthTokenRest;
 import com.auto1.pantera.api.AuthzHandler;
 import com.auto1.pantera.api.RepoAuthzHandler;
 import com.auto1.pantera.api.SecretRedactor;
+import com.auto1.pantera.api.RepositoryEventBroadcaster;
 import com.auto1.pantera.api.RepositoryEvents;
 import com.auto1.pantera.api.RepositoryName;
 import com.auto1.pantera.api.perms.ApiRepositoryPermission;
@@ -28,7 +29,6 @@ import com.auto1.pantera.settings.RepoData;
 import com.auto1.pantera.settings.cache.FiltersCache;
 import com.auto1.pantera.settings.repo.CrudRepoSettings;
 import com.auto1.pantera.settings.repo.FsStorageRootPolicy;
-import io.vertx.core.eventbus.EventBus;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
@@ -82,7 +82,7 @@ public final class RepositoryHandler {
     /**
      * Vert.x event bus.
      */
-    private final EventBus eventBus;
+    private final RepositoryEventBroadcaster eventBus;
 
     /**
      * Approved roots for inline {@code fs} storage submitted through this
@@ -104,20 +104,20 @@ public final class RepositoryHandler {
      * @param policy Pantera security policy
      * @param events Artifact events queue
      * @param cooldown Cooldown service
-     * @param eventBus Vert.x event bus
+     * @param events2 Repository lifecycle event broadcaster (local bus + peers)
      * @checkstyle ParameterNumberCheck (10 lines)
      */
     public RepositoryHandler(final FiltersCache filtersCache,
         final CrudRepoSettings crs, final RepoData repoData,
         final Policy<?> policy, final Optional<MetadataEventQueues> events,
         final CooldownService cooldown, // NOPMD UnusedFormalParameter - public API; reserved for upcoming cooldown integration in repo CRUD endpoints
-        final EventBus eventBus) {
+        final RepositoryEventBroadcaster events2) {
         this.filtersCache = filtersCache;
         this.crs = crs;
         this.repoData = repoData;
         this.policy = policy;
         this.events = events;
-        this.eventBus = eventBus;
+        this.eventBus = events2;
         this.fsRoots = FsStorageRootPolicy.fromEnvironment();
         this.remoteUrls = RemoteUrlPolicy.fromEnvironment();
     }
@@ -431,7 +431,7 @@ public final class RepositoryHandler {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
             } else {
                 this.filtersCache.invalidate(rname.toString());
-                this.eventBus.publish(RepositoryEvents.ADDRESS, RepositoryEvents.upsert(name));
+                this.eventBus.publish(RepositoryEvents.upsert(name));
                 RepositoryHandler.audit(actor, auditAction, name,
                     java.util.Map.of("repository.type", repoType), true);
                 ctx.response().setStatusCode(200).end();
@@ -545,7 +545,7 @@ public final class RepositoryHandler {
                     return null;
                 });
             this.filtersCache.invalidate(rname.toString());
-            this.eventBus.publish(RepositoryEvents.ADDRESS, RepositoryEvents.remove(name));
+            this.eventBus.publish(RepositoryEvents.remove(name));
             this.events.ifPresent(item -> item.stopProxyMetadataProcessing(name));
             RepositoryHandler.audit(actor, "REPO_DELETE", name,
                 java.util.Map.of(), true);
@@ -596,8 +596,7 @@ public final class RepositoryHandler {
             this.repoData.move(rname, newrname)
                 .thenRun(() -> this.crs.move(rname, newrname));
             this.filtersCache.invalidate(rname.toString());
-            this.eventBus.publish(
-                RepositoryEvents.ADDRESS, RepositoryEvents.move(name, newName)
+            this.eventBus.publish(RepositoryEvents.move(name, newName)
             );
             ctx.response().setStatusCode(200).end();
         });
