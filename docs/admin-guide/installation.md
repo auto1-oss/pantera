@@ -211,6 +211,16 @@ The bootstrap only runs when the `users` table is empty, so an existing install 
 | `8087` | Prometheus metrics |
 | `8090` | Management UI (separate container) |
 
+> **Keep `8087` off the public network.** The metrics endpoint is
+> unauthenticated by design (Prometheus scrapes it) and exposes repository
+> names, upstream hosts and request rates. It binds to all interfaces by
+> default; set `PANTERA_METRICS_BIND` (e.g. `127.0.0.1` or the pod/VM's
+> private address) when the host has a public interface, and never map the
+> port in a public-facing load balancer. The same applies to the backend
+> port (`8080`, mapped to `8088` in the compose stack) when a reverse proxy
+> enforces TLS or rate limits in front of Pantera — expose the proxy, not
+> the backend.
+
 ### Volumes
 
 | Container Path | Purpose |
@@ -245,6 +255,25 @@ cd pantera/pantera-main/docker-compose
 cp .env.example .env   # Edit with your secrets
 docker compose up -d
 ```
+
+> The compose stack is a **development and evaluation** environment. It
+> publishes every service port (backend `8088`, metrics `8087`, database,
+> Valkey, Keycloak) on the host, so run it only on a private network. For
+> production, expose the nginx proxy alone and keep the backend, metrics and
+> data services on an internal network.
+
+Fixtures that hold secrets are not committed (2.2.9):
+
+- **TLS**: nginx generates a self-signed key pair into `nginx/ssl/` at
+  container start (`10-selfsigned.sh`) when none is present; the directory
+  ignores `nginx.key`/`nginx.crt`. Drop your own pair there to use a real
+  certificate.
+- **Keycloak realm**: `keycloak-export/pantera-realm.json` reads the client
+  secret from `KEYCLOAK_CLIENT_SECRET` and the sample user's password from
+  `PANTERA_DEV_SSO_USER_PASSWORD` (both required in `.env`; the password is
+  temporary and must be changed at first login). A realm already imported
+  from an older checkout keeps its old values — re-import it (or rotate the
+  client secret in the Keycloak admin console) after upgrading.
 
 ### Stack Services
 
@@ -300,7 +329,8 @@ The `.env` file configures all stack services. Key variables to set before first
 | `JWT_PUBLIC_KEY_PATH` | `/etc/pantera/jwt-public.pem` | Path to the matching RSA public key for verification. Generate with `openssl rsa -in jwt-private.pem -pubout -out jwt-public.pem`. |
 | `POSTGRES_USER` | `pantera` | Database username |
 | `POSTGRES_PASSWORD` | (set a strong password) | Database password |
-| `KEYCLOAK_CLIENT_SECRET` | (from Keycloak console) | OIDC client secret |
+| `KEYCLOAK_CLIENT_SECRET` | (from Keycloak console) | OIDC client secret; also seeds the bundled dev realm's client on import |
+| `PANTERA_DEV_SSO_USER_PASSWORD` | (set one) | Temporary password of the dev realm's sample user, seeded on import (dev stack only) |
 
 For the full list of `.env` variables, see the [Configuration Reference](../configuration-reference.md#8-docker-compose-environment-env).
 

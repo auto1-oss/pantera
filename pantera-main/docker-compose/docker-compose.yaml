@@ -98,6 +98,9 @@ services:
     volumes:
       - ./nginx/conf.d:/etc/nginx/conf.d
       - ./nginx/ssl:/etc/nginx/ssl
+      # Generates a throwaway self-signed cert on first start; no TLS key
+      # is committed to the repository.
+      - ./nginx/ssl/10-selfsigned.sh:/docker-entrypoint.d/10-selfsigned.sh:ro
     networks:
       - pantera-net
 
@@ -118,6 +121,12 @@ services:
       - KC_DB_PASSWORD=${KC_DB_PASSWORD}
       - KEYCLOAK_ADMIN=${KEYCLOAK_ADMIN}
       - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD}
+      # Dev-only realm import placeholders (keycloak-export/pantera-realm.json).
+      # Set both in .env; the realm ships no literal credentials (2.2.9).
+      # The realm's client secret is the same KEYCLOAK_CLIENT_SECRET Pantera
+      # uses to call Keycloak — one variable, so the two sides cannot drift.
+      - PANTERA_DEV_SSO_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET:?set KEYCLOAK_CLIENT_SECRET in .env}
+      - PANTERA_DEV_SSO_USER_PASSWORD=${PANTERA_DEV_SSO_USER_PASSWORD:?set PANTERA_DEV_SSO_USER_PASSWORD in .env}
       - KC_HOSTNAME_STRICT=${KC_HOSTNAME_STRICT}
       - KC_HOSTNAME_STRICT_HTTPS=${KC_HOSTNAME_STRICT_HTTPS}
       - KC_HTTP_ENABLED=${KC_HTTP_ENABLED}

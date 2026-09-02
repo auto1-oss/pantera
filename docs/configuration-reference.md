@@ -1564,6 +1564,7 @@ a Java system property using the lowercase, dot-separated equivalent (e.g.,
 | `PANTERA_SEARCH_OVERFETCH` | `10` | Over-fetch multiplier for permission-filtered search results. The DB fetches `page_size * N` rows so that after dropping rows the user has no access to, the page can still be filled. Increase for deployments with many repos where users only access a few. |
 | `PANTERA_DOWNLOAD_TOKEN_SECRET` | persisted random / ephemeral random | HMAC key for direct-download tokens; ≥32 random bytes. Unset → generated once and stored in `auth_settings` (DB-backed, shared by HA nodes) or ephemeral per process (DB-less). Never derived from process metadata (2.2.9). |
 | `PANTERA_FS_STORAGE_ROOTS` | `/var/pantera/data` | Approved base directories for inline `fs` storage paths submitted via the repository REST API/UI; paths outside are rejected with `400` (2.2.9). |
+| `PANTERA_METRICS_BIND` | `0.0.0.0` | Interface the unauthenticated Prometheus metrics listener binds to; restrict to a private address on hosts with a public interface (2.2.9). |
 | `PANTERA_EGRESS_BLOCK_PRIVATE` | `false` | Egress policy strictness: link-local/metadata/any-local/multicast destinations are always denied; `true` also denies loopback and private ranges (2.2.9). |
 | `PANTERA_EGRESS_ALLOW_HOSTS` | *(empty)* | Hostnames exempt from the egress deny list (2.2.9). |
 | `PANTERA_UPSTREAM_CREDENTIAL_ALLOW_HOSTS` | *(empty)* | Extra hosts allowed to receive an upstream's credentials on Bearer realms / mirror links; default is same host or parent domain only (2.2.9). |
@@ -1702,7 +1703,8 @@ complete variable reference for the Docker Compose stack.
 | `KC_HOSTNAME_STRICT` | `false` | Keycloak hostname strict mode |
 | `KC_HOSTNAME_STRICT_HTTPS` | `false` | Keycloak HTTPS strict mode |
 | `KC_HTTP_ENABLED` | `true` | Enable Keycloak HTTP |
-| `KEYCLOAK_CLIENT_SECRET` | `your_secret` | Pantera Keycloak client secret |
+| `KEYCLOAK_CLIENT_SECRET` | `your_secret` | Pantera Keycloak client secret (also seeds the bundled dev realm on import) |
+| `PANTERA_DEV_SSO_USER_PASSWORD` | `changeme` | Temporary password of the dev realm's sample user, seeded on import (dev stack only) |
 | **Grafana** | | |
 | `GF_SECURITY_ADMIN_USER` | `admin` | Grafana admin username |
 | `GF_SECURITY_ADMIN_PASSWORD` | `changeme` | Grafana admin password |

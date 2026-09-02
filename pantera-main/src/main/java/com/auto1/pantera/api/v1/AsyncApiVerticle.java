@@ -236,22 +236,21 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                     span.parentSpanId()
                 );
             }
-            // Extract client IP. X-Forwarded-For (comma-separated, first
-            // entry is the real client), fall back to X-Real-IP, then
-            // the TCP remote address.
-            String clientIp = req.getHeader("X-Forwarded-For");
-            if (clientIp != null && clientIp.contains(",")) {
-                clientIp = clientIp.substring(0, clientIp.indexOf(',')).trim();
-            }
-            if (clientIp == null || clientIp.isBlank()) {
-                clientIp = req.getHeader("X-Real-IP");
-            }
-            if (clientIp == null || clientIp.isBlank()) {
-                final io.vertx.core.net.SocketAddress remote = req.remoteAddress();
-                if (remote != null) {
-                    clientIp = remote.host();
-                }
-            }
+            // Client IP for logs/audit. SECURITY (2.2.9): forwarding
+            // headers are client-supplied and were honoured unconditionally,
+            // letting any caller falsify the audited source address. They
+            // count only when the deployment declares a trusted proxy
+            // (trust_forwarded_headers, the same setting the client-facing
+            // base URL uses); otherwise the TCP peer is recorded.
+            final io.vertx.core.net.SocketAddress remote = req.remoteAddress();
+            final String clientIp = new com.auto1.pantera.api.ClientIpResolver(
+                com.auto1.pantera.http.headers.ClientBaseUrlSettingsLoader.activeSupplier()
+                    .get().trustForwardedHeaders()
+            ).resolve(
+                remote == null ? null : remote.host(),
+                req.getHeader("X-Forwarded-For"),
+                req.getHeader("X-Real-IP")
+            );
             if (clientIp != null && !clientIp.isBlank()) {
                 org.slf4j.MDC.put(
                     com.auto1.pantera.http.log.EcsMdc.CLIENT_IP, clientIp

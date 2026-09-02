@@ -12,7 +12,7 @@
       "clientId": "pantera",
       "enabled": true,
       "clientAuthenticatorType": "client-secret",
-      "secret": "T4BphdGe7z8X5ycSe4aVjhDGdExx2yuJ",
+      "secret": "${env.PANTERA_DEV_SSO_CLIENT_SECRET}",
       "directAccessGrantsEnabled": true,
       "authorizationServicesEnabled": true,
       "standardFlowEnabled": false,
@@ -52,8 +52,8 @@
       "credentials": [
         {
           "type": "password",
-          "value": "ayd",
-          "temporary": false
+          "value": "${env.PANTERA_DEV_SSO_USER_PASSWORD}",
+          "temporary": true
         }
       ],
       "clientRoles": {

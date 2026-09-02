@@ -1,0 +1,5 @@
+# Dev TLS material is generated at container start by 10-selfsigned.sh —
+# never commit a private key.
+nginx.key
+nginx.crt
+*.pem
