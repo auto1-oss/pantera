@@ -389,6 +389,20 @@ public final class VertxMain {
         com.auto1.pantera.circuit.UpstreamBreakerSettingsLoader.install(
             sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
         );
+        // 2.2.9 security policy settings (request-body cap + fs storage
+        // roots, outbound egress policy, login throttling): DB row -> env
+        // -> default per key, admin-editable at runtime. Installed
+        // unconditionally for the same DB-less-boot reason as above; the
+        // egress loader also feeds http-client's EgressSettingsRegistry.
+        com.auto1.pantera.settings.policy.RequestLimitsSettingsLoader.install(
+            sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
+        );
+        com.auto1.pantera.settings.policy.EgressSettingsLoader.install(
+            sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
+        );
+        com.auto1.pantera.settings.policy.LoginThrottleSettingsLoader.install(
+            sharedDs.map(ds -> new com.auto1.pantera.db.dao.AuthSettingsDao(ds)).orElse(null)
+        );
         // WS8 fixwave-c (2.3.0): install the client-base URL derivation
         // settings (trust_forwarded_headers, client_base_host_allowlist)
         // consumed by pantera-core's ClientBaseUrl. install(...) also feeds
@@ -1455,7 +1469,8 @@ public final class VertxMain {
             vertx,
             new BaseSlice(mctx, slice),
             opts,
-            requestTimeout
+            requestTimeout,
+            com.auto1.pantera.settings.policy.RequestLimitsSettingsLoader.maxRequestBodyBytes()
         );
         this.servers.add(server);
         return server.start();

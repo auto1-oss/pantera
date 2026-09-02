@@ -77,7 +77,7 @@ public final class StorageAliasHandler {
         this.asto = asto;
         this.policy = policy;
         this.aliasDao = aliasDao;
-        this.endpoints = RemoteUrlPolicy.fromEnvironment();
+        this.endpoints = RemoteUrlPolicy.fromRegistry();
     }
 
     /**

@@ -19,6 +19,7 @@ import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Supplier;
 import javax.json.JsonArray;
 import javax.json.JsonObject;
 import javax.json.JsonValue;
@@ -49,7 +50,7 @@ public final class RemoteUrlPolicy {
     /**
      * Egress policy.
      */
-    private final EgressPolicy policy;
+    private final Supplier<EgressPolicy> policy;
 
     /**
      * Ctor.
@@ -57,16 +58,27 @@ public final class RemoteUrlPolicy {
      * @param policy Egress policy
      */
     public RemoteUrlPolicy(final EgressPolicy policy) {
+        this(() -> policy);
+    }
+
+    /**
+     * Ctor reading the policy through a supplier on every check, so an
+     * admin edit applies to the next repository write.
+     * @param policy Live policy source
+     */
+    public RemoteUrlPolicy(final Supplier<EgressPolicy> policy) {
         this.policy = policy;
     }
 
     /**
-     * Policy from the runtime environment.
-     *
-     * @return Remote URL policy
+     * Policy following the DB-backed admin setting (environment fallback),
+     * via http-client's {@link com.auto1.pantera.http.client.egress.EgressSettingsRegistry}.
+     * @return Live policy
      */
-    public static RemoteUrlPolicy fromEnvironment() {
-        return new RemoteUrlPolicy(EgressPolicy.fromEnvironment());
+    public static RemoteUrlPolicy fromRegistry() {
+        return new RemoteUrlPolicy(
+            com.auto1.pantera.http.client.egress.EgressSettingsRegistry.policy()
+        );
     }
 
     /**
@@ -89,13 +101,13 @@ public final class RemoteUrlPolicy {
             if (!http || uri.getHost() == null || uri.getHost().isBlank()) {
                 return Optional.of(RemoteUrlPolicy.malformed(raw));
             }
-            final Optional<String> byName = this.policy.hostRejection(uri.getHost());
+            final Optional<String> byName = this.policy.get().hostRejection(uri.getHost());
             if (byName.isPresent()) {
                 return Optional.of(this.denied(raw, byName.get()));
             }
             final Optional<InetAddress> literal = RemoteUrlPolicy.literal(uri.getHost());
             if (literal.isPresent()) {
-                final Optional<String> rejection = this.policy.rejection(uri.getHost(), literal.get());
+                final Optional<String> rejection = this.policy.get().rejection(uri.getHost(), literal.get());
                 if (rejection.isPresent()) {
                     return Optional.of(this.denied(raw, rejection.get()));
                 }
@@ -127,7 +139,7 @@ public final class RemoteUrlPolicy {
             String reason = null;
             boolean anyAllowed = false;
             for (final InetAddress address : addresses) {
-                final Optional<String> rejection = this.policy.rejection(host, address);
+                final Optional<String> rejection = this.policy.get().rejection(host, address);
                 if (rejection.isPresent()) {
                     reason = rejection.get();
                 } else {

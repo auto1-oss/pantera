@@ -88,7 +88,7 @@ public final class RepositoryHandler {
      * Approved roots for inline {@code fs} storage submitted through this
      * API (SECURITY, 2.2.9 — see {@link FsStorageRootPolicy}).
      */
-    private final FsStorageRootPolicy fsRoots;
+    private final java.util.function.Supplier<FsStorageRootPolicy> fsRoots;
 
     /**
      * Outbound-URL policy for {@code remotes[].url} (SECURITY, 2.2.9 — see
@@ -118,8 +118,8 @@ public final class RepositoryHandler {
         this.policy = policy;
         this.events = events;
         this.eventBus = events2;
-        this.fsRoots = FsStorageRootPolicy.fromEnvironment();
-        this.remoteUrls = RemoteUrlPolicy.fromEnvironment();
+        this.fsRoots = com.auto1.pantera.settings.policy.RequestLimitsSettingsLoader.fsRootPolicy();
+        this.remoteUrls = RemoteUrlPolicy.fromRegistry();
     }
 
     /**
@@ -345,7 +345,7 @@ public final class RepositoryHandler {
         }
         // SECURITY (2.2.9): a raw fs path must sit under an approved root —
         // otherwise repository CREATE/UPDATE mounted the host filesystem.
-        final Optional<String> badRoot = this.fsRoots.rejectStorage(repo);
+        final Optional<String> badRoot = this.fsRoots.get().rejectStorage(repo);
         if (badRoot.isPresent()) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", badRoot.get());
             return;

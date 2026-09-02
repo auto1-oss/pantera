@@ -14,6 +14,8 @@ import java.io.File;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.io.IOException;
+import java.nio.file.Files;
 import java.util.List;
 import java.util.Optional;
 import javax.json.JsonObject;
@@ -128,14 +130,42 @@ public final class FsStorageRootPolicy {
             return Optional.of("fs storage path must be absolute");
         }
         final Path normalised = candidate.normalize();
+        final Path real = realLocation(normalised);
         for (final Path root : this.roots) {
-            if (normalised.startsWith(root)) {
+            if (normalised.startsWith(root) && real.startsWith(realLocation(root))) {
                 return Optional.empty();
             }
         }
         return Optional.of(
             "fs storage path must be under an approved root (" + ENV + ")"
         );
+    }
+
+    /**
+     * Where a (possibly not yet existing) path really lives: the deepest
+     * existing ancestor is resolved through symlinks and the remaining
+     * segments re-applied, so a link planted under an approved root cannot
+     * smuggle its target directory past the lexical check.
+     *
+     * @param normalised Absolute, normalised path
+     * @return Real location, or the input when nothing of it exists yet
+     */
+    private static Path realLocation(final Path normalised) {
+        Path existing = normalised;
+        while (existing != null && !Files.exists(existing, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            existing = existing.getParent();
+        }
+        if (existing == null) {
+            return normalised;
+        }
+        try {
+            final Path real = existing.toRealPath();
+            return existing.equals(normalised)
+                ? real
+                : real.resolve(existing.relativize(normalised)).normalize();
+        } catch (final IOException unreadable) {
+            return normalised;
+        }
     }
 
     /**

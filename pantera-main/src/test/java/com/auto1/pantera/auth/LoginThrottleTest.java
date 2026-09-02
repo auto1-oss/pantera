@@ -11,7 +11,9 @@
 package com.auto1.pantera.auth;
 
 import java.time.Duration;
+import com.auto1.pantera.settings.policy.LoginThrottleConfig;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Test;
@@ -89,6 +91,25 @@ final class LoginThrottleTest {
         MatcherAssert.assertThat(
             "lockout lifts after the window elapses",
             throttle.isThrottled("alice|1.2.3.4"), new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void thresholdChangesApplyToTheNextCheck() {
+        final AtomicLong now = new AtomicLong();
+        final AtomicReference<LoginThrottleConfig> config =
+            new AtomicReference<>(new LoginThrottleConfig(5, 900));
+        final LoginThrottle throttle = new LoginThrottle(config::get, now::get);
+        throttle.recordFailure("carol|1.2.3.4");
+        throttle.recordFailure("carol|1.2.3.4");
+        MatcherAssert.assertThat(
+            "two failures are under the initial threshold of five",
+            throttle.isThrottled("carol|1.2.3.4"), new IsEqual<>(false)
+        );
+        config.set(new LoginThrottleConfig(2, 900));
+        MatcherAssert.assertThat(
+            "lowering the threshold to two applies on the next check",
+            throttle.isThrottled("carol|1.2.3.4"), new IsEqual<>(true)
         );
     }
 }

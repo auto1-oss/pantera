@@ -10,10 +10,13 @@
  */
 package com.auto1.pantera.auth;
 
+import com.auto1.pantera.settings.policy.LoginThrottleConfig;
+import com.auto1.pantera.settings.policy.LoginThrottleSettingsLoader;
 import java.time.Duration;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 
 /**
  * In-memory login attempt throttle keyed by an opaque string (the caller
@@ -31,31 +34,44 @@ import java.util.function.LongSupplier;
  */
 public final class LoginThrottle {
 
-    private final int maxFailures;
-    private final long windowNanos;
+    private final Supplier<LoginThrottleConfig> config;
     private final LongSupplier clock;
     private final ConcurrentHashMap<String, Attempt> attempts;
 
     /**
-     * Ctor with the system monotonic clock and default policy
-     * (5 failures / 15 minutes).
+     * Production ctor: thresholds from the DB-backed admin setting
+     * ({@code login_throttle_*}), re-read on every check.
      */
     public LoginThrottle() {
-        this(5, Duration.ofMinutes(15), System::nanoTime);
+        this(LoginThrottleSettingsLoader.activeSupplier(), System::nanoTime);
     }
 
     /**
-     * Ctor.
-     *
+     * Fixed thresholds (tests).
      * @param maxFailures Failures before lockout
-     * @param window Lockout / counting window
-     * @param clock Monotonic nano clock (injectable for tests)
+     * @param window Lockout window
+     * @param clock Nano-time source
      */
     public LoginThrottle(final int maxFailures, final Duration window, final LongSupplier clock) {
-        this.maxFailures = maxFailures;
-        this.windowNanos = window.toNanos();
+        this(
+            LoginThrottle.fixed(new LoginThrottleConfig(maxFailures, Math.toIntExact(window.toSeconds()))),
+            clock
+        );
+    }
+
+    /**
+     * The single field-initializing ctor.
+     * @param config Live thresholds, read on every decision
+     * @param clock Nano-time source
+     */
+    public LoginThrottle(final Supplier<LoginThrottleConfig> config, final LongSupplier clock) {
+        this.config = config;
         this.clock = clock;
         this.attempts = new ConcurrentHashMap<>();
+    }
+
+    private static Supplier<LoginThrottleConfig> fixed(final LoginThrottleConfig config) {
+        return () -> config;
     }
 
     /**
@@ -67,11 +83,12 @@ public final class LoginThrottle {
         if (att == null) {
             return false;
         }
-        if (this.clock.getAsLong() - att.firstNanos > this.windowNanos) {
+        final LoginThrottleConfig current = this.config.get();
+        if (this.clock.getAsLong() - att.firstNanos > current.window().toNanos()) {
             this.attempts.remove(key);
             return false;
         }
-        return att.count.get() >= this.maxFailures;
+        return att.count.get() >= current.maxFailures();
     }
 
     /**
@@ -81,8 +98,9 @@ public final class LoginThrottle {
      */
     public void recordFailure(final String key) {
         final long now = this.clock.getAsLong();
+        final long window = this.config.get().window().toNanos();
         this.attempts.compute(key, (ignored, existing) -> {
-            if (existing == null || now - existing.firstNanos > this.windowNanos) {
+            if (existing == null || now - existing.firstNanos > window) {
                 return new Attempt(now);
             }
             existing.count.incrementAndGet();

@@ -498,6 +498,12 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                 this.jwtTokens != null ? this.jwtTokens.blocklist() : null,
                 this.security.policy()
             ).register(router);
+            new SecurityPolicySettingsHandler(
+                new AuthSettingsDao(this.dataSource), this.security.policy(),
+                com.auto1.pantera.settings.policy.SecurityPolicySettingsSync.attach(
+                    this.settings.cacheInvalidationPubSub()
+                )
+            ).register(router);
         }
         new com.auto1.pantera.api.v1.admin.NegativeCacheAdminResource(
             this.security.policy()

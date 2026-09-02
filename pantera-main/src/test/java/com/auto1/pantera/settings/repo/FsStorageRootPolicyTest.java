@@ -10,6 +10,8 @@
  */
 package com.auto1.pantera.settings.repo;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import javax.json.Json;
@@ -17,6 +19,7 @@ import javax.json.JsonObject;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 /**
  * Specification of {@link FsStorageRootPolicy}: inline {@code fs} storage
@@ -125,5 +128,35 @@ final class FsStorageRootPolicyTest {
             custom.reject("/srv/b/y").isPresent(), new IsEqual<>(false));
         MatcherAssert.assertThat("the default is no longer implied",
             custom.reject("/var/pantera/data").isPresent(), new IsEqual<>(true));
+    }
+
+    /**
+     * A symlink planted under an approved root must not smuggle the target
+     * directory in: the check follows the deepest existing ancestor to its
+     * real location and re-applies containment there.
+     * @param tmp Scratch directory
+     * @throws IOException On filesystem failure
+     */
+    @Test
+    void symlinkUnderTheRootPointingOutsideIsRejected(@TempDir final Path tmp)
+        throws IOException {
+        final Path root = Files.createDirectory(tmp.resolve("root"));
+        final Path outside = Files.createDirectory(tmp.resolve("outside"));
+        final Path link = root.resolve("link");
+        Files.createSymbolicLink(link, outside);
+        final FsStorageRootPolicy policy = new FsStorageRootPolicy(List.of(root));
+        MatcherAssert.assertThat(
+            "the symlink itself resolves outside the root",
+            policy.reject(link.toString()).isPresent(), new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "a not-yet-existing child of the symlink resolves outside too",
+            policy.reject(link.resolve("repo").toString()).isPresent(), new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "a genuine (possibly not yet created) child of the root is fine",
+            policy.reject(root.resolve("npm-local").toString()).isPresent(),
+            new IsEqual<>(false)
+        );
     }
 }
