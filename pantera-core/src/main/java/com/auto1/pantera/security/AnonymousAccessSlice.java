@@ -189,9 +189,11 @@ public final class AnonymousAccessSlice implements Slice {
             .field("http.response.status_code", 401)
             .field("log.source", "http")
             .log();
-        // Consume the body so Vert.x doesn't leak the request publisher
-        // (same contract as AuthzSlice's 403 path).
-        return body.asBytesFuture().thenApply(ignored ->
+        // Drain (never materialise) the body so Vert.x doesn't leak the
+        // request publisher. asBytesFuture() here pre-allocated from the
+        // attacker-declared Content-Length before the 401 was even written
+        // (resource-dos F31, 2.2.9).
+        return body.discard().thenApply(ignored ->
             ResponseBuilder.unauthorized()
                 .header(new WwwAuthenticate(CHALLENGE))
                 .build()
