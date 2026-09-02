@@ -24,6 +24,7 @@ import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongSupplier;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.AfterEach;
@@ -158,7 +159,41 @@ final class VertxSliceServerBodyLimitTest {
         );
     }
 
+    @Test
+    @Timeout(30)
+    void capChangesApplyToTheNextRequestWithoutRestart() {
+        final AtomicLong cap = new AtomicLong(LIMIT);
+        this.start(
+            (line, headers, body) -> body.asBytesFuture().thenApply(
+                bytes -> ResponseBuilder.ok().textBody(Integer.toString(bytes.length)).build()
+            ),
+            cap::get
+        );
+        final byte[] payload = new byte[(int) LIMIT / 2];
+        final HttpResponse<Buffer> before = this.client
+            .put(this.port, HOST, "/repo/artifact.bin")
+            .rxSendBuffer(Buffer.buffer(payload))
+            .blockingGet();
+        MatcherAssert.assertThat(
+            "the body is within the initial cap",
+            before.statusCode(), new IsEqual<>(200)
+        );
+        cap.set(LIMIT / 4);
+        final HttpResponse<Buffer> after = this.client
+            .put(this.port, HOST, "/repo/artifact.bin")
+            .rxSendBuffer(Buffer.buffer(payload))
+            .blockingGet();
+        MatcherAssert.assertThat(
+            "lowering the cap must reject the very next request, no restart",
+            after.statusCode(), new IsEqual<>(413)
+        );
+    }
+
     private void start(final Slice slice) {
+        this.start(slice, () -> LIMIT);
+    }
+
+    private void start(final Slice slice, final LongSupplier cap) {
         this.server = new VertxSliceServer(
             this.vertx,
             slice,
@@ -166,7 +201,7 @@ final class VertxSliceServerBodyLimitTest {
             Duration.ZERO,
             Duration.ofSeconds(5),
             VertxSliceServer.DEFAULT_BODY_BUFFER_THRESHOLD,
-            LIMIT
+            cap
         );
         this.server.start();
     }
