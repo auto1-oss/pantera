@@ -367,33 +367,63 @@ public final class ProxyDownloadSlice implements Slice {
                     );
                     return CompletableFuture.completedFuture(response);
                 }
-                // Buffer content, save to storage, then return
-                return response.body().asBytesFuture().thenCompose(bytes -> {
-                    EcsLogger.info("com.auto1.pantera.composer")
-                        .message("Caching dist artifact to storage")
-                        .eventCategory("web")
-                        .eventAction("proxy_download")
-                        .eventOutcome("success")
-                        .field("package.name", packageName)
-                        .field("package.version", version)
-                        .field("file.size", bytes.length)
-                        .field("log.source", "application")
-                        .log();
-                    return this.storage.save(
-                        distKey, new Content.From(bytes)
-                    ).thenApply(unused -> {
-                        // Genuine cache miss + successful upstream fetch —
-                        // the only branch that should publish.
-                        this.emitEvent(packageName, version, headers);
+                // STREAM the dist through to the client and the cache at once.
+                // Before 2.2.9 the whole upstream body was materialised with
+                // asBytesFuture() — an artifact of any size the upstream chose
+                // to send sat in heap before the first byte reached anyone
+                // (resource-dos F53). ProxyCacheWriter tees the upstream stream
+                // to the response and to a temp file that commits on completion.
+                final com.auto1.pantera.http.cache.ProxyCacheWriter writer =
+                    new com.auto1.pantera.http.cache.ProxyCacheWriter(this.storage, this.rname);
+                final com.auto1.pantera.http.context.RequestContext rctx =
+                    new com.auto1.pantera.http.context.RequestContext(
+                        ctx.traceId(), null, this.rname, orig
+                    );
+                final long declared = response.body().size().orElse(0L);
+                return writer.streamThroughAndCommit(
+                    distKey, orig, response.body().size(), response.body(), null, null, rctx
+                ).toCompletableFuture().thenApply(result -> {
+                    if (result instanceof com.auto1.pantera.http.fault.Result.Err<?>) {
                         AuditLogger.access(
-                            ctx, this.rtype, this.rname, packageName, version,
-                            bytes.length, owner, AuditLogger.OUTCOME_SUCCESS, null
+                            ctx, this.rtype, this.rname, packageName, version, 0L,
+                            owner, AuditLogger.OUTCOME_FAILURE,
+                            AuditLogger.REASON_UPSTREAM_UNAVAILABLE
                         );
-                        return ResponseBuilder.ok()
-                            .header("Content-Type", "application/zip")
-                            .body(new Content.From(bytes))
+                        return ResponseBuilder.badGateway()
+                            .textBody("Upstream temporarily unavailable")
                             .build();
+                    }
+                    @SuppressWarnings("unchecked")
+                    final com.auto1.pantera.http.cache.ProxyCacheWriter.StreamedArtifact streamed =
+                        ((com.auto1.pantera.http.fault.Result.Ok<
+                            com.auto1.pantera.http.cache.ProxyCacheWriter.StreamedArtifact
+                        >) result).value();
+                    // Publish + audit only once the cache write actually commits —
+                    // a genuine cache miss + successful upstream fetch is the only
+                    // branch that should publish.
+                    streamed.verificationOutcome().thenAccept(outcome -> {
+                        if (outcome instanceof com.auto1.pantera.http.fault.Result.Ok<?>) {
+                            EcsLogger.info("com.auto1.pantera.composer")
+                                .message("Cached streamed dist artifact to storage")
+                                .eventCategory("web")
+                                .eventAction("proxy_download")
+                                .eventOutcome("success")
+                                .field("package.name", packageName)
+                                .field("package.version", version)
+                                .field("file.size", declared)
+                                .field("log.source", "application")
+                                .log();
+                            this.emitEvent(packageName, version, headers);
+                            AuditLogger.access(
+                                ctx, this.rtype, this.rname, packageName, version,
+                                declared, owner, AuditLogger.OUTCOME_SUCCESS, null
+                            );
+                        }
                     });
+                    return ResponseBuilder.ok()
+                        .header("Content-Type", "application/zip")
+                        .body(streamed.body())
+                        .build();
                 });
             });
         });
