@@ -220,11 +220,18 @@ public final class SettingsHandler {
 
     /**
      * GET /api/v1/settings/ui — UI-facing settings readable by any authenticated user.
-     * Returns only the {@code ui} section (e.g. grafana_url).
+     * Returns the {@code ui} section (e.g. grafana_url, registry_url) plus the
+     * global path prefixes, which client setup instructions need to build
+     * repository URLs.
      * @param ctx Routing context
      */
     private void getUiSettings(final RoutingContext ctx) {
         final JsonObject ui = new JsonObject();
+        try {
+            ui.put("prefixes", new JsonArray(this.settings.prefixes().prefixes()));
+        } catch (final Exception ex) {
+            ui.put("prefixes", new JsonArray());
+        }
         if (this.settingsDao != null) {
             this.settingsDao.get("ui").ifPresent(uiSettings -> {
                 if (uiSettings.containsKey("grafana_url")) {
