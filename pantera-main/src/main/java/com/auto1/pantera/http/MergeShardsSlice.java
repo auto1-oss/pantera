@@ -14,6 +14,7 @@ import com.auto1.pantera.RepositorySlices;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.ValueNotFoundException;
 import com.auto1.pantera.composer.ComposerImportMerge;
 import com.auto1.pantera.http.headers.ContentType;
 import com.auto1.pantera.http.rq.RequestLine;
@@ -36,6 +37,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
@@ -697,72 +699,16 @@ public final class MergeShardsSlice implements Slice {
      * Clean up temporary folders after merge.
      * Deletes .import and .meta folders and all their contents.
      */
-    private static CompletionStage<Void> cleanupTempFolders(final Storage storage) {
+    static CompletionStage<Void> cleanupTempFolders(final Storage storage) {
         EcsLogger.info("com.auto1.pantera.http")
             .message("Starting cleanup of temporary folders after merge")
             .eventCategory("web")
             .eventAction("cleanup")
             .field("log.source", "application")
             .log();
-        final List<CompletionStage<Void>> deletions = new ArrayList<>();
-
-        // Delete .import folder completely
-        EcsLogger.debug("com.auto1.pantera.http")
-            .message("Deleting .import folder")
-            .eventCategory("web")
-            .eventAction("cleanup")
-            .field("file.directory", ".import")
-            .field("log.source", "application")
-            .log();
-        deletions.add(storage.delete(new Key.From(".import"))
-            .thenRun(() -> EcsLogger.debug("com.auto1.pantera.http")
-                .message(".import folder deleted successfully")
-                .eventCategory("web")
-                .eventAction("cleanup")
-                .eventOutcome("success")
-                .field("file.directory", ".import")
-                .log())
-            .exceptionally(e -> {
-                EcsLogger.warn("com.auto1.pantera.http")
-                    .message("Failed to delete .import folder")
-                    .eventCategory("web")
-                    .eventAction("cleanup")
-                    .eventOutcome("failure")
-                    .field("file.directory", ".import")
-                    .field("error.message", e.getMessage())
-                    .field("log.source", "application")
-                    .log();
-                return null;
-            }));
-
-        // Delete .meta folder completely
-        EcsLogger.debug("com.auto1.pantera.http")
-            .message("Deleting .meta folder")
-            .eventCategory("web")
-            .eventAction("cleanup")
-            .field("file.directory", ".meta")
-            .log();
-        deletions.add(storage.delete(new Key.From(".meta"))
-            .thenRun(() -> EcsLogger.debug("com.auto1.pantera.http")
-                .message(".meta folder deleted successfully")
-                .eventCategory("web")
-                .eventAction("cleanup")
-                .eventOutcome("success")
-                .field("file.directory", ".meta")
-                .log())
-            .exceptionally(e -> {
-                EcsLogger.warn("com.auto1.pantera.http")
-                    .message("Failed to delete .meta folder")
-                    .eventCategory("web")
-                    .eventAction("cleanup")
-                    .eventOutcome("failure")
-                    .field("file.directory", ".meta")
-                    .field("error.message", e.getMessage())
-                    .field("log.source", "application")
-                    .log();
-                return null;
-            }));
-
+        final List<CompletableFuture<Void>> deletions = new ArrayList<>();
+        deletions.add(deleteTempFolder(storage, ".import"));
+        deletions.add(deleteTempFolder(storage, ".meta"));
         return CompletableFuture.allOf(deletions.toArray(new CompletableFuture[0]))
             .thenRun(() -> EcsLogger.info("com.auto1.pantera.http")
                 .message("Temporary folders cleanup completed")
@@ -778,6 +724,57 @@ public final class MergeShardsSlice implements Slice {
                     .eventOutcome("failure")
                     .field("error.message", e.getMessage())
                     .log();
+                return null;
+            });
+    }
+
+    /**
+     * Delete one temporary folder key. Storage has no value at a directory
+     * key ({@code FileStorage} answers {@link ValueNotFoundException} for it,
+     * as it does when the folder does not exist), so "not found" is the
+     * normal outcome and is logged at DEBUG; any other failure is a WARN.
+     *
+     * @param storage Repository storage
+     * @param folder Folder name
+     * @return Stage that always completes normally
+     */
+    private static CompletableFuture<Void> deleteTempFolder(
+        final Storage storage, final String folder
+    ) {
+        return storage.delete(new Key.From(folder))
+            .thenRun(() -> EcsLogger.debug("com.auto1.pantera.http")
+                .message(folder + " folder deleted")
+                .eventCategory("web")
+                .eventAction("cleanup")
+                .eventOutcome("success")
+                .field("file.directory", folder)
+                .field("log.source", "application")
+                .log())
+            .exceptionally(err -> {
+                Throwable cause = err;
+                while (cause instanceof CompletionException && cause.getCause() != null) {
+                    cause = cause.getCause();
+                }
+                if (cause instanceof ValueNotFoundException) {
+                    EcsLogger.debug("com.auto1.pantera.http")
+                        .message("No " + folder + " value to delete")
+                        .eventCategory("web")
+                        .eventAction("cleanup")
+                        .eventOutcome("success")
+                        .field("file.directory", folder)
+                        .field("log.source", "application")
+                        .log();
+                } else {
+                    EcsLogger.warn("com.auto1.pantera.http")
+                        .message("Failed to delete " + folder + " folder")
+                        .eventCategory("web")
+                        .eventAction("cleanup")
+                        .eventOutcome("failure")
+                        .field("file.directory", folder)
+                        .error(cause)
+                        .field("log.source", "application")
+                        .log();
+                }
                 return null;
             });
     }

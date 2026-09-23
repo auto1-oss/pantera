@@ -13,6 +13,7 @@ package com.auto1.pantera.composer;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.ValueNotFoundException;
 import com.auto1.pantera.http.log.EcsLogger;
 import java.util.Locale;
 
@@ -28,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
@@ -140,35 +142,47 @@ public final class ComposerImportMerge {
                     chain = chain.thenCompose(ignored -> this.mergePackage(packageName));
                 }
                 
+                // Only a merge that found staged packages has a staging area
+                // to clean up; the empty case above returns before this.
                 return chain.thenApply(ignored -> new MergeResult(
                     this.mergedPackages.get(),
                     this.mergedVersions.get(),
                     this.failedPackages.get()
-                ));
-            })
-            .thenCompose(result -> {
-                // Clean up staging area after successful merge
-                if (result.failedPackages == 0) {
-                    EcsLogger.info("com.auto1.pantera.composer")
-                        .message("Merge completed successfully (" + result.mergedPackages + " packages, " + result.mergedVersions + " versions), cleaning up staging area")
-                        .eventCategory("web")
-                        .eventAction("import_merge")
-                        .eventOutcome("success")
-                        .field("log.source", "application")
-                        .log();
-                    return this.cleanupStagingArea(stagingRoot)
-                        .thenApply(ignored -> result);
-                }
-                EcsLogger.warn("com.auto1.pantera.composer")
-                    .message("Merge completed with " + result.failedPackages + " failures (" + result.mergedPackages + " packages merged), keeping staging area for retry")
-                    .eventCategory("web")
-                    .eventAction("import_merge")
-                    .eventOutcome("failure")
-                    .field("event.reason", "partial_failure")
-                    .field("log.source", "application")
-                    .log();
-                return CompletableFuture.completedFuture(result);
+                )).thenCompose(result -> this.finishMerge(stagingRoot, result));
             });
+    }
+
+    /**
+     * Clean up the staging area after a merge that found staged packages,
+     * unless some package failed (then the staging area is kept for retry).
+     *
+     * @param stagingRoot Root of staging area
+     * @param result Merge result
+     * @return Completion stage with the same result
+     */
+    private CompletionStage<MergeResult> finishMerge(
+        final Key stagingRoot, final MergeResult result
+    ) {
+        if (result.failedPackages == 0) {
+            EcsLogger.info("com.auto1.pantera.composer")
+                .message("Merge completed successfully (" + result.mergedPackages + " packages, " + result.mergedVersions + " versions), cleaning up staging area")
+                .eventCategory("web")
+                .eventAction("import_merge")
+                .eventOutcome("success")
+                .field("log.source", "application")
+                .log();
+            return this.cleanupStagingArea(stagingRoot)
+                .thenApply(ignored -> result);
+        }
+        EcsLogger.warn("com.auto1.pantera.composer")
+            .message("Merge completed with " + result.failedPackages + " failures (" + result.mergedPackages + " packages merged), keeping staging area for retry")
+            .eventCategory("web")
+            .eventAction("import_merge")
+            .eventOutcome("failure")
+            .field("event.reason", "partial_failure")
+            .field("log.source", "application")
+            .log();
+        return CompletableFuture.completedFuture(result);
     }
 
     /**
@@ -525,6 +539,20 @@ public final class ComposerImportMerge {
             })
             .thenCompose(ignored -> this.storage.delete(stagingRoot))
             .exceptionally(error -> {
+                // Storage has no value at a directory key (FileStorage answers
+                // ValueNotFoundException for it, and the emptied directory is
+                // already gone), so "not found" here is the normal outcome.
+                if (ComposerImportMerge.notFound(error)) {
+                    EcsLogger.debug("com.auto1.pantera.composer")
+                        .message("Staging area already removed")
+                        .eventCategory("web")
+                        .eventAction("import_merge")
+                        .eventOutcome("success")
+                        .field("file.directory", stagingRoot.string())
+                        .field("log.source", "application")
+                        .log();
+                    return null;
+                }
                 EcsLogger.warn("com.auto1.pantera.composer")
                     .message("Failed to cleanup staging area")
                     .eventCategory("web")
@@ -538,8 +566,22 @@ public final class ComposerImportMerge {
     }
 
     /**
+     * Whether a (possibly wrapped) failure means the key holds no value.
+     *
+     * @param error Failure
+     * @return True for {@link ValueNotFoundException}
+     */
+    private static boolean notFound(final Throwable error) {
+        Throwable cause = error;
+        while (cause instanceof CompletionException && cause.getCause() != null) {
+            cause = cause.getCause();
+        }
+        return cause instanceof ValueNotFoundException;
+    }
+
+    /**
      * Determine if version is a dev branch.
-     * 
+     *
      * @param version Version string
      * @return True if dev branch
      */
