@@ -76,7 +76,7 @@ public final class MavenProxy implements Slice {
         CooldownService cooldown, CooldownMetadataService cooldownMetadata
     ) {
         final Optional<Storage> asto = cfg.storageOpt();
-        slice = new RaceSlice(
+        slice = new com.auto1.pantera.adapters.ReadOnlyProxySlice(new RaceSlice(
             cfg.remotes().stream().map(
                 remote -> new MavenProxySlice(
                     client, remote.uri(),
@@ -90,7 +90,7 @@ public final class MavenProxy implements Slice {
                     cooldownMetadata
                 )
             ).collect(Collectors.toList())
-        );
+        ));
     }
 
     @Override

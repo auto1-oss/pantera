@@ -54,7 +54,7 @@ public final class FileProxy implements Slice {
         final Optional<Storage> asto = cfg.storageOpt();
         // Support multiple remotes with GroupResolver (like maven-proxy)
         // Each remote gets its own FileProxySlice, evaluated in priority order
-        this.slice = new RaceSlice(
+        this.slice = new com.auto1.pantera.adapters.ReadOnlyProxySlice(new RaceSlice(
             cfg.remotes().stream().map(
                 remote -> new FileProxySlice(
                     new AuthClientSlice(
@@ -72,7 +72,7 @@ public final class FileProxy implements Slice {
                     asto
                 )
             ).collect(Collectors.toList())
-        );
+        ));
     }
 
     @Override

@@ -66,6 +66,32 @@ final class RaceSliceTest {
     }
 
     @Test
+    void relaysMethodNotAllowedWhenEveryRemoteRejectsTheMethod() {
+        final Response res = new RaceSlice(
+            new SliceSimple(ResponseBuilder.methodNotAllowed().build()),
+            new SliceSimple(ResponseBuilder.methodNotAllowed().build())
+        ).response(
+            new RequestLine(RqMethod.PUT, "/foo"), Headers.EMPTY, Content.EMPTY
+        ).join();
+        org.hamcrest.MatcherAssert.assertThat(
+            res.status(), new org.hamcrest.core.IsEqual<>(RsStatus.METHOD_NOT_ALLOWED)
+        );
+    }
+
+    @Test
+    void notFoundStillWinsOverAPartialMethodNotAllowed() {
+        final Response res = new RaceSlice(
+            new SliceSimple(ResponseBuilder.methodNotAllowed().build()),
+            new SliceSimple(ResponseBuilder.notFound().build())
+        ).response(
+            new RequestLine(RqMethod.GET, "/foo"), Headers.EMPTY, Content.EMPTY
+        ).join();
+        org.hamcrest.MatcherAssert.assertThat(
+            res.status(), new org.hamcrest.core.IsEqual<>(RsStatus.NOT_FOUND)
+        );
+    }
+
+    @Test
     @Timeout(1)
     void returnsBadGatewayIfAllFailsWithException() {
         // Exceptions and 5xx responses indicate "couldn't reach remote",

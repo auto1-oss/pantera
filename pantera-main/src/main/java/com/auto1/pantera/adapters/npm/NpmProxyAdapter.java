@@ -78,7 +78,7 @@ public final class NpmProxyAdapter implements Slice {
         // Support multiple remotes with GroupResolver (similar to maven-proxy).
         // Each remote gets its own NpmProxy + NpmProxySlice, evaluated in
         // priority order.
-        this.slice = new RaceSlice(
+        this.slice = new com.auto1.pantera.adapters.ReadOnlyProxySlice(new RaceSlice(
             cfg.remotes().stream().map(
                 remote -> {
                     // Create authenticated client slice for this remote
@@ -151,7 +151,7 @@ public final class NpmProxyAdapter implements Slice {
                     );
                 }
             ).collect(Collectors.toList())
-        );
+        ), com.auto1.pantera.http.rq.RqMethod.POST);
     }
 
     @Override

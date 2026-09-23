@@ -62,7 +62,7 @@ public final class GoProxy implements Slice {
 
         // Support multiple remotes with GroupResolver (like maven-proxy)
         // Each remote gets its own GoProxySlice, evaluated in priority order
-        this.slice = new RaceSlice(
+        this.slice = new com.auto1.pantera.adapters.ReadOnlyProxySlice(new RaceSlice(
             cfg.remotes().stream().map(
                 remote -> new GoProxySlice(
                     client,
@@ -77,7 +77,7 @@ public final class GoProxy implements Slice {
                     cooldown
                 )
             ).collect(Collectors.toList())
-        );
+        ));
     }
 
     @Override
