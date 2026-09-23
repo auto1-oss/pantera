@@ -619,4 +619,30 @@ class SliceIndexTest {
             "size must be present (PEP 700)"
         );
     }
+
+    @Test
+    void indexResponsesVaryOnAccept() {
+        // The same URL serves HTML or PEP 691 JSON depending on Accept, so a
+        // shared cache must key on it (B93).
+        this.storage.save(
+            new Key.From("hello", "0.2.0", "hello-0.2.0.tar.gz"),
+            new Content.From("sdist".getBytes())
+        ).join();
+        final Response generated = new SliceIndex(this.storage).response(
+            new RequestLine("GET", "/simple/hello/"), Headers.EMPTY, Content.EMPTY
+        ).join();
+        readBody(generated);
+        final Response cached = new SliceIndex(this.storage).response(
+            new RequestLine("GET", "/simple/hello/"), Headers.EMPTY, Content.EMPTY
+        ).join();
+        readBody(cached);
+        org.junit.jupiter.api.Assertions.assertEquals(
+            java.util.List.of("Accept"), generated.headers().values("Vary"),
+            "a generated index must carry Vary: Accept"
+        );
+        org.junit.jupiter.api.Assertions.assertEquals(
+            java.util.List.of("Accept"), cached.headers().values("Vary"),
+            "a persisted index must carry Vary: Accept"
+        );
+    }
 }

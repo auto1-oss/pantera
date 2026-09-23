@@ -151,8 +151,9 @@ final class SliceIndex implements Slice {
                     listKey, prefix, packageName, format, indexKey
                 );
             }
-        ).toCompletableFuture();
+        ).thenApply(SimpleApiFormat::varyOnAccept).toCompletableFuture();
     }
+
 
     /**
      * Generate a dynamic index AND persist it to storage so the next

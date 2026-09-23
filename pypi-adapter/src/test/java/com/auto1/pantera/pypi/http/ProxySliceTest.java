@@ -581,6 +581,32 @@ class ProxySliceTest {
         );
     }
 
+    @ParameterizedTest
+    @CsvSource({
+        "/my-pypi-proxy/requests/",
+        "/simple/requests/"
+    })
+    void indexResponsesVaryOnAccept(final String path) {
+        // The same index URL answers HTML or PEP 691 JSON depending on
+        // Accept, so shared caches must key on it (B93).
+        final String html =
+            "<html><body><a href=\"requests-1.0.0.tar.gz#sha256=abc\">r</a></body></html>";
+        final Response response = this.newProxySlice(
+            new SliceSimple(
+                ResponseBuilder.ok().htmlBody(html, StandardCharsets.UTF_8).build()
+            ),
+            new TestClientSlices(line -> ResponseBuilder.ok().build()),
+            Optional.of(this.events)
+        ).response(
+            new RequestLine(RqMethod.GET, path), this.authorization, Content.EMPTY
+        ).toCompletableFuture().join();
+        response.body().asBytes();
+        MatcherAssert.assertThat(
+            response.headers().values("Vary"),
+            new IsEqual<>(java.util.List.of("Accept"))
+        );
+    }
+
     private ProxySlice newProxySlice(
         final Slice upstream,
         final TestClientSlices clients,

@@ -101,4 +101,73 @@ class SimpleApiFormatTest {
             new IsEqual<>("text/html")
         );
     }
+
+    @Test
+    void honoursQualityValuesPreferringHtml() {
+        MatcherAssert.assertThat(
+            SimpleApiFormat.fromHeaders(
+                Headers.from(
+                    new Header(
+                        "Accept",
+                        "text/html;q=0.5, application/vnd.pypi.simple.v1+json;q=0.1"
+                    )
+                )
+            ),
+            new IsEqual<>(SimpleApiFormat.HTML)
+        );
+    }
+
+    @Test
+    void latestJsonAliasSelectsJson() {
+        MatcherAssert.assertThat(
+            SimpleApiFormat.fromHeaders(
+                Headers.from(new Header("Accept", "application/vnd.pypi.simple.latest+json"))
+            ),
+            new IsEqual<>(SimpleApiFormat.JSON)
+        );
+    }
+
+    @Test
+    void latestHtmlAliasSelectsHtml() {
+        MatcherAssert.assertThat(
+            SimpleApiFormat.fromHeaders(
+                Headers.from(
+                    new Header(
+                        "Accept",
+                        "application/vnd.pypi.simple.latest+html, "
+                            + "application/vnd.pypi.simple.v1+json;q=0.2"
+                    )
+                )
+            ),
+            new IsEqual<>(SimpleApiFormat.HTML)
+        );
+    }
+
+    @Test
+    void zeroQualityJsonIsNotAcceptable() {
+        MatcherAssert.assertThat(
+            SimpleApiFormat.fromHeaders(
+                Headers.from(
+                    new Header("Accept", "application/vnd.pypi.simple.v1+json;q=0, */*")
+                )
+            ),
+            new IsEqual<>(SimpleApiFormat.HTML)
+        );
+    }
+
+    @Test
+    void pipDefaultAcceptSelectsJson() {
+        MatcherAssert.assertThat(
+            SimpleApiFormat.fromHeaders(
+                Headers.from(
+                    new Header(
+                        "Accept",
+                        "application/vnd.pypi.simple.v1+json, "
+                            + "application/vnd.pypi.simple.v1+html; q=0.1, text/html; q=0.01"
+                    )
+                )
+            ),
+            new IsEqual<>(SimpleApiFormat.JSON)
+        );
+    }
 }
