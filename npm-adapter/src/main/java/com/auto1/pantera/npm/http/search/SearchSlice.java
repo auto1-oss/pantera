@@ -74,6 +74,12 @@ public final class SearchSlice implements Slice {
     private static final int DEFAULT_SIZE = 20;
 
     /**
+     * Largest page size honoured; larger requests are clamped (npm's
+     * registry caps {@code size} at 250 too).
+     */
+    private static final int MAX_SIZE = 250;
+
+    /**
      * How many index rows (versions) are scanned to build the per-package
      * result set; paging ({@code from}/{@code size}) applies to packages.
      */
@@ -171,14 +177,36 @@ public final class SearchSlice implements Slice {
             }
 
             final String text = matcher.group(1);
-            final int size = matcher.group(2) != null
-                ? Integer.parseInt(matcher.group(2))
-                : DEFAULT_SIZE;
-            final int from = matcher.group(3) != null
-                ? Integer.parseInt(matcher.group(3))
-                : 0;
+            final int size = SearchSlice.clamp(
+                matcher.group(2), SearchSlice.DEFAULT_SIZE, SearchSlice.MAX_SIZE
+            );
+            final int from = SearchSlice.clamp(matcher.group(3), 0, Integer.MAX_VALUE);
             return this.search(text, size, from);
         });
+    }
+
+    /**
+     * Parse a non-negative decimal query value, clamped to {@code max}. The
+     * value comes from an unbounded {@code \d+} match, so it may not fit
+     * in an int (or a long); anything beyond {@code max} is {@code max}.
+     * @param digits Matched digits, or null when the parameter is absent
+     * @param absent Value when the parameter is absent
+     * @param max Upper bound
+     * @return Value in {@code [0, max]}
+     */
+    private static int clamp(final String digits, final int absent, final int max) {
+        final int result;
+        if (digits == null) {
+            result = absent;
+        } else {
+            final String significant = digits.replaceFirst("^0+(?=.)", "");
+            if (significant.length() > 18) {
+                result = max;
+            } else {
+                result = (int) Math.min(Long.parseLong(significant), max);
+            }
+        }
+        return result;
     }
 
     /**
@@ -195,10 +223,10 @@ public final class SearchSlice implements Slice {
         ).thenCompose(result -> {
             final List<List<ArtifactDocument>> packages =
                 SearchSlice.byPackage(result.documents());
-            final List<List<ArtifactDocument>> page = packages.subList(
-                Math.min(from, packages.size()),
-                Math.min(from + size, packages.size())
-            );
+            final int start = Math.min(from, packages.size());
+            // long arithmetic: from + size must not overflow into a negative end.
+            final int end = (int) Math.min((long) start + size, packages.size());
+            final List<List<ArtifactDocument>> page = packages.subList(start, end);
             return this.objects(page).thenApply(
                 objects -> ResponseBuilder.ok()
                     .jsonBody(Json.createObjectBuilder()

@@ -232,6 +232,40 @@ final class SearchSliceTest {
         );
     }
 
+    @Test
+    void answersAnEmptyPageForAnOverflowingWindow() {
+        final Response response = this.response(
+            "GET /-/v1/search?text=express&size=2000000000&from=2000000000 HTTP/1.1"
+        );
+        MatcherAssert.assertThat(
+            "An int-overflowing from + size is still a success",
+            response.status(),
+            new IsEqual<>(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "A window past the last package is empty",
+            SearchSliceTest.jsonBody(response).getJsonArray("objects").size(),
+            new IsEqual<>(0)
+        );
+    }
+
+    @Test
+    void clampsPagingValuesBeyondTheIntRange() {
+        final Response response = this.response(
+            "GET /-/v1/search?text=express&size=99999999999999999999&from=0 HTTP/1.1"
+        );
+        MatcherAssert.assertThat(
+            "A size that does not fit in an int is still a success",
+            response.status(),
+            new IsEqual<>(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "The clamped page still holds every matching package",
+            SearchSliceTest.jsonBody(response).getJsonArray("objects").size(),
+            new IsEqual<>(2)
+        );
+    }
+
     /**
      * Drive the slice for a raw request line, consuming the body per the
      * reactive-bodies rule.

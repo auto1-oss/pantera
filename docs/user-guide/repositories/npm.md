@@ -203,7 +203,7 @@ corepack.
 npm search my-package --registry http://pantera-host:8080/npm-local
 ```
 
-Results list each package once, at its highest stable version (its highest prerelease if it has no stable version), with the description and keywords from that version's `package.json`.
+Results list each package once, at its highest stable version (its highest prerelease if it has no stable version), with the description and keywords from that version's `package.json`. On a local repository the page size (`size`) is capped at 250 packages (default 20); a larger `size` returns 250, and a `from` offset past the last package returns an empty page.
 
 ---
 

@@ -218,15 +218,6 @@ final class NpmSliceRoutingTest {
         );
     }
 
-    /**
-     * Drive one request through a freshly built LOCAL npm slice and return
-     * the raw response, without asserting on it -- unlike {@link
-     * #getJson(String)}, callers here expect non-{@code 200} statuses.
-     * @param method Request method
-     * @param path Request path
-     * @return Response
-     * @throws Exception If the base URL is malformed
-     */
     @Test
     void deleteWithoutRevisionSegmentAnswersPreconditionRequired() throws Exception {
         final Response response = this.responseFor(RqMethod.DELETE, "/@scope/scoped-pkg");
@@ -242,6 +233,15 @@ final class NpmSliceRoutingTest {
         );
     }
 
+    /**
+     * Drive one request through a freshly built LOCAL npm slice and return
+     * the raw response, without asserting on it -- unlike {@link
+     * #getJson(String)}, callers here expect non-{@code 200} statuses.
+     * @param method Request method
+     * @param path Request path
+     * @return Response
+     * @throws Exception If the base URL is malformed
+     */
     private Response responseFor(final RqMethod method, final String path) throws Exception {
         final NpmSlice slice = new NpmSlice(
             NpmSliceRoutingTest.baseUrl(), this.storage, Policy.FREE,
