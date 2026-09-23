@@ -372,14 +372,19 @@ final class CachedProxySlice implements Slice {
     ) {
         // Package name for merge: strip ~dev suffix since Packagist JSON uses base name
         final String packageName = name.replaceAll("~dev$", "");
+        // Records whether the upstream failed to answer (unreachable, 5xx,
+        // malformed body) as opposed to answering "no such package": only
+        // the latter may become a 404.
+        final UpstreamFailure failure = new UpstreamFailure();
         return this.cache.load(
             new Key.From(name),  // Cache key keeps ~dev to prevent collision
-            new Remote.WithErrorHandling(
+            CachedProxySlice.recording(
+                failure,
                 () -> this.repo.packages().thenApply(
                         pckgs -> pckgs.orElse(new JsonPackages())
                     ).thenCompose(Packages::content)
                     .thenCombine(
-                        this.packageFromRemote(line),
+                        this.packageFromRemote(line, failure),
                         (lcl, rmt) -> new MergePackage.WithRemote(packageName, lcl).merge(rmt)
                     ).thenCompose(Function.identity())
                     .thenCompose(contentOpt -> {
@@ -414,7 +419,7 @@ final class CachedProxySlice implements Slice {
             new CacheTimeControl(this.repo.storage())
         ).thenCompose((java.util.Optional<? extends Content> pkgs) -> {
             if (pkgs.isEmpty()) {
-                return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
+                return CompletableFuture.completedFuture(this.missResponse(failure, name));
             }
             // Content is already pre-rewritten at write time.
             // Persist the rewritten bytes under {name}.json so
@@ -447,8 +452,108 @@ final class CachedProxySlice implements Slice {
                 .error(throwable)
                 .field("log.source", "application")
                 .log();
-            return ResponseBuilder.notFound().build();
+            return this.missResponse(failure, name);
         }).toCompletableFuture();
+    }
+
+    /**
+     * Response for a metadata lookup that produced no content: 404 when the
+     * upstream answered that the package does not exist, 502 when it could
+     * not answer at all (an outage is not proof of absence, and a 404 would
+     * make Composer report a missing package).
+     *
+     * @param failure Upstream failure record of this lookup
+     * @param name Package name
+     * @return Response
+     */
+    private Response missResponse(final UpstreamFailure failure, final String name) {
+        if (!failure.failed()) {
+            return ResponseBuilder.notFound().build();
+        }
+        EcsLogger.warn("com.auto1.pantera.composer")
+            .message("Upstream could not answer the metadata lookup; returning 502")
+            .eventCategory("network")
+            .eventAction("metadata_fetch")
+            .eventOutcome("failure")
+            .field("event.reason", "upstream_unavailable")
+            .field("repository.name", this.rname)
+            .field("package.name", name)
+            .field("log.source", "application")
+            .log();
+        return ResponseBuilder.badGateway()
+            .textBody("Upstream temporarily unavailable")
+            .build();
+    }
+
+    /**
+     * Wrap a remote so that any failure is recorded and turned into an
+     * empty result (the cache contract), instead of being silently
+     * swallowed as {@link Remote.WithErrorHandling} does.
+     *
+     * @param failure Failure record
+     * @param origin Remote to guard
+     * @return Guarded remote
+     */
+    private static Remote recording(final UpstreamFailure failure, final Remote origin) {
+        return () -> {
+            CompletionStage<Optional<? extends Content>> stage;
+            try {
+                stage = origin.get();
+            } catch (final RuntimeException ex) {
+                stage = CompletableFuture.failedFuture(ex);
+            }
+            return stage.handle((content, err) -> {
+                if (err != null) {
+                    failure.record();
+                    EcsLogger.warn("com.auto1.pantera.composer")
+                        .message("Remote metadata retrieval failed")
+                        .eventCategory("network")
+                        .eventAction("metadata_fetch")
+                        .eventOutcome("failure")
+                        .error(err)
+                        .field("log.source", "application")
+                        .log();
+                    return Optional.empty();
+                }
+                return content;
+            });
+        };
+    }
+
+    /**
+     * Whether an upstream status means the upstream could not answer (as
+     * opposed to a definitive miss such as 404 / 410).
+     *
+     * @param code HTTP status code
+     * @return True for server errors, throttling and upstream auth failures
+     */
+    private static boolean isUpstreamFailure(final int code) {
+        return code >= 500 || code == 429 || code == 401 || code == 403
+            || code == 407 || code == 408;
+    }
+
+    /**
+     * Per-lookup record of an upstream failure.
+     */
+    private static final class UpstreamFailure {
+        /**
+         * Whether a failure was observed.
+         */
+        private volatile boolean flag;
+
+        /**
+         * Record a failure.
+         */
+        void record() {
+            this.flag = true;
+        }
+
+        /**
+         * @return Whether a failure was recorded
+         */
+        boolean failed() {
+            return this.flag;
+        }
     }
 
     /**
@@ -554,14 +659,16 @@ final class CachedProxySlice implements Slice {
     /**
      * Obtains info about package from remote.
      * @param line The request line (usually like this `GET /p2/vendor/package.json HTTP_1_1`)
+     * @param failure Record of an upstream failure for this lookup
      * @return Content from respond of remote. If there were some errors,
-     *  empty will be returned.
+     *  empty will be returned and the failure recorded.
      */
     private CompletionStage<Optional<? extends Content>> packageFromRemote(
-        final RequestLine line
+        final RequestLine line, final UpstreamFailure failure
     ) {
         final long startTime = System.currentTimeMillis();
-        return new Remote.WithErrorHandling(
+        return CachedProxySlice.recording(
+            failure,
             () -> {
                 try {
                     return this.remote.response(line, Headers.EMPTY, Content.EMPTY)
@@ -593,6 +700,9 @@ final class CachedProxySlice implements Slice {
                                 this.recordProxyMetric(result, duration);
                                 if (response.status().code() >= 500) {
                                     this.recordUpstreamErrorMetric(new RuntimeException("HTTP " + response.status().code()));
+                                }
+                                if (CachedProxySlice.isUpstreamFailure(response.status().code())) {
+                                    failure.record();
                                 }
                                 EcsLogger.warn("com.auto1.pantera.composer")
                                     .message("Remote returned non-success status")
