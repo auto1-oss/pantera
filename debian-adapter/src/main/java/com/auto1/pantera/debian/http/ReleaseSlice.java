@@ -146,25 +146,30 @@ public final class ReleaseSlice implements Slice {
 
     /**
      * Create the configured Packages indexes that do not exist yet, empty.
+     * Each index is checked and created under its {@link IndexLock}, the
+     * lock uploads and deletes hold while they rewrite it, so an index an
+     * upload has just written is never replaced by an empty one.
      * @return Keys of the created indexes
      */
     private CompletionStage<List<Key>> createMissingIndexes() {
         final List<Key> created = Collections.synchronizedList(new ArrayList<>(0));
         return CompletableFuture.allOf(
             this.indexes.stream().map(
-                index -> this.storage.exists(index).thenCompose(
-                    present -> {
-                        final CompletableFuture<Void> res;
-                        if (present) {
-                            res = CompletableFuture.completedFuture(null);
-                        } else {
-                            res = this.storage.save(
-                                index, new Content.From(ReleaseSlice.emptyGzip())
-                            ).thenRun(() -> created.add(index));
+                index -> new IndexLock(this.storage, index).run(
+                    () -> this.storage.exists(index).thenCompose(
+                        present -> {
+                            final CompletableFuture<Void> res;
+                            if (present) {
+                                res = CompletableFuture.completedFuture(null);
+                            } else {
+                                res = this.storage.save(
+                                    index, new Content.From(ReleaseSlice.emptyGzip())
+                                ).thenRun(() -> created.add(index));
+                            }
+                            return res;
                         }
-                        return res;
-                    }
-                )
+                    )
+                ).toCompletableFuture()
             ).toArray(CompletableFuture[]::new)
         ).thenApply(nothing -> new ArrayList<>(created));
     }

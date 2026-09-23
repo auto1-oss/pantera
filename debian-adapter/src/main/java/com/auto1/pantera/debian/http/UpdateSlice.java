@@ -184,9 +184,11 @@ public final class UpdateSlice implements Slice {
                         this.config.codename(), arc
                     )
                 ).map(
-                    index -> new UniquePackage(this.asto)
-                        .add(Collections.singletonList(item), new Key.From(index))
-                        .thenCompose(nothing -> release.update(new Key.From(index)))
+                    index -> new IndexLock(this.asto, new Key.From(index)).run(
+                        () -> new UniquePackage(this.asto)
+                            .add(Collections.singletonList(item), new Key.From(index))
+                    ).thenCompose(nothing -> release.update(new Key.From(index)))
+                        .toCompletableFuture()
                 ).toArray(CompletableFuture[]::new)
             ).thenCompose(
                 nothing -> new InRelease.Asto(this.asto, this.config).generate(release.key())
