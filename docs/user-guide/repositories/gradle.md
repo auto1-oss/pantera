@@ -102,6 +102,8 @@ Without the `publications` block, `./gradlew publish` succeeds but uploads nothi
 ./gradlew publish
 ```
 
+Published release versions are immutable: publishing different bytes for an existing release file answers `409 Conflict`, while an identical re-publish succeeds. `-SNAPSHOT` versions stay writable. See [Maven: Re-deploying and checksums](maven.md#re-deploying-and-checksums).
+
 ---
 
 ## Minimal YAML Configuration
