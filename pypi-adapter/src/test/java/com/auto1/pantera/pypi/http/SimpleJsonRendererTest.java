@@ -169,4 +169,49 @@ class SimpleJsonRendererTest {
             new IsEqual<>(false)
         );
     }
+
+    @Test
+    void rendersYankWithoutReasonAsBooleanTrue() {
+        // PEP 691: yanked is a boolean or a NON-EMPTY string. pip maps a
+        // falsy value ("" included) to "not yanked", so a reason-less yank
+        // rendered as "" was silently ignored by pip (B40).
+        final SimpleJsonRenderer.FileEntry entry = new SimpleJsonRenderer.FileEntry(
+            "mylib-0.9.0-py3-none-any.whl",
+            "0.9.0/mylib-0.9.0-py3-none-any.whl",
+            "cafebabe",
+            null,
+            null,
+            true,
+            Optional.empty(),
+            Optional.empty()
+        );
+        final JsonObject file = Json.createReader(new StringReader(
+            SimpleJsonRenderer.render("mylib", List.of(entry))
+        )).readObject().getJsonArray("files").getJsonObject(0);
+        MatcherAssert.assertThat(
+            file.get("yanked"),
+            new IsEqual<>(javax.json.JsonValue.TRUE)
+        );
+    }
+
+    @Test
+    void rendersYankWithBlankReasonAsBooleanTrue() {
+        final SimpleJsonRenderer.FileEntry entry = new SimpleJsonRenderer.FileEntry(
+            "mylib-0.9.0-py3-none-any.whl",
+            "0.9.0/mylib-0.9.0-py3-none-any.whl",
+            "cafebabe",
+            null,
+            null,
+            true,
+            Optional.of(""),
+            Optional.empty()
+        );
+        final JsonObject file = Json.createReader(new StringReader(
+            SimpleJsonRenderer.render("mylib", List.of(entry))
+        )).readObject().getJsonArray("files").getJsonObject(0);
+        MatcherAssert.assertThat(
+            file.get("yanked"),
+            new IsEqual<>(javax.json.JsonValue.TRUE)
+        );
+    }
 }

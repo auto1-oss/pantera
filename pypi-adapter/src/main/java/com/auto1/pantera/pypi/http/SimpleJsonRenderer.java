@@ -56,11 +56,18 @@ public final class SimpleJsonRenderer {
                     file.uploadTime().truncatedTo(ChronoUnit.MICROS).toString()
                 );
             }
-            // PEP 691: yanked is either boolean false (not yanked) or
-            // a string (yanked reason, may be empty). A boolean true
-            // is non-compliant — pip expects a string when yanked.
+            // PEP 691: yanked is a boolean or a NON-EMPTY string (the
+            // reason). An empty string is falsy, and pip maps a falsy
+            // value to "not yanked" — so a reason-less yank must be
+            // boolean true, never "".
             if (file.yanked()) {
-                entry.add("yanked", file.yankedReason().orElse(""));
+                final Optional<String> reason = file.yankedReason()
+                    .filter(text -> !text.isBlank());
+                if (reason.isPresent()) {
+                    entry.add("yanked", reason.get());
+                } else {
+                    entry.add("yanked", true);
+                }
             } else {
                 entry.add("yanked", false);
             }
