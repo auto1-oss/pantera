@@ -607,6 +607,51 @@ class ProxySliceTest {
         );
     }
 
+    @Test
+    void proxiesPerVersionJsonApiToJsonUpstream() {
+        // /pypi/<pkg>/<ver>/json must be served by the PyPI JSON API
+        // upstream, not the simple mirror (which 404s it) (B92).
+        final byte[] json = ("{\"info\":{\"name\":\"six\",\"version\":\"1.16.0\"},"
+            + "\"urls\":[{\"filename\":\"six-1.16.0.tar.gz\","
+            + "\"upload_time_iso_8601\":\"2021-05-05T14:18:18.000000Z\"}]}")
+            .getBytes(StandardCharsets.UTF_8);
+        final ProxySlice slice = new ProxySlice(
+            new TestClientSlices(line -> ResponseBuilder.ok().build()),
+            Authenticator.ANONYMOUS,
+            new SliceSimple(ResponseBuilder.notFound().build()),
+            this.storage,
+            new FromStorageCache(this.storage),
+            Optional.of(this.events),
+            "my-pypi-proxy",
+            "pypi-proxy",
+            NoopCooldownService.INSTANCE,
+            new com.auto1.pantera.publishdate.RegistryBackedInspector(
+                "pypi", com.auto1.pantera.publishdate.PublishDateRegistries.instance()
+            ),
+            (line, headers, body) -> CompletableFuture.completedFuture(
+                "/pypi/six/1.16.0/json".equals(line.uri().getPath())
+                    ? ResponseBuilder.ok().jsonBody(new String(json, StandardCharsets.UTF_8))
+                        .build()
+                    : ResponseBuilder.notFound().build()
+            )
+        );
+        final Response response = slice.response(
+            new RequestLine(RqMethod.GET, "/pypi/six/1.16.0/json"),
+            this.authorization,
+            Content.EMPTY
+        ).toCompletableFuture().join();
+        MatcherAssert.assertThat(
+            "per-version JSON must be answered by the JSON API upstream",
+            response.status(),
+            new IsEqual<>(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "the upstream document must be forwarded",
+            new String(response.body().asBytes(), StandardCharsets.UTF_8),
+            Matchers.containsString("\"version\":\"1.16.0\"")
+        );
+    }
+
     private ProxySlice newProxySlice(
         final Slice upstream,
         final TestClientSlices clients,

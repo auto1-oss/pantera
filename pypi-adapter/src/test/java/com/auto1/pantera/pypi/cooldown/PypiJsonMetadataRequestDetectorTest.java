@@ -176,4 +176,21 @@ final class PypiJsonMetadataRequestDetectorTest {
     void returnsCorrectRepoType() {
         assertThat(this.detector.repoType(), equalTo("pypi"));
     }
+
+    @Test
+    void extractsPackageAndVersionFromVersionPath() {
+        final Optional<String[]> parts = this.detector.extractPackageAndVersion(
+            "/pypi/Six/1.16.0/json"
+        );
+        assertThat(
+            "version-level path must be recognised",
+            parts.map(arr -> arr[0] + "@" + arr[1]).orElse(""),
+            new org.hamcrest.core.IsEqual<>("Six@1.16.0")
+        );
+        assertThat(
+            "package-level path is not version-level",
+            this.detector.isVersionMetadataRequest("/pypi/six/json"),
+            new org.hamcrest.core.IsEqual<>(false)
+        );
+    }
 }

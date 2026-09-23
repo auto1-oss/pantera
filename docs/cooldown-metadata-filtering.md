@@ -36,7 +36,7 @@ and any unbounded-latest resolution endpoint the client can query.
 | maven-proxy        | `maven-metadata.xml` (rewrites `<versions>`, `<latest>`, `<release>`) |
 | gradle-proxy       | Same as maven-proxy (reuses Maven components) |
 | npm-proxy          | `GET /{pkg}` (packument -- full and abbreviated), `GET /{pkg}/latest` (dist-tag shortcut). `dist-tags.latest` is rewritten to the highest non-blocked version; other dist-tags pointing to blocked versions are dropped. |
-| pypi-proxy         | `/simple/{pkg}/` (PEP 503 HTML index), `/pypi/{pkg}/json` (JSON API). `info.version` and `urls` are rewritten to the highest non-blocked version using PEP 440 ordering. |
+| pypi-proxy         | `/simple/{pkg}/` (PEP 503 HTML index), `/pypi/{pkg}/json` and `/pypi/{pkg}/{ver}/json` (JSON API). `info.version` and `urls` are rewritten to the highest non-blocked version using PEP 440 ordering. |
 | docker-proxy       | `/v2/{name}/tags/list` (filters the `tags` array); `/v2/{name}/manifests/{tag}` (returns 404 `MANIFEST_UNKNOWN` when the tag resolves to a blocked digest or the tag itself is blocked). `/manifests/<digest>` continues through the existing digest-level cooldown check. |
 | go-proxy           | `/{module}/@v/list` (filters the version list); `/{module}/@latest` (rewrites `Version` to the highest non-blocked version if upstream latest is blocked; preserves `Origin`; returns 403 if every version is blocked). |
 | php-proxy (Composer) | `/packages/{vendor}/{pkg}.json`, `/p2/{vendor}/{pkg}.json` (per-package version filtering); `/packages.json`, `/repo.json` (root aggregation -- filters inline packages, passes through lazy-providers schemes unchanged). |
@@ -147,6 +147,9 @@ Precedence (highest first): per-repo-name SNAPSHOT → per-repo-name (non-SNAPSH
 - **JSON API (`/pypi/{pkg}/json`):** Filters `releases` by version; rewrites
   `info.version` and the top-level `urls` array to reflect the highest
   non-blocked version using PEP 440 ordering.
+- **Per-version JSON API (`/pypi/{pkg}/{ver}/json`):** Proxied from the same
+  JSON API upstream; a version under cooldown answers `404` (with
+  `X-Pantera-Cooldown: blocked`), exactly like a version that does not exist.
 - Both endpoints are covered because package managers and browsers resolve
   unbounded `pip install foo` through different paths.
 - **HEAD support:** Hosted PySlice handles `HEAD` on both the file path
@@ -286,7 +289,7 @@ lifecycle in a dedicated handler:
 - `GoListHandler` -- `/{module}/@v/list`
 - `GoLatestHandler` -- `/{module}/@latest`
 - `PypiSimpleHandler` -- `/simple/{pkg}/`
-- `PypiJsonHandler` -- `/pypi/{pkg}/json`
+- `PypiJsonHandler` -- `/pypi/{pkg}/json`, `/pypi/{pkg}/{ver}/json`
 - `DockerTagsListHandler` -- `/v2/{name}/tags/list`
 - `DockerManifestTagHandler` -- `/v2/{name}/manifests/{tag}`
 - `ComposerPackageMetadataHandler` -- `/packages/...`, `/p2/...`
