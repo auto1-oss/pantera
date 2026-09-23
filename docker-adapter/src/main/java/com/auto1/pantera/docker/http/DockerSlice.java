@@ -83,7 +83,7 @@ public final class DockerSlice extends Slice.Wrap {
                         auth(new GetManifestSlice(docker), policy, auth)
                     ),
                     RtRulePath.route(MethodRule.PUT, PathPatterns.MANIFESTS,
-                        auth(new PushManifestSlice(docker, events.orElse(null), syncIndex),
+                        auth(new PushManifestSlice(docker, events.orElse(null), syncIndex, policy),
                             policy, auth)
                     ),
                     RtRulePath.route(MethodRule.GET, PathPatterns.TAGS,

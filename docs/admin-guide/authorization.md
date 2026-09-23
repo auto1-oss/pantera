@@ -56,8 +56,9 @@ docker_repository_permissions:
 | Value | Description |
 |-------|-------------|
 | `pull` | Pull Docker images |
-| `push` | Push Docker images |
-| `*` | All Docker operations |
+| `push` | Push Docker images: upload blobs, push new tags and new digests, and re-push a tag with the manifest it already points at |
+| `overwrite` | Move an existing tag to a different manifest. A push that would change the digest of an existing tag without `overwrite` fails with `403 DENIED`. Grant it (together with `push`) to CI users that re-push mutable tags such as `latest` |
+| `*` | All Docker operations, including `overwrite` |
 
 ### docker_registry_permissions
 
@@ -324,7 +325,8 @@ In HA deployments with Valkey, cache invalidation is propagated across nodes aut
 | `admin` | Full access | `all_permission: {}` |
 | `reader` | Read-only access to all repos | `adapter_basic_permissions: {"*": ["read"]}` |
 | `deployer` | CI/CD pipeline | `adapter_basic_permissions: {"maven": ["read","write"], "npm": ["read","write"]}` |
-| `docker-user` | Docker pull/push | `docker_repository_permissions: {"*": {"*": ["pull","push"]}}` |
+| `docker-user` | Docker pull/push of new tags | `docker_repository_permissions: {"*": {"*": ["pull","push"]}}` |
+| `docker-ci` | Docker pull/push, may move existing tags (`latest`) | `docker_repository_permissions: {"*": {"*": ["pull","push","overwrite"]}}` |
 | `security-admin` | Cooldown management only | API permissions for cooldown read/write |
 
 ---
