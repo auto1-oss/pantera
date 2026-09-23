@@ -538,6 +538,22 @@ async fn read_sidecar_checksums(
     Ok((md5, sha1, sha256))
 }
 
+/// Authorization header for every request to Pantera (uploads and the
+/// metadata merge): Basic with --username/--password, else Bearer --token.
+fn authorization_header(args: &Args) -> Result<String> {
+    if let (Some(user), Some(pass)) = (&args.username, &args.password) {
+        let credentials = format!("{}:{}", user, pass);
+        let encoded = general_purpose::STANDARD.encode(credentials.as_bytes());
+        Ok(format!("Basic {}", encoded))
+    } else if let Some(token) = &args.token {
+        Ok(format!("Bearer {}", token))
+    } else {
+        Err(anyhow::anyhow!(
+            "Either --token or both --username and --password must be provided"
+        ))
+    }
+}
+
 async fn upload_file(
     client: &Client,
     task: &UploadTask,
@@ -572,19 +588,7 @@ async fn upload_file(
         };
 
     // Determine authorization header once (outside retry loop)
-    let auth_header = if let (Some(user), Some(pass)) = (&args.username, &args.password) {
-        // Basic authentication
-        let credentials = format!("{}:{}", user, pass);
-        let encoded = general_purpose::STANDARD.encode(credentials.as_bytes());
-        format!("Basic {}", encoded)
-    } else if let Some(token) = &args.token {
-        // Bearer token authentication
-        format!("Bearer {}", token)
-    } else {
-        return Err(anyhow::anyhow!(
-            "Either --token or both --username and --password must be provided"
-        ));
-    };
+    let auth_header = authorization_header(args)?;
 
     for attempt in 1..=args.max_retries {
         debug!(
@@ -1148,6 +1152,7 @@ async fn trigger_repo_merge(
     client: &Client,
     server_url: &str,
     repo_name: &str,
+    auth_header: &str,
 ) -> Result<String> {
     info!("Triggering metadata merge for repository: {}", repo_name);
     
@@ -1156,6 +1161,8 @@ async fn trigger_repo_merge(
     
     let response = client
         .post(&merge_url)
+        // /.merge requires repo-scoped write, like the uploads
+        .header("Authorization", auth_header)
         .timeout(Duration::from_secs(300)) // Merge can take up to 5 minutes
         .send()
         .await
@@ -1489,8 +1496,9 @@ async fn main() -> Result<()> {
             info!("Merging {} PHP/Composer and PyPI repositories (use --auto-merge to include maven/gradle/helm)", merge_repos.len());
         }
         
+        let auth_header = authorization_header(&args)?;
         for repo_name in merge_repos {
-            match trigger_repo_merge(&client, &args.url, &repo_name).await {
+            match trigger_repo_merge(&client, &args.url, &repo_name, &auth_header).await {
                 Ok(result) => {
                     info!("✓ Merged {}: {}", repo_name, result);
                 }
