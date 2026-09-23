@@ -74,6 +74,57 @@ final class DockerOciErrorsWiringTest {
         );
     }
 
+    /**
+     * B35: a push to a docker-group is refused by the group resolver with a
+     * body-less 405; through the real wiring it must carry the OCI
+     * UNSUPPORTED error like a push to a docker-proxy.
+     *
+     * @param tmp Storage root
+     * @throws Exception On error
+     */
+    @Test
+    void groupPushIsUnsupported(@TempDir final Path tmp) throws Exception {
+        final Response response = new RepositorySlices(
+            new TestSettings(),
+            new SingleRepo(DockerOciErrorsWiringTest.group(tmp)),
+            new OneToken()
+        ).slice(new Key.From("docker-group"), 8080).response(
+            new RequestLine(RqMethod.POST, "/docker-group/app/blobs/uploads/"),
+            Headers.from("Authorization", "Bearer " + OneToken.TOKEN),
+            Content.EMPTY
+        ).get(30, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            "group push is refused with 405",
+            response.status().code(), new IsEqual<>(405)
+        );
+        MatcherAssert.assertThat(
+            "body is the OCI UNSUPPORTED error",
+            response.body().asString(), new StringContains("\"UNSUPPORTED\"")
+        );
+    }
+
+    private static RepoConfig group(final Path tmp) {
+        return RepoConfig.from(
+            Yaml.createYamlMappingBuilder().add(
+                "repo", Yaml.createYamlMappingBuilder()
+                    .add("type", "docker-group")
+                    .add("members", Yaml.createYamlSequenceBuilder().build())
+                    .add(
+                        "storage",
+                        Yaml.createYamlMappingBuilder()
+                            .add("type", "fs")
+                            .add("path", tmp.toString())
+                            .build()
+                    )
+                    .build()
+            ).build(),
+            new StorageByAlias(Yaml.createYamlMappingBuilder().build()),
+            new Key.From("docker-group"),
+            new TestStoragesCache(),
+            false
+        );
+    }
+
     private static RepoConfig local(final Path tmp) {
         return RepoConfig.from(
             Yaml.createYamlMappingBuilder().add(
@@ -114,6 +165,30 @@ final class DockerOciErrorsWiringTest {
         @Override
         public Collection<RepoConfig> configs() {
             return List.of(this.cfg);
+        }
+    }
+
+    /**
+     * Token authentication that recognises exactly one token.
+     */
+    private static final class OneToken implements Tokens {
+
+        /**
+         * The recognised token.
+         */
+        static final String TOKEN = "group-test-token";
+
+        @Override
+        public TokenAuthentication auth() {
+            return token -> CompletableFuture.completedFuture(
+                Optional.of(token).filter(OneToken.TOKEN::equals)
+                    .map(ignored -> new AuthUser("alice", "test"))
+            );
+        }
+
+        @Override
+        public String generate(final AuthUser user) {
+            throw new UnsupportedOperationException("not used");
         }
     }
 

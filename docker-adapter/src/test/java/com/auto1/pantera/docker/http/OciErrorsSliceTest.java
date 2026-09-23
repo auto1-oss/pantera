@@ -69,6 +69,18 @@ final class OciErrorsSliceTest {
     }
 
     @Test
+    void renders405AsUnsupported() {
+        MatcherAssert.assertThat(
+            new OciErrorsSlice(
+                (line, headers, body) -> CompletableFuture.completedFuture(
+                    ResponseBuilder.methodNotAllowed().build()
+                )
+            ).response(OciErrorsSliceTest.LINE, Headers.EMPTY, Content.EMPTY).join(),
+            new IsErrorsResponse(RsStatus.METHOD_NOT_ALLOWED, "UNSUPPORTED")
+        );
+    }
+
+    @Test
     void keepsResponsesThatAlreadyHaveABody() {
         final Response original = ResponseBuilder.unauthorized()
             .jsonBody(new com.auto1.pantera.docker.error.UnauthorizedError().json())

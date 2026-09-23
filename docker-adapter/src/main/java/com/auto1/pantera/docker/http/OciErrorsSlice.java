@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.docker.error.DockerError;
 import com.auto1.pantera.docker.error.SizeInvalidError;
 import com.auto1.pantera.docker.error.UnauthorizedError;
+import com.auto1.pantera.docker.error.UnsupportedError;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
@@ -31,7 +32,8 @@ import java.util.concurrent.CompletableFuture;
 
 /**
  * Gives the body-less errors produced in front of a Docker repository (the
- * anonymous-access gate's 401, the request-size limit's 413) the OCI error
+ * anonymous-access gate's 401, the request-size limit's 413, a group's 405
+ * for a push) the OCI error
  * body Docker clients parse, and gives every such 401 the same challenge
  * the adapter's own authentication advertises. Responses that already
  * carry a body pass through untouched.
@@ -75,7 +77,7 @@ public final class OciErrorsSlice implements Slice {
     }
 
     /**
-     * Render a body-less 401 or 413 as an OCI error.
+     * Render a body-less 401, 405 or 413 as an OCI error.
      *
      * @param response Origin response
      * @return Rendered response
@@ -89,6 +91,8 @@ public final class OciErrorsSlice implements Slice {
                 .build();
         } else if (empty && response.status() == RsStatus.REQUEST_TOO_LONG) {
             result = OciErrorsSlice.rebuild(response, new SizeInvalidError()).build();
+        } else if (empty && response.status() == RsStatus.METHOD_NOT_ALLOWED) {
+            result = OciErrorsSlice.rebuild(response, new UnsupportedError()).build();
         } else {
             result = response;
         }
