@@ -238,6 +238,71 @@ final class GroupResolverTest {
             "a genuine all-members 404 (unmarked) must still be negative-cached");
     }
 
+    // ---- 2.2.9: a member's cooldown verdict is authoritative and never negative-cached ----
+
+    @Test
+    void cooldownMarked404StopsTheWalkAndIsNotNegativeCached() {
+        // A proxy member's "all versions blocked" / blocked-tag answer is a
+        // 404 carrying X-Pantera-Cooldown. A later member must NOT serve the
+        // blocked artifact (cooldown bypass), and the 404 must not be cached
+        // or it would outlive the unblock.
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of()));
+        final NegativeCache negCache = buildNegativeCache();
+        final AtomicInteger laterCalls = new AtomicInteger();
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, cooldownSlice(RsStatus.NOT_FOUND, "all-blocked"));
+        slices.put(PROXY_B, countingSlice(laterCalls, RsStatus.OK));
+        final GroupResolver resolver = buildResolver(
+            idx, List.of(PROXY_A, PROXY_B), Set.of(PROXY_A, PROXY_B), negCache, slices
+        );
+        final Response resp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        assertEquals(404, resp.status().code(), "the cooldown verdict is relayed");
+        assertEquals(List.of("all-blocked"),
+            resp.headers().values("X-Pantera-Cooldown"), "marker preserved");
+        assertEquals(0, laterCalls.get(), "a later member must not serve a blocked artifact");
+        assertFalse(negCache.isKnown404(new com.auto1.pantera.http.cache.NegativeCacheKey(
+            GROUP, REPO_TYPE, PARSED_NAME, PARSED_VERSION)),
+            "a cooldown 404 must never be negative-cached");
+    }
+
+    @Test
+    void cooldownForbiddenIsRelayedWithBody() {
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of()));
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, cooldownSlice(RsStatus.FORBIDDEN, "blocked"));
+        final GroupResolver resolver = buildResolver(
+            idx, List.of(PROXY_A), Set.of(PROXY_A), buildNegativeCache(), slices
+        );
+        final Response resp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        assertEquals(403, resp.status().code(), "cooldown 403 is relayed");
+        assertEquals("{\"error\":\"version in cooldown\"}",
+            new String(resp.body().asBytes(), java.nio.charset.StandardCharsets.UTF_8),
+            "cooldown body is relayed");
+    }
+
+    @Test
+    void cooldownVerdictOnIndexedMemberIsNotTreatedAsDrift() {
+        // Index says PROXY_A holds the artifact; its cooldown 404 must be
+        // served as-is, not treated as TOCTOU drift and fanned out.
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of(PROXY_A)));
+        final AtomicInteger otherCalls = new AtomicInteger();
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY_A, cooldownSlice(RsStatus.NOT_FOUND, "blocked"));
+        slices.put(PROXY_B, countingSlice(otherCalls, RsStatus.OK));
+        final GroupResolver resolver = buildResolver(
+            idx, List.of(PROXY_A, PROXY_B), Set.of(PROXY_A, PROXY_B), buildNegativeCache(), slices
+        );
+        final Response resp = resolver.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        assertEquals(404, resp.status().code(), "cooldown verdict served");
+        assertEquals(0, otherCalls.get(), "no fan-out past a cooldown verdict");
+    }
+
     // ---- WS8 Bug B5: the walk terminal must not discard a member's own honest 404 body ----
 
     @Test
@@ -1038,6 +1103,19 @@ final class GroupResolverTest {
             calls.getAndIncrement() == 0
                 ? ResponseBuilder.notFound().build()
                 : ResponseBuilder.ok().build()
+        );
+    }
+
+    /**
+     * A member answering with a cooldown verdict: the given status, the
+     * {@code X-Pantera-Cooldown} marker and a JSON reason body.
+     */
+    private static Slice cooldownSlice(final RsStatus status, final String marker) {
+        return (line, headers, body) -> CompletableFuture.completedFuture(
+            ResponseBuilder.from(status)
+                .header("X-Pantera-Cooldown", marker)
+                .jsonBody("{\"error\":\"version in cooldown\"}")
+                .build()
         );
     }
 

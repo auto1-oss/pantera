@@ -29,6 +29,24 @@ public final class FilteredMetadataCacheRegistry {
 
     private volatile FilteredMetadataCache shared;
 
+    /**
+     * Caches outside the envelope cache that hold cooldown-filtered bytes
+     * (e.g. a Maven group's merged-metadata cache), keyed by owner id so a
+     * re-created owner replaces its predecessor instead of leaking.
+     */
+    private final java.util.concurrent.ConcurrentMap<String, PackageListener> listeners =
+        new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * Fan-out of a package change to peer nodes; no-op until wired.
+     */
+    private volatile java.util.function.Consumer<String> packagePublisher = pkg -> { };
+
+    /**
+     * Fan-out of an everything-changed event to peer nodes; no-op until wired.
+     */
+    private volatile Runnable allPublisher = () -> { };
+
     private FilteredMetadataCacheRegistry() {
     }
 
@@ -50,10 +68,152 @@ public final class FilteredMetadataCacheRegistry {
     }
 
     /**
-     * Clear the shared reference (for testing).
+     * Clear the shared reference and package listeners (for testing).
      */
     public void clear() {
         this.shared = null;
+        this.listeners.clear();
+    }
+
+    /**
+     * Whether the given cache is the shared, process-wide envelope cache.
+     *
+     * @param cache Candidate
+     * @return True when {@code cache} is the registered shared instance
+     */
+    boolean isShared(final FilteredMetadataCache cache) {
+        return cache != null && cache == this.shared;
+    }
+
+    /**
+     * Register (or replace) a listener told whenever the cooldown-filtered
+     * view of a package may have changed: a block, an unblock or expiry, an
+     * upstream refresh, an upload, or a policy change.
+     *
+     * @param owner Stable owner id (e.g. {@code "maven-group:" + name})
+     * @param listener Listener
+     */
+    public void addPackageListener(final String owner, final PackageListener listener) {
+        this.listeners.put(owner, listener);
+    }
+
+    /**
+     * Remove a listener.
+     *
+     * @param owner Owner id it was registered under
+     */
+    public void removePackageListener(final String owner) {
+        this.listeners.remove(owner);
+    }
+
+    /**
+     * Wire cross-node fan-out; called once at boot when pub/sub exists.
+     *
+     * @param onPackage Publishes one changed package name to peers
+     * @param onAll Publishes an everything-changed event to peers
+     */
+    public void setPackagePublisher(
+        final java.util.function.Consumer<String> onPackage, final Runnable onAll
+    ) {
+        this.packagePublisher = onPackage;
+        this.allPublisher = onAll;
+    }
+
+    /**
+     * Receive side of the cross-node fan-out: notifies local listeners only
+     * (never re-publishes, so there is no loop).
+     *
+     * @return Cleanable to register on the pub/sub bus
+     */
+    public com.auto1.pantera.asto.misc.Cleanable<String> packageReceiver() {
+        return new com.auto1.pantera.asto.misc.Cleanable<>() {
+            @Override
+            public void invalidate(final String pkg) {
+                FilteredMetadataCacheRegistry.this.notifyLocal(pkg);
+            }
+
+            @Override
+            public void invalidateAll() {
+                FilteredMetadataCacheRegistry.this.notifyAllLocal();
+            }
+        };
+    }
+
+    /**
+     * A package's filtered view may have changed: notify local listeners and
+     * peers. Never throws.
+     *
+     * @param packageName Package name as the envelope cache keys it
+     */
+    void packageChanged(final String packageName) {
+        this.notifyLocal(packageName);
+        try {
+            this.packagePublisher.accept(packageName);
+        } catch (final RuntimeException ex) {
+            FilteredMetadataCacheRegistry.logListenerFailure(ex);
+        }
+    }
+
+    /**
+     * Every package's filtered view may have changed (policy change, bulk
+     * unblock): notify local listeners and peers. Never throws.
+     */
+    void allPackagesChanged() {
+        this.notifyAllLocal();
+        try {
+            this.allPublisher.run();
+        } catch (final RuntimeException ex) {
+            FilteredMetadataCacheRegistry.logListenerFailure(ex);
+        }
+    }
+
+    private void notifyLocal(final String packageName) {
+        for (final PackageListener listener : this.listeners.values()) {
+            try {
+                listener.packageChanged(packageName);
+            } catch (final RuntimeException ex) {
+                FilteredMetadataCacheRegistry.logListenerFailure(ex);
+            }
+        }
+    }
+
+    private void notifyAllLocal() {
+        for (final PackageListener listener : this.listeners.values()) {
+            try {
+                listener.allChanged();
+            } catch (final RuntimeException ex) {
+                FilteredMetadataCacheRegistry.logListenerFailure(ex);
+            }
+        }
+    }
+
+    private static void logListenerFailure(final RuntimeException ex) {
+        com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.cooldown.metadata")
+            .message("Cooldown package-change listener failed; its entries expire via TTL")
+            .eventCategory("database")
+            .eventAction("cooldown_package_listener")
+            .eventOutcome("failure")
+            .error(ex)
+            .field("log.source", "application")
+            .log();
+    }
+
+    /**
+     * Listener for cooldown-relevant package changes.
+     */
+    public interface PackageListener {
+        /**
+         * The filtered view of this package may have changed.
+         *
+         * @param packageName Package name as the envelope cache keys it
+         *  (e.g. Maven {@code com.google.guava.guava}, npm {@code @scope/pkg})
+         */
+        void packageChanged(String packageName);
+
+        /**
+         * The filtered view of every package may have changed.
+         */
+        void allChanged();
     }
 
     /**

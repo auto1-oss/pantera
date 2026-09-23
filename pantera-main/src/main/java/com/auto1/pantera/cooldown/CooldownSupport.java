@@ -225,8 +225,22 @@ public final class CooldownSupport {
             metadataCache.setInvalidationPublisher(
                 key -> bus.publish("cooldown-envelope", key)
             );
+            // Package-level change fan-out for caches that hold cooldown-
+            // filtered bytes outside the envelope cache (Maven group merged
+            // metadata). Its own channel: an envelope may not exist anywhere
+            // (nothing to piggy-back on) while a group still caches the view.
+            bus.register(
+                "cooldown-package",
+                com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry
+                    .instance().packageReceiver()
+            );
+            com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry.instance()
+                .setPackagePublisher(
+                    pkg -> bus.publish("cooldown-package", pkg),
+                    () -> bus.publishAll("cooldown-package")
+                );
             EcsLogger.info("com.auto1.pantera.cooldown")
-                .message("Wired cooldown pub/sub fan-out (channels: cooldown-decisions, cooldown-envelope)")
+                .message("Wired cooldown pub/sub fan-out (channels: cooldown-decisions, cooldown-envelope, cooldown-package)")
                 .eventCategory("configuration")
                 .eventAction("cooldown_pubsub_wire")
                 .eventOutcome("success")

@@ -515,6 +515,31 @@ public class FilteredMetadataCache implements Cleanable<String> {
     }
 
     /**
+     * Tell caches outside this one that hold cooldown-filtered bytes (e.g. a
+     * Maven group's merged metadata) that a package's view may have changed.
+     * Only the shared, process-wide instance notifies; test instances and the
+     * pub/sub receive path never do.
+     *
+     * @param packageName Package name
+     */
+    private void notifyPackageChanged(final String packageName) {
+        final FilteredMetadataCacheRegistry registry = FilteredMetadataCacheRegistry.instance();
+        if (registry.isShared(this)) {
+            registry.packageChanged(packageName);
+        }
+    }
+
+    /**
+     * Everything-changed variant of {@link #notifyPackageChanged(String)}.
+     */
+    private void notifyAllPackagesChanged() {
+        final FilteredMetadataCacheRegistry registry = FilteredMetadataCacheRegistry.instance();
+        if (registry.isShared(this)) {
+            registry.allPackagesChanged();
+        }
+    }
+
+    /**
      * Earliest of {@code blockedUntil} and {@code now + l1Ttl} — the L1
      * logical-expiry instant for an envelope that has blocked versions.
      *
@@ -549,6 +574,7 @@ public class FilteredMetadataCache implements Cleanable<String> {
         final String repoName,
         final String packageName
     ) {
+        this.notifyPackageChanged(packageName);
         final String prefix = "metadata:" + repoType + ":" + repoName + ":";
         final String suffix = ":" + packageName;
         if (this.l1Cache != null) {
@@ -579,6 +605,7 @@ public class FilteredMetadataCache implements Cleanable<String> {
      * @param repoName Repository name
      */
     public void invalidateAll(final String repoType, final String repoName) {
+        this.notifyAllPackagesChanged();
         final String prefix = "metadata:" + repoType + ":" + repoName + ":";
 
         // L1: Invalidate matching keys (skip in L2-only mode)
@@ -646,6 +673,7 @@ public class FilteredMetadataCache implements Cleanable<String> {
         if (packageName == null || packageName.isEmpty()) {
             return 0;
         }
+        this.notifyPackageChanged(packageName);
         final String suffix = ":" + packageName;
         final java.util.List<String> matched = new java.util.ArrayList<>();
         if (this.l1Cache != null) {
@@ -903,6 +931,7 @@ public class FilteredMetadataCache implements Cleanable<String> {
      * runs at most once per settings update.
      */
     public void clear() {
+        this.notifyAllPackagesChanged();
         if (this.l1Cache != null) {
             this.l1Cache.invalidateAll();
         }

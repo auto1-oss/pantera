@@ -406,6 +406,21 @@ public final class GroupResolver implements Slice {
      * @param path Request path
      * @return {@code true} if any range metacharacter is present
      */
+    /**
+     * Whether a member answered with Pantera's own cooldown verdict. Such a
+     * response is authoritative for the walk (the version is blocked, not
+     * missing — a later member must not serve it) and must never be
+     * negative-cached, whatever its status.
+     *
+     * @param resp Member response
+     * @return True when the response carries the cooldown marker header
+     */
+    private static boolean isCooldownVerdict(final Response resp) {
+        return !resp.headers().values(
+            com.auto1.pantera.cooldown.response.CooldownResponseFactory.HEADER
+        ).isEmpty();
+    }
+
     private static boolean containsVersionRangeSyntax(final String path) {
         for (int idx = 0; idx < path.length(); idx++) {
             final char chr = path.charAt(idx);
@@ -666,7 +681,8 @@ public final class GroupResolver implements Slice {
             .thenCompose(resp -> {
                 if (resp.status().success()
                     || resp.status() == RsStatus.NOT_MODIFIED
-                    || resp.status() == RsStatus.FORBIDDEN) {
+                    || resp.status() == RsStatus.FORBIDDEN
+                    || GroupResolver.isCooldownVerdict(resp)) {
                     return CompletableFuture.completedFuture(resp);
                 }
                 if (resp.status() == RsStatus.NOT_FOUND) {
@@ -829,6 +845,13 @@ public final class GroupResolver implements Slice {
                         this.group, java.util.List.of(), java.util.Optional.empty()
                     );
                     return FaultTranslator.translate(fault, null);
+                }
+                if (GroupResolver.isCooldownVerdict(resp)) {
+                    // A member's cooldown answer (e.g. a PyPI all-versions-
+                    // blocked 404, a Docker blocked-tag MANIFEST_UNKNOWN) is
+                    // authoritative and temporary: relay it, never negative-
+                    // cache it, or it would outlive the unblock / expiry.
+                    return resp;
                 }
                 if (resp.status() == RsStatus.NOT_FOUND) {
                     // Fix 2: a member may launder a non-authoritative upstream
@@ -1065,7 +1088,8 @@ public final class GroupResolver implements Slice {
             }
             final RsStatus status = resp.status();
             if (status == RsStatus.OK || status == RsStatus.PARTIAL_CONTENT
-                || status == RsStatus.NOT_MODIFIED || status == RsStatus.FORBIDDEN) {
+                || status == RsStatus.NOT_MODIFIED || status == RsStatus.FORBIDDEN
+                || GroupResolver.isCooldownVerdict(resp)) {
                 member.recordSuccess();
                 recordMemberOutcome(member, "success", memberLatency);
                 // Record the winning member for sibling pinning. NOT_MODIFIED
