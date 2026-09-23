@@ -58,4 +58,33 @@ final class JoinedTagsSourceTest {
             )
         );
     }
+
+    @Test
+    void marksListingIncompleteWhenASourceFails() {
+        MatcherAssert.assertThat(
+            new JoinedTagsSource(
+                "my-test",
+                java.util.List.of(
+                    new FullTagsManifests(() -> new Content.From("{\"tags\":[]}".getBytes())),
+                    new com.auto1.pantera.docker.fake.FaultyGetManifests()
+                ),
+                Pagination.empty()
+            ).tags().join().complete(),
+            new org.hamcrest.core.IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void marksListingCompleteWhenAllSourcesAnswer() {
+        MatcherAssert.assertThat(
+            new JoinedTagsSource(
+                "my-test",
+                java.util.List.of(
+                    new FullTagsManifests(() -> new Content.From("{\"tags\":[]}".getBytes()))
+                ),
+                Pagination.empty()
+            ).tags().join().complete(),
+            new org.hamcrest.core.IsEqual<>(true)
+        );
+    }
 }

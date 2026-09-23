@@ -115,7 +115,7 @@ curl -u 'your-username:your-api-token' http://pantera-host:8080/v2/docker-local/
 curl -u 'your-username:your-api-token' http://pantera-host:8080/v2/docker-local/myapp/tags/list
 ```
 
-The catalog is per repository (`/v2/<repo>/_catalog`) and lists names with the repository prefix (`docker-local/myapp`); there is no registry-wide `/v2/_catalog`. Both endpoints page with `?n=<count>&last=<name>`.
+The catalog is per repository (`/v2/<repo>/_catalog`) and lists names with the repository prefix (`docker-local/myapp`); there is no registry-wide `/v2/_catalog`. Both endpoints page with `?n=<count>&last=<name>`; a full tags page carries a `Link: <...>; rel="next"` header pointing at the next page. A tags request for an image the repository does not hold answers `404 NAME_UNKNOWN`.
 
 ---
 
@@ -159,6 +159,8 @@ The proxy tries each configured upstream in order until it finds the requested i
 | `denied: requested access to the resource is denied` | User lacks push permission | Contact admin for write access to the Docker local repository |
 | `denied` when re-pushing an existing tag (e.g. `latest`) with new content | Moving an existing tag needs the `overwrite` action on top of `push` | Push a new tag, or ask the admin to grant `overwrite` |
 | Push fails with `unsupported` (405) | The target is a proxy or group repository | Push to a local (`docker`) repository instead |
+| `name unknown` (404 `NAME_UNKNOWN`) on a tags list | The repository holds no tags for that image name | Check the image path (`<repo>/<image>`, include `library/` for official images) |
+| `size invalid` (413 `SIZE_INVALID`) during push | A layer exceeds the server's request-body limit | Ask the admin to raise the limit |
 | `manifest unknown` | Image not cached in proxy yet | Verify the image path matches upstream (include `library/` for official images) |
 | Push fails with `500 Internal Server Error` | Large layer upload timeout | Ask admin to increase `proxy_timeout` and check Nginx `client_max_body_size` |
 | Pull is slow for first request | Image being fetched from upstream for the first time | This is expected; subsequent pulls will be fast from cache |

@@ -19,6 +19,9 @@ import com.auto1.pantera.docker.Repo;
 import com.auto1.pantera.docker.asto.Uploads;
 import com.auto1.pantera.docker.fake.FullTagsManifests;
 import com.auto1.pantera.docker.misc.Pagination;
+import com.auto1.pantera.docker.misc.TagsPage;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.cache.NegativeCache;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.headers.ContentLength;
 import com.auto1.pantera.http.headers.ContentType;
@@ -28,6 +31,7 @@ import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Test;
 
 import java.util.Optional;
@@ -91,6 +95,104 @@ class TagsSliceGetTest {
             "Parses limit",
             manifests.capturedLimit(),
             Matchers.is(limit)
+        );
+    }
+
+    /**
+     * B81: tags of a name the repository does not hold is 404 NAME_UNKNOWN,
+     * not an empty 200 (which a group relayed as "no tags").
+     */
+    @Test
+    void shouldAnswerNameUnknownForUnknownImage() {
+        final Response response = TestDockerAuth.slice(
+            new FakeDocker(
+                new FullTagsManifests(
+                    () -> new Content.From("{\"name\":\"nope\",\"tags\":[]}".getBytes())
+                )
+            )
+        ).response(
+            new RequestLine(RqMethod.GET, "/v2/nope/tags/list"),
+            TestDockerAuth.headers(),
+            Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "unknown name is 404 NAME_UNKNOWN",
+            response, new IsErrorsResponse(RsStatus.NOT_FOUND, "NAME_UNKNOWN")
+        );
+        MatcherAssert.assertThat(
+            "an authoritative miss may be negative-cached",
+            response.headers().values(NegativeCache.SKIP_HEADER).isEmpty(),
+            new IsEqual<>(true)
+        );
+    }
+
+    /**
+     * B81: when a tag source could not be read (upstream failure), an empty
+     * list is not proof the name is unknown: the 404 must not be
+     * negative-cached by a group.
+     */
+    @Test
+    void shouldMarkNameUnknownAsNonAuthoritativeWhenListingIncomplete() {
+        final Response response = TestDockerAuth.slice(
+            new FakeDocker(
+                new FullTagsManifests(
+                    new TagsPage("nope", java.util.List.of(), Pagination.empty(), false)
+                )
+            )
+        ).response(
+            new RequestLine(RqMethod.GET, "/v2/nope/tags/list"),
+            TestDockerAuth.headers(),
+            Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            response.headers().values(NegativeCache.SKIP_HEADER).isEmpty(),
+            new IsEqual<>(false)
+        );
+    }
+
+    /**
+     * B81: a full page carries a Link header to the next page.
+     */
+    @Test
+    void shouldLinkNextPageWhenPageIsFull() {
+        final Response response = TestDockerAuth.slice(
+            new FakeDocker(
+                new FullTagsManifests(
+                    () -> new Content.From(
+                        "{\"name\":\"my-alpine\",\"tags\":[\"1.0\",\"1.1\"]}".getBytes()
+                    )
+                )
+            )
+        ).response(
+            new RequestLine(RqMethod.GET, "/v2/my-alpine/tags/list?n=2"),
+            TestDockerAuth.headers(),
+            Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            response.headers().values("Link"),
+            new IsEqual<>(
+                java.util.List.of("</v2/my-alpine/tags/list?n=2&last=1.1>; rel=\"next\"")
+            )
+        );
+    }
+
+    @Test
+    void shouldNotLinkWhenPageIsNotFull() {
+        final Response response = TestDockerAuth.slice(
+            new FakeDocker(
+                new FullTagsManifests(
+                    () -> new Content.From(
+                        "{\"name\":\"my-alpine\",\"tags\":[\"1.0\"]}".getBytes()
+                    )
+                )
+            )
+        ).response(
+            new RequestLine(RqMethod.GET, "/v2/my-alpine/tags/list?n=2"),
+            TestDockerAuth.headers(),
+            Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            response.headers().values("Link").isEmpty(), new IsEqual<>(true)
         );
     }
 

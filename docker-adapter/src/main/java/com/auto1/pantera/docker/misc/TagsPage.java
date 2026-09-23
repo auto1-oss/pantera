@@ -28,14 +28,37 @@ public final class TagsPage implements Tags {
     private final Pagination pagination;
 
     /**
+     * Whether every source of the tags answered.
+     */
+    private final boolean whole;
+
+    /**
      * @param repoName Repository name.
      * @param tags Tags.
      * @param pagination Pagination parameters.
      */
     public TagsPage(String repoName, List<String> tags, Pagination pagination) {
+        this(repoName, tags, pagination, true);
+    }
+
+    /**
+     * @param repoName Repository name.
+     * @param tags Tags.
+     * @param pagination Pagination parameters.
+     * @param complete Whether every source of the tags answered.
+     */
+    public TagsPage(
+        String repoName, List<String> tags, Pagination pagination, boolean complete
+    ) {
         this.repoName = repoName;
         this.tags = tags;
         this.pagination = pagination;
+        this.whole = complete;
+    }
+
+    @Override
+    public boolean complete() {
+        return this.whole;
     }
 
     @Override

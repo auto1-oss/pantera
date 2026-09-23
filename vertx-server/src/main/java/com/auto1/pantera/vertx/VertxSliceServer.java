@@ -712,11 +712,22 @@ public final class VertxSliceServer implements Closeable {
             // connection, and every other stream multiplexed on it.
             req.response().putHeader("Connection", "close");
         }
+        final String detail = "request body exceeds the configured limit of "
+            + this.maxRequestBodyBytes.getAsLong() + " bytes";
+        final String message;
+        if (req.path().startsWith("/v2/")) {
+            // Docker Registry API: clients print OCI error bodies.
+            if (!req.response().headWritten()) {
+                req.response().putHeader("Content-Type", "application/json");
+            }
+            message = String.format(
+                "{\"errors\":[{\"code\":\"SIZE_INVALID\",\"message\":\"%s\"}]}", detail
+            );
+        } else {
+            message = "Payload Too Large: " + detail;
+        }
         final boolean sent = guarded.safeSendError(
-            "proxyHandler.requestBodyLimit",
-            HttpURLConnection.HTTP_ENTITY_TOO_LARGE,
-            "Payload Too Large: request body exceeds the configured limit of "
-                + this.maxRequestBodyBytes.getAsLong() + " bytes"
+            "proxyHandler.requestBodyLimit", HttpURLConnection.HTTP_ENTITY_TOO_LARGE, message
         );
         if (h2 && sent) {
             // HTTP/2: the complete response was sent before the request body;

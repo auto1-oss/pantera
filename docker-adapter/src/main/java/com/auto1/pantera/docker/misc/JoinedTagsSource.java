@@ -18,6 +18,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Source of tags built by loading and merging multiple tag lists.
@@ -62,18 +63,45 @@ public final class JoinedTagsSource {
      * @return Tags.
      */
     public CompletableFuture<Tags> tags() {
+        // A source that fails still contributes no tags (the others may
+        // know the name), but the joined listing is then marked
+        // incomplete so an empty result is not taken as NAME_UNKNOWN proof.
+        final AtomicBoolean complete = new AtomicBoolean(true);
         CompletableFuture<List<String>>[] futs = new CompletableFuture[manifests.size()];
         for (int i = 0; i < manifests.size(); i++) {
-            futs[i] = manifests.get(i).tags(pagination)
-                .thenCompose(tags -> new ParsedTags(tags).tags())
+            futs[i] = this.load(manifests.get(i))
+                .thenCompose(tags -> {
+                    if (!tags.complete()) {
+                        complete.set(false);
+                    }
+                    return new ParsedTags(tags).tags();
+                })
                 .toCompletableFuture()
-                .exceptionally(err -> Collections.emptyList());
+                .exceptionally(err -> {
+                    complete.set(false);
+                    return Collections.emptyList();
+                });
         }
         return CompletableFuture.allOf(futs)
             .thenApply(v -> {
                 final List<String> names = new ArrayList<>();
                 Arrays.stream(futs).forEach(fut -> names.addAll(fut.getNow(List.of())));
-                return new TagsPage(repo, names, pagination);
+                return new TagsPage(repo, names, pagination, complete.get());
             });
+    }
+
+    /**
+     * Load tags from one source, turning a synchronous throw into a failed
+     * future.
+     *
+     * @param source Manifests
+     * @return Tags future
+     */
+    private CompletableFuture<Tags> load(final Manifests source) {
+        try {
+            return source.tags(this.pagination);
+        } catch (final RuntimeException ex) {
+            return CompletableFuture.failedFuture(ex);
+        }
     }
 }

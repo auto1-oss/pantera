@@ -135,6 +135,34 @@ final class VertxSliceServerBodyLimitTest {
         );
     }
 
+    /**
+     * B81: Docker Registry API paths get the 413 as an OCI error body, which
+     * docker/oras/crane print, instead of a text/plain line.
+     */
+    @Test
+    @Timeout(30)
+    void registryApiPathGetsOciErrorBody() {
+        this.start((line, headers, body) -> body.discard().thenApply(
+            ignored -> ResponseBuilder.ok().build()
+        ));
+        final HttpResponse<Buffer> response = this.client
+            .patch(this.port, HOST, "/v2/docker-local/app/blobs/uploads/abc")
+            .rxSendBuffer(Buffer.buffer(new byte[(int) LIMIT * 2]))
+            .blockingGet();
+        MatcherAssert.assertThat(
+            "over-limit registry upload is 413",
+            response.statusCode(), new IsEqual<>(413)
+        );
+        MatcherAssert.assertThat(
+            "413 body is JSON",
+            response.getHeader("Content-Type"), new IsEqual<>("application/json")
+        );
+        MatcherAssert.assertThat(
+            "413 body carries the OCI SIZE_INVALID code",
+            response.bodyAsString().contains("\"SIZE_INVALID\""), new IsEqual<>(true)
+        );
+    }
+
     @Test
     @Timeout(30)
     void bodyWithinTheLimitIsServedNormally() {

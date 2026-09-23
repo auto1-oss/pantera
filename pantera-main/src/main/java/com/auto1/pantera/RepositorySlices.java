@@ -34,6 +34,7 @@ import com.auto1.pantera.docker.Docker;
 import com.auto1.pantera.docker.asto.AstoDocker;
 import com.auto1.pantera.docker.asto.RegistryRoot;
 import com.auto1.pantera.docker.http.DockerSlice;
+import com.auto1.pantera.docker.http.OciErrorsSlice;
 import com.auto1.pantera.docker.http.TrimmedDocker;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.CooldownSupport;
@@ -1339,9 +1340,13 @@ public class RepositorySlices {
         // any per-adapter logic runs. Policy defaults: proxies allow
         // anon read (curlable maven/npm clients); hosted repos require
         // auth for both directions.
-        return new AnonymousAccessSlice(
+        final Slice gated = new AnonymousAccessSlice(
             withContentLength, anonymousPolicy(cfg), cfg.name()
         );
+        // Docker clients parse OCI error bodies and the adapter advertises
+        // a Basic+Bearer challenge: give the body-less 401/413 produced by
+        // the generic gates above the same shape.
+        return cfg.type().startsWith("docker") ? new OciErrorsSlice(gated) : gated;
     }
 
     /**
