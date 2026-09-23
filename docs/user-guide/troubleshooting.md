@@ -179,8 +179,12 @@ export PANTERA_TOKEN=$(curl -s -X POST http://pantera-host:8086/api/v1/auth/toke
 
 | Issue | Fix |
 |-------|-----|
-| `proxyconnect tcp: tls: first record does not look like a TLS handshake` | Set `GOINSECURE=pantera-host:8080` |
-| `verifying module: checksum mismatch` | Add the module's path prefix to `GONOSUMDB` |
+| `refusing to pass credentials to insecure URL`, or `401 Unauthorized` with an `http://` `GOPROXY` | The `go` command never sends credentials over plain HTTP, and `GOINSECURE` does not apply to `GOPROXY`. Use the registry's `https://` URL with `~/.netrc` (see [Go guide](repositories/go.md#plain-http-registries)) |
+| `x509: certificate signed by unknown authority` | Trust the registry's CA certificate in the operating system trust store (`SSL_CERT_FILE` also works on Linux). `GOINSECURE` does not skip TLS verification for `GOPROXY` |
+| `proxyconnect tcp: tls: first record does not look like a TLS handshake` | Comes from `HTTPS_PROXY`/`HTTP_PROXY`, not `GOPROXY`: use an `http://` URL for an HTTP forward proxy in those variables |
+| `verifying module: checksum mismatch` | For a private module unknown to the public checksum database, add its path prefix to `GONOSUMDB` |
+| `SECURITY ERROR ... does NOT match an earlier download recorded in go.sum` | The version's content changed after `go.sum` recorded it. Do not bypass it with `GONOSUMDB`; the module owner must publish a new version |
+| `409 Conflict` when uploading a module file | That version is already published with different content; Go versions are immutable, so publish a new version |
 
 ### Helm
 

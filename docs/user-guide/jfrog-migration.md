@@ -437,10 +437,11 @@ See the full [Helm guide](repositories/helm.md) for more details.
 
 ```diff
 - export GOPROXY="https://artifactory.example.com/artifactory/api/go/go-virtual,direct"
-+ export GOPROXY="https://your-username:your-jwt-token@pantera.example.com:8080/go-proxy,direct"
++ export GOPROXY="https://pantera.example.com/go-group"
 + export GONOSUMDB="github.com/your-org/*"
-+ export GOINSECURE="pantera.example.com:8080"  # only if not using HTTPS
 ```
+
+Put the credentials in `~/.netrc` (`machine pantera.example.com login your-username password your-api-token`). The `go` command sends credentials over HTTPS only, so Pantera must be served over HTTPS; `GOINSECURE` does not apply to `GOPROXY`.
 
 See the full [Go guide](repositories/go.md) for more details.
 
