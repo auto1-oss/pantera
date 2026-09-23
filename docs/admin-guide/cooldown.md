@@ -257,11 +257,15 @@ curl -s http://pantera-host:8080/go-proxy/github.com/gorilla/mux/@v/list
 # Go -- @latest (should rewrite to highest non-blocked when latest is blocked).
 curl -s http://pantera-host:8080/go-proxy/github.com/gorilla/mux/@latest | jq .
 
-# Docker -- tag list.
-curl -s http://pantera-host:8080/docker-proxy/v2/library/nginx/tags/list | jq .
+# Docker -- the path is /v2/<repo>/<image>/..., the same as in
+# "docker pull pantera-host:8080/docker-proxy/library/nginx:latest".
+# Tag list: blocked tags are absent.
+curl -s -u user:token http://pantera-host:8080/v2/docker-proxy/library/nginx/tags/list | jq .
 
 # Docker -- manifest by tag (expect 404 MANIFEST_UNKNOWN when tag is blocked).
-curl -sv http://pantera-host:8080/docker-proxy/v2/library/nginx/manifests/latest
+curl -sv -u user:token \
+  -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
+  http://pantera-host:8080/v2/docker-proxy/library/nginx/manifests/latest
 
 # Composer -- per-package.
 curl -s http://pantera-host:8080/php-proxy/p2/monolog/monolog.json | jq '.packages."monolog/monolog" | keys'
