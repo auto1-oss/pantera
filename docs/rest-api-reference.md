@@ -1185,6 +1185,8 @@ Create or update a global storage alias.
 
 **Response (200):** Empty body on success.
 
+**Response (400):** A local-filesystem (`fs`, `vertx-file`) `path` outside the approved roots (`fs_storage_roots`), or an S3 `endpoint` the egress policy refuses. An update that keeps the alias's saved path is not re-validated.
+
 **curl example:**
 
 ```bash
@@ -1271,6 +1273,8 @@ Create or update a storage alias scoped to a repository.
 ```
 
 **Response (200):** Empty body on success.
+
+**Response (400):** A local-filesystem (`fs`, `vertx-file`) `path` outside the approved roots (`fs_storage_roots`), or an S3 `endpoint` the egress policy refuses. An update that keeps the alias's saved path is not re-validated.
 
 **curl example:**
 
@@ -2509,7 +2513,7 @@ curl -X PUT http://localhost:8086/api/v1/admin/client-base-url-settings \
 
 ### GET /api/v1/admin/request-limits-settings
 
-Retrieve the request &amp; storage limits (2.2.9): the hard cap on a single request body and the directories an inline `fs` repository storage path may live under. Environment fallbacks `PANTERA_MAX_REQUEST_BODY_BYTES` / `PANTERA_FS_STORAGE_ROOTS` apply only while no row has been saved.
+Retrieve the request &amp; storage limits (2.2.9): the hard cap on a single request body and the directories a local-filesystem (`fs`, `vertx-file`) repository or alias storage path may live under. Environment fallbacks `PANTERA_MAX_REQUEST_BODY_BYTES` / `PANTERA_FS_STORAGE_ROOTS` apply only while no row has been saved.
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_admin_permissions:admin`
@@ -2526,7 +2530,7 @@ Retrieve the request &amp; storage limits (2.2.9): the hard cap on a single requ
 | Field | Type | Description |
 |-------|------|-------------|
 | `max_request_body_bytes` | string (integer bytes, ≥ 1048576) | Hard cap on a single request body; a declared size above it answers `413` before any byte is read, chunked bodies are metered as they stream. Default `10737418240` (10 GiB). |
-| `fs_storage_roots` | string (path-separator delimited absolute directories) | Approved roots for inline `fs` storage paths submitted through `PUT /api/v1/repositories/<name>` or the UI; symlinks are followed before the containment check. Default `/var/pantera/data`. |
+| `fs_storage_roots` | string (path-separator delimited absolute directories) | Approved roots for local-filesystem (`fs`, `vertx-file`) storage paths submitted through `PUT /api/v1/repositories/<name>`, the storage-alias `PUT` endpoints, or the UI; symlinks are followed before the containment check. Default `/var/pantera/data`. |
 
 **curl example:**
 

@@ -40,6 +40,36 @@ final class FsStorageRootPolicyTest {
         new FsStorageRootPolicy(List.of(Path.of("/var/pantera/data")));
 
     @Test
+    void vertxFileStorageIsCheckedLikeFs() {
+        // B12: only "fs" was checked; "vertx-file" is the same local
+        // filesystem and mounted any host path.
+        final JsonObject repo = Json.createObjectBuilder().add(
+            "storage", Json.createObjectBuilder().add("type", "vertx-file").add("path", "/etc")
+        ).build();
+        MatcherAssert.assertThat(
+            POLICY.rejectStorage(repo).isPresent(), new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void aliasBlockIsChecked() {
+        MatcherAssert.assertThat(
+            "an alias definition is a storage block and is checked the same way",
+            POLICY.rejectBlock(
+                Json.createObjectBuilder().add("type", "fs").add("path", "/etc").build()
+            ).isPresent(),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "a non-local storage block is not a filesystem path",
+            POLICY.rejectBlock(
+                Json.createObjectBuilder().add("type", "s3").add("bucket", "b").build()
+            ).isPresent(),
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
     void hostRootIsRejected() {
         MatcherAssert.assertThat(
             "the filesystem root must never become a repository",

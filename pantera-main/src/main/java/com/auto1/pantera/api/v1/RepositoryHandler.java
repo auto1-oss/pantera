@@ -57,6 +57,13 @@ public final class RepositoryHandler {
     private static final String REPO = "repo";
 
     /**
+     * Local-path extraction only (no roots): which storage blocks address
+     * the local filesystem.
+     */
+    private static final FsStorageRootPolicy LOCAL_PATHS =
+        new FsStorageRootPolicy(java.util.List.of());
+
+    /**
      * Pantera filters cache.
      */
     private final FiltersCache filtersCache;
@@ -498,9 +505,11 @@ public final class RepositoryHandler {
     }
 
     /**
-     * The path of an inline {@code fs} storage block.
+     * The path of an inline local-filesystem storage block ({@code fs} or
+     * {@code vertx-file}), qualified by its type so switching the type of
+     * a kept path is still validated.
      * @param repo A {@code repo} section
-     * @return The path, or {@code null} for any other storage
+     * @return The type-qualified path, or {@code null} for any other storage
      */
     private static String fsPath(final javax.json.JsonObject repo) {
         final javax.json.JsonValue storage = repo.get("storage");
@@ -508,7 +517,9 @@ public final class RepositoryHandler {
             return null;
         }
         final javax.json.JsonObject block = storage.asJsonObject();
-        return "fs".equals(block.getString("type", "")) ? block.getString("path", null) : null;
+        return RepositoryHandler.LOCAL_PATHS.localPath(block)
+            .map(path -> block.getString("type") + ":" + path)
+            .orElse(null);
     }
 
     /**

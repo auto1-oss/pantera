@@ -170,8 +170,8 @@ public final class FsStorageRootPolicy {
 
     /**
      * Check the inline storage block of a repository config, if it is a
-     * raw {@code fs} mapping. Alias references (strings) and other storage
-     * types are out of scope.
+     * local-filesystem mapping. Alias references (strings) are checked when
+     * the alias itself is written (see {@link #rejectBlock(JsonObject)}).
      *
      * @param repo The {@code repo} section of the submitted config
      * @return Rejection reason, or empty
@@ -184,10 +184,60 @@ public final class FsStorageRootPolicy {
         if (storage.getValueType() != JsonValue.ValueType.OBJECT) {
             return Optional.empty();
         }
-        final JsonObject block = storage.asJsonObject();
-        if (!"fs".equals(block.getString("type", ""))) {
+        return this.rejectBlock(storage.asJsonObject());
+    }
+
+    /**
+     * Check one storage block (an inline repository storage or a storage
+     * alias definition). Every storage type that addresses the local
+     * filesystem by {@code path} is checked -- {@code fs} and
+     * {@code vertx-file} alike: checking {@code fs} only let
+     * {@code vertx-file} mount any host directory.
+     *
+     * @param block Storage block
+     * @return Rejection reason, or empty
+     */
+    public Optional<String> rejectBlock(final JsonObject block) {
+        if (block == null || !FsStorageRootPolicy.isLocalPath(block)) {
             return Optional.empty();
         }
-        return this.reject(block.getString("path", null));
+        final JsonValue path = block.get("path");
+        if (path == null || path.getValueType() != JsonValue.ValueType.STRING) {
+            return this.reject(null);
+        }
+        return this.reject(block.getString("path"));
+    }
+
+    /**
+     * The local path of a storage block, if it addresses the local
+     * filesystem by path.
+     *
+     * @param block Storage block
+     * @return Path, or empty for any other storage (or a non-string path)
+     */
+    public Optional<String> localPath(final JsonObject block) {
+        if (block == null || !FsStorageRootPolicy.isLocalPath(block)) {
+            return Optional.empty();
+        }
+        final JsonValue path = block.get("path");
+        if (path == null || path.getValueType() != JsonValue.ValueType.STRING) {
+            return Optional.empty();
+        }
+        return Optional.of(block.getString("path"));
+    }
+
+    /**
+     * Whether a storage block is one of the local-filesystem types.
+     *
+     * @param block Storage block
+     * @return True for {@code fs} and {@code vertx-file}
+     */
+    private static boolean isLocalPath(final JsonObject block) {
+        final JsonValue type = block.get("type");
+        if (type == null || type.getValueType() != JsonValue.ValueType.STRING) {
+            return false;
+        }
+        final String name = block.getString("type");
+        return "fs".equals(name) || "vertx-file".equals(name);
     }
 }

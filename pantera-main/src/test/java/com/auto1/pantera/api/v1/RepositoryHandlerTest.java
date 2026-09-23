@@ -106,6 +106,29 @@ public final class RepositoryHandlerTest extends AsyncApiTestBase {
     }
 
     @Test
+    void vertxFileStorageOutsideApprovedRootsIsRefused(final Vertx vertx,
+        final VertxTestContext ctx) throws Exception {
+        // B12: only type "fs" was checked, so "vertx-file" mounted any path.
+        final JsonObject body = new JsonObject().put(
+            "repo",
+            new JsonObject()
+                .put("type", "file")
+                .put("storage", new JsonObject().put("type", "vertx-file").put("path", "/etc"))
+        );
+        final HttpResponse<Buffer> put = WebClient.create(vertx)
+            .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/vx-root")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(body)
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(
+            400, put.statusCode(),
+            "a vertx-file storage root outside the approved base must be refused"
+        );
+        ctx.completeNow();
+    }
+
+    @Test
     void existingRepoOutsideApprovedRootsStaysEditable(final Vertx vertx,
         final VertxTestContext ctx) throws Exception {
         // A repository saved before the 2.2.9 roots existed: the UI re-sends

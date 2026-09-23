@@ -22,6 +22,7 @@ import com.auto1.pantera.db.dao.StorageAliasDao;
 import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.security.perms.Action;
 import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.settings.repo.FsStorageRootPolicy;
 import io.vertx.core.json.JsonArray;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
@@ -64,6 +65,13 @@ public final class StorageAliasHandler {
     private final RemoteUrlPolicy endpoints;
 
     /**
+     * Approved roots for local-filesystem storage (SECURITY, 2.2.9): an
+     * alias is a storage block like an inline one, and a repository that
+     * references it by name was never checked against the roots.
+     */
+    private final java.util.function.Supplier<FsStorageRootPolicy> fsRoots;
+
+    /**
      * Ctor.
      * @param storagesCache Pantera settings storage cache
      * @param asto Pantera settings storage
@@ -78,6 +86,74 @@ public final class StorageAliasHandler {
         this.policy = policy;
         this.aliasDao = aliasDao;
         this.endpoints = RemoteUrlPolicy.fromRegistry();
+        this.fsRoots = com.auto1.pantera.settings.policy.RequestLimitsSettingsLoader.fsRootPolicy();
+    }
+
+    /**
+     * Refuse an alias whose local-filesystem path is outside the approved
+     * roots. An update that keeps the path already saved for the alias is
+     * not re-validated, so aliases created before the roots existed stay
+     * editable. Resolves symlinks -- worker thread only.
+     * @param alias Alias name
+     * @param repo Repository name, {@code null} for a global alias
+     * @param body Alias storage block
+     */
+    private void checkRoots(final String alias, final String repo, final JsonObject body) {
+        final FsStorageRootPolicy roots = this.fsRoots.get();
+        final java.util.Optional<String> path = roots.localPath(body);
+        if (path.isPresent() && this.savedPath(alias, repo, roots).equals(path)
+            && body.getString("type").equals(this.savedType(alias, repo))) {
+            return;
+        }
+        roots.rejectBlock(body).ifPresent(reason -> {
+            throw new EndpointRejected(reason);
+        });
+    }
+
+    /**
+     * Local path saved for an alias.
+     * @param alias Alias name
+     * @param repo Repository name, nullable
+     * @param roots Policy (path extraction)
+     * @return Saved path, empty when none
+     */
+    private java.util.Optional<String> savedPath(
+        final String alias, final String repo, final FsStorageRootPolicy roots
+    ) {
+        return this.saved(alias, repo).flatMap(roots::localPath);
+    }
+
+    /**
+     * Storage type saved for an alias.
+     * @param alias Alias name
+     * @param repo Repository name, nullable
+     * @return Saved type, or empty string
+     */
+    private String savedType(final String alias, final String repo) {
+        return this.saved(alias, repo)
+            .map(cfg -> cfg.get("type"))
+            .filter(type -> type.getValueType() == javax.json.JsonValue.ValueType.STRING)
+            .map(type -> ((javax.json.JsonString) type).getString())
+            .orElse("");
+    }
+
+    /**
+     * Saved config of an alias (DB only).
+     * @param alias Alias name
+     * @param repo Repository name, nullable
+     * @return Saved storage block
+     */
+    private java.util.Optional<JsonObject> saved(final String alias, final String repo) {
+        if (this.aliasDao == null) {
+            return java.util.Optional.empty();
+        }
+        final List<JsonObject> all = repo == null
+            ? this.aliasDao.listGlobal() : this.aliasDao.listForRepo(repo);
+        return all.stream()
+            .filter(item -> alias.equals(item.getString("name", null)))
+            .map(item -> item.getJsonObject("config"))
+            .filter(java.util.Objects::nonNull)
+            .findFirst();
     }
 
     /**
@@ -175,6 +251,7 @@ public final class StorageAliasHandler {
             this.endpoints.resolvedError(outbound).ifPresent(reason -> {
                 throw new EndpointRejected(reason);
             });
+            this.checkRoots(name, null, body);
             if (this.aliasDao != null) {
                 this.aliasDao.put(name, null, body);
             }
@@ -287,6 +364,7 @@ public final class StorageAliasHandler {
             this.endpoints.resolvedError(outbound).ifPresent(reason -> {
                 throw new EndpointRejected(reason);
             });
+            this.checkRoots(aliasName, repoName, body);
             if (this.aliasDao != null) {
                 this.aliasDao.put(aliasName, repoName, body);
             }
