@@ -299,7 +299,12 @@ public final class SecurityPolicySettingsHandler {
             final JsonObject merged = this.current();
             for (final String key : body.fieldNames()) {
                 final Object value = body.getValue(key);
-                merged.put(key, value == null ? "" : value.toString().trim());
+                // A JSON null used to validate as "" and then fail the write
+                // with an NPE (500) after earlier keys were already stored.
+                if (value == null) {
+                    throw new IllegalArgumentException(key + " must not be null");
+                }
+                merged.put(key, value.toString().trim());
             }
             this.roundTrip.accept(merged);
         }

@@ -85,6 +85,18 @@ final class SecurityPolicySettingsHandlerTest {
     }
 
     @Test
+    void nullValueIsRefusedByValidation() {
+        // B100: a JSON null passed validation as "" and then failed the
+        // write with an NPE (500), possibly after other keys were stored.
+        Assertions.assertThrows(IllegalArgumentException.class, (Executable) () ->
+            SecurityPolicySettingsHandler.egress().validate(
+                new JsonObject().put("egress_allow_hosts", "a.example")
+                    .putNull("egress_block_private")
+            )
+        );
+    }
+
+    @Test
     void currentValuesAreReportedAsStringsForEveryKey() {
         final JsonObject current = SecurityPolicySettingsHandler.egress().current();
         MatcherAssert.assertThat(

@@ -2553,7 +2553,7 @@ curl http://localhost:8086/api/v1/admin/request-limits-settings \
 
 ### PUT /api/v1/admin/request-limits-settings
 
-Partial updates are accepted; omitted keys keep their current values. The merged result is validated (round-tripped through the setting's constructor) before anything is written: an unknown key, or a cap below 1 MiB, a non-integer, an empty root list or a relative root, is rejected with `400` and nothing is persisted. Takes effect on the very next request on every node: the HTTP server reads the cap per request and the repository API reads the roots per write. Every successful update is audit-logged (`event.category=configuration`).
+Partial updates are accepted; omitted keys keep their current values. The merged result is validated (round-tripped through the setting's constructor) before anything is written: an unknown key, a `null` value, or a cap below 1 MiB, a non-integer, an empty root list or a relative root, is rejected with `400` and nothing is persisted. Takes effect on the very next request on every node: the HTTP server reads the cap per request and the repository API reads the roots per write. Every successful update is audit-logged (`event.category=configuration`).
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_admin_permissions:admin`
@@ -2607,7 +2607,7 @@ curl http://localhost:8086/api/v1/admin/egress-settings \
 
 ### PUT /api/v1/admin/egress-settings
 
-Partial updates are accepted; omitted keys keep their current values. The merged result is validated (round-tripped through the setting's constructor) before anything is written: an unknown key, or a boolean other than `"true"`/`"false"` or an entry that is not a host name, is rejected with `400` and nothing is persisted. Takes effect on the next outbound connection and credential decision on every node; repository and storage-alias writes are validated against the same policy. Every successful update is audit-logged (`event.category=configuration`).
+Partial updates are accepted; omitted keys keep their current values. The merged result is validated (round-tripped through the setting's constructor) before anything is written: an unknown key, a `null` value, or a boolean other than `"true"`/`"false"` or an entry that is not a host name, is rejected with `400` and nothing is persisted. Takes effect on the next outbound connection and credential decision on every node; repository and storage-alias writes are validated against the same policy. Every successful update is audit-logged (`event.category=configuration`).
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_admin_permissions:admin`
@@ -2659,7 +2659,7 @@ curl http://localhost:8086/api/v1/admin/login-throttle-settings \
 
 ### PUT /api/v1/admin/login-throttle-settings
 
-Partial updates are accepted; omitted keys keep their current values. The merged result is validated (round-tripped through the setting's constructor) before anything is written: an unknown key, or a non-integer or a value below 1, is rejected with `400` and nothing is persisted. Takes effect on the next login attempt on every node. Every successful update is audit-logged (`event.category=configuration`).
+Partial updates are accepted; omitted keys keep their current values. The merged result is validated (round-tripped through the setting's constructor) before anything is written: an unknown key, a `null` value, or a non-integer or a value below 1, is rejected with `400` and nothing is persisted. Takes effect on the next login attempt on every node. Every successful update is audit-logged (`event.category=configuration`).
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_admin_permissions:admin`
