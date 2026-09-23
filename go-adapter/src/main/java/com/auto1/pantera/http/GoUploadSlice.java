@@ -19,6 +19,7 @@ import com.auto1.pantera.asto.ext.Digests;
 import com.auto1.pantera.http.cache.NegativeCacheRegistry;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.index.SyncArtifactIndexer;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.KeyFromPath;
@@ -37,6 +38,7 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -162,14 +164,17 @@ final class GoUploadSlice implements Slice {
         }
         final String module = matcher.group("module");
         final String version = matcher.group("version");
-        final boolean zip = "zip".equals(matcher.group("ext").toLowerCase(Locale.ROOT));
+        final String ext = matcher.group("ext").toLowerCase(Locale.ROOT);
+        final boolean zip = "zip".equals(ext);
         return SERIAL.run(
             this.repo + '|' + key.string(),
-            () -> this.store(key, headers, body)
+            () -> this.store(key, headers, body, this.immutable(ext, module, version))
         ).thenCompose(
             outcome -> {
                 if (outcome == Outcome.CONFLICT) {
-                    return CompletableFuture.completedFuture(this.conflict(sanitizedPath));
+                    return CompletableFuture.completedFuture(
+                        this.conflict(headers, sanitizedPath, module, version)
+                    );
                 }
                 return this.published(outcome, headers, module, version, key, zip)
                     .thenApply(ignored -> ResponseBuilder.created().build());
@@ -178,27 +183,61 @@ final class GoUploadSlice implements Slice {
     }
 
     /**
+     * Whether an existing file of this kind must not be replaced.
+     *
+     * <p>Consumers pin the hashes of the {@code .mod} and {@code .zip} in
+     * {@code go.sum}, so those are immutable once stored. The {@code .info}
+     * is not hashed; it may be replaced until the version's {@code .zip} is
+     * stored, so a publish that failed before its zip can be retried with a
+     * freshly generated {@code .info}. Once the zip is stored the version is
+     * published and its {@code .info} is immutable too.</p>
+     *
+     * @param ext File extension: info, mod or zip
+     * @param module Module path
+     * @param version Version without leading {@code v}
+     * @return Supplier of the answer, evaluated inside the per-key serializer
+     */
+    private Supplier<CompletableFuture<Boolean>> immutable(
+        final String ext, final String module, final String version
+    ) {
+        if ("info".equals(ext)) {
+            final Key zip = new Key.From(String.format("%s/@v/v%s.zip", module, version));
+            return () -> this.storage.exists(zip);
+        }
+        return () -> CompletableFuture.completedFuture(true);
+    }
+
+    /**
      * Store an artifact unless that version file is already published.
      *
-     * <p>Go module versions are immutable: consumers pin the hashes of the
-     * {@code .mod} and {@code .zip} in {@code go.sum}, so replacing a
-     * published file breaks every build that already resolved it with a
-     * {@code SECURITY ERROR}. A re-upload of byte-identical content is
-     * accepted as an idempotent retry; different content is a conflict and
-     * the published bytes are kept.</p>
+     * <p>Go module versions are immutable: replacing a published file breaks
+     * every build that already resolved it with a {@code SECURITY ERROR}.
+     * A re-upload of byte-identical content is accepted as an idempotent
+     * retry; different content is a conflict and the published bytes are
+     * kept.</p>
      *
      * @param key Storage key
      * @param headers Request headers
      * @param body Request body
+     * @param immutable Whether an existing file must not be replaced
      * @return Outcome
      */
     private CompletableFuture<Outcome> store(
-        final Key key, final Headers headers, final Content body
+        final Key key, final Headers headers, final Content body,
+        final Supplier<CompletableFuture<Boolean>> immutable
     ) {
         return this.storage.exists(key).thenCompose(
             exists -> {
                 if (exists) {
-                    return this.compare(key, body);
+                    return immutable.get().thenCompose(
+                        fixed -> {
+                            if (fixed) {
+                                return this.compare(key, body);
+                            }
+                            return this.storage.save(key, new ContentWithSize(body, headers))
+                                .thenApply(ignored -> Outcome.STORED);
+                        }
+                    );
                 }
                 return this.storage.save(key, new ContentWithSize(body, headers))
                     .thenApply(ignored -> Outcome.STORED);
@@ -273,14 +312,25 @@ final class GoUploadSlice implements Slice {
 
     /**
      * Log and build the 409 answer for a republish with different content.
+     * @param headers Request headers carrying the request context
      * @param path Request path
+     * @param module Module path
+     * @param version Version without leading {@code v}
      * @return Response
      */
-    private Response conflict(final String path) {
+    private Response conflict(
+        final Headers headers, final String path, final String module, final String version
+    ) {
+        RequestContextHeaders.bindToMdc(headers);
         EcsLogger.warn("com.auto1.pantera.http")
-            .message("Rejected republish of an existing Go module version with different content")
+            .message(
+                String.format(
+                    "Rejected republish of Go module %s@v%s with different content",
+                    module, version
+                )
+            )
             .eventCategory("web")
-            .eventAction("artifact_publish")
+            .eventAction("upload_rejected")
             .eventOutcome("failure")
             .field("event.reason", "version_immutable")
             .field("repository.name", this.repo)

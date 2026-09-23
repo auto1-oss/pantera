@@ -74,7 +74,7 @@ final class GoUploadSliceTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"info", "mod", "zip"})
+    @ValueSource(strings = {"mod", "zip"})
     void rejectsRepublishWithDifferentContent(final String ext) {
         final Storage storage = new InMemoryStorage();
         final GoUploadSlice slice = new GoUploadSlice(storage, "go-local", Optional.empty());
@@ -89,6 +89,58 @@ final class GoUploadSliceTest {
             "the originally published bytes must be kept",
             storage.value(new Key.From(path)).join(),
             new ContentIs("first".getBytes(StandardCharsets.UTF_8))
+        );
+    }
+
+    @Test
+    void infoIsReplaceableUntilZipIsPublished() {
+        final Storage storage = new InMemoryStorage();
+        final Queue<ArtifactEvent> events = new ConcurrentLinkedQueue<>();
+        final GoUploadSlice slice = new GoUploadSlice(storage, "go-local", Optional.of(events));
+        final String info = MODULE + "/@v/v1.0.0.info";
+        final String second = "{\"Version\":\"v1.0.0\",\"Time\":\"2026-01-02T00:00:00Z\"}";
+        GoUploadSliceTest.put(
+            slice, info, "{\"Version\":\"v1.0.0\",\"Time\":\"2026-01-01T00:00:00Z\"}"
+        );
+        GoUploadSliceTest.put(slice, MODULE + "/@v/v1.0.0.mod", "module " + MODULE);
+        MatcherAssert.assertThat(
+            "a retried publish may replace .info while the zip is missing",
+            GoUploadSliceTest.put(slice, info, second),
+            new RsHasStatus(RsStatus.CREATED)
+        );
+        MatcherAssert.assertThat(
+            "the replacement .info is stored",
+            storage.value(new Key.From(info)).join(),
+            new ContentIs(second.getBytes(StandardCharsets.UTF_8))
+        );
+        MatcherAssert.assertThat(
+            "the zip then publishes",
+            GoUploadSliceTest.put(slice, MODULE + "/@v/v1.0.0.zip", "zip"),
+            new RsHasStatus(RsStatus.CREATED)
+        );
+        MatcherAssert.assertThat(
+            "the completed publish is recorded once",
+            events.size(),
+            new IsEqual<>(1)
+        );
+    }
+
+    @Test
+    void rejectsDifferentInfoOnceZipIsPublished() {
+        final Storage storage = new InMemoryStorage();
+        final GoUploadSlice slice = new GoUploadSlice(storage, "go-local", Optional.empty());
+        final String info = MODULE + "/@v/v1.0.0.info";
+        GoUploadSliceTest.put(slice, info, "{\"Version\":\"v1.0.0\",\"Time\":\"t1\"}");
+        GoUploadSliceTest.put(slice, MODULE + "/@v/v1.0.0.zip", "zip");
+        MatcherAssert.assertThat(
+            "a different .info for a fully published version must conflict",
+            GoUploadSliceTest.put(slice, info, "{\"Version\":\"v1.0.0\",\"Time\":\"t2\"}"),
+            new RsHasStatus(RsStatus.CONFLICT)
+        );
+        MatcherAssert.assertThat(
+            "an identical .info is an idempotent retry",
+            GoUploadSliceTest.put(slice, info, "{\"Version\":\"v1.0.0\",\"Time\":\"t1\"}"),
+            new RsHasStatus(RsStatus.CREATED)
         );
     }
 

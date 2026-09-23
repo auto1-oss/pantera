@@ -89,6 +89,10 @@ public class LatestSliceTest {
                         .getBytes(StandardCharsets.UTF_8)
                 )
             ).join();
+            storage.save(
+                new KeyFromPath(String.format("example.com/order/mod/@v/%s.zip", version)),
+                Content.EMPTY
+            ).join();
         }
         final Response response = new LatestSlice(storage).response(
             RequestLine.from("GET example.com/order/mod/@latest HTTP/1.1"),
@@ -111,8 +115,34 @@ public class LatestSliceTest {
             new KeyFromPath("example.com/nest/@v/v1.0.0/extra/v9.0.0.info"),
             new Content.From("{\"Version\":\"v9.0.0\"}".getBytes(StandardCharsets.UTF_8))
         ).join();
+        storage.save(new KeyFromPath("example.com/nest/@v/v1.0.0.zip"), Content.EMPTY).join();
+        storage.save(
+            new KeyFromPath("example.com/nest/@v/v1.0.0/extra/v9.0.0.zip"), Content.EMPTY
+        ).join();
         final Response response = new LatestSlice(storage).response(
             RequestLine.from("GET example.com/nest/@latest HTTP/1.1"),
+            Headers.EMPTY, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            new String(response.body().asBytes(), StandardCharsets.UTF_8),
+            new IsEqual<>("{\"Version\":\"v1.0.0\"}")
+        );
+    }
+
+    @Test
+    void ignoresVersionsWithoutZip() {
+        final Storage storage = new InMemoryStorage();
+        storage.save(
+            new KeyFromPath("example.com/half/@v/v1.0.0.info"),
+            new Content.From("{\"Version\":\"v1.0.0\"}".getBytes(StandardCharsets.UTF_8))
+        ).join();
+        storage.save(new KeyFromPath("example.com/half/@v/v1.0.0.zip"), Content.EMPTY).join();
+        storage.save(
+            new KeyFromPath("example.com/half/@v/v1.1.0.info"),
+            new Content.From("{\"Version\":\"v1.1.0\"}".getBytes(StandardCharsets.UTF_8))
+        ).join();
+        final Response response = new LatestSlice(storage).response(
+            RequestLine.from("GET example.com/half/@latest HTTP/1.1"),
             Headers.EMPTY, Content.EMPTY
         ).join();
         MatcherAssert.assertThat(

@@ -8,9 +8,11 @@ set -e
 export GO111MODULE=on
 
 MODULE_PATH="example.com/hello"
-# Go versions are immutable: Pantera answers 409 when a published version is
-# uploaded again with different content (the .info carries a timestamp, so a
-# rerun needs a new version). Override with VERSION=v1.0.2 ./publish-module.sh
+# Go versions are immutable: once a version's .zip is stored, Pantera answers
+# 409 to a different .info/.mod/.zip for it, so a rerun of a completed publish
+# needs a new version. A run that failed before the .zip upload can be rerun
+# as is (the .info may be replaced until the .zip is stored).
+# Override with VERSION=v1.0.2 ./publish-module.sh
 VERSION="${VERSION:-v1.0.1}"
 PANTERA_URL="${PANTERA_URL:-https://localhost:8443}"
 PANTERA_USER="${PANTERA_USER:-ayd}"

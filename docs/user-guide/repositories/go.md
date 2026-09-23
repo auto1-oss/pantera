@@ -113,7 +113,7 @@ for f in info mod zip; do
 done
 ```
 
-**Never reuse a version.** Go versions are immutable: republishing one with different content would break every consumer whose `go.sum` already recorded it. Pantera answers `409 Conflict` to an upload whose `.info`, `.mod` or `.zip` differs from the published file and keeps the original; re-uploading identical bytes (a retried upload) answers `201`. Bump `VER` instead.
+**Never reuse a version.** Go versions are immutable: republishing one with different content would break every consumer whose `go.sum` already recorded it. Pantera answers `409 Conflict` to an upload whose `.mod` or `.zip` differs from the stored file and keeps the original; re-uploading identical bytes answers `201`. The `.info` is not recorded in `go.sum`, so until the version's `.zip` is stored a new `.info` replaces the old one: if a publish fails before the `.zip` lands, rerun the same steps (a fresh `STAGE` is fine). Once the `.zip` is stored the version is published and a different `.info` also answers `409`. Bump `VER` to publish changes.
 
 ---
 
@@ -177,7 +177,7 @@ Clients set `GOPROXY` to the group URL (`https://pantera-host/go-group`); Panter
 | `401` or refused credentials with an `http://` `GOPROXY` | Go never sends credentials over plain HTTP | Serve Pantera over HTTPS; meanwhile use curl (see [Plain HTTP Registries](#plain-http-registries)) |
 | `verifying module: checksum mismatch` | Sum database mismatch for a private module | Add the module's path prefix to `GONOSUMDB` |
 | `go mod verify` fails for a published module | Zip built with directory entries | Rebuild with `zip -qrD` and publish a new version |
-| `409 Conflict` on upload | The version is already published with different content | Publish a new version; published versions are immutable |
+| `409 Conflict` on upload | The `.mod` or `.zip` for that version is already stored with different content, or the version's `.zip` is stored and the `.info` differs | Publish a new version; published versions are immutable. A publish that failed before its `.zip` was stored can be rerun as is |
 | `x509: certificate signed by unknown authority` | The registry's CA is not trusted | Add the CA to the operating system trust store; `GOINSECURE` does not apply to `GOPROXY` |
 | `go: module not found` | Module is genuinely missing, or you resolve from a local repository | Verify the module path and version exist upstream; resolve through a group or proxy |
 

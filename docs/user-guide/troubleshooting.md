@@ -184,7 +184,7 @@ export PANTERA_TOKEN=$(curl -s -X POST http://pantera-host:8086/api/v1/auth/toke
 | `proxyconnect tcp: tls: first record does not look like a TLS handshake` | Comes from `HTTPS_PROXY`/`HTTP_PROXY`, not `GOPROXY`: use an `http://` URL for an HTTP forward proxy in those variables |
 | `verifying module: checksum mismatch` | For a private module unknown to the public checksum database, add its path prefix to `GONOSUMDB` |
 | `SECURITY ERROR ... does NOT match an earlier download recorded in go.sum` | The version's content changed after `go.sum` recorded it. Do not bypass it with `GONOSUMDB`; the module owner must publish a new version |
-| `409 Conflict` when uploading a module file | That version is already published with different content; Go versions are immutable, so publish a new version |
+| `409 Conflict` when uploading a module file | That version's `.mod` or `.zip` is already stored with different content, or its `.zip` is stored and the `.info` differs; Go versions are immutable, so publish a new version. A publish that stopped before its `.zip` was stored can be rerun as is |
 
 ### Helm
 

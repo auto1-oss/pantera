@@ -20,8 +20,10 @@ import com.auto1.pantera.http.slice.KeyFromPath;
 import java.net.URI;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -71,7 +73,8 @@ public final class LatestSlice implements Slice {
 
     /**
      * Composes response. It takes the {@code .info} files directly under the
-     * module's {@code @v} directory, chooses the latest version by Go version
+     * module's {@code @v} directory whose version also has a {@code .zip}
+     * (a version without its zip cannot be downloaded), chooses the latest version by Go version
      * ordering (highest release, else highest prerelease, else highest
      * pseudo-version) and returns content from its {@code .info} file.
      * @param module Module file names list from repository
@@ -79,12 +82,22 @@ public final class LatestSlice implements Slice {
      */
     private CompletableFuture<Response> resp(final Collection<Key> module) {
         final Map<String, Key> infos = new HashMap<>();
+        final Set<String> names = new HashSet<>();
         for (final Key key : module) {
+            names.add(key.string());
             final Matcher matcher = LatestSlice.INFO.matcher(key.string());
             if (matcher.matches()) {
                 infos.put(matcher.group(1), key);
             }
         }
+        infos.values().removeIf(
+            info -> {
+                final String name = info.string();
+                return !names.contains(
+                    name.substring(0, name.length() - ".info".length()).concat(".zip")
+                );
+            }
+        );
         final Optional<String> latest = new GoVersionOrder().latest(infos.keySet());
         if (latest.isPresent()) {
             return this.storage.value(infos.get(latest.get()))

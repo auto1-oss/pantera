@@ -140,7 +140,13 @@ class GoSliceTest {
     void returnsLatest(final boolean anonymous) throws Exception {
         final String body = "{\"Version\":\"1.1\",\"Time\":\"2020-01-24T00:54:14Z\"}";
         MatcherAssert.assertThat(
-            this.slice(GoSliceTest.storage("example.com/latest/bar/@v/v1.1.info", body), anonymous),
+            this.slice(
+                GoSliceTest.withZip(
+                    GoSliceTest.storage("example.com/latest/bar/@v/v1.1.info", body),
+                    "example.com/latest/bar/@v/v1.1.zip"
+                ),
+                anonymous
+            ),
             new SliceHasResponse(
                 anonymous
                     ? unauthorized()
@@ -188,7 +194,11 @@ class GoSliceTest {
     void answersHeadForLatest() throws Exception {
         MatcherAssert.assertThat(
             this.slice(
-                GoSliceTest.storage("example.com/head/mod/@v/v1.1.0.info", "{}"), false
+                GoSliceTest.withZip(
+                    GoSliceTest.storage("example.com/head/mod/@v/v1.1.0.info", "{}"),
+                    "example.com/head/mod/@v/v1.1.0.zip"
+                ),
+                false
             ),
             new SliceHasResponse(
                 new RsHasStatus(RsStatus.OK),
@@ -417,6 +427,17 @@ class GoSliceTest {
             new KeyFromPath(path),
             new Content.From(body.getBytes())
         ).get();
+        return storage;
+    }
+
+    /**
+     * Add an empty module zip to a storage.
+     * @param storage Storage
+     * @param path Zip path
+     * @return The same storage
+     */
+    private static Storage withZip(final Storage storage, final String path) {
+        storage.save(new KeyFromPath(path), Content.EMPTY).join();
         return storage;
     }
 
