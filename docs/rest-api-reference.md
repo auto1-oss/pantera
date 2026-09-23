@@ -1875,7 +1875,7 @@ Get a paginated list of currently blocked artifacts. Supports server-side search
       "version": "1.0.0",
       "repo": "maven-central",
       "repo_type": "maven-proxy",
-      "reason": "TOO_YOUNG",
+      "reason": "FRESH_RELEASE",
       "blocked_date": "2026-03-22T08:00:00Z",
       "blocked_until": "2026-03-29T08:00:00Z",
       "remaining_hours": 168
@@ -1925,7 +1925,7 @@ plus `adapter_basic_permissions.read` on a repo to see its rows.
           "version": "4.17.20",
           "repo": "npm-central",
           "repo_type": "npm-proxy",
-          "reason": "MALWARE",
+          "reason": "FRESH_RELEASE",
           "blocked_date": "2026-03-15T09:00:00Z",
           "blocked_until": "2026-03-22T09:00:00Z",
           "archived_at": "2026-03-22T09:00:02Z",

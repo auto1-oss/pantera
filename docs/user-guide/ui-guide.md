@@ -154,7 +154,7 @@ A paginated, searchable table of all currently blocked artifacts:
 | Version | Blocked version |
 | Repository | Which proxy repository the block applies to |
 | Type | Repository type |
-| Reason | Block reason (e.g., `TOO_YOUNG`) |
+| Reason | Block reason: `FRESH_RELEASE` (published upstream less than the minimum age ago) or `NEWER_THAN_CACHE` (newer than the cached version) |
 | Remaining | Time until the block expires (displayed as days/hours) |
 
 - Use the search bar to filter by package name, version, or repository.

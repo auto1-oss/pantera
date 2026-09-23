@@ -96,7 +96,7 @@ Admins can unblock specific files through the normal cooldown panel.
 4. Each entry shows:
    - Package name and version
    - Repository and type
-   - Reason (e.g., `TOO_YOUNG`)
+   - Reason (`FRESH_RELEASE`: the version was published upstream less than the configured minimum age ago; `NEWER_THAN_CACHE`: the version is newer than the one already cached)
    - Remaining time until the block expires
 
 ### Via the API
@@ -116,7 +116,7 @@ Response:
       "version": "4.18.0",
       "repo": "npm-proxy",
       "repo_type": "npm-proxy",
-      "reason": "TOO_YOUNG",
+      "reason": "FRESH_RELEASE",
       "blocked_date": "2026-03-20T08:00:00Z",
       "blocked_until": "2026-03-27T08:00:00Z",
       "remaining_hours": 120
@@ -150,7 +150,9 @@ Administrators can unblock individual artifacts or all artifacts in a repository
 Your build fails with a message like:
 
 - npm: `ETARGET no matching version`, or `E403` with `version in cooldown` and a `blocked_until` date when a pinned version's tarball is requested directly
-- Maven: `Could not find artifact` or `Could not resolve dependencies`
+- Maven (pinned version): `Could not transfer artifact ... status code: 403, reason phrase: Forbidden (403)`. Maven does not print the response body, so the `blocked_until` date is only visible in the cooldown panel or API
+- Maven (version range or dynamic version): `No versions available for ... within specified range`, or `Could not resolve dependencies`, because blocked versions are left out of `maven-metadata.xml`
+- Gradle: `Could not GET '...'. Received status code 403 from server: Forbidden`
 - pip: `No matching distribution found`
 
 And the package version exists on the public registry but is not available through Pantera.
