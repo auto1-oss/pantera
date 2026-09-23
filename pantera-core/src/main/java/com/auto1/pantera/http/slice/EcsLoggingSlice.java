@@ -42,10 +42,12 @@ import java.util.stream.Collectors;
  *   <li>Automatic log level selection (ERROR for 5xx, WARN for 4xx, DEBUG for success)</li>
  * </ul>
  *
- * <p>Access log emission is suppressed when the request carries the
- * {@link #INTERNAL_ROUTING_HEADER} header, which GroupResolver sets when dispatching
- * to member slices. Internal routing is already captured as DEBUG application logs
- * in GroupResolver itself (event.action=group_index_hit, group_proxy_fanout, etc.).
+ * <p>This slice is the client-facing entry point: it drops every internal
+ * header a client sends ({@link #INTERNAL_ROUTING_HEADER}, {@code pantera_login},
+ * {@link #CTX_TRACE_ID_HEADER}, {@link #CTX_CLIENT_IP_HEADER}) and stamps the
+ * server-derived request context. GroupResolver dispatches to members
+ * in-process, below this slice, so every request that reaches it is a client
+ * request and gets an access-log record.
  *
  * <p>This slice should be used at the top level of the slice chain to ensure
  * all HTTP requests are logged consistently.
@@ -55,11 +57,11 @@ import java.util.stream.Collectors;
 public final class EcsLoggingSlice implements Slice {
 
     /**
-     * Request header set by GroupResolver when dispatching to a member slice.
-     * When present, EcsLoggingSlice skips access log emission to avoid ~105K
-     * noise entries per 30 min from internal group-to-member queries.
-     * The header is group-internal and does NOT propagate to upstream remotes
-     * (proxy slice implementations forward {@code Headers.EMPTY} upstream).
+     * Request header set by GroupResolver when dispatching to a member slice
+     * in-process. It is never accepted from a client: this slice drops it at
+     * request entry. The header is group-internal and does NOT propagate to
+     * upstream remotes (proxy slice implementations forward
+     * {@code Headers.EMPTY} upstream).
      */
     public static final String INTERNAL_ROUTING_HEADER = "X-Pantera-Internal";
 
@@ -182,66 +184,52 @@ public final class EcsLoggingSlice implements Slice {
             MDC.put(EcsMdc.REPO_TYPE, this.repoType);
         }
 
-        // Capture the internal-routing flag synchronously here (at request entry),
-        // before the async chain starts.  The headers object is captured in the
-        // closure below, but reading it here makes the intent explicit and avoids
-        // repeated iteration in the hot path.
-        final boolean internalRouting = !headers.find(INTERNAL_ROUTING_HEADER).isEmpty();
-
-        // Thread trace.id + client.ip forward as internal headers so
-        // downstream slices and async package-processors that build
-        // ArtifactEvents can read them WITHOUT relying on per-thread MDC,
-        // which is dropped on every Vert.x worker hop. Skipped for internal
-        // GroupResolver → member dispatches (the headers are already on the
-        // chain). Skipped when clientIp / span.traceId is unset.
-        // pantera_login names the authenticated principal (audit user.name,
-        // artifact owner). Only the authorization slices downstream may set
-        // it, so a client-sent value never enters the chain.
-        final Headers downstreamHeaders;
-        if (internalRouting) {
-            downstreamHeaders = EcsLoggingSlice.without(headers, AuthzSlice.LOGIN_HDR);
-        } else {
-            // The context headers feed client.ip / trace.id of audit records,
-            // so a value the client sent under the same (case-insensitive)
-            // name is dropped rather than left ahead of the server's own.
-            final Headers copy = EcsLoggingSlice.without(
-                headers, AuthzSlice.LOGIN_HDR, CTX_TRACE_ID_HEADER, CTX_CLIENT_IP_HEADER
-            );
-            if (span.traceId() != null && !span.traceId().isEmpty()) {
-                copy.add(new Header(CTX_TRACE_ID_HEADER, span.traceId()));
-            }
-            if (clientIp != null && !clientIp.isEmpty() && !"unknown".equals(clientIp)) {
-                copy.add(new Header(CTX_CLIENT_IP_HEADER, clientIp));
-            }
-            downstreamHeaders = copy;
+        // This slice is the client-facing entry point (built only by
+        // VertxSliceServer); GroupResolver dispatches to members in-process
+        // and never passes through it. Every internal header a client sends
+        // is therefore forged and dropped (names compared ignoring case):
+        // - X-Pantera-Internal would skip the access log and, together with
+        //   X-Pantera-Cache-Only, force cache-only mode on proxy slices;
+        // - pantera_login names the authenticated principal (audit user.name,
+        //   artifact owner) and only the authorization slices may set it;
+        // - the X-Pantera-Ctx-* headers feed client.ip / trace.id of audit
+        //   records, so only the server-derived values below may carry them.
+        // The context headers thread trace.id + client.ip forward so slices
+        // and async package-processors that build ArtifactEvents can read
+        // them WITHOUT relying on per-thread MDC, which is dropped on every
+        // Vert.x worker hop. Skipped when clientIp / span.traceId is unset.
+        final Headers downstreamHeaders = EcsLoggingSlice.without(
+            headers, INTERNAL_ROUTING_HEADER, AuthzSlice.LOGIN_HDR,
+            CTX_TRACE_ID_HEADER, CTX_CLIENT_IP_HEADER
+        );
+        if (span.traceId() != null && !span.traceId().isEmpty()) {
+            downstreamHeaders.add(new Header(CTX_TRACE_ID_HEADER, span.traceId()));
+        }
+        if (clientIp != null && !clientIp.isEmpty() && !"unknown".equals(clientIp)) {
+            downstreamHeaders.add(new Header(CTX_CLIENT_IP_HEADER, clientIp));
         }
         return this.origin.response(line, downstreamHeaders, body)
             .thenApply(response -> {
                 final long duration = System.currentTimeMillis() - startTime;
 
-                // Skip access log for GroupResolver → member internal dispatches.
-                // Internal routing is captured as DEBUG application logs in GroupResolver
-                // (event.action=group_index_hit, group_proxy_fanout, etc.).
-                if (!internalRouting) {
-                    // WI-03 §4.1: emit the access log via the Tier-1 builder.
-                    // The legacy EcsLogEvent emission that used to run alongside
-                    // here was removed to avoid doubling the access-log volume
-                    // in Kibana.  Rich user_agent.* sub-field parsing (name,
-                    // version, os.name, os.version) and url.query emission
-                    // migrate to StructuredLogger.access in a follow-up WI;
-                    // the core contract (trace.id, client.ip, user.name,
-                    // url.original, url.path, http.response.status_code,
-                    // event.duration, user_agent.original) is covered by
-                    // RequestContext; http.request.method is passed explicitly
-                    // from the RequestLine below (the record carries no method).
-                    final RequestContext rctx = buildRequestContext(
-                        span, clientIp, userName, line);
-                    StructuredLogger.access().forRequest(rctx)
-                        .status(response.status().code())
-                        .method(line.method().value())
-                        .duration(duration)
-                        .log();
-                }
+                // WI-03 §4.1: emit the access log via the Tier-1 builder.
+                // The legacy EcsLogEvent emission that used to run alongside
+                // here was removed to avoid doubling the access-log volume
+                // in Kibana.  Rich user_agent.* sub-field parsing (name,
+                // version, os.name, os.version) and url.query emission
+                // migrate to StructuredLogger.access in a follow-up WI;
+                // the core contract (trace.id, client.ip, user.name,
+                // url.original, url.path, http.response.status_code,
+                // event.duration, user_agent.original) is covered by
+                // RequestContext; http.request.method is passed explicitly
+                // from the RequestLine below (the record carries no method).
+                final RequestContext rctx = buildRequestContext(
+                    span, clientIp, userName, line);
+                StructuredLogger.access().forRequest(rctx)
+                    .status(response.status().code())
+                    .method(line.method().value())
+                    .duration(duration)
+                    .log();
 
                 // Add traceparent response header for downstream correlation
                 final Headers responseHeaders = response.headers().copy()

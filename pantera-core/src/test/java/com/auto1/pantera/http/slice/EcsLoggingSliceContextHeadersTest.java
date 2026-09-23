@@ -62,4 +62,42 @@ final class EcsLoggingSliceContextHeadersTest {
             traces.get(0), new IsNot<>(new IsEqual<>("forged-trace"))
         );
     }
+    @Test
+    void clientCannotClaimInternalRoutingToKeepForgedContext() {
+        final AtomicReference<Headers> seen = new AtomicReference<>();
+        new EcsLoggingSlice(
+            (line, headers, body) -> {
+                seen.set(headers);
+                return CompletableFuture.completedFuture(ResponseBuilder.ok().build());
+            },
+            "10.0.0.7"
+        ).response(
+            RequestLine.from("PUT /repo/a.jar HTTP/1.1"),
+            new Headers()
+                .add("x-pantera-internal", "true")
+                .add(EcsLoggingSlice.CTX_CLIENT_IP_HEADER, "203.0.113.66")
+                .add("X-PANTERA-CTX-TRACE-ID", "forged-trace"),
+            Content.EMPTY
+        ).join();
+        MDC.clear();
+        final List<String> traces = seen.get().values(EcsLoggingSlice.CTX_TRACE_ID_HEADER);
+        MatcherAssert.assertThat(
+            "a client-sent internal-routing marker is not forwarded",
+            seen.get().find(EcsLoggingSlice.INTERNAL_ROUTING_HEADER).isEmpty(),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "the forged client IP does not reach downstream slices",
+            seen.get().values(EcsLoggingSlice.CTX_CLIENT_IP_HEADER),
+            new IsEqual<>(List.of("10.0.0.7"))
+        );
+        MatcherAssert.assertThat(
+            "exactly one trace id reaches downstream slices",
+            traces.size(), new IsEqual<>(1)
+        );
+        MatcherAssert.assertThat(
+            "the forged trace id does not reach downstream slices",
+            traces.get(0), new IsNot<>(new IsEqual<>("forged-trace"))
+        );
+    }
 }
