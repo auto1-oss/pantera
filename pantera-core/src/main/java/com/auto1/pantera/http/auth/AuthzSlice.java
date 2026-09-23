@@ -23,6 +23,8 @@ import com.auto1.pantera.http.rq.RequestLine;
 import org.slf4j.MDC;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.ArrayList;
+import java.util.stream.Collectors;
 
 /**
  * Slice with authorization.
@@ -78,7 +80,7 @@ public final class AuthzSlice implements Slice {
                         if (this.control.allowed(result.user())) {
                             return this.origin.response(
                                 line,
-                                headers.copy().add(AuthzSlice.LOGIN_HDR, userName),
+                                AuthzSlice.withLogin(headers, userName),
                                 body
                             );
                         }
@@ -107,7 +109,7 @@ public final class AuthzSlice implements Slice {
                         if (this.control.allowed(result.user())) {
                             return this.origin.response(
                                 line,
-                                headers.copy().add(AuthzSlice.LOGIN_HDR, result.user().name()),
+                                AuthzSlice.withLogin(headers, result.user().name()),
                                 body
                             );
                         }
@@ -121,5 +123,24 @@ public final class AuthzSlice implements Slice {
                         .completedFuture();
                 }
         );
+    }
+
+    /**
+     * Request headers with {@code pantera_login} set to the authenticated
+     * user. Any value the client sent under that name (in any letter case)
+     * is dropped first: {@link com.auto1.pantera.http.headers.Login} reads
+     * the first value, so an appended header would leave a client-chosen
+     * principal in front of the real one.
+     *
+     * @param headers Request headers
+     * @param user Authenticated user name
+     * @return Headers carrying exactly one login header
+     */
+    private static Headers withLogin(final Headers headers, final String user) {
+        return new Headers(
+            headers.stream()
+                .filter(hdr -> !AuthzSlice.LOGIN_HDR.equalsIgnoreCase(hdr.getKey()))
+                .collect(Collectors.toCollection(ArrayList::new))
+        ).add(AuthzSlice.LOGIN_HDR, user);
     }
 }

@@ -15,6 +15,7 @@ import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.auth.AuthzSlice;
 import com.auto1.pantera.http.context.RequestContext;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.log.EcsMdc;
@@ -193,18 +194,18 @@ public final class EcsLoggingSlice implements Slice {
         // which is dropped on every Vert.x worker hop. Skipped for internal
         // GroupResolver → member dispatches (the headers are already on the
         // chain). Skipped when clientIp / span.traceId is unset.
+        // pantera_login names the authenticated principal (audit user.name,
+        // artifact owner). Only the authorization slices downstream may set
+        // it, so a client-sent value never enters the chain.
         final Headers downstreamHeaders;
         if (internalRouting) {
-            downstreamHeaders = headers;
+            downstreamHeaders = EcsLoggingSlice.without(headers, AuthzSlice.LOGIN_HDR);
         } else {
             // The context headers feed client.ip / trace.id of audit records,
             // so a value the client sent under the same (case-insensitive)
             // name is dropped rather than left ahead of the server's own.
-            final Headers copy = new Headers(
-                headers.stream()
-                    .filter(hdr -> !CTX_TRACE_ID_HEADER.equalsIgnoreCase(hdr.getKey())
-                        && !CTX_CLIENT_IP_HEADER.equalsIgnoreCase(hdr.getKey()))
-                    .collect(Collectors.toCollection(ArrayList::new))
+            final Headers copy = EcsLoggingSlice.without(
+                headers, AuthzSlice.LOGIN_HDR, CTX_TRACE_ID_HEADER, CTX_CLIENT_IP_HEADER
             );
             if (span.traceId() != null && !span.traceId().isEmpty()) {
                 copy.add(new Header(CTX_TRACE_ID_HEADER, span.traceId()));
@@ -327,5 +328,19 @@ public final class EcsLoggingSlice implements Slice {
             com.auto1.pantera.http.context.Deadline.in(java.time.Duration.ofSeconds(30))
         );
     }
-}
 
+    /**
+     * Copy of the headers without the given names (compared ignoring case).
+     *
+     * @param headers Request headers
+     * @param names Header names to drop
+     * @return Mutable copy without those headers
+     */
+    private static Headers without(final Headers headers, final String... names) {
+        return new Headers(
+            headers.stream()
+                .filter(hdr -> java.util.Arrays.stream(names).noneMatch(hdr.getKey()::equalsIgnoreCase))
+                .collect(Collectors.toCollection(ArrayList::new))
+        );
+    }
+}

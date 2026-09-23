@@ -27,6 +27,8 @@ import java.util.Optional;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.ArrayList;
+import java.util.stream.Collectors;
 
 /**
  * Slice with combined basic and bearer token authentication.
@@ -98,7 +100,7 @@ public final class CombinedAuthzSlice implements Slice {
                         if (this.control.allowed(result.user())) {
                             return this.origin.response(
                                 line,
-                                headers.copy().add(CombinedAuthzSlice.LOGIN_HDR, userName),
+                                CombinedAuthzSlice.withLogin(headers, userName),
                                 body
                             );
                         }
@@ -127,7 +129,7 @@ public final class CombinedAuthzSlice implements Slice {
                         if (this.control.allowed(result.user())) {
                             return this.origin.response(
                                 line,
-                                headers.copy().add(CombinedAuthzSlice.LOGIN_HDR, result.user().name()),
+                                CombinedAuthzSlice.withLogin(headers, result.user().name()),
                                 body
                             );
                         }
@@ -308,5 +310,24 @@ public final class CombinedAuthzSlice implements Slice {
                         BasicAuthScheme.NAME, BearerAuthScheme.NAME)
                 )
             );
+    }
+
+    /**
+     * Request headers with {@code pantera_login} set to the authenticated
+     * user. Any value the client sent under that name (in any letter case)
+     * is dropped first: {@link com.auto1.pantera.http.headers.Login} reads
+     * the first value, so an appended header would leave a client-chosen
+     * principal in front of the real one.
+     *
+     * @param headers Request headers
+     * @param user Authenticated user name
+     * @return Headers carrying exactly one login header
+     */
+    private static Headers withLogin(final Headers headers, final String user) {
+        return new Headers(
+            headers.stream()
+                .filter(hdr -> !CombinedAuthzSlice.LOGIN_HDR.equalsIgnoreCase(hdr.getKey()))
+                .collect(Collectors.toCollection(ArrayList::new))
+        ).add(CombinedAuthzSlice.LOGIN_HDR, user);
     }
 }
