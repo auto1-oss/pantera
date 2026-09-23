@@ -576,9 +576,34 @@ public final class ProxyDownloadSlice implements Slice {
         final String packageName,
         final String version
     ) {
-        // Metadata is cached by CachedProxySlice with .json extension
-        final Key metadataKey = new Key.From(packageName + ".json");
-        
+        // Metadata is cached by CachedProxySlice with .json extension. Stable
+        // and dev-branch versions live in separate files (Composer v2 serves
+        // dev branches from /p2/<pkg>~dev.json, cached as <pkg>~dev.json), so
+        // a version absent from the stable file is looked up in the dev file.
+        return this.originalUrlFrom(new Key.From(packageName + ".json"), packageName, version)
+            .thenCompose(found -> {
+                if (found.isPresent()) {
+                    return CompletableFuture.completedFuture(found);
+                }
+                return this.originalUrlFrom(
+                    new Key.From(packageName + "~dev.json"), packageName, version
+                );
+            });
+    }
+
+    /**
+     * Resolve a version's original dist URL from one cached metadata file.
+     *
+     * @param metadataKey Cached metadata file
+     * @param packageName Package name ({@code vendor/pkg})
+     * @param version Version
+     * @return Original URL, or empty when the file or the version is absent
+     */
+    private CompletableFuture<Optional<String>> originalUrlFrom(
+        final Key metadataKey,
+        final String packageName,
+        final String version
+    ) {
         return this.storage.exists(metadataKey).thenCompose(exists -> {
             if (!exists) {
                 EcsLogger.warn("com.auto1.pantera.composer")
