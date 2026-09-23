@@ -2609,8 +2609,8 @@ Retrieve the password-login throttle (2.2.9): failures per (user, client IP) tol
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `login_throttle_max_failures` | string (integer ≥ 1) | Failures before lockout. Default `"5"`. |
-| `login_throttle_window_seconds` | string (integer ≥ 1) | Window in seconds; a successful login clears the counter. Counters are per node. Default `"900"`. |
+| `login_throttle_max_failures` | string (integer ≥ 1) | Sign-in attempts per (user, client address) before lockout; a user is also locked after 4× this many attempts from any address. Default `"5"`. |
+| `login_throttle_window_seconds` | string (integer ≥ 1) | Window in seconds; a successful login clears the (user, client address) counter. Counters are per node, shared by all API workers on it. A refused login answers `429` with `Retry-After` set to the rest of the window. Default `"900"`. |
 
 **curl example:**
 

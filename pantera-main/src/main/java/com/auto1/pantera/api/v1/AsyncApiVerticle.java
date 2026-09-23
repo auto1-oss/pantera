@@ -58,6 +58,14 @@ import javax.sql.DataSource;
 public final class AsyncApiVerticle extends AbstractVerticle {
 
     /**
+     * Login throttle shared by every instance of this verticle in the
+     * process (B16): VertxMain deploys several instances, and a per-instance
+     * throttle multiplied the configured limit by their number.
+     */
+    private static final com.auto1.pantera.auth.LoginThrottle LOGIN_THROTTLE =
+        new com.auto1.pantera.auth.LoginThrottle();
+
+    /**
      * Pantera caches.
      */
     private final PanteraCaches caches;
@@ -363,7 +371,8 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             this.security.policy(),
             this.dataSource != null ? new AuthProviderDao(this.dataSource) : null,
             this.dataSource != null ? new UserTokenDao(this.dataSource) : null,
-            this.dataSource != null ? new AuthSettingsDao(this.dataSource) : null
+            this.dataSource != null ? new AuthSettingsDao(this.dataSource) : null,
+            AsyncApiVerticle.LOGIN_THROTTLE
         );
         authHandler.register(router);
         // JWT auth for all /api/v1/* routes EXCEPT download-direct (uses HMAC token auth).

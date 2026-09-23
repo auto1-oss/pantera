@@ -78,10 +78,11 @@ public final class AuthHandler {
     private final AuthSettingsDao settingsDao;
 
     /**
-     * Per-(username, client IP) login attempt throttle (SecOps import-misc).
+     * Login attempt throttle (SecOps import-misc). Shared by every API
+     * verticle instance in the process (B16) — a per-instance throttle
+     * multiplied the limit by the verticle count.
      */
-    private final com.auto1.pantera.auth.LoginThrottle loginThrottle =
-        new com.auto1.pantera.auth.LoginThrottle();
+    private final com.auto1.pantera.auth.LoginThrottle loginThrottle;
 
     /**
      * Per-login OIDC nonces keyed by OAuth state (SecOps sso-oidc): the
@@ -103,6 +104,28 @@ public final class AuthHandler {
         final CrudUsers users, final Policy<?> policy,
         final AuthProviderDao providerDao, final UserTokenDao tokenDao,
         final AuthSettingsDao settingsDao) {
+        this(tokens, auth, users, policy, providerDao, tokenDao, settingsDao,
+            new com.auto1.pantera.auth.LoginThrottle());
+    }
+
+    /**
+     * Full ctor.
+     * @param tokens Token issuer
+     * @param auth Authentication chain
+     * @param users Users store
+     * @param policy Security policy
+     * @param providerDao Auth provider DAO (nullable)
+     * @param tokenDao User token DAO (nullable)
+     * @param settingsDao Auth settings DAO (nullable)
+     * @param loginThrottle Process-wide login throttle
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public AuthHandler(final Tokens tokens, final Authentication auth,
+        final CrudUsers users, final Policy<?> policy,
+        final AuthProviderDao providerDao, final UserTokenDao tokenDao,
+        final AuthSettingsDao settingsDao,
+        final com.auto1.pantera.auth.LoginThrottle loginThrottle) {
+        this.loginThrottle = loginThrottle;
         this.tokens = tokens;
         this.auth = auth;
         this.users = users;
@@ -165,9 +188,13 @@ public final class AuthHandler {
         // SECURITY (2.2.9, SecOps import-misc): throttle online password
         // guessing per (username, client IP). Never reveals whether the user
         // exists — an unknown user is throttled the same as a real one.
-        final String throttleKey = name + "|" + clientIp(ctx);
-        if (this.loginThrottle.isThrottled(throttleKey)) {
-            ctx.response().putHeader("Retry-After", "900");
+        // B16: the address comes from the TCP peer unless a trusted proxy is
+        // declared (trust_forwarded_headers), and the attempt is counted
+        // before the credential check so concurrent guesses cannot race past.
+        final String client = clientIp(ctx);
+        final java.util.OptionalLong retry = this.loginThrottle.admit(name, client);
+        if (retry.isPresent()) {
+            ctx.response().putHeader("Retry-After", Long.toString(retry.getAsLong()));
             ApiResponse.sendError(ctx, 429, "TOO_MANY_REQUESTS",
                 "Too many sign-in attempts. Please wait and try again.");
             return;
@@ -193,7 +220,7 @@ public final class AuthHandler {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
                     "Sign-in is temporarily unavailable. Please try again.");
             } else if (user.isPresent()) {
-                this.loginThrottle.recordSuccess(throttleKey);
+                this.loginThrottle.recordSuccess(name, client);
                 final Tokens.TokenPair pair = this.tokens.generatePair(user.get());
                 ctx.response()
                     .setStatusCode(200)
@@ -204,7 +231,6 @@ public final class AuthHandler {
                         .put("expires_in", pair.expiresIn())
                         .encode());
             } else {
-                this.loginThrottle.recordFailure(throttleKey);
                 // Generic message — never disclose whether the user
                 // exists, the password is wrong, or MFA failed. Detail
                 // is in the server logs from the auth chain.
@@ -1286,27 +1312,24 @@ public final class AuthHandler {
     }
 
     /**
-     * Best-effort client IP for login throttling (SecOps import-misc).
-     * Honours forwarding hints when present, else the socket peer.
+     * Client address for login throttling (SecOps import-misc, B16).
+     * Forwarding headers are client-supplied: they count only when the
+     * deployment declares a trusted reverse proxy
+     * ({@code trust_forwarded_headers}); otherwise the TCP peer is used.
      *
      * @param ctx Routing context
      * @return Client IP, or {@code null} when indeterminable
      */
     private static String clientIp(final RoutingContext ctx) {
         final io.vertx.core.http.HttpServerRequest req = ctx.request();
-        String hint = req.getHeader("X-Forwarded-For");
-        if (hint != null && hint.contains(",")) {
-            hint = hint.substring(0, hint.indexOf(',')).trim();
-        }
-        if (hint == null || hint.isBlank()) {
-            hint = req.getHeader("X-Real-IP");
-        }
-        if (hint == null || hint.isBlank()) {
-            final io.vertx.core.net.SocketAddress remote = req.remoteAddress();
-            if (remote != null) {
-                hint = remote.host();
-            }
-        }
-        return hint != null && !hint.isBlank() ? hint : null;
+        final io.vertx.core.net.SocketAddress remote = req.remoteAddress();
+        return new com.auto1.pantera.api.ClientIpResolver(
+            com.auto1.pantera.http.headers.ClientBaseUrlSettingsLoader.activeSupplier()
+                .get().trustForwardedHeaders()
+        ).resolve(
+            remote == null ? null : remote.host(),
+            req.getHeader("X-Forwarded-For"),
+            req.getHeader("X-Real-IP")
+        );
     }
 }

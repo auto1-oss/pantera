@@ -10,33 +10,61 @@
  */
 package com.auto1.pantera.auth;
 
+import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.settings.policy.LoginThrottleConfig;
 import com.auto1.pantera.settings.policy.LoginThrottleSettingsLoader;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import java.time.Duration;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.OptionalLong;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 /**
- * In-memory login attempt throttle keyed by an opaque string (the caller
- * supplies {@code username|clientIp}). After {@code maxFailures} failures the
- * key is locked out for {@code window}; a success clears it. Prevents unbounded
- * online password guessing against the public login endpoint (SecOps
- * import-misc).
+ * Login attempt throttle (SecOps import-misc, hardened for B16).
  *
- * <p>Single-node / best-effort: state is per-instance. That is the right
- * trade-off for a slow-down control — a distributed limiter would add a hot
- * shared-store round trip to every login. Entries are self-expiring so the map
- * stays bounded under sustained attack against many keys.
+ * <p>Every password login is admitted through {@link #admit(String, String)}
+ * <em>before</em> the credential check runs, and the attempt is counted at
+ * that moment (a success then clears it). Counting after the asynchronous
+ * check let concurrent requests all pass the gate before any failure was
+ * recorded. Two budgets apply within the configured window:</p>
+ * <ul>
+ *   <li>{@code max_failures} per (username, client address) pair;</li>
+ *   <li>{@value #USER_BUDGET_FACTOR} x {@code max_failures} per username from
+ *       any address, so rotating the client address does not give unlimited
+ *       guesses.</li>
+ * </ul>
+ *
+ * <p>The client address must come from a trusted source (the TCP peer, or a
+ * forwarding header only behind a declared trusted proxy); the caller
+ * resolves it. One instance is shared by every API verticle in the process,
+ * so the limit does not multiply with the verticle count. State is per node
+ * and bounded (at most {@value #MAX_KEYS} tracked keys).</p>
  *
  * @since 2.2.9
  */
 public final class LoginThrottle {
 
+    /**
+     * Username-wide budget as a multiple of the per-pair limit.
+     */
+    static final int USER_BUDGET_FACTOR = 4;
+
+    /**
+     * Upper bound on tracked keys (memory bound under attack on many keys).
+     */
+    private static final long MAX_KEYS = 100_000L;
+
+    /**
+     * Nanoseconds per second.
+     */
+    private static final long NANOS = 1_000_000_000L;
+
     private final Supplier<LoginThrottleConfig> config;
+
     private final LongSupplier clock;
-    private final ConcurrentHashMap<String, Attempt> attempts;
+
+    private final Cache<String, Attempt> attempts;
 
     /**
      * Production ctor: thresholds from the DB-backed admin setting
@@ -48,7 +76,7 @@ public final class LoginThrottle {
 
     /**
      * Fixed thresholds (tests).
-     * @param maxFailures Failures before lockout
+     * @param maxFailures Attempts before lockout
      * @param window Lockout window
      * @param clock Nano-time source
      */
@@ -67,7 +95,7 @@ public final class LoginThrottle {
     public LoginThrottle(final Supplier<LoginThrottleConfig> config, final LongSupplier clock) {
         this.config = config;
         this.clock = clock;
-        this.attempts = new ConcurrentHashMap<>();
+        this.attempts = Caffeine.newBuilder().maximumSize(LoginThrottle.MAX_KEYS).build();
     }
 
     private static Supplier<LoginThrottleConfig> fixed(final LoginThrottleConfig config) {
@@ -75,58 +103,102 @@ public final class LoginThrottle {
     }
 
     /**
-     * @param key Opaque throttle key ({@code username|clientIp})
-     * @return {@code true} iff the key is currently locked out
-     */
-    public boolean isThrottled(final String key) {
-        final Attempt att = this.attempts.get(key);
-        if (att == null) {
-            return false;
-        }
-        final LoginThrottleConfig current = this.config.get();
-        if (this.clock.getAsLong() - att.firstNanos > current.window().toNanos()) {
-            this.attempts.remove(key);
-            return false;
-        }
-        return att.count.get() >= current.maxFailures();
-    }
-
-    /**
-     * Record a failed attempt for the key.
+     * Admit a login attempt, counting it before the credential check.
      *
-     * @param key Opaque throttle key
+     * @param username Claimed username (may be null)
+     * @param client Trusted client address (may be null)
+     * @return Empty when admitted; otherwise the seconds until retry
      */
-    public void recordFailure(final String key) {
+    public synchronized OptionalLong admit(final String username, final String client) {
         final long now = this.clock.getAsLong();
-        final long window = this.config.get().window().toNanos();
-        this.attempts.compute(key, (ignored, existing) -> {
-            if (existing == null || now - existing.firstNanos > window) {
-                return new Attempt(now);
+        final LoginThrottleConfig current = this.config.get();
+        final long window = current.window().toNanos();
+        final int pairLimit = current.maxFailures();
+        final int userLimit = (int) Math.min(
+            Integer.MAX_VALUE, (long) pairLimit * LoginThrottle.USER_BUDGET_FACTOR
+        );
+        final Attempt pair = this.live(LoginThrottle.pairKey(username, client), now, window);
+        final Attempt user = this.live(LoginThrottle.userKey(username), now, window);
+        final OptionalLong verdict;
+        if (pair.count >= pairLimit) {
+            verdict = OptionalLong.of(pair.retryAfterSeconds(now, window));
+        } else if (user.count >= userLimit) {
+            verdict = OptionalLong.of(user.retryAfterSeconds(now, window));
+        } else {
+            pair.count += 1;
+            user.count += 1;
+            if (pair.count == pairLimit || user.count == userLimit) {
+                LoginThrottle.logLockout(username, client, pair.count == pairLimit);
             }
-            existing.count.incrementAndGet();
-            return existing;
-        });
+            verdict = OptionalLong.empty();
+        }
+        return verdict;
     }
 
     /**
-     * Clear the counter for the key (successful login).
+     * A successful login: clear the pair's counter and give back the
+     * username-wide unit this attempt consumed.
      *
-     * @param key Opaque throttle key
+     * @param username Username
+     * @param client Client address
      */
-    public void recordSuccess(final String key) {
-        this.attempts.remove(key);
+    public synchronized void recordSuccess(final String username, final String client) {
+        this.attempts.invalidate(LoginThrottle.pairKey(username, client));
+        final Attempt user = this.attempts.getIfPresent(LoginThrottle.userKey(username));
+        if (user != null && user.count > 0) {
+            user.count -= 1;
+        }
     }
 
     /**
-     * One key's failure window.
+     * The live (in-window) attempt record for a key, starting a new window
+     * when absent or lapsed.
+     */
+    private Attempt live(final String key, final long now, final long window) {
+        Attempt att = this.attempts.getIfPresent(key);
+        if (att == null || now - att.firstNanos > window) {
+            att = new Attempt(now);
+            this.attempts.put(key, att);
+        }
+        return att;
+    }
+
+    private static String pairKey(final String username, final String client) {
+        return "p:" + username + '|' + client;
+    }
+
+    private static String userKey(final String username) {
+        return "u:" + username;
+    }
+
+    private static void logLockout(final String username, final String client, final boolean pair) {
+        EcsLogger.warn("com.auto1.pantera.auth")
+            .message(pair
+                ? "Login throttled: attempt limit reached for this user and client address"
+                : "Login throttled: attempt limit reached for this user from all addresses")
+            .eventCategory("authentication")
+            .eventAction("login_throttled")
+            .eventOutcome("failure")
+            .field("user.name", username)
+            .field("client.ip", client)
+            .field("log.source", "application")
+            .log();
+    }
+
+    /**
+     * One key's window. Mutated only under the throttle's lock.
      */
     private static final class Attempt {
         private final long firstNanos;
-        private final AtomicInteger count;
+        private int count;
 
         Attempt(final long firstNanos) {
             this.firstNanos = firstNanos;
-            this.count = new AtomicInteger(1);
+        }
+
+        long retryAfterSeconds(final long now, final long window) {
+            final long remaining = this.firstNanos + window - now;
+            return Math.max(1L, (remaining + LoginThrottle.NANOS - 1) / LoginThrottle.NANOS);
         }
     }
 }
