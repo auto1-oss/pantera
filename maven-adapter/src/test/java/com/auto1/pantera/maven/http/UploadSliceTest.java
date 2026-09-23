@@ -473,4 +473,41 @@ class UploadSliceTest {
         );
     }
 
+
+    @Test
+    void uploadInvalidatesTheGroupNegativeCacheEntry() {
+        final com.auto1.pantera.http.cache.NegativeCache cache =
+            new com.auto1.pantera.http.cache.NegativeCache(
+                new com.auto1.pantera.cache.NegativeCacheConfig(
+                    java.time.Duration.ofMinutes(5), 1_000, false,
+                    com.auto1.pantera.cache.NegativeCacheConfig.DEFAULT_L1_MAX_SIZE,
+                    com.auto1.pantera.cache.NegativeCacheConfig.DEFAULT_L1_TTL,
+                    com.auto1.pantera.cache.NegativeCacheConfig.DEFAULT_L2_MAX_SIZE,
+                    com.auto1.pantera.cache.NegativeCacheConfig.DEFAULT_L2_TTL
+                )
+            );
+        // Group keys use the dotted ArtifactNameParser name, not the URL form.
+        final com.auto1.pantera.http.cache.NegativeCacheKey groupKey =
+            new com.auto1.pantera.http.cache.NegativeCacheKey(
+                "maven_group", "maven-group", "com.pantera.fresh", "0.1/fresh-0.1.pom"
+            );
+        cache.cacheNotFound(groupKey);
+        final com.auto1.pantera.http.cache.NegativeCacheRegistry registry =
+            com.auto1.pantera.http.cache.NegativeCacheRegistry.instance();
+        registry.setSharedCache(cache);
+        try {
+            final byte[] data = "pom".getBytes(StandardCharsets.UTF_8);
+            this.ums.response(
+                new RequestLine(RqMethod.PUT, "/com/pantera/fresh/0.1/fresh-0.1.pom"),
+                Headers.from(new ContentLength(data.length)),
+                new Content.From(data)
+            ).join();
+            MatcherAssert.assertThat(
+                cache.isKnown404(groupKey),
+                new org.hamcrest.core.IsEqual<>(false)
+            );
+        } finally {
+            registry.clear();
+        }
+    }
 }

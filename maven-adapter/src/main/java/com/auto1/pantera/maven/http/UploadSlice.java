@@ -792,12 +792,15 @@ public final class UploadSlice implements Slice {
         final String artifactName = MavenSlice.EVENT_INFO.formatArtifactName(groupArtifact);
 
         // Drop any cached 404 for this artifact so a request that 404'd
-        // before the upload (e.g. via a group fanout) does not keep
-        // returning 404 once the artifact is live. Uses the URL-form
-        // groupArtifact (slashes), matching what the proxy / group
-        // slices write to the negative cache via NegativeCacheKey.fromPath.
+        // before the upload does not keep returning 404 once the artifact
+        // is live. Both name forms are invalidated: proxy slices key the
+        // negative cache by the URL-form groupArtifact (slashes, via
+        // NegativeCacheKey.fromPath), group resolvers by the dotted
+        // ArtifactNameParser name (same as artifactName below).
         com.auto1.pantera.http.cache.NegativeCacheRegistry.instance()
             .invalidateAfterUpload("maven", groupArtifact);
+        com.auto1.pantera.http.cache.NegativeCacheRegistry.instance()
+            .invalidateAfterUpload("maven", artifactName);
         // Drop any cached cooldown-filtered envelope. The envelope cache
         // is keyed by the dotted artifactName (MavenSlice.EVENT_INFO
         // format) — same form the cooldown filter writes when caching
