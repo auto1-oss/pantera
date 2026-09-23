@@ -38,6 +38,7 @@ import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -49,6 +50,12 @@ public final class UpdateSlice implements Slice {
      * Repository type name.
      */
     private static final String REPO_TYPE = "debian";
+
+    /**
+     * Upload path: a {@code .deb} / {@code .udeb} file outside {@code dists/}.
+     */
+    private static final Pattern PACKAGE_PATH =
+        Pattern.compile("^/(?!dists/)(?:[^/]+/)*[^/]+\\.u?deb$");
 
     /**
      * Abstract storage.
@@ -100,7 +107,20 @@ public final class UpdateSlice implements Slice {
     @Override
     public CompletableFuture<Response> response(final RequestLine line, final Headers headers,
                                                 final Content body) {
-        final Key key = new KeyFromPath(line.uri().getPath());
+        final String path = line.uri().getPath();
+        if (!UpdateSlice.PACKAGE_PATH.matcher(path).matches()) {
+            // The request path is the storage key. A bare component path
+            // (`/main`) stored every upload under the same key, each one
+            // overwriting the previous package, and a path such as
+            // dists/<codename>/Release would overwrite a repository index.
+            return body.discard().thenApply(
+                nothing -> ResponseBuilder.badRequest()
+                    .textBody(
+                        "Upload the package to its file path, e.g. pool/main/<name>_<version>_<arch>.deb"
+                    ).build()
+            );
+        }
+        final Key key = new KeyFromPath(path);
         return this.asto.save(key, new Content.From(body))
             .thenCompose(nothing -> this.asto.value(key))
             .thenCompose(

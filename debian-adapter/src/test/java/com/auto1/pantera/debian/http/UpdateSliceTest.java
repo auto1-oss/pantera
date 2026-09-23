@@ -37,6 +37,8 @@ import org.hamcrest.core.IsNot;
 import org.hamcrest.text.StringContainsInOrder;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * Test for {@link UpdateSlice}.
@@ -173,6 +175,37 @@ class UpdateSliceTest {
             new IsNot<>(new IsEqual<>(0L))
         );
         MatcherAssert.assertThat("Artifact event added to queue", this.events.size() == 1);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"/main", "/pool/main/", "/", "/dists/my_repo/Release"})
+    void rejectsUploadToNonPackagePath(final String path) {
+        final Key release = new Key.From("dists/my_repo/Release");
+        this.asto.save(release, new Content.From("original".getBytes())).join();
+        MatcherAssert.assertThat(
+            "Response is bad request",
+            new UpdateSlice(
+                this.asto,
+                new Config.FromYaml("my_repo", UpdateSliceTest.SETTINGS, new InMemoryStorage()),
+                Optional.of(this.events)
+            ),
+            new SliceHasResponse(
+                new RsHasStatus(RsStatus.BAD_REQUEST),
+                new RequestLine(RqMethod.PUT, path),
+                Headers.EMPTY,
+                new Content.From(new TestResource("aglfn_1.7-3_amd64.deb").asBytes())
+            )
+        );
+        MatcherAssert.assertThat(
+            "Only the pre-existing Release is stored",
+            this.asto.list(Key.ROOT).join(),
+            new IsEqual<>(java.util.List.of(release))
+        );
+        MatcherAssert.assertThat(
+            "Release not overwritten",
+            this.asto.value(release).join().asString(),
+            new IsEqual<>("original")
+        );
     }
 
     @Test

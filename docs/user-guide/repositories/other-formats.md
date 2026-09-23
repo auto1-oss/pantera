@@ -195,7 +195,7 @@ curl -f -u 'your-username:your-api-token' \
   http://pantera-host:8080/my-debian/pool/main/
 ```
 
-The package's `Architecture` must be one of the repository's `Architectures`, otherwise the server answers `400`.
+The package's `Architecture` must be one of the repository's `Architectures`, otherwise the server answers `400`. The upload path must end with the `.deb` file name (and must not be under `dists/`); a bare directory such as `/main` answers `400`.
 
 <details>
 <summary>Server-Side Repository Configuration</summary>
