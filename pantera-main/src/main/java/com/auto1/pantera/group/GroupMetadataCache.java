@@ -12,6 +12,8 @@ package com.auto1.pantera.group;
 
 import com.auto1.pantera.cache.GlobalCacheConfig;
 import com.auto1.pantera.cache.ValkeyConnection;
+import com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry;
+import com.auto1.pantera.maven.cooldown.MavenMetadataCoordinates;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import io.lettuce.core.SetArgs;
@@ -24,18 +26,44 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Two-tier cache for Maven group merged metadata with configurable TTL.
- *
- * <p>Key format: {@code maven:group:metadata:{group_name}:{path}}</p>
+ * Cache of a Maven group's winning-member {@code maven-metadata.xml}
+ * (already cooldown-filtered by the proxy member), keyed by request path.
  *
  * <p>Architecture:</p>
  * <ul>
- *   <li>L1 (Caffeine): Fast in-memory primary cache, short TTL when L2 enabled</li>
- *   <li>L2 (Valkey/Redis): Distributed primary cache, full TTL</li>
+ *   <li>Primary (Caffeine, per node): the bytes served on a hit. TTL
+ *       {@link #DEFAULT_TTL} = 10 min, the same as the cooldown
+ *       filtered-metadata envelope's L2 TTL.</li>
  *   <li>Stale L1 (Caffeine): Last-known-good, long TTL, bounded size</li>
  *   <li>Stale L2 (Valkey/Redis): Last-known-good distributed, key
  *       {@code maven:group:metadata:stale:{group_name}:{path}}</li>
  * </ul>
+ *
+ * <p>Cooldown coherence: the primary tier holds cooldown-FILTERED bytes, so
+ * it must follow block / unblock / expiry / refresh / upload events. Each
+ * instance registers a
+ * {@link FilteredMetadataCacheRegistry.PackageListener} (owner
+ * {@code maven-group:<name>}, so a re-created group replaces its listener)
+ * that drops every primary entry whose path maps to the changed dotted
+ * package — artifact-level and snapshot-level metadata alike — and drops
+ * everything on a policy / repo-wide change. The registry delivers these
+ * events on every node (pub/sub), so each node's primary tier is cleared.
+ * Natural block expiry emits no event while the group serves from cache;
+ * the 10-minute primary TTL bounds how long an expired block stays
+ * invisible.</p>
+ *
+ * <p>There is deliberately NO distributed (Valkey) primary tier: it could
+ * not be invalidated per package without an unbounded key scan (paths map
+ * to packages only one way — dotted &rarr; slashed is ambiguous because
+ * artifactIds may contain dots), so it would re-promote pre-unblock bytes
+ * into every node's L1 after the event had cleared them. A primary miss
+ * costs one member walk, which the member proxy answers from its own
+ * metadata + filtered-envelope caches (those ARE cluster-wide and
+ * event-invalidated).</p>
+ *
+ * <p>The stale tier is NOT invalidated by package events: it is only read
+ * when every member failed, and a member's cooldown verdict is relayed by
+ * {@link MavenGroupSlice} before the stale tier is ever consulted.</p>
  *
  * <p>Design principle for the STALE tier: it is an AID, never a BREAKER.
  * Under realistic cardinality no eviction ever fires. Bounds are a
@@ -48,9 +76,13 @@ import java.util.concurrent.TimeUnit;
 public final class GroupMetadataCache {
 
     /**
-     * Default TTL (same as Maven proxy metadata: 12 hours).
+     * Default primary TTL: 10 minutes, matching the cooldown
+     * filtered-metadata envelope L2 TTL
+     * ({@code FilteredMetadataCacheConfig.DEFAULT_L2_TTL}) so a block that
+     * expires naturally (no invalidation event) becomes visible through the
+     * group within the same bound as through the proxy.
      */
-    private static final Duration DEFAULT_TTL = Duration.ofHours(12);
+    private static final Duration DEFAULT_TTL = Duration.ofMinutes(10);
 
     /**
      * Default max size for L1 cache.
@@ -61,16 +93,6 @@ public final class GroupMetadataCache {
      * L1 cache (in-memory) — PRIMARY tier.
      */
     private final Cache<String, CachedMetadata> l1Cache;
-
-    /**
-     * L2 cache (Valkey/Redis), may be null — PRIMARY tier.
-     */
-    private final RedisAsyncCommands<String, byte[]> l2;
-
-    /**
-     * Whether two-tier caching is enabled (primary).
-     */
-    private final boolean twoTier;
 
     /**
      * TTL for cached metadata (primary).
@@ -123,7 +145,7 @@ public final class GroupMetadataCache {
      * @param groupName Group repository name
      * @param ttl Time-to-live for cached metadata
      * @param maxSize Maximum L1 cache size
-     * @param valkey Optional Valkey connection for L2
+     * @param valkey Optional Valkey connection for the stale L2 tier
      */
     public GroupMetadataCache(
         final String groupName,
@@ -139,16 +161,9 @@ public final class GroupMetadataCache {
             ? valkey
             : GlobalCacheConfig.valkeyConnection().orElse(null);
 
-        this.twoTier = (actualValkey != null);
-        this.l2 = this.twoTier ? actualValkey.async() : null;
-
-        // L1 cache: shorter TTL when L2 enabled (5 min), full TTL otherwise
-        final Duration l1Ttl = this.twoTier ? Duration.ofMinutes(5) : ttl;
-        final int l1Size = this.twoTier ? Math.max(100, maxSize / 10) : maxSize;
-
         this.l1Cache = Caffeine.newBuilder()
-            .maximumSize(l1Size)
-            .expireAfterWrite(l1Ttl.toMillis(), TimeUnit.MILLISECONDS)
+            .maximumSize(maxSize)
+            .expireAfterWrite(ttl.toMillis(), TimeUnit.MILLISECONDS)
             .recordStats()
             .build();
 
@@ -166,14 +181,9 @@ public final class GroupMetadataCache {
         this.staleL2 = this.staleTwoTier ? actualValkey.async() : null;
         this.staleL2Timeout = Duration.ofMillis(sc.l2TimeoutMs());
         this.staleL2TtlSeconds = sc.l2TtlSeconds();
-    }
-
-    /**
-     * Build primary L2 cache key.
-     * Format: {@code maven:group:metadata:{group_name}:{path}}
-     */
-    private String buildL2Key(final String path) {
-        return "maven:group:metadata:" + this.groupName + ":" + path;
+        FilteredMetadataCacheRegistry.instance().addPackageListener(
+            "maven-group:" + groupName, new PrimaryInvalidator(this.l1Cache)
+        );
     }
 
     /**
@@ -185,40 +195,18 @@ public final class GroupMetadataCache {
     }
 
     /**
-     * Get cached metadata (checks L1, then L2 if miss).
+     * Get cached metadata from the primary tier.
      * @param path Metadata path
      * @return Optional containing cached bytes, or empty if not found
      */
     public CompletableFuture<Optional<byte[]>> get(final String path) {
-        // Check L1 first
         final CachedMetadata cached = this.l1Cache.getIfPresent(path);
         if (cached != null && !isExpired(cached)) {
             recordCacheHit("l1");
             return CompletableFuture.completedFuture(Optional.of(cached.data));
         }
         recordCacheMiss("l1");
-
-        // Check L2 if available
-        if (!this.twoTier) {
-            return CompletableFuture.completedFuture(Optional.empty());
-        }
-
-        final String l2Key = buildL2Key(path);
-        return this.l2.get(l2Key)
-            .toCompletableFuture()
-            .orTimeout(100, TimeUnit.MILLISECONDS)
-            .exceptionally(err -> null)
-            .thenApply(bytes -> {
-                if (bytes != null && bytes.length > 0) {
-                    // L2 HIT - promote to L1
-                    final CachedMetadata entry = new CachedMetadata(bytes, Instant.now());
-                    this.l1Cache.put(path, entry);
-                    recordCacheHit("l2");
-                    return Optional.of(bytes);
-                }
-                recordCacheMiss("l2");
-                return Optional.empty();
-            });
+        return CompletableFuture.completedFuture(Optional.empty());
     }
 
     /**
@@ -302,7 +290,7 @@ public final class GroupMetadataCache {
     }
 
     /**
-     * Put metadata in cache (both primary L1+L2 and stale L1+L2).
+     * Put metadata in cache (primary and stale L1+L2).
      * @param path Metadata path
      * @param data Metadata bytes
      */
@@ -322,15 +310,7 @@ public final class GroupMetadataCache {
                 this.staleL2.set(staleKey, data);
             }
         }
-        // Primary L1
-        final CachedMetadata entry = new CachedMetadata(data, Instant.now());
-        this.l1Cache.put(path, entry);
-
-        // Primary L2 if available
-        if (this.twoTier) {
-            final String l2Key = buildL2Key(path);
-            this.l2.setex(l2Key, this.ttl.getSeconds(), data);
-        }
+        this.l1Cache.put(path, new CachedMetadata(data, Instant.now()));
     }
 
     /**
@@ -341,9 +321,6 @@ public final class GroupMetadataCache {
      */
     public void invalidate(final String path) {
         this.l1Cache.invalidate(path);
-        if (this.twoTier) {
-            this.l2.del(buildL2Key(path));
-        }
     }
 
     /**
@@ -397,15 +374,49 @@ public final class GroupMetadataCache {
     }
 
     /**
-     * Check if two-tier caching is enabled.
-     * @return True if L2 (Valkey) is configured
-     */
-    public boolean isTwoTier() {
-        return this.twoTier;
-    }
-
-    /**
      * Cached metadata entry with timestamp.
      */
     private record CachedMetadata(byte[] data, Instant cachedAt) { }
+
+    /**
+     * Drops primary entries when the cooldown-filtered view of a package may
+     * have changed. Maps each cached PATH to its dotted package and compares
+     * (never dotted &rarr; path, which is ambiguous).
+     */
+    private static final class PrimaryInvalidator
+        implements FilteredMetadataCacheRegistry.PackageListener {
+
+        /**
+         * Primary tier to invalidate.
+         */
+        private final Cache<String, CachedMetadata> primary;
+
+        /**
+         * Path &rarr; package mapping shared with the proxy.
+         */
+        private final MavenMetadataCoordinates coords;
+
+        /**
+         * Ctor.
+         * @param primary Primary tier
+         */
+        PrimaryInvalidator(final Cache<String, CachedMetadata> primary) {
+            this.primary = primary;
+            this.coords = new MavenMetadataCoordinates();
+        }
+
+        @Override
+        public void packageChanged(final String packageName) {
+            this.primary.asMap().keySet().removeIf(
+                path -> this.coords.packageName(path)
+                    .map(packageName::equals)
+                    .orElse(false)
+            );
+        }
+
+        @Override
+        public void allChanged() {
+            this.primary.invalidateAll();
+        }
+    }
 }

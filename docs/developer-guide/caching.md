@@ -20,7 +20,7 @@ The three reference implementations to study before building a new one:
 |---|---|
 | `com.auto1.pantera.auth.CachedUsers` | Caches the User record by username. Oldest of the three; establishes the pattern. |
 | `com.auto1.pantera.auth.CachedLocalEnabledFilter` | Caches the per-user "enabled" flag in front of `LocalEnabledFilter`. Added in v2.2.0 (Group B). |
-| `com.auto1.pantera.group.GroupMetadataCache` | Two-tier stale fallback for group repositories. Added in v2.2.0 (Group C). Demonstrates the "aid, not breaker" principle. |
+| `com.auto1.pantera.group.GroupMetadataCache` | Per-node primary cache (invalidated by cooldown package events) plus a two-tier stale fallback for group repositories. Added in v2.2.0 (Group C). Demonstrates the "aid, not breaker" principle. |
 
 ---
 
@@ -32,7 +32,7 @@ This principle governs every cached-path decision in Pantera. It has three conse
 2. **Cache failures never become client failures.** An L2 timeout or Valkey unavailability degrades to L1-only operation; the request still completes. Instrumentation records the degradation but does not escalate it.
 3. **Bounds are safety nets, not expiry mechanisms.** The `maxSize` on a cache tier exists to prevent pathological memory growth. Under realistic cardinality no eviction fires -- entries expire via TTL or invalidation. If an operator sees persistent eviction, the sizing is wrong, not the workload.
 
-`GroupMetadataCache` is the canonical example: its degradation ladder is `L1 -> L2 -> expired primary-cache entry -> miss`, where the final "miss" falls through to the normal live fanout. No tier being unavailable breaks the contract.
+`GroupMetadataCache` is the canonical example: its stale degradation ladder is `stale L1 -> stale L2 -> expired primary-cache entry -> miss`, where the final "miss" falls through to the normal live fanout. No tier being unavailable breaks the contract.
 
 ---
 
@@ -114,7 +114,7 @@ These caches exist in production but their tuning is fixed at compile-time or dr
 | `RepositorySlices.slices` | `pantera-main/RepositorySlices.java` | Guava LoadingCache, `maxSize=500`, `expireAfterAccess=30m` | Holds `SliceValue` (proxy client + slice). Hardcoded in the builder; tied to the slice-construction cost. |
 | `StoragesCache` | `pantera-core/cache/StoragesCache.java` | TTL 180s, maxSize 1000 | TTL overridable via `PANTERA_STORAGE_TIMEOUT` (ms) at startup only. Single-tier Caffeine. |
 | `StorageMetaCache` | `pantera-main/api/v1/StorageMetaCache.java` | TTL 30m, maxSize 10000 | Hardcoded. Tree-handler fallback when DB name column does not match path (Go, npm, PyPI, Docker, Helm, Debian). |
-| `GroupMetadataCache` (primary tier) | `pantera-main/group/GroupMetadataCache.java` | L1 TTL 12h, maxSize 1000 | Hardcoded primary; the SECONDARY "stale fallback" tier IS configurable via `meta.caches.group-metadata-stale.*`. |
+| `GroupMetadataCache` (primary tier) | `pantera-main/group/GroupMetadataCache.java` | L1 only, TTL 10m, maxSize 1000 | Hardcoded primary; holds cooldown-filtered bytes, so entries are dropped per package on cooldown package-change events (all nodes) and there is deliberately no Valkey primary tier. The SECONDARY "stale fallback" tier IS configurable via `meta.caches.group-metadata-stale.*`. |
 | `FiltersCache` impls (`GuavaFiltersCache`, `PublishingFiltersCache`) | `pantera-main/settings/cache/` | Reads `meta.caches.filters` via generic `CacheConfig.from()` | The class is internal but the config is admin-tunable -- see the admin doc's `filters` entry. |
 | `CachedYamlPolicy` permission / user / role caches | `pantera-core/security/policy/CachedYamlPolicy.java` | Reads `meta.caches.policy-{perms,users,roles}` via generic `CacheConfig.from()` | Same shape -- internal class, admin-tunable knobs documented in the admin doc. |
 | `ArtifactIndexCache` internal L1 caches | `pantera-main/index/ArtifactIndexCache.java` | Configured from `meta.caches.artifact-index-{positive,negative}` | Caffeine L1 + optional Valkey L2; surgical invalidation by artifact name. Both tiers admin-tunable. |
