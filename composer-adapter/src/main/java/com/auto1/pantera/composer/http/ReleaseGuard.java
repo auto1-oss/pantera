@@ -23,8 +23,9 @@ import javax.json.JsonObject;
  * Immutability check for an upload to a local Composer repository.
  *
  * <p>A published release ({@code 1.0.0}, {@code 2.1.0-RC1}) is immutable:
- * consumers pin it in {@code composer.lock}, and local dists carry no
- * checksum Composer could use to notice a swap. Re-uploading it with
+ * consumers pin it in {@code composer.lock} together with its
+ * {@code dist.shasum}, so a swapped archive would break their installs.
+ * Re-uploading it with
  * different content is a conflict; re-uploading identical content is
  * idempotent. Dev branches ({@code dev-*}, {@code *-dev}) move by design
  * and may be overwritten.</p>

@@ -133,6 +133,8 @@ Published releases are immutable:
 
 To ship a change, publish a new version. The same rules apply to JSON package registrations (`PUT /` with a package JSON body).
 
+Every uploaded archive is listed with `dist.shasum`, the SHA-1 of the archive as Pantera stores it (Pantera writes the resolved version into its `composer.json`, so it differs from the SHA-1 of the file you uploaded). Composer records it in `composer.lock` and checks every download against it. After a dev branch is re-uploaded, `composer install` from an older lock file fails the checksum check; run `composer update <package>` to lock the new upload. Releases uploaded before Pantera 2.2.9 keep their entry without `dist.shasum`, and Composer skips the check for them.
+
 An archive that cannot be read, has no `composer.json`, or has a `composer.json` that is not valid JSON is rejected with `400 Bad Request`.
 
 ### Delete a Package Archive
