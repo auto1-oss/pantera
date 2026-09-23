@@ -239,24 +239,25 @@ public final class MavenProxySlice extends Slice.Wrap {
             rname,
             java.time.Clock.systemUTC()
         );
+        final CachedProxySlice cached = new CachedProxySlice(
+            remote, cache, events, rname, upstreamUrl, rtype,
+            cooldown, inspector, storage, config, metadataCache,
+            cooldownMetadata
+        );
         return new SliceRoute(
             new RtRulePath(
                 MethodRule.HEAD,
                 // Track 5 Phase 2B: pass the raw storage so HEAD on a
                 // cached artifact returns 200 + Content-Length from local
                 // metadata without ever touching upstream. Cache-miss still
-                // proxies to upstream HEAD.
-                new HeadProxySlice(remote, storage)
+                // proxies to upstream HEAD, gated by the same header-time
+                // cooldown check as the GET path so a blocked version
+                // answers 403 on HEAD too.
+                new HeadProxySlice(remote, storage, cached::cooldownAtHeaders)
             ),
             new RtRulePath(
                 MethodRule.GET,
-                new ChecksumProxySlice(
-                    new CachedProxySlice(
-                        remote, cache, events, rname, upstreamUrl, rtype,
-                        cooldown, inspector, storage, config, metadataCache,
-                        cooldownMetadata
-                    )
-                )
+                new ChecksumProxySlice(cached)
             ),
             new RtRulePath(
                 RtRule.FALLBACK,

@@ -38,6 +38,31 @@ import java.util.concurrent.CompletableFuture;
  */
 final class HeadProxySlice implements Slice {
 
+    /**
+     * Cooldown gate of a cache-miss HEAD: given the client headers, the
+     * request path and the upstream HEAD response headers, yields the cooldown
+     * response when the file is blocked.
+     */
+    @FunctionalInterface
+    interface CooldownGate {
+        /**
+         * Gate that never blocks.
+         */
+        CooldownGate NONE = (inbound, path, upstream) ->
+            CompletableFuture.completedFuture(Optional.empty());
+
+        /**
+         * Evaluate cooldown.
+         * @param inbound Client request headers
+         * @param path Request path
+         * @param upstream Upstream HEAD response headers
+         * @return Blocking response, or empty when allowed
+         */
+        CompletableFuture<Optional<Response>> check(
+            Headers inbound, String path, Headers upstream
+        );
+    }
+
     /** Upstream client slice (cache-miss fallback). */
     private final Slice client;
 
@@ -48,6 +73,11 @@ final class HeadProxySlice implements Slice {
     private final Optional<Storage> storage;
 
     /**
+     * Cooldown gate applied to cache-miss HEADs.
+     */
+    private final CooldownGate cooldown;
+
+    /**
      * New slice for {@code HEAD} requests.
      * @param client HTTP client slice
      */
@@ -56,14 +86,32 @@ final class HeadProxySlice implements Slice {
     }
 
     /**
+     * New cache-first {@code HEAD} slice without cooldown.
+     * @param client HTTP client slice
+     * @param storage Local storage
+     */
+    HeadProxySlice(final Slice client, final Optional<Storage> storage) {
+        this(client, storage, CooldownGate.NONE);
+    }
+
+    /**
      * New cache-first {@code HEAD} slice. The local {@code storage} is
      * consulted first; if the key exists we synthesise a 200 with the
      * storage's known {@code Content-Length} and {@code Last-Modified}
-     * metadata, never touching {@code client}.
+     * metadata, never touching {@code client}. On a cache miss the
+     * upstream HEAD answer is run through {@code cooldown}, so a blocked
+     * version answers the same 403 as a GET (a cache hit is served locally,
+     * exactly like the cache-hit GET).
+     * @param client HTTP client slice
+     * @param storage Local storage
+     * @param cooldown Cooldown gate for cache misses
      */
-    HeadProxySlice(final Slice client, final Optional<Storage> storage) {
+    HeadProxySlice(
+        final Slice client, final Optional<Storage> storage, final CooldownGate cooldown
+    ) {
         this.client = client;
         this.storage = storage;
+        this.cooldown = cooldown;
     }
 
     @Override
@@ -71,7 +119,7 @@ final class HeadProxySlice implements Slice {
         RequestLine line, Headers headers, Content body
     ) {
         if (this.storage.isEmpty()) {
-            return this.upstreamHead(line);
+            return this.upstreamHead(line, headers);
         }
         final String rawPath = line.uri().getPath();
         final String keyPath = rawPath.startsWith("/") ? rawPath.substring(1) : rawPath;
@@ -79,7 +127,7 @@ final class HeadProxySlice implements Slice {
         final Storage raw = this.storage.get();
         return raw.exists(key).thenCompose(present -> {
             if (!present) {
-                return this.upstreamHead(line);
+                return this.upstreamHead(line, headers);
             }
             return raw.metadata(key).thenApply(meta -> {
                 final ResponseBuilder resp = ResponseBuilder.ok();
@@ -101,14 +149,36 @@ final class HeadProxySlice implements Slice {
         }).toCompletableFuture();
     }
 
-    private CompletableFuture<Response> upstreamHead(final RequestLine line) {
+    private CompletableFuture<Response> upstreamHead(
+        final RequestLine line, final Headers inbound
+    ) {
         return this.client.response(line, Headers.EMPTY, Content.EMPTY)
             .thenCompose(resp ->
                 // CRITICAL: Must consume body even for HEAD requests to prevent Vert.x request leak
                 // This is the same pattern as Docker ProxyLayers fix
-                resp.body().asBytesFuture().thenApply(ignored ->
-                    ResponseBuilder.from(resp.status()).headers(resp.headers()).build()
-                )
+                resp.body().asBytesFuture().thenCompose(ignored -> {
+                    if (!resp.status().success()) {
+                        return CompletableFuture.completedFuture(
+                            ResponseBuilder.from(resp.status()).headers(resp.headers()).build()
+                        );
+                    }
+                    return this.cooldown.check(inbound, line.uri().getPath(), resp.headers())
+                        .thenCompose(blocked -> {
+                            if (blocked.isEmpty()) {
+                                return CompletableFuture.completedFuture(
+                                    ResponseBuilder.from(resp.status())
+                                        .headers(resp.headers()).build()
+                                );
+                            }
+                            // HEAD carries the GET verdict's status and
+                            // headers; its explanatory body is drained.
+                            final Response block = blocked.get();
+                            return block.body().asBytesFuture().thenApply(
+                                none -> ResponseBuilder.from(block.status())
+                                    .headers(block.headers()).build()
+                            );
+                        });
+                })
             );
     }
 }

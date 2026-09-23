@@ -1070,7 +1070,7 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
             new EnumMap<>(ChecksumAlgo.class);
         sidecars.put(ChecksumAlgo.SHA1, () -> sha1Inflight);
         return this.fetchPrimaryBody(line, inboundHeaders).toCompletableFuture().thenCompose(body ->
-            this.cooldownAtHeaders(inboundHeaders, path, body).thenCompose(blockResp -> {
+            this.cooldownAtHeaders(inboundHeaders, path, body.headers()).thenCompose(blockResp -> {
                 if (blockResp.isPresent()) {
                     // Block decided at header time. Drain the upstream body so
                     // the connection is released, complete the leader gate so
@@ -1171,11 +1171,20 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      * (or cooldown is not configured, the request is not cooldown-
      * eligible, or the header is missing/unparseable — fail-open for
      * availability, matching {@code evaluateCooldownOrProceed}).
+     *
+     * <p>Also the cooldown gate of a HEAD cache miss ({@link HeadProxySlice}),
+     * fed with the upstream HEAD response headers, so HEAD answers the same
+     * 403 a GET of the same file would.</p>
+     *
+     * @param inboundHeaders Client request headers
+     * @param path Request path
+     * @param upstreamHeaders Upstream response headers (Last-Modified)
+     * @return Cooldown 403 when blocked, empty when allowed
      */
-    private CompletableFuture<Optional<Response>> cooldownAtHeaders(
+    CompletableFuture<Optional<Response>> cooldownAtHeaders(
         final Headers inboundHeaders,
         final String path,
-        final UpstreamBody body
+        final Headers upstreamHeaders
     ) {
         if (this.cooldownService == null) {
             return CompletableFuture.completedFuture(Optional.empty());
@@ -1186,7 +1195,7 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
             return CompletableFuture.completedFuture(Optional.empty());
         }
         final Optional<java.time.Instant> publishDate =
-            BaseCachedProxySlice.extractLastModified(body.headers())
+            BaseCachedProxySlice.extractLastModified(upstreamHeaders)
                 .map(java.time.Instant::ofEpochMilli);
         return this.cooldownService
             .evaluateWithKnownDate(request.get(), publishDate)
