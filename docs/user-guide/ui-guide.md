@@ -162,6 +162,19 @@ A paginated, searchable table of all currently blocked artifacts:
 
 ---
 
+## Quick Setup
+
+The Quick Setup page (`/setup`) generates client configuration for one format at a time. Pick the format, then two repositories:
+
+- **Resolve from** — any repository of that format. A group is the usual choice: it serves your local packages and upstream packages through one URL.
+- **Publish to** — a local repository only. Groups and proxies are read-only and answer `405 Method Not Allowed` to uploads. When you resolve from a group, this defaults to the group's first local member.
+
+The generated steps are split into a *Resolve* section (install/pull) and a *Publish* section (deploy/push/upload) that use the matching URL. If no local repository of the format exists, the *Publish* section is omitted; ask an administrator to create one. Go and Conda pages cover resolution only.
+
+Replace `YOUR_USERNAME` and `YOUR_TOKEN` with your username and an API token from your Profile page.
+
+---
+
 ## Profile
 
 The Profile page (`/profile`) shows your user information:

@@ -46,6 +46,8 @@ This release contains security hardening fixes. Upgrading is recommended. Specif
   ([@aydasraf](https://github.com/aydasraf))
 - **`npm unpublish <pkg>@<version>` no longer fails with `409 Conflict` after removing the version** — the CLI finishes a single-version unpublish by deleting the version’s tarball at `<pkg>/-/<file>.tgz/-rev/<revision>`, and that request was handled by the whole-package unpublish path, which read the tarball path as the package name, computed a revision for a package that does not exist, and rejected the client’s current revision as stale. The preceding PUT had already removed the version from the packument, so the CLI reported failure while the registry had in fact unpublished the version and left the tarball blob orphaned in storage. The tarball step is now recognised, validated against the real package’s revision with the same 409/428/404 semantics as force-unpublish, and removes only that blob.
   ([@aydasraf](https://github.com/aydasraf))
+- **Quick Setup separates resolving from publishing.** Each format page now has a *Resolve from* picker (group, proxy or local) and a *Publish to* picker (local repositories only, defaulting to the group's local member), so publish instructions no longer target groups or proxies, which reject uploads. Repositories no longer appear twice in the picker. Several snippets were corrected (Composer credentials host, `docker login` host, Go checksum variables, Helm and RPM credentials, the APT distribution name), and Gradle, Go local/group, PHP group and RubyGems group repositories are now offered.
+  ([@aydasraf](https://github.com/aydasraf))
 
 ### 🔒 Security
 
