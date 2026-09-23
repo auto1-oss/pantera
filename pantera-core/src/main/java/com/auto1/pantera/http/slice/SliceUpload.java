@@ -21,8 +21,14 @@ import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.scheduling.RepositoryEvents;
 
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.log.EcsLogger;
+import java.nio.file.DirectoryNotEmptyException;
+import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.NotDirectoryException;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.function.Function;
 
 /**
@@ -96,6 +102,29 @@ public final class SliceUpload implements Slice {
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
         final Key key = transform.apply(line.uri().getPath());
+        if (key.string().isEmpty()) {
+            // The repository root is a directory, never an artifact: a
+            // client error, not a storage failure.
+            return body.discard().thenApply(
+                ignored -> ResponseBuilder.badRequest()
+                    .textBody("Bad Request: cannot upload to the repository root")
+                    .build()
+            );
+        }
+        return this.upload(key, headers, body).exceptionally(
+            err -> SliceUpload.conflict(key, err)
+        );
+    }
+
+    /**
+     * Save the content and queue the upload event.
+     * @param key Storage key
+     * @param headers Request headers
+     * @param body Request body
+     * @return Response future
+     */
+    private CompletableFuture<Response> upload(final Key key, final Headers headers,
+        final Content body) {
         CompletableFuture<Void> res = this.storage.save(key, new ContentWithSize(body, headers));
         if (this.events.isPresent()) {
             res = res.thenCompose(
@@ -119,5 +148,50 @@ public final class SliceUpload implements Slice {
                 .invalidateAfterUpload("file", key.string());
             return ResponseBuilder.created().build();
         });
+    }
+
+    /**
+     * Map a save failure caused by the path clashing with an existing entry
+     * (a file where a directory is needed, or a directory where the file
+     * should go) to {@code 409 Conflict}; any other failure propagates.
+     * @param key Storage key
+     * @param err Failure
+     * @return Conflict response
+     */
+    private static Response conflict(final Key key, final Throwable err) {
+        Throwable cause = err;
+        while (cause != null && !SliceUpload.isPathClash(cause)) {
+            cause = cause.getCause();
+        }
+        if (cause == null) {
+            if (err instanceof RuntimeException rte) {
+                throw rte;
+            }
+            throw new CompletionException(err);
+        }
+        EcsLogger.warn("com.auto1.pantera.http")
+            .message("Upload rejected: the path clashes with an existing file or directory")
+            .eventCategory("file")
+            .eventAction("artifact_upload")
+            .eventOutcome("failure")
+            .field("event.reason", cause.getClass().getSimpleName())
+            .field("file.path", key.string())
+            .field("http.response.status_code", 409)
+            .field("log.source", "application")
+            .log();
+        return ResponseBuilder.from(RsStatus.CONFLICT)
+            .textBody("Conflict: the path clashes with an existing file or directory")
+            .build();
+    }
+
+    /**
+     * Whether a failure is a path clash in the storage tree.
+     * @param err Failure
+     * @return True for a file/directory clash
+     */
+    private static boolean isPathClash(final Throwable err) {
+        return err instanceof FileAlreadyExistsException
+            || err instanceof DirectoryNotEmptyException
+            || err instanceof NotDirectoryException;
     }
 }
