@@ -460,7 +460,7 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             );
         new RepositoryHandler(
             this.caches.filtersCache(), crs,
-            new RepoData(this.configsStorage, this.caches.storagesCache()),
+            this.repoData(),
             this.security.policy(), this.events,
             this.cooldown,
             repoEvents, this.artifactIndex
@@ -507,7 +507,7 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         ).register(router);
         new DashboardHandler(crs, this.dataSource, this.security.policy()).register(router);
         new ArtifactHandler(
-            crs, new RepoData(this.configsStorage, this.caches.storagesCache()),
+            crs, this.repoData(),
             this.security.policy(), this.dataSource, this.artifactIndex
         ).register(router);
         new CooldownHandler(
@@ -626,5 +626,28 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             );
         }
         return handler;
+    }
+
+    /**
+     * Repository data management resolving storage aliases like the
+     * serving path: database aliases (global, then the repository's own,
+     * as {@code DbRepositories} merges them) with the YAML alias files as
+     * the fallback.
+     * @return Repository data
+     */
+    private RepoData repoData() {
+        if (this.dataSource == null) {
+            return new RepoData(this.configsStorage, this.caches.storagesCache());
+        }
+        final StorageAliasDao aliases = new StorageAliasDao(this.dataSource);
+        return new RepoData(
+            this.configsStorage, this.caches.storagesCache(),
+            repo -> {
+                final java.util.List<javax.json.JsonObject> merged =
+                    new java.util.ArrayList<>(aliases.listGlobal());
+                merged.addAll(aliases.listForRepo(repo));
+                return merged;
+            }
+        );
     }
 }

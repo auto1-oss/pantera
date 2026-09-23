@@ -200,6 +200,43 @@ class RepoDataTest {
     }
 
     @Test
+    void removesDataOfDbOnlyRepositoryWhoseStorageIsADbOnlyAlias() {
+        // B06: in DB-backed deployments storage aliases live in the
+        // storage_aliases table (e.g. the migrated "default"), with no
+        // _storages.yaml. The alias must resolve the way serving does,
+        // or the delete answers 200 and leaves the data behind.
+        final Storage aliased = new InMemoryStorage();
+        final BlockingStorage blocking = new BlockingStorage(aliased);
+        blocking.save(new Key.From(RepoDataTest.REPO, "a.txt"), new byte[]{1});
+        blocking.save(new Key.From("other", "keep.txt"), new byte[]{1});
+        final javax.json.JsonObject alias = javax.json.Json.createObjectBuilder()
+            .add("name", "default")
+            .add(
+                "config",
+                javax.json.Json.createObjectBuilder().add("type", "fs").add("path", "/db-alias")
+            ).build();
+        new RepoData(
+            this.storage,
+            new PathStoragesCache("/db-alias", aliased),
+            repo -> List.of(alias)
+        ).remove(
+            new RepositoryName.Simple(RepoDataTest.REPO),
+            new SingleRepoSettings(
+                RepoDataTest.REPO,
+                javax.json.Json.createObjectBuilder().add(
+                    "repo", javax.json.Json.createObjectBuilder()
+                        .add("type", "file")
+                        .add("storage", "default")
+                ).build()
+            )
+        ).toCompletableFuture().join();
+        MatcherAssert.assertThat(
+            blocking.list(Key.ROOT).stream().map(Key::string).toList(),
+            new IsEqual<>(List.of("other/keep.txt"))
+        );
+    }
+
+    @Test
     void removesNothingForRepositoryWithoutStorage() {
         final Storage shared = new InMemoryStorage();
         final BlockingStorage blocking = new BlockingStorage(shared);
@@ -272,6 +309,35 @@ class RepoDataTest {
         @Override
         public Storage storage(final com.amihaiemil.eoyaml.YamlMapping yaml) {
             return this.fixed;
+        }
+    }
+
+    /**
+     * Storages cache that answers only the storage block with one path.
+     */
+    private static final class PathStoragesCache extends StoragesCache {
+        /**
+         * The path.
+         */
+        private final String path;
+
+        /**
+         * Its storage.
+         */
+        private final Storage asto;
+
+        PathStoragesCache(final String path, final Storage asto) {
+            super();
+            this.path = path;
+            this.asto = asto;
+        }
+
+        @Override
+        public Storage storage(final com.amihaiemil.eoyaml.YamlMapping yaml) {
+            if (!this.path.equals(yaml.string("path"))) {
+                throw new IllegalStateException("Unexpected storage: " + yaml);
+            }
+            return this.asto;
         }
     }
 

@@ -34,6 +34,8 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Function;
+import javax.json.JsonObject;
 import javax.json.JsonStructure;
 import javax.json.JsonValue;
 
@@ -69,14 +71,37 @@ public final class RepoData {
     private final StoragesCache storagesCache;
 
     /**
-     * Ctor.
+     * Database storage aliases visible to a repository (global and its
+     * own, as {@code storage_aliases} records); empty without a database.
+     */
+    private final Function<String, List<JsonObject>> dbAliases;
+
+    /**
+     * Ctor for deployments without a database: aliases come from the
+     * {@code _storages.yaml} files only.
      *
      * @param configStorage Repository settings storage
      * @param storagesCache Storages cache
      */
     public RepoData(final Storage configStorage, final StoragesCache storagesCache) {
+        this(configStorage, storagesCache, repo -> List.of());
+    }
+
+    /**
+     * Ctor.
+     *
+     * @param configStorage Repository settings storage
+     * @param storagesCache Storages cache
+     * @param dbAliases Database storage aliases (global and per-repository)
+     *  visible to a repository, resolved like the serving path does
+     */
+    public RepoData(
+        final Storage configStorage, final StoragesCache storagesCache,
+        final Function<String, List<JsonObject>> dbAliases
+    ) {
         this.configStorage = configStorage;
         this.storagesCache = storagesCache;
+        this.dbAliases = dbAliases;
     }
 
     /**
@@ -404,7 +429,9 @@ public final class RepoData {
     }
 
     /**
-     * Resolve a storage alias for a repository.
+     * Resolve a storage alias for a repository the way the serving path
+     * does: the database aliases (global and the repository's own, see
+     * {@code DbRepositories}) first, then the {@code _storages.yaml} files.
      * @param rname Repository name
      * @param alias Alias name
      * @return Storage
@@ -412,9 +439,20 @@ public final class RepoData {
     private CompletionStage<Storage> aliasStorage(
         final RepositoryName rname, final String alias
     ) {
-        return new AliasSettings(this.configStorage).find(
-            new Key.From(rname.toString())
-        ).thenApply(aliases -> aliases.storage(this.storagesCache, alias));
+        return CompletableFuture.supplyAsync(() -> this.dbAliases.apply(rname.toString()))
+            .thenCompose(records -> {
+                final boolean known = records.stream().anyMatch(
+                    rec -> alias.equals(rec.getString("name", null))
+                );
+                if (known) {
+                    return CompletableFuture.completedStage(
+                        DbStorageByAlias.from(records).storage(this.storagesCache, alias)
+                    );
+                }
+                return new AliasSettings(this.configStorage).find(
+                    new Key.From(rname.toString())
+                ).thenApply(aliases -> aliases.storage(this.storagesCache, alias));
+            });
     }
 
     /**

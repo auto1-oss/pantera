@@ -569,7 +569,7 @@ curl -X PUT http://localhost:8086/api/v1/repositories/maven-central \
 
 Delete a repository and its data.
 
-The repository's own data (everything under `<storage root>/<name>/`) and its rows in the search index are removed before the response is sent; other repositories that share the same storage root are not touched. A group repository has no data of its own, so only its configuration is removed. Re-creating a repository with the same name starts empty.
+The repository's own data (everything under `<storage root>/<name>/`) and its rows in the search index are removed before the response is sent; other repositories that share the same storage root are not touched. The storage is found the same way requests are served, including a storage given as an alias name (global or repository-scoped, from the database or `_storages.yaml`). A group repository has no data of its own, so only its configuration is removed. Re-creating a repository with the same name starts empty.
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_repository_permissions:delete`
