@@ -18,6 +18,9 @@ import com.auto1.pantera.scheduling.JobDataRegistry;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 import com.auto1.pantera.scheduling.QuartzJob;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
 import java.util.Queue;
 import org.quartz.JobExecutionContext;
 
@@ -97,7 +100,10 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
 
                         final String vendor = parts[0];
                         final String pkg = parts[1];
-                        final String version = parts[2];
+                        // Branch versions may contain '/' (dev-feature/x).
+                        final String version = String.join(
+                            "/", java.util.Arrays.copyOfRange(parts, 2, parts.length)
+                        );
                         final String packageName = vendor + "/" + pkg;
                         final String normalizedName = normalizePackageName(packageName);
 
@@ -110,17 +116,16 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                         // Read size from storage (like Maven/npm adapters do)
                         long artifactSize = 0L;
                         try {
-                            final Key distKey = new Key.From(
-                                "dist", vendor, pkg,
-                                pkg + "-" + version + ".zip"
+                            final Optional<Key> distKey = this.distKey(
+                                vendor, pkg, packageName, version
                             );
-                            if (this.asto.exists(distKey).join()) {
-                                final var sizeOpt = this.asto.metadata(distKey)
+                            if (distKey.isPresent()) {
+                                final var sizeOpt = this.asto.metadata(distKey.get())
                                     .join()
                                     .read(com.auto1.pantera.asto.Meta.OP_SIZE);
-                            if (sizeOpt.isPresent()) {
-                                artifactSize = sizeOpt.get();
-                            }
+                                if (sizeOpt.isPresent()) {
+                                    artifactSize = sizeOpt.get();
+                                }
                             }
                         } catch (final Exception ignored) {
                             // EXPECTED: size is a best-effort hint for the
@@ -178,6 +183,102 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                 }
             }
         }
+    }
+
+    /**
+     * Storage key of the cached dist of a downloaded version, as written by
+     * {@link ProxyDownloadSlice}: {@code dist/<vendor>/<pkg>/<version>.zip},
+     * the legacy key without {@code .zip}, or — for a dev branch — the key of
+     * the reference the cached metadata currently names.
+     *
+     * @param vendor Vendor
+     * @param pkg Package
+     * @param packageName Package name ({@code vendor/pkg})
+     * @param version Version
+     * @return Existing dist key, if any
+     */
+    private Optional<Key> distKey(
+        final String vendor, final String pkg, final String packageName, final String version
+    ) {
+        final List<Key> candidates = new ArrayList<>(3);
+        candidates.add(new Key.From("dist", vendor, pkg, version + ".zip"));
+        candidates.add(new Key.From("dist", vendor, pkg, version));
+        final DevDistReference refs = new DevDistReference();
+        if (refs.mutable(version)) {
+            this.currentReference(packageName, version)
+                .ifPresent(ref -> candidates.add(0, refs.key(vendor, pkg, version, ref)));
+        }
+        for (final Key candidate : candidates) {
+            if (this.asto.exists(candidate).join()) {
+                return Optional.of(candidate);
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * The {@code dist.reference} the cached metadata names for a version
+     * (dev file first, then the stable file; object or array layout).
+     *
+     * @param packageName Package name
+     * @param version Version
+     * @return Reference, if found
+     */
+    private Optional<String> currentReference(final String packageName, final String version) {
+        for (final String file : List.of(packageName + "~dev.json", packageName + ".json")) {
+            final Key key = new Key.From(file);
+            if (!this.asto.exists(key).join()) {
+                continue;
+            }
+            final javax.json.JsonObject meta = javax.json.Json.createReader(
+                new java.io.StringReader(new String(
+                    this.asto.value(key).join().asBytesFuture().join(),
+                    java.nio.charset.StandardCharsets.UTF_8
+                ))
+            ).readObject();
+            final Optional<String> ref = ComposerProxyPackageProcessor.referenceIn(
+                meta.getJsonObject("packages"), packageName, version
+            );
+            if (ref.isPresent()) {
+                return ref;
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Find a version's {@code dist.reference} in a {@code packages} object.
+     *
+     * @param packages Packages object, may be null
+     * @param packageName Package name
+     * @param version Version
+     * @return Reference, if present
+     */
+    private static Optional<String> referenceIn(
+        final javax.json.JsonObject packages, final String packageName, final String version
+    ) {
+        if (packages == null || !packages.containsKey(packageName)) {
+            return Optional.empty();
+        }
+        final javax.json.JsonValue pkg = packages.get(packageName);
+        javax.json.JsonValue entry = null;
+        if (pkg instanceof javax.json.JsonArray arr) {
+            for (final javax.json.JsonValue item : arr) {
+                if (item instanceof javax.json.JsonObject obj
+                    && version.equals(obj.getString("version", ""))) {
+                    entry = obj;
+                    break;
+                }
+            }
+        } else if (pkg instanceof javax.json.JsonObject obj) {
+            entry = obj.get(version);
+        }
+        if (entry instanceof javax.json.JsonObject obj
+            && obj.get("dist") instanceof javax.json.JsonObject dist
+            && dist.get("reference") instanceof javax.json.JsonString ref) {
+            return Optional.of(ref.getString());
+        }
+        return Optional.empty();
     }
 
     /**

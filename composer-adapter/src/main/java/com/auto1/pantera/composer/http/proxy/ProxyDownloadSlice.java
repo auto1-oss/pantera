@@ -414,7 +414,6 @@ public final class ProxyDownloadSlice implements Slice {
                     new com.auto1.pantera.http.context.RequestContext(
                         ctx.traceId(), null, this.rname, orig
                     );
-                final long declared = response.body().size().orElse(0L);
                 return writer.streamThroughAndCommit(
                     distKey, orig, response.body().size(), response.body(), null, null, rctx
                 ).toCompletableFuture().thenApply(result -> {
@@ -436,8 +435,18 @@ public final class ProxyDownloadSlice implements Slice {
                     // Publish + audit only once the cache write actually commits —
                     // a genuine cache miss + successful upstream fetch is the only
                     // branch that should publish.
-                    streamed.verificationOutcome().thenAccept(outcome -> {
-                        if (outcome instanceof com.auto1.pantera.http.fault.Result.Ok<?>) {
+                    // The size is read back from the committed cache entry:
+                    // upstreams that stream without Content-Length (GitHub
+                    // zipballs) declare no size, and 0 is not a valid audit
+                    // package.size.
+                    streamed.verificationOutcome()
+                        .thenCompose(outcome -> {
+                            if (outcome instanceof com.auto1.pantera.http.fault.Result.Ok<?>) {
+                                return this.committedSize(distKey).thenApply(Optional::of);
+                            }
+                            return CompletableFuture.completedFuture(Optional.<Long>empty());
+                        })
+                        .thenAccept(committed -> committed.ifPresent(size -> {
                             EcsLogger.info("com.auto1.pantera.composer")
                                 .message("Cached streamed dist artifact to storage")
                                 .eventCategory("web")
@@ -445,16 +454,15 @@ public final class ProxyDownloadSlice implements Slice {
                                 .eventOutcome("success")
                                 .field("package.name", packageName)
                                 .field("package.version", version)
-                                .field("file.size", declared)
+                                .field("file.size", size)
                                 .field("log.source", "application")
                                 .log();
                             this.emitEvent(packageName, version, headers);
                             AuditLogger.access(
                                 ctx, this.rtype, this.rname, packageName, version,
-                                declared, owner, AuditLogger.OUTCOME_SUCCESS, null
+                                size, owner, AuditLogger.OUTCOME_SUCCESS, null
                             );
-                        }
-                    });
+                        }));
                     return ResponseBuilder.ok()
                         .header("Content-Type", "application/zip")
                         .body(streamed.body())
@@ -753,6 +761,21 @@ public final class ProxyDownloadSlice implements Slice {
                 })
             );
         });
+    }
+
+    /**
+     * Size of a committed cache entry; 0 when the storage cannot report it.
+     *
+     * @param key Cache key
+     * @return Size in bytes
+     */
+    private CompletableFuture<Long> committedSize(final Key key) {
+        return this.storage.metadata(key)
+            .<Long>thenApply(
+                meta -> meta.read(com.auto1.pantera.asto.Meta.OP_SIZE)
+                    .map(Long::longValue).orElse(0L)
+            )
+            .exceptionally(err -> 0L);
     }
 
     /**
