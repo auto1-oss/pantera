@@ -207,12 +207,20 @@ public final class MetadataUrlRewriter {
             distBuilder.add("original_url", originalUrl);
         }
         
-        // Add rewritten proxy URL (with .zip extension for clarity)
+        // Add rewritten proxy URL (with .zip extension for clarity). A dev
+        // branch moves, so its URL also names the commit it was built from
+        // (see DevDistReference) — otherwise a moved branch would be served
+        // from the zip cached for an older commit.
+        final javax.json.JsonValue reference = dist.get("reference");
         final String proxyUrl = String.format(
-            "%s/dist/%s/%s.zip",
+            "%s/dist/%s/%s.zip%s",
             this.baseUrl,
             packageName,
-            version
+            version,
+            new DevDistReference().query(
+                version,
+                reference instanceof javax.json.JsonString str ? str.getString() : null
+            )
         );
         distBuilder.add("url", proxyUrl);
 

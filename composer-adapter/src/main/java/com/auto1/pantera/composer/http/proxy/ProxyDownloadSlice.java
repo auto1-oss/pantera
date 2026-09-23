@@ -228,14 +228,22 @@ public final class ProxyDownloadSlice implements Slice {
             );
 
             // Cache-first: check local storage before network calls
-            // New format uses .zip extension; also check legacy key without it
-            final Key distKey = new Key.From(
-                "dist", vendor, pkg, version + ".zip"
-            );
+            // New format uses .zip extension; also check legacy key without it.
+            // A dev-branch dist requested for a specific commit (?ref=) is
+            // cached per reference and never answered from the version-only
+            // keys, which hold whatever commit the branch pointed at before.
+            final DevDistReference refs = new DevDistReference();
+            final Optional<String> ref = refs.requested(version, line.uri().getRawQuery());
+            final Key distKey = ref
+                .map(r -> refs.key(vendor, pkg, version, r))
+                .orElseGet(() -> new Key.From("dist", vendor, pkg, version + ".zip"));
             final Key legacyKey = new Key.From("dist", vendor, pkg, version);
             return this.storage.exists(distKey).thenCompose(cached -> {
                 if (cached) {
                     return CompletableFuture.completedFuture(distKey);
+                }
+                if (ref.isPresent()) {
+                    return CompletableFuture.completedFuture((Key) null);
                 }
                 // Fall back to legacy key (no .zip)
                 return this.storage.exists(legacyKey).thenApply(
@@ -291,7 +299,7 @@ public final class ProxyDownloadSlice implements Slice {
                         );
                     }
                     return this.fetchAndCache(
-                        line, headers, ctx, packageName, version, distKey
+                        line, headers, ctx, packageName, version, distKey, ref
                     );
                 });
             });
@@ -307,10 +315,11 @@ public final class ProxyDownloadSlice implements Slice {
         final AuditContext ctx,
         final String packageName,
         final String version,
-        final Key distKey
+        final Key distKey,
+        final Optional<String> ref
     ) {
         final String owner = new Login(headers).getValue();
-        return this.findOriginalUrl(packageName, version).thenCompose(originalUrl -> {
+        return this.findOriginalUrl(packageName, version, ref).thenCompose(originalUrl -> {
             if (originalUrl.isEmpty()) {
                 EcsLogger.error("com.auto1.pantera.composer")
                     .message("Could not find original URL for package")
@@ -570,23 +579,25 @@ public final class ProxyDownloadSlice implements Slice {
      *
      * @param packageName Package name (vendor/package)
      * @param version Version
+     * @param ref Requested dist reference (dev versions), if any
      * @return Original URL or empty
      */
     private CompletableFuture<Optional<String>> findOriginalUrl(
         final String packageName,
-        final String version
+        final String version,
+        final Optional<String> ref
     ) {
         // Metadata is cached by CachedProxySlice with .json extension. Stable
         // and dev-branch versions live in separate files (Composer v2 serves
         // dev branches from /p2/<pkg>~dev.json, cached as <pkg>~dev.json), so
         // a version absent from the stable file is looked up in the dev file.
-        return this.originalUrlFrom(new Key.From(packageName + ".json"), packageName, version)
+        return this.originalUrlFrom(new Key.From(packageName + ".json"), packageName, version, ref)
             .thenCompose(found -> {
                 if (found.isPresent()) {
                     return CompletableFuture.completedFuture(found);
                 }
                 return this.originalUrlFrom(
-                    new Key.From(packageName + "~dev.json"), packageName, version
+                    new Key.From(packageName + "~dev.json"), packageName, version, ref
                 );
             });
     }
@@ -597,12 +608,16 @@ public final class ProxyDownloadSlice implements Slice {
      * @param metadataKey Cached metadata file
      * @param packageName Package name ({@code vendor/pkg})
      * @param version Version
+     * @param ref Requested dist reference: the version's current
+     *     {@code dist.reference} must match it, otherwise the URL (which
+     *     builds a different commit) is not returned
      * @return Original URL, or empty when the file or the version is absent
      */
     private CompletableFuture<Optional<String>> originalUrlFrom(
         final Key metadataKey,
         final String packageName,
-        final String version
+        final String version,
+        final Optional<String> ref
     ) {
         return this.storage.exists(metadataKey).thenCompose(exists -> {
             if (!exists) {
@@ -658,6 +673,18 @@ public final class ProxyDownloadSlice implements Slice {
 
                         final JsonObject dist = versionData.getJsonObject("dist");
                         if (dist == null) {
+                            return Optional.empty();
+                        }
+                        if (ref.isPresent() && !ref.get().equals(referenceOf(dist))) {
+                            EcsLogger.warn("com.auto1.pantera.composer")
+                                .message("Requested dev dist reference is not the current one in metadata")
+                                .eventCategory("web")
+                                .eventAction("proxy_download")
+                                .eventOutcome("failure")
+                                .field("package.name", packageName)
+                                .field("package.version", version)
+                                .field("log.source", "application")
+                                .log();
                             return Optional.empty();
                         }
 
@@ -726,6 +753,17 @@ public final class ProxyDownloadSlice implements Slice {
                 })
             );
         });
+    }
+
+    /**
+     * The {@code dist.reference} string of a dist, or null.
+     *
+     * @param dist Dist object
+     * @return Reference or null
+     */
+    private static String referenceOf(final JsonObject dist) {
+        final javax.json.JsonValue value = dist.get("reference");
+        return value instanceof javax.json.JsonString str ? str.getString() : null;
     }
 
     private static boolean versionEquals(final String a, final String b) {
