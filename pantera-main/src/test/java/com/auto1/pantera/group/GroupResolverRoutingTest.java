@@ -134,6 +134,93 @@ final class GroupResolverRoutingTest {
     }
 
     @Test
+    void pinnedMemberServerErrorIsNotRetriedThroughTheFullResolution() {
+        // minimumNumberOfCalls=3 / rate 0.6: the pin-setting success plus ONE
+        // failure stays closed; a second (duplicate) failure trips it.
+        final AutoBlockRegistry registry = new AutoBlockRegistry(
+            new AutoBlockSettings(0.6, 3, 30, Duration.ofSeconds(60), Duration.ofMinutes(5))
+        );
+        final AtomicInteger calls = new AtomicInteger();
+        final AtomicReference<RsStatus> status = new AtomicReference<>(RsStatus.OK);
+        final Slice proxy = (line, headers, body) -> {
+            calls.incrementAndGet();
+            return CompletableFuture.completedFuture(ResponseBuilder.from(status.get()).build());
+        };
+        final GroupResolver resolver = new GroupResolver(
+            GROUP,
+            List.of(new MemberSlice(PROXY, proxy, registry, true)),
+            Collections.emptyList(),
+            Optional.of(new MutableIndex(List.of())),
+            "maven-group",
+            Set.of(PROXY),
+            negativeCache(),
+            ForkJoinPool.commonPool()
+        );
+        MatcherAssert.assertThat(
+            "the first read is served and pins the version to the proxy",
+            get(resolver, MAVEN_DIR + "guava-31.1.jar"),
+            new IsEqual<>(200)
+        );
+        calls.set(0);
+        status.set(RsStatus.SERVICE_UNAVAILABLE);
+        MatcherAssert.assertThat(
+            "a failing pinned member is a server error, not a 404",
+            get(resolver, MAVEN_DIR + "guava-31.1.pom") >= 500,
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "the pinned member is asked exactly once for one client request",
+            calls.get(),
+            new IsEqual<>(1)
+        );
+        MatcherAssert.assertThat(
+            "the pinned member's breaker records exactly one failure",
+            registry.isBlocked(PROXY),
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void pinnedMemberWithAnOpenCircuitIsNotCalledDirectly() {
+        final AutoBlockRegistry registry = new AutoBlockRegistry(
+            new AutoBlockSettings(0.5, 1, 30, Duration.ofSeconds(60), Duration.ofMinutes(5))
+        );
+        final List<String> direct = new CopyOnWriteArrayList<>();
+        final Slice proxy = (line, headers, body) -> {
+            if (headers.values(
+                com.auto1.pantera.http.cache.BaseCachedProxySlice.CACHE_ONLY_HEADER
+            ).isEmpty()) {
+                direct.add(line.uri().getPath());
+            }
+            return CompletableFuture.completedFuture(ResponseBuilder.ok().build());
+        };
+        final GroupResolver resolver = new GroupResolver(
+            GROUP,
+            List.of(new MemberSlice(PROXY, proxy, registry, true)),
+            Collections.emptyList(),
+            Optional.of(new MutableIndex(List.of())),
+            "maven-group",
+            Set.of(PROXY),
+            negativeCache(),
+            ForkJoinPool.commonPool()
+        );
+        get(resolver, MAVEN_DIR + "guava-31.1.jar");
+        direct.clear();
+        registry.recordFailure(PROXY);
+        registry.recordFailure(PROXY);
+        MatcherAssert.assertThat(
+            "the warm cache of the open-circuit member still serves the file",
+            get(resolver, MAVEN_DIR + "guava-31.1.pom"),
+            new IsEqual<>(200)
+        );
+        MatcherAssert.assertThat(
+            "an open-circuit pinned member gets no normal (upstream) request",
+            direct.isEmpty(),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
     void metadataRequestsAreNeverPinnedToAMember() {
         final MutableIndex index = new MutableIndex(List.of(PROXY));
         final AtomicReference<String> hostedBody = new AtomicReference<>("");

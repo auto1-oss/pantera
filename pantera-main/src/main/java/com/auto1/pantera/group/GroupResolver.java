@@ -573,7 +573,12 @@ public final class GroupResolver implements Slice {
         final String pinnedRepo = pinKey == null ? null : this.memberPin.getIfPresent(pinKey);
         final Optional<MemberSlice> pinned = pinnedRepo == null ? Optional.empty()
             : this.members.stream().filter(m -> m.name().equals(pinnedRepo)).findFirst();
-        if (pinned.isPresent()) {
+        if (pinned.isPresent() && pinned.get().isCircuitOpen()) {
+            // The pinned read bypasses open-circuit gating, so a pin must
+            // never route to a member whose group breaker is open: drop it
+            // and let the walk skip the member / probe its warm cache.
+            this.memberPin.invalidate(pinKey);
+        } else if (pinned.isPresent()) {
             return pinnedRead(
                 pinned.get(), idx, line, headers, body, artifactName, negCacheKey, pinKey
             ).whenComplete((r, e) -> recordPhase("resolve_total", resolveStartNs));
@@ -613,8 +618,12 @@ public final class GroupResolver implements Slice {
     /**
      * STEP 1.5 read: route to the pinned member. A pin-routed hit does NOT
      * renew the pin (its TTL is absolute from the resolution that created
-     * it), so a busy coordinate cannot stay pinned forever. Anything but an
-     * authoritative answer drops the pin and re-runs the full resolution.
+     * it), so a busy coordinate cannot stay pinned forever. Only a 404 (or
+     * a non-authoritative 404 from a member redirect / laundered throttle)
+     * drops the pin and re-runs the full resolution. A failure drops the pin
+     * but is answered as-is: the member already recorded it, and re-running
+     * the resolution would ask it again, convicting it twice and doubling
+     * upstream load for one client request.
      */
     private CompletableFuture<Response> pinnedRead(
         final MemberSlice pinned,
@@ -641,8 +650,13 @@ public final class GroupResolver implements Slice {
                 if (isAuthoritative(resp)) {
                     return CompletableFuture.completedFuture(resp);
                 }
-                drainBody(resp.body());
                 this.memberPin.invalidate(pinKey);
+                if (resp.status() != RsStatus.NOT_FOUND) {
+                    return CompletableFuture.completedFuture(
+                        this.pinnedFailure(pinned, line, resp)
+                    );
+                }
+                drainBody(resp.body());
                 EcsLogger.debug("com.auto1.pantera.group")
                     .message("Pinned member could not serve " + pinKey
                         + "; pin dropped, resolving in declared order")
@@ -659,6 +673,42 @@ public final class GroupResolver implements Slice {
                 );
             })
         );
+    }
+
+    /**
+     * Answer for a pinned member that failed (the single-member walk ends in
+     * a 502 on a genuine failure, or a marked 503 when the member's upstream
+     * circuit is open). The marked answer passes through verbatim; a genuine
+     * failure is translated the way the index / fanout paths translate it.
+     */
+    private Response pinnedFailure(
+        final MemberSlice pinned, final RequestLine line, final Response resp
+    ) {
+        if (!resp.status().serverError()
+            || !resp.headers().values(UpstreamCircuitOpenException.HEADER).isEmpty()) {
+            return resp;
+        }
+        drainBody(resp.body());
+        EcsLogger.warn("com.auto1.pantera.group")
+            .message("Pinned member " + pinned.name() + " failed with status "
+                + resp.status().code() + "; pin dropped")
+            .eventCategory("web")
+            .eventAction("group_sibling_pin_failed")
+            .eventOutcome("failure")
+            .field("repository.name", this.group)
+            .field("url.path", line.uri().getPath())
+            .field("http.response.status_code", resp.status().code())
+            .field("log.source", "application")
+            .log();
+        final Fault fault;
+        if (pinned.isProxy()) {
+            fault = new Fault.AllProxiesFailed(
+                this.group, java.util.List.of(), java.util.Optional.empty()
+            );
+        } else {
+            fault = new Fault.StorageUnavailable(null, line.uri().getPath());
+        }
+        return FaultTranslator.translate(fault, null);
     }
 
     /**

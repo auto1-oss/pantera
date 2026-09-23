@@ -39,8 +39,10 @@ migration; it is purely noise at this point.
   member for up to 60 seconds, so a file and its checksum always come
   from the same source. This shortcut covers one version only. It never
   applies to metadata or index requests (`maven-metadata.xml`, PyPI
-  `/simple/<name>/`, Go `@v/list`, npm package documents), and if the
-  member cannot serve the file the group falls back to the normal walk.
+  `/simple/<name>/`, Go `@v/list`, npm package documents). If the
+  member answers 404, the group falls back to the normal walk. If the
+  member fails or its circuit breaker is open, the shortcut is dropped
+  and the member is not asked twice.
 - A cached "not found" is per file: a missing `-sources.jar` or
   `.module` never hides the `.jar` or `.pom` of the same version.
 - A member redirect (`3xx`) does not count as a member failure and is

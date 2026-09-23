@@ -968,7 +968,7 @@ Hosted members are part of the index-miss fanout because the index is written as
 Related invariants in the same class:
 
 - The negative-cache key carries the file: `NegativeCacheKey(group, type, name, "<version>/<file>")`. Version-less (metadata) keys keep an empty version and are never cached.
-- The sibling pin (`memberPin`) is keyed by `name@version`, never set for version-less requests, and never renewed by a pin-routed hit. When the pinned member does not answer with 2xx/304/403, the pin is dropped and the full index path runs.
+- The sibling pin (`memberPin`) is keyed by `name@version`, never set for version-less requests, and never renewed by a pin-routed hit. A pinned member with an open group breaker is not used (the pin is dropped before any request). When the pinned member answers 404, the pin is dropped and the full index path runs. When it fails (5xx, or the marked 503 of an open upstream circuit), the pin is dropped and that failure is answered as-is. The member is not asked a second time, so one request records at most one breaker failure.
 - A member `3xx` is skipped without `recordFailure()` and marks the walk unverified (no negative-cache write).
 - `pypi-group` rewrites `/simple/<name>/` to the PEP 503 normalised name before the walk.
 
