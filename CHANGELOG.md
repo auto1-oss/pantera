@@ -30,6 +30,10 @@ This release contains security hardening fixes. Upgrading is recommended. Specif
 
 ### 🔧 Bug fixes
 
+- **A manual cooldown unblock now holds until the version's cooldown window would have ended.** Previously the unblock could be undone within the hour — the version was blocked again on a later request — and the UI/API unblock did not always reach the caches clients are served from, so the full npm packument (`npm show`, `npm view`) kept hiding an unblocked version while `npm install` saw it. Unblocked entries are now kept as released (hidden from the blocked list, recorded in history as before) and cleaned up once the window ends; migration V144 schedules that cleanup when pg_cron is available.
+  ([@aydasraf](https://github.com/aydasraf))
+- **npm proxies now return the cooldown response (`403`, `version in cooldown`, `blocked_until`, `Retry-After`) for a blocked tarball** instead of a bare `404 Not Found`, matching the other formats. Genuine upstream refusals still fall through to other remotes and group members as before.
+  ([@aydasraf](https://github.com/aydasraf))
 - **`npm unpublish <pkg>@<version>` no longer fails with `409 Conflict` after removing the version** — the CLI finishes a single-version unpublish by deleting the version’s tarball at `<pkg>/-/<file>.tgz/-rev/<revision>`, and that request was handled by the whole-package unpublish path, which read the tarball path as the package name, computed a revision for a package that does not exist, and rejected the client’s current revision as stale. The preceding PUT had already removed the version from the packument, so the CLI reported failure while the registry had in fact unpublished the version and left the tarball blob orphaned in storage. The tarball step is now recognised, validated against the real package’s revision with the same 409/428/404 semantics as force-unpublish, and removes only that blob.
   ([@aydasraf](https://github.com/aydasraf))
 

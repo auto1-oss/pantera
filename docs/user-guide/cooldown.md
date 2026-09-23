@@ -149,7 +149,7 @@ Administrators can unblock individual artifacts or all artifacts in a repository
 
 Your build fails with a message like:
 
-- npm: `ERR! 404 Not Found` or `ETARGET no matching version`
+- npm: `ETARGET no matching version`, or `E403` with `version in cooldown` and a `blocked_until` date when a pinned version's tarball is requested directly
 - Maven: `Could not find artifact` or `Could not resolve dependencies`
 - pip: `No matching distribution found`
 

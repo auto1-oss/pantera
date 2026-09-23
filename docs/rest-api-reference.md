@@ -1942,7 +1942,12 @@ plus `adapter_basic_permissions.read` on a repo to see its rows.
 
 ### POST /api/v1/repositories/:name/cooldown/unblock
 
-Manually unblock a specific artifact version in a repository.
+Manually unblock a specific artifact version in a repository. The release
+holds until the version's original `blocked_until`: the entry is archived to
+cooldown history (`MANUAL_UNBLOCK`), removed from `GET /api/v1/cooldown/blocked`,
+and the version is not re-blocked by later requests. Filtered metadata for the
+package is invalidated before the response. Unblocking a version that has no
+active block is a no-op that still returns `204`.
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_cooldown_permissions:write`
@@ -1971,7 +1976,8 @@ curl -X POST http://localhost:8086/api/v1/repositories/maven-central/cooldown/un
 
 ### POST /api/v1/repositories/:name/cooldown/unblock-all
 
-Unblock all currently blocked artifacts in a repository.
+Unblock all currently blocked artifacts in a repository. Each release holds
+until that version's original `blocked_until`, exactly as for a single unblock.
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_cooldown_permissions:write`

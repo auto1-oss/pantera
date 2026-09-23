@@ -338,16 +338,31 @@ the 403/404 response (format-appropriate).
 ### Unblock a Specific Version
 
 ```bash
-curl -X POST "http://pantera:8086/api/v1/cooldown/unblock" \
+curl -X POST "http://pantera:8086/api/v1/repositories/npm-proxy/cooldown/unblock" \
   -H "Authorization: Bearer $TOKEN" \
-  -d '{"repo_type":"npm","repo_name":"npm-proxy","package":"lodash","version":"4.18.0"}'
+  -H "Content-Type: application/json" \
+  -d '{"artifact":"lodash","version":"4.18.0"}'
 ```
 
 On unblock:
-- The DB record is updated first
-- `FilteredMetadataCache` L1 + L2 are invalidated for the package
-- `CooldownCache` L1 + L2 are invalidated for the specific version
-- All invalidation futures complete synchronously before the 200 response
+- The block is archived to history (`MANUAL_UNBLOCK`) and the live row is
+  kept with `status = 'INACTIVE'`, `unblocked_at` / `unblocked_by` set and the
+  original `blocked_until`. An evaluation that misses the decision cache finds
+  the released row and allows the version; before 2.2.9 the row was deleted,
+  so the next evaluation re-created the block from the release date. Released
+  rows never appear in the blocked list or counts, and are deleted once
+  `blocked_until` has passed (see *Cleanup execution modes*).
+- `CooldownCache` L1 + L2 are set to "allowed" for the version.
+- `FilteredMetadataCache` L1 + L2 are invalidated for the package (every
+  variant, e.g. npm `full` and `abbreviated`).
+- All invalidations complete before the `204` response.
+- The REST API and the repository slices share one cooldown service and one
+  metadata service per process, so the unblock clears the caches clients are
+  served from (2.2.9; previously each API verticle built its own copies).
+- A filter computation already in flight when the unblock lands does not
+  write its pre-unblock result back into the cache, and an L1 envelope with
+  blocked versions is revalidated at least every L1 TTL even when its earliest
+  block ends days later, so a missed invalidation self-heals within minutes.
 
 ### Policy Change (Duration Update)
 
@@ -449,6 +464,12 @@ identifies the chosen mode:
 
 History retention is enforced daily by either mechanism (pg_cron job
 `purge-cooldown-history` or the fallback's hourly check-gated purge).
+
+Manually released (`INACTIVE`) rows whose `blocked_until` has passed are
+deleted every 10 minutes by the pg_cron job `purge-released-cooldowns`
+(migration V144) or, without pg_cron, by the Vertx fallback in the same tick
+as the expiry archive. They were archived at release time, so this writes no
+second history row.
 
 ## Permission model
 

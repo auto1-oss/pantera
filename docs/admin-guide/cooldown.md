@@ -152,6 +152,12 @@ curl -X POST http://pantera-host:8086/api/v1/repositories/npm-proxy/cooldown/unb
   -H "Authorization: Bearer $TOKEN"
 ```
 
+An unblock holds until the version's cooldown window would have ended on its
+own: the released entry leaves the blocked list immediately, is recorded in
+cooldown history as `MANUAL_UNBLOCK`, and the version is not blocked again by
+later requests. Clients see the version on their next metadata request (their
+own client-side cache aside, e.g. `npm cache clean --force`).
+
 ### View Cooldown Overview
 
 Shows per-repository block counts:
