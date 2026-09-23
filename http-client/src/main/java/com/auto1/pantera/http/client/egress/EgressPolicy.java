@@ -36,8 +36,10 @@ import java.util.Set;
  * ranges unconditionally; loopback and RFC1918 stay ALLOWED by default
  * because the local dev stack, unit-test upstreams and private registries
  * legitimately live there — a deployment can deny them too with
- * {@code strict} ({@code PANTERA_EGRESS_BLOCK_PRIVATE=true}) and whitelist
- * specific hosts with {@code PANTERA_EGRESS_ALLOW_HOSTS}.</p>
+ * {@code strict} ({@code PANTERA_EGRESS_BLOCK_PRIVATE=true}) and exempt
+ * specific hosts from that strict refusal with
+ * {@code PANTERA_EGRESS_ALLOW_HOSTS}. The allowlist never opens the
+ * metadata service, link-local, any-local or multicast ranges.</p>
  *
  * <p>Enforced in two places: at repository-config write time (full
  * resolution on a worker thread) and inside the Jetty client's socket
@@ -78,8 +80,8 @@ public final class EgressPolicy {
 
     /**
      * The metadata addresses parsed, so any spelling of them (expanded
-     * IPv6, IPv4-mapped IPv6) is recognised once resolved; denied even if a
-     * deployment somehow whitelists link-local ranges.
+     * IPv6, IPv4-mapped IPv6) is recognised once resolved; denied for
+     * every host, allowlisted or not.
      */
     private static final Set<InetAddress> METADATA_ADDRESSES = EgressPolicy.parse(METADATA_LITERALS);
 
@@ -91,7 +93,8 @@ public final class EgressPolicy {
     private final boolean strict;
 
     /**
-     * Hosts (lower-case) exempt from the deny list.
+     * Hosts (normalised) exempt from the strict-mode loopback/private
+     * refusal; never from the always-denied ranges.
      */
     private final Set<String> allowed;
 
@@ -99,7 +102,7 @@ public final class EgressPolicy {
      * Ctor.
      *
      * @param strict Deny loopback + site-local too
-     * @param allowed Hostnames exempt from the deny list
+     * @param allowed Hostnames exempt from the strict-mode refusal
      */
     public EgressPolicy(final boolean strict, final Set<String> allowed) {
         this.strict = strict;
@@ -147,8 +150,10 @@ public final class EgressPolicy {
     }
 
     /**
-     * Name-level check that needs no DNS: metadata-service hostnames are
-     * refused outright. Everything else passes here and is judged by
+     * Name-level check that needs no DNS: metadata-service hostnames and
+     * literals are refused outright, whether or not they are allowlisted
+     * (the allowlist only exempts the strict-mode loopback/private refusal).
+     * Everything else passes here and is judged by
      * {@link #rejection(String, InetAddress)} once resolved.
      *
      * @param host Hostname or IP literal from the URI
@@ -159,9 +164,6 @@ public final class EgressPolicy {
             return Optional.of("missing host");
         }
         final String name = EgressPolicy.normalize(host);
-        if (this.allowed.contains(name)) {
-            return Optional.empty();
-        }
         if (METADATA_HOSTS.contains(name) || METADATA_LITERALS.contains(name)
             || EgressPolicy.literal(name).map(METADATA_ADDRESSES::contains).orElse(false)) {
             return Optional.of("cloud metadata service");
@@ -201,36 +203,55 @@ public final class EgressPolicy {
     }
 
     /**
-     * Address-level check. An allowlisted host passes regardless of where
-     * it resolves; otherwise the address must not fall in a denied range.
+     * Address-level check. The cloud metadata service, link-local,
+     * any-local and multicast addresses are always denied, for every host
+     * (an allowlisted name that resolves there, e.g. after DNS rebinding,
+     * is refused too). The allowlist only exempts a host from the
+     * strict-mode loopback and private-range refusal.
      *
      * @param host Hostname the address was resolved from (nullable)
      * @param address Resolved address
      * @return Reason the address is denied, or empty
      */
     public Optional<String> rejection(final String host, final InetAddress address) {
-        if (host != null && this.allowed.contains(EgressPolicy.normalize(host))) {
-            return Optional.empty();
+        final Optional<String> always = EgressPolicy.alwaysDenied(address);
+        final Optional<String> result;
+        if (always.isPresent()) {
+            result = always;
+        } else if (!this.strict
+            || host != null && this.allowed.contains(EgressPolicy.normalize(host))) {
+            result = Optional.empty();
+        } else if (address.isLoopbackAddress()) {
+            result = Optional.of("loopback address (strict egress policy)");
+        } else if (EgressPolicy.isPrivate(address)) {
+            result = Optional.of("private address (strict egress policy)");
+        } else {
+            result = Optional.empty();
         }
+        return result;
+    }
+
+    /**
+     * Ranges no setting can open: the metadata service, link-local,
+     * any-local and multicast.
+     *
+     * @param address Resolved address
+     * @return Reason the address is denied, or empty
+     */
+    private static Optional<String> alwaysDenied(final InetAddress address) {
+        final Optional<String> result;
         if (METADATA_ADDRESSES.contains(address)) {
-            return Optional.of("cloud metadata service");
+            result = Optional.of("cloud metadata service");
+        } else if (address.isLinkLocalAddress()) {
+            result = Optional.of("link-local address");
+        } else if (address.isAnyLocalAddress()) {
+            result = Optional.of("any-local address");
+        } else if (address.isMulticastAddress()) {
+            result = Optional.of("multicast address");
+        } else {
+            result = Optional.empty();
         }
-        if (address.isLinkLocalAddress()) {
-            return Optional.of("link-local address");
-        }
-        if (address.isAnyLocalAddress()) {
-            return Optional.of("any-local address");
-        }
-        if (address.isMulticastAddress()) {
-            return Optional.of("multicast address");
-        }
-        if (this.strict && address.isLoopbackAddress()) {
-            return Optional.of("loopback address (strict egress policy)");
-        }
-        if (this.strict && EgressPolicy.isPrivate(address)) {
-            return Optional.of("private address (strict egress policy)");
-        }
-        return Optional.empty();
+        return result;
     }
 
     /**

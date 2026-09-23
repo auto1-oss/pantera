@@ -95,13 +95,13 @@ final class EgressPolicyTest {
     }
 
     @Test
-    void allowlistedHostBypassesTheDenyList() throws Exception {
+    void allowlistedHostBypassesTheStrictPrivateRefusal() throws Exception {
         final EgressPolicy policy = new EgressPolicy(true, Set.of("registry.internal"));
         final Optional<String> rejection = policy.rejection(
             "registry.internal", InetAddress.getByName("10.0.0.5")
         );
         MatcherAssert.assertThat(
-            "an explicitly allowlisted host must pass even when its address is in a denied range",
+            "an explicitly allowlisted host must pass even when its address is in a strict-mode private range",
             rejection.isPresent(), new IsEqual<>(false)
         );
     }
@@ -120,6 +120,74 @@ final class EgressPolicyTest {
             new IsEqual<>(false)
         );
     }
+
+    @Test
+    void allowlistedHostResolvingToMetadataIsStillDenied() throws Exception {
+        final EgressPolicy policy = new EgressPolicy(false, Set.of("mirror.corp"));
+        MatcherAssert.assertThat(
+            "an allowlisted host rebound to 169.254.169.254 must be denied",
+            policy.rejection("mirror.corp", InetAddress.getByName("169.254.169.254")),
+            new IsEqual<>(Optional.of("cloud metadata service"))
+        );
+        MatcherAssert.assertThat(
+            "an allowlisted host rebound to fd00:ec2::254 must be denied",
+            policy.rejection("mirror.corp", InetAddress.getByName("fd00:ec2::254")),
+            new IsEqual<>(Optional.of("cloud metadata service"))
+        );
+        MatcherAssert.assertThat(
+            "an allowlisted host rebound to link-local must be denied",
+            policy.rejection("mirror.corp", InetAddress.getByName("169.254.10.1")),
+            new IsEqual<>(Optional.of("link-local address"))
+        );
+        MatcherAssert.assertThat(
+            "an allowlisted host rebound to any-local must be denied",
+            policy.rejection("mirror.corp", InetAddress.getByName("0.0.0.0")),
+            new IsEqual<>(Optional.of("any-local address"))
+        );
+    }
+
+    @Test
+    void allowlistingTheMetadataServiceDoesNotOpenIt() throws Exception {
+        final EgressPolicy policy = new EgressPolicy(
+            true, Set.of("metadata.google.internal", "169.254.169.254", "[fd00:ec2::254]")
+        );
+        MatcherAssert.assertThat(
+            "allowlisting metadata.google.internal must not exempt it from the name check",
+            policy.hostRejection("metadata.google.internal"),
+            new IsEqual<>(Optional.of("cloud metadata service"))
+        );
+        MatcherAssert.assertThat(
+            "allowlisting 169.254.169.254 must not exempt it from the name check",
+            policy.hostRejection("169.254.169.254"),
+            new IsEqual<>(Optional.of("cloud metadata service"))
+        );
+        MatcherAssert.assertThat(
+            "allowlisting 169.254.169.254 must not exempt it from the address check",
+            policy.rejection("169.254.169.254", InetAddress.getByName("169.254.169.254")),
+            new IsEqual<>(Optional.of("cloud metadata service"))
+        );
+        MatcherAssert.assertThat(
+            "allowlisting [fd00:ec2::254] must not exempt it from the literal check",
+            policy.literalRejection("[fd00:ec2::254]"),
+            new IsEqual<>(Optional.of("cloud metadata service"))
+        );
+    }
+
+    @Test
+    void allowlistStillExemptsLoopbackInStrictMode() throws Exception {
+        final EgressPolicy policy = new EgressPolicy(true, Set.of("localhost"));
+        MatcherAssert.assertThat(
+            "an allowlisted host on loopback passes in strict mode",
+            policy.rejection("localhost", InetAddress.getByName("127.0.0.1")),
+            new IsEqual<>(Optional.empty())
+        );
+        MatcherAssert.assertThat(
+            "a host that is not allowlisted on loopback is refused in strict mode",
+            policy.rejection("other.local", InetAddress.getByName("127.0.0.1")),
+            new IsEqual<>(Optional.of("loopback address (strict egress policy)"))
+        );
+    }
+
     @Test
     void ipv6AndAlibabaMetadataAddressesAreDeniedByDefault() throws Exception {
         final EgressPolicy policy = EgressPolicy.defaults();
