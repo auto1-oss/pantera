@@ -77,6 +77,7 @@ import com.auto1.pantera.npm.http.RegistryInfoSlice;
 import com.auto1.pantera.npm.proxy.NpmProxy;
 import com.auto1.pantera.npm.proxy.http.NpmProxySlice;
 import com.auto1.pantera.nuget.http.NuGet;
+import com.auto1.pantera.nuget.http.NuGetApiKeySlice;
 import com.auto1.pantera.pypi.http.PySlice;
 import com.auto1.pantera.rpm.http.RpmSlice;
 import com.auto1.pantera.scheduling.ArtifactEvent;
@@ -1448,7 +1449,7 @@ public class RepositorySlices {
                 );
         }
         return new SliceValue(
-            wrapIntoCommonSlices(slice, cfg),
+            credentialsInClientForm(cfg, wrapIntoCommonSlices(slice, cfg)),
             Optional.ofNullable(clientLease)
         );
         } catch (final RuntimeException | Error ex) {
@@ -1740,6 +1741,27 @@ public class RepositorySlices {
 
     private static Slice trimPathSlice(final Slice original) {
         return new TrimPathSlice(original, RepositorySlices.PATTERN);
+    }
+
+    /**
+     * Present credentials some clients send outside the {@code Authorization}
+     * header as that header, so the anonymous-access gate (which only looks
+     * at it) lets them through to the adapter's own credential check:
+     * NuGet's {@code X-NuGet-ApiKey}. Nothing is granted here; the adapter
+     * still validates the credential.
+     *
+     * @param cfg Repository config
+     * @param gated Repository slice behind the anonymous-access gate
+     * @return Slice
+     */
+    private static Slice credentialsInClientForm(final RepoConfig cfg, final Slice gated) {
+        final Slice res;
+        if ("nuget".equals(cfg.type())) {
+            res = new NuGetApiKeySlice(gated);
+        } else {
+            res = gated;
+        }
+        return res;
     }
 
     /**

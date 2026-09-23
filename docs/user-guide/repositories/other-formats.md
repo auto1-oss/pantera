@@ -101,11 +101,18 @@ dotnet add package Newtonsoft.Json --source http://pantera-host:8080/my-nuget/in
 
 ### Push a Package
 
-Pantera authenticates the push with the credentials stored for the source; it does not accept an `--api-key` on its own:
+Pantera authenticates the push with the credentials stored for the source:
 
 ```bash
 dotnet pack -c Release -o nupkg
 dotnet nuget push "nupkg/*.nupkg" --source pantera --skip-duplicate
+```
+
+Alternatively pass your API token as the NuGet API key (sent as the `X-NuGet-ApiKey` header); it is validated like any other Pantera token:
+
+```bash
+dotnet nuget push "nupkg/*.nupkg" --source http://pantera-host:8080/my-nuget/index.json \
+  --api-key your-api-token --skip-duplicate
 ```
 
 ### nuget.config
