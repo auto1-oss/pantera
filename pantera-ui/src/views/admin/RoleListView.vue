@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue'
 import { listRoles, getRole, deleteRole, enableRole, disableRole, putRole } from '@/api/roles'
 import { listRepos } from '@/api/repos'
 import { useNotificationStore } from '@/stores/notifications'
+import { apiErrorMessage } from '@/utils/apiError'
 import { useAuthStore } from '@/stores/auth'
 import { useConfirmDelete } from '@/composables/useConfirmDelete'
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -293,8 +294,13 @@ async function handleSave() {
     dialogVisible.value = false
     resetForm()
     load()
-  } catch { notify.error(editMode.value ? 'Failed to update role' : 'Failed to create role') }
-  finally { saving.value = false }
+  } catch (err: unknown) {
+    // Keep the dialog open so the admin can fix what the server refused.
+    notify.error(
+      editMode.value ? 'Failed to update role' : 'Failed to create role',
+      apiErrorMessage(err, newRoleName.value),
+    )
+  } finally { saving.value = false }
 }
 
 onMounted(load)
