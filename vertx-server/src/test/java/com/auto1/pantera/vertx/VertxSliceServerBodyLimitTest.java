@@ -18,8 +18,6 @@ import io.vertx.reactivex.core.Vertx;
 import io.vertx.reactivex.core.buffer.Buffer;
 import io.vertx.reactivex.ext.web.client.HttpResponse;
 import io.vertx.reactivex.ext.web.client.WebClient;
-import java.io.IOException;
-import java.net.ServerSocket;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -62,8 +60,7 @@ final class VertxSliceServerBodyLimitTest {
     private VertxSliceServer server;
 
     @BeforeEach
-    void setUp() throws IOException {
-        this.port = this.rndPort();
+    void setUp() {
         this.vertx = Vertx.vertx();
         this.client = WebClient.create(this.vertx);
     }
@@ -248,18 +245,13 @@ final class VertxSliceServerBodyLimitTest {
         this.server = new VertxSliceServer(
             this.vertx,
             slice,
-            new HttpServerOptions().setPort(this.port).setHost(HOST),
+            new HttpServerOptions().setPort(0).setHost(HOST),
             Duration.ZERO,
             Duration.ofSeconds(5),
             VertxSliceServer.DEFAULT_BODY_BUFFER_THRESHOLD,
             cap
         );
-        this.server.start();
-    }
-
-    private int rndPort() throws IOException {
-        try (ServerSocket socket = new ServerSocket(0)) {
-            return socket.getLocalPort();
-        }
+        // Ephemeral port, read back from start(): probing then binding races (-T8).
+        this.port = this.server.start();
     }
 }

@@ -19,8 +19,6 @@ import io.vertx.reactivex.core.Vertx;
 import io.vertx.reactivex.core.buffer.Buffer;
 import io.vertx.reactivex.ext.web.client.HttpResponse;
 import io.vertx.reactivex.ext.web.client.WebClient;
-import java.io.IOException;
-import java.net.ServerSocket;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -53,19 +51,17 @@ final class VertxSliceServerHostHeaderTest {
     private VertxSliceServer server;
 
     @BeforeEach
-    void setUp() throws IOException {
-        try (ServerSocket socket = new ServerSocket(0)) {
-            this.port = socket.getLocalPort();
-        }
+    void setUp() {
         this.vertx = Vertx.vertx();
         this.server = new VertxSliceServer(
             this.vertx,
             (line, headers, body) -> CompletableFuture.completedFuture(
                 ResponseBuilder.ok().textBody(VertxSliceServerHostHeaderTest.host(headers)).build()
             ),
-            new HttpServerOptions().setPort(this.port)
+            new HttpServerOptions().setPort(0)
         );
-        this.server.start();
+        // Ephemeral port, read back from start(): probing then binding races (-T8).
+        this.port = this.server.start();
     }
 
     @AfterEach

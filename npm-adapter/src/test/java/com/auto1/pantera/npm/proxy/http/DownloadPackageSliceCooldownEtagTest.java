@@ -24,7 +24,6 @@ import com.auto1.pantera.cooldown.metadata.MetadataRewriter;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.slice.SliceSimple;
-import com.auto1.pantera.npm.RandomFreePort;
 import com.auto1.pantera.npm.proxy.NpmProxy;
 import com.auto1.pantera.vertx.VertxSliceServer;
 import io.vertx.reactivex.core.Vertx;
@@ -68,7 +67,9 @@ final class DownloadPackageSliceCooldownEtagTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        this.port = new RandomFreePort().value();
+        // Bind to an ephemeral port and read the real one back from start():
+        // probing a free port and binding later races other tests (-T8).
+        this.port = 0;
     }
 
     @AfterAll
@@ -101,7 +102,7 @@ final class DownloadPackageSliceCooldownEtagTest {
                 this.port
             )
         ) {
-            server.start();
+            this.port = server.start();
             final String url = String.format(
                 "http://127.0.0.1:%d/ctx/%s", this.port, PKG
             );
@@ -176,7 +177,7 @@ final class DownloadPackageSliceCooldownEtagTest {
                 this.port
             )
         ) {
-            server.start();
+            this.port = server.start();
             final HttpResponse<Buffer> response = WebClient
                 .create(DownloadPackageSliceCooldownEtagTest.VERTX)
                 .getAbs(String.format("http://127.0.0.1:%d/ctx/%s", this.port, PKG))

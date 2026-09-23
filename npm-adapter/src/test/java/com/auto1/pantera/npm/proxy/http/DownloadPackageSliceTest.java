@@ -18,7 +18,6 @@ import com.auto1.pantera.asto.test.TestResource;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.slice.SliceSimple;
-import com.auto1.pantera.npm.RandomFreePort;
 import com.auto1.pantera.npm.proxy.NpmProxy;
 import com.auto1.pantera.vertx.VertxSliceServer;
 import io.vertx.core.json.JsonObject;
@@ -53,7 +52,9 @@ final class DownloadPackageSliceTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        this.port = new RandomFreePort().value();
+        // Bind to an ephemeral port and read the real one back from start():
+        // probing a free port and binding later races other tests (-T8).
+        this.port = 0;
     }
 
     @AfterAll
@@ -109,7 +110,7 @@ final class DownloadPackageSliceTest {
                 this.port
             )
         ) {
-            server.start();
+            this.port = server.start();
             final String url = String.format(
                 "http://127.0.0.1:%d%s/@hello/simple-npm-project/latest",
                 this.port, pathprefix
@@ -168,7 +169,7 @@ final class DownloadPackageSliceTest {
     }
 
     private void pereformRequestAndChecks(String pathPrefix, VertxSliceServer server) {
-        server.start();
+        this.port = server.start();
         final String url = String.format("http://127.0.0.1:%d%s/@hello/simple-npm-project",
             this.port, pathPrefix);
         final WebClient client = WebClient.create(DownloadPackageSliceTest.VERTX);
