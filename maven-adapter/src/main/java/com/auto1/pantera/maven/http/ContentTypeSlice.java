@@ -13,7 +13,6 @@ package com.auto1.pantera.maven.http;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
-import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.KeyFromPath;
@@ -24,7 +23,9 @@ import java.util.concurrent.CompletableFuture;
  * {@link ArtifactHeaders}) to a successful response that has none, so
  * proxied {@code .module}, checksum and archive files are typed like the
  * ones a local repository serves (responses also carry
- * {@code X-Content-Type-Options: nosniff}).
+ * {@code X-Content-Type-Options: nosniff}). Only the header is added: the
+ * status, the other headers (notably the {@code Content-Length} of a HEAD
+ * answer) and the body pass through unchanged.
  *
  * @since 2.2.9
  */
@@ -51,11 +52,16 @@ final class ContentTypeSlice implements Slice {
             if (!resp.status().success() || !resp.headers().find("Content-Type").isEmpty()) {
                 return resp;
             }
-            return ResponseBuilder.from(resp.status())
-                .headers(resp.headers())
-                .header(ArtifactHeaders.contentType(new KeyFromPath(line.uri().getPath())))
-                .body(resp.body())
-                .build();
+            // Keep the original headers and body untouched: rebuilding the
+            // body through ResponseBuilder would overwrite Content-Length
+            // with the size of a HEAD answer's empty body (0).
+            return new Response(
+                resp.status(),
+                resp.headers().copy().add(
+                    ArtifactHeaders.contentType(new KeyFromPath(line.uri().getPath()))
+                ),
+                resp.body()
+            );
         });
     }
 }

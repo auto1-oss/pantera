@@ -11,13 +11,22 @@
 package com.auto1.pantera.maven.http;
 
 import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.headers.ContentLength;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
@@ -50,6 +59,52 @@ final class ContentTypeSliceTest {
                 new RequestLine(RqMethod.GET, path), Headers.EMPTY, Content.EMPTY
             ).join().headers().values("Content-Type"),
             new IsEqual<>(List.of(type))
+        );
+    }
+
+    @Test
+    void keepsTheContentLengthOfAHeadResponse() {
+        final Response resp = new ContentTypeSlice(
+            (line, headers, body) -> CompletableFuture.completedFuture(
+                new Response(
+                    RsStatus.OK,
+                    Headers.from(new ContentLength(1234)),
+                    Content.EMPTY
+                )
+            )
+        ).response(
+            new RequestLine(RqMethod.HEAD, "/g/a/1.0/a-1.0.jar"), Headers.EMPTY, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "Content-Length of the HEAD answer is kept",
+            resp.headers().values("Content-Length"),
+            new IsEqual<>(List.of("1234"))
+        );
+        MatcherAssert.assertThat(
+            "Content-Type is added",
+            resp.headers().values("Content-Type"),
+            new IsEqual<>(List.of("application/java-archive"))
+        );
+    }
+
+    @Test
+    void keepsTheContentLengthOfACachedHeadProxyHit() {
+        final byte[] bytes = "cached-jar-bytes".getBytes(StandardCharsets.UTF_8);
+        final InMemoryStorage storage = new InMemoryStorage();
+        storage.save(new Key.From("g/a/1.0/a-1.0.jar"), new Content.From(bytes)).join();
+        MatcherAssert.assertThat(
+            new ContentTypeSlice(
+                new HeadProxySlice(
+                    (line, headers, body) -> CompletableFuture.failedFuture(
+                        new AssertionError("upstream must not be hit on cache HEAD")
+                    ),
+                    Optional.of(storage)
+                )
+            ).response(
+                new RequestLine(RqMethod.HEAD, "/g/a/1.0/a-1.0.jar"),
+                Headers.EMPTY, Content.EMPTY
+            ).join().headers().values("Content-Length"),
+            new IsEqual<>(List.of(String.valueOf(bytes.length)))
         );
     }
 }
