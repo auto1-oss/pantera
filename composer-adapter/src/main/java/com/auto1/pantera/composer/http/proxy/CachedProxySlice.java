@@ -25,6 +25,7 @@ import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.UpstreamCircuitOpenException;
 import com.auto1.pantera.http.cache.ProxyCacheWriter;
 import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.context.RequestContext;
@@ -480,7 +481,16 @@ final class CachedProxySlice implements Slice {
             .field("package.name", name)
             .field("log.source", "application")
             .log();
-        return ResponseBuilder.badGateway()
+        final ResponseBuilder builder = ResponseBuilder.badGateway();
+        if (failure.circuitOpen()) {
+            // Preserve the upstream breaker's marker so a php-group does not
+            // convict this member on a fast-failed call (see CLAUDE.md).
+            builder.header(UpstreamCircuitOpenException.HEADER, "true");
+            if (failure.retryAfter() > 0L) {
+                builder.header("Retry-After", Long.toString(failure.retryAfter()));
+            }
+        }
+        return builder
             .textBody("Upstream temporarily unavailable")
             .build();
     }
@@ -504,7 +514,7 @@ final class CachedProxySlice implements Slice {
             }
             return stage.handle((content, err) -> {
                 if (err != null) {
-                    failure.record();
+                    failure.record(err);
                     EcsLogger.warn("com.auto1.pantera.composer")
                         .message("Remote metadata retrieval failed")
                         .eventCategory("network")
@@ -533,7 +543,9 @@ final class CachedProxySlice implements Slice {
     }
 
     /**
-     * Per-lookup record of an upstream failure.
+     * Per-lookup record of an upstream failure, including whether it was a
+     * fast-fail of the outbound circuit breaker (marker header or
+     * {@link UpstreamCircuitOpenException}) and its Retry-After hint.
      */
     private static final class UpstreamFailure {
         /**
@@ -542,10 +554,42 @@ final class CachedProxySlice implements Slice {
         private volatile boolean flag;
 
         /**
-         * Record a failure.
+         * Whether the failure carried the circuit-open marker.
          */
-        void record() {
+        private volatile boolean open;
+
+        /**
+         * Retry-After hint of the circuit-open failure in seconds; 0 if unknown.
+         */
+        private volatile long retry;
+
+        /**
+         * Record a failed upstream response.
+         *
+         * @param headers Upstream response headers
+         */
+        void record(final Headers headers) {
             this.flag = true;
+            if (!headers.values(UpstreamCircuitOpenException.HEADER).isEmpty()) {
+                this.circuit(UpstreamFailure.seconds(headers.values("Retry-After")));
+            }
+        }
+
+        /**
+         * Record an upstream call that failed with an exception.
+         *
+         * @param err Failure, possibly wrapped
+         */
+        void record(final Throwable err) {
+            this.flag = true;
+            Throwable cur = err;
+            while (cur != null) {
+                if (cur instanceof UpstreamCircuitOpenException) {
+                    this.circuit(((UpstreamCircuitOpenException) cur).retryAfterSeconds());
+                    break;
+                }
+                cur = cur.getCause();
+            }
         }
 
         /**
@@ -553,6 +597,47 @@ final class CachedProxySlice implements Slice {
          */
         boolean failed() {
             return this.flag;
+        }
+
+        /**
+         * @return Whether a failure carried the circuit-open marker
+         */
+        boolean circuitOpen() {
+            return this.open;
+        }
+
+        /**
+         * @return Retry-After hint in seconds; 0 when unknown
+         */
+        long retryAfter() {
+            return this.retry;
+        }
+
+        /**
+         * Mark the failure as a circuit-open fast-fail.
+         *
+         * @param hint Retry-After hint in seconds
+         */
+        private void circuit(final long hint) {
+            this.open = true;
+            this.retry = Math.max(this.retry, hint);
+        }
+
+        /**
+         * Delta-seconds value of the first Retry-After header; 0 if absent.
+         *
+         * @param values Retry-After header values
+         * @return Seconds
+         */
+        private static long seconds(final List<String> values) {
+            if (values.isEmpty()) {
+                return 0L;
+            }
+            try {
+                return Math.max(0L, Long.parseLong(values.get(0).trim()));
+            } catch (final NumberFormatException ignored) {
+                return 0L;
+            }
         }
     }
 
@@ -702,7 +787,7 @@ final class CachedProxySlice implements Slice {
                                     this.recordUpstreamErrorMetric(new RuntimeException("HTTP " + response.status().code()));
                                 }
                                 if (CachedProxySlice.isUpstreamFailure(response.status().code())) {
-                                    failure.record();
+                                    failure.record(response.headers());
                                 }
                                 EcsLogger.warn("com.auto1.pantera.composer")
                                     .message("Remote returned non-success status")

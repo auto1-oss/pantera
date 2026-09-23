@@ -19,13 +19,27 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.UpstreamCircuitOpenException;
+import com.auto1.pantera.http.client.ClientSlices;
+import com.auto1.pantera.http.client.auth.Authenticator;
 import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.slice.TrimPathSlice;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.composer.AstoRepository;
+import com.auto1.pantera.composer.http.proxy.ComposerProxySlice;
+import com.auto1.pantera.composer.http.proxy.ComposerStorageCache;
+import com.auto1.pantera.cooldown.api.CooldownDependency;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
+import com.auto1.pantera.cooldown.impl.NoopCooldownService;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Test;
 
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.Optional;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -324,6 +338,30 @@ public final class ComposerGroupSliceTest {
     }
 
     @Test
+    void circuitOpenProxyMemberGivesServiceUnavailableWithTheMarker() throws Exception {
+        final Map<String, Slice> members = new HashMap<>();
+        members.put("local", status(RsStatus.NOT_FOUND));
+        members.put("proxy", new TrimPathSlice(ComposerGroupSliceTest.circuitOpenProxy(), "proxy"));
+        final Response resp = ComposerGroupSliceTest.group(members, "local", "proxy").response(
+            new RequestLine("GET", "/p2/psr/log.json"), Headers.EMPTY, Content.EMPTY
+        ).get(10, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            "an open upstream breaker is an outage",
+            resp.status(), new IsEqual<>(RsStatus.SERVICE_UNAVAILABLE)
+        );
+        MatcherAssert.assertThat(
+            "the circuit-open marker reaches the client",
+            resp.headers().values(UpstreamCircuitOpenException.HEADER),
+            new IsEqual<>(List.of("true"))
+        );
+        MatcherAssert.assertThat(
+            "the breaker's Retry-After is honoured",
+            resp.headers().values("Retry-After"),
+            new IsEqual<>(List.of("42"))
+        );
+    }
+
+    @Test
     void packagesJsonOutageIsServiceUnavailable() throws Exception {
         final Map<String, Slice> members = new HashMap<>();
         members.put("repo1", status(RsStatus.NOT_FOUND));
@@ -397,6 +435,63 @@ public final class ComposerGroupSliceTest {
     private static Slice status(final RsStatus status) {
         return (line, headers, body) -> body.asBytesFuture().thenApply(ignored ->
             ResponseBuilder.from(status).build()
+        );
+    }
+
+    /**
+     * A real php-proxy whose upstream breaker is open: every upstream call
+     * is fast-failed with the marked 502 the http-client synthesises.
+     */
+    private static Slice circuitOpenProxy() {
+        final Slice remote = (line, headers, body) -> CompletableFuture.completedFuture(
+            ResponseBuilder.badGateway()
+                .header(UpstreamCircuitOpenException.HEADER, "true")
+                .header("Retry-After", "42")
+                .textBody("Upstream circuit breaker is open")
+                .build()
+        );
+        final ClientSlices clients = new ClientSlices() {
+            @Override
+            public Slice http(final String host) {
+                return remote;
+            }
+
+            @Override
+            public Slice http(final String host, final int port) {
+                return remote;
+            }
+
+            @Override
+            public Slice https(final String host) {
+                return remote;
+            }
+
+            @Override
+            public Slice https(final String host, final int port) {
+                return remote;
+            }
+        };
+        final CooldownInspector nodates = new CooldownInspector() {
+            @Override
+            public CompletableFuture<Optional<Instant>> releaseDate(
+                final String artifact, final String version
+            ) {
+                return CompletableFuture.completedFuture(Optional.empty());
+            }
+
+            @Override
+            public CompletableFuture<List<CooldownDependency>> dependencies(
+                final String artifact, final String version
+            ) {
+                return CompletableFuture.completedFuture(List.of());
+            }
+        };
+        final AstoRepository repo = new AstoRepository(new InMemoryStorage());
+        return new ComposerProxySlice(
+            clients, URI.create("https://repo.packagist.example"), repo,
+            Authenticator.ANONYMOUS, new ComposerStorageCache(repo), Optional.empty(),
+            "proxy", "php-proxy", NoopCooldownService.INSTANCE, nodates,
+            "http://localhost:8080/proxy"
         );
     }
 

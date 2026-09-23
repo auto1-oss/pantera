@@ -14,12 +14,15 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.composer.AstoRepository;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.UpstreamCircuitOpenException;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import org.hamcrest.MatcherAssert;
@@ -85,7 +88,71 @@ final class ComposerUpstreamFailureStatusTest {
         );
     }
 
+    @Test
+    void circuitOpenUpstreamKeepsTheMarker() {
+        final Response resp = ComposerUpstreamFailureStatusTest.response(
+            (line, headers, body) -> CompletableFuture.completedFuture(
+                ResponseBuilder.badGateway()
+                    .header(UpstreamCircuitOpenException.HEADER, "true")
+                    .header("Retry-After", "17")
+                    .textBody("circuit open")
+                    .build()
+            )
+        );
+        MatcherAssert.assertThat(
+            "status is 502", resp.status().code(), new IsEqual<>(502)
+        );
+        MatcherAssert.assertThat(
+            "circuit-open marker is preserved",
+            resp.headers().values(UpstreamCircuitOpenException.HEADER),
+            new IsEqual<>(List.of("true"))
+        );
+        MatcherAssert.assertThat(
+            "breaker Retry-After is preserved",
+            resp.headers().values("Retry-After"),
+            new IsEqual<>(List.of("17"))
+        );
+    }
+
+    @Test
+    void circuitOpenExceptionKeepsTheMarker() {
+        final Response resp = ComposerUpstreamFailureStatusTest.response(
+            (line, headers, body) -> CompletableFuture.failedFuture(
+                new UpstreamCircuitOpenException(9L)
+            )
+        );
+        MatcherAssert.assertThat(
+            "status is 502", resp.status().code(), new IsEqual<>(502)
+        );
+        MatcherAssert.assertThat(
+            "circuit-open marker is added",
+            resp.headers().values(UpstreamCircuitOpenException.HEADER),
+            new IsEqual<>(List.of("true"))
+        );
+        MatcherAssert.assertThat(
+            "exception Retry-After is used",
+            resp.headers().values("Retry-After"),
+            new IsEqual<>(List.of("9"))
+        );
+    }
+
+    @Test
+    void plainOutageCarriesNoMarker() {
+        MatcherAssert.assertThat(
+            ComposerUpstreamFailureStatusTest.response(
+                (line, headers, body) -> CompletableFuture.completedFuture(
+                    ResponseBuilder.badGateway().build()
+                )
+            ).headers().values(UpstreamCircuitOpenException.HEADER).isEmpty(),
+            new IsEqual<>(true)
+        );
+    }
+
     private static int status(final Slice upstream) {
+        return ComposerUpstreamFailureStatusTest.response(upstream).status().code();
+    }
+
+    private static Response response(final Slice upstream) {
         final InMemoryStorage storage = new InMemoryStorage();
         return new CachedProxySlice(
             upstream,
@@ -97,6 +164,6 @@ final class ComposerUpstreamFailureStatusTest {
             "https://packagist.example"
         ).response(
             new RequestLine(RqMethod.GET, "/p2/acme/down.json"), Headers.EMPTY, Content.EMPTY
-        ).join().status().code();
+        ).join();
     }
 }
