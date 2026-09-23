@@ -88,6 +88,24 @@ class GoProxyPackageProcessorTest {
     }
 
     @Test
+    void recordsTheRealPathOfAMixedCaseModule() {
+        // B84: the index stored the '!'-escaped path, so search never found
+        // github.com/BurntSushi/toml by its real module path.
+        final String escaped = "github.com/!burnt!sushi/toml";
+        this.storage.save(
+            new Key.From(escaped, "@v", "v1.3.2.zip"),
+            new Content.From("zip".getBytes(StandardCharsets.UTF_8))
+        ).join();
+        this.packages.add(
+            new ProxyArtifactEvent(
+                new Key.From(escaped + "/@v/1.3.2"), "go_proxy", "u", Optional.empty()
+            )
+        );
+        this.processor.execute(mock(JobExecutionContext.class));
+        assertEquals("github.com/BurntSushi/toml", this.events.poll().artifactName());
+    }
+
+    @Test
     void skipsNonZipFiles() {
         // Arrange: Create .info and .mod files (not .zip)
         final String modulePath = "github.com/example/module";

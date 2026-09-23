@@ -103,7 +103,7 @@ cp go.mod "$STAGE/$VER.mod"
 printf '{"Version":"%s","Time":"%s"}\n' "$VER" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STAGE/$VER.info"
 ```
 
-`git archive` packs the committed files as `go` would fetch them from VCS. `zip -D` omits directory entries, which is required for `go mod verify` to pass for consumers. Uppercase letters in the module path are escaped (`!` + lowercase) for the URL, as the Go module protocol requires.
+`git archive` packs the committed files as `go` would fetch them from VCS. `zip -D` omits directory entries, which is required for `go mod verify` to pass for consumers. Uppercase letters in the module path are escaped (`!` + lowercase) for the URL, as the Go module protocol requires. Search shows and finds the module under its real path (`github.com/BurntSushi/toml`, not `github.com/!burnt!sushi/toml`).
 
 **2. Upload** — `.info` and `.mod` first, `.zip` last (the zip adds the version to `@v/list`). Each upload answers `201`:
 

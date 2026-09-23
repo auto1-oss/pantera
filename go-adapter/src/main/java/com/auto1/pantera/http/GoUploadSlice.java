@@ -176,6 +176,11 @@ final class GoUploadSlice implements Slice {
                 if (error == null) {
                     NegativeCacheRegistry.instance()
                         .invalidateAfterUpload("go-proxy", module);
+                    // Group 404s are keyed by the real module path.
+                    final String real = new com.auto1.pantera.goproxy.ModulePath(module).decoded();
+                    if (!real.equals(module)) {
+                        NegativeCacheRegistry.instance().invalidateAfterUpload("go-proxy", real);
+                    }
                     com.auto1.pantera.cooldown.metadata
                         .FilteredMetadataCacheRegistry.instance()
                         .invalidateAfterUpload("go-proxy", module);
@@ -212,9 +217,11 @@ final class GoUploadSlice implements Slice {
         return this.storage.metadata(key)
             .thenApply(meta -> meta.read(Meta.OP_SIZE).orElseThrow())
             .thenCompose(size -> {
+                // Real module path ("!b" -> "B"): what search and group
+                // routing look the module up by; the key stays escaped.
                 final ArtifactEvent event = new ArtifactEvent(
                     REPO_TYPE, this.repo, owner(headers),
-                    module, version, size,
+                    new com.auto1.pantera.goproxy.ModulePath(module).decoded(), version, size,
                     System.currentTimeMillis(), null, key.string()
                 ).withRequestContext(headers);
                 this.events.ifPresent(

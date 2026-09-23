@@ -152,6 +152,27 @@ class GoSliceTest {
     }
 
     @Test
+    void uploadOfAMixedCaseModuleIsRecordedUnderItsRealPath() throws Exception {
+        // B84: the upload event carried the '!'-escaped module path.
+        final Queue<ArtifactEvent> events = new ConcurrentLinkedQueue<>();
+        final GoSlice slice = new GoSlice(
+            new InMemoryStorage(),
+            new PolicyByUsername(USER.getKey()),
+            new Authentication.Single(USER.getKey(), USER.getValue()),
+            "go-repo",
+            Optional.of(events)
+        );
+        slice.response(
+            new RequestLine("PUT", "example.com/!acme/lib/@v/v1.0.0.zip"),
+            Headers.from(new Authorization.Basic(USER.getKey(), USER.getValue())),
+            new Content.From("zip".getBytes(StandardCharsets.UTF_8))
+        ).toCompletableFuture().get();
+        MatcherAssert.assertThat(
+            events.poll().artifactName(), new IsEqual<>("example.com/Acme/lib")
+        );
+    }
+
+    @Test
     void uploadsZipStoresContentAndRecordsMetadata() throws Exception {
         final Storage storage = new InMemoryStorage();
         final Queue<ArtifactEvent> events = new ConcurrentLinkedQueue<>();

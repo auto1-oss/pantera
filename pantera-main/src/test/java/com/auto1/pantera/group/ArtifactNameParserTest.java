@@ -278,6 +278,9 @@ final class ArtifactNameParserTest {
         "/github.com/gin-gonic/gin/@v/list, github.com/gin-gonic/gin",
         "/github.com/gin-gonic/gin/@latest, github.com/gin-gonic/gin",
         "/golang.org/x/text/@v/v0.14.0.info, golang.org/x/text",
+        // B84: the index records the real (decoded) module path
+        "/github.com/!burnt!sushi/toml/@v/v1.3.2.zip, github.com/BurntSushi/toml",
+        "/github.com/!azure/azure-sdk-for-go/@latest, github.com/Azure/azure-sdk-for-go",
     })
     void goPaths(final String url, final String expected) {
         MatcherAssert.assertThat(

@@ -1103,6 +1103,53 @@ class DbArtifactIndexTest {
     }
 
     /**
+     * B84: V145 renames Go rows indexed under the '!'-escaped module path to
+     * the real path, and drops an escaped row whose decoded twin exists.
+     */
+    @Test
+    void v145DecodesEscapedGoModuleNames() throws Exception {
+        this.insertArtifactRow(
+            "go", "go-local", "github.com/!burnt!sushi/toml", "1.3.2", 1L, "u",
+            "github.com/!burnt!sushi/toml/@v/v1.3.2.zip"
+        );
+        this.insertArtifactRow(
+            "go-proxy", "go-remote", "github.com/!azure/sdk", "1.0.0", 1L, "u", null
+        );
+        this.insertArtifactRow(
+            "go-proxy", "go-remote", "github.com/Azure/sdk", "1.0.0", 1L, "u", null
+        );
+        this.insertArtifactRow(
+            "npm", "npm-local", "odd!name", "1.0.0", 1L, "u", null
+        );
+        try (Connection conn = this.dataSource.getConnection();
+             Statement stmt = conn.createStatement()) {
+            stmt.execute(
+                new String(
+                    DbArtifactIndexTest.class.getResourceAsStream(
+                        "/db/migration/V145__go_index_real_module_path.sql"
+                    ).readAllBytes(),
+                    java.nio.charset.StandardCharsets.UTF_8
+                )
+            );
+        }
+        MatcherAssert.assertThat(
+            "the escaped local row is renamed to the real module path",
+            this.index.locateByName("github.com/BurntSushi/toml").join().orElseThrow(),
+            new IsEqual<>(List.of("go-local"))
+        );
+        MatcherAssert.assertThat(
+            "the escaped duplicate of an already decoded row is gone",
+            this.index.locateByName("github.com/!azure/sdk").join().orElseThrow(),
+            new IsEqual<>(List.of())
+        );
+        MatcherAssert.assertThat(
+            "other formats are untouched",
+            this.index.locateByName("odd!name").join().orElseThrow(),
+            new IsEqual<>(List.of("npm-local"))
+        );
+    }
+
+    /**
      * B25: maven local uploads stored {@code path_prefix} with a leading
      * slash before 2.2.9; {@code locate} must still find those rows.
      */
