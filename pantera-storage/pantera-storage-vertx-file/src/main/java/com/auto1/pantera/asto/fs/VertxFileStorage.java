@@ -37,6 +37,7 @@ import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -417,7 +418,26 @@ public final class VertxFileStorage implements Storage {
 
     @Override
     public CompletableFuture<? extends Meta> metadata(final Key key) {
-        return CompletableFuture.completedFuture(Meta.EMPTY);
+        // Real attributes (size, timestamps), read on the blocking scheduler.
+        // Upload slices read Meta.OP_SIZE right after a save to emit the
+        // upload event; an empty meta used to fail every successful upload
+        // to a vertx-file repository with a 500.
+        return Single.<Meta>fromCallable(
+            () -> {
+                final Path path = this.path(key);
+                final BasicFileAttributes attrs;
+                try {
+                    attrs = Files.readAttributes(path, BasicFileAttributes.class);
+                } catch (final NoSuchFileException fex) {
+                    throw new ValueNotFoundException(key, fex);
+                }
+                if (attrs.isDirectory()) {
+                    throw new ValueNotFoundException(key);
+                }
+                return new FileMeta(attrs);
+            }
+        ).subscribeOn(RxHelper.blockingScheduler(this.vertx.getDelegate()))
+            .to(SingleInterop.get()).toCompletableFuture();
     }
 
     @Override
