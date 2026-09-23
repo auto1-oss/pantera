@@ -449,8 +449,12 @@ public final class PypiSimpleHandler {
         if (clientWantsJson) {
             return ResponseBuilder.ok()
                 .header("Content-Type", JSON_CONTENT_TYPE)
-                .body(("{\"meta\":{\"api-version\":\"1.1\"},\"name\":\""
-                    + pkg + "\",\"files\":[]}")
+                .body(javax.json.Json.createObjectBuilder()
+                    .add("meta", javax.json.Json.createObjectBuilder().add("api-version", "1.1"))
+                    .add("name", pkg)
+                    .add("versions", javax.json.Json.createArrayBuilder())
+                    .add("files", javax.json.Json.createArrayBuilder())
+                    .build().toString()
                     .getBytes(java.nio.charset.StandardCharsets.UTF_8))
                 .build();
         }

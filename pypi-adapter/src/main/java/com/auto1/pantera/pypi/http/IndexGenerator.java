@@ -91,17 +91,25 @@ public final class IndexGenerator {
         private final String sha256;
         /** Sidecar metadata (may be empty for legacy uploads). */
         private final Optional<PypiSidecar.Meta> meta;
+        /** File size in bytes, negative when unknown. */
+        private final long size;
+        /** Version directory the file lives in (nullable for flat files). */
+        private final String version;
 
         Entry(
             final String filename,
             final String relativeHref,
             final String sha256,
-            final Optional<PypiSidecar.Meta> meta
+            final Optional<PypiSidecar.Meta> meta,
+            final long size,
+            final String version
         ) {
             this.filename = filename;
             this.relativeHref = relativeHref;
             this.sha256 = sha256;
             this.meta = meta;
+            this.size = size;
+            this.version = version;
         }
     }
 
@@ -128,7 +136,7 @@ public final class IndexGenerator {
                             final List<CompletableFuture<Entry>> futures = new ArrayList<>();
                             if (subKeys.isEmpty()) {
                                 // Key is a file directly under the package dir
-                                futures.add(buildEntry(key, new KeyLastPart(key).get()));
+                                futures.add(buildEntry(key, new KeyLastPart(key).get(), null));
                             } else {
                                 // Key is a version dir; iterate files
                                 for (final Key subKey : subKeys) {
@@ -138,7 +146,8 @@ public final class IndexGenerator {
                                     final String filename = new KeyLastPart(subKey).get();
                                     futures.add(buildEntry(
                                         subKey,
-                                        String.format("%s/%s", versionPath, filename)
+                                        String.format("%s/%s", versionPath, filename),
+                                        versionPath
                                     ));
                                 }
                             }
@@ -178,20 +187,28 @@ public final class IndexGenerator {
 
     /**
      * Build an {@link Entry} from a storage key by reading the file
-     * content for the SHA-256 digest and the sidecar metadata.
+     * content for the SHA-256 digest and size, and the sidecar metadata.
      */
-    private CompletableFuture<Entry> buildEntry(final Key key, final String relativeHref) {
+    private CompletableFuture<Entry> buildEntry(
+        final Key key, final String relativeHref, final String version
+    ) {
         return this.storage.value(key).thenCompose(
-            value -> new ContentDigest(value, Digests.SHA256).hex()
-        ).thenCompose(
-            hex -> PypiSidecar.read(this.storage, key).thenApply(
-                optMeta -> new Entry(
-                    new KeyLastPart(key).get(),
-                    relativeHref,
-                    hex,
-                    optMeta
-                )
-            )
+            value -> {
+                final long size = value.size().orElse(-1L);
+                return new ContentDigest(value, Digests.SHA256).hex()
+                    .thenCompose(
+                        hex -> PypiSidecar.read(this.storage, key).thenApply(
+                            optMeta -> new Entry(
+                                new KeyLastPart(key).get(),
+                                relativeHref,
+                                hex,
+                                optMeta,
+                                size,
+                                version
+                            )
+                        )
+                    );
+            }
         ).toCompletableFuture();
     }
 
@@ -251,7 +268,9 @@ public final class IndexGenerator {
                 entry.meta.map(PypiSidecar.Meta::uploadTime).orElse(null),
                 entry.meta.map(PypiSidecar.Meta::yanked).orElse(false),
                 entry.meta.flatMap(PypiSidecar.Meta::yankedReason),
-                entry.meta.flatMap(PypiSidecar.Meta::distInfoMetadata)
+                entry.meta.flatMap(PypiSidecar.Meta::distInfoMetadata),
+                entry.size,
+                entry.version
             ));
         }
         return SimpleJsonRenderer.render(packageName, files);

@@ -275,46 +275,34 @@ final class SliceIndex implements Slice {
                                     subKeys -> {
                                         if (subKeys.isEmpty()) {
                                             // It's a file, not a directory
-                                            return this.storage.value(key).thenCompose(
-                                                value -> new ContentDigest(value, Digests.SHA256).hex()
-                                            ).thenCompose(
-                                                hex -> PypiSidecar.read(this.storage, key).thenApply(
-                                                    meta -> {
-                                                        final List<SimpleJsonRenderer.FileEntry> result = new ArrayList<>(1);
-                                                        result.add(buildJsonEntry(
-                                                            new KeyLastPart(key).get(),
-                                                            key.string(),
-                                                            hex,
-                                                            meta
-                                                        ));
-                                                        return result;
-                                                    }
-                                                )
+                                            return this.jsonEntry(
+                                                key, key.string(), null
+                                            ).thenApply(
+                                                entry -> {
+                                                    final List<SimpleJsonRenderer.FileEntry> result = new ArrayList<>(1);
+                                                    result.add(entry);
+                                                    return result;
+                                                }
                                             );
                                         } else {
                                             // It's a directory - process all files in it
                                             return Flowable.fromIterable(subKeys)
                                                 .concatMapSingle(
-                                                    subKey -> RxFuture.single(
-                                                        this.storage.value(subKey).thenCompose(
-                                                            value -> new ContentDigest(value, Digests.SHA256).hex()
-                                                        ).thenCompose(
-                                                            hex -> PypiSidecar.read(this.storage, subKey).thenApply(
-                                                                meta -> {
-                                                                    final String versionPath = new KeyLastPart(
-                                                                        new Key.From(subKey.parent().get())
-                                                                    ).get();
-                                                                    final String filename = new KeyLastPart(subKey).get();
-                                                                    return buildJsonEntry(
-                                                                        filename,
-                                                                        String.format("%s/%s", versionPath, filename),
-                                                                        hex,
-                                                                        meta
-                                                                    );
-                                                                }
+                                                    subKey -> {
+                                                        final String versionPath = new KeyLastPart(
+                                                            new Key.From(subKey.parent().get())
+                                                        ).get();
+                                                        return RxFuture.single(
+                                                            this.jsonEntry(
+                                                                subKey,
+                                                                String.format(
+                                                                    "%s/%s", versionPath,
+                                                                    new KeyLastPart(subKey).get()
+                                                                ),
+                                                                versionPath
                                                             )
-                                                        )
-                                                    )
+                                                        );
+                                                    }
                                                 )
                                                 .toList()
                                                 .to(SingleInterop.get())
@@ -437,13 +425,17 @@ final class SliceIndex implements Slice {
      * @param url Full URL for the file
      * @param sha256 SHA-256 hex digest
      * @param meta Optional sidecar metadata
+     * @param size File size in bytes, negative when unknown
+     * @param version Version directory (nullable)
      * @return FileEntry for JSON rendering
      */
     private static SimpleJsonRenderer.FileEntry buildJsonEntry(
         final String filename,
         final String url,
         final String sha256,
-        final Optional<PypiSidecar.Meta> meta
+        final Optional<PypiSidecar.Meta> meta,
+        final long size,
+        final String version
     ) {
         final String requiresPython = meta.map(PypiSidecar.Meta::requiresPython).orElse(null);
         final java.time.Instant uploadTime = meta.map(PypiSidecar.Meta::uploadTime).orElse(null);
@@ -451,8 +443,35 @@ final class SliceIndex implements Slice {
         final Optional<String> yankedReason = meta.flatMap(PypiSidecar.Meta::yankedReason);
         final Optional<String> distInfoMetadata = meta.flatMap(PypiSidecar.Meta::distInfoMetadata);
         return new SimpleJsonRenderer.FileEntry(
-            filename, url, sha256, requiresPython, uploadTime, yanked, yankedReason, distInfoMetadata
+            filename, url, sha256, requiresPython, uploadTime, yanked, yankedReason,
+            distInfoMetadata, size, version
         );
+    }
+
+    /**
+     * Read one distribution file (digest + size) and its sidecar into a
+     * PEP 691 file entry.
+     *
+     * @param key File key
+     * @param url Relative URL for the entry
+     * @param version Version directory the file lives in (nullable)
+     * @return Future file entry
+     */
+    private CompletableFuture<SimpleJsonRenderer.FileEntry> jsonEntry(
+        final Key key, final String url, final String version
+    ) {
+        return this.storage.value(key).thenCompose(
+            value -> {
+                final long size = value.size().orElse(-1L);
+                return new ContentDigest(value, Digests.SHA256).hex().thenCompose(
+                    hex -> PypiSidecar.read(this.storage, key).thenApply(
+                        meta -> buildJsonEntry(
+                            new KeyLastPart(key).get(), url, hex, meta, size, version
+                        )
+                    )
+                );
+            }
+        ).toCompletableFuture();
     }
 
     private static boolean isRepoIndexRequest(final List<String> segments) {

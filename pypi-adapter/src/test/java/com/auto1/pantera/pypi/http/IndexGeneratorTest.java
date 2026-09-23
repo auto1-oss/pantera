@@ -205,4 +205,39 @@ class IndexGeneratorTest {
         );
         return new String(future.join(), java.nio.charset.StandardCharsets.UTF_8);
     }
+
+    @Test
+    void writtenJsonCarriesPep700VersionsAndSize() {
+        this.storage.save(
+            new Key.From("hello", "0.2.0", "hello-0.2.0-py3-none-any.whl"),
+            new Content.From("whl-content".getBytes())
+        ).join();
+        this.storage.save(
+            new Key.From("hello", "0.10.0", "hello-0.10.0.tar.gz"),
+            new Content.From("sdist".getBytes())
+        ).join();
+        new IndexGenerator(this.storage, new Key.From("hello"), "/").generate().join();
+        final JsonObject root = Json.createReader(new StringReader(
+            new String(
+                this.storage.value(new Key.From(".pypi", "hello", "hello.json"))
+                    .join().asBytes()
+            )
+        )).readObject();
+        assertEquals(
+            "[\"0.2.0\",\"0.10.0\"]",
+            root.getJsonArray("versions").toString(),
+            "versions must list every version in PEP 440 order"
+        );
+        final java.util.Map<String, Long> sizes = new java.util.HashMap<>();
+        root.getJsonArray("files").getValuesAs(JsonObject.class).forEach(
+            file -> sizes.put(
+                file.getString("filename"), file.getJsonNumber("size").longValue()
+            )
+        );
+        assertEquals(
+            java.util.Map.of("hello-0.2.0-py3-none-any.whl", 11L, "hello-0.10.0.tar.gz", 5L),
+            sizes,
+            "every file must carry its byte size"
+        );
+    }
 }

@@ -594,4 +594,29 @@ class SliceIndexTest {
             ).getBytes();
     }
 
+
+    @Test
+    void dynamicJsonCarriesPep700VersionsAndSize() {
+        this.storage.save(
+            new Key.From("hello", "0.2.0", "hello-0.2.0.tar.gz"),
+            new Content.From("sdist".getBytes())
+        ).join();
+        final Response resp = new SliceIndex(this.storage).response(
+            new RequestLine("GET", "/simple/hello/"),
+            Headers.from("Accept", "application/vnd.pypi.simple.v1+json"),
+            Content.EMPTY
+        ).join();
+        final javax.json.JsonObject parsed = javax.json.Json.createReader(
+            new java.io.StringReader(readBody(resp))
+        ).readObject();
+        org.junit.jupiter.api.Assertions.assertEquals(
+            "[\"0.2.0\"]", parsed.getJsonArray("versions").toString(),
+            "versions must be present (PEP 700)"
+        );
+        org.junit.jupiter.api.Assertions.assertEquals(
+            5L,
+            parsed.getJsonArray("files").getJsonObject(0).getJsonNumber("size").longValue(),
+            "size must be present (PEP 700)"
+        );
+    }
 }
