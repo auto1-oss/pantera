@@ -56,17 +56,17 @@ public final class CacheDocker implements Docker {
     private final String upstreamUrl;
 
     /**
-     * @param origin Origin repository.
-     * @param cache Cache repository.
-     * @param events Artifact metadata events queue
-     * @param inspector Cooldown inspector
-     */
-    /**
      * Manifest cache copies in flight for this proxy repository: concurrent
      * first pulls of one tag store and publish it once.
      */
     private final ConcurrentMap<String, CompletableFuture<Void>> inflight;
 
+    /**
+     * @param origin Origin repository.
+     * @param cache Cache repository.
+     * @param events Artifact metadata events queue
+     * @param inspector Cooldown inspector
+     */
     public CacheDocker(Docker origin,
                        Docker cache,
                        Optional<Queue<ArtifactEvent>> events,

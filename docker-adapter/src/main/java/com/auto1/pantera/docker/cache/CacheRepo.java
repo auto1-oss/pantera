@@ -63,6 +63,11 @@ public final class CacheRepo implements Repo {
     private final String upstreamUrl;
 
     /**
+     * Manifest cache copies in flight, shared per proxy repository.
+     */
+    private final ConcurrentMap<String, CompletableFuture<Void>> inflight;
+
+    /**
      * @param name Repository name.
      * @param origin Origin repository.
      * @param cache Cache repository.
@@ -117,11 +122,6 @@ public final class CacheRepo implements Repo {
         this.upstreamUrl = upstreamUrl;
         this.inflight = inflight;
     }
-
-    /**
-     * Manifest cache copies in flight, shared per proxy repository.
-     */
-    private final ConcurrentMap<String, CompletableFuture<Void>> inflight;
 
     @Override
     public Layers layers() {
