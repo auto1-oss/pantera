@@ -2,17 +2,17 @@
 
 ## Version 2.2.9
 
-This release contains security hardening fixes. Upgrading is recommended. Specifics are intentionally withheld here to protect deployments that have not yet upgraded; the operational changes an administrator must be aware of are listed below. For coordinated-disclosure details, contact the maintainers.
+This release contains security hardening and a broad set of bug fixes across formats. Upgrading is recommended. Some specifics of the hardening are intentionally withheld here to protect deployments that have not yet upgraded; the operational changes an administrator must be aware of are listed below. For coordinated-disclosure details, contact the maintainers.
 
 ### ⚠️ Breaking changes
 
 - **The bundled bootstrap administrator is no longer created with a fixed default password.** On a database-backed first start the password is taken from `PANTERA_BOOTSTRAP_ADMIN_PASSWORD`, or a random one is generated and written to `/var/pantera/bootstrap-admin-password` (readable by the server user only), never to the log. Existing installations are unaffected; automation that assumed the old default must set the variable.
   ([@aydasraf](https://github.com/aydasraf))
-- **Filesystem repository roots must sit under an approved base directory.** The approved roots (default `/var/pantera/data`) are an admin setting (Settings → *Request & Storage Limits*, or `PUT /api/v1/admin/request-limits-settings`), with `PANTERA_FS_STORAGE_ROOTS` as the fallback while none is saved. They are enforced when a repository is created, or its path changed, through the API or UI: an `fs` path outside them (symlinks followed) is rejected with `400` until a root covering it is added. Existing repositories keep serving and stay editable as long as their path is unchanged.
+- **Filesystem repository roots must sit under an approved base directory.** The approved roots (default `/var/pantera/data`) are an admin setting (Settings → *Request & Storage Limits*, or `PUT /api/v1/admin/request-limits-settings`), with `PANTERA_FS_STORAGE_ROOTS` as the fallback while none is saved. They are enforced when a repository is created, or its path changed, through the API or UI: an `fs` or `vertx-file` path, or a storage alias (global or per-repository) resolving to one, outside them (symlinks followed) is rejected with `400` until a root covering it is added. Existing repositories keep serving and stay editable as long as their path is unchanged.
   ([@aydasraf](https://github.com/aydasraf))
 - **Direct download tokens are now single-use and are re-checked against the issuer’s repository permission at redemption.** `PANTERA_DOWNLOAD_TOKEN_SECRET`, when set, must be at least 32 bytes; when unset, a database-backed deployment generates and shares a key across nodes and a database-less one uses a per-process key.
   ([@aydasraf](https://github.com/aydasraf))
-- **Changing or resetting a password now ends that user’s existing sessions and API tokens**, including the caller’s own session on a self-service change. Refresh tokens are single-use and are accepted only at `/auth/refresh`.
+- **Changing or resetting a password now ends that user’s existing sessions and API tokens**, including the caller’s own session on a self-service change. Refresh tokens are single-use, are accepted only at `/auth/refresh` and no longer work as repository credentials; only a signed-in session can mint API tokens, however the request path is spelled.
   ([@aydasraf](https://github.com/aydasraf))
 - **The SSO callback (`/auth/callback`) now requires the `state` parameter**; the bundled UI already sends it. Pending logins are shared across cluster nodes over Valkey, so the callback may land on any node. Only explicitly mapped identity-provider groups grant roles.
   ([@aydasraf](https://github.com/aydasraf))
@@ -21,6 +21,17 @@ This release contains security hardening fixes. Upgrading is recommended. Specif
 - **A request-body size cap now applies to every request**, measured on the bytes actually received (so chunked uploads are bounded too). The cap is an admin setting (Settings → *Request & Storage Limits*, or `PUT /api/v1/admin/request-limits-settings`), default 10 GiB, with `PANTERA_MAX_REQUEST_BODY_BYTES` as the fallback while none is saved; raise it if you publish larger artifacts. A per-repository `content-length-max`, where configured, also applies to chunked bodies.
   ([@aydasraf](https://github.com/aydasraf))
 - **Outbound connections are subject to an egress policy.** Link-local and cloud-metadata addresses are always refused. The admin setting *Outbound Egress Policy* (or `PUT /api/v1/admin/egress-settings`) can extend this to loopback and private ranges with per-host exceptions, and lists the hosts that may receive an upstream's credentials beyond its own host; `PANTERA_EGRESS_BLOCK_PRIVATE`, `PANTERA_EGRESS_ALLOW_HOSTS` and `PANTERA_UPSTREAM_CREDENTIAL_ALLOW_HOSTS` are the fallback while nothing is saved. The metrics listener bind address is configurable via `PANTERA_METRICS_BIND`.
+  ([@aydasraf](https://github.com/aydasraf))
+
+- **Published releases are immutable.** Re-uploading a released file with different content is refused: Maven/Gradle, Composer and Go answer `409 Conflict` (Go also refuses a changed `.info` once the version's `.zip` is stored), and PyPI answers `400 File already exists`. The original is kept, identical re-uploads are still accepted, and Maven `-SNAPSHOT` versions, `maven-metadata.xml` and Composer dev branches stay writable. A client-uploaded Maven checksum that does not match the stored artifact is refused with `400`.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Deleting a repository deletes its stored data and search-index rows.** `DELETE /api/v1/repositories/:name` removes the repository's own data (including repositories created through the API or UI and those on a storage alias) before its configuration, so re-creating the name starts empty; other repositories on the same storage root are untouched. A large repository answers `202` while the removal finishes on the server, and a repeated delete does not start a second one.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Docker proxy repositories are read-only, and moving an existing tag needs `overwrite`.** Blob uploads and manifest pushes to a `docker-proxy` answer `405 UNSUPPORTED` without contacting the upstream, and pushes to a `docker-group` report `UNSUPPORTED`. Re-pushing an existing tag with a different manifest requires the `overwrite` action in `docker_repository_permissions` (`push` alone gets `403 DENIED`); grant it to CI users that re-push mutable tags such as `latest`.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Hex registry records name the Pantera repository instead of `pantera`.** Re-register clients with `mix hex.repo add <repository-name> <url> --public-key <key>`, taking the key from `<url>/public_key`.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Debian uploads must target the package file path**, `pool/<component>/<file>.deb`. A bare component path such as `/main`, or any non-`.deb` path, now answers `400` instead of overwriting the previously uploaded package.
   ([@aydasraf](https://github.com/aydasraf))
 
 ### 🌟 New features
@@ -52,10 +63,84 @@ This release contains security hardening fixes. Upgrading is recommended. Specif
   ([@aydasraf](https://github.com/aydasraf))
 - **The *Binary* repository type is no longer offered when creating or filtering repositories**; the server never supported it.
   ([@aydasraf](https://github.com/aydasraf))
+- **Group resolution keeps declared member order, per file.** A missing `-sources.jar`, `.module` or classifier file no longer makes other files of the same version return `404` through a group, and local Go, PyPI and npm versions are no longer hidden after the group served an upstream version of the same package. If the member that served a version fails or its upstream circuit is open, the group serves the remaining files from the other members without asking the failing member twice. go groups merge `@v/list` across members and respect the group member circuit breaker.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Fresh uploads are visible through groups immediately**, instead of returning `404` for a few seconds, or longer if an earlier `404` had been cached. PyPI groups serve `/simple/<Name>/` with mixed case or separators instead of `500`, and a member redirect no longer counts toward the member's circuit breaker.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Uploads to proxy repositories answer `405 Method Not Allowed`.** PUT or DELETE to a maven, gradle, npm, go, file, pypi or php proxy returns `405` as the guides state, instead of an empty `404`.
+  ([@aydasraf](https://github.com/aydasraf))
+- **File-proxy serves cache hits locally.** Cached files are served with `200` before any cooldown check or upstream call; before, repeat requests returned `502` (`500` through a group), made an unneeded upstream request and could trip the group member breaker. With the member breaker open, a file-proxy serves only what it has cached. Composer and PyPI proxies no longer make an upstream request on cache hits either.
+  ([@aydasraf](https://github.com/aydasraf))
+- **File repository listings, HEAD and download names.** For a path ending with `/`, curl and other non-browser clients get a plain-text listing while browsers keep the HTML index, whose links keep the repository path and are URL-encoded. HEAD on local files returns the real `Content-Length`, `?meta=true` works on storage without recorded checksums, and `Content-Disposition` follows RFC 6266 (`filename*` for non-ASCII names).
+  ([@aydasraf](https://github.com/aydasraf))
+- **Range downloads past the first 128 KiB no longer hang.** Resumes such as `curl -C -` now receive data, a range end past the end of the file is clamped and answered `206`, and suffix ranges (`bytes=-N`) are supported.
+  ([@aydasraf](https://github.com/aydasraf))
+- **HTTP request handling edge cases.** Paths with `%23`, `%3F`, `%20` or `%25` behind a global URL prefix are stored and served under the right name; small uploads with `Expect: 100-continue` get the `100` at once, so Maven deploys no longer stall; rejecting an oversized HTTP/2 body resets only that stream; creating or updating a repository with a dedicated `port` at runtime no longer freezes an event loop.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Client errors instead of `500`s.** A path with a `..` segment returns `400`, an upload that clashes with an existing file or directory returns `409`, and an upload to the repository root returns `400`, without ERROR stack traces. Uploads to `vertx-file` storage return `201` and are indexed instead of `500` after the file was stored.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Artifact deletes keep metadata and search consistent.** REST artifact and package deletes remove the matching search rows for every format, drop deleted versions from local `maven-metadata.xml` (with checksums and the file's checksum sidecars), Composer `p2` metadata and PyPI simple indexes, and write an `artifact_delete` audit record.
+  ([@aydasraf](https://github.com/aydasraf))
+- **REST API corrections.** Creating or updating a repository with an unsupported type (e.g. `binary`) answers `400`; a JSON `null` in a settings `PUT` answers `400` instead of `500`; `GET /api/v1/repositories/:name/members` lists a group's members; pull instructions give `docker pull <host>/<repo>/<image>:<tag>`; `search/locate` finds locally deployed Maven artifacts; Go modules are indexed and searchable under their real mixed-case path, including by the backfill CLI.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Cooldown settings and unblocks apply as documented.** The `{"artifact":"groupId:artifactId"}` unblock form releases Maven/Gradle blocks, and a repository's own `cooldown.duration` takes effect when the repository is created or edited, without a restart, re-evaluating only that repository's cached decisions.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Maven metadata checksums match the served metadata.** `maven-metadata.xml.sha1/.md5/.sha256/.sha512` on Maven/Gradle proxies and groups are the digest of the served, cooldown-filtered metadata, so strict-checksum builds (`mvn -C`, Gradle verification) resolve version ranges again.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Maven HEAD requests.** HEAD on a cooldown-blocked artifact of a Maven/Gradle proxy answers the same `403` as GET; local and proxy HEAD responses carry the real `Content-Length`; `.module`, checksum and signature files are served with a proper `Content-Type`.
+  ([@aydasraf](https://github.com/aydasraf))
+- **npm login, whoami and group endpoints.** `npm login` and `npm adduser` work against local, proxy and group repositories and return a revocable, expiring Pantera API token; `npm whoami` and `npm profile get` return the user on proxy and group repositories. Through a group, `npm dist-tag ls`, `npm search` and `npm audit signatures` include local members and answer `503` with `Retry-After` when no member is reachable.
+  ([@aydasraf](https://github.com/aydasraf))
+- **npm search, revalidation and dist-tags.** `npm search` on a local repository no longer crashes the CLI (one entry per package with maintainers, description and keywords; oversized `size`/`from` are clamped); local packuments keep a stable `time.modified` and ETag so `If-None-Match` returns `304`; a package with only prereleases keeps a `latest` tag, so `npm install` no longer fails with ETARGET; a force-unpublish without a revision answers `428`, and `409`/`428` carry a JSON reason.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Composer proxies and groups behave during outages.** `/packages.json` on a php-proxy returns the proxy's own root instead of `502`; cached p2 metadata is served cache-first and refreshed in the background, so an upstream outage no longer turns older cached packages into `404`; an unreachable or malformed upstream gives `502` from a php-proxy and `503` with `Retry-After` from a php-group; a php-group relays a member's `403` instead of `404`.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Composer dists and uploads.** Proxied dev-branch dists are keyed by their source reference, so a moved branch installs the new commit; proxied dists are recorded with their real size when the upstream sends no `Content-Length`; unreadable archives and invalid `composer.json` return `400` instead of `500`.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Docker registry conformance.** Proxy `tags/list` no longer answers `401` to authenticated users and groups no longer return an empty list; chunked or resumed blob uploads with several `PATCH` requests work (an out-of-order chunk gets `416` with the held `Range`); `/v2/<repo>/_catalog` works for path-routed repositories; unknown names give `404 NAME_UNKNOWN`, malformed digests `400 DIGEST_INVALID`, full tag pages carry `Link`, and `401`/`405`/`413` return OCI JSON bodies. Manifest and blob `DELETE` answer `405 UNSUPPORTED`; tags are deleted through the UI or REST API.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Docker proxy audit records** — a proxied tag produces one `artifact_publish` record, written after it is cached, instead of one per pull while it is being cached.
+  ([@aydasraf](https://github.com/aydasraf))
+- **PyPI yank and index fixes.** Yank and unyank update the served simple index immediately, work on alias-backed storage and answer `404` for an unknown repository or version; a yank without a reason renders as `yanked: true` in PEP 691 JSON so pip skips it; hosted JSON indexes include the PEP 700 `versions` and `size` fields; the index honours Accept q-values and the `latest` aliases and sends `Vary: Accept`; the name redirect keeps the path prefix and trailing slash.
+  ([@aydasraf](https://github.com/aydasraf))
+- **PyPI uploads, JSON API and search.** Uploads to any sub-path, including twine's `/legacy/`, are stored at the repository root and no longer hide earlier releases; a filename/metadata mismatch returns an explanatory `400`; proxies serve `/pypi/<pkg>/<ver>/json` with a cooldown check; `pip search` reports the real latest version, needs only read permission, and returns an XML-RPC fault on group and proxy repositories instead of crashing pip.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Go module versions stay consistent.** Parallel publishes of one module no longer drop `@v/list` entries or fail with `500`, and the next publish repairs missing or duplicate lines; `@latest` uses Go version ordering and ignores versions without a `.zip`; HEAD on `.info`, `.mod`, `.zip`, `@v/list` and `@latest` answers `200` on local and group repositories; a retried publish repairs its search-index entry.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Proxy metadata on S3 expires after its TTL**, so new upstream releases of composer, PyPI and Go packages show up.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Hex, Conda and Conan work end to end.** The Hex registry is signed and serves its key at `/public_key`, so `mix deps.get` works without `HEX_UNSAFE_REGISTRY`, and `mix hex.publish` is accepted. Conda downloads, `/t/<token>/` URLs and HEAD work on the main port and `anaconda upload` works again. Conan repositories without a dedicated port are reachable at `<registry>/<repository>` with download and upload URLs that point back into it.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Empty repositories and other format fixes.** `helm repo add`, `apt-get update` and `dnf makecache` work before the first upload; a Helm repository whose last chart was deleted no longer answers `500`; reading a new Debian or RPM repository during its first upload no longer drops that package from the index. `dotnet nuget push --api-key <token>` authenticates with a Pantera token. Gems without `homepage` or `description` upload, and failed gem uploads leave no temporary files.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Import CLI uploads work again.** `pantera-import-cli` sends the headers the server expects, imports php, deb, gem, conda, conan and hex export folders into repositories of their format, and imports into repositories without a `url` no longer fail with `500`. A `POST /.merge/<repo>` with nothing staged no longer logs cleanup warnings. `artifact_publish` records from every format carry `client.ip` and `trace.id`, and PyPI proxy cache-miss records carry the real user.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Access log shows the verified user.** Bearer-authenticated requests are no longer logged as anonymous, and failed logins are no longer logged under the claimed username.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Settings and user-management UI report server rejections.** Save no longer claims success when a section is rejected — failed sections, including Runtime Tuning, keep their edits and show the server's message — and Discard reverts every card. Create User shows the password rules as you type. `PUT /api/v1/roles/:name` answers `400` for unregistered permission keys instead of storing a role that grants nothing, and the role editors show the reason.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Client guides match the product.** The Gradle guide and Set Me Up route plugins through Pantera via `pluginManagement`; the cooldown guides list the real Maven/Gradle `403` symptom, reason codes and Docker `/v2/<repo>/<image>/...` commands, and `meta.cooldown` is described as the release-age gate; the Go guides no longer suggest `GOINSECURE`, and the Go sample builds zips that pass `go mod verify`.
+  ([@aydasraf](https://github.com/aydasraf))
 
 ### 🔒 Security
 
 - **Hardening across authentication, authorization, input validation, request-egress, resource limits, and output encoding**, addressing issues raised in an external review. Each fix ships with a regression test. Deployments should upgrade; details are withheld pending broad adoption.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Password and token handling.** A self-service password change needs the real current password (a session token is no longer accepted in its place), and no longer needs the `change_password` grant. Tokens carry a millisecond issue time, so a session issued just before a password change or revoke is rejected while the re-login right after it works. Revocations survive restarts and rolling upgrades: nodes reload them from Valkey and the database at startup and peers keep each for its full lifetime.
+  ([@aydasraf](https://github.com/aydasraf))
+- **User management has a privilege ceiling.** A caller without `all_permission` can no longer reset, edit, strip the roles of, or change the identity provider of an administrator or of a user holding roles the caller lacks; `sso_subject` and `auth_provider` are ignored in request bodies. A weak password on update gets `400` before anything is written, conflicting `pass`/`password` values are refused, and a reset applies in one transaction.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Login throttling holds against spoofed addresses.** Behind a trusted proxy the limit keys on the address the nearest proxy recorded (the last `X-Forwarded-For` entry, or `X-Real-IP` only without one), never on a client-supplied value. It is shared by all API workers on a node, counted before the credential check, capped per username across addresses, and `Retry-After` gives the remaining window.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Credentials stay out of logs and client-set identity headers are ignored.** A scheme-less `Authorization` header (hex, gem and conda clients) gets `401` instead of `500` and is no longer written to the error log; the anaconda upload token is masked. A client-sent `pantera_login` or internal `X-Pantera-Internal` header is dropped, so only the authenticated user reaches repository handlers. Import audit records name the authenticated caller, including imports without an artifact name.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Tighter per-format access checks.** Conan upload URLs are signed for one repository, expire after an hour and need write permission; the `anaconda upload` staging URL is short-lived, bound to one package, needs WRITE and is single-use (cluster-wide with Valkey); the service index of a private NuGet repository requires credentials; removing an RPM package requires the delete permission. The npm login endpoint issues only a policy-bounded API token, never echoes credentials as a token, and caps its body at 64 KiB.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Outbound egress policy closes remaining gaps.** IPv6 and Alibaba Cloud metadata addresses and trailing-dot metadata hostnames are always refused, and `egress_allow_hosts` can no longer exempt metadata or link-local addresses; strict mode also covers `fc00::/7` and `100.64.0.0/10`. Behind an outbound HTTP proxy the policy checks the real target and every redirect hop, and Composer dist URLs follow the admin-configured policy.
+  ([@aydasraf](https://github.com/aydasraf))
+- **php-group dependency confusion prevented.** A php-group no longer looks up package names owned by a local member on its proxy members, so an upstream cannot inject `dev-*` versions into a private package and private names are not sent upstream.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Composer archive integrity.** Uploaded archives are listed with `dist.shasum`, so Composer detects a dist that changed after locking, and the re-upload comparison streams both archives with bounded work so a highly compressible archive cannot exhaust server memory.
   ([@aydasraf](https://github.com/aydasraf))
 
 ## Version 2.2.8
