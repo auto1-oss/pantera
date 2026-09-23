@@ -62,4 +62,42 @@ final class ClientIpResolverTest {
             new IsEqual<>("10.0.0.2")
         );
     }
+
+    @Test
+    void proxyRecordedAddressPrefersRealIp() {
+        MatcherAssert.assertThat(
+            new ClientIpResolver(true).proxyRecorded(
+                "10.0.0.2", "6.6.6.6, 198.51.100.7", "198.51.100.7"
+            ),
+            new IsEqual<>("198.51.100.7")
+        );
+    }
+
+    @Test
+    void proxyRecordedAddressTakesTheRightmostForwardedEntry() {
+        final ClientIpResolver resolver = new ClientIpResolver(true);
+        MatcherAssert.assertThat(
+            "the client-supplied leftmost entry must not become the key",
+            resolver.proxyRecorded("10.0.0.2", "6.6.6.6, 198.51.100.7", null),
+            new IsEqual<>("198.51.100.7")
+        );
+        MatcherAssert.assertThat(
+            "a rotated leftmost entry must resolve to the same address",
+            resolver.proxyRecorded("10.0.0.2", "7.7.7.7 ,198.51.100.7 ", " "),
+            new IsEqual<>("198.51.100.7")
+        );
+        MatcherAssert.assertThat(
+            "with no forwarding headers the peer is used",
+            resolver.proxyRecorded("10.0.0.2", " ", null),
+            new IsEqual<>("10.0.0.2")
+        );
+    }
+
+    @Test
+    void proxyRecordedAddressIgnoresHeadersWithoutATrustedProxy() {
+        MatcherAssert.assertThat(
+            new ClientIpResolver(false).proxyRecorded("203.0.113.9", "1.1.1.1", "2.2.2.2"),
+            new IsEqual<>("203.0.113.9")
+        );
+    }
 }

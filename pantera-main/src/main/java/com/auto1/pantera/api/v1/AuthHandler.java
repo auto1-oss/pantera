@@ -1329,6 +1329,10 @@ public final class AuthHandler {
      * Forwarding headers are client-supplied: they count only when the
      * deployment declares a trusted reverse proxy
      * ({@code trust_forwarded_headers}); otherwise the TCP peer is used.
+     * Even then only the address the proxy recorded is used
+     * ({@code X-Real-IP}, else the rightmost {@code X-Forwarded-For}
+     * entry): the leftmost entry is whatever the client sent, and rotating
+     * it would buy a fresh throttle budget per request.
      *
      * @param ctx Routing context
      * @return Client IP, or {@code null} when indeterminable
@@ -1339,7 +1343,7 @@ public final class AuthHandler {
         return new com.auto1.pantera.api.ClientIpResolver(
             com.auto1.pantera.http.headers.ClientBaseUrlSettingsLoader.activeSupplier()
                 .get().trustForwardedHeaders()
-        ).resolve(
+        ).proxyRecorded(
             remote == null ? null : remote.host(),
             req.getHeader("X-Forwarded-For"),
             req.getHeader("X-Real-IP")

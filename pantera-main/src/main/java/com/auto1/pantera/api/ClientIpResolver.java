@@ -63,4 +63,41 @@ public final class ClientIpResolver {
         }
         return peer == null || peer.isBlank() ? null : peer;
     }
+
+    /**
+     * The client address as the trusted proxy itself recorded it, for
+     * decisions a client must not be able to steer (the login throttle).
+     *
+     * <p>A proxy configured the documented way
+     * ({@code X-Forwarded-For $proxy_add_x_forwarded_for}) appends the
+     * peer it saw to whatever {@code X-Forwarded-For} the client sent, so
+     * the leftmost entry is client-controlled even behind the proxy (B16).
+     * With a trusted proxy this returns {@code X-Real-IP} (nginx sets it to
+     * {@code $remote_addr}), else the rightmost {@code X-Forwarded-For}
+     * entry, else the TCP peer; without one, always the TCP peer.</p>
+     *
+     * @param peer TCP peer address (nullable)
+     * @param forwardedFor {@code X-Forwarded-For} header value (nullable)
+     * @param realIp {@code X-Real-IP} header value (nullable)
+     * @return Address to key on, or {@code null} when nothing is known
+     */
+    public String proxyRecorded(final String peer, final String forwardedFor,
+        final String realIp) {
+        String result = null;
+        if (this.trustForwarded) {
+            if (realIp != null && !realIp.isBlank()) {
+                result = realIp.trim();
+            } else if (forwardedFor != null) {
+                final String last = forwardedFor.substring(forwardedFor.lastIndexOf(',') + 1)
+                    .trim();
+                if (!last.isEmpty()) {
+                    result = last;
+                }
+            }
+        }
+        if (result == null && peer != null && !peer.isBlank()) {
+            result = peer;
+        }
+        return result;
+    }
 }
