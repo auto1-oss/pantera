@@ -165,4 +165,64 @@ final class ValkeyRevocationBlocklistTest {
             fresh.close();
         }
     }
+
+    @Test
+    void preUpgradeUserEntryIsRestoredAsARevocation() throws Exception {
+        // B47 rolling upgrade: a 2.2.8 node stored the marker "1" with no
+        // instant; restoring it as epoch second 1 revoked nothing.
+        this.conn.async().setex(
+            "pantera:revoked:user:ivan", 3600,
+            "1".getBytes(java.nio.charset.StandardCharsets.UTF_8)
+        ).get(10, java.util.concurrent.TimeUnit.SECONDS);
+        final Instant issued = Instant.now().minusSeconds(60);
+        final CacheInvalidationPubSub fresh = new CacheInvalidationPubSub(this.conn);
+        try {
+            final ValkeyRevocationBlocklist restarted =
+                new ValkeyRevocationBlocklist(this.conn, fresh, 3600);
+            restarted.restore();
+            MatcherAssert.assertThat(
+                restarted.isRevokedUser("ivan", issued), new IsEqual<>(true)
+            );
+        } finally {
+            fresh.close();
+        }
+    }
+
+    @Test
+    void peersNotYetUpgradedStillReceiveRevocations() throws Exception {
+        // B47 rolling upgrade: a 2.2.8 node decodes only "user:<name>" and
+        // "jti:<jti>" and silently drops the current form.
+        final java.util.Queue<String> heard = new java.util.concurrent.ConcurrentLinkedQueue<>();
+        final CacheInvalidationPubSub old = new CacheInvalidationPubSub(this.conn);
+        try {
+            old.register("revocation", new com.auto1.pantera.asto.misc.Cleanable<String>() {
+                @Override
+                public void invalidate(final String key) {
+                    heard.add(key);
+                }
+
+                @Override
+                public void invalidateAll() {
+                    // Not used.
+                }
+            });
+            this.blocklist.revokeUser("judy", 3600);
+            this.blocklist.revokeJti("jti-judy", 3600);
+            for (int attempt = 0; attempt < 50
+                && !(heard.contains("user:judy") && heard.contains("jti:jti-judy"));
+                attempt += 1) {
+                java.util.concurrent.locks.LockSupport.parkNanos(100_000_000L);
+            }
+            MatcherAssert.assertThat(
+                "a pre-2.2.9 peer must receive the user revocation",
+                heard.contains("user:judy"), new IsEqual<>(true)
+            );
+            MatcherAssert.assertThat(
+                "a pre-2.2.9 peer must receive the JTI revocation",
+                heard.contains("jti:jti-judy"), new IsEqual<>(true)
+            );
+        } finally {
+            old.close();
+        }
+    }
 }

@@ -41,7 +41,9 @@ import java.util.concurrent.TimeUnit;
  *       and, when a database is wired, from the {@code revocation_blocklist}
  *       table;</li>
  *   <li>the pub/sub message carries the sender's revocation instant and
- *       expiry ({@link RevocationMessage});</li>
+ *       expiry ({@link RevocationMessage}), and is followed by the pre-2.2.9
+ *       form so nodes not yet upgraded keep receiving revocations during a
+ *       rolling upgrade;</li>
  *   <li>revocations are also written to the database (when wired), so they
  *       survive a Valkey flush or eviction.</li>
  * </ul>
@@ -50,7 +52,7 @@ import java.util.concurrent.TimeUnit;
  * <ul>
  *   <li>{@code pantera:revoked:jti:{jti}} — value {@code 1}</li>
  *   <li>{@code pantera:revoked:user:{username}} — value: revocation instant in
- *       epoch milliseconds (epoch seconds before 2.2.9)</li>
+ *       epoch milliseconds ({@code 1} before 2.2.9)</li>
  * </ul>
  *
  * @since 2.1.0
@@ -83,11 +85,6 @@ public final class ValkeyRevocationBlocklist implements RevocationBlocklist {
     private static final String TYPE_USER = "username";
 
     /**
-     * Stored values below this are epoch seconds (pre-2.2.9 format).
-     */
-    private static final long MILLIS_THRESHOLD = 100_000_000_000L;
-
-    /**
      * Per-command timeout for the boot-time restore.
      */
     private static final long RESTORE_TIMEOUT_SECONDS = 10L;
@@ -116,6 +113,11 @@ public final class ValkeyRevocationBlocklist implements RevocationBlocklist {
      * Durable fallback store; {@code null} when no database is wired.
      */
     private final RevocationDao dao;
+
+    /**
+     * Decodes peer messages and drops the legacy echo of a current one.
+     */
+    private final RevocationInbox inbox;
 
     /**
      * Local cache: JTI → expiry instant.
@@ -160,6 +162,7 @@ public final class ValkeyRevocationBlocklist implements RevocationBlocklist {
         this.pubSub = pubSub;
         this.defaultTtlSeconds = defaultTtlSeconds;
         this.dao = dao;
+        this.inbox = new RevocationInbox(java.time.Duration.ofMinutes(1));
         this.jtiCache = new ConcurrentHashMap<>();
         this.userCache = new ConcurrentHashMap<>();
         pubSub.register(CACHE_TYPE, new RevocationCacheHandler());
@@ -238,17 +241,16 @@ public final class ValkeyRevocationBlocklist implements RevocationBlocklist {
 
     @Override
     public void revokeJti(final String jti, final int ttlSeconds) {
-        final Instant expires = Instant.now().plusSeconds(ttlSeconds);
+        final Instant now = Instant.now();
+        final Instant expires = now.plusSeconds(ttlSeconds);
         this.jtiCache.merge(jti, expires, ValkeyRevocationBlocklist::later);
-        this.pubSub.publish(
-            CACHE_TYPE, new RevocationMessage(false, jti, expires, expires).encode()
-        );
+        this.broadcast(new RevocationMessage(false, jti, expires, expires));
         this.valkey.async().setex(
             VALKEY_JTI_KEY + jti,
             ttlSeconds,
             "1".getBytes(StandardCharsets.UTF_8)
         );
-        this.persist(TYPE_JTI, jti, ttlSeconds);
+        this.persist(TYPE_JTI, jti, now, ttlSeconds);
     }
 
     @Override
@@ -256,16 +258,27 @@ public final class ValkeyRevocationBlocklist implements RevocationBlocklist {
         final Instant now = Instant.now();
         final UserRevocation rev = new UserRevocation(now, now.plusSeconds(ttlSeconds));
         this.userCache.merge(username, rev, UserRevocation::merge);
-        this.pubSub.publish(
-            CACHE_TYPE,
-            new RevocationMessage(true, username, rev.revokedAt(), rev.expiresAt()).encode()
-        );
+        this.broadcast(new RevocationMessage(true, username, rev.revokedAt(), rev.expiresAt()));
         this.valkey.async().set(
             VALKEY_USER_KEY + username,
             Long.toString(now.toEpochMilli()).getBytes(StandardCharsets.UTF_8),
             SetArgs.Builder.ex(ttlSeconds)
         );
-        this.persist(TYPE_USER, username, ttlSeconds);
+        this.persist(TYPE_USER, username, now, ttlSeconds);
+    }
+
+    /**
+     * Publish a revocation to peers: the current form first, then the
+     * pre-2.2.9 form so nodes not yet upgraded during a rolling upgrade
+     * still apply it. Both go out on the same connection, so every peer
+     * receives them in this order; an upgraded peer drops the second one
+     * ({@link RevocationInbox}).
+     *
+     * @param msg Revocation
+     */
+    private void broadcast(final RevocationMessage msg) {
+        this.pubSub.publish(CACHE_TYPE, msg.encode());
+        this.pubSub.publish(CACHE_TYPE, msg.encodeLegacy());
     }
 
     /**
@@ -274,14 +287,17 @@ public final class ValkeyRevocationBlocklist implements RevocationBlocklist {
      *
      * @param type Entry type
      * @param value JTI or username
+     * @param now Revocation instant, the same one sent to Valkey and peers
      * @param ttlSeconds Lifetime
      */
-    private void persist(final String type, final String value, final int ttlSeconds) {
+    private void persist(
+        final String type, final String value, final Instant now, final int ttlSeconds
+    ) {
         if (this.dao == null) {
             return;
         }
         try {
-            this.dao.insert(type, value, ttlSeconds);
+            this.dao.insert(type, value, now, ttlSeconds);
         } catch (final Exception ex) {
             EcsLogger.warn(LOGGER)
                 .message("Could not persist token revocation to the database;"
@@ -312,9 +328,9 @@ public final class ValkeyRevocationBlocklist implements RevocationBlocklist {
                 continue;
             }
             final Instant now = Instant.now();
-            final long stored = Long.parseLong(new String(raw, StandardCharsets.UTF_8).trim());
-            final Instant revoked = stored < MILLIS_THRESHOLD
-                ? Instant.ofEpochSecond(stored) : Instant.ofEpochMilli(stored);
+            final Instant revoked = RevocationMessage.storedRevokedAt(
+                new String(raw, StandardCharsets.UTF_8), now
+            );
             this.userCache.merge(
                 key.substring(VALKEY_USER_KEY.length()),
                 new UserRevocation(revoked, now.plusMillis(pttl)),
@@ -404,7 +420,7 @@ public final class ValkeyRevocationBlocklist implements RevocationBlocklist {
 
         @Override
         public void invalidate(final String key) {
-            RevocationMessage.decode(
+            ValkeyRevocationBlocklist.this.inbox.accept(
                 key, Instant.now(), ValkeyRevocationBlocklist.this.defaultTtlSeconds
             ).ifPresent(msg -> {
                 if (msg.user()) {

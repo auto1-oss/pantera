@@ -23,7 +23,10 @@ import java.util.Optional;
  * {@code jti:<jti>}) carried neither, so a peer substituted its receipt time
  * and a fixed default TTL — forgetting a 7-day revocation after 2 hours
  * (B47). The earlier form is still decoded (receipt time + default TTL) so
- * a rolling upgrade keeps propagating revocations from older nodes.</p>
+ * a rolling upgrade keeps propagating revocations from older nodes, and
+ * every revocation is also published in the earlier form
+ * ({@link #encodeLegacy()}) so nodes not yet upgraded still receive it;
+ * upgraded peers drop that echo ({@link RevocationInbox}).</p>
  *
  * @param user True for a user-wide revocation, false for a single JTI
  * @param subject Username or JTI
@@ -54,6 +57,17 @@ record RevocationMessage(boolean user, String subject, Instant revokedAt, Instan
     private static final String JTI_LEGACY = "jti:";
 
     /**
+     * Stored values below this are epoch seconds rather than milliseconds.
+     */
+    private static final long MILLIS_THRESHOLD = 100_000_000_000L;
+
+    /**
+     * Stored values below this (2001-09-09 in epoch seconds) are not an
+     * instant at all but the pre-2.2.9 marker {@code 1}.
+     */
+    private static final long MIN_EPOCH_SECONDS = 1_000_000_000L;
+
+    /**
      * Wire form of this message.
      * @return Encoded message
      */
@@ -63,6 +77,52 @@ record RevocationMessage(boolean user, String subject, Instant revokedAt, Instan
                 + this.expiresAt.toEpochMilli() + ':' + this.subject;
         }
         return JTI_EXP + this.expiresAt.toEpochMilli() + ':' + this.subject;
+    }
+
+    /**
+     * Pre-2.2.9 wire form of this message ({@code user:<name>} /
+     * {@code jti:<jti>}), the only form a node not yet upgraded decodes.
+     * @return Encoded legacy message
+     */
+    String encodeLegacy() {
+        if (this.user) {
+            return USER_LEGACY + this.subject;
+        }
+        return JTI_LEGACY + this.subject;
+    }
+
+    /**
+     * Whether this message arrived in the pre-2.2.9 wire form.
+     * @param raw Message payload
+     * @return True for {@code user:} / {@code jti:} messages
+     */
+    static boolean legacy(final String raw) {
+        return raw.startsWith(USER_LEGACY) || raw.startsWith(JTI_LEGACY);
+    }
+
+    /**
+     * Revocation instant held in a {@code pantera:revoked:user:*} Valkey
+     * value. Since 2.2.9 the value is epoch milliseconds; an earlier 2.2.9
+     * build stored epoch seconds; 2.2.8 and older stored the marker
+     * {@code 1}, which carries no instant — then every token issued before
+     * {@code now} is treated as revoked, which errs toward revoking as the
+     * old node itself does.
+     * @param raw Stored value
+     * @param now Restore time
+     * @return Revocation instant
+     * @throws NumberFormatException When the value is not a number
+     */
+    static Instant storedRevokedAt(final String raw, final Instant now) {
+        final long stored = Long.parseLong(raw.trim());
+        final Instant result;
+        if (stored < MIN_EPOCH_SECONDS) {
+            result = now;
+        } else if (stored < MILLIS_THRESHOLD) {
+            result = Instant.ofEpochSecond(stored);
+        } else {
+            result = Instant.ofEpochMilli(stored);
+        }
+        return result;
     }
 
     /**

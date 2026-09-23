@@ -67,4 +67,48 @@ final class RevocationMessageTest {
             new IsEqual<>(Optional.empty())
         );
     }
+
+    @Test
+    void legacyEncodingIsWhatPreUpgradeNodesDecode() {
+        MatcherAssert.assertThat(
+            "a 2.2.8 node matches 'user:' + username",
+            new RevocationMessage(true, "alice", REVOKED, EXPIRES).encodeLegacy(),
+            new IsEqual<>("user:alice")
+        );
+        MatcherAssert.assertThat(
+            "a 2.2.8 node matches 'jti:' + jti",
+            new RevocationMessage(false, "jti-1", EXPIRES, EXPIRES).encodeLegacy(),
+            new IsEqual<>("jti:jti-1")
+        );
+    }
+
+    @Test
+    void storedUserValueInEpochMillisIsTheRevocationInstant() {
+        MatcherAssert.assertThat(
+            RevocationMessage.storedRevokedAt(
+                Long.toString(REVOKED.toEpochMilli()), RECEIVED
+            ),
+            new IsEqual<>(REVOKED)
+        );
+    }
+
+    @Test
+    void storedUserValueInEpochSecondsIsTheRevocationSecond() {
+        MatcherAssert.assertThat(
+            RevocationMessage.storedRevokedAt(
+                Long.toString(REVOKED.getEpochSecond()), RECEIVED
+            ),
+            new IsEqual<>(Instant.ofEpochSecond(REVOKED.getEpochSecond()))
+        );
+    }
+
+    @Test
+    void storedPreUpgradeMarkerRevokesUpToTheRestore() {
+        MatcherAssert.assertThat(
+            "a 2.2.8 node stored '1': the instant is unknown, so every token"
+                + " issued before the restore stays revoked",
+            RevocationMessage.storedRevokedAt("1", RECEIVED),
+            new IsEqual<>(RECEIVED)
+        );
+    }
 }
