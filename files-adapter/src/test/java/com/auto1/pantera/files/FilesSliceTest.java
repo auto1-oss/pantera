@@ -112,6 +112,20 @@ final class FilesSliceTest {
     }
 
     @Test
+    void browserDirectoryGetIsLeftToTheHtmlIndex() {
+        MatcherAssert.assertThat(
+            this.get(
+                "/dir/",
+                FilesSliceTest.auth().copy().add(
+                    "Accept",
+                    "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+                )
+            ).status(),
+            new IsEqual<>(RsStatus.NOT_FOUND)
+        );
+    }
+
+    @Test
     void fileGetStillServesTheBlob() {
         MatcherAssert.assertThat(
             this.get("/dir/b.bin", FilesSliceTest.auth()).body().asBytes().length,

@@ -23,6 +23,7 @@ import com.auto1.pantera.http.auth.TokenAuthentication;
 import com.auto1.pantera.http.auth.OperationControl;
 import com.auto1.pantera.http.headers.Accept;
 import com.auto1.pantera.http.headers.ContentType;
+import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rt.MethodRule;
 import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
@@ -41,6 +42,8 @@ import com.auto1.pantera.security.perms.AdapterBasicPermission;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.vertx.VertxSliceServer;
 
+import java.util.Arrays;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.regex.Pattern;
@@ -80,11 +83,6 @@ public final class FilesSlice extends Slice.Wrap {
      * Repository type.
      */
     private static final String REPO_TYPE = "file";
-
-    /**
-     * Request path of a directory listing: ends with a slash.
-     */
-    private static final Pattern DIRECTORY = Pattern.compile(".*/");
 
     /**
      * Ctor used by Pantera server which knows `Authentication` implementation.
@@ -170,8 +168,10 @@ public final class FilesSlice extends Slice.Wrap {
                             ),
                             new RtRulePath(
                                 // A directory path (trailing slash) can never be a
-                                // stored key: list it as plain text for any Accept.
-                                new RtRule.ByPath(FilesSlice.DIRECTORY),
+                                // stored key: list it as plain text for non-browser
+                                // clients. Browsers fall through to a 404 so the
+                                // wrapping BrowsableSlice renders its HTML index.
+                                new PlainDirectory(),
                                 new ListBlobsSlice(
                                     storage,
                                     BlobListFormat.Standard.TEXT,
@@ -270,6 +270,31 @@ public final class FilesSlice extends Slice.Wrap {
             )
         ) {
             server.start();
+        }
+    }
+
+    /**
+     * Matches a directory request (path ends with a slash) from a client
+     * that did not ask for HTML. A browser navigation lists a
+     * {@code text/html} media range (e.g.
+     * {@code text/html,application/xhtml+xml,...;q=0.9}); such requests are
+     * left to the blob route, whose 404 lets the wrapping
+     * {@code BrowsableSlice} serve its HTML directory index.
+     *
+     * @since 2.2.9
+     */
+    private static final class PlainDirectory implements RtRule {
+
+        @Override
+        public boolean apply(final RequestLine line, final Headers headers) {
+            return line.uri().getPath().endsWith("/")
+                && headers.stream()
+                    .filter(hdr -> Accept.NAME.equalsIgnoreCase(hdr.getKey()))
+                    .flatMap(hdr -> Arrays.stream(hdr.getValue().split(",")))
+                    .noneMatch(
+                        range -> range.trim().toLowerCase(Locale.ROOT)
+                            .startsWith(FilesSlice.HTML_TEXT)
+                    );
         }
     }
 }

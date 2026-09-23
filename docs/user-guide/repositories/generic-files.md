@@ -100,7 +100,7 @@ curl -u your-username:your-jwt-token http://pantera-host:8080/bin/releases/
 curl -u your-username:your-jwt-token -H 'Accept: application/json' http://pantera-host:8080/bin/releases/
 ```
 
-The `Accept` header selects the format: `text/plain` (the default for a path ending with `/`), `application/json`, or `text/html` (a list of links). A browser opening a directory path gets an HTML index page.
+The `Accept` header selects the format: `text/plain` (the default for a path ending with `/`, including `Accept: */*`), `application/json`, or exactly `text/html` (a flat list of links). A browser, whose `Accept` header lists `text/html` among other types, gets the HTML directory index page, one directory level at a time.
 
 You can also browse file repositories through the Management UI by navigating to the repository detail page.
 
