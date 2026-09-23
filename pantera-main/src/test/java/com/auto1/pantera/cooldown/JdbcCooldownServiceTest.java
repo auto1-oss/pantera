@@ -41,6 +41,8 @@ import java.util.concurrent.Executors;
 import javax.sql.DataSource;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
+import org.hamcrest.collection.IsEmptyCollection;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -201,9 +203,9 @@ final class JdbcCooldownServiceTest {
         this.service.evaluate(request, inspector).join();
         this.service.unblockAll("npm-proxy", "npm", "eve").join();
         MatcherAssert.assertThat(
-            "Record should be deleted after unblock",
-            this.recordExists("npm", "main", "1.0.0"),
-            Matchers.is(false)
+            "Record should be released (INACTIVE) after unblock",
+            this.statusOf("npm", "main", "1.0.0"),
+            new IsEqual<>(Optional.of("INACTIVE"))
         );
     }
 
@@ -470,9 +472,9 @@ final class JdbcCooldownServiceTest {
         );
         this.service.unblock("npm-proxy", "npm", "left-pad", "1.1.0", "alice").join();
         MatcherAssert.assertThat(
-            "Live row should be gone after release",
-            this.recordExists("npm", "left-pad", "1.1.0"),
-            Matchers.is(false)
+            "Live row should be released (INACTIVE), not deleted",
+            this.statusOf("npm", "left-pad", "1.1.0"),
+            new IsEqual<>(Optional.of("INACTIVE"))
         );
         final List<DbHistoryRecord> history = this.repository.findHistoryPaginated(
             Set.of("npm"), null, null, null, "archived_at", false, 0, 50
@@ -511,14 +513,16 @@ final class JdbcCooldownServiceTest {
         );
         this.service.unblockAll("npm-proxy", "npm", "alice").join();
         MatcherAssert.assertThat(
-            "All target-repo live rows should be gone",
-            this.recordExists("npm", "pkg0", "1.0.0"), Matchers.is(false)
+            "All target-repo live rows should be released",
+            this.statusOf("npm", "pkg0", "1.0.0"), new IsEqual<>(Optional.of("INACTIVE"))
         );
         MatcherAssert.assertThat(
-            this.recordExists("npm", "pkg1", "1.0.1"), Matchers.is(false)
+            "pkg1 released",
+            this.statusOf("npm", "pkg1", "1.0.1"), new IsEqual<>(Optional.of("INACTIVE"))
         );
         MatcherAssert.assertThat(
-            this.recordExists("npm", "pkg2", "1.0.2"), Matchers.is(false)
+            "pkg2 released",
+            this.statusOf("npm", "pkg2", "1.0.2"), new IsEqual<>(Optional.of("INACTIVE"))
         );
         MatcherAssert.assertThat(
             "Unrelated repo's row must remain live",
@@ -725,6 +729,327 @@ final class JdbcCooldownServiceTest {
             callbackCalls,
             Matchers.hasItem("maven-proxy:central:com.gap1.pkg:1.2.3")
         );
+    }
+
+    @Test
+    void manualUnblockSurvivesDecisionCacheLossOnKnownDatePath() {
+        // Prod 2026-09-23: the unblock deleted the row, so once the "allowed"
+        // decision aged out of the cache the next metadata filter saw no row,
+        // a fresh release date, and re-blocked the version every ~30 minutes.
+        final Instant released = Instant.now().minus(Duration.ofHours(17));
+        final CooldownRequest request = new CooldownRequest(
+            "npm-proxy", "npm_proxy", "@scope/pkg", "2.1.280", "alice", Instant.now()
+        );
+        MatcherAssert.assertThat(
+            "fresh release is blocked before the unblock",
+            this.service.evaluateWithKnownDate(request, Optional.of(released)).join().blocked(),
+            new IsEqual<>(true)
+        );
+        this.service.unblock("npm-proxy", "npm_proxy", "@scope/pkg", "2.1.280", "alice").join();
+        MatcherAssert.assertThat(
+            "re-evaluation with an empty decision cache stays allowed",
+            this.freshService().evaluateWithKnownDate(request, Optional.of(released)).join().blocked(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "no new ACTIVE block row is created",
+            this.statusOf("npm_proxy", "@scope/pkg", "2.1.280"),
+            new IsEqual<>(Optional.of("INACTIVE"))
+        );
+    }
+
+    @Test
+    void manualUnblockSurvivesDecisionCacheLossOnInspectorPath() {
+        final CooldownRequest request = new CooldownRequest(
+            "npm-proxy", "npm_proxy", "tarball-pkg", "1.0.0", "alice", Instant.now()
+        );
+        final CooldownInspector inspector = JdbcCooldownServiceTest.releasedAt(
+            Instant.now().minus(Duration.ofHours(2))
+        );
+        MatcherAssert.assertThat(
+            "fresh release is blocked before the unblock",
+            this.service.evaluate(request, inspector).join().blocked(),
+            new IsEqual<>(true)
+        );
+        this.service.unblock("npm-proxy", "npm_proxy", "tarball-pkg", "1.0.0", "alice").join();
+        MatcherAssert.assertThat(
+            "tarball evaluation with an empty decision cache stays allowed",
+            this.freshService().evaluate(request, inspector).join().blocked(),
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void unblockAllSurvivesDecisionCacheLoss() {
+        final Instant released = Instant.now().minus(Duration.ofHours(3));
+        for (int idx = 0; idx < 3; idx++) {
+            this.service.evaluateWithKnownDate(
+                new CooldownRequest("npm-proxy", "npm_proxy", "bulk" + idx, "1.0.0", "u", Instant.now()),
+                Optional.of(released)
+            ).join();
+        }
+        this.service.unblockAll("npm-proxy", "npm_proxy", "alice").join();
+        final JdbcCooldownService fresh = this.freshService();
+        for (int idx = 0; idx < 3; idx++) {
+            MatcherAssert.assertThat(
+                "bulk-unblocked bulk" + idx + " stays allowed after cache loss",
+                fresh.evaluateWithKnownDate(
+                    new CooldownRequest("npm-proxy", "npm_proxy", "bulk" + idx, "1.0.0", "u", Instant.now()),
+                    Optional.of(released)
+                ).join().blocked(),
+                new IsEqual<>(false)
+            );
+        }
+        MatcherAssert.assertThat(
+            "released rows are not counted as active",
+            this.repository.countActiveBlocks("npm-proxy", "npm_proxy"),
+            new IsEqual<>(0L)
+        );
+    }
+
+    @Test
+    void unblockOnlyReleasesTheNamedVersion() {
+        final Instant released = Instant.now().minus(Duration.ofHours(1));
+        final CooldownRequest unblocked = new CooldownRequest(
+            "npm-proxy", "npm_proxy", "multi", "1.0.0", "u", Instant.now()
+        );
+        final CooldownRequest sibling = new CooldownRequest(
+            "npm-proxy", "npm_proxy", "multi", "1.0.1", "u", Instant.now()
+        );
+        this.service.evaluateWithKnownDate(unblocked, Optional.of(released)).join();
+        this.service.evaluateWithKnownDate(sibling, Optional.of(released)).join();
+        this.service.unblock("npm-proxy", "npm_proxy", "multi", "1.0.0", "alice").join();
+        final JdbcCooldownService fresh = this.freshService();
+        MatcherAssert.assertThat(
+            "unblocked version is allowed",
+            fresh.evaluateWithKnownDate(unblocked, Optional.of(released)).join().blocked(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "sibling version stays blocked",
+            fresh.evaluateWithKnownDate(sibling, Optional.of(released)).join().blocked(),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void releasedRowIsHiddenFromActiveViewsAndKeepsUnblockActor() {
+        final Instant now = Instant.now();
+        this.repository.insertBlock(
+            "npm-proxy", "npm_proxy", "hidden", "1.0.0", CooldownReason.FRESH_RELEASE,
+            now, now.plus(Duration.ofDays(3)), "system", Optional.empty(), Optional.of(now)
+        );
+        this.service.unblock("npm-proxy", "npm_proxy", "hidden", "1.0.0", "alice").join();
+        MatcherAssert.assertThat(
+            "activeBlocks omits the released row",
+            this.service.activeBlocks("npm-proxy", "npm_proxy").join(),
+            new IsEmptyCollection<>()
+        );
+        MatcherAssert.assertThat(
+            "paginated active view omits the released row",
+            this.repository.findActivePaginated(
+                Set.of("npm_proxy"), null, null, null, "blocked_at", false, 0, 50
+            ),
+            new IsEmptyCollection<>()
+        );
+        final DbBlockRecord row = this.repository.find(
+            "npm-proxy", "npm_proxy", "hidden", "1.0.0"
+        ).orElseThrow();
+        MatcherAssert.assertThat("row is INACTIVE", row.status(), new IsEqual<>(BlockStatus.INACTIVE));
+        MatcherAssert.assertThat(
+            "unblock actor recorded", row.unblockedBy(), new IsEqual<>(Optional.of("alice"))
+        );
+        MatcherAssert.assertThat(
+            "unblock time recorded", row.unblockedAt().isPresent(), new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void paginatedActiveViewSkipsAllBlockedMarkers() {
+        final Instant now = Instant.now();
+        this.repository.insertBlock(
+            "npm-proxy", "npm_proxy", "listed", "1.0.0", CooldownReason.FRESH_RELEASE,
+            now, now.plus(Duration.ofDays(3)), "system", Optional.empty(), Optional.empty()
+        );
+        this.repository.markAllBlocked("npm-proxy", "npm_proxy", "listed");
+        MatcherAssert.assertThat(
+            "only the real block is listed",
+            this.repository.findActivePaginated(
+                Set.of("npm_proxy"), null, null, null, "blocked_at", false, 0, 50
+            ).size(),
+            new IsEqual<>(1)
+        );
+        MatcherAssert.assertThat(
+            "count matches the listing",
+            this.repository.countActiveBlocks(Set.of("npm_proxy"), null, null, null),
+            new IsEqual<>(1L)
+        );
+    }
+
+    @Test
+    void repeatedUnblockWritesOneHistoryRow() {
+        final Instant now = Instant.now();
+        this.repository.insertBlock(
+            "npm-proxy", "npm_proxy", "twice", "1.0.0", CooldownReason.FRESH_RELEASE,
+            now, now.plus(Duration.ofDays(3)), "system", Optional.empty(), Optional.empty()
+        );
+        this.service.unblock("npm-proxy", "npm_proxy", "twice", "1.0.0", "alice").join();
+        this.service.unblock("npm-proxy", "npm_proxy", "twice", "1.0.0", "bob").join();
+        final List<DbHistoryRecord> history = this.repository.findHistoryPaginated(
+            Set.of("npm_proxy"), null, null, null, "archived_at", false, 0, 50
+        );
+        MatcherAssert.assertThat("one history row", history.size(), new IsEqual<>(1));
+        MatcherAssert.assertThat(
+            "first actor kept", history.get(0).archivedBy(), new IsEqual<>("alice")
+        );
+    }
+
+    @Test
+    void unblockWithoutRowIsHarmless() {
+        this.service.unblock("npm-proxy", "npm_proxy", "never-blocked", "1.0.0", "alice").join();
+        MatcherAssert.assertThat(
+            this.statusOf("npm_proxy", "never-blocked", "1.0.0"), new IsEqual<>(Optional.empty())
+        );
+    }
+
+    @Test
+    void releasedRowIsPurgedOnlyAfterBlockedUntil() {
+        final Instant now = Instant.now();
+        this.repository.insertBlock(
+            "npm-proxy", "npm_proxy", "gone", "1.0.0", CooldownReason.FRESH_RELEASE,
+            now.minus(Duration.ofDays(8)), now.minus(Duration.ofMinutes(1)), "system",
+            Optional.empty(), Optional.empty()
+        );
+        this.repository.insertBlock(
+            "npm-proxy", "npm_proxy", "kept", "1.0.0", CooldownReason.FRESH_RELEASE,
+            now, now.plus(Duration.ofDays(3)), "system", Optional.empty(), Optional.empty()
+        );
+        this.service.unblock("npm-proxy", "npm_proxy", "gone", "1.0.0", "alice").join();
+        this.service.unblock("npm-proxy", "npm_proxy", "kept", "1.0.0", "alice").join();
+        MatcherAssert.assertThat(
+            "one released row is past blocked_until",
+            this.repository.purgeReleasedBatch(100), new IsEqual<>(1)
+        );
+        MatcherAssert.assertThat(
+            "expired released row removed",
+            this.statusOf("npm_proxy", "gone", "1.0.0"), new IsEqual<>(Optional.empty())
+        );
+        MatcherAssert.assertThat(
+            "still-running released row kept",
+            this.statusOf("npm_proxy", "kept", "1.0.0"), new IsEqual<>(Optional.of("INACTIVE"))
+        );
+    }
+
+    @Test
+    void expiryCleanupLeavesReleasedRowsAlone() {
+        final Instant now = Instant.now();
+        this.repository.insertBlock(
+            "npm-proxy", "npm_proxy", "released", "1.0.0", CooldownReason.FRESH_RELEASE,
+            now.minus(Duration.ofDays(8)), now.minus(Duration.ofMinutes(1)), "system",
+            Optional.empty(), Optional.empty()
+        );
+        this.service.unblock("npm-proxy", "npm_proxy", "released", "1.0.0", "alice").join();
+        MatcherAssert.assertThat(
+            "expiry archive only touches ACTIVE rows",
+            this.repository.archiveExpiredBatch(100), new IsEqual<>(0)
+        );
+        MatcherAssert.assertThat(
+            "no second (EXPIRED) history row",
+            this.repository.findHistoryPaginated(
+                Set.of("npm_proxy"), null, null, null, "archived_at", false, 0, 50
+            ).size(),
+            new IsEqual<>(1)
+        );
+    }
+
+    @Test
+    void expiredBlockIsReleasedOnNextEvaluationAndInvalidatesEnvelope() {
+        final Instant now = Instant.now();
+        this.repository.insertBlock(
+            "npm-proxy", "npm_proxy", "expiring", "1.0.0", CooldownReason.FRESH_RELEASE,
+            now.minus(Duration.ofDays(8)), now.minus(Duration.ofSeconds(1)), "system",
+            Optional.empty(), Optional.of(now.minus(Duration.ofDays(8)))
+        );
+        final TrackingCache envelopes = new TrackingCache();
+        this.service.setEnvelopeInvalidator(envelopes);
+        MatcherAssert.assertThat(
+            "block past its window is allowed",
+            this.service.evaluateWithKnownDate(
+                new CooldownRequest("npm-proxy", "npm_proxy", "expiring", "1.0.0", "u", now),
+                Optional.of(now.minus(Duration.ofDays(8)))
+            ).join().blocked(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "expired row archived out of the live table",
+            this.statusOf("npm_proxy", "expiring", "1.0.0"), new IsEqual<>(Optional.empty())
+        );
+        MatcherAssert.assertThat(
+            "envelope dropped on expiry",
+            envelopes.wasInvalidated("npm-proxy", "npm_proxy", "expiring"), new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void shortenedPolicyReleasesActiveBlockOnNextEvaluation() {
+        final Instant released = Instant.now().minus(Duration.ofDays(2));
+        final CooldownRequest request = new CooldownRequest(
+            "npm-proxy", "npm_proxy", "policy", "1.0.0", "u", Instant.now()
+        );
+        MatcherAssert.assertThat(
+            "blocked under the default 72h policy",
+            this.service.evaluateWithKnownDate(request, Optional.of(released)).join().blocked(),
+            new IsEqual<>(true)
+        );
+        final CooldownSettings shorter = CooldownSettings.defaults();
+        shorter.update(true, Duration.ofDays(1), java.util.Map.of());
+        MatcherAssert.assertThat(
+            "block no longer warranted under the 1d policy",
+            new JdbcCooldownService(shorter, this.repository, this.executor)
+                .evaluateWithKnownDate(request, Optional.of(released)).join().blocked(),
+            new IsEqual<>(false)
+        );
+    }
+
+    private JdbcCooldownService freshService() {
+        return new JdbcCooldownService(CooldownSettings.defaults(), this.repository, this.executor);
+    }
+
+    private static CooldownInspector releasedAt(final Instant when) {
+        return new CooldownInspector() {
+            @Override
+            public CompletableFuture<Optional<Instant>> releaseDate(
+                final String artifact, final String version
+            ) {
+                return CompletableFuture.completedFuture(Optional.of(when));
+            }
+
+            @Override
+            public CompletableFuture<List<CooldownDependency>> dependencies(
+                final String artifact, final String version
+            ) {
+                return CompletableFuture.completedFuture(List.of());
+            }
+        };
+    }
+
+    private Optional<String> statusOf(final String repo, final String artifact, final String version) {
+        try (Connection conn = this.dataSource.getConnection();
+            PreparedStatement stmt = conn.prepareStatement(
+                "SELECT status FROM artifact_cooldowns WHERE repo_name = ? AND artifact = ? AND version = ?"
+            )) {
+            stmt.setString(1, repo);
+            stmt.setString(2, artifact);
+            stmt.setString(3, version);
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    return Optional.of(rs.getString(1));
+                }
+                return Optional.empty();
+            }
+        } catch (final SQLException err) {
+            throw new IllegalStateException(err);
+        }
     }
 
     private void truncate() {

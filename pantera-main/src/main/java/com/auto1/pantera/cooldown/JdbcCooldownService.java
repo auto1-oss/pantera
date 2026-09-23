@@ -1235,7 +1235,8 @@ final class JdbcCooldownService implements CooldownService {
         final String actor
     ) {
         final Optional<DbBlockRecord> record = this.repository.find(repoType, repoName, artifact, version);
-        record.ifPresent(value -> this.release(value, actor, Instant.now()));
+        record.filter(value -> value.status() == BlockStatus.ACTIVE)
+            .ifPresent(value -> this.release(value, actor, Instant.now()));
     }
 
     private int unblockAllBlocking(
@@ -1244,18 +1245,18 @@ final class JdbcCooldownService implements CooldownService {
         final String actor
     ) {
         final Instant now = Instant.now();
-        // Log each active block before bulk delete
+        // Log each active block before the bulk release
         final List<DbBlockRecord> blocks = this.repository.findActiveForRepo(repoType, repoName);
         for (final DbBlockRecord record : blocks) {
             EcsLogger.debug("com.auto1.pantera.cooldown")
-                .message("Deleting unblocked cooldown block (bulk unblock-all): reason=" + record.reason().name()
+                .message("Releasing cooldown block (bulk unblock-all): reason=" + record.reason().name()
                     + " blocked_at=" + record.blockedAt()
                     + " blocked_until=" + record.blockedUntil()
                     + " blocked_by=" + record.blockedBy()
                     + " unblocked_by=" + actor
                     + " unblocked_at=" + now)
                 .eventCategory("database")
-                .eventAction("block_unblocked_delete")
+                .eventAction("block_released")
                 .field("package.name", record.artifact())
                 .field("package.version", record.version())
                 .field("repository.type", repoType)
@@ -1263,30 +1264,34 @@ final class JdbcCooldownService implements CooldownService {
                 .field("log.source", "application")
                 .log();
         }
-        // Single bulk archive+delete instead of N individual updates so that
-        // every unblocked row leaves a MANUAL_UNBLOCK history trail.
-        final int count = this.repository.archiveAndDeleteByRepo(
+        // Single bulk archive+release instead of N individual updates: every
+        // unblocked row leaves a MANUAL_UNBLOCK history trail and stays in the
+        // live table as INACTIVE, so the release survives decision-cache loss.
+        return this.repository.archiveAndReleaseByRepo(
             repoType, repoName, ArchiveReason.MANUAL_UNBLOCK, actor);
-        return count;
     }
 
     private void release(final DbBlockRecord record, final String actor, final Instant when) {
         EcsLogger.info("com.auto1.pantera.cooldown")
-            .message("Deleting unblocked cooldown block: reason=" + record.reason().name()
+            .message("Releasing cooldown block (manual unblock, kept INACTIVE until"
+                + " blocked_until): reason=" + record.reason().name()
                 + " blocked_at=" + record.blockedAt()
                 + " blocked_until=" + record.blockedUntil()
                 + " blocked_by=" + record.blockedBy()
                 + " unblocked_by=" + actor
                 + " unblocked_at=" + when)
             .eventCategory("database")
-            .eventAction("block_unblocked_delete")
+            .eventAction("block_released")
             .field("package.name", record.artifact())
             .field("package.version", record.version())
             .field("repository.type", record.repoType())
             .field("repository.name", record.repoName())
             .field("log.source", "application")
             .log();
-        this.repository.archiveAndDelete(
+        // Archive + mark INACTIVE (not delete): a deleted row let the next
+        // evaluation that missed the decision cache re-create the block from
+        // the release date, silently undoing the unblock.
+        this.repository.archiveAndRelease(
             record.id(),
             ArchiveReason.MANUAL_UNBLOCK,
             actor);
