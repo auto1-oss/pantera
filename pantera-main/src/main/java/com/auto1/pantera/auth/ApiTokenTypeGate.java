@@ -46,16 +46,36 @@ public final class ApiTokenTypeGate {
      * @return {@code true} iff the type is in scope for the route
      */
     public static boolean allows(final String path, final TokenType type) {
-        final boolean refreshRoute = path != null && path.endsWith(REFRESH_ROUTE);
-        if (refreshRoute) {
+        final String route = ApiTokenTypeGate.canonical(path);
+        if (route.endsWith(REFRESH_ROUTE)) {
             return type == TokenType.REFRESH;
         }
-        if (path != null && path.endsWith(GENERATE_ROUTE)) {
+        if (route.endsWith(GENERATE_ROUTE)) {
             // Only the signed-in session mints API tokens: an API token
             // minting another (possibly permanent) one would outlive its
             // own expiry and revocation (B103).
             return type == TokenType.ACCESS;
         }
         return type == TokenType.ACCESS || type == TokenType.API;
+    }
+
+    /**
+     * The path as Vert.x-web routes it: runs of {@code /} collapsed and
+     * trailing slashes dropped. Matching the raw path let
+     * {@code /auth/token/generate/} and {@code /auth//token/generate}
+     * reach the handler while missing the suffix check (B103).
+     *
+     * @param path Raw request path (nullable)
+     * @return Canonical path, never {@code null}
+     */
+    private static String canonical(final String path) {
+        if (path == null) {
+            return "";
+        }
+        String route = path.replaceAll("/{2,}", "/");
+        while (route.length() > 1 && route.endsWith("/")) {
+            route = route.substring(0, route.length() - 1);
+        }
+        return route;
     }
 }

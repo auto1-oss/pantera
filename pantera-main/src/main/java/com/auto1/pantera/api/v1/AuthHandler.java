@@ -948,6 +948,19 @@ public final class AuthHandler {
      * @param ctx Routing context
      */
     private void generateTokenEndpoint(final RoutingContext ctx) {
+        // SECURITY (2.2.9, B103): only the signed-in session (ACCESS) mints
+        // API tokens. Enforced here on the verified type the /api/v1 filter
+        // stamps on the principal, so a non-canonical path (trailing or
+        // doubled slash) that the router still sends here cannot let an API
+        // or refresh token mint a new, possibly permanent, API token.
+        final String type = ctx.user() == null ? ""
+            : ctx.user().principal().getString(AuthTokenRest.TYPE, "");
+        if (!com.auto1.pantera.auth.TokenType.ACCESS.value().equals(type)) {
+            ApiResponse.sendError(
+                ctx, 401, "UNAUTHORIZED", "A session token is required to generate API tokens"
+            );
+            return;
+        }
         final JsonObject body = ctx.body().asJsonObject();
         final String label = body != null
             ? body.getString("label", "API Token") : "API Token";

@@ -118,6 +118,27 @@ final class ApiTokenTypeGateTest {
     }
 
     @Test
+    void nonCanonicalGeneratePathsAreStillGated() {
+        // B103: Vert.x-web routes a trailing slash and a doubled slash to
+        // the generate handler, so the gate must see through both.
+        MatcherAssert.assertThat(
+            "a trailing slash must not let an API token mint",
+            ApiTokenTypeGate.allows("/api/v1/auth/token/generate/", TokenType.API),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "a doubled slash must not let an API token mint",
+            ApiTokenTypeGate.allows("/api/v1/auth//token/generate", TokenType.API),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "a trailing slash must not let an ACCESS token refresh",
+            ApiTokenTypeGate.allows("/api/v1/auth/refresh//", TokenType.ACCESS),
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
     void accessAndApiTokensAuthorizeOrdinaryRoutes() {
         MatcherAssert.assertThat(
             "an ACCESS token authorizes ordinary routes",
