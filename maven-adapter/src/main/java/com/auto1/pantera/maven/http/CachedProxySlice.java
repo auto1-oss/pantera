@@ -37,7 +37,7 @@ import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.maven.cooldown.MavenMetadataFilter;
 import com.auto1.pantera.maven.cooldown.MavenMetadataParser;
-import com.auto1.pantera.maven.cooldown.MavenMetadataRequestDetector;
+import com.auto1.pantera.maven.cooldown.MavenMetadataCoordinates;
 import com.auto1.pantera.maven.cooldown.MavenMetadataRewriter;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
@@ -65,7 +65,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Supplier;
 import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import org.reactivestreams.Publisher;
 
@@ -142,15 +141,6 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
      * same behaviour as before the metadata filter was wired.
      */
     private final CooldownMetadataService cooldownMetadata;
-
-    /**
-     * Per-input materialised filter cache: a stable upstream payload sha256
-     * inside a 1 h bucket yields the same filtered bytes without re-running
-     * the parser/filter/rewriter chain on every request. Sits ahead of
-     * {@link CooldownMetadataService}'s version-keyed cache.
-     */
-    private final PerInputFilteredMetadataCache materialisedCache =
-        new PerInputFilteredMetadataCache();
 
     /**
      * Constructor with full configuration (no metadata filtering).
@@ -309,35 +299,25 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
     protected Optional<CooldownRequest> buildCooldownRequest(
         final String path, final Headers headers
     ) {
-        // Strip leading '/' for pattern matching (Key format has no leading slash)
-        final String keyPath = path.startsWith("/") ? path.substring(1) : path;
-        final Matcher matcher = MavenSlice.ARTIFACT.matcher(keyPath);
-        if (!matcher.matches()) {
+        // Every primary file of a version (jar, pom, Gradle .module, war,
+        // aar, classifier jars incl. -sources/-javadoc) is gated under the
+        // main jar's (artifact, version) key so one unblock covers them all;
+        // checksum/signature sidecars carry no key (see MavenVersionFile).
+        if (this.isChecksumSidecar(path)) {
             return Optional.empty();
         }
-        final String pkg = matcher.group("pkg");
-        final int idx = pkg.lastIndexOf('/');
-        if (idx < 0 || idx == pkg.length() - 1) {
+        final Optional<MavenVersionFile> file = MavenVersionFile.parse(path)
+            .filter(MavenVersionFile::gated);
+        if (file.isEmpty()) {
             return Optional.empty();
         }
-        final String dirVersion = pkg.substring(idx + 1);
-        final String artifact = MavenSlice.EVENT_INFO.formatArtifactName(
-            pkg.substring(0, idx)
-        );
-        // SNAPSHOT timestamped artifacts (e.g. lib-1.0-20260519.090000-1.jar)
-        // live under a SNAPSHOT directory but each upload has a distinct
-        // version stamp. Use the timestamp form as the cooldown version so
-        // admission gates and DB rows differentiate uploads — falling back to
-        // the directory name for release artifacts and non-timestamped
-        // SNAPSHOTs (lib-1.0-SNAPSHOT.jar).
-        final String version = extractSnapshotVersion(keyPath).orElse(dirVersion);
         final String user = new Login(headers).getValue();
         return Optional.of(
             new CooldownRequest(
                 this.repoType(),
                 this.repoName(),
-                artifact,
-                version,
+                file.get().artifact(),
+                file.get().version(),
                 user,
                 Instant.now()
             )
@@ -345,35 +325,19 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
     }
 
     /**
-     * Maven SNAPSHOT timestamp pattern: matches an artifact basename of the
-     * form {@code <artifactId>-<base>-<yyyyMMdd.HHmmss>-<buildNumber>[-<classifier>].<ext>}.
-     * Capture group 1 isolates the {@code <base>} stem (e.g. {@code 1.0}),
-     * group 2 isolates the timestamped portion. The two groups are joined to
-     * form the canonical timestamped version used by Maven Resolver.
-     * Released artifacts and non-timestamped SNAPSHOTs do not match.
-     */
-    private static final Pattern SNAPSHOT_TIMESTAMP = Pattern.compile(
-        "^[^/]+?-([^/]+)-(\\d{8}\\.\\d{6}-\\d+)(?:-[^.]+)?\\.[^.]+$"
-    );
-
-    /**
-     * Extract the timestamped SNAPSHOT version from a Maven artifact path.
-     * Combines the base version stem with the {@code yyyyMMdd.HHmmss-N}
-     * suffix from the basename — e.g. {@code lib-1.0-20260519.090000-1.jar}
-     * yields {@code 1.0-20260519.090000-1}. Classifier suffixes (
-     * {@code -sources}, {@code -javadoc}, {@code -tests}) are accommodated.
+     * Extract the timestamped SNAPSHOT version from a Maven artifact path,
+     * e.g. {@code my-lib/1.0-SNAPSHOT/my-lib-1.0-20260519.090000-1-sources.jar}
+     * yields {@code 1.0-20260519.090000-1}. The base version is taken from the
+     * directory and the artifactId from its parent, so hyphenated artifactIds
+     * never mis-split.
      *
-     * @param path Request path (no leading slash)
-     * @return Combined {@code base-timestamp-build} cooldown version, or empty
+     * @param path Request path (leading slash optional)
+     * @return Timestamped cooldown version, or empty for releases and
+     *  non-timestamped SNAPSHOT files
      */
     static Optional<String> extractSnapshotVersion(final String path) {
-        final int slash = path.lastIndexOf('/');
-        final String basename = slash >= 0 ? path.substring(slash + 1) : path;
-        final Matcher m = SNAPSHOT_TIMESTAMP.matcher(basename);
-        if (m.matches()) {
-            return Optional.of(m.group(1) + "-" + m.group(2));
-        }
-        return Optional.empty();
+        return MavenVersionFile.parse(path)
+            .flatMap(MavenVersionFile::snapshotTimestampVersion);
     }
 
     @Override
@@ -464,23 +428,20 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         // Refreshed-content hook: when a 200 replaces the cached
         // maven-metadata.xml (cold miss, SWR background refresh, or
         // hard-TTL fall-through alike), drop the package's cooldown
-        // filtered-metadata envelope — shared L1+L2, all repos — and this
-        // slice's materialised filtered-output entries. Without this, a
+        // filtered-metadata envelope — shared L1+L2, all repos. Without this, a
         // refreshed upstream version list kept serving the PRE-refresh
         // filtered envelope for the envelope's own TTL (the maven twin of
         // the npm 2.2.6 stale-packument incident); nothing on the maven
         // proxy path ever called invalidateAfterProxyRefresh before 2.2.7.
         // Same dotted coordinate as applyMetadataCooldown passes to
         // filterMetadata, so the envelope key shapes match exactly.
-        final Optional<String> dottedPkg = new MavenMetadataRequestDetector()
-            .extractPackageName(line.uri().getPath())
-            .map(name -> name.replace('/', '.'));
-        final Runnable onRefreshed = () -> dottedPkg.ifPresent(pkg -> {
-            com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry
+        final Optional<String> dottedPkg = new MavenMetadataCoordinates()
+            .packageName(line.uri().getPath());
+        final Runnable onRefreshed = () -> dottedPkg.ifPresent(
+            pkg -> com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheRegistry
                 .instance()
-                .invalidateAfterProxyRefresh(this.repoType(), pkg);
-            this.materialisedCache.invalidate(this.repoType(), this.repoName(), pkg);
-        });
+                .invalidateAfterProxyRefresh(this.repoType(), pkg)
+        );
         final CompletableFuture<Optional<Content>> loaded = this.metadataCache.load(
             key,
             request -> this.fetchMetadata(line, request),
@@ -497,9 +458,8 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 // listing view; audit with nothing filtered.
                 final com.auto1.pantera.audit.AuditContext metaCtx =
                     this.captureAuditContext(inboundHeaders);
-                final String pkg = new MavenMetadataRequestDetector()
-                    .extractPackageName(line.uri().getPath())
-                    .map(name -> name.replace('/', '.'))
+                final String pkg = new MavenMetadataCoordinates()
+                    .packageName(line.uri().getPath())
                     .orElseGet(() -> line.uri().getPath());
                 com.auto1.pantera.audit.AuditLogger.resolution(
                     metaCtx, this.repoType(), this.repoName(), pkg,
@@ -594,8 +554,8 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         );
         final String owner = new Login(inboundHeaders).getValue();
         final String path = line.uri().getPath();
-        final Optional<String> pkgOpt = new MavenMetadataRequestDetector()
-            .extractPackageName(path);
+        final MavenMetadataCoordinates coords = new MavenMetadataCoordinates();
+        final Optional<String> pkgOpt = coords.packageName(path);
         if (pkgOpt.isEmpty()) {
             // Path didn't parse as a package coordinate — the metadata is
             // still served (unfiltered), so audit the view; the filter
@@ -608,15 +568,20 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 bytes -> buildMetadataResponse(inboundHeaders, bytes)
             );
         }
-        // extractPackageName returns SLASHED format (com/google/guava/guava)
-        // — the MavenHeadSource that resolves release dates splits on the last
-        // DOT to derive groupId/artifactId, so a slashed name silently produces
-        // an empty inspector lookup and the filter fails open ("0 blocked"
-        // even when the version is well past its publish-date window). Convert
-        // to dotted before handing it to the metadata service. Mirrors the
-        // same conversion applied in MavenGroupSlice.applyCooldownFilter.
-        final boolean snapshot = isSnapshotMetadataPath(path);
-        final String packageName = pkgOpt.get().replace('/', '.');
+        // DOTTED package (com.google.guava.guava): the MavenHeadSource that
+        // resolves release dates splits on the last DOT to derive
+        // groupId/artifactId, so a slashed name would silently produce an
+        // empty inspector lookup and fail open. For snapshot-level metadata
+        // (.../my-lib/1.0-SNAPSHOT/maven-metadata.xml) the version dir is
+        // NOT part of the package: snapshot downloads record block rows as
+        // (com.example.my-lib, 1.0-20260519.090000-1), and the snapshot
+        // parser lists exactly those timestamped versions — so decisions,
+        // rows and unblocks line up. The snapshot-level envelope gets its
+        // own variant so it never collides with the artifact-level envelope
+        // of the same package.
+        final Optional<String> variant = coords.envelopeVariant(path);
+        final boolean snapshot = variant.isPresent();
+        final String packageName = pkgOpt.get();
         final com.auto1.pantera.cooldown.metadata.MetadataParser<org.w3c.dom.Document> parser;
         final com.auto1.pantera.cooldown.metadata.MetadataFilter<org.w3c.dom.Document> filter;
         final com.auto1.pantera.cooldown.metadata.MetadataRewriter<org.w3c.dom.Document> rewriter;
@@ -646,38 +611,27 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
             filter = new MavenMetadataFilter();
             rewriter = new MavenMetadataRewriter();
         }
+        // No private filtered-bytes cache in front of the service: the
+        // service's envelope cache (FilteredMetadataCache) already caches
+        // the filtered result per package and is the one cache every block,
+        // unblock, expiry and refresh invalidates — a slice-local cache here
+        // would keep serving pre-unblock bytes that no cooldown event can
+        // reach. The service also emits the artifact_resolution audit.
         return content.asBytesFuture().thenCompose(bytes -> {
-            final String sha = PerInputFilteredMetadataCache.sha256(bytes);
-            final Optional<byte[]> cached = this.materialisedCache.get(
-                this.repoType(), this.repoName(), packageName, sha
-            );
-            if (cached.isPresent()) {
-                // Materialised filtered-output cache hit: the listing view is
-                // still served to THIS requester — audit it. The cache holds
-                // bytes only, so the filtered-version detail is unknown here.
-                com.auto1.pantera.audit.AuditLogger.resolutionDetailUnknown(
-                    auditCtx, this.repoType(), this.repoName(), packageName,
-                    owner, "materialised filtered-metadata cache"
+            final CompletableFuture<byte[]> filtering;
+            if (snapshot) {
+                filtering = this.cooldownMetadata.filterMetadata(
+                    this.repoType(), this.repoName(), variant.get(), packageName,
+                    bytes, parser, filter, rewriter, auditCtx, owner
                 );
-                return CompletableFuture.completedFuture(
-                    buildMetadataResponse(inboundHeaders, cached.get())
+            } else {
+                filtering = this.cooldownMetadata.filterMetadata(
+                    this.repoType(), this.repoName(), packageName,
+                    bytes, parser, filter, rewriter, auditCtx, owner
                 );
             }
-            return this.cooldownMetadata.filterMetadata(
-                this.repoType(),
-                this.repoName(),
-                packageName,
-                bytes,
-                parser,
-                filter,
-                rewriter,
-                auditCtx,
-                owner
-            ).handle((filtered, ex) -> {
+            return filtering.handle((filtered, ex) -> {
                 if (ex == null) {
-                    this.materialisedCache.put(
-                        this.repoType(), this.repoName(), packageName, sha, filtered
-                    );
                     return buildMetadataResponse(inboundHeaders, filtered);
                 }
                 Throwable cause = ex;
@@ -691,7 +645,15 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                             .field("package.name", packageName)
                             .field("log.source", "application")
                             .log();
+                        // Carry the cooldown marker so a group walk relays
+                        // this verdict instead of trying the next member or
+                        // falling back to stale bytes.
                         return ResponseBuilder.forbidden()
+                            .header(
+                                com.auto1.pantera.cooldown.response
+                                    .CooldownResponseFactory.HEADER,
+                                "all-blocked"
+                            )
                             .textBody(
                                 "All versions of '" + packageName
                                     + "' are under cooldown; no non-blocked "
@@ -713,26 +675,6 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
                 return buildMetadataResponse(inboundHeaders, bytes);
             });
         });
-    }
-
-    /**
-     * Distinguish artifact-level metadata ({@code .../my-lib/maven-metadata.xml})
-     * from snapshot-level metadata ({@code .../my-lib/1.0-SNAPSHOT/maven-metadata.xml}).
-     * Snapshot-level path has a {@code -SNAPSHOT} segment immediately before
-     * the filename.
-     */
-    private static boolean isSnapshotMetadataPath(final String path) {
-        if (path == null) {
-            return false;
-        }
-        final int suffix = path.lastIndexOf("/maven-metadata.xml");
-        if (suffix <= 0) {
-            return false;
-        }
-        final String parent = path.substring(0, suffix);
-        final int lastSlash = parent.lastIndexOf('/');
-        final String dir = lastSlash >= 0 ? parent.substring(lastSlash + 1) : parent;
-        return dir.endsWith("-SNAPSHOT");
     }
 
     /**
