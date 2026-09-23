@@ -665,10 +665,10 @@ public final class VertxSliceServer implements Closeable {
 
     /**
      * Refuse a request whose body exceeds the hard cap with
-     * {@code 413 Payload Too Large}, logging the state transition. The
-     * connection is marked {@code Connection: close} because an unread
-     * (declared) or partially-read (chunked) body would otherwise desync
-     * HTTP/1.1 keep-alive framing.
+     * {@code 413 Payload Too Large}, logging the state transition. On
+     * HTTP/1.x the connection is marked {@code Connection: close} because an
+     * unread (declared) or partially-read (chunked) body would otherwise
+     * desync keep-alive framing; on HTTP/2 only the stream is reset.
      *
      * @param req The request
      * @param guarded Thread-safe response guard
@@ -691,13 +691,26 @@ public final class VertxSliceServer implements Closeable {
             .field("http.response.status_code", HttpURLConnection.HTTP_ENTITY_TOO_LARGE)
             .field("log.source", "http")
             .log();
-        req.response().putHeader("Connection", "close");
-        guarded.safeSendError(
+        final boolean h2 = req.version() == HttpVersion.HTTP_2;
+        if (!h2) {
+            // HTTP/1.x: the unread body would desync keep-alive framing.
+            // HTTP/2 forbids connection-specific headers (RFC 9113 8.2.2);
+            // sending one is a protocol error that kills the whole h2c
+            // connection, and every other stream multiplexed on it.
+            req.response().putHeader("Connection", "close");
+        }
+        final boolean sent = guarded.safeSendError(
             "proxyHandler.requestBodyLimit",
             HttpURLConnection.HTTP_ENTITY_TOO_LARGE,
             "Payload Too Large: request body exceeds the configured limit of "
                 + this.maxRequestBodyBytes.getAsLong() + " bytes"
         );
+        if (h2 && sent) {
+            // HTTP/2: the complete response was sent before the request body;
+            // tell the client to stop sending it (RST_STREAM NO_ERROR,
+            // RFC 9113 8.1) instead of closing the connection.
+            req.response().reset(0L);
+        }
     }
 
     /**

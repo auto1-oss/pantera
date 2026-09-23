@@ -189,6 +189,57 @@ final class VertxSliceServerBodyLimitTest {
         );
     }
 
+    @Test
+    @Timeout(60)
+    void rejectionOverHttp2KeepsTheConnectionUsable() throws Exception {
+        this.start((line, headers, body) -> body.asBytesFuture().thenApply(
+            bytes -> ResponseBuilder.ok().textBody(Integer.toString(bytes.length)).build()
+        ));
+        final io.vertx.core.http.HttpClient h2 = this.vertx.getDelegate().createHttpClient(
+            new io.vertx.core.http.HttpClientOptions()
+                .setProtocolVersion(io.vertx.core.http.HttpVersion.HTTP_2)
+                .setHttp2ClearTextUpgrade(false),
+            new io.vertx.core.http.PoolOptions().setHttp2MaxSize(1)
+        );
+        final java.util.Set<io.vertx.core.http.HttpConnection> conns =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+        final AtomicBoolean closed = new AtomicBoolean();
+        h2.connectionHandler(conn -> {
+            conns.add(conn);
+            conn.closeHandler(v -> closed.set(true));
+        });
+        try {
+            final int rejected = this.h2Put(h2, (int) LIMIT * 2);
+            final int accepted = this.h2Put(h2, (int) LIMIT / 2);
+            MatcherAssert.assertThat(
+                "an over-limit h2 body is rejected with 413",
+                rejected, new IsEqual<>(413)
+            );
+            MatcherAssert.assertThat(
+                "the next request on the same h2 client succeeds",
+                accepted, new IsEqual<>(200)
+            );
+            MatcherAssert.assertThat(
+                "the h2 connection is not torn down by the 413",
+                closed.get() || conns.size() != 1, new IsEqual<>(false)
+            );
+        } finally {
+            h2.close();
+        }
+    }
+
+    private int h2Put(final io.vertx.core.http.HttpClient h2, final int size)
+        throws Exception {
+        return h2.request(io.vertx.core.http.HttpMethod.PUT, this.port, HOST, "/repo/a.bin")
+            .compose(
+                req -> req.putHeader("Content-Length", Integer.toString(size))
+                    .send(io.vertx.core.buffer.Buffer.buffer(new byte[size]))
+            )
+            .compose(rsp -> rsp.body().map(ignored -> rsp.statusCode()))
+            .toCompletionStage().toCompletableFuture()
+            .get(30, java.util.concurrent.TimeUnit.SECONDS);
+    }
+
     private void start(final Slice slice) {
         this.start(slice, () -> LIMIT);
     }
