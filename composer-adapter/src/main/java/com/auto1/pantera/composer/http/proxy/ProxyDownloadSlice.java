@@ -491,20 +491,16 @@ public final class ProxyDownloadSlice implements Slice {
     }
 
     /**
-     * Build base URI (scheme://host[:port]) for given URI.
-     *
-     * @param uri Input URI
-     * @return Base URI
-     */
-    /**
      * Name-level / literal-IP egress check for a cross-host dist (no DNS —
      * this runs on the reactive path; the resolver guards resolved names).
+     * Judged by the live admin egress policy (DB-backed, env fallback), the
+     * same one the outbound resolver enforces.
      * @param uri Dist URI
      * @return Reason when denied, else empty
      */
     private static java.util.Optional<String> egressDenial(final URI uri) {
         final com.auto1.pantera.http.client.egress.EgressPolicy policy =
-            com.auto1.pantera.http.client.egress.EgressPolicy.fromEnvironment();
+            com.auto1.pantera.http.client.egress.EgressSettingsRegistry.policy().get();
         final String host = uri.getHost();
         final java.util.Optional<String> byName = policy.hostRejection(host);
         if (byName.isPresent()) {
@@ -515,6 +511,12 @@ public final class ProxyDownloadSlice implements Slice {
         return policy.literalRejection(host);
     }
 
+    /**
+     * Build base URI (scheme://host[:port]) for given URI.
+     *
+     * @param uri Input URI
+     * @return Base URI
+     */
     private static URI baseOf(final URI uri) {
         final int port = uri.getPort();
         final String auth = (port == -1)

@@ -21,6 +21,8 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.client.ClientSlices;
+import com.auto1.pantera.http.client.egress.EgressPolicy;
+import com.auto1.pantera.http.client.egress.EgressSettingsRegistry;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import java.net.URI;
@@ -28,11 +30,13 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -58,6 +62,52 @@ final class ProxyDownloadSliceEgressTest {
     })
     @Timeout(20)
     void deniedLiteralDistUrlIsNeverDialed(final String dist) throws Exception {
+        final AtomicBoolean dialed = new AtomicBoolean();
+        final Response response = ProxyDownloadSliceEgressTest.fetch(dist, dialed);
+        MatcherAssert.assertThat(
+            "a dist.url on a denied literal address must never be dialed",
+            dialed.get(), new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "the denied dist must be answered as an upstream failure, not served",
+            response.status().code() >= 500, new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    @Timeout(20)
+    void adminStrictModeRefusesPrivateLiteralDistUrl() throws Exception {
+        EgressSettingsRegistry.install(
+            () -> new EgressPolicy(true, Set.of()), Set::of
+        );
+        try {
+            final AtomicBoolean dialed = new AtomicBoolean();
+            final Response response = ProxyDownloadSliceEgressTest.fetch(
+                "http://10.0.0.5/acme/widget.zip", dialed
+            );
+            MatcherAssert.assertThat(
+                "strict mode set by the admin setting must stop a private dist.url before dialing",
+                dialed.get(), new IsEqual<>(false)
+            );
+            MatcherAssert.assertThat(
+                "the refused dist must be answered as an upstream failure",
+                response.status().code() >= 500, new IsEqual<>(true)
+            );
+        } finally {
+            EgressSettingsRegistry.uninstall();
+        }
+    }
+
+    /**
+     * Request a dist whose metadata names the given URL.
+     *
+     * @param dist Dist URL in the cached metadata
+     * @param dialed Set when a cross-host client is built
+     * @return Response
+     * @throws Exception On failure
+     */
+    private static Response fetch(final String dist, final AtomicBoolean dialed)
+        throws Exception {
         final InMemoryStorage storage = new InMemoryStorage();
         storage.save(
             new Key.From("acme/widget.json"),
@@ -66,7 +116,6 @@ final class ProxyDownloadSliceEgressTest {
                     + "\"dist\":{\"url\":\"" + dist + "\"}}}}}"
             ).getBytes(StandardCharsets.UTF_8))
         ).join();
-        final AtomicBoolean dialed = new AtomicBoolean();
         final ClientSlices clients = new ClientSlices() {
             @Override
             public Slice http(final String host) {
@@ -102,18 +151,10 @@ final class ProxyDownloadSliceEgressTest {
             upstream, clients, UPSTREAM, Optional.empty(), "composer-proxy",
             "composer-proxy", storage, NoopCooldownService.INSTANCE, new NoDates()
         );
-        final Response response = slice.response(
+        return slice.response(
             new RequestLine(RqMethod.GET, "/dist/acme/widget/1.0.0.zip"),
             Headers.EMPTY, Content.EMPTY
         ).get(5, TimeUnit.SECONDS);
-        MatcherAssert.assertThat(
-            "a dist.url on a denied literal address must never be dialed",
-            dialed.get(), new IsEqual<>(false)
-        );
-        MatcherAssert.assertThat(
-            "the denied dist must be answered as an upstream failure, not served",
-            response.status().code() >= 500, new IsEqual<>(true)
-        );
     }
 
     /**
