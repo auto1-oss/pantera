@@ -65,7 +65,13 @@ public final class ArtifactHeadersTest {
         "target.jar,application/java-archive",
         "target.pom,application/x-maven-pom+xml",
         "target.xml,application/xml",
-        "target.none,*"
+        "target.module,application/json",
+        "target.jar.sha1,text/plain",
+        "target.jar.md5,text/plain",
+        "target.jar.sha256,text/plain",
+        "target.jar.sha512,text/plain",
+        "target.jar.asc,application/pgp-signature",
+        "target.none,application/octet-stream"
     })
     @ParameterizedTest
     void addsContentTypeHeaders(final String target, final String mime) {

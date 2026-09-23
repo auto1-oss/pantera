@@ -244,7 +244,7 @@ public final class MavenProxySlice extends Slice.Wrap {
             cooldown, inspector, storage, config, metadataCache,
             cooldownMetadata
         );
-        return new SliceRoute(
+        return new ContentTypeSlice(new SliceRoute(
             new RtRulePath(
                 MethodRule.HEAD,
                 // Track 5 Phase 2B: pass the raw storage so HEAD on a
@@ -263,7 +263,7 @@ public final class MavenProxySlice extends Slice.Wrap {
                 RtRule.FALLBACK,
                 new SliceSimple(ResponseBuilder.methodNotAllowed().build())
             )
-        );
+        ));
     }
 
     /**

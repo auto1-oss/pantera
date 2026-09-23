@@ -79,15 +79,23 @@ final class ArtifactHeaders {
      * @param key Artifact key
      * @return Content type header
      */
-    private static Header contentType(final Key key) {
+    static Header contentType(final Key key) {
         final String type;
         final String src = key.string();
         type = switch (extension(key)) {
             case "jar" -> "application/java-archive";
             case "pom" -> "application/x-maven-pom+xml";
+            // Gradle Module Metadata is a JSON document.
+            case "module" -> "application/json";
+            case "md5", "sha1", "sha256", "sha512" -> "text/plain";
+            case "asc" -> "application/pgp-signature";
             default -> URLConnection.guessContentTypeFromName(src);
         };
-        return new Header("Content-Type", Optional.ofNullable(type).orElse("*"));
+        // "*" is not a media type; responses also carry nosniff, so an
+        // unknown file is announced as opaque bytes.
+        return new Header(
+            "Content-Type", Optional.ofNullable(type).orElse("application/octet-stream")
+        );
     }
 
     /**
