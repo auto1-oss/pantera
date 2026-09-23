@@ -105,6 +105,23 @@ Blob uploads may be monolithic or chunked (several `PATCH` requests with `Conten
 
 ---
 
+## Delete Images
+
+The registry API does not delete: `DELETE /v2/<repo>/<image>/manifests/<reference>` and `DELETE /v2/<repo>/<image>/blobs/<digest>` answer `405 UNSUPPORTED` (so `skopeo delete` and `crane delete` report the operation as unsupported, not the image as missing).
+
+Delete a tag from a local repository in the UI (repository browser), or with the REST API (needs `api_repository_permissions: delete`):
+
+```bash
+curl -X DELETE http://pantera-host:8086/api/v1/repositories/docker-local/packages \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"path": "docker/registry/v2/repositories/myapp/_manifests/tags/1.0.0"}'
+```
+
+The `path` is the tag's storage folder: `docker/registry/v2/repositories/<image>/_manifests/tags/<tag>`. See [REST API Reference](../../rest-api-reference.md#delete-apiv1repositoriesnamepackages).
+
+---
+
 ## Multi-Registry Proxy
 
 A single Docker proxy repository can cache images from multiple upstream registries. This is useful when your builds pull from Docker Hub, GCR, Elastic, and Kubernetes registries:

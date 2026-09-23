@@ -115,6 +115,15 @@ public final class DockerSlice extends Slice.Wrap {
                     ),
                     RtRulePath.route(MethodRule.GET, PathPatterns.REFERRERS,
                         auth(new ReferrersSlice(docker), policy, auth)
+                    ),
+                    // Deletion through the registry API is not supported;
+                    // the spec requires 405 (tags are removed via the UI
+                    // or the REST API).
+                    RtRulePath.route(MethodRule.DELETE, PathPatterns.MANIFESTS,
+                        new UnsupportedSlice()
+                    ),
+                    RtRulePath.route(MethodRule.DELETE, PathPatterns.BLOBS,
+                        new UnsupportedSlice()
                     )
                 )
             )
