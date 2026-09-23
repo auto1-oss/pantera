@@ -14,7 +14,8 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.cache.FromStorageCache;
-import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.asto.cache.Remote;
+import com.auto1.pantera.asto.fs.FileStorage;
 import com.auto1.pantera.composer.AstoRepository;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
@@ -26,8 +27,10 @@ import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -44,14 +47,24 @@ final class ComposerCacheHitNoUpstreamTest {
 
     @Test
     @DisplayName("cached metadata JSON is served pure-local — no upstream call")
-    void metadataCacheHitIsLocal() {
+    void metadataCacheHitIsLocal(@TempDir final Path dir) {
         final String pkg = "vendor/package";
         final byte[] cachedJson =
             ("{\"packages\":{\"" + pkg + "\":{\"1.0\":{\"version\":\"1.0\","
                 + "\"time\":\"2024-01-01T00:00:00+00:00\"}}}}").getBytes(StandardCharsets.UTF_8);
-        final Storage storage = new InMemoryStorage();
+        // FileStorage reports updated-at, so the just-saved entry is fresh
+        // and the hit is pure-local. InMemoryStorage reports no timestamp,
+        // which CacheTimeControl treats as stale (background refresh).
         // Metadata is cached as <vendor>/<pkg>.json (ComposerStorageCache).
-        storage.save(new Key.From(pkg + ".json"), new Content.From(cachedJson)).join();
+        final Key cached = new Key.From(pkg + ".json");
+        final Storage storage = new FileStorage(dir);
+        storage.save(cached, new Content.From(cachedJson)).join();
+        MatcherAssert.assertThat(
+            "precondition: the cached entry is fresh, so no background refresh is scheduled",
+            new CacheTimeControl(storage).validate(cached, Remote.EMPTY)
+                .toCompletableFuture().join(),
+            new IsEqual<>(true)
+        );
 
         final AtomicInteger upstreamCalls = new AtomicInteger();
         final Slice upstream = (line, headers, body) -> {
