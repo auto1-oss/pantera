@@ -27,7 +27,7 @@ describe('conanSnippets', () => {
     expect(cfg).toContain("conan user 'jane@corp.com' -r pantera -p 'tok-123'")
   })
 
-  it('explains that the URL must be the dedicated Conan URL', () => {
+  it('explains when the URL must be the dedicated Conan URL', () => {
     const desc = render().configure[0].description ?? ''
     expect(desc).toContain('dedicated port')
     expect(desc).toContain('ask your administrator for the Conan URL')

@@ -7,15 +7,15 @@ const REMOTE = 'pantera'
 const REF = 'my_package/1.0@'
 
 /**
- * Conan repositories are served on their own port, at the root of that port.
- * The URL the panel passes is the repository's configured `url` when it has one;
- * otherwise it is the main-port URL, which Conan cannot use.
+ * A Conan repository is served on the main port under its name, or at the root
+ * of its dedicated port when it has one. The URL the panel passes is the
+ * repository's configured `url` when it has one, otherwise the main-port URL.
  */
 const PORT_NOTE =
-  'Conan repositories are served on a dedicated port, so the URL must be the repository\'s own Conan URL '
-  + '(its <code>url</code> setting, e.g. <code>http://registry.example.com:9300</code>), not the main '
-  + 'registry address. If login fails with <code>Wrong user or password</code> although the token is right, '
-  + 'the URL is the main-port one: ask your administrator for the Conan URL.'
+  'A repository with a dedicated port is served at the root of that port: then the URL must be the '
+  + 'repository\'s own Conan URL (its <code>url</code> setting, e.g. <code>http://registry.example.com:9300</code>). '
+  + 'If login fails with <code>Wrong user or password</code> although the token is right, ask your '
+  + 'administrator for the Conan URL.'
 
 /** Single-quote a value for POSIX shells. */
 function sq(value: string): string {
@@ -28,7 +28,7 @@ function configure(ctx: SnippetCtx): Step[] {
       title: 'Add the remote',
       description:
         'Pantera speaks the Conan 1.x protocol; these steps are for Conan 1.60 (Python 3.11 or older). '
-        + `Conan 2 clients are not tested. ${PORT_NOTE}`,
+        + `Conan 2 clients are not supported. ${PORT_NOTE}`,
       code: `conan remote add ${REMOTE} ${ctx.repoUrl}`,
     },
     {
