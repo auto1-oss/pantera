@@ -85,11 +85,6 @@ import org.reactivestreams.Publisher;
 public final class CachedProxySlice extends BaseCachedProxySlice {
 
     /**
-     * Primary artifact extensions that participate in the coupled
-     * primary+sidecar write path. The checksum sidecar paths themselves are
-     * still served by {@link ChecksumProxySlice} / standard cache flow.
-     */
-    /**
      * Maven metadata file name.
      */
     private static final String METADATA = "maven-metadata.xml";
@@ -105,6 +100,11 @@ public final class CachedProxySlice extends BaseCachedProxySlice {
         ".sha512", "SHA-512"
     );
 
+    /**
+     * Primary artifact extensions that participate in the coupled
+     * primary+sidecar write path. The checksum sidecar paths themselves are
+     * still served by {@link ChecksumProxySlice} / standard cache flow.
+     */
     private static final List<String> PRIMARY_EXTENSIONS = List.of(
         ".pom", ".jar", ".war", ".aar", ".ear", ".zip", ".module"
     );
