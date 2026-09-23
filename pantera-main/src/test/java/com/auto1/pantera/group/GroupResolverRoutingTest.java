@@ -17,6 +17,7 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.UpstreamCircuitOpenException;
 import com.auto1.pantera.http.cache.NegativeCache;
 import com.auto1.pantera.http.fault.FaultTranslator;
 import com.auto1.pantera.http.rq.RequestLine;
@@ -55,6 +56,10 @@ final class GroupResolverRoutingTest {
     private static final String HOSTED = "hosted";
 
     private static final String PROXY = "proxy";
+
+    private static final String CENTRAL = "central-proxy";
+
+    private static final String MIRROR = "central-mirror-proxy";
 
     private static final String MAVEN_DIR = "/com/google/guava/guava/31.1/";
 
@@ -176,6 +181,140 @@ final class GroupResolverRoutingTest {
         MatcherAssert.assertThat(
             "the pinned member's breaker records exactly one failure",
             registry.isBlocked(PROXY),
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void pinnedMemberWithAnOpenUpstreamCircuitIsSkippedAndTheNextMemberServes() {
+        // rate 0.5 / min 1: a single recorded failure would trip the breaker.
+        final AutoBlockRegistry registry = new AutoBlockRegistry(
+            new AutoBlockSettings(0.5, 1, 30, Duration.ofSeconds(60), Duration.ofMinutes(5))
+        );
+        final AtomicInteger pinnedCalls = new AtomicInteger();
+        final AtomicReference<Boolean> circuitOpen = new AtomicReference<>(false);
+        final Slice central = (line, headers, body) -> {
+            pinnedCalls.incrementAndGet();
+            if (circuitOpen.get()) {
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.from(RsStatus.SERVICE_UNAVAILABLE)
+                        .header(UpstreamCircuitOpenException.HEADER, "true")
+                        .header("Retry-After", "30")
+                        .build()
+                );
+            }
+            return CompletableFuture.completedFuture(ResponseBuilder.ok().build());
+        };
+        final GroupResolver resolver = twoProxies(registry, central, byPath(p -> true));
+        MatcherAssert.assertThat(
+            "the jar is served by the declared-first proxy and pins the version to it",
+            get(resolver, MAVEN_DIR + "guava-31.1.jar"),
+            new IsEqual<>(200)
+        );
+        pinnedCalls.set(0);
+        circuitOpen.set(true);
+        MatcherAssert.assertThat(
+            "the mirror serves the sibling while the pinned member's upstream circuit is open",
+            get(resolver, MAVEN_DIR + "guava-31.1.pom.sha1"),
+            new IsEqual<>(200)
+        );
+        MatcherAssert.assertThat(
+            "the pinned member is asked exactly once",
+            pinnedCalls.get(),
+            new IsEqual<>(1)
+        );
+        MatcherAssert.assertThat(
+            "a circuit-open marker is a skip, never a recorded member failure",
+            registry.isBlocked(CENTRAL),
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void pinnedMemberServerErrorIsRecordedOnceAndTheNextMemberServes() {
+        // rate 0.6 / min 3: the pin-setting success plus ONE failure stays
+        // closed; a second (duplicate) failure trips it.
+        final AutoBlockRegistry registry = new AutoBlockRegistry(
+            new AutoBlockSettings(0.6, 3, 30, Duration.ofSeconds(60), Duration.ofMinutes(5))
+        );
+        final AtomicInteger pinnedCalls = new AtomicInteger();
+        final AtomicReference<RsStatus> status = new AtomicReference<>(RsStatus.OK);
+        final Slice central = (line, headers, body) -> {
+            pinnedCalls.incrementAndGet();
+            return CompletableFuture.completedFuture(ResponseBuilder.from(status.get()).build());
+        };
+        final GroupResolver resolver = twoProxies(registry, central, byPath(p -> true));
+        get(resolver, MAVEN_DIR + "guava-31.1.jar");
+        pinnedCalls.set(0);
+        status.set(RsStatus.SERVICE_UNAVAILABLE);
+        MatcherAssert.assertThat(
+            "the mirror serves the sibling when the pinned member fails",
+            get(resolver, MAVEN_DIR + "guava-31.1.pom"),
+            new IsEqual<>(200)
+        );
+        MatcherAssert.assertThat(
+            "the failing pinned member is asked exactly once",
+            pinnedCalls.get(),
+            new IsEqual<>(1)
+        );
+        MatcherAssert.assertThat(
+            "the failing pinned member records exactly one failure",
+            registry.isBlocked(CENTRAL),
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void pinnedMemberCircuitOpenWithNoOtherSourceIsA503NotACachedNotFound() {
+        final NegativeCache cache = negativeCache();
+        final AtomicReference<Boolean> circuitOpen = new AtomicReference<>(false);
+        final Slice central = (line, headers, body) -> {
+            if (circuitOpen.get()) {
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.from(RsStatus.SERVICE_UNAVAILABLE)
+                        .header(UpstreamCircuitOpenException.HEADER, "true")
+                        .header("Retry-After", "30")
+                        .build()
+                );
+            }
+            return CompletableFuture.completedFuture(ResponseBuilder.ok().build());
+        };
+        final GroupResolver resolver = new GroupResolver(
+            GROUP,
+            List.of(
+                new MemberSlice(CENTRAL, central, true),
+                new MemberSlice(MIRROR, byPath(p -> false), true)
+            ),
+            Collections.emptyList(),
+            Optional.of(new MutableIndex(List.of())),
+            "maven-group",
+            Set.of(CENTRAL, MIRROR),
+            cache,
+            ForkJoinPool.commonPool()
+        );
+        get(resolver, MAVEN_DIR + "guava-31.1.jar");
+        circuitOpen.set(true);
+        final Response resp = resolver.response(
+            new RequestLine("GET", MAVEN_DIR + "guava-31.1.pom"), Headers.EMPTY, Content.EMPTY
+        ).join();
+        resp.body().asBytesFuture().join();
+        MatcherAssert.assertThat(
+            "an unreachable pinned member with no other source is 503",
+            resp.status().code(),
+            new IsEqual<>(503)
+        );
+        MatcherAssert.assertThat(
+            "the 503 carries Retry-After",
+            resp.headers().values("Retry-After").isEmpty(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "an outage is never negative-cached as absence",
+            cache.isKnown404(
+                new com.auto1.pantera.http.cache.NegativeCacheKey(
+                    GROUP, "maven-group", "com.google.guava.guava", "31.1/guava-31.1.pom"
+                )
+            ),
             new IsEqual<>(false)
         );
     }
@@ -435,6 +574,24 @@ final class GroupResolverRoutingTest {
             Optional.of(index),
             type,
             Set.of(PROXY),
+            negativeCache(),
+            ForkJoinPool.commonPool()
+        );
+    }
+
+    private static GroupResolver twoProxies(
+        final AutoBlockRegistry registry, final Slice central, final Slice mirror
+    ) {
+        return new GroupResolver(
+            GROUP,
+            List.of(
+                new MemberSlice(CENTRAL, central, registry, true),
+                new MemberSlice(MIRROR, mirror, true)
+            ),
+            Collections.emptyList(),
+            Optional.of(new MutableIndex(List.of())),
+            "maven-group",
+            Set.of(CENTRAL, MIRROR),
             negativeCache(),
             ForkJoinPool.commonPool()
         );

@@ -602,7 +602,7 @@ public final class GroupResolver implements Slice {
                 pinned.get(), idx, line, headers, body, artifactName, negCacheKey, pinKey
             ).whenComplete((r, e) -> recordPhase("resolve_total", resolveStartNs));
         }
-        return indexLookup(idx, line, headers, body, artifactName, negCacheKey, pinKey)
+        return indexLookup(idx, line, headers, body, artifactName, negCacheKey, pinKey, Set.of())
             .whenComplete((r, e) -> recordPhase("resolve_total", resolveStartNs));
     }
 
@@ -616,7 +616,8 @@ public final class GroupResolver implements Slice {
         final Content body,
         final String artifactName,
         final NegativeCacheKey negCacheKey,
-        final String pinKey
+        final String pinKey,
+        final Set<String> excluded
     ) {
         // Phase 7.5 profiler: time the index lookup itself, separate from
         // the downstream targeted/fanout work. Recorded both on success
@@ -629,7 +630,7 @@ public final class GroupResolver implements Slice {
                 recordPhase("index_lookup", indexStartNs);
                 return handleIndexOutcome(
                     outcome, line, headers, body, line.uri().getPath(),
-                    artifactName, negCacheKey, pinKey
+                    artifactName, negCacheKey, pinKey, excluded
                 );
             });
     }
@@ -637,12 +638,16 @@ public final class GroupResolver implements Slice {
     /**
      * STEP 1.5 read: route to the pinned member. A pin-routed hit does NOT
      * renew the pin (its TTL is absolute from the resolution that created
-     * it), so a busy coordinate cannot stay pinned forever. Only a 404 (or
-     * a non-authoritative 404 from a member redirect / laundered throttle)
-     * drops the pin and re-runs the full resolution. A failure drops the pin
-     * but is answered as-is: the member already recorded it, and re-running
-     * the resolution would ask it again, convicting it twice and doubling
-     * upstream load for one client request.
+     * it), so a busy coordinate cannot stay pinned forever.
+     *
+     * <p>Any non-authoritative answer drops the pin and continues the normal
+     * resolution (index lookup, targeted read, index-miss fanout) with the
+     * pinned member EXCLUDED: it is asked once per request, records at most
+     * one breaker failure, and the other members still get their turn. A
+     * 404 keeps the negative-cache key (the pinned member's absence is
+     * authoritative); a failure, a circuit-open skip or an unverified 404
+     * disables the negative-cache write. The pinned outcome is folded into
+     * the continuation's terminal the way the sequential walk folds it.
      */
     private CompletableFuture<Response> pinnedRead(
         final MemberSlice pinned,
@@ -664,61 +669,95 @@ public final class GroupResolver implements Slice {
             .log();
         return body.asBytesFuture().thenCompose(bytes ->
             querySequentially(
-                List.of(pinned), line, headers, new Content.From(bytes), true, null
+                List.of(pinned), line, headers, new Content.From(bytes), true, null,
+                new WalkState(true)
             ).thenCompose(resp -> {
                 if (isAuthoritative(resp)) {
                     return CompletableFuture.completedFuture(resp);
                 }
                 this.memberPin.invalidate(pinKey);
-                if (resp.status() != RsStatus.NOT_FOUND) {
-                    return CompletableFuture.completedFuture(
-                        this.pinnedFailure(pinned, line, resp)
-                    );
-                }
                 drainBody(resp.body());
-                EcsLogger.debug("com.auto1.pantera.group")
-                    .message("Pinned member could not serve " + pinKey
-                        + "; pin dropped, resolving in declared order")
-                    .eventCategory("web")
-                    .eventAction("group_sibling_pin_miss")
-                    .field("url.path", line.uri().getPath())
-                    .field("repository.name", pinned.name())
-                    .field("http.response.status_code", resp.status().code())
-                    .field("log.source", "application")
-                    .log();
+                final PinnedMiss miss = PinnedMiss.of(resp);
+                this.logPinDropped(pinned, line, pinKey, resp.status(), miss);
                 return indexLookup(
-                    idx, line, headers, new Content.From(bytes),
-                    artifactName, negCacheKey, pinKey
-                );
+                    idx, line, headers, new Content.From(bytes), artifactName,
+                    miss == PinnedMiss.NOT_FOUND ? negCacheKey : null, pinKey,
+                    Set.of(pinned.name())
+                ).thenApply(next -> this.afterPinnedMiss(
+                    pinned, line, miss, parseRetryAfterSeconds(resp), next
+                ));
             })
         );
     }
 
     /**
-     * Answer for a pinned member that failed (the single-member walk ends in
-     * a 502 on a genuine failure, or a marked 503 when the member's upstream
-     * circuit is open). The marked answer passes through verbatim; a genuine
-     * failure is translated the way the index / fanout paths translate it.
+     * Log a dropped sibling pin: DEBUG for a 404 (normal fallthrough), WARN
+     * for a failure or a circuit-open skip (a state transition an operator
+     * needs to see).
      */
-    private Response pinnedFailure(
-        final MemberSlice pinned, final RequestLine line, final Response resp
+    private void logPinDropped(
+        final MemberSlice pinned,
+        final RequestLine line,
+        final String pinKey,
+        final RsStatus status,
+        final PinnedMiss miss
     ) {
-        if (!resp.status().serverError()
-            || !resp.headers().values(UpstreamCircuitOpenException.HEADER).isEmpty()) {
-            return resp;
+        final String message = "Pinned member " + pinned.name() + " could not serve "
+            + pinKey + " (status " + status.code()
+            + "); pin dropped, resolving the remaining members in declared order";
+        if (miss == PinnedMiss.NOT_FOUND || miss == PinnedMiss.UNVERIFIED) {
+            EcsLogger.debug("com.auto1.pantera.group")
+                .message(message)
+                .eventCategory("web")
+                .eventAction("group_sibling_pin_miss")
+                .field("repository.name", this.group)
+                .field("url.path", line.uri().getPath())
+                .field("http.response.status_code", status.code())
+                .field("log.source", "application")
+                .log();
+        } else {
+            EcsLogger.warn("com.auto1.pantera.group")
+                .message(message)
+                .eventCategory("web")
+                .eventAction("group_sibling_pin_failed")
+                .eventOutcome("failure")
+                .field("repository.name", this.group)
+                .field("url.path", line.uri().getPath())
+                .field("http.response.status_code", status.code())
+                .field("log.source", "application")
+                .log();
         }
-        drainBody(resp.body());
-        EcsLogger.warn("com.auto1.pantera.group")
-            .message("Pinned member " + pinned.name() + " failed with status "
-                + resp.status().code() + "; pin dropped")
-            .eventCategory("web")
-            .eventAction("group_sibling_pin_failed")
-            .eventOutcome("failure")
-            .field("repository.name", this.group)
-            .field("url.path", line.uri().getPath())
-            .field("http.response.status_code", resp.status().code())
-            .field("log.source", "application")
-            .log();
+    }
+
+    /**
+     * Fold the pinned member's outcome into the continuation's answer, with
+     * the sequential walk's precedence: an authoritative answer wins; then a
+     * genuine failure (502 / storage fault); then a circuit-open skip (503 +
+     * Retry-After, never 404); then 404.
+     */
+    private Response afterPinnedMiss(
+        final MemberSlice pinned,
+        final RequestLine line,
+        final PinnedMiss miss,
+        final long retryAfter,
+        final Response next
+    ) {
+        if (isAuthoritative(next)
+            || miss == PinnedMiss.NOT_FOUND || miss == PinnedMiss.UNVERIFIED) {
+            return next;
+        }
+        final boolean nextFailed = next.status().serverError()
+            && next.headers().values(UpstreamCircuitOpenException.HEADER).isEmpty();
+        if (nextFailed || miss == PinnedMiss.SKIPPED && next.status().serverError()) {
+            return next;
+        }
+        drainBody(next.body());
+        if (miss == PinnedMiss.SKIPPED) {
+            final WalkState walk = new WalkState();
+            walk.skippedOpen.set(true);
+            walk.noteRetryAfter(retryAfter);
+            return this.circuitSkippedTerminal(walk, line);
+        }
         final Fault fault;
         if (pinned.isProxy()) {
             fault = new Fault.AllProxiesFailed(
@@ -728,6 +767,36 @@ public final class GroupResolver implements Slice {
             fault = new Fault.StorageUnavailable(null, line.uri().getPath());
         }
         return FaultTranslator.translate(fault, null);
+    }
+
+    /**
+     * Non-authoritative outcome of a single-member pinned read.
+     */
+    private enum PinnedMiss {
+        /** Authoritative 404. */
+        NOT_FOUND,
+        /** 404 marked non-authoritative (laundered throttle, redirect). */
+        UNVERIFIED,
+        /** Skipped: the member's upstream circuit is open (marked 503). */
+        SKIPPED,
+        /** Genuine failure (5xx, other 4xx, exception). */
+        FAILED;
+
+        static PinnedMiss of(final Response resp) {
+            final PinnedMiss miss;
+            if (resp.status() == RsStatus.NOT_FOUND) {
+                if (resp.headers().values(NegativeCache.SKIP_HEADER).isEmpty()) {
+                    miss = NOT_FOUND;
+                } else {
+                    miss = UNVERIFIED;
+                }
+            } else if (resp.headers().values(UpstreamCircuitOpenException.HEADER).isEmpty()) {
+                miss = FAILED;
+            } else {
+                miss = SKIPPED;
+            }
+            return miss;
+        }
     }
 
     /**
@@ -798,14 +867,16 @@ public final class GroupResolver implements Slice {
         final String path,
         final String artifactName,
         final NegativeCacheKey negCacheKey,
-        final String pinKey
+        final String pinKey,
+        final Set<String> excluded
     ) {
         return switch (outcome) { // NOPMD SwitchDensity - exhaustive IndexOutcome sealed-type dispatch; per-branch logging required
             case IndexOutcome.Hit hit -> targetedLocalRead(
-                hit.repos(), line, headers, body, path, artifactName, negCacheKey, pinKey
+                hit.repos(), line, headers, body, path, artifactName, negCacheKey, pinKey,
+                excluded
             );
             case IndexOutcome.Miss miss -> indexMissFanout(
-                line, headers, body, artifactName, negCacheKey, pinKey, Set.of()
+                line, headers, body, artifactName, negCacheKey, pinKey, excluded, excluded
             );
             case IndexOutcome.Timeout t -> {
                 EcsLogger.warn("com.auto1.pantera.group")
@@ -857,13 +928,14 @@ public final class GroupResolver implements Slice {
         final String path,
         final String artifactName,
         final NegativeCacheKey negCacheKey,
-        final String pinKey
+        final String pinKey,
+        final Set<String> excluded
     ) {
         // Phase 7.5 profiler: time the targeted local-read path end-to-end
         // including the (possible) TOCTOU fallthrough into proxy fanout.
         final long phaseStartNs = System.nanoTime();
         return targetedLocalReadInternal(
-            repos, line, headers, body, path, artifactName, negCacheKey, pinKey
+            repos, line, headers, body, path, artifactName, negCacheKey, pinKey, excluded
         ).whenComplete((r, e) -> recordPhase("targeted_local_read", phaseStartNs));
     }
 
@@ -875,12 +947,20 @@ public final class GroupResolver implements Slice {
         final String path,
         final String artifactName,
         final NegativeCacheKey negCacheKey,
-        final String pinKey
+        final String pinKey,
+        final Set<String> excluded
     ) {
         final Set<String> wanted = new HashSet<>(repos);
         final List<MemberSlice> targeted = this.members.stream()
-            .filter(m -> wanted.contains(m.name()))
+            .filter(m -> wanted.contains(m.name()) && !excluded.contains(m.name()))
             .toList();
+        if (targeted.isEmpty() && !excluded.isEmpty()) {
+            // Every member the index names was already asked for this request
+            // (a failed sibling pin): walk the remaining members instead.
+            return indexMissFanout(
+                line, headers, body, artifactName, negCacheKey, pinKey, excluded, excluded
+            );
+        }
         if (targeted.isEmpty()) {
             EcsLogger.debug("com.auto1.pantera.group")
                 .message("Index hit references repo not in flattened member list, "
@@ -907,9 +987,8 @@ public final class GroupResolver implements Slice {
         // index-hit reads are authoritative on hosted state — a tripped
         // breaker against the hosted member would otherwise mask the
         // index-vs-storage drift behind a fanout.
-        final Set<String> tried = targeted.stream()
-            .map(MemberSlice::name)
-            .collect(Collectors.toSet());
+        final Set<String> tried = new HashSet<>(excluded);
+        targeted.forEach(m -> tried.add(m.name()));
         return querySequentially(targeted, line, headers, body, true, pinKey)
             .thenCompose(resp -> {
                 if (isAuthoritative(resp)) {
@@ -933,7 +1012,7 @@ public final class GroupResolver implements Slice {
                         .values(NegativeCache.SKIP_HEADER).isEmpty();
                     return indexMissFanout(
                         line, headers, body, artifactName,
-                        unverified ? null : negCacheKey, pinKey, tried
+                        unverified ? null : negCacheKey, pinKey, tried, excluded
                     );
                 }
                 if (resp.status().serverError()) {
@@ -984,11 +1063,12 @@ public final class GroupResolver implements Slice {
         final String artifactName,
         final NegativeCacheKey negCacheKey,
         final String pinKey,
-        final Set<String> tried
+        final Set<String> tried,
+        final Set<String> excluded
     ) {
         final long phaseStartNs = System.nanoTime();
         return indexMissFanoutInternal(
-            line, headers, body, artifactName, negCacheKey, pinKey, tried
+            line, headers, body, artifactName, negCacheKey, pinKey, tried, excluded
         ).whenComplete((r, e) -> recordPhase("proxy_only_fanout", phaseStartNs));
     }
 
@@ -999,14 +1079,15 @@ public final class GroupResolver implements Slice {
         final String artifactName,
         final NegativeCacheKey negCacheKey,
         final String pinKey,
-        final Set<String> tried
+        final Set<String> tried,
+        final Set<String> excluded
     ) {
         final List<MemberSlice> fanoutMembers = new ArrayList<>();
         this.members.stream()
             .filter(m -> !m.isProxy() && !tried.contains(m.name()))
             .forEach(fanoutMembers::add);
         this.members.stream()
-            .filter(MemberSlice::isProxy)
+            .filter(m -> m.isProxy() && !excluded.contains(m.name()))
             .forEach(fanoutMembers::add);
         if (fanoutMembers.isEmpty()) {
             // WS8 Bug 2: a HEAD probe (proxy, scanner, health check, or a
@@ -1067,7 +1148,7 @@ public final class GroupResolver implements Slice {
             .log();
         return gate.exceptionally(err -> null)
             .thenCompose(ignored -> indexMissFanout(
-                line, headers, body, artifactName, negCacheKey, pinKey, tried
+                line, headers, body, artifactName, negCacheKey, pinKey, tried, excluded
             ));
     }
 
@@ -1250,11 +1331,25 @@ public final class GroupResolver implements Slice {
         final boolean isTargetedLocalRead,
         final String pinArtifactName
     ) {
+        return querySequentially(
+            targeted, line, headers, body, isTargetedLocalRead, pinArtifactName, new WalkState()
+        );
+    }
+
+    private CompletableFuture<Response> querySequentially(
+        final List<MemberSlice> targeted,
+        final RequestLine line,
+        final Headers headers,
+        final Content body,
+        final boolean isTargetedLocalRead,
+        final String pinArtifactName,
+        final WalkState walk
+    ) {
         return body.asBytesFuture().thenCompose(requestBytes -> {
             final CompletableFuture<Response> result = new CompletableFuture<>();
             tryNextSequentialMember(
                 targeted.iterator(), line, headers, requestBytes,
-                isTargetedLocalRead, new WalkState(), result, pinArtifactName
+                isTargetedLocalRead, walk, result, pinArtifactName
             );
             return result;
         });
@@ -1513,6 +1608,17 @@ public final class GroupResolver implements Slice {
      */
     private Response circuitSkippedTerminal(final WalkState walk, final RequestLine line) {
         final long retry = Math.max(5L, walk.retryAfterHint.get());
+        if (!walk.partial) {
+            this.logAllMembersCircuitOpen(retry, line);
+        }
+        return ResponseBuilder.from(RsStatus.SERVICE_UNAVAILABLE)
+            .header("Retry-After", Long.toString(retry))
+            .header(UpstreamCircuitOpenException.HEADER, "true")
+            .textBody("All group members are temporarily unavailable (upstream circuit open)")
+            .build();
+    }
+
+    private void logAllMembersCircuitOpen(final long retry, final RequestLine line) {
         EcsLogger.warn("com.auto1.pantera.group")
             .message(
                 "All remaining group members circuit-open — returning 503, Retry-After "
@@ -1525,11 +1631,6 @@ public final class GroupResolver implements Slice {
             .field("url.path", line.uri().getPath())
             .field("log.source", "application")
             .log();
-        return ResponseBuilder.from(RsStatus.SERVICE_UNAVAILABLE)
-            .header("Retry-After", Long.toString(retry))
-            .header(UpstreamCircuitOpenException.HEADER, "true")
-            .textBody("All group members are temporarily unavailable (upstream circuit open)")
-            .build();
     }
 
     /**
@@ -1555,6 +1656,13 @@ public final class GroupResolver implements Slice {
      * hint seen (member block remainder or marker response header).
      */
     private static final class WalkState {
+        /**
+         * The walk covers only part of the group (a sibling-pin read of one
+         * member): its terminal is not the group's answer, so it must not
+         * log "all members circuit-open".
+         */
+        private final boolean partial;
+
         /** A member genuinely 5xx'd or threw. */
         private final java.util.concurrent.atomic.AtomicBoolean anyServerError =
             new java.util.concurrent.atomic.AtomicBoolean(false);
@@ -1583,6 +1691,14 @@ public final class GroupResolver implements Slice {
          */
         private final java.util.concurrent.atomic.AtomicReference<NotFoundSnapshot> notFoundSnapshot =
             new java.util.concurrent.atomic.AtomicReference<>();
+
+        WalkState() {
+            this(false);
+        }
+
+        WalkState(final boolean partial) {
+            this.partial = partial;
+        }
 
         /**
          * Track the largest positive Retry-After hint.

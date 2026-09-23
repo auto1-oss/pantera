@@ -40,9 +40,12 @@ migration; it is purely noise at this point.
   from the same source. This shortcut covers one version only. It never
   applies to metadata or index requests (`maven-metadata.xml`, PyPI
   `/simple/<name>/`, Go `@v/list`, npm package documents). If the
-  member answers 404, the group falls back to the normal walk. If the
-  member fails or its circuit breaker is open, the shortcut is dropped
-  and the member is not asked twice.
+  member cannot serve the file (404, an error, or its upstream circuit
+  breaker is open), the shortcut is dropped and the group asks the other
+  members in the normal order. The member is not asked a second time for
+  the same request. If no other member has the file, the group answers
+  a 5xx error for a failure, or 503 with `Retry-After` for an open
+  circuit, never 404.
 - A cached "not found" is per file: a missing `-sources.jar` or
   `.module` never hides the `.jar` or `.pom` of the same version.
 - A member redirect (`3xx`) does not count as a member failure and is
