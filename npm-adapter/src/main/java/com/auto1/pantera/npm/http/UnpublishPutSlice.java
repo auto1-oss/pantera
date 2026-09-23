@@ -30,6 +30,7 @@ import javax.json.Json;
 import javax.json.JsonObject;
 import javax.json.JsonPatchBuilder;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
@@ -217,12 +218,18 @@ final class UnpublishPutSlice implements Slice {
                     if (source.getJsonObject("dist-tags").containsKey(diff)) {
                         patch.remove(String.format("/dist-tags/%s", diff));
                     }
-                    // Get latest STABLE version (exclude prereleases like alpha, beta, rc)
-                    final String latest = new DescSortedVersions(
-                        update.getJsonObject("versions"),
-                        true  // excludePrereleases = true
-                    ).value().get(0);
-                    patch.add("/dist-tags/latest", latest);
+                    // Highest stable version; the highest prerelease when no
+                    // stable version remains, so latest never disappears.
+                    final JsonObject remaining = update.getJsonObject("versions");
+                    final List<String> stable =
+                        new DescSortedVersions(remaining, true).value();
+                    final List<String> all =
+                        new DescSortedVersions(remaining, false).value();
+                    if (!stable.isEmpty()) {
+                        patch.add("/dist-tags/latest", stable.get(0));
+                    } else if (!all.isEmpty()) {
+                        patch.add("/dist-tags/latest", all.get(0));
+                    }
                     patch.add("/time/modified", new DateTimeNowStr().value());
                     return this.asto.save(
                         meta,

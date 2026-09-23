@@ -134,7 +134,7 @@ npm publish --registry http://pantera-host:8080/npm-local
 
 ## Dist-Tags & Custom Channels
 
-Every published version gets the `latest` dist-tag by default. To publish to a custom channel (e.g. a beta/next release line) instead:
+Every published version gets the `latest` dist-tag by default. A package always has a `latest` tag: while it has only prerelease versions (for example, its first publish used `--tag next`, or its last stable version was unpublished), `latest` points at the highest prerelease until a stable version is published or you set it with `npm dist-tag add`. To publish to a custom channel (e.g. a beta/next release line) instead:
 
 ```bash
 npm publish --tag beta

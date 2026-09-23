@@ -37,6 +37,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedList;
 import java.util.Optional;
 import java.util.Queue;
@@ -138,6 +139,63 @@ final class UnpublishPutSliceTest {
             new IsEqual<>("1.0.1")
         );
         MatcherAssert.assertThat("Events queue has one item", this.events.size() == 1);
+    }
+
+    @Test
+    void legacyUnpublishOfLastStableMovesLatestToRemainingPrerelease() {
+        this.storage.save(
+            new Key.From("rc-only", "meta.json"),
+            new Content.From(
+                Json.createObjectBuilder()
+                    .add("name", "rc-only")
+                    .add(
+                        "versions",
+                        Json.createObjectBuilder()
+                            .add("1.0.0", Json.createObjectBuilder().add("version", "1.0.0"))
+                            .add(
+                                "1.1.0-beta.1",
+                                Json.createObjectBuilder().add("version", "1.1.0-beta.1")
+                            )
+                    )
+                    .add(
+                        "time",
+                        Json.createObjectBuilder()
+                            .add("1.0.0", "2026-01-01T00:00:00Z")
+                            .add("1.1.0-beta.1", "2026-01-02T00:00:00Z")
+                    )
+                    .add("dist-tags", Json.createObjectBuilder().add("latest", "1.0.0"))
+                    .build().toString().getBytes(StandardCharsets.UTF_8)
+            )
+        ).join();
+        MatcherAssert.assertThat(
+            "Response status is OK",
+            new UnpublishPutSlice(
+                this.storage, Optional.of(this.events), UnpublishPutSliceTest.REPO
+            ),
+            new SliceHasResponse(
+                new RsHasStatus(RsStatus.OK),
+                new RequestLine(RqMethod.PUT, "/rc-only/-rev/undefined"),
+                Headers.from("referer", "unpublish"),
+                new Content.From(
+                    Json.createObjectBuilder()
+                        .add("name", "rc-only")
+                        .add(
+                            "versions",
+                            Json.createObjectBuilder().add(
+                                "1.1.0-beta.1",
+                                Json.createObjectBuilder().add("version", "1.1.0-beta.1")
+                            )
+                        )
+                        .build().toString().getBytes(StandardCharsets.UTF_8)
+                )
+            )
+        );
+        MatcherAssert.assertThat(
+            "latest moves to the remaining prerelease",
+            new JsonFromMeta(this.storage, new Key.From("rc-only")).json()
+                .getJsonObject("dist-tags").getString("latest"),
+            new IsEqual<>("1.1.0-beta.1")
+        );
     }
 
     @Test
