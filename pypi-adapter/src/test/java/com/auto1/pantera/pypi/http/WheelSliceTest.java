@@ -103,7 +103,7 @@ class WheelSliceTest {
     void savesContentByNormalizedNameAndReturnsOk() throws IOException {
         final String boundary = "my boundary";
         final String filename = "ABtests-0.0.2.1-py2.py3-none-any.whl";
-        final String path = "super";
+        final String path = "legacy";
         final byte[] body = new TestResource("pypi_repo/ABtests-0.0.2.1-py2.py3-none-any.whl")
             .asBytes();
         MatcherAssert.assertThat(
@@ -119,9 +119,14 @@ class WheelSliceTest {
             )
         );
         MatcherAssert.assertThat(
-            "Saves content to storage",
-            this.asto.value(new Key.From(path, "abtests", "0.0.2.1", filename)).join().asBytes(),
+            "Saves content at the repository root whatever the upload sub-path",
+            this.asto.value(new Key.From("abtests", "0.0.2.1", filename)).join().asBytes(),
             new IsEqual<>(body)
+        );
+        MatcherAssert.assertThat(
+            "Nothing is stored under the upload sub-path",
+            this.asto.list(new Key.From(path)).join(),
+            new IsEmptyCollection<>()
         );
         MatcherAssert.assertThat(
             "Added event to queue", this.queue.size() == 1
@@ -180,6 +185,127 @@ class WheelSliceTest {
         MatcherAssert.assertThat(
             "Event to queue is empty", this.queue.isEmpty()
         );
+    }
+
+    @Test
+    void uploadToLegacyPathKeepsEarlierReleasesInTheIndex() throws IOException {
+        // B39: twine's conventional /legacy/ upload URL used to store the
+        // file under legacy/ and rebuild the package index from that prefix
+        // only, dropping every earlier release.
+        final byte[] first = new TestResource("pypi_repo/pantera-sample-0.2.tar").asBytes();
+        this.upload("/", "pantera-sample-0.2.tar", first);
+        final byte[] second = new TestResource("pypi_repo/pantera-sample-0.2.tar.gz").asBytes();
+        this.upload("/legacy/", "pantera-sample-0.2.tar.gz", second);
+        final String index = new String(
+            this.asto.value(new Key.From(".pypi", "pantera-sample", "pantera-sample.html"))
+                .join().asBytes(),
+            StandardCharsets.UTF_8
+        );
+        MatcherAssert.assertThat(
+            "index keeps the release uploaded to the root",
+            index.contains("0.2/pantera-sample-0.2.tar#"),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "index lists the release uploaded to /legacy/",
+            index.contains("0.2/pantera-sample-0.2.tar.gz#"),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void rejectsReuploadOfExistingFileWithDifferentContent() throws IOException {
+        // B22: PyPI answers 400 "File already exists" when a filename is
+        // reused with different bytes; silently replacing it breaks every
+        // hash-pinned consumer.
+        final String filename = "pantera-sample-0.2.tar";
+        final byte[] original = new TestResource("pypi_repo/pantera-sample-0.2.tar").asBytes();
+        this.upload("/", filename, original);
+        final byte[] tampered = original.clone();
+        tampered[tampered.length - 1] = (byte) (tampered[tampered.length - 1] ^ 0x1);
+        final com.auto1.pantera.http.Response response = this.upload("/", filename, tampered);
+        MatcherAssert.assertThat(
+            "re-upload with different bytes is refused",
+            response.status(),
+            new IsEqual<>(RsStatus.BAD_REQUEST)
+        );
+        MatcherAssert.assertThat(
+            "the refusal says why",
+            new String(response.body().asBytes(), StandardCharsets.UTF_8)
+                .contains("File already exists"),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "the stored file is untouched",
+            this.asto.value(new Key.From("pantera-sample", "0.2", filename)).join().asBytes(),
+            new IsEqual<>(original)
+        );
+        MatcherAssert.assertThat(
+            "only the first upload is published",
+            this.queue.size(),
+            new IsEqual<>(1)
+        );
+    }
+
+    @Test
+    void identicalReuploadIsIdempotent() throws IOException {
+        final String filename = "pantera-sample-0.2.tar";
+        final byte[] body = new TestResource("pypi_repo/pantera-sample-0.2.tar").asBytes();
+        this.upload("/", filename, body);
+        final com.auto1.pantera.http.Response response = this.upload("/", filename, body);
+        response.body().asBytes();
+        MatcherAssert.assertThat(
+            "identical re-upload succeeds",
+            response.status().success(),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "identical re-upload is not a second publish",
+            this.queue.size(),
+            new IsEqual<>(1)
+        );
+        MatcherAssert.assertThat(
+            "no temporary upload is left behind",
+            this.asto.list(Key.ROOT).join().stream()
+                .filter(key -> !key.string().startsWith(".pypi")
+                    && !key.string().startsWith("pantera-sample/"))
+                .count(),
+            new IsEqual<>(0L)
+        );
+    }
+
+    @Test
+    void badRequestExplainsFilenameMetadataMismatch() throws IOException {
+        // B91: the 400 for a filename/metadata mismatch had an empty body,
+        // so twine printed only "Bad Request".
+        final com.auto1.pantera.http.Response response = this.upload(
+            "/", "other_pkg-9.9.9.tar",
+            new TestResource("pypi_repo/pantera-sample-0.2.tar").asBytes()
+        );
+        MatcherAssert.assertThat(
+            "mismatch is a 400",
+            response.status(),
+            new IsEqual<>(RsStatus.BAD_REQUEST)
+        );
+        MatcherAssert.assertThat(
+            "the 400 names the mismatch",
+            new String(response.body().asBytes(), StandardCharsets.UTF_8)
+                .contains("does not match"),
+            new IsEqual<>(true)
+        );
+    }
+
+    private com.auto1.pantera.http.Response upload(
+        final String path, final String filename, final byte[] body
+    ) throws IOException {
+        final String boundary = "b0undary";
+        return new WheelSlice(this.asto, Optional.of(this.queue), "test").response(
+            new RequestLine(RqMethod.POST, path),
+            Headers.from(
+                ContentType.mime(String.format("multipart/form-data; boundary=\"%s\"", boundary))
+            ),
+            new Content.From(this.multipartBody(body, boundary, filename))
+        ).join();
     }
 
     private byte[] multipartBody(final byte[] input, final String boundary, final String filename)
