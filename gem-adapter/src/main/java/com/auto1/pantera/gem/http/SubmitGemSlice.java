@@ -30,7 +30,9 @@ import java.util.Optional;
 import java.util.Queue;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Function;
 
 /**
  * A slice, which servers gem packages.
@@ -141,7 +143,23 @@ final class SubmitGemSlice implements Slice {
                     );
                 }
             )
-            .thenCompose(none -> this.storage.delete(key))
-            .thenApply(none -> ResponseBuilder.created().build());
+            // The upload key is temporary whether indexing succeeds or not:
+            // a leftover gems/<uuid>.gem would be served and folded into the
+            // next index rebuild.
+            .handle(
+                (none, err) -> this.storage.exists(key)
+                    .thenCompose(
+                        present -> present ? this.storage.delete(key)
+                            : CompletableFuture.<Void>completedFuture(null)
+                    )
+                    .<Response>thenApply(
+                        deleted -> {
+                            if (err != null) {
+                                throw new CompletionException(err);
+                            }
+                            return ResponseBuilder.created().build();
+                        }
+                    )
+            ).thenCompose(Function.identity());
     }
 }
