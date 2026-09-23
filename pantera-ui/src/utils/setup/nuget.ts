@@ -56,7 +56,8 @@ function publishSteps(ctx: SnippetCtx): Step[] {
     {
       title: 'Push the package',
       description: 'Pantera authenticates the push with the username and token stored for the source'
-        + ' (passing the token as <code>--api-key</code> works too). <code>--skip-duplicate</code> skips'
+        + ' (<code>--api-key</code> with the token also authenticates the push, but the stored'
+        + ' credentials are still needed to read the service index). <code>--skip-duplicate</code> skips'
         + ' versions already in the repository (older packages left in <code>./nupkg</code>).',
       code: `dotnet nuget push "nupkg/*.nupkg" --source ${source} --skip-duplicate`,
     },

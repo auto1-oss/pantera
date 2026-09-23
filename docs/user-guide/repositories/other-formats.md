@@ -108,10 +108,10 @@ dotnet pack -c Release -o nupkg
 dotnet nuget push "nupkg/*.nupkg" --source pantera --skip-duplicate
 ```
 
-Alternatively pass your API token as the NuGet API key (sent as the `X-NuGet-ApiKey` header); it is validated like any other Pantera token:
+You can also pass your API token as the NuGet API key (sent as the `X-NuGet-ApiKey` header); it is validated like any other Pantera token. The key only authenticates the push itself: dotnet first reads the service index with the credentials stored for the source, and the index requires valid credentials. Push to the source added above, not to a bare URL:
 
 ```bash
-dotnet nuget push "nupkg/*.nupkg" --source http://pantera-host:8080/my-nuget/index.json \
+dotnet nuget push "nupkg/*.nupkg" --source pantera \
   --api-key your-api-token --skip-duplicate
 ```
 

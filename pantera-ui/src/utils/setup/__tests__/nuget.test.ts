@@ -51,6 +51,11 @@ describe('nugetSnippets', () => {
     expect(allCode(cli)).not.toContain('--api-key')
   })
 
+  it('says an API key does not replace the stored credentials for the service index', () => {
+    const cli = byId(render(HTTPS, 'tok'), 'dotnet')
+    expect(cli.publish[1].description).toContain('stored credentials are still needed to read the service index')
+  })
+
   it('adds a separate publish source when publishing to another repository', () => {
     const cli = byId(render(HTTPS, 'tok', 'nuget_release'), 'dotnet')
     expect(cli.publish[0].code, 'publish source').toContain(`dotnet nuget add source ${HTTPS}/nuget_release/index.json`)
