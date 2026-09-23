@@ -569,14 +569,25 @@ curl -X PUT http://localhost:8086/api/v1/repositories/maven-central \
 
 Delete a repository and its data.
 
-The repository's own data (everything under `<storage root>/<name>/`) and its rows in the search index are removed before the response is sent; other repositories that share the same storage root are not touched. The storage is found the same way requests are served, including a storage given as an alias name (global or repository-scoped, from the database or `_storages.yaml`). A group repository has no data of its own, so only its configuration is removed. Re-creating a repository with the same name starts empty.
+The repository's own data (everything under `<storage root>/<name>/`) is removed first, then its rows in the search index, then its configuration; other repositories that share the same storage root are not touched. The storage is found the same way requests are served, including a storage given as an alias name (global or repository-scoped, from the database or `_storages.yaml`). A group repository has no data of its own, so only its configuration is removed. Re-creating a repository with the same name starts empty.
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_repository_permissions:delete`
 
-**Response (200):** Empty body on success.
+The response waits up to 5 seconds for the removal. A large repository takes longer (one storage delete per object), so the response can be `202` while the removal continues on the server; the repository stays listed until its data is removed and disappears when the delete finishes. The final outcome is written to the application log (`event.action=repository_delete`) and the audit log either way. While a removal is running on a node, another `DELETE` of the same name sent to that node answers `202` without starting a second removal, and `PUT` or `move` of that name (or a move onto it) answers `409`.
 
-**Response (500):** The data could not be removed. The repository is kept so the delete can be retried.
+**Response (200):** Empty body. The data, index rows and configuration were removed.
+
+**Response (202):** The removal is still running.
+
+```json
+{
+  "status": "deleting",
+  "message": "Repository 'old-repo' is being deleted; it disappears from the list when its data is removed"
+}
+```
+
+**Response (500):** The data could not be removed within the wait. The repository is kept so the delete can be retried. A removal that fails after a `202` also keeps the repository; the failure is in the log and audit record.
 
 **Response (404):**
 

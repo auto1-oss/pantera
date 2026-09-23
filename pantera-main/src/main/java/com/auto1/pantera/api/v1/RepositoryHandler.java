@@ -44,6 +44,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import javax.json.Json;
 import javax.json.JsonStructure;
 
@@ -68,6 +69,21 @@ public final class RepositoryHandler {
      * Repository types the server can serve.
      */
     private static final SupportedRepoTypes TYPES = new SupportedRepoTypes();
+
+    /**
+     * How long a repository DELETE waits for the data removal before it
+     * answers 202; below the UI's 10 s request timeout and the API server's
+     * 60 s idle timeout.
+     */
+    private static final java.time.Duration DELETE_WAIT = java.time.Duration.ofSeconds(5);
+
+    /**
+     * Repository deletes in progress on this node. Shared by every
+     * AsyncApiVerticle instance (one handler per instance), so a second
+     * DELETE is recognised whichever event loop receives it.
+     */
+    private static final RepositoryRemovals REMOVALS =
+        new RepositoryRemovals(RepositoryHandler.DELETE_WAIT);
 
     /**
      * Pantera filters cache.
@@ -328,6 +344,9 @@ public final class RepositoryHandler {
      */
     private void createOrUpdateRepository(final RoutingContext ctx) {
         final String name = ctx.pathParam("name");
+        if (RepositoryHandler.refusedWhileDeleting(ctx, name)) {
+            return;
+        }
         final RepositoryName rname = new RepositoryName.Simple(name);
         final String bodyStr = ctx.body().asString();
         if (bodyStr == null || bodyStr.isBlank()) {
@@ -588,12 +607,25 @@ public final class RepositoryHandler {
 
     /**
      * DELETE /api/v1/repositories/:name — delete repository.
+     *
+     * <p>The data goes first, while the config still names its storage,
+     * then the index rows, then the config. A failed removal keeps the
+     * config so the delete can be retried -- deleting the config regardless
+     * left the data behind for whoever reused the name next. The answer
+     * waits at most {@link #DELETE_WAIT}: a large repository is answered
+     * 202 and its outcome is logged and audited when the removal ends. A
+     * delete of a name whose removal is still running answers 202 without
+     * starting a second removal.</p>
      * @param ctx Routing context
      */
     private void deleteRepository(final RoutingContext ctx) {
         final String name = ctx.pathParam("name");
         final RepositoryName rname = new RepositoryName.Simple(name);
         final String actor = ctx.user().principal().getString(AuthTokenRest.SUB);
+        if (RepositoryHandler.REMOVALS.inProgress(name)) {
+            RepositoryHandler.sendDeleteInProgress(ctx, name);
+            return;
+        }
         CompletableFuture.supplyAsync(
             () -> this.crs.exists(rname),
             HandlerExecutor.get()
@@ -614,42 +646,114 @@ public final class RepositoryHandler {
                 );
                 return;
             }
-            // The data goes first, while the config still names its storage;
-            // the answer waits for it. A failed removal keeps the config so
-            // the delete can be retried -- deleting the config regardless
-            // left the data behind for whoever reused the name next.
-            this.repoData.remove(rname, this.crs)
-                .thenCompose(nothing -> this.artifactIndex.removeRepo(name))
-                .thenAcceptAsync(rows -> this.crs.delete(rname), HandlerExecutor.get())
-                .whenComplete((ignored, failure) -> {
-                    if (failure == null) {
-                        this.filtersCache.invalidate(rname.toString());
-                        this.eventBus.publish(RepositoryEvents.remove(name));
-                        this.events.ifPresent(item -> item.stopProxyMetadataProcessing(name));
-                        RepositoryHandler.audit(actor, "REPO_DELETE", name,
-                            java.util.Map.of(), true);
-                        ctx.response().setStatusCode(200).end();
-                    } else {
-                        final Throwable cause = RepositoryHandler.rootCause(failure);
-                        EcsLogger.error("com.auto1.pantera.api.v1")
-                            .message("Repository delete failed, the repository was kept")
-                            .eventCategory("configuration")
-                            .eventAction("repository_delete")
-                            .eventOutcome("failure")
-                            .field("repository.name", name)
-                            .error(cause)
-                            .field("log.source", "application")
-                            .log();
-                        RepositoryHandler.audit(actor, "REPO_DELETE", name,
-                            java.util.Map.of("error", String.valueOf(cause.getMessage())),
-                            false);
-                        ApiResponse.sendError(
-                            ctx, 500, "INTERNAL_ERROR",
-                            "Repository data could not be removed; the repository was kept"
-                        );
-                    }
-                });
+            final Optional<CompletableFuture<Void>> removal = RepositoryHandler.REMOVALS.start(
+                name, () -> this.removeRepository(rname, actor)
+            );
+            if (removal.isEmpty()) {
+                RepositoryHandler.sendDeleteInProgress(ctx, name);
+                return;
+            }
+            RepositoryHandler.REMOVALS.answer(removal.get()).thenAccept(outcome -> {
+                if (outcome.pending()) {
+                    RepositoryHandler.sendDeleteInProgress(ctx, name);
+                } else if (outcome.failure().isEmpty()) {
+                    ctx.response().setStatusCode(200).end();
+                } else {
+                    ApiResponse.sendError(
+                        ctx, 500, "INTERNAL_ERROR",
+                        "Repository data could not be removed; the repository was kept"
+                    );
+                }
+            });
         });
+    }
+
+    /**
+     * Remove a repository: data, index rows, then config. The outcome is
+     * logged and audited here, not by the HTTP answer, which may have been
+     * sent before the removal ended.
+     * @param rname Repository name
+     * @param actor User deleting the repository
+     * @return Completion of the whole removal
+     */
+    private CompletionStage<Void> removeRepository(
+        final RepositoryName rname, final String actor
+    ) {
+        final String name = rname.toString();
+        return this.repoData.remove(rname, this.crs)
+            .thenCompose(nothing -> this.artifactIndex.removeRepo(name))
+            .thenAcceptAsync(rows -> this.crs.delete(rname), HandlerExecutor.get())
+            .whenComplete((ignored, failure) -> {
+                if (failure == null) {
+                    this.filtersCache.invalidate(name);
+                    this.eventBus.publish(RepositoryEvents.remove(name));
+                    this.events.ifPresent(item -> item.stopProxyMetadataProcessing(name));
+                    EcsLogger.info("com.auto1.pantera.api.v1")
+                        .message("Repository deleted with its data")
+                        .eventCategory("configuration")
+                        .eventAction("repository_delete")
+                        .eventOutcome("success")
+                        .field("repository.name", name)
+                        .field("log.source", "application")
+                        .log();
+                    RepositoryHandler.audit(actor, "REPO_DELETE", name,
+                        java.util.Map.of(), true);
+                } else {
+                    final Throwable cause = RepositoryHandler.rootCause(failure);
+                    EcsLogger.error("com.auto1.pantera.api.v1")
+                        .message("Repository delete failed, the repository was kept")
+                        .eventCategory("configuration")
+                        .eventAction("repository_delete")
+                        .eventOutcome("failure")
+                        .field("repository.name", name)
+                        .error(cause)
+                        .field("log.source", "application")
+                        .log();
+                    RepositoryHandler.audit(actor, "REPO_DELETE", name,
+                        java.util.Map.of("error", String.valueOf(cause.getMessage())),
+                        false);
+                }
+            });
+    }
+
+    /**
+     * Answer 202: the repository's removal is still running.
+     * @param ctx Routing context
+     * @param name Repository name
+     */
+    private static void sendDeleteInProgress(final RoutingContext ctx, final String name) {
+        ctx.response()
+            .setStatusCode(202)
+            .putHeader("Content-Type", "application/json")
+            .end(
+                new JsonObject()
+                    .put("status", "deleting")
+                    .put(
+                        "message",
+                        String.format(
+                            "Repository '%s' is being deleted; it disappears from the list when its data is removed",
+                            name
+                        )
+                    ).encode()
+            );
+    }
+
+    /**
+     * Refuse a change to a repository whose delete is still running: the
+     * running delete would remove the config written now.
+     * @param ctx Routing context
+     * @param name Repository name
+     * @return True when refused (answer sent)
+     */
+    private static boolean refusedWhileDeleting(final RoutingContext ctx, final String name) {
+        final boolean deleting = RepositoryHandler.REMOVALS.inProgress(name);
+        if (deleting) {
+            ApiResponse.sendError(
+                ctx, 409, "CONFLICT",
+                String.format("Repository '%s' is being deleted; retry when the delete has finished", name)
+            );
+        }
+        return deleting;
     }
 
     /**
@@ -658,6 +762,9 @@ public final class RepositoryHandler {
      */
     private void moveRepository(final RoutingContext ctx) {
         final String name = ctx.pathParam("name");
+        if (RepositoryHandler.refusedWhileDeleting(ctx, name)) {
+            return;
+        }
         final RepositoryName rname = new RepositoryName.Simple(name);
         final String bodyStr = ctx.body().asString();
         if (bodyStr == null || bodyStr.isBlank()) {
@@ -674,6 +781,9 @@ public final class RepositoryHandler {
         final String newName = body.getString("new_name", "").trim();
         if (newName.isEmpty()) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "new_name is required");
+            return;
+        }
+        if (RepositoryHandler.refusedWhileDeleting(ctx, newName)) {
             return;
         }
         CompletableFuture.supplyAsync(
