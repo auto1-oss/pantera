@@ -106,6 +106,29 @@ curl -sS -w '%{http_code}\n' -u 'your-username:your-api-token' \
 
 The local Composer repository indexes uploaded archives and makes them available for `composer require`.
 
+### Version Resolution
+
+Pantera takes the package version from the first of these that is present:
+
+1. `"version"` in the archive's `composer.json`.
+2. A version in the file name, such as `my-package-1.0.0.zip` or `my-package-v2.1.0-beta.tar.gz`.
+3. `dev-master`. An archive with no version in `composer.json` or in its file name is published as `dev-master`, and the upload does not warn about it.
+
+### Re-uploading a Version
+
+Published releases are immutable:
+
+| Upload | Result |
+|--------|--------|
+| A release that is not published yet | `201`, published |
+| The same release again with the same content | `201`, nothing changes |
+| The same release again with different content | `409 Conflict`, the published archive is kept |
+| A dev branch (`dev-*` or `*-dev`) | `201`, replaces the previous upload of that branch |
+
+To ship a change, publish a new version. The same rules apply to JSON package registrations (`PUT /` with a package JSON body).
+
+An archive that cannot be read, has no `composer.json`, or has a `composer.json` that is not valid JSON is rejected with `400 Bad Request`.
+
 ---
 
 ## Common Issues

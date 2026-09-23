@@ -16,12 +16,15 @@ import com.auto1.pantera.composer.Repository;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import java.util.Locale;
+import java.util.function.Function;
+import javax.json.JsonObject;
 
 import java.util.Optional;
 import java.util.Queue;
@@ -48,6 +51,14 @@ final class AddArchiveSlice implements Slice {
      * Repository type.
      */
     public static final String REPO_TYPE = "php";
+
+    /**
+     * Unique build identifier of a dev archive file name
+     * (e.g. {@code -20220119164424-1e02e050.zip}).
+     */
+    private static final Pattern DEV_SUFFIX = Pattern.compile(
+        "-(\\d{14}-[a-f0-9]{8,40})(?:\\.tar\\.gz|\\.tgz|\\.zip)$"
+    );
 
     /**
      * Repository.
@@ -149,218 +160,278 @@ final class AddArchiveSlice implements Slice {
         
         // Extract the filename from the URI for initial storage
         final String filename = uri.substring(uri.lastIndexOf('/') + 1);
-        
+        final Upload upload = new Upload(uri, filename, isZip, headers);
+
         // First, extract composer.json to get the real package metadata
         return body.asBytesFuture().thenCompose(bytes -> {
             // Choose appropriate archive handler based on format
             final Archive tempArchive = isZip
                 ? new Archive.Zip(new Archive.Name(filename, "unknown"))
                 : new TarArchive(new Archive.Name(filename, "unknown"));
-            
             return tempArchive.composerFrom(new Content.From(bytes))
-                .thenCompose(composerJson -> {
-                    // Extract name and version from composer.json (source of truth)
-                    final String packageName = composerJson.getString("name", null);
-                    if (packageName == null || packageName.trim().isEmpty()) {
+                .handle((composerJson, error) -> {
+                    if (error != null) {
+                        // Not an archive, no composer.json, or composer.json
+                        // is not a JSON object: the client sent a bad package.
                         EcsLogger.warn("com.auto1.pantera.composer")
-                            .message("Missing or empty 'name' in composer.json")
+                            .message("Rejected unreadable Composer archive")
                             .eventCategory("web")
                             .eventAction("archive_upload")
                             .eventOutcome("failure")
-                            .field("url.path", uri)
-                            .field("log.source", "application")
-                            .log();
-                        return CompletableFuture.completedFuture(
-                            ResponseBuilder.badRequest()
-                                .textBody("composer.json must contain non-empty 'name' field")
-                                .build()
-                        );
-                    }
-                    
-                    // Handle version - try multiple sources in priority order:
-                    // 1. composer.json version field
-                    // 2. Extract from filename (e.g., package-1.0.0.tar.gz)
-                    // 3. Fallback to "dev-master"
-                    final String version;
-                    final String versionFromJson = composerJson.getString("version", null);
-                    if (versionFromJson != null && !versionFromJson.trim().isEmpty()) {
-                        version = versionFromJson.trim();
-                    } else {
-                        // Try to extract version from filename
-                        version = extractVersionFromFilename(filename).orElse("dev-master");
-                        EcsLogger.debug("com.auto1.pantera.composer")
-                            .message("Version not found in composer.json, extracted from filename")
-                            .eventCategory("web")
-                            .eventAction("archive_upload")
-                            .field("package.version", version)
+                            .error(error)
                             .field("file.name", filename)
                             .field("log.source", "application")
                             .log();
-                    }
-                    
-                    // Validate package name format (must be vendor/package)
-                    final String[] parts = packageName.split("/");
-                    if (parts.length != 2) {
-                        EcsLogger.warn("com.auto1.pantera.composer")
-                            .message("Invalid package name format, expected 'vendor/package'")
-                            .eventCategory("web")
-                            .eventAction("archive_upload")
-                            .eventOutcome("failure")
-                            .field("package.name", packageName)
-                            .field("log.source", "application")
-                            .log();
                         return CompletableFuture.completedFuture(
                             ResponseBuilder.badRequest()
-                                .textBody("Package name must be in format 'vendor/package'")
+                                .textBody(
+                                    "The archive could not be read or has no valid composer.json"
+                                )
                                 .build()
                         );
                     }
-                    
-                    final String vendor = parts[0];
-                    final String packagePart = parts[1];
-                    
-                    // Preserve original archive format extension
-                    final String extension = isZip ? ".zip" : ".tar.gz";
-                    
-                    // Sanitize version for use in URLs and filenames
-                    // Replace spaces and other invalid URL characters with hyphens
-                    final String sanitizedVersion = sanitizeVersion(version);
-                    
-                    // For dev versions, preserve unique identifier from original filename to avoid overwrites
-                    // Extract timestamp-hash pattern like "20220119164424-1e02e050" from filename
-                    String uniqueSuffix = "";
-                    if (sanitizedVersion.startsWith("dev-") || sanitizedVersion.contains("dev")) {
-                        final java.util.regex.Pattern devPattern = java.util.regex.Pattern.compile(
-                            "-(\\d{14}-[a-f0-9]{8,40})(?:\\.tar\\.gz|\\.tgz|\\.zip)$"
-                        );
-                        final java.util.regex.Matcher matcher = devPattern.matcher(filename);
-                        if (matcher.find()) {
-                            uniqueSuffix = "-" + matcher.group(1);
-                            EcsLogger.debug("com.auto1.pantera.composer")
-                                .message("Dev version detected, preserving unique identifier: " + uniqueSuffix)
-                                .eventCategory("web")
-                                .eventAction("archive_upload")
-                                .field("log.source", "application")
-                                .log();
-                        }
-                    }
-                    
-                    // Generate artifact filename: vendor-package-version[-unique].{zip|tar.gz}
-                    final String artifactFilename = String.format(
-                        "%s-%s-%s%s%s",
-                        vendor,
-                        packagePart,
-                        sanitizedVersion,
-                        uniqueSuffix,
-                        extension
-                    );
-                    
-                    // Store organized by vendor/package/version (like PyPI)
-                    // Path: artifacts/vendor/package/version/vendor-package-version.{ext}
-                    final String artifactPath = String.format(
-                        "%s/%s/%s/%s",
-                        vendor,
-                        packagePart,
-                        sanitizedVersion,
-                        artifactFilename
-                    );
-                    
-                    EcsLogger.info("com.auto1.pantera.composer")
-                        .message("Processing Composer package upload")
-                        .eventCategory("web")
-                        .eventAction("archive_upload")
-                        .field("package.name", packageName)
-                        .field("package.version", version)
-                        .field("package.path", artifactPath)
-                        .field("file.type", isZip ? "ZIP" : "TAR.GZ")
-                        .field("log.source", "application")
-                        .log();
-                    
-                    // Create appropriate archive handler for final storage
-                    // Use sanitized version for metadata consistency
-                    final Archive archive = isZip
-                        ? new Archive.Zip(new Archive.Name(artifactPath, sanitizedVersion))
-                        : new TarArchive(new Archive.Name(artifactPath, sanitizedVersion));
-                    
-                    // Add archive to repository
-                    CompletableFuture<Void> res = this.repository.addArchive(
-                        archive,
-                        new Content.From(bytes)
-                    );
-                    
-                    // Record artifact event AND synchronously update index so
-                    // group resolver sees the new artifact immediately.
-                    res = res.thenCompose(nothing -> {
-                        final long size;
-                        try {
-                            size = this.repository.storage()
-                                .metadata(archive.name().artifact())
-                                .thenApply(meta -> meta.read(Meta.OP_SIZE))
-                                .join()
-                                .map(Long::longValue)
-                                .orElse(0L);
-                        } catch (final Exception e) {
-                            EcsLogger.warn("com.auto1.pantera.composer")
-                                .message("Failed to get file size for event")
-                                .eventCategory("web")
-                                .eventAction("event_creation")
-                                .eventOutcome("failure")
-                                .error(e)
-                                .field("log.source", "application")
-                                .log();
-                            return CompletableFuture.completedFuture(null);
-                        }
-                        final long created = System.currentTimeMillis();
-                        final ArtifactEvent event = new ArtifactEvent(
-                            AddArchiveSlice.REPO_TYPE,
-                            this.rname,
-                            new Login(headers).getValue(),
-                            packageName,
-                            version,
-                            size,
-                            created,
-                            null,  // No release date for local uploads
-                            archive.name().artifact().string()
-                        ).withRequestContext(headers);
-                        this.events.ifPresent(queue -> queue.add(event));
-                        EcsLogger.info("com.auto1.pantera.composer")
-                            .message("Recorded Composer package upload event")
-                            .eventCategory("web")
-                            .eventAction("event_creation")
-                            .eventOutcome("success")
-                            .field("package.name", packageName)
-                            .field("package.version", version)
-                            .field("repository.name", this.rname)
-                            .field("package.size", size)
-                            .field("log.source", "application")
-                            .log();
-                        return this.syncIndex.recordSync(event);
-                    });
-
-                    return res.thenApply(nothing -> ResponseBuilder.created().build());
+                    return this.upload(composerJson, bytes, upload);
                 })
-                .exceptionally(error -> {
-                    EcsLogger.error("com.auto1.pantera.composer")
-                        .message("Failed to process Composer package")
-                        .eventCategory("web")
-                        .eventAction("archive_upload")
-                        .eventOutcome("failure")
-                        .error(error)
-                        .field("file.name", filename)
-                        .field("log.source", "application")
-                        .log();
-                    return ResponseBuilder.internalError()
-                        .textBody(
-                            String.format(
-                                "Failed to process package: %s",
-                                error.getMessage()
-                            )
-                        )
-                        .build();
-                });
+                .thenCompose(Function.identity());
         });
     }
-    
+
+    /**
+     * Validate the package identity from composer.json, check the release
+     * against what is already published, and store it.
+     *
+     * @param composerJson Parsed composer.json
+     * @param bytes Uploaded archive bytes
+     * @param upload Upload request details
+     * @return Response
+     */
+    private CompletableFuture<Response> upload(
+        final JsonObject composerJson, final byte[] bytes, final Upload upload
+    ) {
+        final String packageName;
+        final String versionFromJson;
+        try {
+            packageName = composerJson.getString("name", null);
+            versionFromJson = composerJson.getString("version", null);
+        } catch (final ClassCastException ex) {
+            return ResponseBuilder.badRequest()
+                .textBody("composer.json 'name' and 'version' must be strings")
+                .completedFuture();
+        }
+        if (packageName == null || packageName.trim().isEmpty()) {
+            EcsLogger.warn("com.auto1.pantera.composer")
+                .message("Missing or empty 'name' in composer.json")
+                .eventCategory("web")
+                .eventAction("archive_upload")
+                .eventOutcome("failure")
+                .field("url.path", upload.uri())
+                .field("log.source", "application")
+                .log();
+            return ResponseBuilder.badRequest()
+                .textBody("composer.json must contain non-empty 'name' field")
+                .completedFuture();
+        }
+        // Handle version - try multiple sources in priority order:
+        // 1. composer.json version field
+        // 2. Extract from filename (e.g., package-1.0.0.tar.gz)
+        // 3. Fallback to "dev-master"
+        final String version;
+        if (versionFromJson != null && !versionFromJson.trim().isEmpty()) {
+            version = versionFromJson.trim();
+        } else {
+            version = extractVersionFromFilename(upload.filename()).orElse("dev-master");
+            EcsLogger.debug("com.auto1.pantera.composer")
+                .message("Version not found in composer.json, extracted from filename")
+                .eventCategory("web")
+                .eventAction("archive_upload")
+                .field("package.version", version)
+                .field("file.name", upload.filename())
+                .field("log.source", "application")
+                .log();
+        }
+        // Validate package name format (must be vendor/package)
+        final String[] parts = packageName.split("/");
+        if (parts.length != 2 || parts[0].isEmpty() || parts[1].isEmpty()) {
+            EcsLogger.warn("com.auto1.pantera.composer")
+                .message("Invalid package name format, expected 'vendor/package'")
+                .eventCategory("web")
+                .eventAction("archive_upload")
+                .eventOutcome("failure")
+                .field("package.name", packageName)
+                .field("log.source", "application")
+                .log();
+            return ResponseBuilder.badRequest()
+                .textBody("Package name must be in format 'vendor/package'")
+                .completedFuture();
+        }
+        final Archive archive = this.archive(parts[0], parts[1], version, upload);
+        final String sanitizedVersion = archive.name().version();
+        return new ReleaseGuard(this.repository).check(
+            archive.name().artifact(), packageName, sanitizedVersion, upload.zip(), bytes
+        ).thenCompose(verdict -> {
+            if (verdict == ReleaseGuard.Verdict.CONFLICT) {
+                EcsLogger.warn("com.auto1.pantera.composer")
+                    .message("Rejected re-upload of a published release with different content")
+                    .eventCategory("web")
+                    .eventAction("archive_upload")
+                    .eventOutcome("failure")
+                    .field("event.reason", "version_exists")
+                    .field("package.name", packageName)
+                    .field("package.version", sanitizedVersion)
+                    .field("repository.name", this.rname)
+                    .field("log.source", "application")
+                    .log();
+                return ResponseBuilder.from(RsStatus.CONFLICT)
+                    .textBody(
+                        String.format(
+                            "%s %s is already published with different content;"
+                                + " publish a new version instead",
+                            packageName, sanitizedVersion
+                        )
+                    )
+                    .completedFuture();
+            }
+            if (verdict == ReleaseGuard.Verdict.IDENTICAL) {
+                return ResponseBuilder.created().completedFuture();
+            }
+            return this.store(archive, bytes, packageName, version, upload);
+        }).exceptionally(error -> {
+            EcsLogger.error("com.auto1.pantera.composer")
+                .message("Failed to process Composer package")
+                .eventCategory("web")
+                .eventAction("archive_upload")
+                .eventOutcome("failure")
+                .error(error)
+                .field("file.name", upload.filename())
+                .field("log.source", "application")
+                .log();
+            return ResponseBuilder.internalError()
+                .textBody("Failed to store the package")
+                .build();
+        });
+    }
+
+    /**
+     * Build the archive handle for final storage:
+     * {@code vendor/package/version/vendor-package-version[-unique].{zip|tar.gz}}.
+     *
+     * @param vendor Vendor
+     * @param packagePart Package
+     * @param version Resolved version
+     * @param upload Upload request details
+     * @return Archive whose name carries the storage path and sanitised version
+     */
+    private Archive archive(
+        final String vendor, final String packagePart, final String version, final Upload upload
+    ) {
+        // Preserve original archive format extension
+        final String extension = upload.zip() ? ".zip" : ".tar.gz";
+        // Sanitize version for use in URLs and filenames
+        // Replace spaces and other invalid URL characters with hyphens
+        final String sanitizedVersion = sanitizeVersion(version);
+        // For dev versions, preserve unique identifier from original filename to avoid overwrites
+        // Extract timestamp-hash pattern like "20220119164424-1e02e050" from filename
+        String uniqueSuffix = "";
+        if (sanitizedVersion.startsWith("dev-") || sanitizedVersion.contains("dev")) {
+            final Matcher matcher = DEV_SUFFIX.matcher(upload.filename());
+            if (matcher.find()) {
+                uniqueSuffix = "-" + matcher.group(1);
+                EcsLogger.debug("com.auto1.pantera.composer")
+                    .message("Dev version detected, preserving unique identifier: " + uniqueSuffix)
+                    .eventCategory("web")
+                    .eventAction("archive_upload")
+                    .field("log.source", "application")
+                    .log();
+            }
+        }
+        // Generate artifact filename: vendor-package-version[-unique].{zip|tar.gz}
+        final String artifactFilename = String.format(
+            "%s-%s-%s%s%s", vendor, packagePart, sanitizedVersion, uniqueSuffix, extension
+        );
+        // Store organized by vendor/package/version (like PyPI)
+        // Path: artifacts/vendor/package/version/vendor-package-version.{ext}
+        final String artifactPath = String.format(
+            "%s/%s/%s/%s", vendor, packagePart, sanitizedVersion, artifactFilename
+        );
+        EcsLogger.info("com.auto1.pantera.composer")
+            .message("Processing Composer package upload")
+            .eventCategory("web")
+            .eventAction("archive_upload")
+            .field("package.name", vendor + "/" + packagePart)
+            .field("package.version", version)
+            .field("package.path", artifactPath)
+            .field("file.type", upload.zip() ? "ZIP" : "TAR.GZ")
+            .field("log.source", "application")
+            .log();
+        // Use sanitized version for metadata consistency
+        return upload.zip()
+            ? new Archive.Zip(new Archive.Name(artifactPath, sanitizedVersion))
+            : new TarArchive(new Archive.Name(artifactPath, sanitizedVersion));
+    }
+
+    /**
+     * Store the archive, record the artifact event and update the index
+     * synchronously so the group resolver sees the new artifact at once.
+     *
+     * @param archive Archive handle
+     * @param bytes Archive bytes
+     * @param packageName Package name
+     * @param version Resolved version
+     * @param upload Upload request details
+     * @return 201 once stored
+     */
+    private CompletableFuture<Response> store(
+        final Archive archive,
+        final byte[] bytes,
+        final String packageName,
+        final String version,
+        final Upload upload
+    ) {
+        return this.repository.addArchive(archive, new Content.From(bytes))
+            .thenCompose(nothing -> this.repository.storage()
+                .metadata(archive.name().artifact())
+                .<Long>thenApply(meta -> meta.read(Meta.OP_SIZE).map(Long::longValue).orElse(0L))
+                .exceptionally(error -> {
+                    EcsLogger.warn("com.auto1.pantera.composer")
+                        .message("Failed to get file size for event")
+                        .eventCategory("web")
+                        .eventAction("event_creation")
+                        .eventOutcome("failure")
+                        .error(error)
+                        .field("log.source", "application")
+                        .log();
+                    return 0L;
+                })
+            )
+            .thenCompose(size -> {
+                final ArtifactEvent event = new ArtifactEvent(
+                    AddArchiveSlice.REPO_TYPE,
+                    this.rname,
+                    new Login(upload.headers()).getValue(),
+                    packageName,
+                    version,
+                    size,
+                    System.currentTimeMillis(),
+                    null,  // No release date for local uploads
+                    archive.name().artifact().string()
+                ).withRequestContext(upload.headers());
+                this.events.ifPresent(queue -> queue.add(event));
+                EcsLogger.info("com.auto1.pantera.composer")
+                    .message("Recorded Composer package upload event")
+                    .eventCategory("web")
+                    .eventAction("event_creation")
+                    .eventOutcome("success")
+                    .field("package.name", packageName)
+                    .field("package.version", version)
+                    .field("repository.name", this.rname)
+                    .field("package.size", size)
+                    .field("log.source", "application")
+                    .log();
+                return this.syncIndex.recordSync(event);
+            })
+            .thenApply(nothing -> ResponseBuilder.created().build());
+    }
+
     /**
      * Extract version from filename.
      * Supports patterns like:
@@ -409,5 +480,16 @@ final class AddArchiveSlice implements Slice {
         return version
             .replaceAll("\\s+", "+")              // spaces -> plus signs
             .replaceAll("[^a-zA-Z0-9._+-]", "+"); // other invalid chars -> plus signs
+    }
+
+    /**
+     * Details of one upload request.
+     *
+     * @param uri Request path
+     * @param filename Uploaded file name
+     * @param zip True for ZIP, false for TAR.GZ
+     * @param headers Request headers
+     */
+    private record Upload(String uri, String filename, boolean zip, Headers headers) {
     }
 }
