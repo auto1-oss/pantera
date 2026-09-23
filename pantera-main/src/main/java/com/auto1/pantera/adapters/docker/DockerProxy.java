@@ -32,6 +32,7 @@ import com.auto1.pantera.http.client.ClientSlices;
 import com.auto1.pantera.http.client.RemoteConfig;
 import com.auto1.pantera.http.client.auth.AuthClientSlice;
 import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.index.SyncArtifactIndexer;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.repo.RepoConfig;
@@ -170,8 +171,12 @@ public final class DockerProxy implements Slice {
             )
             .orElse(proxies);
         docker = new TrimmedDocker(docker, cfg.name());
+        // writable=false: push routes answer 405 UNSUPPORTED before any
+        // repository lookup, so a refused push never fetches, caches or
+        // publishes the upstream manifest, and upload bodies are drained.
         Slice slice = new DockerSlice(
-            docker, policy, new CombinedAuthScheme(auth, tokens), events
+            docker, policy, new CombinedAuthScheme(auth, tokens), events,
+            SyncArtifactIndexer.NOOP, false
         );
         slice = new DockerProxyCooldownSlice(
             slice,
