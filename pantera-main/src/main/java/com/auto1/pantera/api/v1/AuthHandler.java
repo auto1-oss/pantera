@@ -1330,9 +1330,10 @@ public final class AuthHandler {
      * deployment declares a trusted reverse proxy
      * ({@code trust_forwarded_headers}); otherwise the TCP peer is used.
      * Even then only the address the proxy recorded is used
-     * ({@code X-Real-IP}, else the rightmost {@code X-Forwarded-For}
-     * entry): the leftmost entry is whatever the client sent, and rotating
-     * it would buy a fresh throttle budget per request.
+     * (the rightmost {@code X-Forwarded-For} entry, else {@code X-Real-IP}
+     * when no {@code X-Forwarded-For} arrived): the leftmost entry and a
+     * passed-through {@code X-Real-IP} are whatever the client sent, and
+     * rotating either would buy a fresh throttle budget per request.
      *
      * @param ctx Routing context
      * @return Client IP, or {@code null} when indeterminable

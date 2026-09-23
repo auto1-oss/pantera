@@ -64,11 +64,21 @@ final class ClientIpResolverTest {
     }
 
     @Test
-    void proxyRecordedAddressPrefersRealIp() {
+    void proxyRecordedAddressPrefersTheRightmostForwardedEntryOverRealIp() {
+        final ClientIpResolver resolver = new ClientIpResolver(true);
         MatcherAssert.assertThat(
-            new ClientIpResolver(true).proxyRecorded(
-                "10.0.0.2", "6.6.6.6, 198.51.100.7", "198.51.100.7"
-            ),
+            "an ALB passes a client-sent X-Real-IP through, so it must not win",
+            resolver.proxyRecorded("10.0.0.2", "6.6.6.6, 198.51.100.7", "1.2.3.4"),
+            new IsEqual<>("198.51.100.7")
+        );
+        MatcherAssert.assertThat(
+            "a rotated X-Real-IP must resolve to the same address",
+            resolver.proxyRecorded("10.0.0.2", "6.6.6.6, 198.51.100.7", "5.6.7.8"),
+            new IsEqual<>("198.51.100.7")
+        );
+        MatcherAssert.assertThat(
+            "X-Real-IP is used only when X-Forwarded-For is absent",
+            resolver.proxyRecorded("10.0.0.2", null, "198.51.100.7"),
             new IsEqual<>("198.51.100.7")
         );
     }

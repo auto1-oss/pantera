@@ -43,7 +43,9 @@ import org.junit.jupiter.api.extension.ExtendWith;
  * {@code X-Forwarded-For}, so its leftmost entry stays client-controlled
  * even with {@code trust_forwarded_headers} on. Keying the throttle on it
  * handed a fresh (user, address) budget to every request that rotated the
- * header. The throttle must key on the address the proxy recorded.
+ * header. The throttle must key on the address the proxy recorded: the
+ * rightmost {@code X-Forwarded-For} entry, since an ALB passes a
+ * client-sent {@code X-Real-IP} through unchanged.
  *
  * @since 2.2.9
  */
@@ -112,6 +114,30 @@ final class AuthHandlerTrustedProxyThrottleTest {
         MatcherAssert.assertThat(
             this.login(this.withRealIp("10.0.1.3")), new IsEqual<>(429)
         );
+    }
+
+    @Test
+    void rotatingRealIpUnderAFixedRightmostForwardedEntryDoesNotEscapeTheThrottle()
+        throws Exception {
+        this.login(this.spoofedRealIp("10.0.2.1"));
+        this.login(this.spoofedRealIp("10.0.2.2"));
+        MatcherAssert.assertThat(
+            this.login(this.spoofedRealIp("10.0.2.3")), new IsEqual<>(429)
+        );
+    }
+
+    /**
+     * Headers as an ALB forwards them: it appends the peer to
+     * {@code X-Forwarded-For} but passes a client-sent {@code X-Real-IP}
+     * through untouched.
+     *
+     * @param spoofed Client-chosen X-Real-IP
+     * @return Headers
+     */
+    private MultiMap spoofedRealIp(final String spoofed) {
+        return MultiMap.caseInsensitiveMultiMap()
+            .add("X-Forwarded-For", PROXY_SEEN)
+            .add("X-Real-IP", spoofed);
     }
 
     private MultiMap withRealIp(final String spoofed) {

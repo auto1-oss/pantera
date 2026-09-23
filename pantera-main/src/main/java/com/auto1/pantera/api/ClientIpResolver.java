@@ -72,9 +72,13 @@ public final class ClientIpResolver {
      * ({@code X-Forwarded-For $proxy_add_x_forwarded_for}) appends the
      * peer it saw to whatever {@code X-Forwarded-For} the client sent, so
      * the leftmost entry is client-controlled even behind the proxy (B16).
-     * With a trusted proxy this returns {@code X-Real-IP} (nginx sets it to
-     * {@code $remote_addr}), else the rightmost {@code X-Forwarded-For}
-     * entry, else the TCP peer; without one, always the TCP peer.</p>
+     * With a trusted proxy this returns the rightmost {@code X-Forwarded-For}
+     * entry (the peer the nearest proxy appended), else {@code X-Real-IP}
+     * when no {@code X-Forwarded-For} arrived, else the TCP peer; without
+     * one, always the TCP peer. {@code X-Real-IP} never outranks
+     * {@code X-Forwarded-For}: a load balancer such as an ALB appends to
+     * {@code X-Forwarded-For} but passes a client-sent {@code X-Real-IP}
+     * through unchanged.</p>
      *
      * @param peer TCP peer address (nullable)
      * @param forwardedFor {@code X-Forwarded-For} header value (nullable)
@@ -85,14 +89,15 @@ public final class ClientIpResolver {
         final String realIp) {
         String result = null;
         if (this.trustForwarded) {
-            if (realIp != null && !realIp.isBlank()) {
-                result = realIp.trim();
-            } else if (forwardedFor != null) {
+            if (forwardedFor != null) {
                 final String last = forwardedFor.substring(forwardedFor.lastIndexOf(',') + 1)
                     .trim();
                 if (!last.isEmpty()) {
                     result = last;
                 }
+            }
+            if (result == null && realIp != null && !realIp.isBlank()) {
+                result = realIp.trim();
             }
         }
         if (result == null && peer != null && !peer.isBlank()) {
