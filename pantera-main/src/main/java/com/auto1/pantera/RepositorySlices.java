@@ -511,7 +511,6 @@ public class RepositorySlices {
         return this.cooldownMetadata;
     }
 
-
     /**
      * Pre-build slices for every configured repository so their shared Jetty
      * clients finish starting before request traffic begins. Without this,

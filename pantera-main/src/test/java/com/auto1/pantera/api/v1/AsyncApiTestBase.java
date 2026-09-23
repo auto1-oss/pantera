@@ -181,6 +181,7 @@ public class AsyncApiTestBase {
             null,
             Optional.empty(),
             NoopCooldownService.INSTANCE,
+            com.auto1.pantera.cooldown.metadata.NoopCooldownMetadataService.INSTANCE,
             new TestSettings(),
             this.testIndex(),
             sharedDs,

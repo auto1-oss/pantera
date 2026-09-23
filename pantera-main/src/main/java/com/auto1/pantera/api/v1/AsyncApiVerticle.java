@@ -130,7 +130,12 @@ public final class AsyncApiVerticle extends AbstractVerticle {
      * @param keystore KeyStore
      * @param jwt JWT authentication provider (Vert.x, for route protection)
      * @param events Artifact metadata events queue
-     * @param cooldown Cooldown service
+     * @param cooldown Cooldown service — the SAME instance the repository
+     *  slices serve traffic with, so an admin unblock updates the decision
+     *  cache the serving path reads
+     * @param cooldownMetadata Cooldown metadata service — likewise the serving
+     *  instance, so an unblock drops the filtered-metadata envelopes clients
+     *  are actually served from
      * @param settings Pantera settings
      * @param artifactIndex Artifact index for search
      * @param dataSource Database data source, nullable
@@ -145,6 +150,7 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         final JWTAuth jwt, // NOPMD UnusedFormalParameter - public API; JWTAuth is reserved for upcoming route-protection wiring
         final Optional<MetadataEventQueues> events,
         final CooldownService cooldown,
+        final CooldownMetadataService cooldownMetadata,
         final Settings settings,
         final ArtifactIndex artifactIndex,
         final DataSource dataSource,
@@ -157,7 +163,7 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         this.keystore = keystore;
         this.events = events;
         this.cooldown = cooldown;
-        this.cooldownMetadata = CooldownSupport.createMetadataService(cooldown, settings);
+        this.cooldownMetadata = cooldownMetadata;
         this.settings = settings;
         this.artifactIndex = artifactIndex;
         this.dataSource = dataSource;
@@ -166,20 +172,30 @@ public final class AsyncApiVerticle extends AbstractVerticle {
 
     /**
      * Convenience constructor for deployment from VertxMain.
+     *
+     * <p>The cooldown services are injected, never built here: every verticle
+     * instance used to call {@code CooldownSupport.create} itself, so admin
+     * unblocks mutated a private decision cache and envelope cache while the
+     * repository slices kept serving their own stale "blocked" state.</p>
      * @param settings Pantera settings
      * @param port Port to start verticle on
      * @param jwt JWT authentication provider
      * @param dataSource Database data source, nullable
      * @param jwtTokens RS256 tokens provider for token issuance, nullable
+     * @param cooldown Serving cooldown service (shared with the slices)
+     * @param cooldownMetadata Serving cooldown metadata service (shared)
+     * @checkstyle ParameterNumberCheck (5 lines)
      */
     public AsyncApiVerticle(final Settings settings, final int port,
         final JWTAuth jwt, final DataSource dataSource,
-        final JwtTokens jwtTokens) {
+        final JwtTokens jwtTokens, final CooldownService cooldown,
+        final CooldownMetadataService cooldownMetadata) {
         this(
             settings.caches(), settings.configStorage(),
             port, settings.authz(), settings.keyStore(), jwt,
             settings.artifactMetadata(),
-            CooldownSupport.create(settings),
+            cooldown,
+            cooldownMetadata,
             settings,
             settings.artifactIndex(),
             dataSource,

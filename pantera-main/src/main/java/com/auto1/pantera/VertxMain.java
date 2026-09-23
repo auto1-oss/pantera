@@ -855,8 +855,11 @@ public final class VertxMain {
         final DeploymentOptions deployOpts = new DeploymentOptions()
             .setInstances(apiInstances);
         this.vertx.deployVerticle(
+            // Every API instance shares the slices' cooldown stack: a
+            // per-verticle stack made unblocks invisible to the serving path.
             () -> new AsyncApiVerticle(
-                settings, apiPort, null, sharedDs.orElse(null), jwtTokens
+                settings, apiPort, null, sharedDs.orElse(null), jwtTokens,
+                slices.cooldownService(), slices.cooldownMetadataService()
             ),
             deployOpts,
             result -> {
