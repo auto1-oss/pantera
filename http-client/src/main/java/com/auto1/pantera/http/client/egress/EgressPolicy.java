@@ -10,10 +10,14 @@
  */
 package com.auto1.pantera.http.client.egress;
 
+import java.net.Inet4Address;
+import java.net.Inet6Address;
 import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
@@ -57,13 +61,32 @@ public final class EgressPolicy {
     );
 
     /**
-     * The AWS/GCP/Azure metadata address; denied even if a deployment
-     * somehow whitelists link-local ranges.
+     * Literal spellings of the cloud metadata service addresses, denied by
+     * name so they never even reach the resolver: AWS/GCP/Azure/OCI IPv4
+     * ({@code 169.254.169.254}), AWS IMDS over IPv6 ({@code fd00:ec2::254}),
+     * GCP metadata over IPv6 ({@code fd20:ce::254}) and Alibaba Cloud
+     * ({@code 100.100.100.200}). The IPv6 ones are unique-local, not
+     * link-local, and the Alibaba one is in the shared address space, so
+     * none of them is caught by the link-local rule.
      */
-    private static final String METADATA_V4 = "169.254.169.254"; // NOPMD AvoidUsingHardCodedIP - the cloud metadata address is exactly the literal this policy exists to deny
+    private static final List<String> METADATA_LITERALS = List.of(
+        "169.254.169.254", // NOPMD AvoidUsingHardCodedIP - the cloud metadata address is exactly the literal this policy exists to deny
+        "fd00:ec2::254", // NOPMD AvoidUsingHardCodedIP - AWS IMDS IPv6 address, denied by this policy
+        "fd20:ce::254", // NOPMD AvoidUsingHardCodedIP - GCP metadata IPv6 address, denied by this policy
+        "100.100.100.200" // NOPMD AvoidUsingHardCodedIP - Alibaba Cloud metadata address, denied by this policy
+    );
 
     /**
-     * Also deny loopback and site-local (RFC1918 / fc00::/7) addresses.
+     * The metadata addresses parsed, so any spelling of them (expanded
+     * IPv6, IPv4-mapped IPv6) is recognised once resolved; denied even if a
+     * deployment somehow whitelists link-local ranges.
+     */
+    private static final Set<InetAddress> METADATA_ADDRESSES = EgressPolicy.parse(METADATA_LITERALS);
+
+    /**
+     * Also deny loopback and private ranges: RFC1918 and fec0::/10
+     * site-local, fc00::/7 unique-local and 100.64.0.0/10 shared address
+     * space.
      */
     private final boolean strict;
 
@@ -83,7 +106,7 @@ public final class EgressPolicy {
         final Set<String> lower = new HashSet<>();
         for (final String host : allowed) {
             if (host != null && !host.isBlank()) {
-                lower.add(host.trim().toLowerCase(Locale.ROOT));
+                lower.add(EgressPolicy.normalize(host.trim()));
             }
         }
         this.allowed = Collections.unmodifiableSet(lower);
@@ -135,11 +158,12 @@ public final class EgressPolicy {
         if (host == null) {
             return Optional.of("missing host");
         }
-        final String lower = host.toLowerCase(Locale.ROOT);
-        if (this.allowed.contains(lower)) {
+        final String name = EgressPolicy.normalize(host);
+        if (this.allowed.contains(name)) {
             return Optional.empty();
         }
-        if (METADATA_HOSTS.contains(lower) || METADATA_V4.equals(lower)) {
+        if (METADATA_HOSTS.contains(name) || METADATA_LITERALS.contains(name)
+            || EgressPolicy.literal(name).map(METADATA_ADDRESSES::contains).orElse(false)) {
             return Optional.of("cloud metadata service");
         }
         return Optional.empty();
@@ -165,10 +189,10 @@ public final class EgressPolicy {
      * @return Reason the address is denied, or empty
      */
     public Optional<String> rejection(final String host, final InetAddress address) {
-        if (host != null && this.allowed.contains(host.toLowerCase(Locale.ROOT))) {
+        if (host != null && this.allowed.contains(EgressPolicy.normalize(host))) {
             return Optional.empty();
         }
-        if (METADATA_V4.equals(address.getHostAddress())) {
+        if (METADATA_ADDRESSES.contains(address)) {
             return Optional.of("cloud metadata service");
         }
         if (address.isLinkLocalAddress()) {
@@ -183,9 +207,87 @@ public final class EgressPolicy {
         if (this.strict && address.isLoopbackAddress()) {
             return Optional.of("loopback address (strict egress policy)");
         }
-        if (this.strict && address.isSiteLocalAddress()) {
+        if (this.strict && EgressPolicy.isPrivate(address)) {
             return Optional.of("private address (strict egress policy)");
         }
         return Optional.empty();
+    }
+
+    /**
+     * Canonical host form for comparisons: lower-case, IPv6 brackets
+     * removed, and the DNS root dot dropped ({@code metadata.google.internal.}
+     * is the same host as {@code metadata.google.internal}).
+     *
+     * @param host Host from a URI or a config entry
+     * @return Normalised host
+     */
+    private static String normalize(final String host) {
+        String name = host.toLowerCase(Locale.ROOT);
+        if (name.length() > 1 && name.charAt(0) == '[' && name.charAt(name.length() - 1) == ']') {
+            name = name.substring(1, name.length() - 1);
+        }
+        while (name.length() > 1 && name.charAt(name.length() - 1) == '.') {
+            name = name.substring(0, name.length() - 1);
+        }
+        return name;
+    }
+
+    /**
+     * Parse an IP literal WITHOUT any DNS lookup: only strings made of hex
+     * characters, dots and colons are handed to {@link InetAddress#getByName},
+     * which parses such literals locally.
+     *
+     * @param host Normalised host
+     * @return Parsed address, or empty for a hostname / unparsable literal
+     */
+    private static Optional<InetAddress> literal(final String host) {
+        final boolean ipv6 = host.indexOf(':') >= 0
+            && host.chars().allMatch(c -> Character.digit(c, 16) >= 0 || c == ':' || c == '.');
+        final boolean ipv4 = !host.isEmpty()
+            && host.chars().allMatch(c -> Character.isDigit(c) || c == '.');
+        Optional<InetAddress> result = Optional.empty();
+        if (ipv6 || ipv4) {
+            try {
+                result = Optional.of(InetAddress.getByName(host));
+            } catch (final UnknownHostException ex) {
+                result = Optional.empty();
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Private (non-internet) unicast ranges denied in strict mode:
+     * RFC1918 / fec0::/10 site-local, fc00::/7 unique-local (RFC 4193) and
+     * 100.64.0.0/10 shared address space (RFC 6598). Java's
+     * {@link InetAddress#isSiteLocalAddress()} covers only the first.
+     *
+     * @param address Address
+     * @return True when the address is in a private range
+     */
+    private static boolean isPrivate(final InetAddress address) {
+        final byte[] raw = address.getAddress();
+        final boolean ula = address instanceof Inet6Address && (raw[0] & 0xFE) == 0xFC;
+        final boolean shared = address instanceof Inet4Address
+            && (raw[0] & 0xFF) == 100 && (raw[1] & 0xC0) == 64;
+        return address.isSiteLocalAddress() || ula || shared;
+    }
+
+    /**
+     * Parse the built-in literals.
+     *
+     * @param literals IP literals
+     * @return Parsed addresses
+     */
+    private static Set<InetAddress> parse(final List<String> literals) {
+        final Set<InetAddress> out = new HashSet<>();
+        for (final String lit : literals) {
+            out.add(
+                EgressPolicy.literal(lit).orElseThrow(
+                    () -> new IllegalStateException("Bad built-in IP literal: " + lit)
+                )
+            );
+        }
+        return Collections.unmodifiableSet(out);
     }
 }

@@ -120,4 +120,104 @@ final class EgressPolicyTest {
             new IsEqual<>(false)
         );
     }
+    @Test
+    void ipv6AndAlibabaMetadataAddressesAreDeniedByDefault() throws Exception {
+        final EgressPolicy policy = EgressPolicy.defaults();
+        MatcherAssert.assertThat(
+            "the AWS IMDS IPv6 address must be denied",
+            policy.rejection(InetAddress.getByName("fd00:ec2::254")).isPresent(),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "the GCP metadata IPv6 address must be denied",
+            policy.rejection(InetAddress.getByName("fd20:ce::254")).isPresent(),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "the Alibaba Cloud metadata address must be denied",
+            policy.rejection(InetAddress.getByName("100.100.100.200")).isPresent(),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void metadataLiteralsAreDeniedByNameInEverySpelling() {
+        final EgressPolicy policy = EgressPolicy.defaults();
+        MatcherAssert.assertThat(
+            "a bracketed IPv6 metadata literal must be denied by name",
+            policy.hostRejection("[fd00:ec2::254]").isPresent(),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "the GCP IPv6 metadata literal must be denied by name",
+            policy.hostRejection("fd20:ce::254").isPresent(),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "the Alibaba metadata literal must be denied by name",
+            policy.hostRejection("100.100.100.200").isPresent(),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void trailingDotAndCaseDoNotBypassTheMetadataHostnameCheck() {
+        final EgressPolicy policy = EgressPolicy.defaults();
+        MatcherAssert.assertThat(
+            "a trailing-dot FQDN names the same metadata host",
+            policy.hostRejection("metadata.google.internal.").isPresent(),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "upper case and a trailing dot together must still be denied",
+            policy.hostRejection("Metadata.Google.Internal.").isPresent(),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void trailingDotAllowlistEntryMatchesTheBareHost() throws Exception {
+        final EgressPolicy policy = new EgressPolicy(true, Set.of("registry.internal."));
+        MatcherAssert.assertThat(
+            "an allowlist entry and a host differing only by the root dot are the same host",
+            policy.rejection("registry.internal", InetAddress.getByName("10.0.0.5")).isPresent(),
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void uniqueLocalAndSharedAddressSpaceAreDeniedOnlyInStrictMode() throws Exception {
+        final EgressPolicy lenient = EgressPolicy.defaults();
+        final EgressPolicy strict = new EgressPolicy(true, Set.of());
+        MatcherAssert.assertThat(
+            "fc00::/7 is allowed by default",
+            lenient.rejection(InetAddress.getByName("fd12:3456::1")).isPresent(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "100.64.0.0/10 is allowed by default",
+            lenient.rejection(InetAddress.getByName("100.64.1.1")).isPresent(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "strict mode must deny the fc00::/7 unique-local range",
+            strict.rejection(InetAddress.getByName("fd12:3456::1")).isPresent(),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "strict mode must deny the fc00::/7 range in its fc half too",
+            strict.rejection(InetAddress.getByName("fc00::1")).isPresent(),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "strict mode must deny the 100.64.0.0/10 shared address space",
+            strict.rejection(InetAddress.getByName("100.127.255.254")).isPresent(),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "100.128.0.1 is outside 100.64.0.0/10 and stays allowed in strict mode",
+            strict.rejection(InetAddress.getByName("100.128.0.1")).isPresent(),
+            new IsEqual<>(false)
+        );
+    }
 }
