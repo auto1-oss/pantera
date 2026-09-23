@@ -18,6 +18,9 @@ import io.vertx.ext.web.client.HttpResponse;
 import io.vertx.ext.web.client.WebClient;
 import io.vertx.junit5.VertxTestContext;
 import java.util.concurrent.TimeUnit;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.core.IsEqual;
+import org.hamcrest.core.StringContains;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
@@ -33,8 +36,8 @@ public final class RoleHandlerTest extends AsyncApiTestBase {
         .put(
             "permissions",
             new JsonObject().put(
-                "api_repository",
-                new JsonObject().put("read", true).put("write", false)
+                "api_repository_permissions",
+                new io.vertx.core.json.JsonArray().add("read")
             )
         );
 
@@ -95,5 +98,68 @@ public final class RoleHandlerTest extends AsyncApiTestBase {
         Assertions.assertNotNull(body);
         Assertions.assertFalse(body.isBlank());
         ctx.completeNow();
+    }
+
+    @Test
+    void putRoleRejectsUnregisteredPermissionType(final Vertx vertx) throws Exception {
+        // Repo names as top-level keys (the old documented shape) are not a
+        // permission type: the role would be stored and then grant nothing.
+        final HttpResponse<Buffer> put = WebClient.create(vertx)
+            .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/roles/repokeyed")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(
+                new JsonObject().put(
+                    "permissions",
+                    new JsonObject().put(
+                        "maven-central",
+                        new io.vertx.core.json.JsonArray().add("read")
+                    )
+                )
+            )
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            "an unregistered permission type is refused",
+            put.statusCode(), new IsEqual<>(400)
+        );
+        MatcherAssert.assertThat(
+            "the refusal names the offending key",
+            put.bodyAsJsonObject().getString("message"),
+            new StringContains("maven-central")
+        );
+        final HttpResponse<Buffer> get = WebClient.create(vertx)
+            .get(this.port(), AsyncApiTestBase.HOST, "/api/v1/roles/repokeyed")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .send()
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            "nothing was stored", get.statusCode(), new IsEqual<>(404)
+        );
+    }
+
+    @Test
+    void putRoleAcceptsAdapterBasicPermissions(final Vertx vertx) throws Exception {
+        final HttpResponse<Buffer> put = WebClient.create(vertx)
+            .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/roles/repo-reader")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(
+                new JsonObject().put(
+                    "permissions",
+                    new JsonObject().put(
+                        "adapter_basic_permissions",
+                        new JsonObject().put(
+                            "maven-central",
+                            new io.vertx.core.json.JsonArray().add("read")
+                        ).put(
+                            "npm-local",
+                            new io.vertx.core.json.JsonArray().add("read").add("write")
+                        )
+                    )
+                )
+            )
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(put.statusCode(), new IsEqual<>(201));
     }
 }

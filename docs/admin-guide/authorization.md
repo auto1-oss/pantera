@@ -19,6 +19,8 @@ A user's effective permissions are the union of all permissions from their assig
 
 ## Permission Types
 
+The keys of a role's `permissions` object are the permission types below; repository names go *inside* a type, never at the top level. `PUT /api/v1/roles/:name` refuses a role whose keys are not registered types with `400`, because the policy cannot load such a role and it would grant nothing.
+
 ### adapter_basic_permissions
 
 Controls read, write, and delete access to repositories.
@@ -97,7 +99,7 @@ When a user authenticates to the REST API, Pantera resolves the following API pe
 | `api_repository_permissions` | `read`, `create`, `update`, `delete`, `move` | Repository CRUD |
 | `api_user_permissions` | `read`, `create`, `update`, `delete`, `enable`, `change_password` | User management |
 | `api_role_permissions` | `read`, `create`, `update`, `delete`, `enable` | Role management |
-| `api_alias_permissions` | `read`, `create`, `delete` | Storage alias management |
+| `api_storage_alias_permissions` | `read`, `create`, `delete` | Storage alias management |
 | `api_cooldown_permissions` | `read`, `write` | Cooldown configuration and unblocking |
 | `api_search_permissions` | `read`, `write` | Search queries and reindexing |
 

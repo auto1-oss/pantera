@@ -217,7 +217,7 @@ Admin panels appear in the sidebar under **Administration** only if you have the
 | Repository Management | `api_repository_permissions:write` | Create, edit, delete repositories |
 | User Management | `api_user_permissions:write` | Create, edit, enable/disable users |
 | Roles & Permissions | `api_role_permissions:write` | Manage RBAC roles |
-| Storage Configuration | `api_alias_permissions:write` | Manage storage aliases |
+| Storage Configuration | `api_storage_alias_permissions:create` | Manage storage aliases |
 | System Settings | Admin role | Configure server settings, auth providers |
 
 If you do not see the Administration section, you have read-only access. Contact your administrator for elevated permissions.

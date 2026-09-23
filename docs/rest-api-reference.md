@@ -938,8 +938,8 @@ List all roles with pagination, optional search, and server-side sorting.
 ```json
 {
   "items": [
-    { "name": "admin", "permissions": { "*": ["*"] } },
-    { "name": "reader", "permissions": { "*": ["read", "download"] } }
+    { "name": "admin", "enabled": true, "permissions": { "all_permission": {} } },
+    { "name": "reader", "enabled": true, "permissions": { "adapter_basic_permissions": { "*": ["read"] } } }
   ],
   "page": 0,
   "size": 20,
@@ -973,8 +973,10 @@ Get details for a specific role.
 ```json
 {
   "permissions": {
-    "maven-central": ["read", "download"],
-    "npm-local": ["read", "download", "upload"]
+    "adapter_basic_permissions": {
+      "maven-central": ["read"],
+      "npm-local": ["read", "write"]
+    }
   },
   "enabled": true
 }
@@ -1008,18 +1010,30 @@ Create a new role or update an existing one. If the role exists, the `update` pe
 
 **Privilege ceiling (2.2.9).** Unless the caller holds `all_permission`: the built-in `admin` role cannot be modified; `all_permission` cannot be authored into a role; and every permission the role would grant must already be implied by the caller's own effective permissions (evaluated on the materialised permissions, not the raw JSON). A role editor therefore cannot grant themselves or others anything above what they hold. Requests exceeding the ceiling are refused with `403`.
 
-**Request Body:**
+**Request Body:** the keys of `permissions` are permission types, not repository names. Repository access goes under `adapter_basic_permissions`, keyed by repository name (`*` for every repository), with the actions `read`, `write` and `delete` (`download`/`upload` are accepted aliases of `read`/`write`). Docker repositories additionally use `docker_repository_permissions` and `docker_registry_permissions`; management-API access uses the `api_*_permissions` types. The full list of types and actions is in the [authorization guide](admin-guide/authorization.md).
 
 ```json
 {
   "permissions": {
-    "maven-central": ["read", "download"],
-    "npm-local": ["read", "download", "upload"]
+    "adapter_basic_permissions": {
+      "maven-central": ["read"],
+      "npm-local": ["read", "write", "delete"]
+    }
   }
 }
 ```
 
 **Response (201):** Empty body on success.
+
+**Response (400):** the body is not JSON, or a key of `permissions` is not a registered permission type (for example a repository name used as a top-level key) or has a malformed value. Nothing is stored.
+
+```json
+{
+  "error": "BAD_REQUEST",
+  "message": "Invalid role permissions: Permission type maven-central is not found. The keys of 'permissions' must be permission types such as adapter_basic_permissions, keyed by repository inside",
+  "status": 400
+}
+```
 
 **curl example:**
 
@@ -1027,7 +1041,7 @@ Create a new role or update an existing one. If the role exists, the `update` pe
 curl -X PUT http://localhost:8086/api/v1/roles/developer \
   -H "Authorization: Bearer eyJhbGciOi..." \
   -H "Content-Type: application/json" \
-  -d '{"permissions": {"maven-central": ["read", "download"], "npm-local": ["read", "download", "upload"]}}'
+  -d '{"permissions": {"adapter_basic_permissions": {"maven-central": ["read"], "npm-local": ["read", "write", "delete"]}}}'
 ```
 
 ---
@@ -1103,7 +1117,7 @@ curl -X POST http://localhost:8086/api/v1/roles/developer/disable \
 List all global storage aliases.
 
 **Authentication:** JWT Bearer token required.
-**Permission:** `api_alias_permissions:read`
+**Permission:** `api_storage_alias_permissions:read`
 
 Backend credentials in each alias `config` (`secretAccessKey`, `sessionToken`, tokens, passwords) are returned masked as `"***"` (2.2.9) — the same write-only rule as repository configuration.
 
@@ -1143,7 +1157,7 @@ curl http://localhost:8086/api/v1/storages \
 Create or update a global storage alias.
 
 **Authentication:** JWT Bearer token required.
-**Permission:** `api_alias_permissions:create`
+**Permission:** `api_storage_alias_permissions:create`
 
 **Request Body:**
 
@@ -1172,7 +1186,7 @@ curl -X PUT http://localhost:8086/api/v1/storages/default \
 Delete a global storage alias. Fails with 409 if any repositories reference it.
 
 **Authentication:** JWT Bearer token required.
-**Permission:** `api_alias_permissions:delete`
+**Permission:** `api_storage_alias_permissions:delete`
 
 **Response (200):** Empty body on success.
 
@@ -1200,7 +1214,7 @@ curl -X DELETE http://localhost:8086/api/v1/storages/old-storage \
 List storage aliases scoped to a specific repository.
 
 **Authentication:** JWT Bearer token required.
-**Permission:** `api_alias_permissions:read` **and** `adapter_basic_permissions` `read` on `:name` (2.2.9 — per-repository scope is enforced in addition to the global bit).
+**Permission:** `api_storage_alias_permissions:read` **and** `adapter_basic_permissions` `read` on `:name` (2.2.9 — per-repository scope is enforced in addition to the global bit).
 
 **Response (200):**
 
@@ -1230,7 +1244,7 @@ curl http://localhost:8086/api/v1/repositories/maven-central/storages \
 Create or update a storage alias scoped to a repository.
 
 **Authentication:** JWT Bearer token required.
-**Permission:** `api_alias_permissions:create` **and** `adapter_basic_permissions` `write` on `:name` (2.2.9 — this route previously accepted the read-only alias grant; an alias write rewrites the repository's backing storage and now requires the create bit plus repository-scoped write).
+**Permission:** `api_storage_alias_permissions:create` **and** `adapter_basic_permissions` `write` on `:name` (2.2.9 — this route previously accepted the read-only alias grant; an alias write rewrites the repository's backing storage and now requires the create bit plus repository-scoped write).
 
 **Request Body:**
 
@@ -1259,7 +1273,7 @@ curl -X PUT http://localhost:8086/api/v1/repositories/maven-central/storages/loc
 Delete a repository-scoped storage alias.
 
 **Authentication:** JWT Bearer token required.
-**Permission:** `api_alias_permissions:delete` **and** `adapter_basic_permissions` `delete` on `:name` (2.2.9).
+**Permission:** `api_storage_alias_permissions:delete` **and** `adapter_basic_permissions` `delete` on `:name` (2.2.9).
 
 **Response (200):** Empty body on success.
 

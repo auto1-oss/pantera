@@ -211,6 +211,11 @@ public final class RoleHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid JSON body");
             return;
         }
+        final String invalid = RoleHandler.invalidPermissions(body);
+        if (invalid != null) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", invalid);
+            return;
+        }
         final Optional<JsonObject> existing = this.roles.get(rname);
         final PermissionCollection perms = this.policy.getPermissions(
             new AuthUser(
@@ -245,6 +250,33 @@ public final class RoleHandler {
         } else {
             ApiResponse.sendError(ctx, 403, "FORBIDDEN", "Insufficient permissions");
         }
+    }
+
+    /**
+     * Materialise the submitted role the same way the policy does when it
+     * loads the role. A key that is not a registered permission type (for
+     * example a repository name used as a top-level key) or a malformed
+     * value would otherwise be stored and make the policy drop the whole
+     * role, so the role would silently grant nothing.
+     * @param body Submitted role document
+     * @return Refusal reason or {@code null} when every key materialises
+     */
+    private static String invalidPermissions(final JsonObject body) {
+        String refusal = null;
+        try {
+            new RolePermissionsReader().read(body);
+        } catch (final ClassCastException ex) {
+            refusal = "'permissions' must be an object keyed by permission type,"
+                + " e.g. {\"adapter_basic_permissions\": {\"<repo>\": [\"read\"]}}";
+        } catch (final RuntimeException ex) {
+            refusal = String.format(
+                "Invalid role permissions: %s. The keys of 'permissions' must be"
+                    + " permission types such as adapter_basic_permissions, keyed"
+                    + " by repository inside",
+                ex.getMessage()
+            );
+        }
+        return refusal;
     }
 
     /**
