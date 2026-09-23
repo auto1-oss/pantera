@@ -46,7 +46,8 @@ public final class ImportHeaders {
     public static final String ARTIFACT_SIZE = "X-Pantera-Artifact-Size";
 
     /**
-     * Artifact owner header.
+     * Artifact owner header. Accepted but not trusted: the recorded owner
+     * and the audit {@code user.name} are the authenticated caller.
      */
     public static final String ARTIFACT_OWNER = "X-Pantera-Artifact-Owner";
 

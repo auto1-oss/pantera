@@ -39,15 +39,15 @@ curl -X PUT \
 
 | Header | Description |
 |--------|-------------|
-| `X-Pantera-Artifact-Name` | Logical artifact name |
+| `X-Pantera-Artifact-Name` | Logical artifact name (defaults to the artifact path) |
 | `X-Pantera-Artifact-Version` | Artifact version string |
 | `X-Pantera-Artifact-Size` | Size in bytes (falls back to Content-Length) |
-| `X-Pantera-Artifact-Owner` | Owner/publisher name |
+| `X-Pantera-Artifact-Owner` | Ignored. The artifact owner and the audit `user.name` are always the authenticated caller |
 | `X-Pantera-Artifact-Created` | Created timestamp (milliseconds since epoch) |
 | `X-Pantera-Checksum-Sha256` | Expected SHA-256 checksum for verification |
 | `X-Pantera-Checksum-Sha1` | Expected SHA-1 checksum |
 | `X-Pantera-Checksum-Md5` | Expected MD5 checksum |
-| `X-Pantera-Checksum-Mode` | Checksum policy: `VERIFY` (default), `STORE`, or `NONE` |
+| `X-Pantera-Checksum-Mode` | Checksum policy: `COMPUTE` (default), `METADATA`, or `SKIP` |
 | `X-Pantera-Metadata-Only` | If `true`, only index metadata without storing bytes |
 
 ### Response Codes

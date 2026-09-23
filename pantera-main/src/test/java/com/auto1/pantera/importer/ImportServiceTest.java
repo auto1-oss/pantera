@@ -19,10 +19,13 @@ import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.asto.SubStorage;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseException;
+import com.auto1.pantera.http.auth.AuthzSlice;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.http.slice.EcsLoggingSlice;
 import com.auto1.pantera.importer.api.ChecksumPolicy;
 import com.auto1.pantera.importer.api.ImportHeaders;
+import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.settings.repo.RepoConfig;
 import com.auto1.pantera.settings.repo.Repositories;
 import java.lang.reflect.Constructor;
@@ -32,6 +35,8 @@ import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import org.apache.commons.codec.binary.Hex;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -165,6 +170,65 @@ final class ImportServiceTest {
             new Content.From("a".getBytes(StandardCharsets.UTF_8))
         ).toCompletableFuture().get();
         Assertions.assertEquals(ImportStatus.CREATED, result.status());
+    }
+
+    @Test
+    void auditIdentityIsTheAuthenticatedCallerNotTheOwnerHeader() throws Exception {
+        // B53: X-Pantera-Artifact-Owner is caller-controlled. It used to
+        // become the event owner, i.e. the audit record's user.name, so any
+        // writer could attribute an upload to someone else; the record also
+        // lacked client.ip and trace.id.
+        final Headers headers = new Headers()
+            .add(AuthzSlice.LOGIN_HDR, "alice")
+            .add(EcsLoggingSlice.CTX_TRACE_ID_HEADER, "trace-import")
+            .add(EcsLoggingSlice.CTX_CLIENT_IP_HEADER, "10.0.0.9")
+            .add(ImportHeaders.REPO_TYPE, "file")
+            .add(ImportHeaders.IDEMPOTENCY_KEY, "id-owner")
+            .add(ImportHeaders.ARTIFACT_NAME, "owned.txt")
+            .add(ImportHeaders.ARTIFACT_OWNER, "spoofed_victim");
+        this.service.importArtifact(
+            ImportRequest.parse(
+                new RequestLine(RqMethod.PUT, "/.import/my-repo/dir/owned.txt"), headers
+            ),
+            new Content.From("o".getBytes(StandardCharsets.UTF_8))
+        ).toCompletableFuture().get();
+        final ArtifactEvent event = this.events.poll();
+        MatcherAssert.assertThat(
+            "user.name is the authenticated caller",
+            event.owner(), new IsEqual<>("alice")
+        );
+        MatcherAssert.assertThat(
+            "trace.id is the import request's",
+            event.traceId(), new IsEqual<>("trace-import")
+        );
+        MatcherAssert.assertThat(
+            "client.ip is the import request's",
+            event.clientIp(), new IsEqual<>("10.0.0.9")
+        );
+    }
+
+    @Test
+    void importWithoutArtifactNameIsStillRecorded() throws Exception {
+        // B53: X-Pantera-Artifact-Name is optional, but without it no event
+        // was enqueued, so the import left no artifact row and no audit record.
+        final Headers headers = new Headers()
+            .add(AuthzSlice.LOGIN_HDR, "alice")
+            .add(ImportHeaders.REPO_TYPE, "file")
+            .add(ImportHeaders.IDEMPOTENCY_KEY, "id-unnamed");
+        final ImportResult result = this.service.importArtifact(
+            ImportRequest.parse(
+                new RequestLine(RqMethod.PUT, "/.import/my-repo/dir/unnamed.txt"), headers
+            ),
+            new Content.From("u".getBytes(StandardCharsets.UTF_8))
+        ).toCompletableFuture().get();
+        MatcherAssert.assertThat(
+            "the import succeeds",
+            result.status(), new IsEqual<>(ImportStatus.CREATED)
+        );
+        MatcherAssert.assertThat(
+            "the event falls back to the artifact path as its name",
+            this.events.poll().artifactName(), new IsEqual<>("dir/unnamed.txt")
+        );
     }
 
     private static RepoConfig repoConfig(final Storage storage) throws Exception {

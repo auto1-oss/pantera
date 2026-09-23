@@ -1271,42 +1271,38 @@ public final class ImportService {
     }
 
     /**
-     * Enqueue metadata event.
+     * Enqueue the artifact event, which becomes the artifacts row and the
+     * {@code artifact_publish} audit record.
+     *
+     * <p>The owner is the authenticated caller ({@link ImportRequest#caller()}),
+     * never the caller-controlled {@code X-Pantera-Artifact-Owner} header, and
+     * the request's trace id / client IP are bound from its context headers.
+     * An import without {@code X-Pantera-Artifact-Name} is recorded under its
+     * artifact path, so every import leaves an audit record.</p>
      *
      * @param request Request
      * @param size Size
      */
     private void enqueueEvent(final ImportRequest request, final long size) {
-        this.events.ifPresent(queue -> request.artifact().ifPresent(name -> {
+        this.events.ifPresent(queue -> {
+            final String name = request.artifact()
+                .filter(value -> !value.isBlank())
+                .orElse(request.path());
             final long created = request.created().orElse(System.currentTimeMillis());
             // The import target path is the artifact's real storage key.
-            final String prefix = request.path();
-            final ArtifactEvent event = request.release()
-                .map(release -> new ArtifactEvent(
+            queue.offer(
+                new ArtifactEvent(
                     request.repoType(),
                     request.repo(),
-                    request.owner().orElse(ArtifactEvent.DEF_OWNER),
+                    request.caller(),
                     name,
                     request.version().orElse(""),
                     size,
                     created,
-                    release,
-                    prefix
-                ))
-                .orElse(
-                    new ArtifactEvent(
-                        request.repoType(),
-                        request.repo(),
-                        request.owner().orElse(ArtifactEvent.DEF_OWNER),
-                        name,
-                        request.version().orElse(""),
-                        size,
-                        created,
-                        null,
-                        prefix
-                    )
-                );
-            queue.offer(event);
-        }));
+                    request.release().orElse(null),
+                    request.path()
+                ).withRequestContext(request.headers())
+            );
+        });
     }
 }

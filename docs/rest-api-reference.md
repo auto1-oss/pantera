@@ -2891,16 +2891,16 @@ Import an artifact into a repository. Supports idempotent uploads with checksum 
 
 | Header                        | Description                                      |
 |-------------------------------|--------------------------------------------------|
-| `X-Pantera-Artifact-Name`    | Logical artifact name                            |
+| `X-Pantera-Artifact-Name`    | Logical artifact name (defaults to the artifact path) |
 | `X-Pantera-Artifact-Version` | Artifact version string                          |
 | `X-Pantera-Artifact-Size`    | Size in bytes (falls back to `Content-Length`)    |
-| `X-Pantera-Artifact-Owner`   | Owner/publisher name                             |
+| `X-Pantera-Artifact-Owner`   | Ignored; the owner and audit `user.name` are the authenticated caller |
 | `X-Pantera-Artifact-Created` | Created timestamp (milliseconds since epoch)     |
 | `X-Pantera-Artifact-Release` | Release timestamp (milliseconds since epoch)     |
 | `X-Pantera-Checksum-Sha1`   | Expected SHA-1 checksum                          |
 | `X-Pantera-Checksum-Sha256` | Expected SHA-256 checksum                        |
 | `X-Pantera-Checksum-Md5`    | Expected MD5 checksum                            |
-| `X-Pantera-Checksum-Mode`   | Checksum policy (`VERIFY`, `STORE`, `NONE`)      |
+| `X-Pantera-Checksum-Mode`   | Checksum policy (`COMPUTE` default, `METADATA`, `SKIP`) |
 | `X-Pantera-Metadata-Only`   | If `true`, only index metadata without storing bytes |
 
 **Request Body:** Raw artifact binary content.
