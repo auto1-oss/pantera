@@ -118,7 +118,7 @@ public enum SimpleApiFormat {
      * @param parts Media range split on {@code ;}
      * @return Quality in [0, 1]; malformed values count as 1
      */
-    private static double quality(final String[] parts) {
+    private static double quality(final String... parts) {
         double result = 1.0;
         for (int idx = 1; idx < parts.length; idx += 1) {
             final String param = parts[idx].trim();
