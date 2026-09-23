@@ -263,7 +263,7 @@ public final class UploadSlice implements Slice {
      * Upload of an artifact checksum sidecar ({@code .sha1}, {@code .md5},
      * {@code .sha256}, {@code .sha512}). When the file it describes is
      * stored, the claimed digest is compared with the digest of the stored
-     * bytes: a match stores the canonical server-computed value (201), a
+     * bytes (see {@link #storedDigest}): a match stores the canonical server-computed value (201), a
      * mismatch is refused with 400 and the generated checksum is kept.
      * Without a stored primary the checksum is saved as sent; the primary's
      * upload regenerates it from the real bytes.
@@ -282,18 +282,16 @@ public final class UploadSlice implements Slice {
         final String path = key.string();
         final int dot = path.lastIndexOf('.');
         final Key primary = new Key.From(path.substring(0, dot));
-        final Digests alg = Digests.valueOf(path.substring(dot + 1).toUpperCase(Locale.US));
+        final String alg = path.substring(dot + 1);
         return this.storage.exists(primary).thenCompose(
             exists -> {
                 if (!exists) {
                     return this.save(key, body, headers, owner, size);
                 }
                 return new ContentWithSize(body, headers).asBytesFuture().thenCompose(
-                    bytes -> this.storage.value(primary)
-                        .thenCompose(content -> new ContentDigest(content, alg).hex())
-                        .thenCompose(
-                            expected -> this.verifiedChecksum(key, expected, bytes)
-                        )
+                    bytes -> this.storedDigest(primary, alg).thenCompose(
+                        expected -> this.verifiedChecksum(key, expected, bytes)
+                    )
                 );
             }
         );
@@ -338,7 +336,8 @@ public final class UploadSlice implements Slice {
     }
 
     /**
-     * Re-upload of an existing release file: identical bytes are an
+     * Re-upload of an existing release file, compared by SHA-256 with the
+     * stored file (see {@link #storedDigest}): identical bytes are an
      * idempotent 201 (nothing rewritten, no new publish event), different
      * bytes are refused with 409 Conflict.
      *
@@ -352,10 +351,44 @@ public final class UploadSlice implements Slice {
     ) {
         return new ContentDigest(new ContentWithSize(body, headers), Digests.SHA256).hex()
             .thenCompose(
-                incoming -> this.storage.value(key)
-                    .thenCompose(content -> new ContentDigest(content, Digests.SHA256).hex())
+                incoming -> this.storedDigest(key, "sha256")
                     .thenApply(existing -> this.redeployResponse(key, incoming, existing))
             ).toCompletableFuture();
+    }
+
+    /**
+     * Lower-case hex digest of a stored file. Read from the checksum
+     * sidecar that {@link #save} generated from the stored bytes, so the
+     * file itself is not streamed again; the file is hashed only when that
+     * sidecar is missing or does not hold a well-formed digest.
+     *
+     * @param file Stored file key
+     * @param alg Checksum extension: {@code sha1}, {@code md5},
+     *  {@code sha256} or {@code sha512}
+     * @return Digest future
+     */
+    private CompletableFuture<String> storedDigest(final Key file, final String alg) {
+        final Digests digest = Digests.valueOf(alg.toUpperCase(Locale.US));
+        final Key sidecar = new Key.From(String.format("%s.%s", file.string(), alg));
+        return this.storage.exists(sidecar).thenCompose(
+            present -> {
+                if (!present) {
+                    return CompletableFuture.completedFuture("");
+                }
+                return this.storage.value(sidecar).thenCompose(Content::asStringFuture);
+            }
+        ).thenCompose(
+            text -> {
+                final String hex = text.trim().toLowerCase(Locale.US);
+                if (hex.length() == digest.get().getDigestLength() * 2
+                    && hex.chars().allMatch(chr -> Character.digit(chr, 16) >= 0)) {
+                    return CompletableFuture.completedFuture(hex);
+                }
+                return this.storage.value(file)
+                    .thenCompose(content -> new ContentDigest(content, digest).hex())
+                    .toCompletableFuture();
+            }
+        );
     }
 
     /**

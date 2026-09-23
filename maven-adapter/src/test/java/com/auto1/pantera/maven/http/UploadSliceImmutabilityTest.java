@@ -26,7 +26,9 @@ import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.Optional;
 import java.util.Queue;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.BeforeEach;
@@ -56,6 +58,11 @@ final class UploadSliceImmutabilityTest {
     private Storage asto;
 
     /**
+     * Number of reads of the release jar itself (not its sidecars).
+     */
+    private AtomicInteger jarReads;
+
+    /**
      * Events.
      */
     private Queue<ArtifactEvent> events;
@@ -67,7 +74,8 @@ final class UploadSliceImmutabilityTest {
 
     @BeforeEach
     void init() {
-        this.asto = new InMemoryStorage();
+        this.jarReads = new AtomicInteger();
+        this.asto = new JarReadCounting(new InMemoryStorage(), this.jarReads);
         this.events = new ConcurrentLinkedQueue<>();
         this.slice = new UploadSlice(this.asto, Optional.of(this.events), "maven");
     }
@@ -172,6 +180,72 @@ final class UploadSliceImmutabilityTest {
         );
     }
 
+    @Test
+    void verifiesChecksumsAgainstTheGeneratedSidecarsWithoutRereadingTheArtifact() {
+        this.put(JAR, "jar-bytes");
+        this.jarReads.set(0);
+        this.put(JAR + ".sha1", hex("SHA-1", "jar-bytes"));
+        this.put(JAR + ".md5", hex("MD5", "jar-bytes"));
+        this.put(JAR + ".sha256", hex("SHA-256", "jar-bytes"));
+        final RsStatus bad = this.put(JAR + ".sha512", hex("SHA-512", "other"));
+        MatcherAssert.assertThat(
+            "a mismatch is still detected from the sidecar",
+            bad, new IsEqual<>(RsStatus.BAD_REQUEST)
+        );
+        MatcherAssert.assertThat(
+            "the stored artifact is not re-read for checksum uploads",
+            this.jarReads.get(), new IsEqual<>(0)
+        );
+    }
+
+    @Test
+    void fallsBackToTheStoredFileWhenTheSidecarIsMissing() {
+        this.put(JAR, "jar-bytes");
+        this.asto.delete(new Key.From(JAR.substring(1) + ".sha1")).join();
+        MatcherAssert.assertThat(
+            "mismatch detected from the stored bytes",
+            this.put(JAR + ".sha1", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"),
+            new IsEqual<>(RsStatus.BAD_REQUEST)
+        );
+        MatcherAssert.assertThat(
+            "match accepted from the stored bytes",
+            this.put(JAR + ".sha1", hex("SHA-1", "jar-bytes")),
+            new IsEqual<>(RsStatus.CREATED)
+        );
+    }
+
+    @Test
+    void redeployComparesAgainstTheStoredSha256Sidecar() {
+        this.put(JAR, "one");
+        this.jarReads.set(0);
+        final RsStatus same = this.put(JAR, "one");
+        final RsStatus other = this.put(JAR, "two");
+        MatcherAssert.assertThat(
+            "identical re-upload accepted", same, new IsEqual<>(RsStatus.CREATED)
+        );
+        MatcherAssert.assertThat(
+            "different re-upload refused", other, new IsEqual<>(RsStatus.CONFLICT)
+        );
+        MatcherAssert.assertThat(
+            "the stored release is not re-read to compare it",
+            this.jarReads.get(), new IsEqual<>(0)
+        );
+    }
+
+    @Test
+    void redeployFallsBackToTheStoredFileWhenTheSha256SidecarIsMissing() {
+        this.put(JAR, "one");
+        this.asto.delete(new Key.From(JAR.substring(1) + ".sha256")).join();
+        MatcherAssert.assertThat(
+            "identical re-upload accepted",
+            this.put(JAR, "one"), new IsEqual<>(RsStatus.CREATED)
+        );
+        MatcherAssert.assertThat(
+            "different re-upload refused",
+            this.put(JAR, "two"), new IsEqual<>(RsStatus.CONFLICT)
+        );
+    }
+
     private RsStatus put(final String path, final String body) {
         final byte[] data = body.getBytes(StandardCharsets.UTF_8);
         return this.slice.response(
@@ -195,6 +269,36 @@ final class UploadSliceImmutabilityTest {
             );
         } catch (final java.security.NoSuchAlgorithmException ex) {
             throw new IllegalStateException(ex);
+        }
+    }
+
+    /**
+     * Storage that counts reads of the release jar ({@link #JAR}).
+     * @since 2.2.9
+     */
+    private static final class JarReadCounting extends Storage.Wrap {
+
+        /**
+         * Read counter.
+         */
+        private final AtomicInteger reads;
+
+        /**
+         * Ctor.
+         * @param origin Delegate
+         * @param reads Read counter
+         */
+        JarReadCounting(final Storage origin, final AtomicInteger reads) {
+            super(origin);
+            this.reads = reads;
+        }
+
+        @Override
+        public CompletableFuture<Content> value(final Key key) {
+            if (key.string().equals(JAR.substring(1))) {
+                this.reads.incrementAndGet();
+            }
+            return super.value(key);
         }
     }
 }
