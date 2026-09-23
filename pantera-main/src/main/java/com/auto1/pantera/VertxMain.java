@@ -155,7 +155,7 @@ public final class VertxMain {
     public VertxMain(final Path config, final int port) {
         this.config = config;
         this.port = port;
-        this.servers = new ArrayList<>(0);
+        this.servers = java.util.Collections.synchronizedList(new ArrayList<>(0));
         this.http3 = new ConcurrentHashMap<>(0);
     }
 
@@ -731,41 +731,9 @@ public final class VertxMain {
                                         nothing -> {
                                             slices.invalidateRepo(name);
                                             repos.config(name).ifPresent(cfg -> cfg.port().ifPresent(
-                                                prt -> {
-                                                    // Dedicated ports bypass MainSlice's
-                                                    // ApiRoutingSlice/SliceByPath pipeline
-                                                    // entirely, so the internal client-base
-                                                    // marker scrub has to be applied here
-                                                    // instead (see InternalHeaderScrubSlice).
-                                                    final Slice slice = new InternalHeaderScrubSlice(
-                                                        slices.slice(new Key.From(name), prt)
-                                                    );
-                                                    if (cfg.startOnHttp3()) {
-                                                        this.http3.computeIfAbsent(
-                                                            prt, key -> {
-                                                                final Http3Server server = new Http3Server(
-                                                                    new LoggingSlice(slice), prt,
-                                                                    new SslFactoryFromYaml(cfg.repoYaml()).build()
-                                                                );
-                                                                server.start();
-                                                                return server;
-                                                            }
-                                                        );
-                                                    } else {
-                                                        final boolean exists = this.servers
-                                                            .stream()
-                                                            .anyMatch(s -> s.port() == prt);
-                                                        if (!exists) {
-                                                            this.listenOn(
-                                                                slice,
-                                                                prt,
-                                                                VertxMain.this.vertx,
-                                                                settings.metrics(),
-                                                                settings.httpServerRequestTimeout()
-                                                            );
-                                                        }
-                                                    }
-                                                }
+                                                prt -> this.startRepoListener(
+                                                    name, cfg, prt, slices, settings
+                                                )
                                             ));
                                         }
                                     );
@@ -1401,6 +1369,87 @@ public final class VertxMain {
                     .log();
             }
         }
+    }
+
+    /**
+     * Start the dedicated-port listener of a repository created or updated at
+     * runtime. Binding blocks until the socket is bound and the bind completes
+     * on an event loop, so it runs on a worker thread: running it on the
+     * event loop that delivered the repository event deadlocked that loop.
+     *
+     * @param name Repository name
+     * @param cfg Repository config
+     * @param prt Dedicated port
+     * @param slices Slices cache
+     * @param settings Settings
+     */
+    private void startRepoListener(
+        final String name,
+        final RepoConfig cfg,
+        final int prt,
+        final RepositorySlices slices,
+        final Settings settings
+    ) {
+        this.vertx.getDelegate().executeBlocking(
+            () -> {
+                // Dedicated ports bypass MainSlice's ApiRoutingSlice/SliceByPath
+                // pipeline entirely, so the internal client-base marker scrub has
+                // to be applied here instead (see InternalHeaderScrubSlice).
+                final Slice slice = new InternalHeaderScrubSlice(
+                    slices.slice(new Key.From(name), prt)
+                );
+                if (cfg.startOnHttp3()) {
+                    this.http3.computeIfAbsent(
+                        prt, key -> {
+                            final Http3Server server = new Http3Server(
+                                new LoggingSlice(slice), prt,
+                                new SslFactoryFromYaml(cfg.repoYaml()).build()
+                            );
+                            server.start();
+                            return server;
+                        }
+                    );
+                } else {
+                    synchronized (this.servers) {
+                        final boolean exists = this.servers.stream()
+                            .anyMatch(srv -> srv.port() == prt);
+                        if (!exists) {
+                            this.listenOn(
+                                slice, prt, this.vertx, settings.metrics(),
+                                settings.httpServerRequestTimeout()
+                            );
+                        }
+                    }
+                }
+                return prt;
+            },
+            false
+        ).onComplete(
+            res -> {
+                if (res.succeeded()) {
+                    EcsLogger.info("com.auto1.pantera")
+                        .message("Pantera repo was started on port")
+                        .eventCategory("web")
+                        .eventAction("repo_start")
+                        .eventOutcome("success")
+                        .field("repository.name", name)
+                        .field("destination.port", prt)
+                        .field("log.source", "application")
+                        .log();
+                } else {
+                    EcsLogger.error("com.auto1.pantera")
+                        .message("Failed to start the repository listener on its dedicated port")
+                        .eventCategory("web")
+                        .eventAction("repo_start")
+                        .eventOutcome("failure")
+                        .field("repository.name", name)
+                        .field("destination.port", prt)
+                        .error(res.cause())
+                        .field("log.source", "application")
+                        .log();
+                }
+            }
+        );
     }
 
     /**

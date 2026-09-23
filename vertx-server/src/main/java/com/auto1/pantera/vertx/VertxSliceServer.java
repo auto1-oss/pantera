@@ -516,9 +516,22 @@ public final class VertxSliceServer implements Closeable {
     /**
      * Start the server.
      *
+     * <p>Blocks until the socket is bound. The bind itself completes on a
+     * Vert.x event loop, so this method must never be called ON an event
+     * loop: it would wait for itself forever and freeze every connection
+     * pinned to that loop. Call it from a boot or worker thread
+     * ({@code executeBlocking}).</p>
+     *
      * @return Port the server is listening on.
+     * @throws IllegalStateException When called on a Vert.x event-loop thread
      */
     public int start() {
+        if (io.vertx.core.Context.isOnEventLoopThread()) {
+            throw new IllegalStateException(
+                "VertxSliceServer.start() blocks until the port is bound and must not "
+                    + "run on a Vert.x event-loop thread; call it from a worker thread"
+            );
+        }
         this.shuttingDown.set(false);
         for (int attempt = 1; attempt <= BIND_MAX_ATTEMPTS; attempt++) {
             final HttpServer server = this.vertx.createHttpServer(this.options);
