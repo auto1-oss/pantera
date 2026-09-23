@@ -156,4 +156,34 @@ class PySliceTest {
         );
     }
 
+
+    @Test
+    void searchNeedsOnlyReadPermission() {
+        // B90: pip search is a read; it used to demand WRITE.
+        final com.auto1.pantera.security.perms.AdapterBasicPermission read =
+            new com.auto1.pantera.security.perms.AdapterBasicPermission(
+                "repo", com.auto1.pantera.security.perms.Action.Standard.READ
+            );
+        final java.security.PermissionCollection perms = read.newPermissionCollection();
+        perms.add(read);
+        final Response resp = new PySlice(
+            this.storage, user -> perms,
+            new com.auto1.pantera.http.auth.Authentication.Single(USER, PASSWORD),
+            "repo", Optional.empty()
+        ).response(
+            new RequestLine("POST", "/"),
+            Headers.from(new Authorization.Basic(USER, PASSWORD))
+                .copy().add(new Header("content-type", "text/xml")),
+            new Content.From(
+                String.join(
+                    "", "<?xml version='1.0'?><methodCall><methodName>search</methodName>",
+                    "<params><param><value><struct><member><name>name</name>",
+                    "<value><array><data><value><string>nothing</string></value>",
+                    "</data></array></value></member></struct></value></param>",
+                    "</params></methodCall>"
+                ).getBytes()
+            )
+        ).join();
+        MatcherAssert.assertThat(resp.status(), new org.hamcrest.core.IsEqual<>(RsStatus.OK));
+    }
 }

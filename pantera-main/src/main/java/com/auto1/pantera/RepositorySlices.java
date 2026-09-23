@@ -1158,19 +1158,25 @@ public class RepositorySlices {
             case "pypi-group":
             case "docker-group":
                 final List<String> genericFlatMembers = flattenMembers(cfg.name());
+                final Slice genericResolver = new GroupResolver(
+                    this::slice, cfg.name(), genericFlatMembers, port, depth,
+                    cfg.groupMemberTimeout().orElse(120L),
+                    java.util.Collections.emptyList(),
+                    Optional.of(this.settings.artifactIndex()),
+                    proxyMembers(genericFlatMembers),
+                    cfg.type(),
+                    this.sharedNegativeCache,
+                    this::getOrCreateMemberRegistry,
+                    getOrCreateBulkhead(cfg.name()).drainExecutor()
+                );
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
-                        new GroupResolver(
-                            this::slice, cfg.name(), genericFlatMembers, port, depth,
-                            cfg.groupMemberTimeout().orElse(120L),
-                            java.util.Collections.emptyList(),
-                            Optional.of(this.settings.artifactIndex()),
-                            proxyMembers(genericFlatMembers),
-                            cfg.type(),
-                            this.sharedNegativeCache,
-                            this::getOrCreateMemberRegistry,
-                            getOrCreateBulkhead(cfg.name()).drainExecutor()
-                        ),
+                        // pip search is XML-RPC POST; a group cannot search,
+                        // so it answers an XML-RPC fault instead of an empty
+                        // 405 that crashes pip.
+                        "pypi-group".equals(cfg.type())
+                            ? new com.auto1.pantera.pypi.http.SearchFaultSlice(genericResolver)
+                            : genericResolver,
                         authentication(),
                         tokens.auth(),
                         new OperationControl(
@@ -1186,15 +1192,19 @@ public class RepositorySlices {
                 slice = trimPathSlice(
                     new PathPrefixStripSlice(
                         new CombinedAuthzSliceWrap(
-                            new TimeoutSlice(
-                                new PypiProxy(
-                                    clientSlices,
-                                    cfg,
-                                    settings.artifactMetadata()
-                                        .flatMap(queues -> queues.proxyEventQueues(cfg)),
-                                    this.cooldown
-                                ),
-                                settings.httpClientSettings().proxyTimeout()
+                            // pip search (XML-RPC POST) cannot be proxied:
+                            // answer an XML-RPC fault, not an empty 405.
+                            new com.auto1.pantera.pypi.http.SearchFaultSlice(
+                                new TimeoutSlice(
+                                    new PypiProxy(
+                                        clientSlices,
+                                        cfg,
+                                        settings.artifactMetadata()
+                                            .flatMap(queues -> queues.proxyEventQueues(cfg)),
+                                        this.cooldown
+                                    ),
+                                    settings.httpClientSettings().proxyTimeout()
+                                )
                             ),
                             authentication(),
                             tokens.auth(),

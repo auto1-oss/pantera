@@ -14,7 +14,6 @@ import com.auto1.pantera.pypi.cooldown.Pep440VersionComparator;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
-import java.util.Locale;
 import java.util.Optional;
 import java.util.TreeSet;
 import javax.json.Json;
@@ -162,46 +161,9 @@ public final class SimpleJsonRenderer {
             if (this.version != null && !this.version.isBlank()) {
                 result = Optional.of(this.version);
             } else {
-                result = versionFromFilename(this.filename);
+                result = new DistFilename(this.filename).version();
             }
             return result;
-        }
-
-        /**
-         * Parse the version out of a distribution filename.
-         * @param name Filename
-         * @return Version, empty when the name has no recognised shape
-         */
-        private static Optional<String> versionFromFilename(final String name) {
-            final String lower = name.toLowerCase(Locale.ROOT);
-            final Optional<String> result;
-            if (lower.endsWith(".whl") || lower.endsWith(".egg")) {
-                final String[] parts = name.substring(0, name.length() - 4).split("-");
-                result = parts.length >= 2 ? Optional.of(parts[1]) : Optional.empty();
-            } else {
-                final String stem = stripSdistSuffix(name, lower);
-                final int dash = stem.lastIndexOf('-');
-                result = dash > 0 && dash < stem.length() - 1
-                    ? Optional.of(stem.substring(dash + 1)) : Optional.empty();
-            }
-            return result;
-        }
-
-        /**
-         * Remove the source-distribution archive suffix.
-         * @param name Filename
-         * @param lower Lower-cased filename
-         * @return Filename without its archive suffix
-         */
-        private static String stripSdistSuffix(final String name, final String lower) {
-            String stem = name;
-            for (final String suffix : List.of(".tar.gz", ".tar.bz2", ".tar.z", ".tgz", ".zip", ".tar")) {
-                if (lower.endsWith(suffix)) {
-                    stem = name.substring(0, name.length() - suffix.length());
-                    break;
-                }
-            }
-            return stem;
         }
     }
 }

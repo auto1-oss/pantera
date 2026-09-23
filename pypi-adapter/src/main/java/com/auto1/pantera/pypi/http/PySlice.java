@@ -147,12 +147,13 @@ public final class PySlice extends Slice.Wrap {
                             "content-type", Pattern.compile("text.*", Pattern.CASE_INSENSITIVE)
                         )
                     ),
+                    // pip search (XML-RPC) only reads the repository.
                     PySlice.createAuthSlice(
                         new SearchSlice(storage),
                         basicAuth,
                         tokenAuth,
                         new OperationControl(
-                            policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
+                            policy, new AdapterBasicPermission(name, Action.Standard.READ)
                         )
                     )
                 ),
