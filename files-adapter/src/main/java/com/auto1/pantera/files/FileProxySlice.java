@@ -25,6 +25,7 @@ import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.cache.BaseCachedProxySlice;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.client.ClientSlices;
 import com.auto1.pantera.http.client.UriClientSlice;
@@ -32,6 +33,7 @@ import com.auto1.pantera.http.client.auth.AuthClientSlice;
 import com.auto1.pantera.http.client.auth.Authenticator;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.slice.EcsLoggingSlice;
 import com.auto1.pantera.http.slice.KeyFromPath;
 import com.auto1.pantera.publishdate.PublishDateRegistries;
 import com.auto1.pantera.publishdate.RegistryBackedInspector;
@@ -259,10 +261,54 @@ public final class FileProxySlice implements Slice {
         final KeyFromPath key = new KeyFromPath(line.uri().getPath());
         final String artifact = line.uri().getPath();
         final String user = new Login(rqheaders).getValue();
-
+        if (FileProxySlice.isCacheOnly(rqheaders)) {
+            return this.cacheOnly(key);
+        }
         // CRITICAL FIX: Check cache FIRST before any network calls (cooldown/inspector)
         // This ensures offline mode works - serve cached content even when upstream is down
         return this.checkCacheFirst(line, key, artifact, user, rshdr);
+    }
+
+    /**
+     * True when the group resolver probes this (circuit-open) member for a
+     * warm-cache hit: the cache-only marker plus the internal-routing header,
+     * so an external client cannot force cache-only mode.
+     *
+     * @param headers Request headers
+     * @return Whether the upstream must not be contacted
+     */
+    private static boolean isCacheOnly(final Headers headers) {
+        return !headers.find(BaseCachedProxySlice.CACHE_ONLY_HEADER).isEmpty()
+            && !headers.find(EcsLoggingSlice.INTERNAL_ROUTING_HEADER).isEmpty();
+    }
+
+    /**
+     * Cache-only lookup: serve a stored copy, or answer 404 without any
+     * cooldown evaluation or upstream request.
+     *
+     * @param key Cache key
+     * @return Response future
+     */
+    private CompletableFuture<Response> cacheOnly(final KeyFromPath key) {
+        if (this.storage.isEmpty()) {
+            return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
+        }
+        return this.cached(key).thenApply(
+            cached -> cached.<Response>map(content -> ResponseBuilder.ok().body(content).build())
+                .orElseGet(() -> ResponseBuilder.notFound().build())
+        );
+    }
+
+    /**
+     * Read the stored copy of a key, never contacting the upstream.
+     *
+     * @param key Cache key
+     * @return Stored content, empty on a miss
+     */
+    private CompletableFuture<Optional<? extends Content>> cached(final KeyFromPath key) {
+        return new FromStorageCache(this.storage.orElseThrow())
+            .load(key, Remote.EMPTY, CacheControl.Standard.ALWAYS)
+            .toCompletableFuture();
     }
 
     /**
@@ -289,7 +335,7 @@ public final class FileProxySlice implements Slice {
         }
         // Check storage cache FIRST before any network calls
         // Use FromStorageCache pattern: check storage directly, serve if present
-        return new FromStorageCache(this.storage.get()).load(key, Remote.EMPTY, CacheControl.Standard.ALWAYS)
+        return this.cached(key)
             .thenCompose(cached -> {
                 if (cached.isPresent()) {
                     // Cache HIT - serve immediately without any network calls
@@ -420,8 +466,11 @@ public final class FileProxySlice implements Slice {
             ).toCompletableFuture()
             .handle((content, throwable) -> {
                     if (throwable == null && content.isPresent()) {
+                        // A cache hit completes without contacting the upstream, so no
+                        // upstream headers were captured: serve with the body's own.
+                        final Headers upstream = rshdr.get();
                         return ResponseBuilder.ok()
-                            .headers(rshdr.get())
+                            .headers(upstream == null ? Headers.EMPTY : upstream)
                             .body(content.get())
                             .build();
                     }

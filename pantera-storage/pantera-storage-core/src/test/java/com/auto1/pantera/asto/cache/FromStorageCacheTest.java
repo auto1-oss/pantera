@@ -62,6 +62,32 @@ final class FromStorageCacheTest {
     }
 
     @Test
+    void cacheHitDoesNotInvokeRemote() throws Exception {
+        final Key key = new Key.From("hit", "lazy");
+        final byte[] data = "cached".getBytes();
+        new BlockingStorage(this.storage).save(key, data);
+        final AtomicInteger calls = new AtomicInteger();
+        final Content hit = new FromStorageCache(this.storage).load(
+            key,
+            () -> {
+                calls.incrementAndGet();
+                return CompletableFuture.completedFuture(
+                    Optional.of(new Content.From("remote".getBytes()))
+                );
+            },
+            CacheControl.Standard.ALWAYS
+        ).toCompletableFuture().get().get();
+        MatcherAssert.assertThat(
+            "Cache hit must serve the stored bytes",
+            hit, new ContentIs(data)
+        );
+        MatcherAssert.assertThat(
+            "Cache hit must not call the remote at all",
+            calls.get(), new org.hamcrest.core.IsEqual<>(0)
+        );
+    }
+
+    @Test
     void savesToCacheFromRemote() throws Exception {
         final Key key = new Key.From("key2");
         final byte[] data = "hello2".getBytes();
