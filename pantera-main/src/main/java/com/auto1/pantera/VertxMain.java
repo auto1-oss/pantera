@@ -311,11 +311,17 @@ public final class VertxMain {
         final com.auto1.pantera.auth.RevocationBlocklist revocationBlocklist;
         if (settings.valkeyConnection().isPresent()
             && settings.cacheInvalidationPubSub().isPresent()) {
-            revocationBlocklist = new com.auto1.pantera.auth.ValkeyRevocationBlocklist(
-                settings.valkeyConnection().get(),
-                settings.cacheInvalidationPubSub().get(),
-                (int) java.time.Duration.ofHours(2).toSeconds()
-            );
+            final com.auto1.pantera.auth.ValkeyRevocationBlocklist valkeyBlocklist =
+                new com.auto1.pantera.auth.ValkeyRevocationBlocklist(
+                    settings.valkeyConnection().get(),
+                    settings.cacheInvalidationPubSub().get(),
+                    (int) java.time.Duration.ofHours(2).toSeconds(),
+                    sharedDs.map(com.auto1.pantera.db.dao.RevocationDao::new).orElse(null)
+                );
+            // Boot thread: reload live revocations from Valkey (+ the DB
+            // copy) so a restart does not forget them (B47).
+            valkeyBlocklist.restore();
+            revocationBlocklist = valkeyBlocklist;
             EcsLogger.info("com.auto1.pantera")
                 .message("Valkey-backed token revocation blocklist active (cross-node broadcast)")
                 .eventCategory("configuration")

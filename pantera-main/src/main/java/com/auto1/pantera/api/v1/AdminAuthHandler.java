@@ -578,15 +578,19 @@ public final class AdminAuthHandler {
             return;
         }
         CompletableFuture.supplyAsync(
-            () -> this.tokenDao.revokeAllForUser(username),
+            () -> {
+                final int revoked = this.tokenDao.revokeAllForUser(username);
+                // On the worker: the blocklist may write through to the DB.
+                if (this.blocklist != null) {
+                    this.blocklist.revokeUser(username, REVOKE_USER_TTL_SECONDS);
+                }
+                return revoked;
+            },
             HandlerExecutor.get()
         ).whenComplete((count, err) -> {
             if (err != null) {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
             } else {
-                if (this.blocklist != null) {
-                    this.blocklist.revokeUser(username, REVOKE_USER_TTL_SECONDS);
-                }
                 EcsLogger.info("com.auto1.pantera.api.v1")
                     .message("Admin revoked all tokens for user (revoked_count=" + count + ")")
                     .eventCategory("iam")

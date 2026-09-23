@@ -402,11 +402,12 @@ The `type` claim is mandatory. Tokens missing the `type` claim are rejected rega
 
 **Access tokens** (not DB-stored) are invalidated via a blocklist:
 
-1. `POST /api/v1/admin/revoke-user/:username` writes a revocation record and publishes a `pantera:revoke:user:{username}` message on the Valkey pub/sub channel.
-3. On each access token validation, the cache is consulted. Tokens issued before the revocation timestamp are rejected.
-4. Without Valkey, nodes poll the `user_tokens` revocation table every 30 seconds.
+1. `POST /api/v1/admin/revoke-user/:username` (and every password change or reset) records a user-wide revocation: the local cache, a Valkey key `pantera:revoked:user:{username}` (value: revocation instant in epoch ms, TTL = revocation lifetime), a `revocation_blocklist` row when a database is configured, and a message on the `revocation` pub/sub channel carrying the revocation instant and expiry (`userat:<revokedMs>:<expiresMs>:<username>`), so peers hold the entry exactly as long as the sender.
+2. At boot, `ValkeyRevocationBlocklist.restore()` reloads every live entry from Valkey (cursor `SCAN`) and the `revocation_blocklist` table, so a restart does not forget revocations.
+3. On each access token validation, the cache is consulted. Tokens issued before the revocation instant are rejected, compared at millisecond precision via the `iat_ms` claim every Pantera-issued token carries (tokens with only the one-second `iat` are compared at their truncated second).
+4. Without Valkey, nodes poll the `revocation_blocklist` table every 5 seconds.
 
-The in-memory revocation cache has a TTL equal to the access token lifetime (default: 1 hour). After that period no access token from a revoked user can still be valid.
+Each entry lapses at the expiry it was issued with (7 days for a credential change). After that period no access token from before the revocation can still be valid.
 
 ### 6.4 Adding a New Protected Endpoint
 

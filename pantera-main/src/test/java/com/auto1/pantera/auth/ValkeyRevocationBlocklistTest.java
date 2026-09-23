@@ -125,4 +125,44 @@ final class ValkeyRevocationBlocklistTest {
             new IsEqual<>(false)
         );
     }
+
+    @Test
+    void revocationsSurviveARestart() {
+        // B47: entries were written to Valkey but never read back, so a
+        // restarted node forgot every revocation.
+        final Instant before = Instant.now().minusSeconds(60);
+        this.blocklist.revokeUser("henry", 3600);
+        this.blocklist.revokeJti("jti-restart", 3600);
+        final CacheInvalidationPubSub fresh = new CacheInvalidationPubSub(this.conn);
+        try {
+            final ValkeyRevocationBlocklist restarted =
+                new ValkeyRevocationBlocklist(this.conn, fresh, 3600);
+            // The writes are fire-and-forget; poll for their eventual state.
+            for (int attempt = 0; attempt < 50
+                && !(restarted.isRevokedJti("jti-restart")
+                    && restarted.isRevokedUser("henry", before)); attempt += 1) {
+                restarted.restore();
+                if (!restarted.isRevokedJti("jti-restart")) {
+                    java.util.concurrent.locks.LockSupport.parkNanos(100_000_000L);
+                }
+            }
+            MatcherAssert.assertThat(
+                "a user revocation must be restored after a restart",
+                restarted.isRevokedUser("henry", before),
+                new IsEqual<>(true)
+            );
+            MatcherAssert.assertThat(
+                "the re-login after the revocation stays accepted",
+                restarted.isRevokedUser("henry", Instant.now()),
+                new IsEqual<>(false)
+            );
+            MatcherAssert.assertThat(
+                "a JTI revocation must be restored after a restart",
+                restarted.isRevokedJti("jti-restart"),
+                new IsEqual<>(true)
+            );
+        } finally {
+            fresh.close();
+        }
+    }
 }
