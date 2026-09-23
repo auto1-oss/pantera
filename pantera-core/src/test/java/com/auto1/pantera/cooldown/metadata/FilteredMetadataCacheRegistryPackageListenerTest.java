@@ -39,13 +39,23 @@ final class FilteredMetadataCacheRegistryPackageListenerTest {
 
     private final AtomicInteger publishedAll = new AtomicInteger();
 
+    /**
+     * Strong reference: the registry holds listeners weakly.
+     */
+    private FilteredMetadataCacheRegistry.PackageListener listener;
+
+    /**
+     * Strong reference for the failing listener.
+     */
+    private FilteredMetadataCacheRegistry.PackageListener broken;
+
     @BeforeEach
     void setUp() {
         this.shared = new FilteredMetadataCache(100, Duration.ofMinutes(5), Duration.ofMinutes(5), null);
         final FilteredMetadataCacheRegistry registry = FilteredMetadataCacheRegistry.instance();
         registry.setSharedCache(this.shared);
         registry.setPackagePublisher(this.published::add, this.publishedAll::incrementAndGet);
-        registry.addPackageListener("test", new FilteredMetadataCacheRegistry.PackageListener() {
+        this.listener = new FilteredMetadataCacheRegistry.PackageListener() {
             @Override
             public void packageChanged(final String packageName) {
                 FilteredMetadataCacheRegistryPackageListenerTest.this.changed.add(packageName);
@@ -55,7 +65,8 @@ final class FilteredMetadataCacheRegistryPackageListenerTest {
             public void allChanged() {
                 FilteredMetadataCacheRegistryPackageListenerTest.this.allChanged.incrementAndGet();
             }
-        });
+        };
+        registry.addPackageListener("test", this.listener);
     }
 
     @AfterEach
@@ -109,20 +120,40 @@ final class FilteredMetadataCacheRegistryPackageListenerTest {
     }
 
     @Test
-    void failingListenerDoesNotBreakTheInvalidation() {
-        FilteredMetadataCacheRegistry.instance().addPackageListener(
-            "broken", new FilteredMetadataCacheRegistry.PackageListener() {
+    void everyLiveListenerIsNotifiedNotJustTheLastRegistered() {
+        final List<String> second = new CopyOnWriteArrayList<>();
+        final FilteredMetadataCacheRegistry.PackageListener other =
+            new FilteredMetadataCacheRegistry.PackageListener() {
                 @Override
                 public void packageChanged(final String packageName) {
-                    throw new IllegalStateException("boom");
+                    second.add(packageName);
                 }
 
                 @Override
                 public void allChanged() {
-                    throw new IllegalStateException("boom");
+                    // not exercised
                 }
+            };
+        FilteredMetadataCacheRegistry.instance().addPackageListener("test-2", other);
+        this.shared.invalidate("maven-proxy", "maven_proxy", "com.a.b");
+        MatcherAssert.assertThat("first told", this.changed, new IsEqual<>(List.of("com.a.b")));
+        MatcherAssert.assertThat("second told", second, new IsEqual<>(List.of("com.a.b")));
+    }
+
+    @Test
+    void failingListenerDoesNotBreakTheInvalidation() {
+        this.broken = new FilteredMetadataCacheRegistry.PackageListener() {
+            @Override
+            public void packageChanged(final String packageName) {
+                throw new IllegalStateException("boom");
             }
-        );
+
+            @Override
+            public void allChanged() {
+                throw new IllegalStateException("boom");
+            }
+        };
+        FilteredMetadataCacheRegistry.instance().addPackageListener("broken", this.broken);
         this.shared.invalidate("maven-proxy", "maven_proxy", "com.a.b");
         MatcherAssert.assertThat(
             "healthy listener still told", this.changed, new IsEqual<>(List.of("com.a.b"))

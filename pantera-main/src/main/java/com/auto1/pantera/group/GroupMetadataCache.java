@@ -42,8 +42,9 @@ import java.util.concurrent.TimeUnit;
  * <p>Cooldown coherence: the primary tier holds cooldown-FILTERED bytes, so
  * it must follow block / unblock / expiry / refresh / upload events. Each
  * instance registers a
- * {@link FilteredMetadataCacheRegistry.PackageListener} (owner
- * {@code maven-group:<name>}, so a re-created group replaces its listener)
+ * {@link FilteredMetadataCacheRegistry.PackageListener} (held weakly by
+ * the registry under a per-instance owner id, so every live cache of a
+ * group is notified and a discarded one drops out)
  * that drops every primary entry whose path maps to the changed dotted
  * package — artifact-level and snapshot-level metadata alike — and drops
  * everything on a policy / repo-wide change. The registry delivers these
@@ -93,6 +94,12 @@ public final class GroupMetadataCache {
      * L1 cache (in-memory) — PRIMARY tier.
      */
     private final Cache<String, CachedMetadata> l1Cache;
+
+    /**
+     * Cooldown package-event listener; strongly held here because the
+     * registry only keeps a weak reference.
+     */
+    private final PrimaryInvalidator invalidator;
 
     /**
      * TTL for cached metadata (primary).
@@ -181,8 +188,14 @@ public final class GroupMetadataCache {
         this.staleL2 = this.staleTwoTier ? actualValkey.async() : null;
         this.staleL2Timeout = Duration.ofMillis(sc.l2TimeoutMs());
         this.staleL2TtlSeconds = sc.l2TtlSeconds();
+        // The registry holds listeners weakly; this field is the strong
+        // reference that keeps events flowing while this cache is alive.
+        // Owner id is per instance so two live caches of one group (e.g. the
+        // group slice built for two ports) are both invalidated.
+        this.invalidator = new PrimaryInvalidator(this.l1Cache);
         FilteredMetadataCacheRegistry.instance().addPackageListener(
-            "maven-group:" + groupName, new PrimaryInvalidator(this.l1Cache)
+            "maven-group:" + groupName + "@" + System.identityHashCode(this),
+            this.invalidator
         );
     }
 

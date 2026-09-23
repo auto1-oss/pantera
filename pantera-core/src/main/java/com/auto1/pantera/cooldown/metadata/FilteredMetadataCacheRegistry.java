@@ -31,10 +31,13 @@ public final class FilteredMetadataCacheRegistry {
 
     /**
      * Caches outside the envelope cache that hold cooldown-filtered bytes
-     * (e.g. a Maven group's merged-metadata cache), keyed by owner id so a
-     * re-created owner replaces its predecessor instead of leaking.
+     * (e.g. a Maven group's merged-metadata cache), keyed by owner id and
+     * held WEAKLY: the owning cache keeps the strong reference, so every
+     * live cache hears every event (two live caches for one group are both
+     * notified) and a discarded one drops out without an explicit removal.
      */
-    private final java.util.concurrent.ConcurrentMap<String, PackageListener> listeners =
+    private final java.util.concurrent.ConcurrentMap<String,
+        java.lang.ref.WeakReference<PackageListener>> listeners =
         new java.util.concurrent.ConcurrentHashMap<>();
 
     /**
@@ -89,13 +92,15 @@ public final class FilteredMetadataCacheRegistry {
     /**
      * Register (or replace) a listener told whenever the cooldown-filtered
      * view of a package may have changed: a block, an unblock or expiry, an
-     * upstream refresh, an upload, or a policy change.
+     * upstream refresh, an upload, or a policy change. The registry holds
+     * the listener weakly — the caller MUST keep a strong reference for as
+     * long as it wants events (typically a field of the cache it clears).
      *
-     * @param owner Stable owner id (e.g. {@code "maven-group:" + name})
+     * @param owner Owner id, unique per live listener
      * @param listener Listener
      */
     public void addPackageListener(final String owner, final PackageListener listener) {
-        this.listeners.put(owner, listener);
+        this.listeners.put(owner, new java.lang.ref.WeakReference<>(listener));
     }
 
     /**
@@ -169,19 +174,29 @@ public final class FilteredMetadataCacheRegistry {
     }
 
     private void notifyLocal(final String packageName) {
-        for (final PackageListener listener : this.listeners.values()) {
-            try {
-                listener.packageChanged(packageName);
-            } catch (final RuntimeException ex) {
-                FilteredMetadataCacheRegistry.logListenerFailure(ex);
-            }
-        }
+        this.forEachLive(listener -> listener.packageChanged(packageName));
     }
 
     private void notifyAllLocal() {
-        for (final PackageListener listener : this.listeners.values()) {
+        this.forEachLive(PackageListener::allChanged);
+    }
+
+    /**
+     * Run an action on every live listener, pruning collected ones. A
+     * failing listener never stops the others.
+     *
+     * @param action Action
+     */
+    private void forEachLive(final java.util.function.Consumer<PackageListener> action) {
+        for (final java.util.Map.Entry<String, java.lang.ref.WeakReference<PackageListener>> entry
+            : this.listeners.entrySet()) {
+            final PackageListener listener = entry.getValue().get();
+            if (listener == null) {
+                this.listeners.remove(entry.getKey(), entry.getValue());
+                continue;
+            }
             try {
-                listener.allChanged();
+                action.accept(listener);
             } catch (final RuntimeException ex) {
                 FilteredMetadataCacheRegistry.logListenerFailure(ex);
             }
