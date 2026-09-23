@@ -13,7 +13,7 @@ On a fresh install with an empty `users` table, Pantera bootstraps a single defa
 | Field | Value |
 |---|---|
 | **Username** | `admin` |
-| **Password** | `admin` |
+| **Password** | `PANTERA_BOOTSTRAP_ADMIN_PASSWORD`, or a generated one in `/var/pantera/bootstrap-admin-password` (see below) |
 | **Role** | `admin` (all permissions) |
 | **Must change password** | `true` |
 
@@ -27,7 +27,9 @@ On a fresh install with an empty `users` table, Pantera bootstraps a single defa
 - **Not** equal to the username
 - **Not** in the well-known weak-password list (`password`, `admin`, `changeme`, ...)
 
-⚠ **Change this password immediately in production.** The default is logged at WARN level during startup so operators see it. The bootstrap only runs when the `users` table is empty, so it will not overwrite an existing admin account.
+The initial password is the value of `PANTERA_BOOTSTRAP_ADMIN_PASSWORD` when it is set; otherwise a random password written to `/var/pantera/bootstrap-admin-password` (the `pantera.home` directory), readable only by the server user. It is never written to the log. Read it on the server (with the bundled docker-compose stack: `docker exec pantera cat /var/pantera/bootstrap-admin-password`), then delete the file after your first login. If that file cannot be written, the admin user is not created and the startup log says why. The startup log records only the file's location.
+
+⚠ **Change this password immediately.** The bootstrap only runs when no `admin` user and no other holder of the `admin` role exists, so it will not overwrite an existing admin account.
 
 ---
 

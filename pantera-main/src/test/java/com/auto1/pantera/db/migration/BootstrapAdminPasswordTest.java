@@ -10,10 +10,15 @@
  */
 package com.auto1.pantera.db.migration;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.hamcrest.core.IsNot;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 /**
  * Exploit-regression test for SecOps bootstrap-admin: the fallback admin
@@ -71,6 +76,50 @@ final class BootstrapAdminPasswordTest {
             "a blank configured password must not be used — fall back to a generated one",
             this.migrator.resolveBootstrapPassword("   "),
             new IsNot<>(new IsEqual<>("   "))
+        );
+    }
+
+    @Test
+    void generatedPasswordGoesToAnOwnerOnlyFile(@TempDir final Path dir) throws Exception {
+        // B105: the generated password used to be written to the (shipped,
+        // centrally stored) application log. It now goes to a 0600 file.
+        final Path file = dir.resolve("home").resolve("bootstrap-admin-password");
+        this.migrator.writeBootstrapPassword(file, "generated-secret");
+        MatcherAssert.assertThat(
+            "the file holds the password",
+            Files.readString(file, StandardCharsets.UTF_8).trim(),
+            new IsEqual<>("generated-secret")
+        );
+        MatcherAssert.assertThat(
+            "only the owner can read or write the file",
+            PosixFilePermissions.toString(Files.getPosixFilePermissions(file)),
+            new IsEqual<>("rw-------")
+        );
+    }
+
+    @Test
+    void rewritingReplacesAWorldReadableFile(@TempDir final Path dir) throws Exception {
+        final Path file = dir.resolve("bootstrap-admin-password");
+        Files.writeString(file, "stale");
+        Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("rw-r--r--"));
+        this.migrator.writeBootstrapPassword(file, "fresh-secret");
+        MatcherAssert.assertThat(
+            "the stale content is replaced",
+            Files.readString(file, StandardCharsets.UTF_8).trim(),
+            new IsEqual<>("fresh-secret")
+        );
+        MatcherAssert.assertThat(
+            "the replaced file is owner-only",
+            PosixFilePermissions.toString(Files.getPosixFilePermissions(file)),
+            new IsEqual<>("rw-------")
+        );
+    }
+
+    @Test
+    void passwordFileLivesUnderPanteraHome() {
+        MatcherAssert.assertThat(
+            this.migrator.bootstrapPasswordFile().getFileName().toString(),
+            new IsEqual<>("bootstrap-admin-password")
         );
     }
 }

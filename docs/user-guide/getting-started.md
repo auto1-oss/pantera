@@ -74,11 +74,8 @@ maven-group
 
 ### First login after a fresh install
 
-A brand-new Pantera install ships with a **default admin user**:
-
-| Username | Password | Notes |
-|---|---|---|
-| `admin` | `admin` | **Must** change on first login. The server refuses every other API call until a compliant password is set. |
+A brand-new Pantera install creates an **`admin` user**. Its initial password is the value of `PANTERA_BOOTSTRAP_ADMIN_PASSWORD` when it is set; otherwise a random password written to `/var/pantera/bootstrap-admin-password` (the `pantera.home` directory), readable only by the server user. It is never written to the log. Read it on the server (with the bundled docker-compose stack: `docker exec pantera cat /var/pantera/bootstrap-admin-password`), then delete the file after your first login. If that file cannot be written, the admin user is not created and the startup log says why.
+You **must** change it on first login: the server refuses every other API call until a compliant password is set.
 
 Your first login goes to the built-in force-password-change screen. The new password must meet these rules:
 
@@ -87,7 +84,7 @@ Your first login goes to the built-in force-password-change screen. The new pass
 - Not equal to the username
 - Not in the well-known weak-password list
 
-These rules are enforced server-side, so a direct API call with a weak password is rejected with `400 WEAK_PASSWORD`. **Change the default immediately in production.**
+These rules are enforced server-side, so a direct API call with a weak password is rejected with `400 WEAK_PASSWORD`. **Change the initial password immediately.**
 
 ### Step 1: Get an Access Token
 
