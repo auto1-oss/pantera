@@ -37,6 +37,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -391,7 +392,7 @@ public final class ComposerRootPackagesHandler {
         final CooldownRequest req = new CooldownRequest(
             this.repoType,
             this.repoName,
-            pkg,
+            pkg.toLowerCase(Locale.ROOT),
             version,
             user == null ? "composer-root" : user,
             Instant.now()

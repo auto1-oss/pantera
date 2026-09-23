@@ -37,6 +37,7 @@ import javax.json.Json;
 import javax.json.JsonObject;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
@@ -215,10 +216,12 @@ public final class ProxyDownloadSlice implements Slice {
 
             // Evaluate cooldown before proceeding
             final String owner = new Login(headers).getValue();
+            // Keyed like the metadata handlers (ComposerMetadataRequestDetector):
+            // Composer names are case-insensitive, one block row per package.
             final CooldownRequest cdreq = new CooldownRequest(
                 this.rtype,
                 this.rname,
-                packageName,
+                packageName.toLowerCase(Locale.ROOT),
                 version,
                 owner,
                 Instant.now()
