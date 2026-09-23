@@ -129,9 +129,12 @@ Published releases are immutable:
 | A release that is not published yet | `201`, published |
 | The same release again with the same content | `201`, nothing changes |
 | The same release again with different content | `409 Conflict`, the published archive is kept |
+| The same release again, when either archive is corrupt or too large to compare | `409 Conflict`, the published archive is kept |
 | A dev branch (`dev-*` or `*-dev`) | `201`, replaces the previous upload of that branch |
 
-To ship a change, publish a new version. The same rules apply to JSON package registrations (`PUT /` with a package JSON body).
+Pantera compares the files inside the two archives, not their bytes. It compares at most 256 MiB of unpacked content and 65,536 entries, and it does not read a published archive larger than 256 MiB. When it cannot complete the comparison, it treats the upload as different.
+
+To ship a change, publish a new version. The same rules apply to JSON package registrations (`PUT /` with a package JSON body, or `PUT /?version=1.0.0` for a body without a `version` field).
 
 Every uploaded archive is listed with `dist.shasum`, the SHA-1 of the archive as Pantera stores it (Pantera writes the resolved version into its `composer.json`, so it differs from the SHA-1 of the file you uploaded). Composer records it in `composer.lock` and checks every download against it. After a dev branch is re-uploaded, `composer install` from an older lock file fails the checksum check; run `composer update <package>` to lock the new upload. Releases uploaded before Pantera 2.2.9 keep their entry without `dist.shasum`, and Composer skips the check for them.
 
@@ -161,7 +164,7 @@ Uploaded archives are stored as `artifacts/<vendor>/<package>/<version>/<vendor>
 | `curl error 60: SSL certificate problem` | HTTPS verification failure | Set `"secure-http": false` in composer.json (non-HTTPS) or install proper certs |
 | Package found on Packagist but not resolving | Proxy not configured for packagist.org | Ask admin to verify the php-proxy remote URL |
 | `Your requirements could not be resolved` | Dependency conflict, not a Pantera issue | Run `composer update --with-all-dependencies` to resolve conflicts |
-| `409 Conflict` on upload | That release is already published with different content | Publish a new version |
+| `409 Conflict` on upload | That release is already published with different content, or the two archives could not be compared (corrupt or too large) | Publish a new version |
 | `400 Bad Request` on upload | The archive is unreadable or its `composer.json` is missing or invalid | Rebuild the archive with `composer archive` |
 | `503 Service Unavailable` with `Retry-After` from a group, or `502` from a proxy | The upstream could not be reached or sent invalid metadata | Retry later. The package is not reported as missing during an upstream outage |
 | `403 Forbidden` from a group | Your account cannot read one of the group's member repositories | Ask an admin for read access on the member repositories |

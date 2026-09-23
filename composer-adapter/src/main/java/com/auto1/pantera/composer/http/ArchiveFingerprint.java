@@ -15,16 +15,16 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
-import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.TreeMap;
 import javax.json.Json;
-import javax.json.JsonObject;
+import javax.json.JsonException;
+import javax.json.JsonReader;
 import org.apache.commons.compress.archivers.ArchiveEntry;
 import org.apache.commons.compress.archivers.ArchiveInputStream;
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
@@ -43,6 +43,13 @@ import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
  * version, exactly as the repository stores it — so the stored archive and
  * a re-upload of the same package produce the same value.</p>
  *
+ * <p>Entries are streamed: each file's content is hashed while it is
+ * inflated and only its digest is kept, plus the bytes of the first
+ * {@code composer.json} (at most {@link #MAX_MANIFEST}). The walk stops at
+ * {@link #MAX_BYTES} inflated bytes or {@link #MAX_ENTRIES} entries, so a
+ * highly compressible archive cannot exhaust the heap; an archive past a
+ * limit, or one that is corrupt, has no fingerprint.</p>
+ *
  * @since 2.2.9
  */
 final class ArchiveFingerprint {
@@ -51,6 +58,21 @@ final class ArchiveFingerprint {
      * Composer manifest file name.
      */
     private static final String COMPOSER = "composer.json";
+
+    /**
+     * Most inflated bytes read from one archive.
+     */
+    private static final long MAX_BYTES = 256L * 1024 * 1024;
+
+    /**
+     * Most entries read from one archive.
+     */
+    private static final int MAX_ENTRIES = 65_536;
+
+    /**
+     * Largest composer.json kept in memory.
+     */
+    private static final int MAX_MANIFEST = 1024 * 1024;
 
     /**
      * Whether the archive is a ZIP (else TAR.GZ).
@@ -77,43 +99,44 @@ final class ArchiveFingerprint {
      * Fingerprint of an archive.
      *
      * @param archive Archive bytes
-     * @return Hex SHA-256 over sorted (path, content digest) pairs
+     * @return Hex SHA-256 over sorted (path, content digest) pairs; empty when
+     *  the archive is corrupt or past a limit
      */
-    String of(final byte[] archive) {
-        final Map<String, byte[]> files = this.files(archive);
-        final byte[] manifest = ArchiveFingerprint.manifest(files, this.version);
-        final MessageDigest total = ArchiveFingerprint.sha256();
-        for (final Map.Entry<String, byte[]> file : new TreeMap<>(files).entrySet()) {
-            final String[] parts = file.getKey().split("/");
-            final byte[] content = COMPOSER.equals(parts[parts.length - 1])
-                ? manifest : file.getValue();
-            total.update(file.getKey().getBytes(StandardCharsets.UTF_8));
-            total.update((byte) 0);
-            total.update(ArchiveFingerprint.sha256().digest(content));
+    Optional<String> of(final byte[] archive) {
+        Optional<String> result;
+        try {
+            result = Optional.of(this.walk(archive).digest(this.version));
+        } catch (final IOException | JsonException | IllegalStateException
+            | IllegalArgumentException ex) {
+            result = Optional.empty();
         }
-        return HexFormat.of().formatHex(total.digest());
+        return result;
     }
 
     /**
-     * Read all regular files of the archive, in archive order.
+     * Stream all regular files of the archive into their digests.
      *
      * @param archive Archive bytes
-     * @return Path to content
+     * @return Collected digests
+     * @throws IOException On a malformed archive or a limit being exceeded
      */
-    private Map<String, byte[]> files(final byte[] archive) {
-        final Map<String, byte[]> files = new LinkedHashMap<>();
+    private Digests walk(final byte[] archive) throws IOException {
+        final Digests digests = new Digests();
         try (ArchiveInputStream<?> in = this.open(archive)) {
             ArchiveEntry entry = in.getNextEntry();
+            int count = 0;
             while (entry != null) {
+                count += 1;
+                if (count > ArchiveFingerprint.MAX_ENTRIES) {
+                    throw new IOException("Too many archive entries");
+                }
                 if (!entry.isDirectory()) {
-                    files.put(entry.getName(), ArchiveFingerprint.readAll(in));
+                    digests.read(entry.getName(), in);
                 }
                 entry = in.getNextEntry();
             }
-        } catch (final IOException ex) {
-            throw new UncheckedIOException(ex);
         }
-        return files;
+        return digests;
     }
 
     /**
@@ -133,46 +156,14 @@ final class ArchiveFingerprint {
     }
 
     /**
-     * The manifest the repository stores: the first composer.json with the
-     * resolved version.
+     * Whether an entry path names a composer.json.
      *
-     * @param files Archive files in archive order
-     * @param version Resolved version
-     * @return Manifest bytes, empty when the archive has no composer.json
+     * @param path Entry path
+     * @return True for {@code composer.json} at any depth
      */
-    private static byte[] manifest(final Map<String, byte[]> files, final String version) {
-        for (final Map.Entry<String, byte[]> file : files.entrySet()) {
-            final String[] parts = file.getKey().split("/");
-            if (COMPOSER.equals(parts[parts.length - 1])) {
-                final JsonObject json = Json.createReader(
-                    new ByteArrayInputStream(file.getValue())
-                ).readObject();
-                return Json.createObjectBuilder(json)
-                    .add(JsonPackage.VRSN, version)
-                    .build()
-                    .toString()
-                    .getBytes(StandardCharsets.UTF_8);
-            }
-        }
-        return new byte[0];
-    }
-
-    /**
-     * Read the current entry fully.
-     *
-     * @param in Entry stream
-     * @return Entry bytes
-     * @throws IOException On read failure
-     */
-    private static byte[] readAll(final InputStream in) throws IOException {
-        final ByteArrayOutputStream out = new ByteArrayOutputStream();
-        final byte[] buf = new byte[8192];
-        int len = in.read(buf);
-        while (len > 0) {
-            out.write(buf, 0, len);
-            len = in.read(buf);
-        }
-        return out.toByteArray();
+    private static boolean manifest(final String path) {
+        final String[] parts = path.split("/");
+        return COMPOSER.equals(parts[parts.length - 1]);
     }
 
     /**
@@ -186,5 +177,138 @@ final class ArchiveFingerprint {
         } catch (final NoSuchAlgorithmException ex) {
             throw new IllegalStateException(ex);
         }
+    }
+
+    /**
+     * Per-path content digests of one archive, collected while streaming.
+     *
+     * @since 2.2.9
+     */
+    private static final class Digests {
+
+        /**
+         * Path to content digest; {@code null} for a composer.json, whose
+         * digest is the normalised manifest's.
+         */
+        private final Map<String, byte[]> files = new TreeMap<>();
+
+        /**
+         * Read buffer.
+         */
+        private final byte[] buf = new byte[8192];
+
+        /**
+         * First composer.json, if seen.
+         */
+        private byte[] first;
+
+        /**
+         * Inflated bytes read so far.
+         */
+        private long total;
+
+        /**
+         * Consume the current entry.
+         *
+         * @param path Entry path
+         * @param in Entry stream
+         * @throws IOException On read failure or a limit being exceeded
+         */
+        void read(final String path, final InputStream in) throws IOException {
+            if (ArchiveFingerprint.manifest(path)) {
+                final ByteArrayOutputStream out = new ByteArrayOutputStream();
+                this.drain(in, (chunk, len) -> {
+                    if (this.first == null) {
+                        if (out.size() + len > ArchiveFingerprint.MAX_MANIFEST) {
+                            throw new IOException("composer.json is too large");
+                        }
+                        out.write(chunk, 0, len);
+                    }
+                });
+                if (this.first == null) {
+                    this.first = out.toByteArray();
+                }
+                this.files.put(path, null);
+            } else {
+                final MessageDigest digest = ArchiveFingerprint.sha256();
+                this.drain(in, (chunk, len) -> digest.update(chunk, 0, len));
+                this.files.put(path, digest.digest());
+            }
+        }
+
+        /**
+         * Fingerprint of the collected digests.
+         *
+         * @param version Resolved version
+         * @return Hex SHA-256
+         */
+        String digest(final String version) {
+            final byte[] manifest = ArchiveFingerprint.sha256().digest(this.normalised(version));
+            final MessageDigest total = ArchiveFingerprint.sha256();
+            for (final Map.Entry<String, byte[]> file : this.files.entrySet()) {
+                total.update(file.getKey().getBytes(StandardCharsets.UTF_8));
+                total.update((byte) 0);
+                total.update(file.getValue() == null ? manifest : file.getValue());
+            }
+            return HexFormat.of().formatHex(total.digest());
+        }
+
+        /**
+         * The manifest the repository stores: the first composer.json with
+         * the resolved version.
+         *
+         * @param version Resolved version
+         * @return Manifest bytes, empty when the archive has no composer.json
+         */
+        private byte[] normalised(final String version) {
+            if (this.first == null) {
+                return new byte[0];
+            }
+            try (JsonReader reader = Json.createReader(new ByteArrayInputStream(this.first))) {
+                return Json.createObjectBuilder(reader.readObject())
+                    .add(JsonPackage.VRSN, version)
+                    .build()
+                    .toString()
+                    .getBytes(StandardCharsets.UTF_8);
+            }
+        }
+
+        /**
+         * Read the current entry to its end, counting against the limit.
+         *
+         * @param in Entry stream
+         * @param sink Receiver of each chunk
+         * @throws IOException On read failure or the size limit
+         */
+        private void drain(final InputStream in, final Sink sink) throws IOException {
+            int len = in.read(this.buf);
+            while (len >= 0) {
+                this.total += len;
+                if (this.total > ArchiveFingerprint.MAX_BYTES) {
+                    throw new IOException("Archive content is too large to verify");
+                }
+                if (len > 0) {
+                    sink.accept(this.buf, len);
+                }
+                len = in.read(this.buf);
+            }
+        }
+    }
+
+    /**
+     * Receiver of streamed entry chunks.
+     *
+     * @since 2.2.9
+     */
+    @FunctionalInterface
+    private interface Sink {
+        /**
+         * Accept a chunk.
+         *
+         * @param chunk Buffer
+         * @param len Valid bytes
+         * @throws IOException On failure
+         */
+        void accept(byte[] chunk, int len) throws IOException;
     }
 }

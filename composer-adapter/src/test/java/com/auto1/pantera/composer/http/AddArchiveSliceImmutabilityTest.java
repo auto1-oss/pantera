@@ -140,9 +140,101 @@ final class AddArchiveSliceImmutabilityTest {
         );
     }
 
-    private static int json(final AddSlice slice, final String body) {
+    @Test
+    void queryVersionRegistrationIsIdempotent() {
+        final AddSlice slice = new AddSlice(
+            new AstoRepository(new InMemoryStorage(), Optional.of("http://pantera:8080/php"))
+        );
+        final String first = "{\"name\":\"qa/query\","
+            + "\"dist\":{\"url\":\"https://example.org/a.zip\",\"type\":\"zip\"}}";
+        final String swapped = "{\"name\":\"qa/query\","
+            + "\"dist\":{\"url\":\"https://evil.example/b.zip\",\"type\":\"zip\"}}";
+        MatcherAssert.assertThat(
+            "first versionless registration is created",
+            AddArchiveSliceImmutabilityTest.json(slice, "/?version=1.0.0", first),
+            new IsEqual<>(201)
+        );
+        MatcherAssert.assertThat(
+            "the same versionless registration again is idempotent",
+            AddArchiveSliceImmutabilityTest.json(slice, "/?version=1.0.0", first),
+            new IsEqual<>(201)
+        );
+        MatcherAssert.assertThat(
+            "a different versionless entry for the published version is rejected",
+            AddArchiveSliceImmutabilityTest.json(slice, "/?version=1.0.0", swapped),
+            new IsEqual<>(409)
+        );
+    }
+
+    @Test
+    void oversizedPublishedArchiveIsAConflictNotABufferedDecompression() throws Exception {
+        final InMemoryStorage storage = new InMemoryStorage();
+        final AddArchiveSlice slice = AddArchiveSliceImmutabilityTest.slice(storage);
+        final byte[] bomb = AddArchiveSliceImmutabilityTest.bomb(
+            "{\"name\":\"qa/bomb\",\"version\":\"1.0.0\"}", 300L << 20
+        );
+        MatcherAssert.assertThat(
+            "a new release is stored whatever its size",
+            AddArchiveSliceImmutabilityTest.upload(slice, "/qa-bomb.zip", bomb).status().code(),
+            new IsEqual<>(201)
+        );
+        MatcherAssert.assertThat(
+            "a re-upload that cannot be verified within the limits is a conflict",
+            AddArchiveSliceImmutabilityTest.upload(slice, "/qa-bomb.zip", bomb).status().code(),
+            new IsEqual<>(409)
+        );
+    }
+
+    @Test
+    void truncatedReuploadIsAConflictNotAServerError() throws Exception {
+        final AddArchiveSlice slice = AddArchiveSliceImmutabilityTest.slice(new InMemoryStorage());
+        AddArchiveSliceImmutabilityTest.put(slice, "1.0.0", "hi");
+        final byte[] full = AddArchiveSliceImmutabilityTest.zip(
+            "{\"name\":\"qa/helper\",\"version\":\"1.0.0\"}", "hi-but-longer-content"
+        );
+        final byte[] truncated = java.util.Arrays.copyOf(full, full.length - 40);
+        MatcherAssert.assertThat(
+            AddArchiveSliceImmutabilityTest.upload(slice, "/qa-helper.zip", truncated)
+                .status().code(),
+            new IsEqual<>(409)
+        );
+    }
+
+    private static Response upload(
+        final AddArchiveSlice slice, final String path, final byte[] bytes
+    ) {
         return slice.response(
-            new RequestLine(RqMethod.PUT, "/"), Headers.EMPTY,
+            new RequestLine(RqMethod.PUT, path), Headers.EMPTY, new Content.From(bytes)
+        ).join();
+    }
+
+    /**
+     * A ZIP with a composer.json and one highly compressible entry of the
+     * given decompressed size (a few hundred KiB compressed).
+     */
+    static byte[] bomb(final String composer, final long size) throws Exception {
+        final ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        try (ZipOutputStream zos = new ZipOutputStream(bos)) {
+            zos.putNextEntry(new ZipEntry("composer.json"));
+            zos.write(composer.getBytes(StandardCharsets.UTF_8));
+            zos.closeEntry();
+            zos.putNextEntry(new ZipEntry("data/zeros.bin"));
+            final byte[] chunk = new byte[1 << 20];
+            for (long done = 0; done < size; done += chunk.length) {
+                zos.write(chunk, 0, (int) Math.min(chunk.length, size - done));
+            }
+            zos.closeEntry();
+        }
+        return bos.toByteArray();
+    }
+
+    private static int json(final AddSlice slice, final String body) {
+        return AddArchiveSliceImmutabilityTest.json(slice, "/", body);
+    }
+
+    private static int json(final AddSlice slice, final String path, final String body) {
+        return slice.response(
+            new RequestLine(RqMethod.PUT, path), Headers.EMPTY,
             new Content.From(body.getBytes(StandardCharsets.UTF_8))
         ).join().status().code();
     }

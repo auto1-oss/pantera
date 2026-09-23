@@ -11,13 +11,19 @@
 package com.auto1.pantera.composer.http;
 
 import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Meta;
+import com.auto1.pantera.composer.JsonPackage;
 import com.auto1.pantera.composer.Name;
 import com.auto1.pantera.composer.Packages;
 import com.auto1.pantera.composer.Repository;
+import com.auto1.pantera.http.misc.StorageExecutors;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import javax.json.Json;
 import javax.json.JsonObject;
+import javax.json.JsonObjectBuilder;
 
 /**
  * Immutability check for an upload to a local Composer repository.
@@ -55,9 +61,21 @@ final class ReleaseGuard {
     }
 
     /**
+     * Largest stored archive the guard reads to compare with an upload
+     * (compressed size). Larger published releases are not read: any
+     * re-upload of them is a conflict.
+     */
+    private static final long MAX_STORED = 256L * 1024 * 1024;
+
+    /**
      * Repository.
      */
     private final Repository repository;
+
+    /**
+     * Executor for fingerprinting.
+     */
+    private final Executor executor;
 
     /**
      * Ctor.
@@ -65,7 +83,18 @@ final class ReleaseGuard {
      * @param repository Repository
      */
     ReleaseGuard(final Repository repository) {
+        this(repository, StorageExecutors.WRITE);
+    }
+
+    /**
+     * Ctor.
+     *
+     * @param repository Repository
+     * @param executor Executor for fingerprinting (CPU work off the event loop)
+     */
+    ReleaseGuard(final Repository repository, final Executor executor) {
         this.repository = repository;
+        this.executor = executor;
     }
 
     /**
@@ -97,19 +126,52 @@ final class ReleaseGuard {
                         listed ? Verdict.CONFLICT : Verdict.NEW
                     );
                 }
-                return this.repository.value(artifact)
-                    .thenCompose(content -> content.asBytesFuture())
-                    .thenApply(stored -> {
-                        final ArchiveFingerprint print = new ArchiveFingerprint(zip, version);
-                        if (!print.of(stored).equals(print.of(upload))) {
+                return this.compare(artifact, zip, version, upload).thenApply(
+                    same -> {
+                        if (!same) {
                             return Verdict.CONFLICT;
                         }
                         // Same content: done, unless an earlier upload never
                         // reached the metadata (then store it again to repair).
                         return listed ? Verdict.IDENTICAL : Verdict.NEW;
-                    });
+                    }
+                );
             })
         );
+    }
+
+    /**
+     * Whether the stored archive has the same content as the upload.
+     *
+     * <p>Content that cannot be verified counts as different: a stored
+     * archive larger than {@link #MAX_STORED} is not read at all, and an
+     * archive that is corrupt or past the {@link ArchiveFingerprint} limits
+     * has no fingerprint. Either way the published release is kept and the
+     * upload is a conflict. Fingerprinting inflates and hashes, so it runs
+     * on the storage write pool, never on the calling (event-loop) thread.</p>
+     *
+     * @param artifact Stored archive key
+     * @param zip True for ZIP
+     * @param version Resolved version
+     * @param upload Uploaded bytes
+     * @return True when both have the same fingerprint
+     */
+    private CompletableFuture<Boolean> compare(
+        final Key artifact, final boolean zip, final String version, final byte[] upload
+    ) {
+        return this.repository.storage().metadata(artifact).thenCompose(meta -> {
+            final long size = meta.read(Meta.OP_SIZE).map(Long::longValue).orElse(-1L);
+            if (size < 0 || size > ReleaseGuard.MAX_STORED) {
+                return CompletableFuture.completedFuture(false);
+            }
+            return this.repository.value(artifact)
+                .thenCompose(content -> content.asBytesFuture())
+                .thenApplyAsync(stored -> {
+                    final ArchiveFingerprint print = new ArchiveFingerprint(zip, version);
+                    final Optional<String> mine = print.of(upload);
+                    return mine.isPresent() && mine.equals(print.of(stored));
+                }, this.executor);
+        });
     }
 
     /**
@@ -135,7 +197,8 @@ final class ReleaseGuard {
             if (existing.isEmpty()) {
                 return Verdict.NEW;
             }
-            if (ReleaseGuard.withoutUid(existing.get()).equals(ReleaseGuard.withoutUid(entry))) {
+            if (ReleaseGuard.normalised(existing.get(), version)
+                .equals(ReleaseGuard.normalised(entry, version))) {
                 return Verdict.IDENTICAL;
             }
             return Verdict.CONFLICT;
@@ -143,13 +206,21 @@ final class ReleaseGuard {
     }
 
     /**
-     * A version entry without the generated {@code uid}.
+     * A version entry as the repository publishes it, minus the generated
+     * {@code uid}: a registration whose version came from the query string
+     * ({@code PUT /?version=1.0.0}) has no {@code version} field, while a
+     * writer may store one, so both sides carry the resolved version.
      *
      * @param entry Entry
-     * @return Entry without uid
+     * @param version Resolved version
+     * @return Comparable entry
      */
-    private static JsonObject withoutUid(final JsonObject entry) {
-        return javax.json.Json.createObjectBuilder(entry).remove("uid").build();
+    private static JsonObject normalised(final JsonObject entry, final String version) {
+        final JsonObjectBuilder builder = Json.createObjectBuilder(entry).remove("uid");
+        if (!entry.containsKey(JsonPackage.VRSN)) {
+            builder.add(JsonPackage.VRSN, version);
+        }
+        return builder.build();
     }
 
     /**
