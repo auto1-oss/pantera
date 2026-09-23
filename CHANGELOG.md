@@ -38,6 +38,8 @@ This release contains security hardening fixes. Upgrading is recommended. Specif
   ([@aydasraf](https://github.com/aydasraf))
 - **`npm unpublish <pkg>@<version>` no longer fails with `409 Conflict` after removing the version** — the CLI finishes a single-version unpublish by deleting the version’s tarball at `<pkg>/-/<file>.tgz/-rev/<revision>`, and that request was handled by the whole-package unpublish path, which read the tarball path as the package name, computed a revision for a package that does not exist, and rejected the client’s current revision as stale. The preceding PUT had already removed the version from the packument, so the CLI reported failure while the registry had in fact unpublished the version and left the tarball blob orphaned in storage. The tarball step is now recognised, validated against the real package’s revision with the same 409/428/404 semantics as force-unpublish, and removes only that blob.
   ([@aydasraf](https://github.com/aydasraf))
+- **Go, Docker and file proxies now enforce and release cooldown consistently.** A Go version is one cooldown entry (`v1.2.3`) across `@v/list`, `@latest` and module downloads, so unblocking it unblocks all of them. A Docker image is one entry whatever the spelling (`nginx` / `library/nginx`); a fresh tag is blocked from its image date on the first pull; unblocking a tag also releases the manifest and per-platform digests it points to, so the pull succeeds; a failed evaluation no longer serves an empty manifest body. file-proxy dates files by the upstream `Last-Modified` and answers a block with a `403` instead of a server error.
+  ([@aydasraf](https://github.com/aydasraf))
 
 ### 🔒 Security
 

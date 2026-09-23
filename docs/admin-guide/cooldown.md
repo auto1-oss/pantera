@@ -39,9 +39,12 @@ versions are invisible to client resolvers) as of v2.2.0.
 `file-proxy` (generic / raw file proxies) has no version-resolution semantics
 -- no tag list, no version list, no packument -- so there is nothing to
 filter at the metadata layer. Cooldown for file-proxy applies **only at the
-artifact-fetch layer**: if the file's cached-at / remote last-modified
-timestamp falls within the cooldown window, the fetch is blocked with the
-standard 403 envelope. Everything else (unblock API, admin UI listing,
+artifact-fetch layer**: on a cache miss Pantera asks the upstream for the
+file's `Last-Modified` (a `HEAD` of the same path); if it falls within the
+cooldown window, the fetch is blocked with a `403` carrying `Retry-After`
+and `X-Pantera-Cooldown: blocked`. An upstream that sends no `Last-Modified`
+cannot be dated, so its files are allowed. Files already in the cache are
+served without evaluation. Everything else (unblock API, admin UI listing,
 retention) works the same as for other adapter types.
 
 ### Hosted-only adapters (out of scope)
@@ -157,6 +160,19 @@ own: the released entry leaves the blocked list immediately, is recorded in
 cooldown history as `MANUAL_UNBLOCK`, and the version is not blocked again by
 later requests. Clients see the version on their next metadata request (their
 own client-side cache aside, e.g. `npm cache clean --force`).
+
+How the blocked entries are named, per format where it is not obvious:
+
+| Proxy adapter | `artifact` | `version` |
+|---------------|------------|-----------|
+| go-proxy | module path | canonical Go version with the leading `v` (`v1.2.3`) -- the same entry covers `@v/list`, `@latest` and the `.info`/`.mod`/`.zip` downloads |
+| docker-proxy | image name without the repository prefix; on a Docker Hub upstream a single-segment name is its official image (`nginx` and `library/nginx` are both `library/nginx`) | tag, or manifest digest (`sha256:…`) |
+| file-proxy | request path | `latest` |
+
+Unblocking a docker **tag** also releases the digests the tag points to at that
+moment -- its manifest digest and, for a multi-arch image, the per-platform
+child manifests -- so the pull succeeds end to end. Other digests of the same
+image are not released.
 
 ### View Cooldown Overview
 
