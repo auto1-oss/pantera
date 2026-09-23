@@ -374,11 +374,18 @@ final class CachedProxySlice implements Slice {
                 .field("log.source", "application")
                 .log();
 
+            // Cooldown key uses Go's canonical semver ("v1.2.3") — the form
+            // @v/list lines and the @latest "Version" field carry. ARTIFACT
+            // strips the leading "v" from the path, so keying on the bare
+            // group created a second, unrelated block row for the same
+            // version: unblocking one form left the other in force. The
+            // upstream request path is untouched.
+            final String canonical = canonicalVersion(version);
             final CooldownRequest request = new CooldownRequest(
                 this.rtype,
                 this.rname,
                 module,
-                version,
+                canonical,
                 user,
                 Instant.now()
             );
@@ -407,7 +414,7 @@ final class CachedProxySlice implements Slice {
                             // that version — resolution with it filtered.
                             AuditLogger.resolution(
                                 ctx, this.rtype, this.rname, module, user,
-                                java.util.List.of(version)
+                                java.util.List.of(canonical)
                             );
                         }
                         return CompletableFuture.completedFuture(
@@ -426,7 +433,7 @@ final class CachedProxySlice implements Slice {
                         .log();
                     // Cooldown passed, proceed with fetch
                     // Get the release date for database event
-                    return this.inspector.releaseDate(module, version)
+                    return this.inspector.releaseDate(module, canonical)
                         .thenCompose(releaseDate -> {
                             EcsLogger.debug("com.auto1.pantera.http")
                                 .message("Release date retrieved")
@@ -451,6 +458,17 @@ final class CachedProxySlice implements Slice {
         }).toCompletableFuture();
     }
 
+
+    /**
+     * Go canonical semver for a version captured by {@link #ARTIFACT},
+     * which matches the literal leading "v" outside the group.
+     *
+     * @param bare Version without the leading "v" (e.g. {@code 1.2.3})
+     * @return Canonical version (e.g. {@code v1.2.3})
+     */
+    private static String canonicalVersion(final String bare) {
+        return "v" + bare;
+    }
 
     private CompletableFuture<Response> fetchThroughCache(
         final RequestLine line,
