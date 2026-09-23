@@ -542,7 +542,11 @@ Create a new repository or update an existing one. If the repository exists, the
 | `repo.type`    | string | Yes      | Repository type (e.g. `maven`, `npm`, `docker-proxy`)  |
 | `repo.storage` | string | Yes      | Storage alias name (e.g. `default`)                    |
 
+Supported `repo.type` values: `file`, `file-proxy`, `file-group`, `maven`, `maven-proxy`, `maven-group`, `gradle`, `gradle-proxy`, `gradle-group`, `npm`, `npm-proxy`, `npm-group`, `pypi`, `pypi-proxy`, `pypi-group`, `docker`, `docker-proxy`, `docker-group`, `go`, `go-proxy`, `go-group`, `php`, `php-proxy`, `php-group`, `gem`, `gem-group`, `helm`, `rpm`, `nuget`, `deb`, `conda`, `conan`, `hexpm`.
+
 **Response (200):** Empty body on success.
+
+**Response (400):** Invalid body, including a `repo.type` that is not supported (the message lists the supported types).
 
 **curl example:**
 

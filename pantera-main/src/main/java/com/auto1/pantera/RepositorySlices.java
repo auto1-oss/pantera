@@ -1332,7 +1332,7 @@ public class RepositorySlices {
                 break;
             default:
                 throw new IllegalStateException(
-                    String.format("Unsupported repository type '%s", cfg.type())
+                    String.format("Unsupported repository type '%s'", cfg.type())
                 );
         }
         return new SliceValue(

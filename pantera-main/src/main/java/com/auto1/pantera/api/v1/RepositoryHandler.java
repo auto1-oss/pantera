@@ -31,6 +31,7 @@ import com.auto1.pantera.settings.RepoData;
 import com.auto1.pantera.settings.cache.FiltersCache;
 import com.auto1.pantera.settings.repo.CrudRepoSettings;
 import com.auto1.pantera.settings.repo.FsStorageRootPolicy;
+import com.auto1.pantera.settings.repo.SupportedRepoTypes;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
@@ -62,6 +63,11 @@ public final class RepositoryHandler {
      */
     private static final FsStorageRootPolicy LOCAL_PATHS =
         new FsStorageRootPolicy(java.util.List.of());
+
+    /**
+     * Repository types the server can serve.
+     */
+    private static final SupportedRepoTypes TYPES = new SupportedRepoTypes();
 
     /**
      * Pantera filters cache.
@@ -341,11 +347,22 @@ public final class RepositoryHandler {
             return;
         }
         final javax.json.JsonObject repo = body.getJsonObject(RepositoryHandler.REPO);
-        if (!repo.containsKey("type")) {
+        if (!repo.containsKey("type")
+            || repo.get("type").getValueType() != javax.json.JsonValue.ValueType.STRING) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Repository type is required");
             return;
         }
         final String repoType = repo.getString("type");
+        if (!RepositoryHandler.TYPES.contains(repoType)) {
+            ApiResponse.sendError(
+                ctx, 400, "BAD_REQUEST",
+                String.format(
+                    "Unsupported repository type '%s'; supported types: %s",
+                    repoType, String.join(", ", RepositoryHandler.TYPES.all())
+                )
+            );
+            return;
+        }
         if (RepositoryHandler.isGroupType(repoType)) {
             if (!repo.containsKey("members")
                 || !(repo.get("members") instanceof javax.json.JsonArray)

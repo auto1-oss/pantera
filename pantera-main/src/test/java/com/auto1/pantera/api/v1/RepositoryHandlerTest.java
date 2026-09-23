@@ -106,6 +106,30 @@ public final class RepositoryHandlerTest extends AsyncApiTestBase {
     }
 
     @Test
+    void unsupportedRepositoryTypeIsRefused(final Vertx vertx, final VertxTestContext ctx)
+        throws Exception {
+        // B57: type "binary" was stored with 200 and then every request to
+        // the repository answered 500 "Unsupported repository type".
+        this.request(
+            vertx, ctx,
+            HttpMethod.PUT, "/api/v1/repositories/bin-repo",
+            new JsonObject().put(
+                "repo",
+                new JsonObject()
+                    .put("type", "binary")
+                    .put("storage", new JsonObject().put("type", "fs").put("path", "/tmp"))
+            ),
+            res -> {
+                Assertions.assertEquals(400, res.statusCode(), "unknown type must be refused");
+                Assertions.assertTrue(
+                    res.bodyAsJsonObject().getString("message").contains("binary"),
+                    "the message must name the refused type"
+                );
+            }
+        );
+    }
+
+    @Test
     void vertxFileStorageOutsideApprovedRootsIsRefused(final Vertx vertx,
         final VertxTestContext ctx) throws Exception {
         // B12: only type "fs" was checked, so "vertx-file" mounted any path.
