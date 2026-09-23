@@ -87,6 +87,25 @@ meta:
 | `repo_types.<type>.enabled` | boolean | inherits global | Enable for this repo type |
 | `repo_types.<type>.minimum_allowed_age` | string | inherits global | Override duration for this type |
 
+### Per-repository window
+
+A proxy repository can carry its own window in its config (the admin UI's
+repository cooldown setting), which takes precedence over the type and global
+windows:
+
+```yaml
+repo:
+  type: npm-proxy
+  cooldown:
+    duration: P30D   # ISO-8601 duration
+```
+
+It applies as soon as the repository is created or edited through the REST
+API or the UI, without a restart; removing it (or deleting
+the repository) falls back to the type and global windows. Cached cooldown
+decisions and the repository's filtered metadata are dropped when the
+window changes.
+
 ---
 
 ## Duration Format

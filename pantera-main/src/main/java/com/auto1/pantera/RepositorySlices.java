@@ -38,6 +38,7 @@ import com.auto1.pantera.docker.http.OciErrorsSlice;
 import com.auto1.pantera.docker.http.TrimmedDocker;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.CooldownSupport;
+import com.auto1.pantera.cooldown.RepoConfigCooldownOverrides;
 import com.auto1.pantera.files.FilesSlice;
 import com.auto1.pantera.gem.http.GemSlice;
 
@@ -173,6 +174,12 @@ public class RepositorySlices {
     private final com.auto1.pantera.cooldown.metadata.CooldownMetadataService cooldownMetadata;
 
     /**
+     * Per-repository cooldown windows from the repositories' own configs
+     * ({@code cooldown.duration}); nullable when there are no settings.
+     */
+    private final RepoConfigCooldownOverrides cooldownOverrides;
+
+    /**
      * Shared Jetty HTTP clients keyed by settings signature.
      */
     private final SharedJettyClients sharedClients;
@@ -275,12 +282,13 @@ public class RepositorySlices {
         this.tokens = tokens;
         this.cooldown = CooldownSupport.create(settings);
         this.cooldownMetadata = CooldownSupport.createMetadataService(this.cooldown, settings);
-        // Register per-repo cooldown durations from repo configurations
-        if (repos != null) {
+        // Register per-repo cooldown durations from repo configurations;
+        // kept in sync on every repository change by invalidateRepo().
+        this.cooldownOverrides = settings == null || settings.cooldown() == null
+            ? null : new RepoConfigCooldownOverrides(settings.cooldown());
+        if (repos != null && this.cooldownOverrides != null) {
             for (final RepoConfig cfg : repos.configs()) {
-                cfg.cooldownDuration().ifPresent(duration ->
-                    settings.cooldown().setRepoNameOverride(cfg.name(), true, duration)
-                );
+                this.cooldownOverrides.sync(cfg.name(), RepositorySlices.cooldownDuration(cfg));
             }
         }
         this.sharedClients = new SharedJettyClients();
@@ -423,6 +431,66 @@ public class RepositorySlices {
         this.slices.asMap().keySet().stream()
             .filter(k -> k.name().string().equals(name))
             .forEach(this.slices::invalidate);
+        this.syncCooldownOverride(name);
+    }
+
+    /**
+     * Re-apply a repository's own {@code cooldown.duration} after it was
+     * created, edited, moved or deleted. When the effective window changes,
+     * cached cooldown decisions and the repository's filtered metadata are
+     * dropped so the new window applies to the next request.
+     * @param name Repository name
+     */
+    private void syncCooldownOverride(final String name) {
+        if (this.cooldownOverrides == null || this.repos == null) {
+            return;
+        }
+        final Optional<RepoConfig> cfg = this.repos.config(name);
+        final Optional<java.time.Duration> duration =
+            cfg.flatMap(RepositorySlices::cooldownDuration);
+        if (this.cooldownOverrides.sync(name, duration)) {
+            cfg.ifPresent(conf -> this.cooldownMetadata.invalidateAll(conf.type(), name));
+            final com.auto1.pantera.cooldown.cache.CooldownCache decisions =
+                CooldownSupport.extractCache(this.cooldown);
+            if (decisions != null) {
+                decisions.clear();
+            }
+            EcsLogger.info("com.auto1.pantera")
+                .message(
+                    duration.map(
+                        value -> "Repository cooldown window set from its config: " + value
+                    ).orElse("Repository cooldown window from its config removed")
+                )
+                .eventCategory("configuration")
+                .eventAction("repo_cooldown_override_sync")
+                .eventOutcome("success")
+                .field("repository.name", name)
+                .field("log.source", "application")
+                .log();
+        }
+    }
+
+    /**
+     * A repository's configured cooldown window; an unparsable value is
+     * logged and ignored rather than failing the repository.
+     * @param cfg Repository config
+     * @return Duration, empty when absent or invalid
+     */
+    private static Optional<java.time.Duration> cooldownDuration(final RepoConfig cfg) {
+        try {
+            return cfg.cooldownDuration();
+        } catch (final java.time.format.DateTimeParseException bad) {
+            EcsLogger.warn("com.auto1.pantera")
+                .message("Ignoring invalid repository cooldown.duration")
+                .eventCategory("configuration")
+                .eventAction("repo_cooldown_override_sync")
+                .eventOutcome("failure")
+                .field("repository.name", cfg.name())
+                .error(bad)
+                .field("log.source", "application")
+                .log();
+            return Optional.empty();
+        }
     }
 
     public void enableJettyMetrics(final MeterRegistry registry) {
