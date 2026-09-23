@@ -142,19 +142,47 @@ final class ImportServiceTest {
         );
     }
 
+    @Test
+    void importsIntoRepositoryWithoutConfiguredUrl() throws Exception {
+        // B54: a repository created through the REST API has no `url:` key.
+        // RepoConfig.url() throws IllegalStateException for it, which escaped
+        // as a 500 "yaml repo.url is absent" and blocked every import.
+        final ImportService noUrl = new ImportService(
+            new SingleRepo(
+                repoConfig(this.repoStorage, Yaml.createYamlMappingBuilder().build())
+            ),
+            Optional.empty(),
+            Optional.of(this.events)
+        );
+        final Headers headers = new Headers()
+            .add(ImportHeaders.REPO_TYPE, "file")
+            .add(ImportHeaders.IDEMPOTENCY_KEY, "id-no-url")
+            .add(ImportHeaders.ARTIFACT_NAME, "a.txt");
+        final ImportResult result = noUrl.importArtifact(
+            ImportRequest.parse(
+                new RequestLine(RqMethod.PUT, "/.import/my-repo/dir/a.txt"), headers
+            ),
+            new Content.From("a".getBytes(StandardCharsets.UTF_8))
+        ).toCompletableFuture().get();
+        Assertions.assertEquals(ImportStatus.CREATED, result.status());
+    }
+
     private static RepoConfig repoConfig(final Storage storage) throws Exception {
+        return repoConfig(
+            storage,
+            Yaml.createYamlMappingBuilder()
+                .add("url", "http://localhost:8080/my-repo")
+                .build()
+        );
+    }
+
+    private static RepoConfig repoConfig(final Storage storage, final YamlMapping yaml)
+        throws Exception {
         final Constructor<RepoConfig> ctor = RepoConfig.class.getDeclaredConstructor(
             YamlMapping.class, String.class, String.class, Storage.class
         );
         ctor.setAccessible(true);
-        return ctor.newInstance(
-            Yaml.createYamlMappingBuilder()
-                .add("url", "http://localhost:8080/my-repo")
-                .build(),
-            "my-repo",
-            "file",
-            storage
-        );
+        return ctor.newInstance(yaml, "my-repo", "file", storage);
     }
 
     private static String digestHex(final String algorithm, final byte[] data) throws Exception {

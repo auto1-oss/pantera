@@ -1242,6 +1242,12 @@ public final class ImportService {
      * @return Optional base URL string without trailing slash
      */
     private static Optional<String> repositoryBaseUrl(final RepoConfig config) {
+        // A repository created through the REST API has no `url:` key, and
+        // RepoConfig.url() throws IllegalStateException for it. The base URL
+        // is optional for imports, so an absent key simply means "none".
+        if (config.urlOpt().filter(raw -> !raw.isBlank()).isEmpty()) {
+            return Optional.empty();
+        }
         try {
             final String raw = config.url().toString();
             if (raw == null || raw.isBlank()) {
