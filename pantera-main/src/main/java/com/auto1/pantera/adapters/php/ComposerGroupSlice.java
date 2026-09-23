@@ -12,6 +12,7 @@ package com.auto1.pantera.adapters.php;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.cooldown.response.CooldownResponseFactory;
 import com.auto1.pantera.group.SliceResolver;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
@@ -180,6 +181,13 @@ public final class ComposerGroupSlice implements Slice {
     /**
      * Try each member sequentially for p2 metadata requests.
      * Returns the first successful response, or 404 if all members fail.
+     *
+     * <p>A member's cooldown verdict (any response carrying
+     * {@link CooldownResponseFactory#HEADER}, e.g. the all-versions-blocked
+     * 404) is authoritative, as in {@code GroupResolver}: it ends the walk
+     * and is relayed verbatim -- status, marker and reason body -- instead
+     * of being discarded for a bare 404 or, worse, letting a later member
+     * serve the blocked versions.</p>
      */
     private CompletableFuture<Response> tryMembersForP2(
         final RequestLine line,
@@ -192,7 +200,7 @@ public final class ComposerGroupSlice implements Slice {
             );
             for (final String member : this.members) {
                 chain = chain.thenCompose(prev -> {
-                    if (prev.status() == RsStatus.OK) {
+                    if (ComposerGroupSlice.isFinal(prev)) {
                         return CompletableFuture.completedFuture(prev);
                     }
                     final Slice memberSlice = this.resolver.slice(
@@ -202,7 +210,7 @@ public final class ComposerGroupSlice implements Slice {
                     final Headers sanitized = dropFullPathHeader(headers);
                     return memberSlice.response(rewritten, sanitized, Content.EMPTY)
                         .thenCompose(resp -> {
-                            if (resp.status() == RsStatus.OK) {
+                            if (ComposerGroupSlice.isFinal(resp)) {
                                 return CompletableFuture.completedFuture(resp);
                             }
                             // Drain non-OK response body to release upstream connection
@@ -214,6 +222,18 @@ public final class ComposerGroupSlice implements Slice {
             }
             return chain;
         });
+    }
+
+    /**
+     * Whether a member's p2 response ends the walk: a 200, or a cooldown
+     * verdict.
+     *
+     * @param resp Member response
+     * @return True when later members must not be asked
+     */
+    private static boolean isFinal(final Response resp) {
+        return resp.status() == RsStatus.OK
+            || !resp.headers().values(CooldownResponseFactory.HEADER).isEmpty();
     }
 
     /**

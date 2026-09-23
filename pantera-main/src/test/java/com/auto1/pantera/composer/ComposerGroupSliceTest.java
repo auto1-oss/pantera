@@ -22,6 +22,7 @@ import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.rq.RequestLine;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
@@ -172,6 +173,57 @@ public final class ComposerGroupSliceTest {
             "All-404 collapses to 404",
             resp.status(), Matchers.equalTo(RsStatus.NOT_FOUND)
         );
+    }
+
+    @Test
+    void p2CooldownVerdictIsRelayedVerbatim() throws Exception {
+        final AtomicInteger later = new AtomicInteger(0);
+        final Map<String, Slice> members = new HashMap<>();
+        members.put("repo1", (line, headers, body) -> body.asBytesFuture().thenApply(
+            ignored -> ResponseBuilder.notFound()
+                .header("X-Pantera-Cooldown", "all-blocked")
+                .textBody("All versions of 'acme/foo' are under cooldown; no versions available.")
+                .build()
+        ));
+        members.put("repo2", new CountingSlice(later, jsonOk(
+            "{\"packages\":{\"acme/foo\":[{\"name\":\"acme/foo\",\"version\":\"9.9\"}]}}"
+        )));
+        final Response resp = new ComposerGroupSlice(
+            new FakeDelegate(), new MapResolver(members), "php-group",
+            List.of("repo1", "repo2"), 8080, ""
+        ).response(
+            new RequestLine("GET", "/p2/acme/foo.json"), Headers.EMPTY, Content.EMPTY
+        ).get(10, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(
+            "status of the verdict kept", resp.status(), new IsEqual<>(RsStatus.NOT_FOUND)
+        );
+        MatcherAssert.assertThat(
+            "cooldown marker kept",
+            resp.headers().values("X-Pantera-Cooldown"), new IsEqual<>(List.of("all-blocked"))
+        );
+        MatcherAssert.assertThat(
+            "reason body kept",
+            new String(resp.body().asBytes(), StandardCharsets.UTF_8),
+            new IsEqual<>("All versions of 'acme/foo' are under cooldown; no versions available.")
+        );
+        MatcherAssert.assertThat(
+            "the verdict is authoritative: later members are not asked",
+            later.get(), new IsEqual<>(0)
+        );
+    }
+
+    @Test
+    void p2GenuineMissFallsThroughToTheNextMember() throws Exception {
+        final Map<String, Slice> members = new HashMap<>();
+        members.put("repo1", status(RsStatus.NOT_FOUND));
+        members.put("repo2", jsonOk("{\"packages\":{\"acme/foo\":[]}}"));
+        final Response resp = new ComposerGroupSlice(
+            new FakeDelegate(), new MapResolver(members), "php-group",
+            List.of("repo1", "repo2"), 8080, ""
+        ).response(
+            new RequestLine("GET", "/p2/acme/foo.json"), Headers.EMPTY, Content.EMPTY
+        ).get(10, TimeUnit.SECONDS);
+        MatcherAssert.assertThat(resp.status(), new IsEqual<>(RsStatus.OK));
     }
 
     private static Slice jsonOk(final String json) {
