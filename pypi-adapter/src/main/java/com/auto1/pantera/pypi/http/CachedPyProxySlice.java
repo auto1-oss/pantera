@@ -13,6 +13,7 @@ package com.auto1.pantera.pypi.http;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.cooldown.response.CooldownResponseFactory;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
@@ -531,6 +532,18 @@ public final class CachedPyProxySlice implements Slice {
         sidecars.put(ChecksumAlgo.SHA512, () -> this.fetchSidecar(line, ".sha512"));
         return this.origin.response(line, Headers.EMPTY, Content.EMPTY)
             .thenCompose(resp -> {
+                if (CachedPyProxySlice.isCooldownVerdict(resp)) {
+                    // Pantera's own cooldown 403 for a blocked file, not an
+                    // upstream answer: relay it verbatim (Retry-After, the
+                    // marker and the blocked-until body) instead of the
+                    // non-authoritative 404 below. Nothing is cached, so
+                    // followers re-enter, fetch again and get the verdict
+                    // re-evaluated -- an unblock is visible at once.
+                    if (!leaderGate.isDone()) {
+                        leaderGate.complete(null);
+                    }
+                    return CompletableFuture.completedFuture(resp);
+                }
                 if (!resp.status().success()) {
                     // Drain non-2xx body to release the connection.
                     resp.body().asBytesFuture();
@@ -611,6 +624,17 @@ public final class CachedPyProxySlice implements Slice {
                     .textBody("Upstream temporarily unavailable")
                     .build();
             });
+    }
+
+    /**
+     * Whether an origin response is a cooldown verdict produced by Pantera
+     * itself, as opposed to an upstream answer.
+     *
+     * @param response Origin response
+     * @return True when the response carries the cooldown marker header
+     */
+    private static boolean isCooldownVerdict(final Response response) {
+        return !response.headers().values(CooldownResponseFactory.HEADER).isEmpty();
     }
 
     /**
