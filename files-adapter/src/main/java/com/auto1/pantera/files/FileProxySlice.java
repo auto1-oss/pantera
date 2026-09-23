@@ -96,6 +96,11 @@ public final class FileProxySlice implements Slice {
     private final CooldownInspector inspector;
 
     /**
+     * Repository type cooldown rows and the 403 factory are keyed by.
+     */
+    private final String rtype;
+
+    /**
      * Upstream URL for metrics.
      */
     private final String upstreamUrl;
@@ -236,7 +241,12 @@ public final class FileProxySlice implements Slice {
         this.events = events;
         this.rname = rname;
         this.cooldown = cooldown;
-        this.inspector = new RegistryBackedInspector(rtype, PublishDateRegistries.instance());
+        this.rtype = rtype;
+        // The upstream Last-Modified is the only source of a file's age;
+        // the registry stays as fallback for dates recorded elsewhere.
+        this.inspector = new FileProxyCooldownInspector(
+            remote, new RegistryBackedInspector(rtype, PublishDateRegistries.instance())
+        );
         this.upstreamUrl = upstreamUrl;
         this.storage = storage;
     }
@@ -313,7 +323,7 @@ public final class FileProxySlice implements Slice {
         final AtomicReference<Headers> rshdr
     ) {
         final CooldownRequest request = new CooldownRequest(
-            FileProxySlice.REPO_TYPE,
+            this.rtype,
             this.rname,
             artifact,
             "latest",
@@ -326,7 +336,7 @@ public final class FileProxySlice implements Slice {
                 if (result.blocked()) {
                     return java.util.concurrent.CompletableFuture.completedFuture(
                         CooldownResponseRegistry.instance()
-                            .getOrThrow(FileProxySlice.REPO_TYPE)
+                            .getOrThrow(this.rtype)
                             .forbidden(result.block().orElseThrow())
                     );
                 }
