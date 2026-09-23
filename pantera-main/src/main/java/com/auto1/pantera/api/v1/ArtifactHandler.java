@@ -20,6 +20,9 @@ import com.auto1.pantera.api.v1.download.DownloadTokenSupport;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.SubStorage;
+import com.auto1.pantera.audit.AuditContext;
+import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.http.headers.ContentFileName;
 import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
@@ -48,6 +51,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import javax.json.Json;
 import javax.json.JsonStructure;
 import javax.sql.DataSource;
@@ -1054,6 +1058,29 @@ public final class ArtifactHandler {
      * @param ctx Routing context
      */
     private void deleteArtifactHandler(final RoutingContext ctx) {
+        this.deletePath(ctx, false);
+    }
+
+    /**
+     * DELETE /api/v1/repositories/:name/packages — delete package folder.
+     * @param ctx Routing context
+     */
+    private void deletePackageFolderHandler(final RoutingContext ctx) {
+        this.deletePath(ctx, true);
+    }
+
+    /**
+     * Shared delete flow: storage delete (DB-fallback storage lookup), then
+     * the cascade that keeps everything derived from storage consistent --
+     * the tree-view metadata cache, the artifact index (matched on the
+     * storage path the rows were indexed from), the format's own metadata
+     * of a local repository -- and an {@code artifact_delete} audit record.
+     * The cascade is best-effort: a failure is logged and the storage
+     * delete still answers 204.
+     * @param ctx Routing context
+     * @param folder Whether the path is a package folder
+     */
+    private void deletePath(final RoutingContext ctx, final boolean folder) {
         final String bodyStr = ctx.body().asString();
         if (bodyStr == null || bodyStr.isBlank()) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "JSON body is required");
@@ -1073,47 +1100,30 @@ public final class ArtifactHandler {
         }
         final RepositoryName rname = new RepositoryName.Simple(ctx.pathParam("name"));
         final String repoName = rname.toString();
-        // Fix (2.2.0): use DB-fallback storage lookup so DB-only repos
-        // created via the management UI don't 500 with
-        // `No value for key: {repo}.yml`. On success, cascade the delete
-        // into the artifacts DB index so search/locate don't return
-        // ghosts for files that have been removed from storage. The
-        // cascade is best-effort: if it fails we still return 204 and
-        // log — the ghost will resolve next backfill pass.
-        this.repoData.deleteArtifact(rname, path, this.crs)
-            .thenCompose(deleted -> {
-                if (!deleted) {
-                    return CompletableFuture.completedFuture(deleted);
-                }
-                // Evict from metadata cache so the next tree view doesn't
-                // show stale size/modified for a file that no longer exists.
-                this.metaCache.invalidate(repoName, path);
-                // Cover both cases: single file at the exact path, and
-                // directory delete (which also removes any children).
-                return this.artifactIndex.remove(repoName, path)
-                    .thenCompose(
-                        nothing -> this.artifactIndex.removePrefix(
-                            repoName, path.endsWith("/") ? path : path + "/"
-                        )
-                    )
-                    .<Boolean>handle((count, err) -> {
-                        if (err != null) {
-                            EcsLogger.warn("com.auto1.pantera.api.v1")
-                                .message("Artifact deleted from storage but"
-                                    + " DB-index cascade failed; ghost row"
-                                    + " will persist until next backfill: "
-                                    + err.getMessage())
-                                .eventCategory("database")
-                                .eventAction("delete_index_cascade_failed")
-                                .field("repository.name", repoName)
-                                .field("file.path", path)
-                                .error(err)
-                                .field("log.source", "application")
-                                .log();
+        // Captured before any async hop (the MDC does not survive it).
+        final AuditContext audit = new ApiAuditContext(ctx).value();
+        final String actor = ctx.user() == null ? null
+            : ctx.user().principal().getString(com.auto1.pantera.api.AuthTokenRest.SUB);
+        CompletableFuture.supplyAsync(() -> this.repoTypeOf(rname), HandlerExecutor.get())
+            .thenCompose(
+                repoType -> {
+                    final CompletionStage<Boolean> deletion = folder
+                        ? this.repoData.deletePackageFolder(rname, path, this.crs)
+                        : this.repoData.deleteArtifact(rname, path, this.crs);
+                    return deletion.thenCompose(deleted -> {
+                        AuditLogger.delete(
+                            audit, repoType, repoName, path, null, actor,
+                            deleted ? AuditLogger.OUTCOME_SUCCESS : AuditLogger.OUTCOME_FAILURE,
+                            deleted ? null : AuditLogger.REASON_NOT_FOUND
+                        );
+                        if (!deleted) {
+                            return CompletableFuture.completedFuture(false);
                         }
-                        return deleted;
+                        return this.cascade(rname, repoType, path, folder)
+                            .thenApply(nothing -> true);
                     });
-            })
+                }
+            )
             .thenAccept(
                 deleted -> ctx.response().setStatusCode(204).end()
             )
@@ -1126,68 +1136,93 @@ public final class ArtifactHandler {
     }
 
     /**
-     * DELETE /api/v1/repositories/:name/packages — delete package folder.
-     * @param ctx Routing context
+     * Keep everything derived from storage consistent with a delete.
+     * Never fails: each step logs its own failure.
+     * @param rname Repository name
+     * @param repoType Repository type
+     * @param path Deleted path
+     * @param folder Whether a folder was deleted
+     * @return Completion
      */
-    private void deletePackageFolderHandler(final RoutingContext ctx) {
-        final String bodyStr = ctx.body().asString();
-        if (bodyStr == null || bodyStr.isBlank()) {
-            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "JSON body is required");
-            return;
-        }
-        final javax.json.JsonObject body;
-        try {
-            body = Json.createReader(new StringReader(bodyStr)).readObject();
-        } catch (final Exception ex) {
-            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid JSON body");
-            return;
-        }
-        final String path = body.getString("path", "").trim();
-        if (path.isEmpty()) {
-            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Field 'path' is required");
-            return;
-        }
-        final RepositoryName rname = new RepositoryName.Simple(ctx.pathParam("name"));
+    private CompletableFuture<Void> cascade(
+        final RepositoryName rname, final String repoType, final String path,
+        final boolean folder
+    ) {
         final String repoName = rname.toString();
-        // Fix (2.2.0): DB-fallback storage lookup + DB-index cascade. See
-        // deleteArtifactHandler for the rationale.
-        this.repoData.deletePackageFolder(rname, path, this.crs)
-            .thenCompose(deleted -> {
-                if (!deleted) {
-                    return CompletableFuture.completedFuture(deleted);
+        if (folder) {
+            this.metaCache.invalidatePrefix(repoName, path);
+        } else {
+            this.metaCache.invalidate(repoName, path);
+        }
+        final CompletableFuture<Void> index = this.artifactIndex.removeByPath(repoName, path)
+            .<Void>handle((count, err) -> {
+                if (err != null) {
+                    ArtifactHandler.cascadeFailed(
+                        "Deleted from storage but the search index cascade failed",
+                        repoName, path, err
+                    );
                 }
-                // Evict all cache entries under this folder prefix so the
-                // next tree view doesn't serve stale metadata for deleted files.
-                this.metaCache.invalidatePrefix(repoName, path);
-                return this.artifactIndex.removePrefix(
-                        repoName, path.endsWith("/") ? path : path + "/"
-                    )
-                    .<Boolean>handle((count, err) -> {
-                        if (err != null) {
-                            EcsLogger.warn("com.auto1.pantera.api.v1")
-                                .message("Package folder deleted from storage"
-                                    + " but DB-index cascade failed: "
-                                    + err.getMessage())
-                                .eventCategory("database")
-                                .eventAction("delete_index_cascade_failed")
-                                .field("repository.name", repoName)
-                                .field("file.path", path)
-                                .error(err)
-                                .field("log.source", "application")
-                                .log();
-                        }
-                        return deleted;
-                    });
-            })
-            .thenAccept(
-                deleted -> ctx.response().setStatusCode(204).end()
+                return null;
+            });
+        final CompletableFuture<Void> format = this.repoData.repoStorage(rname, this.crs)
+            .thenCompose(
+                asto -> new FormatDeleteHooks().afterDelete(
+                    repoType, new SubStorage(new Key.From(repoName), asto), path
+                )
             )
-            .exceptionally(
-                err -> {
-                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
-                    return null;
+            .<Void>handle((nothing, err) -> {
+                if (err != null) {
+                    ArtifactHandler.cascadeFailed(
+                        "Deleted from storage but the " + repoType
+                            + " metadata could not be updated",
+                        repoName, path, err
+                    );
                 }
-            );
+                return null;
+            })
+            .toCompletableFuture();
+        return CompletableFuture.allOf(index, format);
+    }
+
+    /**
+     * Log a failed cascade step.
+     * @param message Message
+     * @param repoName Repository name
+     * @param path Deleted path
+     * @param err Failure
+     */
+    private static void cascadeFailed(
+        final String message, final String repoName, final String path, final Throwable err
+    ) {
+        EcsLogger.warn("com.auto1.pantera.api.v1")
+            .message(message)
+            .eventCategory("database")
+            .eventAction("delete_cascade_failed")
+            .eventOutcome("failure")
+            .field("repository.name", repoName)
+            .field("file.path", path)
+            .error(err)
+            .field("log.source", "application")
+            .log();
+    }
+
+    /**
+     * The type of a repository, or {@code unknown}. Blocking (DB read).
+     * @param rname Repository name
+     * @return Repository type
+     */
+    private String repoTypeOf(final RepositoryName rname) {
+        String type = "unknown";
+        if (this.crs != null && this.crs.exists(rname)) {
+            final JsonStructure config = this.crs.value(rname);
+            if (config instanceof javax.json.JsonObject) {
+                final javax.json.JsonObject jobj = (javax.json.JsonObject) config;
+                final javax.json.JsonObject repo = jobj.containsKey("repo")
+                    ? jobj.getJsonObject("repo") : jobj;
+                type = repo.getString("type", "unknown");
+            }
+        }
+        return type;
     }
 
     /**

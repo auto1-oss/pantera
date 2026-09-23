@@ -64,6 +64,49 @@ public interface ArtifactIndex extends Closeable {
     }
 
     /**
+     * Remove every row describing a storage path that was deleted: the
+     * path itself (a file) or everything under it (a folder). Rows are
+     * matched on the storage path they were indexed from, which is the
+     * {@code name} for path-named formats (file, helm, ...) and the
+     * {@code path_prefix} for formats whose {@code name} is a package
+     * identity (maven's dotted coordinates, composer's vendor/package,
+     * docker's image). Both the bare and a leading-slash form of the
+     * path are matched.
+     *
+     * <p>The default delegates to {@link #remove} and {@link #removePrefix},
+     * which match on {@code name} only.</p>
+     *
+     * @param repoName Repository name (exact match)
+     * @param path Deleted storage path, relative to the repository; must
+     *  not be empty
+     * @return Future carrying the number of rows removed
+     */
+    default CompletableFuture<Integer> removeByPath(
+        final String repoName, final String path
+    ) {
+        final String dir = path.endsWith("/") ? path : path + "/";
+        return this.remove(repoName, path).thenCompose(
+            nothing -> this.removePrefix(repoName, dir)
+        );
+    }
+
+    /**
+     * Remove every row of a repository. Used when the repository itself is
+     * deleted, so search, locate and group routing stop returning
+     * artifacts of a repository that no longer exists (and do not
+     * resurrect them if the name is reused).
+     *
+     * <p>Default implementation removes nothing; concrete indexes should
+     * override.</p>
+     *
+     * @param repoName Repository name (exact match)
+     * @return Future carrying the number of rows removed
+     */
+    default CompletableFuture<Integer> removeRepo(final String repoName) {
+        return CompletableFuture.completedFuture(0);
+    }
+
+    /**
      * Full-text search across all indexed artifacts.
      *
      * @param query Search query string

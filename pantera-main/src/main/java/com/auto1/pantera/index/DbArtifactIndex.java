@@ -92,6 +92,21 @@ public final class DbArtifactIndex implements ArtifactIndex, ScopedSearchIndex {
     private static final String DELETE_SQL =
         "DELETE FROM artifacts WHERE repo_name = ? AND name = ?";
 
+    /**
+     * DELETE every row describing a deleted storage path: matched on the
+     * {@code name} (path-named formats) and on the {@code path_prefix}
+     * (formats whose name is a package identity), each as the path itself
+     * or a subtree, and for {@code path_prefix} also in the legacy
+     * leading-slash form maven local uploads wrote before 2.2.9.
+     */
+    private static final String REMOVE_BY_PATH_SQL = String.join(
+        " ",
+        "DELETE FROM artifacts WHERE repo_name = ? AND (",
+        "name = ? OR name LIKE ? ESCAPE '\\'",
+        "OR path_prefix = ? OR path_prefix = ?",
+        "OR path_prefix LIKE ? ESCAPE '\\' OR path_prefix LIKE ? ESCAPE '\\')"
+    );
+
     // Removed 2.2.0: the static SQL templates FTS_SEARCH_SQL,
     // PREFIX_FTS_SEARCH_SQL, and LIKE_SEARCH_SQL were kept only as
     // back-compat entry points for the 3-arg search(query, max, offset)
@@ -409,6 +424,89 @@ public final class DbArtifactIndex implements ArtifactIndex, ScopedSearchIndex {
                 );
             }
         }, this.executor);
+    }
+
+    @Override
+    public CompletableFuture<Integer> removeByPath(final String repoName, final String path) {
+        final String clean = DbArtifactIndex.trimSlashes(path);
+        if (clean.isEmpty()) {
+            return CompletableFuture.failedFuture(
+                new IllegalArgumentException("path must not be empty")
+            );
+        }
+        final String slashed = "/" + clean;
+        return CompletableFuture.supplyAsync(() -> {
+            try (Connection conn = this.source.getConnection();
+                 PreparedStatement stmt = conn.prepareStatement(REMOVE_BY_PATH_SQL)) {
+                stmt.setString(1, repoName);
+                stmt.setString(2, clean);
+                stmt.setString(3, DbArtifactIndex.likeEscape(clean) + "/%");
+                stmt.setString(4, clean);
+                stmt.setString(5, slashed);
+                stmt.setString(6, DbArtifactIndex.likeEscape(clean) + "/%");
+                stmt.setString(7, DbArtifactIndex.likeEscape(slashed) + "/%");
+                return stmt.executeUpdate();
+            } catch (final SQLException ex) {
+                throw new IllegalStateException(
+                    String.format("Failed to remove path %s from %s", clean, repoName), ex
+                );
+            }
+        }, this.executor);
+    }
+
+    @Override
+    public CompletableFuture<Integer> removeRepo(final String repoName) {
+        if (repoName == null || repoName.isBlank()) {
+            return CompletableFuture.failedFuture(
+                new IllegalArgumentException("repoName must not be empty")
+            );
+        }
+        return CompletableFuture.supplyAsync(() -> {
+            try (Connection conn = this.source.getConnection();
+                 PreparedStatement stmt = conn.prepareStatement(
+                     "DELETE FROM artifacts WHERE repo_name = ?"
+                 )) {
+                stmt.setString(1, repoName);
+                return stmt.executeUpdate();
+            } catch (final SQLException ex) {
+                throw new IllegalStateException(
+                    String.format("Failed to remove index rows of %s", repoName), ex
+                );
+            }
+        }, this.executor);
+    }
+
+    /**
+     * Escape LIKE wildcards so a path is matched literally ({@code \} is
+     * the ESCAPE character).
+     * @param value Raw value
+     * @return Escaped value
+     */
+    private static String likeEscape(final String value) {
+        return value
+            .replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_");
+    }
+
+    /**
+     * Strip leading and trailing slashes.
+     * @param path Path
+     * @return Path without surrounding slashes, never null
+     */
+    private static String trimSlashes(final String path) {
+        if (path == null) {
+            return "";
+        }
+        int from = 0;
+        int to = path.length();
+        while (from < to && path.charAt(from) == '/') {
+            from += 1;
+        }
+        while (to > from && path.charAt(to - 1) == '/') {
+            to -= 1;
+        }
+        return path.substring(from, to);
     }
 
     @Override

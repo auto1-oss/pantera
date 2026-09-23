@@ -261,6 +261,43 @@ public final class RepositoryHandlerTest extends AsyncApiTestBase {
     }
 
     @Test
+    void deleteRepoRemovesItsDataOnly(final Vertx vertx, final VertxTestContext ctx,
+        @org.junit.jupiter.api.io.TempDir final java.nio.file.Path root) throws Exception {
+        // B06: a repository created through the API has no YAML file; its
+        // data used to survive DELETE and reappear when the name was reused.
+        final java.nio.file.Path mine = root.resolve("del-data").resolve("secret.txt");
+        final java.nio.file.Path sibling = root.resolve("del-data-2").resolve("keep.txt");
+        java.nio.file.Files.createDirectories(mine.getParent());
+        java.nio.file.Files.createDirectories(sibling.getParent());
+        java.nio.file.Files.writeString(mine, "SECRET");
+        java.nio.file.Files.writeString(sibling, "KEEP");
+        final WebClient client = WebClient.create(vertx);
+        final HttpResponse<Buffer> put = client
+            .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/del-data")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(RepositoryHandlerTest.fileRepo(root.toString()))
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(200, put.statusCode(), "repository must be created");
+        final HttpResponse<Buffer> del = client
+            .delete(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/del-data")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .send()
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(200, del.statusCode(), "delete must succeed");
+        Assertions.assertFalse(
+            java.nio.file.Files.exists(mine),
+            "the repository's data must be gone once DELETE has answered"
+        );
+        Assertions.assertTrue(
+            java.nio.file.Files.exists(sibling),
+            "another repository sharing the storage root must be untouched"
+        );
+        ctx.completeNow();
+    }
+
+    @Test
     void getRepoReturns404IfMissing(final Vertx vertx, final VertxTestContext ctx)
         throws Exception {
         this.request(

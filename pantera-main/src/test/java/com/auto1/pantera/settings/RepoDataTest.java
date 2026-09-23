@@ -19,6 +19,7 @@ import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.cache.StoragesCache;
 import com.auto1.pantera.test.TestStoragesCache;
 import org.hamcrest.MatcherAssert;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -174,6 +175,165 @@ class RepoDataTest {
             "Repository data are moved",
             this.waitCondition(() -> this.data.list(Key.ROOT).isEmpty())
         );
+    }
+
+    @Test
+    void removesDataOfDbOnlyRepositoryAndLeavesSiblingsAlone() {
+        // B06: a repository created through the API exists only in the DB
+        // (no YAML file); its data used to survive DELETE and come back
+        // when the name was reused. The storage is a raw-prefix store (as
+        // S3 is), so a sibling "my-repo-2" shares the string prefix.
+        final Storage shared = new InMemoryStorage();
+        final BlockingStorage blocking = new BlockingStorage(shared);
+        blocking.save(new Key.From(RepoDataTest.REPO, "a.txt"), new byte[]{1});
+        blocking.save(new Key.From(RepoDataTest.REPO, "sub", "b.txt"), new byte[]{1});
+        blocking.save(new Key.From("my-repo-2", "keep.txt"), new byte[]{1});
+        new RepoData(this.storage, new FixedStoragesCache(shared))
+            .remove(
+                new RepositoryName.Simple(RepoDataTest.REPO),
+                new SingleRepoSettings(RepoDataTest.REPO, RepoDataTest.inlineStorage())
+            ).toCompletableFuture().join();
+        MatcherAssert.assertThat(
+            blocking.list(Key.ROOT).stream().map(Key::string).toList(),
+            new IsEqual<>(List.of("my-repo-2/keep.txt"))
+        );
+    }
+
+    @Test
+    void removesNothingForRepositoryWithoutStorage() {
+        final Storage shared = new InMemoryStorage();
+        final BlockingStorage blocking = new BlockingStorage(shared);
+        blocking.save(new Key.From("grp", "a.txt"), new byte[]{1});
+        new RepoData(this.storage, new FixedStoragesCache(shared))
+            .remove(
+                new RepositoryName.Simple("grp"),
+                new SingleRepoSettings(
+                    "grp",
+                    javax.json.Json.createObjectBuilder().add(
+                        "repo", javax.json.Json.createObjectBuilder()
+                            .add("type", "maven-group")
+                            .add("members", javax.json.Json.createArrayBuilder().add("x"))
+                    ).build()
+                )
+            ).toCompletableFuture().join();
+        MatcherAssert.assertThat(
+            blocking.list(Key.ROOT).size(),
+            new IsEqual<>(1)
+        );
+    }
+
+    @Test
+    void folderDeleteKeepsSiblingSharingTheStringPrefix() {
+        final Storage shared = new InMemoryStorage();
+        final BlockingStorage blocking = new BlockingStorage(shared);
+        blocking.save(new Key.From(RepoDataTest.REPO, "com/acme/lib/1.0/lib-1.0.jar"), new byte[]{1});
+        blocking.save(
+            new Key.From(RepoDataTest.REPO, "com/acme/lib-extra/1.0/lib-extra-1.0.jar"),
+            new byte[]{1}
+        );
+        final RepoData data = new RepoData(this.storage, new FixedStoragesCache(shared));
+        final SingleRepoSettings crs =
+            new SingleRepoSettings(RepoDataTest.REPO, RepoDataTest.inlineStorage());
+        data.deletePackageFolder(new RepositoryName.Simple(RepoDataTest.REPO), "com/acme/lib", crs)
+            .toCompletableFuture().join();
+        data.deleteArtifact(new RepositoryName.Simple(RepoDataTest.REPO), "com/acme/li", crs)
+            .toCompletableFuture().join();
+        MatcherAssert.assertThat(
+            blocking.list(Key.ROOT).stream().map(Key::string).toList(),
+            new IsEqual<>(List.of("my-repo/com/acme/lib-extra/1.0/lib-extra-1.0.jar"))
+        );
+    }
+
+    private static javax.json.JsonObject inlineStorage() {
+        return javax.json.Json.createObjectBuilder().add(
+            "repo", javax.json.Json.createObjectBuilder()
+                .add("type", "file")
+                .add(
+                    "storage",
+                    javax.json.Json.createObjectBuilder().add("type", "fs").add("path", "/unused")
+                )
+        ).build();
+    }
+
+    /**
+     * Storages cache that answers every storage block with one storage.
+     */
+    private static final class FixedStoragesCache extends StoragesCache {
+        /**
+         * The storage.
+         */
+        private final Storage fixed;
+
+        FixedStoragesCache(final Storage fixed) {
+            super();
+            this.fixed = fixed;
+        }
+
+        @Override
+        public Storage storage(final com.amihaiemil.eoyaml.YamlMapping yaml) {
+            return this.fixed;
+        }
+    }
+
+    /**
+     * DB-style settings holding exactly one repository.
+     */
+    private static final class SingleRepoSettings
+        implements com.auto1.pantera.settings.repo.CrudRepoSettings {
+        /**
+         * Repository name.
+         */
+        private final String name;
+
+        /**
+         * Its config.
+         */
+        private final javax.json.JsonObject config;
+
+        SingleRepoSettings(final String name, final javax.json.JsonObject config) {
+            this.name = name;
+            this.config = config;
+        }
+
+        @Override
+        public java.util.Collection<String> listAll() {
+            return List.of(this.name);
+        }
+
+        @Override
+        public java.util.Collection<String> list(final String uname) {
+            return List.of(this.name);
+        }
+
+        @Override
+        public boolean exists(final RepositoryName rname) {
+            return this.name.equals(rname.toString());
+        }
+
+        @Override
+        public javax.json.JsonStructure value(final RepositoryName rname) {
+            return this.config;
+        }
+
+        @Override
+        public void save(final RepositoryName rname, final javax.json.JsonStructure value) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public void delete(final RepositoryName rname) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public void move(final RepositoryName rname, final RepositoryName newrname) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public boolean hasSettingsDuplicates(final RepositoryName rname) {
+            return false;
+        }
     }
 
     private String repoSettings() {

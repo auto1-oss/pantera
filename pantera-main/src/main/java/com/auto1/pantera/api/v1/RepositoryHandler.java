@@ -21,6 +21,8 @@ import com.auto1.pantera.api.perms.ApiRepositoryPermission;
 import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.context.HandlerExecutor;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.scheduling.MetadataEventQueues;
 import com.auto1.pantera.security.perms.AdapterBasicPermission;
 import com.auto1.pantera.security.perms.Action;
@@ -97,6 +99,11 @@ public final class RepositoryHandler {
     private final RemoteUrlPolicy remoteUrls;
 
     /**
+     * Artifact index: a deleted repository's rows are purged with it.
+     */
+    private final ArtifactIndex artifactIndex;
+
+    /**
      * Ctor.
      * @param filtersCache Pantera filters cache
      * @param crs Repository settings CRUD
@@ -105,19 +112,21 @@ public final class RepositoryHandler {
      * @param events Artifact events queue
      * @param cooldown Cooldown service
      * @param events2 Repository lifecycle event broadcaster (local bus + peers)
+     * @param artifactIndex Artifact index (rows purged on repository delete)
      * @checkstyle ParameterNumberCheck (10 lines)
      */
     public RepositoryHandler(final FiltersCache filtersCache,
         final CrudRepoSettings crs, final RepoData repoData,
         final Policy<?> policy, final Optional<MetadataEventQueues> events,
         final CooldownService cooldown, // NOPMD UnusedFormalParameter - public API; reserved for upcoming cooldown integration in repo CRUD endpoints
-        final RepositoryEventBroadcaster events2) {
+        final RepositoryEventBroadcaster events2, final ArtifactIndex artifactIndex) {
         this.filtersCache = filtersCache;
         this.crs = crs;
         this.repoData = repoData;
         this.policy = policy;
         this.events = events;
         this.eventBus = events2;
+        this.artifactIndex = artifactIndex == null ? ArtifactIndex.NOP : artifactIndex;
         this.fsRoots = com.auto1.pantera.settings.policy.RequestLimitsSettingsLoader.fsRootPolicy();
         this.remoteUrls = RemoteUrlPolicy.fromRegistry();
     }
@@ -577,18 +586,41 @@ public final class RepositoryHandler {
                 );
                 return;
             }
-            this.repoData.remove(rname)
-                .thenRun(() -> this.crs.delete(rname))
-                .exceptionally(exc -> {
-                    this.crs.delete(rname);
-                    return null;
+            // The data goes first, while the config still names its storage;
+            // the answer waits for it. A failed removal keeps the config so
+            // the delete can be retried -- deleting the config regardless
+            // left the data behind for whoever reused the name next.
+            this.repoData.remove(rname, this.crs)
+                .thenCompose(nothing -> this.artifactIndex.removeRepo(name))
+                .thenAcceptAsync(rows -> this.crs.delete(rname), HandlerExecutor.get())
+                .whenComplete((ignored, failure) -> {
+                    if (failure == null) {
+                        this.filtersCache.invalidate(rname.toString());
+                        this.eventBus.publish(RepositoryEvents.remove(name));
+                        this.events.ifPresent(item -> item.stopProxyMetadataProcessing(name));
+                        RepositoryHandler.audit(actor, "REPO_DELETE", name,
+                            java.util.Map.of(), true);
+                        ctx.response().setStatusCode(200).end();
+                    } else {
+                        final Throwable cause = RepositoryHandler.rootCause(failure);
+                        EcsLogger.error("com.auto1.pantera.api.v1")
+                            .message("Repository delete failed, the repository was kept")
+                            .eventCategory("configuration")
+                            .eventAction("repository_delete")
+                            .eventOutcome("failure")
+                            .field("repository.name", name)
+                            .error(cause)
+                            .field("log.source", "application")
+                            .log();
+                        RepositoryHandler.audit(actor, "REPO_DELETE", name,
+                            java.util.Map.of("error", String.valueOf(cause.getMessage())),
+                            false);
+                        ApiResponse.sendError(
+                            ctx, 500, "INTERNAL_ERROR",
+                            "Repository data could not be removed; the repository was kept"
+                        );
+                    }
                 });
-            this.filtersCache.invalidate(rname.toString());
-            this.eventBus.publish(RepositoryEvents.remove(name));
-            this.events.ifPresent(item -> item.stopProxyMetadataProcessing(name));
-            RepositoryHandler.audit(actor, "REPO_DELETE", name,
-                java.util.Map.of(), true);
-            ctx.response().setStatusCode(200).end();
         });
     }
 
@@ -632,7 +664,7 @@ public final class RepositoryHandler {
                 return;
             }
             final RepositoryName newrname = new RepositoryName.Simple(newName);
-            this.repoData.move(rname, newrname)
+            this.repoData.move(rname, newrname, this.crs)
                 .thenRun(() -> this.crs.move(rname, newrname));
             this.filtersCache.invalidate(rname.toString());
             this.eventBus.publish(RepositoryEvents.move(name, newName)

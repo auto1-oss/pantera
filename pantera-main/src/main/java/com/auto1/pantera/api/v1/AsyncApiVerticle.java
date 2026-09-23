@@ -282,6 +282,9 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                     com.auto1.pantera.http.log.EcsMdc.CLIENT_IP, clientIp
                 );
             }
+            // The same values ride on the routing context: MDC does not
+            // survive the async auth hop, audit records must still carry them.
+            new ApiAuditContext(ctx).bind(span.traceId(), clientIp);
             // Echo the server-generated traceparent in the response so
             // the UI / APM agent can correlate UI transactions with the
             // backend span.
@@ -460,7 +463,7 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             new RepoData(this.configsStorage, this.caches.storagesCache()),
             this.security.policy(), this.events,
             this.cooldown,
-            repoEvents
+            repoEvents, this.artifactIndex
         ).register(router);
         new BulkAccessPolicyHandler(
             crs, this.security.policy(),

@@ -24,6 +24,7 @@ import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.RequestContextHeaders;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.KeyFromPath;
+import com.auto1.pantera.pypi.meta.PypiIndexCleanup;
 import com.auto1.pantera.scheduling.RepositoryEvents;
 import org.slf4j.MDC;
 
@@ -56,7 +57,13 @@ public final class DeleteSlice implements Slice {
         return this.asto.exists(key).thenCompose(
                 exists -> {
                     if (exists) {
-                        return this.asto.delete(key).thenApply(
+                        return this.asto.delete(key)
+                            .thenCompose(
+                                // The pre-generated simple index still lists the
+                                // file until it is regenerated from storage.
+                                nothing -> new PypiIndexCleanup(this.asto).afterDelete(key.string())
+                            )
+                            .thenApply(
                                 nothing -> {
                                     this.events.ifPresent(item -> item.addDeleteEventByKey(key));
                                     final String repoType = this.events.map(RepositoryEvents::repoType).orElse(null);

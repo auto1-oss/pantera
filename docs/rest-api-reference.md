@@ -565,10 +565,14 @@ curl -X PUT http://localhost:8086/api/v1/repositories/maven-central \
 
 Delete a repository and its data.
 
+The repository's own data (everything under `<storage root>/<name>/`) and its rows in the search index are removed before the response is sent; other repositories that share the same storage root are not touched. A group repository has no data of its own, so only its configuration is removed. Re-creating a repository with the same name starts empty.
+
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_repository_permissions:delete`
 
 **Response (200):** Empty body on success.
+
+**Response (500):** The data could not be removed. The repository is kept so the delete can be retried.
 
 **Response (404):**
 
@@ -1494,7 +1498,7 @@ curl -OJ "http://localhost:8086/api/v1/repositories/maven-local/artifact/downloa
 
 ### DELETE /api/v1/repositories/:name/artifacts
 
-Delete a specific artifact from a repository.
+Delete a specific artifact from a repository. The search index, format metadata and audit trail are updated as described under [DELETE /api/v1/repositories/:name/packages](#delete-apiv1repositoriesnamepackages).
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_repository_permissions:delete`
@@ -1522,7 +1526,14 @@ curl -X DELETE http://localhost:8086/api/v1/repositories/maven-local/artifacts \
 
 ### DELETE /api/v1/repositories/:name/packages
 
-Delete an entire package folder (directory and all contents) from a repository.
+Delete an entire package folder (directory and all contents) from a repository. Only the folder and the keys under it are removed; a sibling whose name merely starts the same (`lib-extra` next to `lib`) is untouched.
+
+Both delete endpoints keep what is derived from storage consistent, and write an `artifact_delete` audit record:
+
+- the search index rows indexed from the deleted path are removed (search and locate stop returning them);
+- in a local `maven`/`gradle` repository, versions that no longer exist are removed from the artifact's `maven-metadata.xml` (`latest`/`release` move to the highest remaining version, checksums are rewritten, a metadata file left with no version is removed);
+- in a local `php` repository, versions whose archive was deleted are removed from `p2/<vendor>/<package>.json`;
+- in a local `pypi` repository, the cached simple indexes are dropped and regenerated from storage on the next request.
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_repository_permissions:delete`

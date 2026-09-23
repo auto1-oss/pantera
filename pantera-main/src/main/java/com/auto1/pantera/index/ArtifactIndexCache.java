@@ -562,6 +562,16 @@ public final class ArtifactIndexCache implements ArtifactIndex, ScopedSearchInde
     }
 
     @Override
+    public CompletableFuture<Integer> removeByPath(final String repoName, final String path) {
+        return this.delegate.removeByPath(repoName, path);
+    }
+
+    @Override
+    public CompletableFuture<Integer> removeRepo(final String repoName) {
+        return this.delegate.removeRepo(repoName);
+    }
+
+    @Override
     public CompletableFuture<SearchResult> search(
         final String query, final int maxResults, final int offset
     ) {

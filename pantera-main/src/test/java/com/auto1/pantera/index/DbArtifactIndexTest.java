@@ -1021,6 +1021,88 @@ class DbArtifactIndexTest {
     }
 
     /**
+     * A REST delete cascades on the storage path the rows were indexed
+     * from: the {@code path_prefix} (maven, composer, docker keep a package
+     * identity in {@code name}) as well as the {@code name}.
+     */
+    @Test
+    void removeByPathMatchesPathPrefixOfPackageNamedFormats() throws Exception {
+        this.insertArtifactRow(
+            "maven", "mvn", "com.qa.lib", "0.0.2", 1L, "u", "/com/qa/lib/0.0.2"
+        );
+        this.insertArtifactRow(
+            "maven", "mvn", "com.qa.lib", "0.0.3", 1L, "u", "com/qa/lib/0.0.3"
+        );
+        this.insertArtifactRow(
+            "maven", "mvn", "com.qa.lib-extra", "1.0", 1L, "u", "com/qa/lib-extra/1.0"
+        );
+        this.insertArtifactRow(
+            "docker", "dock", "dock/qa/app", "1.0", 1L, "u",
+            "docker/registry/v2/repositories/qa/app/_manifests/tags/1.0/current/link"
+        );
+        this.insertArtifactRow(
+            "php", "php", "qa/helper", "1.0.0", 1L, "u",
+            "artifacts/qa/helper/1.0.0/qa-helper-1.0.0.zip"
+        );
+        MatcherAssert.assertThat(
+            "version folder delete removes the legacy slash-prefixed maven row",
+            this.index.removeByPath("mvn", "com/qa/lib/0.0.2").join(),
+            new IsEqual<>(1)
+        );
+        MatcherAssert.assertThat(
+            "artifact folder delete removes its versions but not a sibling sharing the string prefix",
+            this.index.removeByPath("mvn", "com/qa/lib").join(),
+            new IsEqual<>(1)
+        );
+        MatcherAssert.assertThat(
+            "docker tag delete removes the row whose path_prefix is under the tag",
+            this.index.removeByPath(
+                "dock", "docker/registry/v2/repositories/qa/app/_manifests/tags/1.0"
+            ).join(),
+            new IsEqual<>(1)
+        );
+        MatcherAssert.assertThat(
+            "composer archive delete removes the row indexed from that archive",
+            this.index.removeByPath(
+                "php", "artifacts/qa/helper/1.0.0/qa-helper-1.0.0.zip"
+            ).join(),
+            new IsEqual<>(1)
+        );
+        MatcherAssert.assertThat(
+            "the sibling artifact must survive",
+            this.index.locateByName("com.qa.lib-extra").join().orElseThrow(),
+            new IsEqual<>(List.of("mvn"))
+        );
+    }
+
+    /**
+     * Deleting a repository removes all of its rows and only its rows.
+     */
+    @Test
+    void removeRepoRemovesOnlyThatRepository() throws Exception {
+        final Instant now = Instant.now();
+        this.index.index(new ArtifactDocument(
+            "file", "gone", "a/b.txt", "b.txt", "1", 1L, now, "u"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "file", "gone", "a/c.txt", "c.txt", "1", 1L, now, "u"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "file", "gone-too", "a/b.txt", "b.txt", "1", 1L, now, "u"
+        )).join();
+        MatcherAssert.assertThat(
+            "both rows of the deleted repository are removed",
+            this.index.removeRepo("gone").join(),
+            new IsEqual<>(2)
+        );
+        MatcherAssert.assertThat(
+            "a repository whose name merely starts the same is untouched",
+            this.index.locateByName("a/b.txt").join().orElseThrow(),
+            new IsEqual<>(List.of("gone-too"))
+        );
+    }
+
+    /**
      * Passing an empty prefix must NOT wipe an entire repo — it signals
      * a coding error and the index should refuse.
      */
