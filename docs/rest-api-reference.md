@@ -1407,7 +1407,7 @@ Get technology-specific pull/install instructions for an artifact.
 }
 ```
 
-The generated instructions are technology-aware: Maven produces `mvn` commands, npm produces `npm install`, Docker produces `docker pull`, PyPI produces `pip install`, Helm produces `helm` commands, NuGet produces `dotnet add package`, Go produces `go get`, and generic repositories produce `curl`/`wget` commands.
+The generated instructions are technology-aware: Maven produces `mvn` commands, npm produces `npm install`, Docker produces `docker pull <pantera-host>/<repo>/<image>:<tag>` (the tag named by a `_manifests/tags/<tag>` path, `@sha256:<digest>` for a `_manifests/revisions` path, a `<tag>` placeholder otherwise), PyPI produces `pip install`, Helm produces `helm` commands, NuGet produces `dotnet add package`, Go produces `go get`, and generic repositories produce `curl`/`wget` commands.
 
 **curl example:**
 

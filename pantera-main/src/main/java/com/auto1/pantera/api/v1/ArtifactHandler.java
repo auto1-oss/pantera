@@ -1254,18 +1254,12 @@ public final class ArtifactHandler {
                 )
             );
         } else if (repoType.startsWith("docker")) {
-            final String image = dockerImageName(path);
-            if (image != null) {
-                instructions.add(
-                    String.format("docker pull <pantera-host>/%s", image)
-                );
-            } else {
-                instructions.add(
-                    String.format(
-                        "docker pull <pantera-host>/%s/<image>:<tag>", repoName
-                    )
-                );
-            }
+            instructions.add(
+                String.format(
+                    "docker pull <pantera-host>/%s",
+                    new DockerPullReference(repoName, path).value()
+                )
+            );
         } else if (repoType.startsWith("pypi")) {
             final String pkg = pypiPackageName(path);
             instructions.add(
@@ -1348,34 +1342,6 @@ public final class ArtifactHandler {
     }
 
     /**
-     * Extract Docker image name from storage path.
-     * Storage path: docker/registry/v2/repositories/image/... → image
-     * @param path Artifact path
-     * @return Image name or null if it's a blob/internal path
-     */
-    private static String dockerImageName(final String path) {
-        final String[] parts = path.split("/");
-        final int repoIdx = indexOf(parts, "repositories");
-        if (repoIdx >= 0 && repoIdx + 1 < parts.length) {
-            final StringBuilder image = new StringBuilder();
-            for (int i = repoIdx + 1; i < parts.length; i++) {
-                if ("_manifests".equals(parts[i]) || "_layers".equals(parts[i])
-                    || "_uploads".equals(parts[i])) {
-                    break;
-                }
-                if (image.length() > 0) {
-                    image.append('/');
-                }
-                image.append(parts[i]);
-            }
-            if (image.length() > 0) {
-                return image.toString();
-            }
-        }
-        return null;
-    }
-
-    /**
      * Extract PyPI package name from path.
      * Path: packages/example-pkg/1.0/example_pkg-1.0.tar.gz → example-pkg
      * @param path Artifact path
@@ -1417,21 +1383,6 @@ public final class ArtifactHandler {
     private static String nugetPackageName(final String path) {
         final String[] parts = path.split("/");
         return parts[0];
-    }
-
-    /**
-     * Find index of element in array.
-     * @param arr Array
-     * @param target Target element
-     * @return Index or -1
-     */
-    private static int indexOf(final String[] arr, final String target) {
-        for (int i = 0; i < arr.length; i++) {
-            if (target.equals(arr[i])) {
-                return i;
-            }
-        }
-        return -1;
     }
 
 }
