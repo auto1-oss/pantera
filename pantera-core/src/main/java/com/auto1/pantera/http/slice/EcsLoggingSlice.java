@@ -12,6 +12,7 @@ package com.auto1.pantera.http.slice;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.auth.VerifiedPrincipal;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
@@ -88,6 +89,13 @@ public final class EcsLoggingSlice implements Slice {
     public static final String CTX_CLIENT_IP_HEADER = "X-Pantera-Ctx-Client-Ip";
 
     /**
+     * Internal RESPONSE header on which the authz slices report the verified
+     * principal ({@link VerifiedPrincipal}). The access log records it as
+     * {@code user.name}; it is stripped before the response leaves Pantera.
+     */
+    public static final String AUTHENTICATED_USER_HEADER = VerifiedPrincipal.HEADER;
+
+    /**
      * Origin slice.
      */
     private final Slice origin;
@@ -150,8 +158,11 @@ public final class EcsLoggingSlice implements Slice {
         // TRACE CONTEXT: Set MDC values at request start for propagation to all downstream logging
         // This enables auth, cooldown, and other services to log with request context
         final String clientIp = EcsLogEvent.extractClientIp(headers, this.remoteAddress);
-        final String userName = EcsLogEvent.extractUsername(headers).orElse(null);
-        
+        // user.name is NOT taken from the raw Authorization header: that is
+        // an unverified claim (B55 — a failed Basic login was logged under
+        // the claimed name, every Bearer client as "anonymous"). The authz
+        // layer reports the verified principal on the response instead.
+
         // Extract or generate trace context from request headers (B3 / W3C / fallback)
         final SpanContext span = SpanContext.extract(headers);
 
@@ -173,9 +184,6 @@ public final class EcsLoggingSlice implements Slice {
         }
         if (clientIp != null && !clientIp.isEmpty() && !"unknown".equals(clientIp)) {
             MDC.put(EcsMdc.CLIENT_IP, clientIp);
-        }
-        if (userName != null) {
-            MDC.put(EcsMdc.USER_NAME, userName);
         }
         if (this.repoName != null) {
             MDC.put(EcsMdc.REPO_NAME, this.repoName);
@@ -209,8 +217,11 @@ public final class EcsLoggingSlice implements Slice {
             downstreamHeaders.add(new Header(CTX_CLIENT_IP_HEADER, clientIp));
         }
         return this.origin.response(line, downstreamHeaders, body)
-            .thenApply(response -> {
+            .thenApply(stamped -> {
                 final long duration = System.currentTimeMillis() - startTime;
+                final VerifiedPrincipal principal = new VerifiedPrincipal(stamped);
+                final String userName = principal.user().orElse(null);
+                final Response response = principal.stripped();
 
                 // WI-03 §4.1: emit the access log via the Tier-1 builder.
                 // The legacy EcsLogEvent emission that used to run alongside
