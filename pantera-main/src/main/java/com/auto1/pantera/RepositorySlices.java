@@ -453,7 +453,7 @@ public class RepositorySlices {
             final com.auto1.pantera.cooldown.cache.CooldownCache decisions =
                 CooldownSupport.extractCache(this.cooldown);
             if (decisions != null) {
-                decisions.clear();
+                decisions.invalidateRepo(name);
             }
             EcsLogger.info("com.auto1.pantera")
                 .message(
