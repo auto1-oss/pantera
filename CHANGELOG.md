@@ -40,6 +40,12 @@ This release contains security hardening fixes. Upgrading is recommended. Specif
   ([@aydasraf](https://github.com/aydasraf))
 - **Go, Docker and file proxies now enforce and release cooldown consistently.** A Go version is one cooldown entry (`v1.2.3`) across `@v/list`, `@latest` and module downloads, so unblocking it unblocks all of them. A Docker image is one entry whatever the spelling (`nginx` / `library/nginx`); a fresh tag is blocked from its image date on the first pull; unblocking a tag also releases the manifest and per-platform digests it points to, so the pull succeeds; a failed evaluation no longer serves an empty manifest body. file-proxy dates files by the upstream `Last-Modified` and answers a block with a `403` instead of a server error.
   ([@aydasraf](https://github.com/aydasraf))
+- **PyPI and Composer cooldown answers reach the client, and Composer dev-branch packages are keyed like their downloads.** A blocked wheel or sdist returns the cooldown `403` (with `Retry-After`) instead of a bare `404`; a Composer `~dev` or mixed-case package name is one cooldown entry across metadata and dist downloads, and a group relays a member's cooldown answer instead of a `404`.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Group repositories treat a member's cooldown answer as final.** A later member can no longer serve a version that an earlier proxy member has in cooldown, and such an answer is never negative-cached, so it cannot outlive an unblock.
+  ([@aydasraf](https://github.com/aydasraf))
+- **Composer proxies keep every version's fields intact for packagist's minified metadata.** Versions other than the newest lost inherited fields such as `name`, `require` and `dist` when the metadata was merged or filtered; minified documents are now expanded first. Dev-branch dist downloads also resolve again (they were looked up in the stable metadata file only).
+  ([@aydasraf](https://github.com/aydasraf))
 
 ### 🔒 Security
 
