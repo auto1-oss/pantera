@@ -81,8 +81,8 @@ meta:
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `enabled` | boolean | `false` | Global enable/disable |
-| `minimum_allowed_age` | string | -- | Default quarantine duration |
+| `enabled` | boolean | `true` | Global enable/disable |
+| `minimum_allowed_age` | string | `72h` | Default quarantine duration |
 | `repo_types` | map | -- | Per-repository-type overrides |
 | `repo_types.<type>.enabled` | boolean | inherits global | Enable for this repo type |
 | `repo_types.<type>.minimum_allowed_age` | string | inherits global | Override duration for this type |

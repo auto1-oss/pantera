@@ -430,13 +430,19 @@ meta:
 
 ### 1.9 meta.cooldown
 
-Cooldown prevents Pantera from retrying failed upstream fetches too frequently.
-When an artifact is not found upstream, it is "cooled down" for a configured duration.
+Cooldown is a supply-chain release-age gate for proxy repositories: an
+upstream version published less than `minimum_allowed_age` ago cannot be
+downloaded through a proxy (403 with `Retry-After`), and it is left out of
+the metadata listings clients resolve versions from (npm packuments, Maven
+`maven-metadata.xml`, PyPI simple index, ...). Once the version is older than
+the threshold, it is served normally. See the
+[admin guide](admin-guide/cooldown.md) and the
+[user guide](user-guide/cooldown.md).
 
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
-| `enabled` | boolean | No | `false` | Global default enable/disable |
-| `minimum_allowed_age` | string | No | -- | Duration before retry. Supports `m` (minutes), `h` (hours), `d` (days). |
+| `enabled` | boolean | No | `true` | Global default enable/disable |
+| `minimum_allowed_age` | string | No | `72h` | Minimum upstream publish age a version must reach before it can be downloaded. Supports `m` (minutes), `h` (hours), `d` (days). |
 | `repo_types` | map | No | -- | Per-repository-type overrides |
 
 Each entry under `repo_types` is a map with:
@@ -444,6 +450,10 @@ Each entry under `repo_types` is a map with:
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
 | `enabled` | boolean | No | inherits global | Enable cooldown for this repo type |
+| `minimum_allowed_age` | string | No | inherits global | Minimum publish age for this repo type |
+
+Cooldown settings saved through the admin UI or `PUT /api/v1/cooldown/config`
+are stored in the database and take precedence over these YAML values.
 
 ```yaml
 meta:
@@ -453,6 +463,9 @@ meta:
     repo_types:
       npm-proxy:
         enabled: true
+      maven-proxy:
+        enabled: true
+        minimum_allowed_age: 3d
 ```
 
 ### DB-backed cooldown settings
