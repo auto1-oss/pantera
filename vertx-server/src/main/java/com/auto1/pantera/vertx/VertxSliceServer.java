@@ -786,7 +786,12 @@ public final class VertxSliceServer implements Closeable {
                     // For small bodies with known size (< threshold), buffer for simpler error handling.
                     // For large bodies or chunked transfers (unknown size), stream directly.
                     if (hasContentLength && contentLength < this.bodyBufferThreshold) {
-                        // Small body - buffer for simpler error handling
+                        // Small body - buffer for simpler error handling.
+                        // The interim 100 must go out BEFORE buffering: a client
+                        // that sent Expect: 100-continue withholds the body until
+                        // it sees it, so waiting for the body first stalls every
+                        // small upload until the client's own expect timeout.
+                        continueResponseFut(VertxSliceServer.requestHeaders(req), req.response());
                         req.bodyHandler(body -> {
                             EcsLogger.debug("com.auto1.pantera.vertx")
                                 .message("Small request body buffered")
@@ -1177,8 +1182,8 @@ public final class VertxSliceServer implements Closeable {
             ),
             req
         );
-        final CompletionStage<Void> continueFuture = continueResponseFut(requestHeaders, req.response());
-        return response.thenCombine(continueFuture, (resp, ignored) -> resp)
+        // 100 Continue (if expected) was already written before buffering.
+        return response
             .thenCompose(
                 resp -> {
                     // Ensure trace context is set for response handling
