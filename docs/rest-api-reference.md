@@ -2053,6 +2053,12 @@ and the version is not re-blocked by later requests. Filtered metadata for the
 package is invalidated before the response. Unblocking a version that has no
 active block is a no-op that still returns `204`.
 
+`artifact` is the name the block is listed under in `GET /api/v1/cooldown/blocked`
+(`package_name`). For a `maven`/`gradle` repository that is the dotted
+`groupId.artifactId`; the `groupId:artifactId` form used below is accepted and
+normalised to it. See the per-format naming table in the
+[cooldown admin guide](admin-guide/cooldown.md).
+
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_cooldown_permissions:write`
 

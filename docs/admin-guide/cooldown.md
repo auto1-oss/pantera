@@ -165,6 +165,7 @@ How the blocked entries are named, per format where it is not obvious:
 
 | Proxy adapter | `artifact` | `version` |
 |---------------|------------|-----------|
+| maven-proxy, gradle-proxy | dotted `groupId.artifactId` (`software.amazon.awssdk.annotations`); the unblock endpoint also accepts `groupId:artifactId` and normalises it -- one entry covers the version's jar, pom, `.module` and classifier jars | version directory; a timestamped SNAPSHOT upload uses its timestamped version |
 | go-proxy | module path | canonical Go version with the leading `v` (`v1.2.3`) -- the same entry covers `@v/list`, `@latest` and the `.info`/`.mod`/`.zip` downloads |
 | docker-proxy | image name without the repository prefix; on a Docker Hub upstream a single-segment name is its official image (`nginx` and `library/nginx` are both `library/nginx`) | tag, or manifest digest (`sha256:…`) |
 | file-proxy | request path | `latest` |

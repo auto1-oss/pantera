@@ -927,9 +927,9 @@ public final class CooldownHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid JSON body");
             return;
         }
-        final String artifact = body.getString("artifact", "").trim();
+        final String requested = body.getString("artifact", "").trim();
         final String version = body.getString("version", "").trim();
-        if (artifact.isEmpty() || version.isEmpty()) {
+        if (requested.isEmpty() || version.isEmpty()) {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "artifact and version are required");
             return;
         }
@@ -944,6 +944,9 @@ public final class CooldownHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Repository type is required");
             return;
         }
+        // The documented maven/gradle "groupId:artifactId" form must reach
+        // the dotted key the block is stored under.
+        final String artifact = new UnblockArtifactName(repoType, requested).value();
         final String actor = ctx.user().principal().getString(AuthTokenRest.SUB);
         final String unblockIp = CooldownHandler.clientIp(ctx);
         // DB write completes first, then synchronous cache invalidation, then response
