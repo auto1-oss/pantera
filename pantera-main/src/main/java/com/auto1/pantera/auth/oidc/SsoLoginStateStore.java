@@ -50,7 +50,8 @@ public interface SsoLoginStateStore {
 
     /**
      * The store for this process: Valkey-backed when a global Valkey
-     * connection is configured, in-memory otherwise. The choice is logged
+     * connection is configured, otherwise one in-memory store shared by
+     * every API verticle instance in the JVM. The choice is logged
      * because it decides whether SSO logins survive a node switch.
      * @param ttl Lifetime of a pending login
      * @return Store
@@ -67,6 +68,6 @@ public interface SsoLoginStateStore {
             .eventOutcome("success")
             .field("log.source", "application")
             .log();
-        return shared.orElseGet(() -> new InMemorySsoLoginStateStore(new SsoNonceStore(ttl)));
+        return shared.orElseGet(() -> ProcessLocalSsoLogins.store(ttl));
     }
 }
