@@ -1027,6 +1027,7 @@ repo:
 
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
+| `url` | string | No | -- | Client-facing URL of the repository on the main port. The download and upload URLs Pantera returns to Conan are built from it; without it they follow the address the client used, including any path prefix. Not used on a dedicated port |
 | `port` | int | No | -- | Dedicated Conan server port. Without it the repository is served on the main port under its name |
 
 ```yaml

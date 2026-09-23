@@ -188,7 +188,7 @@ public final class ConansEntityV2 { // NOPMD MissingStaticMethodInNonInstantiata
 
         @Override
         public CompletableFuture<RequestResult> getResult(
-            final RequestLine request, final String hostname, final Matcher matcher
+            final RequestLine request, final RepoFileUrl urls, final Matcher matcher
         ) {
             final Key key = new Key.From(
                 String.format(
@@ -215,7 +215,7 @@ public final class ConansEntityV2 { // NOPMD MissingStaticMethodInNonInstantiata
 
         @Override
         public CompletableFuture<RequestResult> getResult(
-            final RequestLine request, final String hostname, final Matcher matcher
+            final RequestLine request, final RepoFileUrl urls, final Matcher matcher
         ) {
             final Key key = new Key.From(
                 String.format(
@@ -241,7 +241,7 @@ public final class ConansEntityV2 { // NOPMD MissingStaticMethodInNonInstantiata
 
         @Override
         public CompletableFuture<RequestResult> getResult(
-            final RequestLine request, final String hostname, final Matcher matcher
+            final RequestLine request, final RepoFileUrl urls, final Matcher matcher
         ) {
             final Key key = new Key.From(
                 String.format(
@@ -280,7 +280,7 @@ public final class ConansEntityV2 { // NOPMD MissingStaticMethodInNonInstantiata
 
         @Override
         public CompletableFuture<RequestResult> getResult(
-            final RequestLine request, final String hostname, final Matcher matcher
+            final RequestLine request, final RepoFileUrl urls, final Matcher matcher
         ) {
             return BaseConanSlice.generateJson(
                 ConansEntityV2.PKG_BIN_LIST, file -> {
@@ -312,7 +312,7 @@ public final class ConansEntityV2 { // NOPMD MissingStaticMethodInNonInstantiata
 
         @Override
         public CompletableFuture<RequestResult> getResult(
-            final RequestLine request, final String hostname, final Matcher matcher
+            final RequestLine request, final RepoFileUrl urls, final Matcher matcher
         ) {
             final Key key = new Key.From(
                 String.format(
@@ -351,7 +351,7 @@ public final class ConansEntityV2 { // NOPMD MissingStaticMethodInNonInstantiata
 
         @Override
         public CompletableFuture<RequestResult> getResult(
-            final RequestLine request, final String hostname, final Matcher matcher
+            final RequestLine request, final RepoFileUrl urls, final Matcher matcher
         ) {
             return BaseConanSlice.generateJson(
                 ConansEntityV2.PKG_SRC_LIST, file -> {

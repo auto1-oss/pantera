@@ -72,11 +72,6 @@ public final class ConanUpload {
     private static final String HOST = "Host";
 
     /**
-     * Protocol type for download URIs.
-     */
-    private static final String PROTOCOL = "http://";
-
-    /**
      * Subdir for package recipe (sources).
      */
     private static final String PKG_SRC_DIR = "/0/export/";
@@ -151,7 +146,8 @@ public final class ConanUpload {
             final String hostname = new RqHeaders.Single(headers, ConanUpload.HOST).asString();
             return this.storage.exists(new Key.From(path))
                 .thenCompose(
-                    exist -> exist ? generateError(path) : generateUrls(body, path, hostname)
+                    exist -> exist ? generateError(path)
+                        : generateUrls(body, path, hostname, new RepoFileUrl(headers))
                 );
         }
 
@@ -159,11 +155,12 @@ public final class ConanUpload {
          * Implements uploading from the client to server repository storage.
          * @param body Request body with file data.
          * @param path Target path for the package.
-         * @param hostname Server host name.
+         * @param hostname Server host name the upload URL's signature is bound to.
+         * @param urls Client-facing URLs of repository files.
          * @return Respose result of this operation.
          */
         private CompletableFuture<Response> generateUrls(final Publisher<ByteBuffer> body,
-                                                         final String path, final String hostname) {
+            final String path, final String hostname, final RepoFileUrl urls) {
             return new Content.From(body).asStringFuture()
                 .thenApply(
                     str -> {
@@ -186,7 +183,7 @@ public final class ConanUpload {
                                 "", "/", fpath, pkgdir, key
                             );
                             final String url = String.join(
-                                "", ConanUpload.PROTOCOL, hostname, filepath, "?signature=",
+                                "", urls.of(filepath), "?signature=",
                                 this.tokenizer.generateToken(filepath, hostname)
                             );
                             result.add(key, url);
