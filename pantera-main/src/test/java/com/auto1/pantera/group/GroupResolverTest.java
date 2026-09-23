@@ -72,11 +72,12 @@ final class GroupResolverTest {
         "/com/google/guava/guava/31.1/guava-31.1.jar";
     private static final String PARSED_NAME = "com.google.guava.guava";
     /**
-     * Version that {@link com.auto1.pantera.http.cache.NegativeCacheKey#fromPath}
-     * extracts from {@link #JAR_PATH}. GroupResolver populates the cache with
-     * this version so the admin UI shows it as a separate column.
+     * Version component GroupResolver writes to the negative cache for
+     * {@link #JAR_PATH}: the version {@link com.auto1.pantera.http.cache.NegativeCacheKey#fromPath}
+     * extracts plus the file name, so a 404 for one file never hides the
+     * other files of the same version.
      */
-    private static final String PARSED_VERSION = "31.1";
+    private static final String PARSED_VERSION = "31.1/guava-31.1.jar";
 
     // ---- PATH A: negativeCacheHit_returns404WithoutDbQuery ----
 
@@ -555,7 +556,7 @@ final class GroupResolverTest {
         final AtomicInteger hostedCount = new AtomicInteger(0);
         final NegativeCache negCache = buildNegativeCache();
         final Map<String, Slice> slices = new HashMap<>();
-        slices.put(HOSTED, countingSlice(hostedCount, RsStatus.OK));
+        slices.put(HOSTED, countingSlice(hostedCount, RsStatus.NOT_FOUND));
 
         final GroupResolver resolver = buildResolver(
             idx,
@@ -570,8 +571,9 @@ final class GroupResolverTest {
 
         assertEquals(404, resp.status().code(),
             "Index miss with no proxy members must return 404");
-        assertEquals(0, hostedCount.get(),
-            "Hosted member must NOT be queried on index miss (fully indexed)");
+        assertEquals(1, hostedCount.get(),
+            "Hosted member must be probed on index miss (the index is written "
+                + "asynchronously, a fresh upload may not be indexed yet)");
         final com.auto1.pantera.http.cache.NegativeCacheKey negKey =
             new com.auto1.pantera.http.cache.NegativeCacheKey(GROUP, REPO_TYPE, PARSED_NAME, PARSED_VERSION);
         assertTrue(negCache.isKnown404(negKey),
@@ -593,7 +595,7 @@ final class GroupResolverTest {
             List.of(HOSTED),
             Collections.emptySet(), // no proxy members
             negCache,
-            Map.of(HOSTED, okSlice())
+            Map.of(HOSTED, notFoundSlice())
         );
 
         final Response headResp = resolver.response(

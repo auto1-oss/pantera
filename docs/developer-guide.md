@@ -24,7 +24,7 @@
 14. [Adding Features](#14-adding-features)
     - [14.4 Adding a New Search Field](#144-adding-a-new-search-field)
     - [14.5 PagedResult and Server-Side Pagination](#145-pagedresult-and-server-side-pagination)
-    - [14.6 GroupSlice: Proxy-Only Fanout on Index Miss](#146-groupslice-proxy-only-fanout-on-index-miss)
+    - [14.6 GroupResolver: Index-Miss Fanout](#146-groupresolver-index-miss-fanout)
 15. [Testing](#15-testing)
 16. [Debugging](#16-debugging)
 
@@ -959,29 +959,20 @@ The SQL uses `COUNT(*) OVER()` window functions so both the total count and the 
 - `pantera-main/src/main/java/com/auto1/pantera/api/v1/UserHandler.java`
 - `pantera-main/src/main/java/com/auto1/pantera/api/v1/RoleHandler.java`
 
-### 14.6 GroupSlice: Proxy-Only Fanout on Index Miss
+### 14.6 GroupResolver: Index-Miss Fanout
 
-When `GroupSlice` cannot resolve an artifact name from the URL (metadata endpoints, unknown paths), it falls back to direct fanout instead of querying the artifact index. As of v2.1.0, this fallback fans out only to **proxy members** of the group, not to hosted (local) repositories.
+`GroupResolver` (pantera-main `group/`) resolves a parsed artifact name through the artifact index. On an index hit it walks only the members the index names, in declared order. On an index miss, or when every targeted member answers 404 (index/storage drift), it runs the index-miss fanout in `indexMissFanout`: the **hosted members not already tried** in declared order, then the **proxy members** in declared order.
 
-The rationale: if the artifact index does not contain the artifact, it was never uploaded to a hosted member. Proxy members may still have it from upstream. Fanning out to hosted members wastes connections and generates 404 log noise.
+Hosted members are part of the index-miss fanout because the index is written asynchronously by `DbConsumer` (2 s / 200-event batches). A freshly uploaded artifact is served by its hosted member before its index row exists. Skipping hosted members on a miss made the group answer 404, and negative-cache it, for that window. Hosted reads are local storage lookups, so the probe is cheap.
 
-**Implementation:**
+Related invariants in the same class:
 
-```java
-// GroupSlice.java (~line 449)
-final List<MemberSlice> proxyOnly = this.members.stream()
-    .filter(m -> this.proxyMembers.contains(m.name()))
-    .collect(toList());
-if (proxyOnly.isEmpty()) {
-    // fall back to all members if no proxies are configured
-    return queryTargetedMembers(this.members, line, headers, body, ctx);
-}
-return queryTargetedMembers(proxyOnly, line, headers, body, ctx);
-```
+- The negative-cache key carries the file: `NegativeCacheKey(group, type, name, "<version>/<file>")`. Version-less (metadata) keys keep an empty version and are never cached.
+- The sibling pin (`memberPin`) is keyed by `name@version`, never set for version-less requests, and never renewed by a pin-routed hit. When the pinned member does not answer with 2xx/304/403, the pin is dropped and the full index path runs.
+- A member `3xx` is skipped without `recordFailure()` and marks the walk unverified (no negative-cache write).
+- `pypi-group` rewrites `/simple/<name>/` to the PEP 503 normalised name before the walk.
 
-`proxyMembers` is a `Set<String>` injected at construction time by `RepositorySlices`, which classifies each member by its configured type.
-
-To ensure a new adapter type is included in proxy fanout, register it as a proxy type in `RepositorySlices` when building the `GroupSlice`.
+`proxyMembers` is a `Set<String>` injected at construction time by `RepositorySlices`, which classifies each member by its configured type. To ensure a new adapter type is treated as a proxy in the fanout, register it as a proxy type in `RepositorySlices` when building the `GroupResolver`.
 
 ---
 

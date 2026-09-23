@@ -1153,8 +1153,37 @@ public class RepositorySlices {
                     )
                 );
                 break;
-            case "gem-group":
             case "go-group":
+                // go-group merges <module>/@v/list across members (hosted
+                // private versions + upstream versions); every other request
+                // goes through the generic declared-order walk.
+                final List<String> goFlatMembers = flattenMembers(cfg.name());
+                slice = trimPathSlice(
+                    new CombinedAuthzSliceWrap(
+                        new com.auto1.pantera.group.GoGroupSlice(
+                            new GroupResolver(
+                                this::slice, cfg.name(), goFlatMembers, port, depth,
+                                cfg.groupMemberTimeout().orElse(120L),
+                                java.util.Collections.emptyList(),
+                                Optional.of(this.settings.artifactIndex()),
+                                proxyMembers(goFlatMembers),
+                                cfg.type(),
+                                this.sharedNegativeCache,
+                                this::getOrCreateMemberRegistry,
+                                getOrCreateBulkhead(cfg.name()).drainExecutor()
+                            ),
+                            this::slice, goFlatMembers, port
+                        ),
+                        authentication(),
+                        tokens.auth(),
+                        new OperationControl(
+                            securityPolicy(),
+                            new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                        )
+                    )
+                );
+                break;
+            case "gem-group":
             case "pypi-group":
             case "docker-group":
                 final List<String> genericFlatMembers = flattenMembers(cfg.name());

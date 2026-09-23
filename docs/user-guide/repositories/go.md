@@ -146,7 +146,7 @@ Point `GOPROXY` at the proxy URL (see [Configure GOPROXY](#configure-goproxy) ab
 
 ## Go Group (`go-group`)
 
-A `go-group` repository is a virtual repository that fans out requests across a list of member repositories (`go` locals and `go-proxy` proxies) in resolution order. The first member that serves the module wins. Groups do not store artifacts themselves — they delegate to members.
+A `go-group` repository is a virtual repository that fans out requests across a list of member repositories (`go` locals and `go-proxy` proxies) in resolution order. For each file (`.info`, `.mod`, `.zip`), the first member that serves it wins. The version list (`@v/list`) combines the lists of every member, so `go list -m -versions` shows both your private versions and the upstream ones. Groups do not store artifacts themselves — they delegate to members.
 
 **When to use**
 

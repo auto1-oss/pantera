@@ -26,6 +26,29 @@ upgrade, but the value has no effect (sequential is the only mode).
 Remove the key from your config-management as part of the 2.2.0
 migration; it is purely noise at this point.
 
+## How a request is routed
+
+- The artifact index narrows the walk: when it knows which members hold
+  the package, only those members are asked, still in declared order.
+- When the index has no row yet (it is written a moment after an
+  upload), the group asks the hosted members first, then the proxy
+  members. A freshly published artifact is therefore served through the
+  group as soon as its hosted member has it.
+- After a member serves one file of a version, the other files of that
+  same version (`.pom` after `.jar`, `.sha1` after `.pom`) go to that
+  member for up to 60 seconds, so a file and its checksum always come
+  from the same source. This shortcut covers one version only. It never
+  applies to metadata or index requests (`maven-metadata.xml`, PyPI
+  `/simple/<name>/`, Go `@v/list`, npm package documents), and if the
+  member cannot serve the file the group falls back to the normal walk.
+- A cached "not found" is per file: a missing `-sources.jar` or
+  `.module` never hides the `.jar` or `.pom` of the same version.
+- A member redirect (`3xx`) does not count as a member failure and is
+  not relayed. pypi groups rewrite `/simple/<name>/` to the PEP 503
+  normalised name before asking members.
+- go groups merge `<module>/@v/list` across all members, so the list
+  holds both the hosted and the upstream versions.
+
 ## Heuristics
 
 ### Mixed local + proxy groups (most common)
