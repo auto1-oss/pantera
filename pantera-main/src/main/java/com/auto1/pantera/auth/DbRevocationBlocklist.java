@@ -56,9 +56,9 @@ public final class DbRevocationBlocklist implements RevocationBlocklist {
     private final ConcurrentHashMap<String, Instant> jtiCache;
 
     /**
-     * Local cache: username → expiry instant.
+     * Local cache: username → revocation (issued-at cutoff + expiry).
      */
-    private final ConcurrentHashMap<String, Instant> userCache;
+    private final ConcurrentHashMap<String, UserRevocation> userCache;
 
     /**
      * Timestamp of the last successful DB poll.
@@ -91,17 +91,18 @@ public final class DbRevocationBlocklist implements RevocationBlocklist {
     }
 
     @Override
-    public boolean isRevokedUser(final String username) {
+    public boolean isRevokedUser(final String username, final Instant issuedAt) {
         this.pollIfStale();
-        final Instant exp = this.userCache.get(username);
-        if (exp == null) {
+        final UserRevocation rev = this.userCache.get(username);
+        if (rev == null) {
             return false;
         }
-        if (Instant.now().isAfter(exp)) {
-            this.userCache.remove(username);
+        final Instant now = Instant.now();
+        if (rev.expired(now)) {
+            this.userCache.remove(username, rev);
             return false;
         }
-        return true;
+        return rev.revokes(issuedAt, now);
     }
 
     @Override
@@ -113,7 +114,10 @@ public final class DbRevocationBlocklist implements RevocationBlocklist {
     @Override
     public void revokeUser(final String username, final int ttlSeconds) {
         this.dao.insert(TYPE_USER, username, ttlSeconds);
-        this.userCache.put(username, Instant.now().plusSeconds(ttlSeconds));
+        final Instant now = Instant.now();
+        this.userCache.merge(
+            username, new UserRevocation(now, now.plusSeconds(ttlSeconds)), UserRevocation::merge
+        );
     }
 
     /**
@@ -133,7 +137,11 @@ public final class DbRevocationBlocklist implements RevocationBlocklist {
                 if (TYPE_JTI.equals(entry.entryType())) {
                     this.jtiCache.put(entry.entryValue(), entry.expiresAt());
                 } else if (TYPE_USER.equals(entry.entryType())) {
-                    this.userCache.put(entry.entryValue(), entry.expiresAt());
+                    this.userCache.merge(
+                        entry.entryValue(),
+                        new UserRevocation(entry.createdAt(), entry.expiresAt()),
+                        UserRevocation::merge
+                    );
                 }
             }
         } catch (final Exception ex) {

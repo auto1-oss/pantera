@@ -86,7 +86,7 @@ final class SessionRevokerTest {
         }
 
         @Override
-        public boolean isRevokedUser(final String username) {
+        public boolean isRevokedUser(final String username, final Instant issuedAt) {
             return this.revokedUsers.contains(username);
         }
 

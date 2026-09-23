@@ -252,4 +252,68 @@ class UnifiedJwtAuthHandlerTest {
             new IsEqual<>(true)
         );
     }
+
+    @Test
+    void userRevocationRejectsOldSessionButNotTheLoginAfterIt() {
+        // Password change: every session issued before it is revoked, and
+        // the user's re-login right afterwards must work (2.2.9 regression:
+        // the user-wide entry rejected every token for 7 days).
+        final InMemoryBlocklist blocklist = new InMemoryBlocklist();
+        final UnifiedJwtAuthHandler guarded =
+            new UnifiedJwtAuthHandler(this.publicKey, null, blocklist);
+        final String before = this.accessToken("bob", Instant.now().minusSeconds(120));
+        blocklist.revokeUser("bob", 3600);
+        final String after = this.accessToken("bob", Instant.now());
+        MatcherAssert.assertThat(
+            "Session issued before the revocation must be rejected",
+            guarded.user(before).toCompletableFuture().join().isPresent(),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "Login after the revocation must be accepted",
+            guarded.user(after).toCompletableFuture().join().isPresent(),
+            new IsEqual<>(true)
+        );
+    }
+
+    private String accessToken(final String sub, final Instant issuedAt) {
+        return JWT.create()
+            .withSubject(sub)
+            .withClaim("context", "local")
+            .withClaim("type", "access")
+            .withJWTId(java.util.UUID.randomUUID().toString())
+            .withIssuedAt(issuedAt)
+            .withExpiresAt(Instant.now().plusSeconds(3600))
+            .sign(this.algorithm);
+    }
+
+    /**
+     * Blocklist over {@link UserRevocation} without Valkey or a database.
+     */
+    private static final class InMemoryBlocklist implements RevocationBlocklist {
+        private final java.util.Map<String, UserRevocation> users =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+        @Override
+        public boolean isRevokedJti(final String jti) {
+            return false;
+        }
+
+        @Override
+        public boolean isRevokedUser(final String username, final Instant issuedAt) {
+            final UserRevocation rev = this.users.get(username);
+            return rev != null && rev.revokes(issuedAt, Instant.now());
+        }
+
+        @Override
+        public void revokeJti(final String jti, final int ttlSeconds) {
+            // not exercised
+        }
+
+        @Override
+        public void revokeUser(final String username, final int ttlSeconds) {
+            final Instant now = Instant.now();
+            this.users.put(username, new UserRevocation(now, now.plusSeconds(ttlSeconds)));
+        }
+    }
 }

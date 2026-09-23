@@ -20,6 +20,7 @@ import io.vertx.ext.auth.User;
 import io.vertx.ext.auth.authentication.TokenCredentials;
 import io.vertx.ext.auth.jwt.JWTAuth;
 
+import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -146,7 +147,9 @@ public final class JwtPasswordAuth implements Authentication {
             // authorize as a repository password.
             final TokenType type = TokenType.fromClaim(principal.getString(AuthTokenRest.TYPE));
             final String jti = principal.getString(AuthTokenRest.JTI);
-            if (!this.gate.allows(type, jti, tokenSubject)) {
+            final Long iat = principal.getLong("iat");
+            final Instant issuedAt = iat == null ? null : Instant.ofEpochSecond(iat);
+            if (!this.gate.allows(type, jti, tokenSubject, issuedAt)) {
                 EcsLogger.warn("com.auto1.pantera.auth")
                     .message("JWT-as-password rejected: token revoked, disabled, or wrong type")
                     .eventCategory("authentication")

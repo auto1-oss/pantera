@@ -2537,7 +2537,7 @@ Partial updates are accepted; omitted keys keep their current values. The merged
 
 Immediately revoke all tokens (access, refresh, and API) for the specified user. The revocation is propagated to all cluster nodes via Valkey pub/sub (sub-second propagation when Valkey is available; DB polling fallback otherwise).
 
-> Note: Access tokens (which are not DB-stored) are placed on an in-memory blocklist and will be rejected until they expire naturally. This makes the effective revocation window equal to the access token TTL (default: 1 hour).
+> Note: Access tokens (which are not DB-stored) issued up to the moment of revocation are rejected until they expire naturally. Tokens issued afterwards are unaffected, so the user can sign in again immediately — to keep a user out, disable the account (`POST /api/v1/users/:name/disable`). The same revocation runs when a user's password is changed or reset.
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_user_permissions:update`

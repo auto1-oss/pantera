@@ -87,7 +87,7 @@ final class JwtPasswordAuthRevocationTest {
     void revokedApiTokenIsRejectedAsPassword() {
         // Gate that has "REVOKED" blocklisted — mirrors a token the admin
         // revoked, whose signature still verifies.
-        final PasswordTokenGate gate = (type, jti, sub) -> !"REVOKED".equals(jti);
+        final PasswordTokenGate gate = (type, jti, sub, iat) -> !"REVOKED".equals(jti);
         final JwtPasswordAuth auth = new JwtPasswordAuth(this.jwtAuth, true, gate);
         final Optional<AuthUser> result = auth.user("alice", this.mint("alice", "api", "REVOKED"));
         MatcherAssert.assertThat(
@@ -98,7 +98,7 @@ final class JwtPasswordAuthRevocationTest {
 
     @Test
     void validApiTokenIsStillAccepted() {
-        final PasswordTokenGate gate = (type, jti, sub) -> true;
+        final PasswordTokenGate gate = (type, jti, sub, iat) -> true;
         final JwtPasswordAuth auth = new JwtPasswordAuth(this.jwtAuth, true, gate);
         final Optional<AuthUser> result = auth.user("alice", this.mint("alice", "api", "OK"));
         MatcherAssert.assertThat(
@@ -111,7 +111,7 @@ final class JwtPasswordAuthRevocationTest {
     void gateRejectionDeniesEvenAValidSignature() {
         // A gate that rejects everything (e.g. user disabled) must veto a
         // perfectly-signed token — proving the gate is actually consulted.
-        final PasswordTokenGate deny = (type, jti, sub) -> false;
+        final PasswordTokenGate deny = (type, jti, sub, iat) -> false;
         final JwtPasswordAuth auth = new JwtPasswordAuth(this.jwtAuth, true, deny);
         final Optional<AuthUser> result = auth.user("alice", this.mint("alice", "api", "OK"));
         MatcherAssert.assertThat(

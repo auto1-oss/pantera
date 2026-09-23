@@ -10,6 +10,8 @@
  */
 package com.auto1.pantera.auth;
 
+import java.time.Instant;
+
 /**
  * Interface for token revocation blocklist.
  * Used by UnifiedJwtAuthHandler to reject access tokens immediately.
@@ -25,11 +27,14 @@ public interface RevocationBlocklist {
     boolean isRevokedJti(String jti);
 
     /**
-     * Check if all tokens for a user have been revoked.
-     * @param username Username to check
-     * @return True if the user's tokens are revoked
+     * Check if a user-wide revocation covers a token issued at {@code issuedAt}.
+     * Only tokens issued before the revocation are covered, so the user can
+     * sign in again afterwards (see {@link UserRevocation#revokes}).
+     * @param username Token subject
+     * @param issuedAt Token {@code iat}; {@code null} counts as covered
+     * @return True if the token is revoked
      */
-    boolean isRevokedUser(String username);
+    boolean isRevokedUser(String username, Instant issuedAt);
 
     /**
      * Revoke a specific token by JTI.
@@ -39,7 +44,7 @@ public interface RevocationBlocklist {
     void revokeJti(String jti, int ttlSeconds);
 
     /**
-     * Revoke all tokens for a user.
+     * Revoke every token issued to a user up to now.
      * @param username Username whose tokens should be revoked
      * @param ttlSeconds Time-to-live in seconds for the revocation entry
      */

@@ -16,9 +16,11 @@ import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.sql.Connection;
 import java.sql.Statement;
+import java.time.Instant;
 import javax.sql.DataSource;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -100,7 +102,7 @@ final class DbRevocationBlocklistTest {
         this.blocklist.revokeUser("alice", 3600);
         MatcherAssert.assertThat(
             "Revoked user must be reported as revoked",
-            this.blocklist.isRevokedUser("alice"),
+            this.blocklist.isRevokedUser("alice", Instant.now().minusSeconds(60)),
             Matchers.is(true)
         );
     }
@@ -110,8 +112,19 @@ final class DbRevocationBlocklistTest {
         this.blocklist.revokeUser("bob", 3600);
         MatcherAssert.assertThat(
             "Non-revoked user must not be reported as revoked",
-            this.blocklist.isRevokedUser("carol"),
+            this.blocklist.isRevokedUser("carol", Instant.now().minusSeconds(60)),
             Matchers.is(false)
+        );
+    }
+
+    @Test
+    void acceptsTokenIssuedAfterUserRevocation() {
+        // Password change → revokeUser → the user signs in again. The fresh
+        // token (same second or later) must not be caught by the revocation.
+        this.blocklist.revokeUser("dave", 3600);
+        MatcherAssert.assertThat(
+            this.blocklist.isRevokedUser("dave", Instant.now()),
+            new IsEqual<>(false)
         );
     }
 }

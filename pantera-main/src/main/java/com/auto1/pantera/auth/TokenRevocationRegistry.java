@@ -11,6 +11,7 @@
 package com.auto1.pantera.auth;
 
 import com.auto1.pantera.db.dao.UserTokenDao;
+import java.time.Instant;
 import java.util.UUID;
 
 /**
@@ -74,7 +75,9 @@ public final class TokenRevocationRegistry implements PasswordTokenGate {
     }
 
     @Override
-    public boolean allows(final TokenType type, final String jti, final String sub) {
+    public boolean allows(
+        final TokenType type, final String jti, final String sub, final Instant issuedAt
+    ) {
         if (type == null || sub == null) {
             return false;
         }
@@ -84,7 +87,7 @@ public final class TokenRevocationRegistry implements PasswordTokenGate {
             return false;
         }
         final RevocationBlocklist bl = this.blocklist;
-        if (bl != null && (bl.isRevokedJti(jti) || bl.isRevokedUser(sub))) {
+        if (bl != null && (bl.isRevokedJti(jti) || bl.isRevokedUser(sub, issuedAt))) {
             return false;
         }
         final UserTokenDao dao = this.tokenDao;

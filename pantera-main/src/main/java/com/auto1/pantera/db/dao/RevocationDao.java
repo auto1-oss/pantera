@@ -93,7 +93,7 @@ public final class RevocationDao {
      */
     public List<RevocationEntry> pollSince(final Instant since) {
         final String sql = String.join(" ",
-            "SELECT entry_type, entry_value, expires_at",
+            "SELECT entry_type, entry_value, created_at, expires_at",
             "FROM revocation_blocklist",
             "WHERE created_at > ? AND expires_at > NOW()",
             "ORDER BY created_at ASC"
@@ -107,6 +107,7 @@ public final class RevocationDao {
                     entries.add(new RevocationEntry(
                         rs.getString("entry_type"),
                         rs.getString("entry_value"),
+                        rs.getTimestamp("created_at").toInstant(),
                         rs.getTimestamp("expires_at").toInstant()
                     ));
                 }
@@ -119,7 +120,13 @@ public final class RevocationDao {
 
     /**
      * A single revocation blocklist entry.
+     * @param entryType Entry type: "jti" or "username"
+     * @param entryValue The JTI string or username
+     * @param createdAt When the entry was written (the revocation instant)
+     * @param expiresAt When the entry lapses
      */
-    public record RevocationEntry(String entryType, String entryValue, Instant expiresAt) {
+    public record RevocationEntry(
+        String entryType, String entryValue, Instant createdAt, Instant expiresAt
+    ) {
     }
 }

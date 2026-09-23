@@ -10,6 +10,8 @@
  */
 package com.auto1.pantera.auth;
 
+import java.time.Instant;
+
 /**
  * Gate deciding whether an already signature-verified JWT may be used as a
  * Basic-auth repository password right now.
@@ -31,7 +33,8 @@ public interface PasswordTokenGate {
      * @param type Token type claim (access / refresh / api), may be {@code null}
      * @param jti Token id claim, may be {@code null}
      * @param sub Token subject (username)
+     * @param issuedAt Token {@code iat}, may be {@code null}
      * @return {@code true} iff the token may authorize as a password now
      */
-    boolean allows(TokenType type, String jti, String sub);
+    boolean allows(TokenType type, String jti, String sub, Instant issuedAt);
 }

@@ -191,7 +191,8 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
         switch (type) {
             case ACCESS:
                 if (this.blocklist != null
-                    && (this.blocklist.isRevokedJti(jti) || this.blocklist.isRevokedUser(sub))) {
+                    && (this.blocklist.isRevokedJti(jti)
+                        || this.blocklist.isRevokedUser(sub, decoded.getIssuedAtAsInstant()))) {
                     EcsLogger.info("com.auto1.pantera.auth")
                         .message("Access token rejected: blocklisted")
                         .eventCategory("authentication")

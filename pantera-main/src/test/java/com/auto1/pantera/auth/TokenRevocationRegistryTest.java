@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.auth;
 
+import java.time.Instant;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.AfterEach;
@@ -34,7 +35,7 @@ final class TokenRevocationRegistryTest {
         TokenRevocationRegistry.instance().clear();
         MatcherAssert.assertThat(
             "a refresh token must never be usable as a password, even unwired",
-            TokenRevocationRegistry.instance().allows(TokenType.REFRESH, "j", "alice"),
+            TokenRevocationRegistry.instance().allows(TokenType.REFRESH, "j", "alice", Instant.now()),
             new IsEqual<>(false)
         );
     }
@@ -46,7 +47,7 @@ final class TokenRevocationRegistryTest {
         );
         MatcherAssert.assertThat(
             "a token whose JTI is blocklisted must be rejected",
-            TokenRevocationRegistry.instance().allows(TokenType.ACCESS, "BAD", "alice"),
+            TokenRevocationRegistry.instance().allows(TokenType.ACCESS, "BAD", "alice", Instant.now()),
             new IsEqual<>(false)
         );
     }
@@ -58,7 +59,7 @@ final class TokenRevocationRegistryTest {
         );
         MatcherAssert.assertThat(
             "a token for a blocklisted user must be rejected",
-            TokenRevocationRegistry.instance().allows(TokenType.ACCESS, "j", "alice"),
+            TokenRevocationRegistry.instance().allows(TokenType.ACCESS, "j", "alice", Instant.now()),
             new IsEqual<>(false)
         );
     }
@@ -68,7 +69,7 @@ final class TokenRevocationRegistryTest {
         TokenRevocationRegistry.instance().install(null, null, user -> false);
         MatcherAssert.assertThat(
             "a token for a disabled user must be rejected",
-            TokenRevocationRegistry.instance().allows(TokenType.ACCESS, "j", "alice"),
+            TokenRevocationRegistry.instance().allows(TokenType.ACCESS, "j", "alice", Instant.now()),
             new IsEqual<>(false)
         );
     }
@@ -80,7 +81,7 @@ final class TokenRevocationRegistryTest {
         );
         MatcherAssert.assertThat(
             "a valid, non-revoked access token for an enabled user is allowed",
-            TokenRevocationRegistry.instance().allows(TokenType.ACCESS, "j", "alice"),
+            TokenRevocationRegistry.instance().allows(TokenType.ACCESS, "j", "alice", Instant.now()),
             new IsEqual<>(true)
         );
     }
@@ -90,7 +91,7 @@ final class TokenRevocationRegistryTest {
         TokenRevocationRegistry.instance().clear();
         MatcherAssert.assertThat(
             "a token with an unrecognised/absent type must be rejected",
-            TokenRevocationRegistry.instance().allows(null, "j", "alice"),
+            TokenRevocationRegistry.instance().allows(null, "j", "alice", Instant.now()),
             new IsEqual<>(false)
         );
     }
@@ -113,7 +114,7 @@ final class TokenRevocationRegistryTest {
         }
 
         @Override
-        public boolean isRevokedUser(final String username) {
+        public boolean isRevokedUser(final String username, final Instant issuedAt) {
             return this.badUser != null && this.badUser.equals(username);
         }
 

@@ -13,6 +13,7 @@ package com.auto1.pantera.auth;
 import com.auto1.pantera.asto.misc.Cleanable;
 import com.auto1.pantera.cache.CacheInvalidationPubSub;
 import com.auto1.pantera.cache.ValkeyConnection;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -92,9 +93,9 @@ public final class ValkeyRevocationBlocklist implements RevocationBlocklist {
     private final ConcurrentHashMap<String, Instant> jtiCache;
 
     /**
-     * Local cache: username → expiry instant.
+     * Local cache: username → revocation (issued-at cutoff + expiry).
      */
-    private final ConcurrentHashMap<String, Instant> userCache;
+    private final ConcurrentHashMap<String, UserRevocation> userCache;
 
     /**
      * Ctor.
@@ -130,16 +131,17 @@ public final class ValkeyRevocationBlocklist implements RevocationBlocklist {
     }
 
     @Override
-    public boolean isRevokedUser(final String username) {
-        final Instant exp = this.userCache.get(username);
-        if (exp == null) {
+    public boolean isRevokedUser(final String username, final Instant issuedAt) {
+        final UserRevocation rev = this.userCache.get(username);
+        if (rev == null) {
             return false;
         }
-        if (Instant.now().isAfter(exp)) {
-            this.userCache.remove(username);
+        final Instant now = Instant.now();
+        if (rev.expired(now)) {
+            this.userCache.remove(username, rev);
             return false;
         }
-        return true;
+        return rev.revokes(issuedAt, now);
     }
 
     @Override
@@ -155,12 +157,15 @@ public final class ValkeyRevocationBlocklist implements RevocationBlocklist {
 
     @Override
     public void revokeUser(final String username, final int ttlSeconds) {
-        this.userCache.put(username, Instant.now().plusSeconds(ttlSeconds));
+        final Instant now = Instant.now();
+        this.userCache.merge(
+            username, new UserRevocation(now, now.plusSeconds(ttlSeconds)), UserRevocation::merge
+        );
         this.pubSub.publish(CACHE_TYPE, USER_PREFIX + username);
         this.valkey.async().setex(
             VALKEY_USER_KEY + username,
             ttlSeconds,
-            "1".getBytes()
+            Long.toString(now.getEpochSecond()).getBytes(StandardCharsets.UTF_8)
         );
     }
 
@@ -183,11 +188,16 @@ public final class ValkeyRevocationBlocklist implements RevocationBlocklist {
                 );
             } else if (key.startsWith(USER_PREFIX)) {
                 final String username = key.substring(USER_PREFIX.length());
-                ValkeyRevocationBlocklist.this.userCache.put(
+                // The message carries no timestamp; receipt time stands in
+                // for the revocation instant (pub/sub latency is well under
+                // the one-second iat resolution).
+                final Instant now = Instant.now();
+                ValkeyRevocationBlocklist.this.userCache.merge(
                     username,
-                    Instant.now().plusSeconds(
-                        ValkeyRevocationBlocklist.this.defaultTtlSeconds
-                    )
+                    new UserRevocation(
+                        now, now.plusSeconds(ValkeyRevocationBlocklist.this.defaultTtlSeconds)
+                    ),
+                    UserRevocation::merge
                 );
             }
         }
