@@ -343,13 +343,6 @@ public final class RepositoryHandler {
                 "Repository storage is required for non-group repositories");
             return;
         }
-        // SECURITY (2.2.9): a raw fs path must sit under an approved root —
-        // otherwise repository CREATE/UPDATE mounted the host filesystem.
-        final Optional<String> badRoot = this.fsRoots.get().rejectStorage(repo);
-        if (badRoot.isPresent()) {
-            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", badRoot.get());
-            return;
-        }
         if (repo.containsKey("anonymous_read")) {
             final javax.json.JsonValue.ValueType vt = repo.get("anonymous_read").getValueType();
             if (vt != javax.json.JsonValue.ValueType.TRUE
@@ -407,18 +400,30 @@ public final class RepositoryHandler {
                 // Resolving egress check — blocks on DNS, hence on the worker.
                 final Optional<String> resolved = this.remoteUrls.resolvedError(outbound);
                 if (resolved.isPresent()) {
-                    throw new RemoteUrlRejected(resolved.get());
+                    throw new ConfigRejected(resolved.get());
                 }
                 // Secrets are write-only on the read API (masked as "***"). A
                 // client that round-trips the masked document must not
                 // overwrite the real stored secret with the sentinel.
                 final javax.json.JsonObject stored = exists
                     ? RepositoryHandler.asObject(this.crs.value(rname)) : null;
+                // SECURITY (2.2.9): a raw fs path must sit under an approved
+                // root — otherwise repository CREATE/UPDATE mounted the host
+                // filesystem. An update that keeps the saved path is not
+                // re-validated: the UI re-sends the storage block on every
+                // save, and a repository created before the roots existed
+                // must stay editable. Resolves symlinks, hence on the worker.
+                if (!RepositoryHandler.keepsFsPath(repo, stored)) {
+                    final Optional<String> badRoot = this.fsRoots.get().rejectStorage(repo);
+                    if (badRoot.isPresent()) {
+                        throw new ConfigRejected(badRoot.get());
+                    }
+                }
                 this.crs.save(rname, new SecretRedactor().restoreMasked(body, stored), actor);
             },
             HandlerExecutor.get()
         ).whenComplete((ignored, err) -> {
-            if (err != null && RepositoryHandler.rootCause(err) instanceof RemoteUrlRejected) {
+            if (err != null && RepositoryHandler.rootCause(err) instanceof ConfigRejected) {
                 ApiResponse.sendError(
                     ctx, 400, "BAD_REQUEST", RepositoryHandler.rootCause(err).getMessage()
                 );
@@ -453,14 +458,48 @@ public final class RepositoryHandler {
     }
 
     /**
-     * A {@code remotes[].url} refused by the resolving egress check.
+     * A config refused on the worker (resolving egress check, storage root);
+     * answered as {@code 400}.
      */
-    private static final class RemoteUrlRejected extends RuntimeException {
+    private static final class ConfigRejected extends RuntimeException {
         private static final long serialVersionUID = 1L;
 
-        RemoteUrlRejected(final String message) {
+        ConfigRejected(final String message) {
             super(message);
         }
+    }
+
+    /**
+     * Whether an update keeps the {@code fs} storage path already saved for
+     * the repository.
+     * @param repo Submitted {@code repo} section
+     * @param stored Stored config document, {@code null} on create
+     * @return True if both are {@code fs} storage with the same path
+     */
+    private static boolean keepsFsPath(
+        final javax.json.JsonObject repo, final javax.json.JsonObject stored
+    ) {
+        if (stored == null) {
+            return false;
+        }
+        final javax.json.JsonObject saved = stored.containsKey(RepositoryHandler.REPO)
+            ? stored.getJsonObject(RepositoryHandler.REPO) : stored;
+        final String path = RepositoryHandler.fsPath(repo);
+        return path != null && path.equals(RepositoryHandler.fsPath(saved));
+    }
+
+    /**
+     * The path of an inline {@code fs} storage block.
+     * @param repo A {@code repo} section
+     * @return The path, or {@code null} for any other storage
+     */
+    private static String fsPath(final javax.json.JsonObject repo) {
+        final javax.json.JsonValue storage = repo.get("storage");
+        if (storage == null || storage.getValueType() != javax.json.JsonValue.ValueType.OBJECT) {
+            return null;
+        }
+        final javax.json.JsonObject block = storage.asJsonObject();
+        return "fs".equals(block.getString("type", "")) ? block.getString("path", null) : null;
     }
 
     /**

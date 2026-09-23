@@ -106,6 +106,55 @@ public final class RepositoryHandlerTest extends AsyncApiTestBase {
     }
 
     @Test
+    void existingRepoOutsideApprovedRootsStaysEditable(final Vertx vertx,
+        final VertxTestContext ctx) throws Exception {
+        // A repository saved before the 2.2.9 roots existed: the UI re-sends
+        // its unchanged storage block on every save, which must not be
+        // refused; moving it to another unapproved path still is.
+        final String legacy = "/opt/pantera-legacy";
+        new com.auto1.pantera.db.dao.RepositoryDao(AsyncApiTestBase.sharedDs()).save(
+            new com.auto1.pantera.api.RepositoryName.Simple("legacy-root"),
+            javax.json.Json.createObjectBuilder().add(
+                "repo", javax.json.Json.createObjectBuilder()
+                    .add("type", "file")
+                    .add("storage", javax.json.Json.createObjectBuilder()
+                        .add("type", "fs").add("path", legacy))
+            ).build()
+        );
+        final JsonObject edited = RepositoryHandlerTest.fileRepo(legacy);
+        edited.getJsonObject("repo").put("anonymous_read", true);
+        final WebClient client = WebClient.create(vertx);
+        final HttpResponse<Buffer> keep = client
+            .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/legacy-root")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(edited)
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        final HttpResponse<Buffer> move = client
+            .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/legacy-root")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(RepositoryHandlerTest.fileRepo("/opt/elsewhere"))
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(
+            200, keep.statusCode(), "an update keeping the saved fs path must be accepted"
+        );
+        Assertions.assertEquals(
+            400, move.statusCode(), "moving to an unapproved fs path must still be refused"
+        );
+        ctx.completeNow();
+    }
+
+    private static JsonObject fileRepo(final String path) {
+        return new JsonObject().put(
+            "repo",
+            new JsonObject()
+                .put("type", "file")
+                .put("storage", new JsonObject().put("type", "fs").put("path", path))
+        );
+    }
+
+    @Test
     void remotePointingAtCloudMetadataIsRefused(final Vertx vertx, final VertxTestContext ctx)
         throws Exception {
         // SECURITY (2.2.9): remotes[].url was never validated, so a repo
