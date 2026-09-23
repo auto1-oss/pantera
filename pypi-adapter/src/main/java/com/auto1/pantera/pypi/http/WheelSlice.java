@@ -352,7 +352,7 @@ final class WheelSlice implements Slice {
                     System.currentTimeMillis(),
                     null,
                     key.string()
-                );
+                ).withRequestContext(headers);
                 this.events.ifPresent(queue -> queue.add(event));
                 // Drop any cached 404 for this package so requests that
                 // 404'd before publish do not keep returning 404.

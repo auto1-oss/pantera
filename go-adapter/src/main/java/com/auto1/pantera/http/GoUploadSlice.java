@@ -216,7 +216,7 @@ final class GoUploadSlice implements Slice {
                     REPO_TYPE, this.repo, owner(headers),
                     module, version, size,
                     System.currentTimeMillis(), null, key.string()
-                );
+                ).withRequestContext(headers);
                 this.events.ifPresent(
                     queue -> queue.add( // ok: unbounded ConcurrentLinkedDeque
                         event

@@ -131,7 +131,7 @@ public final class RpmUpload implements Slice {
                                                 info.packageSize(),
                                                 System.currentTimeMillis(), null,
                                                 info.packagePath()
-                                            );
+                                            ).withRequestContext(headers);
                                             this.events.ifPresent(queue -> queue.add(event));
                                             syncs.add(this.syncIndex.recordSync(event));
                                             com.auto1.pantera.http.cache.NegativeCacheRegistry

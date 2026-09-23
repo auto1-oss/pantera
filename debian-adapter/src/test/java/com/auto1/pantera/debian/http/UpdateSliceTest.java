@@ -83,7 +83,10 @@ class UpdateSliceTest {
             new SliceHasResponse(
                 new RsHasStatus(RsStatus.OK),
                 new RequestLine(RqMethod.PUT, "/main/aglfn_1.7-3_amd64.deb"),
-                Headers.EMPTY,
+                Headers.from(
+                    new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_TRACE_ID_HEADER, "trace-deb"),
+                    new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_CLIENT_IP_HEADER, "10.0.0.1")
+                ),
                 new Content.From(new TestResource("aglfn_1.7-3_amd64.deb").asBytes())
             )
         );
@@ -108,6 +111,14 @@ class UpdateSliceTest {
             new IsNot<>(new IsEqual<>(0L))
         );
         MatcherAssert.assertThat("Artifact event added to queue", this.events.size() == 1);
+        MatcherAssert.assertThat(
+            "B36: the publish event carries the request trace.id",
+            this.events.peek().traceId(), new org.hamcrest.core.IsEqual<>("trace-deb")
+        );
+        MatcherAssert.assertThat(
+            "B36: the publish event carries the request client.ip",
+            this.events.peek().clientIp(), new org.hamcrest.core.IsEqual<>("10.0.0.1")
+        );
     }
 
     @Test

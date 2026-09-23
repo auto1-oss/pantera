@@ -71,7 +71,9 @@ class WheelSliceTest {
                 new RsHasStatus(RsStatus.CREATED),
                 new RequestLine(RqMethod.POST, "/"),
                 Headers.from(
-                    ContentType.mime(String.format("multipart/form-data; boundary=\"%s\"", boundary))
+                    ContentType.mime(String.format("multipart/form-data; boundary=\"%s\"", boundary)),
+                    new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_TRACE_ID_HEADER, "trace-pypi"),
+                    new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_CLIENT_IP_HEADER, "10.0.0.1")
                 ),
                 new Content.From(this.multipartBody(body, boundary, filename))
             )
@@ -88,6 +90,14 @@ class WheelSliceTest {
             "Artifact event stored per package",
             this.queue.peek().artifactName(),
             new IsEqual<>("pantera-sample")
+        );
+        MatcherAssert.assertThat(
+            "B36: the publish event carries the request trace.id",
+            this.queue.peek().traceId(), new org.hamcrest.core.IsEqual<>("trace-pypi")
+        );
+        MatcherAssert.assertThat(
+            "B36: the publish event carries the request client.ip",
+            this.queue.peek().clientIp(), new org.hamcrest.core.IsEqual<>("10.0.0.1")
         );
         MatcherAssert.assertThat(
             "Creates package index in .pypi folder",

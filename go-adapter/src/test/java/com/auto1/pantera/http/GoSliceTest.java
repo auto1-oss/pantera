@@ -166,7 +166,9 @@ class GoSliceTest {
         final Response response = slice.response(
             new RequestLine("PUT", "example.com/hello/@v/v1.2.3.zip"),
             Headers.from(
-                new Authorization.Basic(USER.getKey(), USER.getValue())
+                new Authorization.Basic(USER.getKey(), USER.getValue()),
+                new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_TRACE_ID_HEADER, "trace-go"),
+                new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_CLIENT_IP_HEADER, "10.0.0.1")
             ),
             new Content.From(data)
         ).toCompletableFuture().get();
@@ -192,6 +194,14 @@ class GoSliceTest {
         org.junit.jupiter.api.Assertions.assertEquals("1.2.3", event.artifactVersion());
         org.junit.jupiter.api.Assertions.assertEquals(data.length, event.size());
         org.junit.jupiter.api.Assertions.assertEquals(USER.getKey(), event.owner());
+        MatcherAssert.assertThat(
+            "B36: the publish event carries the request trace.id",
+            event.traceId(), new org.hamcrest.core.IsEqual<>("trace-go")
+        );
+        MatcherAssert.assertThat(
+            "B36: the publish event carries the request client.ip",
+            event.clientIp(), new org.hamcrest.core.IsEqual<>("10.0.0.1")
+        );
         final Key list = new Key.From("example.com/hello/@v/list");
         org.junit.jupiter.api.Assertions.assertTrue(
             storage.exists(list).toCompletableFuture().join(),

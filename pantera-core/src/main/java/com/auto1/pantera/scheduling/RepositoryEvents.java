@@ -100,7 +100,7 @@ public final class RepositoryEvents {
                 this.rtype, this.rname, new Login(headers).getValue(),
                 aname, version, size, System.currentTimeMillis(), null,
                 this.storagePath(key)
-            )
+            ).withRequestContext(headers)
         );
     }
 

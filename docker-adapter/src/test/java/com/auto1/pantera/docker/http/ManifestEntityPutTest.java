@@ -56,7 +56,12 @@ class ManifestEntityPutTest {
         final String path = "/v2/my-alpine/manifests/1";
         ResponseAssert.check(
             this.slice.response(
-                new RequestLine(RqMethod.PUT, path), Headers.EMPTY, this.manifest()
+                new RequestLine(RqMethod.PUT, path),
+                Headers.from(
+                    new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_TRACE_ID_HEADER, "trace-docker"),
+                    new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_CLIENT_IP_HEADER, "10.0.0.1")
+                ),
+                this.manifest()
             ).join(),
             RsStatus.CREATED,
             new Header("Location", path),
@@ -70,6 +75,14 @@ class ManifestEntityPutTest {
         final ArtifactEvent item = this.events.element();
         MatcherAssert.assertThat(item.artifactName(), new IsEqual<>("my-alpine"));
         MatcherAssert.assertThat(item.artifactVersion(), new IsEqual<>("1"));
+        org.hamcrest.MatcherAssert.assertThat(
+            "B36: the publish event carries the request trace.id",
+            item.traceId(), new org.hamcrest.core.IsEqual<>("trace-docker")
+        );
+        org.hamcrest.MatcherAssert.assertThat(
+            "B36: the publish event carries the request client.ip",
+            item.clientIp(), new org.hamcrest.core.IsEqual<>("10.0.0.1")
+        );
     }
 
     @Test

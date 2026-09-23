@@ -10,7 +10,10 @@
  */
 package com.auto1.pantera.scheduling;
 
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.log.EcsMdc;
+import com.auto1.pantera.http.slice.EcsLoggingSlice;
 import java.util.Objects;
 import java.util.Optional;
 import org.slf4j.MDC;
@@ -209,6 +212,26 @@ public final class ArtifactEvent {
             traceId != null ? traceId : this.traceId,
             this.checksum,
             clientIp != null ? clientIp : this.clientIp
+        );
+    }
+
+    /**
+     * Return a copy carrying the request context that {@code EcsLoggingSlice}
+     * stamped on the inbound request as the internal
+     * {@code X-Pantera-Ctx-Trace-Id} / {@code X-Pantera-Ctx-Client-Ip}
+     * headers. Local publish paths build their event after one or more async
+     * hops, on a thread whose MDC is empty or still holds another request's
+     * values, so the construction-time MDC capture is unreliable there; the
+     * headers travel with the request and are authoritative. A header that is
+     * absent keeps the value captured at construction.
+     *
+     * @param headers Request headers of the publish
+     * @return Copy with the request's trace id and client IP bound
+     */
+    public ArtifactEvent withRequestContext(final Headers headers) {
+        return this.withContext(
+            ArtifactEvent.header(headers, EcsLoggingSlice.CTX_TRACE_ID_HEADER),
+            ArtifactEvent.header(headers, EcsLoggingSlice.CTX_CLIENT_IP_HEADER)
         );
     }
 
@@ -426,6 +449,21 @@ public final class ArtifactEvent {
             ", created=" + created +
             ", release=" + release.orElse(null) +
             '}';
+    }
+
+    /**
+     * First non-blank value of a header.
+     *
+     * @param headers Headers
+     * @param name Header name
+     * @return Value, or {@code null} when absent or blank
+     */
+    private static String header(final Headers headers, final String name) {
+        return headers.find(name).stream()
+            .map(Header::getValue)
+            .filter(value -> value != null && !value.isBlank())
+            .findFirst()
+            .orElse(null);
     }
 
     /**

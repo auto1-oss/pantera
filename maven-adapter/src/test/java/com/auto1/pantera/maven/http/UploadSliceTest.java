@@ -303,6 +303,30 @@ class UploadSliceTest {
     }
 
     @Test
+    void artifactEventCarriesRequestContext() {
+        final Queue<ArtifactEvent> events = new ConcurrentLinkedQueue<>();
+        final Slice slice = new UploadSlice(this.asto, Optional.of(events), "libs-release-local");
+        final byte[] data = "jar".getBytes(StandardCharsets.UTF_8);
+        slice.response(
+            new RequestLine(RqMethod.PUT, "/com/acme/lib/1.0/lib-1.0.jar"),
+            Headers.from(
+                new ContentLength(data.length),
+                new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_TRACE_ID_HEADER, "trace-maven"),
+                new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_CLIENT_IP_HEADER, "10.0.0.1")
+            ),
+            new Content.From(data)
+        ).join();
+        org.hamcrest.MatcherAssert.assertThat(
+            "B36: the publish event carries the request trace.id",
+            events.peek().traceId(), new org.hamcrest.core.IsEqual<>("trace-maven")
+        );
+        org.hamcrest.MatcherAssert.assertThat(
+            "B36: the publish event carries the request client.ip",
+            events.peek().clientIp(), new org.hamcrest.core.IsEqual<>("10.0.0.1")
+        );
+    }
+
+    @Test
     void sourcesJarUploadDoesNotProduceEvent() {
         final Queue<ArtifactEvent> events = new ConcurrentLinkedQueue<>();
         final Slice slice = new UploadSlice(this.asto, Optional.of(events), "libs-release-local");

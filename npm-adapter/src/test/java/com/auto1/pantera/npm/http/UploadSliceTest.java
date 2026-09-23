@@ -77,7 +77,10 @@ public final class UploadSliceTest {
             RsStatus.OK,
             slice.response(
                 RequestLine.from("PUT /ctx/package HTTP/1.1"),
-                Headers.EMPTY,
+                Headers.from(
+                    new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_TRACE_ID_HEADER, "trace-npm"),
+                    new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_CLIENT_IP_HEADER, "10.0.0.1")
+                ),
                 new Content.From(json.getBytes())
             ).join().status()
         );
@@ -96,6 +99,14 @@ public final class UploadSliceTest {
             this.storage.exists(new KeyFromPath("package/meta.json")).get()
         );
         Assertions.assertEquals(1, this.events.size());
+        org.hamcrest.MatcherAssert.assertThat(
+            "B36: the publish event carries the request trace.id",
+            this.events.peek().traceId(), new org.hamcrest.core.IsEqual<>("trace-npm")
+        );
+        org.hamcrest.MatcherAssert.assertThat(
+            "B36: the publish event carries the request client.ip",
+            this.events.peek().clientIp(), new org.hamcrest.core.IsEqual<>("10.0.0.1")
+        );
     }
 
     @Test

@@ -49,7 +49,9 @@ class UpdateSliceTest {
      * Test headers.
      */
     private static final Headers HEADERS = Headers.from(
-        ContentType.mime("multipart/form-data; boundary=\"simple boundary\"")
+        ContentType.mime("multipart/form-data; boundary=\"simple boundary\""),
+        new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_TRACE_ID_HEADER, "trace-conda"),
+        new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_CLIENT_IP_HEADER, "10.0.0.1")
     );
 
     /**
@@ -99,6 +101,14 @@ class UpdateSliceTest {
             true
         );
         MatcherAssert.assertThat("Package info was added to events queue", this.events.size() == 1);
+        MatcherAssert.assertThat(
+            "B36: the publish event carries the request trace.id",
+            this.events.peek().traceId(), new org.hamcrest.core.IsEqual<>("trace-conda")
+        );
+        MatcherAssert.assertThat(
+            "B36: the publish event carries the request client.ip",
+            this.events.peek().clientIp(), new org.hamcrest.core.IsEqual<>("10.0.0.1")
+        );
     }
 
     @ParameterizedTest

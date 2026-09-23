@@ -129,7 +129,7 @@ final class SubmitGemSlice implements Slice {
                                     new Key.From(
                                         "gems", pair.getKey() + "-" + pair.getValue() + ".gem"
                                     ).string()
-                                );
+                                ).withRequestContext(headers);
                                 this.events.ifPresent(queue -> queue.add(event));
                                 com.auto1.pantera.http.cache.NegativeCacheRegistry.instance()
                                     .invalidateAfterUpload("gem", pair.getKey());

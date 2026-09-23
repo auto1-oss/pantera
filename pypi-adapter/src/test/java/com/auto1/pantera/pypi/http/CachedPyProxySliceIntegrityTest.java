@@ -206,6 +206,40 @@ final class CachedPyProxySliceIntegrityTest {
         );
     }
 
+    @Test
+    @DisplayName("cache-miss primary fetch forwards the caller's identity and request context to the origin")
+    void primaryFetchForwardsRequestIdentity() throws Exception {
+        // B36: the origin (pypi ProxySlice) derives the audit user and the
+        // trace/client-ip context from the headers it receives. The primary
+        // stream-through fetch used to call it with Headers.EMPTY, so every
+        // cache-miss artifact_access / artifact_publish record said UNKNOWN.
+        final Storage storage = new InMemoryStorage();
+        final FakePyUpstream origin = new FakePyUpstream(
+            WHEEL_BYTES, sha256Hex(WHEEL_BYTES), null, null
+        );
+        final CachedPyProxySlice slice = buildSlice(origin, storage, new SimpleMeterRegistry());
+        final Response response = slice.response(
+            new RequestLine(RqMethod.GET, WHEEL_PATH),
+            new Headers()
+                .add(com.auto1.pantera.http.auth.AuthzSlice.LOGIN_HDR, "alice")
+                .add(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_CLIENT_IP_HEADER, "10.9.8.7"),
+            Content.EMPTY
+        ).join();
+        response.body().asBytesFuture().join();
+        org.hamcrest.MatcherAssert.assertThat(
+            "the origin sees the authenticated caller",
+            new com.auto1.pantera.http.headers.Login(origin.primaryHeaders()).getValue(),
+            new org.hamcrest.core.IsEqual<>("alice")
+        );
+        org.hamcrest.MatcherAssert.assertThat(
+            "the origin sees the request's client IP context",
+            origin.primaryHeaders().values(
+                com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_CLIENT_IP_HEADER
+            ),
+            new org.hamcrest.core.IsEqual<>(java.util.List.of("10.9.8.7"))
+        );
+    }
+
     private static CachedPyProxySlice buildSlice(
         final Slice origin, final Storage storage, final MeterRegistry registry
     ) throws Exception {
@@ -265,6 +299,8 @@ final class CachedPyProxySliceIntegrityTest {
         private final String md5;
         private final String sha512;
         private final AtomicInteger primaryCalls = new AtomicInteger();
+        private final java.util.concurrent.atomic.AtomicReference<Headers> lastPrimaryHeaders =
+            new java.util.concurrent.atomic.AtomicReference<>(Headers.EMPTY);
         private final java.util.concurrent.atomic.AtomicBoolean hold =
             new java.util.concurrent.atomic.AtomicBoolean();
 
@@ -282,6 +318,10 @@ final class CachedPyProxySliceIntegrityTest {
 
         int primaryCalls() {
             return this.primaryCalls.get();
+        }
+
+        Headers primaryHeaders() {
+            return this.lastPrimaryHeaders.get();
         }
 
         void holdPrimary(final boolean hold) {
@@ -303,6 +343,7 @@ final class CachedPyProxySliceIntegrityTest {
                 return serveOrNotFound(this.sha512);
             }
             this.primaryCalls.incrementAndGet();
+            this.lastPrimaryHeaders.set(headers);
             if (this.hold.get()) {
                 // Spin-block in a background thread until released, simulating
                 // a slow upstream so followers race the leader.

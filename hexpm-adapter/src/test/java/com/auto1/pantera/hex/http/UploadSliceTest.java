@@ -95,7 +95,11 @@ class UploadSliceTest {
             new SliceHasResponse(
                 new RsHasStatus(RsStatus.CREATED),
                 new RequestLine(RqMethod.POST, String.format("/publish?replace=%s", replace)),
-                Headers.from(new ContentLength(UploadSliceTest.tar.length)),
+                Headers.from(
+                    new ContentLength(UploadSliceTest.tar.length),
+                    new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_TRACE_ID_HEADER, "trace-hex"),
+                    new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_CLIENT_IP_HEADER, "10.0.0.1")
+                ),
                 new Content.From(UploadSliceTest.tar)
             )
         );
@@ -121,6 +125,14 @@ class UploadSliceTest {
         );
         MatcherAssert.assertThat(
             "Package version should be 2.0.0", event.artifactVersion(), new IsEqual<>("2.0.0")
+        );
+        MatcherAssert.assertThat(
+            "B36: the publish event carries the request trace.id",
+            event.traceId(), new org.hamcrest.core.IsEqual<>("trace-hex")
+        );
+        MatcherAssert.assertThat(
+            "B36: the publish event carries the request client.ip",
+            event.clientIp(), new org.hamcrest.core.IsEqual<>("10.0.0.1")
         );
     }
 

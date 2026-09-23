@@ -186,7 +186,7 @@ public final class UploadSlice implements Slice {
                                 DownloadSlice.TARBALLS,
                                 String.format("%s-%s.tar", name.get(), version.get())
                             ).string()
-                        );
+                        ).withRequestContext(headers);
                         this.events.ifPresent(queue -> queue.add(event));
                         com.auto1.pantera.http.cache.NegativeCacheRegistry.instance()
                             .invalidateAfterUpload("hexpm", name.get());

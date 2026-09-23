@@ -172,7 +172,7 @@ final class PushChartSlice implements Slice {
                                         chart.name(), chart.version(), tgz.size(),
                                         System.currentTimeMillis(), null,
                                         artifactKey.string()
-                                    );
+                                    ).withRequestContext(headers);
                                     this.events.ifPresent(queue -> queue.add(event));
                                     com.auto1.pantera.http.cache.NegativeCacheRegistry.instance()
                                         .invalidateAfterUpload("helm", chart.name());

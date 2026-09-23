@@ -219,7 +219,7 @@ public final class UploadSlice implements Slice {
                     }
                 )
             ).thenCompose(
-                sha256 -> this.addEvent(key, owner, size, sha256)
+                sha256 -> this.addEvent(key, owner, size, sha256, headers)
                     .thenApply(ignored -> ResponseBuilder.created().build())
             ).exceptionally(
                 throwable -> {
@@ -459,7 +459,7 @@ public final class UploadSlice implements Slice {
                 }
             }
         ).thenCompose(
-            sha256 -> this.addEvent(key, owner, size, sha256)
+            sha256 -> this.addEvent(key, owner, size, sha256, headers)
                 .thenApply(ignored -> ResponseBuilder.created().build())
         ).exceptionally(
             throwable -> {
@@ -699,9 +699,12 @@ public final class UploadSlice implements Slice {
      * @param key Artifact key
      * @param owner Owner
      * @param size Artifact size
+     * @param sha256 SHA-256 digest, or {@code null}
+     * @param headers Request headers carrying the request context
      */
     private CompletableFuture<Void> addEvent(
-        final Key key, final String owner, final long size, final String sha256
+        final Key key, final String owner, final long size, final String sha256,
+        final Headers headers
     ) {
         final String path = key.string().startsWith("/") ? key.string() : "/" + key.string();
 
@@ -718,7 +721,7 @@ public final class UploadSlice implements Slice {
 
         // pkg = "{groupId}/{artifactId}/{version}" (everything before the filename)
         final String pkg = path.substring(0, path.lastIndexOf('/'));
-        return this.createAndAddEvent(pkg, owner, size, sha256);
+        return this.createAndAddEvent(pkg, owner, size, sha256, headers);
     }
 
     /**
@@ -766,9 +769,12 @@ public final class UploadSlice implements Slice {
      * @param pkg Package path (group/artifact/version)
      * @param owner Owner
      * @param size Artifact size
+     * @param sha256 SHA-256 digest, or {@code null}
+     * @param headers Request headers carrying the request context
      */
     private CompletableFuture<Void> createAndAddEvent(
-        final String pkg, final String owner, final long size, final String sha256
+        final String pkg, final String owner, final long size, final String sha256,
+        final Headers headers
     ) {
         // Extract version (last directory before the file)
         final String[] parts = pkg.split("/");
@@ -812,7 +818,7 @@ public final class UploadSlice implements Slice {
             // records and what the UI browses to verbatim. Deliberately not
             // the file key: for maven the browse target is the directory.
             pkg
-        );
+        ).withRequestContext(headers);
         final ArtifactEvent event = sha256 == null ? base : base.withChecksum(sha256);
         // Async path: queue for audit/metrics consumers (DbConsumer batches).
         this.events.ifPresent(queue -> queue.add(event));

@@ -54,8 +54,13 @@ public final class RpmUploadTest {
         final Optional<Queue<ArtifactEvent>> events = Optional.of(new LinkedList<>());
         Assertions.assertEquals(RsStatus.ACCEPTED,
             new RpmUpload(this.storage, new RepoConfig.Simple(), events)
-                .response(new RequestLine("PUT", "/uploaded.rpm"), Headers.EMPTY,
-                new Content.From(content)
+                .response(
+                    new RequestLine("PUT", "/uploaded.rpm"),
+                    Headers.from(
+                        new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_TRACE_ID_HEADER, "trace-rpm"),
+                        new com.auto1.pantera.http.headers.Header(com.auto1.pantera.http.slice.EcsLoggingSlice.CTX_CLIENT_IP_HEADER, "10.0.0.1")
+                    ),
+                    new Content.From(content)
             ).join().status()
         );
         MatcherAssert.assertThat(
@@ -69,6 +74,14 @@ public final class RpmUploadTest {
             new IsEqual<>(false)
         );
         MatcherAssert.assertThat("Events queue has one item", events.get().size() == 1);
+        MatcherAssert.assertThat(
+            "B36: the publish event carries the request trace.id",
+            events.get().peek().traceId(), new org.hamcrest.core.IsEqual<>("trace-rpm")
+        );
+        MatcherAssert.assertThat(
+            "B36: the publish event carries the request client.ip",
+            events.get().peek().clientIp(), new org.hamcrest.core.IsEqual<>("10.0.0.1")
+        );
     }
 
     @Test

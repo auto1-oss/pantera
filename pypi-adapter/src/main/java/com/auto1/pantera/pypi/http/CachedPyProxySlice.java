@@ -255,7 +255,7 @@ public final class CachedPyProxySlice implements Slice {
         // requested path is a primary artifact. All other paths fall
         // through to the existing metadata / origin flow unchanged.
         if (this.cacheWriter != null && isPrimaryArtifact(path)) {
-            return this.verifyAndServePrimary(line, key, path);
+            return this.verifyAndServePrimary(line, headers, key, path);
         }
 
         // Check metadata cache for wheels and index pages
@@ -462,7 +462,7 @@ public final class CachedPyProxySlice implements Slice {
      * Maven primary-path decision.
      */
     private CompletableFuture<Response> verifyAndServePrimary(
-        final RequestLine line, final Key key, final String path
+        final RequestLine line, final Headers headers, final Key key, final String path
     ) {
         final Storage storage = this.rawStorage.orElseThrow();
         return storage.exists(key).thenCompose(present -> {
@@ -483,10 +483,10 @@ public final class CachedPyProxySlice implements Slice {
                 }
             );
             if (isLeader[0]) {
-                return this.streamPrimary(line, key, path, leaderGate);
+                return this.streamPrimary(line, headers, key, path, leaderGate);
             }
             return gate.exceptionally(err -> null)
-                .thenCompose(ignored -> this.verifyAndServePrimary(line, key, path));
+                .thenCompose(ignored -> this.verifyAndServePrimary(line, headers, key, path));
         }).exceptionally(err -> {
             EcsLogger.warn("com.auto1.pantera.pypi")
                 .message("PyPI primary-artifact verify-and-serve failed; returning 502")
@@ -514,6 +514,7 @@ public final class CachedPyProxySlice implements Slice {
      */
     private CompletableFuture<Response> streamPrimary(
         final RequestLine line,
+        final Headers headers,
         final Key key,
         final String path,
         final CompletableFuture<Void> leaderGate
@@ -530,7 +531,10 @@ public final class CachedPyProxySlice implements Slice {
         sidecars.put(ChecksumAlgo.SHA256, () -> this.fetchSidecar(line, ".sha256"));
         sidecars.put(ChecksumAlgo.MD5, () -> this.fetchSidecar(line, ".md5"));
         sidecars.put(ChecksumAlgo.SHA512, () -> this.fetchSidecar(line, ".sha512"));
-        return this.origin.response(line, Headers.EMPTY, Content.EMPTY)
+        // The request headers carry the authenticated caller and the
+        // X-Pantera-Ctx-* request context; the origin derives the audit
+        // user.name / client.ip / trace.id of this fetch from them.
+        return this.origin.response(line, headers, Content.EMPTY)
             .thenCompose(resp -> {
                 if (CachedPyProxySlice.isCooldownVerdict(resp)) {
                     // Pantera's own cooldown 403 for a blocked file, not an

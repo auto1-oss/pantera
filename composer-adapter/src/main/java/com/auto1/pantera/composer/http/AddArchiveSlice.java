@@ -321,7 +321,7 @@ final class AddArchiveSlice implements Slice {
                             created,
                             null,  // No release date for local uploads
                             archive.name().artifact().string()
-                        );
+                        ).withRequestContext(headers);
                         this.events.ifPresent(queue -> queue.add(event));
                         EcsLogger.info("com.auto1.pantera.composer")
                             .message("Recorded Composer package upload event")

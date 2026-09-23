@@ -149,7 +149,7 @@ public final class UpdateSlice implements Slice {
                                         json.getJsonNumber(UpdateSlice.SIZE).longValue(),
                                         System.currentTimeMillis(), null,
                                         matcher.group(1)
-                                    );
+                                    ).withRequestContext(headers);
                                     this.events.ifPresent(queue -> queue.add(event));
                                     com.auto1.pantera.http.cache.NegativeCacheRegistry
                                         .instance()

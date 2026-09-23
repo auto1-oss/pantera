@@ -201,7 +201,7 @@ public final class UpdateSlice implements Slice {
                         UpdateSlice.REPO_TYPE, this.config.codename(), owner,
                         String.join("_", name, val), version, size,
                         System.currentTimeMillis(), null, artifact.string()
-                    );
+                    ).withRequestContext(hdrs);
                     this.events.ifPresent(queue -> queue.add(event));
                     syncs.add(this.syncIndex.recordSync(event));
                 });

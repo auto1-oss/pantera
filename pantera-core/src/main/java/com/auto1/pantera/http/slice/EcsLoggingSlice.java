@@ -24,8 +24,10 @@ import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.trace.SpanContext;
 import org.slf4j.MDC;
 
+import java.util.ArrayList;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 
 /**
  * ECS-compliant HTTP access logging slice.
@@ -195,7 +197,15 @@ public final class EcsLoggingSlice implements Slice {
         if (internalRouting) {
             downstreamHeaders = headers;
         } else {
-            final Headers copy = headers.copy();
+            // The context headers feed client.ip / trace.id of audit records,
+            // so a value the client sent under the same (case-insensitive)
+            // name is dropped rather than left ahead of the server's own.
+            final Headers copy = new Headers(
+                headers.stream()
+                    .filter(hdr -> !CTX_TRACE_ID_HEADER.equalsIgnoreCase(hdr.getKey())
+                        && !CTX_CLIENT_IP_HEADER.equalsIgnoreCase(hdr.getKey()))
+                    .collect(Collectors.toCollection(ArrayList::new))
+            );
             if (span.traceId() != null && !span.traceId().isEmpty()) {
                 copy.add(new Header(CTX_TRACE_ID_HEADER, span.traceId()));
             }

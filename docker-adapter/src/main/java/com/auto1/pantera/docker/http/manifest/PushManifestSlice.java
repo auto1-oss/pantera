@@ -198,7 +198,7 @@ public class PushManifestSlice extends DockerActionSlice {
                                         this.docker.resolveName(request.name()), ref
                                     )
                                 ).string()
-                            );
+                            ).withRequestContext(headers);
                             if (queue != null) {
                                 queue.add(event);
                             }
