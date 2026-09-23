@@ -82,7 +82,8 @@ public final class FilteredMetadataCacheRegistry {
      * @return True when {@code cache} is the registered shared instance
      */
     boolean isShared(final FilteredMetadataCache cache) {
-        return cache != null && cache == this.shared;
+        // FilteredMetadataCache does not override equals(): identity check.
+        return cache != null && cache.equals(this.shared);
     }
 
     /**

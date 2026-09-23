@@ -70,10 +70,6 @@ public final class CachedNpmProxySlice implements Slice {
      */
     private static final String UPSTREAM_STATUS_HEADER = "X-Pantera-Upstream-Status";
 
-    /**
-     * Header every cooldown 403 carries ({@code blocked} / {@code all-blocked}).
-     */
-    private static final String COOLDOWN_HEADER = "X-Pantera-Cooldown";
 
     /**
      * Origin slice (NpmProxySlice).
@@ -406,7 +402,9 @@ public final class CachedNpmProxySlice implements Slice {
      */
     private static boolean isCooldownVerdict(final Response response) {
         return response.status() == RsStatus.FORBIDDEN
-            && !response.headers().values(CachedNpmProxySlice.COOLDOWN_HEADER).isEmpty();
+            && !response.headers().values(
+                com.auto1.pantera.cooldown.response.CooldownResponseFactory.HEADER
+            ).isEmpty();
     }
 
     /**
