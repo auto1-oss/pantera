@@ -21,6 +21,7 @@ import com.auto1.pantera.http.headers.WwwAuthenticate;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.http.rt.RtRule;
 
 import java.util.Locale;
 import java.util.Set;
@@ -144,6 +145,15 @@ public final class AnonymousAccessSlice implements Slice {
     private final String repoName;
 
     /**
+     * Requests that carry their own credentials in the request itself
+     * (e.g. the {@code npm login} PUT, whose body holds the user name and
+     * password) and are validated by the downstream slice. They are passed
+     * through without an {@code Authorization} header, because they are how
+     * a client without credentials obtains one.
+     */
+    private final RtRule selfAuthenticating;
+
+    /**
      * Construct an enforcement decorator.
      *
      * @param origin   Wrapped slice (typically the per-adapter slice).
@@ -153,16 +163,33 @@ public final class AnonymousAccessSlice implements Slice {
     public AnonymousAccessSlice(
         final Slice origin, final Policy policy, final String repoName
     ) {
+        this(origin, policy, repoName, (line, headers) -> false);
+    }
+
+    /**
+     * Construct an enforcement decorator with credential-bootstrap routes.
+     *
+     * @param origin   Wrapped slice (typically the per-adapter slice).
+     * @param policy   Per-repo policy.
+     * @param repoName Repository name for log correlation.
+     * @param selfAuthenticating Requests that validate credentials carried
+     *     in the request themselves and are passed through unchanged.
+     */
+    public AnonymousAccessSlice(
+        final Slice origin, final Policy policy, final String repoName,
+        final RtRule selfAuthenticating
+    ) {
         this.origin = origin;
         this.policy = policy;
         this.repoName = repoName;
+        this.selfAuthenticating = selfAuthenticating;
     }
 
     @Override
     public CompletableFuture<Response> response(
         final RequestLine line, final Headers headers, final Content body
     ) {
-        if (hasAuthorization(headers)) {
+        if (hasAuthorization(headers) || this.selfAuthenticating.apply(line, headers)) {
             return this.origin.response(line, headers, body);
         }
         final boolean isRead = isRead(line);

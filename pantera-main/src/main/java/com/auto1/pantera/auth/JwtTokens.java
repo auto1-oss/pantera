@@ -69,6 +69,12 @@ public final class JwtTokens implements Tokens {
     private final UserEnabledCheck enabledCheck;
 
     /**
+     * Lifetime of an API token issued to a password login from a
+     * package-manager client: the same 30-day default the token API uses.
+     */
+    private static final long CLIENT_LOGIN_TOKEN_SECONDS = 30L * 86_400L;
+
+    /**
      * Default access token TTL in seconds (cached from settings on construction).
      */
     private final int defaultAccessTtl;
@@ -194,6 +200,37 @@ public final class JwtTokens implements Tokens {
             }
         }
         return this.generatePair(user);
+    }
+
+    /**
+     * Named API token for a password login from a package-manager client
+     * ({@code npm login}): expires after the default API-token lifetime
+     * (30 days), shortened to the admin cap ({@code api_token_max_ttl_seconds},
+     * or the legacy {@code max_api_token_days}) when that is lower. Never
+     * permanent, so the "allow permanent API tokens" policy cannot be
+     * bypassed through a client login. Persisted like any other API token.
+     * Blocking (settings read and token store): call off the event loop.
+     *
+     * @param user User to issue the token for
+     * @param label Token label
+     * @return Signed JWT string
+     */
+    @Override
+    public String issueApiToken(final AuthUser user, final String label) {
+        long expiry = JwtTokens.CLIENT_LOGIN_TOKEN_SECONDS;
+        if (this.settingsDao != null) {
+            final long maxSeconds = this.settingsDao.getInt("api_token_max_ttl_seconds", 0);
+            final long cap;
+            if (maxSeconds > 0) {
+                cap = maxSeconds;
+            } else {
+                cap = 86_400L * this.settingsDao.getInt("max_api_token_days", 0);
+            }
+            if (cap > 0 && cap < expiry) {
+                expiry = cap;
+            }
+        }
+        return this.generateApiToken(user, (int) expiry, UUID.randomUUID(), label);
     }
 
     /**

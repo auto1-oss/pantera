@@ -950,21 +950,12 @@ public class RepositorySlices {
                         ),
                         npmProxySlice
                     ),
-                    // Block login/adduser/whoami - proxy is read-only
+                    // npm login / whoami / profile get are answered by
+                    // Pantera itself (they concern the Pantera identity, not
+                    // the upstream); other user management is refused.
                     // NOTE: Do NOT block generic /auth paths - they conflict with scoped packages
                     // like @verdaccio/auth. Standard NPM auth uses /-/user/ and /-/v1/login.
-                    new com.auto1.pantera.http.rt.RtRulePath(
-                        new com.auto1.pantera.http.rt.RtRule.Any(
-                            new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/v1/login.*"),
-                            new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/user/.*"),
-                            new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/whoami.*")
-                        ),
-                        new com.auto1.pantera.http.slice.SliceSimple(
-                            com.auto1.pantera.http.ResponseBuilder.forbidden()
-                                .textBody("User management not supported on proxy. Use local npm repository.")
-                                .build()
-                        )
-                    ),
+                    this.npmAccountRoute(cfg, "proxy"),
                     // WS-A: npm token/hook/team have no supported surface on
                     // this registry (any method); npm org is only declined
                     // for its write verbs -- GET (e.g. "npm org ls") is a
@@ -995,6 +986,26 @@ public class RepositorySlices {
                             new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/org/.*")
                         ),
                         "npm organization management", Action.Standard.WRITE, cfg.name()
+                    ),
+                    // A proxy is read-only: publish, unpublish and dist-tag
+                    // writes answer 405 (as on a group), not a misleading 404.
+                    new com.auto1.pantera.http.rt.RtRulePath(
+                        new com.auto1.pantera.http.rt.RtRule.Any(
+                            com.auto1.pantera.http.rt.MethodRule.PUT,
+                            com.auto1.pantera.http.rt.MethodRule.DELETE
+                        ),
+                        new CombinedAuthzSliceWrap(
+                            new com.auto1.pantera.http.slice.SliceSimple(
+                                com.auto1.pantera.http.ResponseBuilder.methodNotAllowed()
+                                    .build()
+                            ),
+                            authentication(),
+                            tokens.auth(),
+                            new OperationControl(
+                                securityPolicy(),
+                                new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                            )
+                        )
                     ),
                     // Downloads - require Keycloak JWT
                     new com.auto1.pantera.http.rt.RtRulePath(
@@ -1047,21 +1058,12 @@ public class RepositorySlices {
                             ),
                             npmGroupAuditSlice
                         ),
-                        // Block login/adduser/whoami - group is read-only
+                        // npm login / whoami / profile get are answered by
+                        // Pantera itself (they concern the Pantera identity,
+                        // not any member); other user management is refused.
                         // NOTE: Do NOT block generic /auth paths - they conflict with scoped packages
                         // like @verdaccio/auth. Standard NPM auth uses /-/user/ and /-/v1/login.
-                        new com.auto1.pantera.http.rt.RtRulePath(
-                            new com.auto1.pantera.http.rt.RtRule.Any(
-                                new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/v1/login.*"),
-                                new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/user/.*"),
-                                new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/whoami.*")
-                            ),
-                            new com.auto1.pantera.http.slice.SliceSimple(
-                                com.auto1.pantera.http.ResponseBuilder.forbidden()
-                                    .textBody("User management not supported on group. Use local npm repository.")
-                                    .build()
-                            )
-                        ),
+                        this.npmAccountRoute(cfg, "group"),
                         // WS-A: npm token/hook/team have no supported surface
                         // on this registry (any method); npm org is only
                         // declined for its write verbs -- GET (e.g. "npm org
@@ -1446,8 +1448,18 @@ public class RepositorySlices {
         // any per-adapter logic runs. Policy defaults: proxies allow
         // anon read (curlable maven/npm clients); hosted repos require
         // auth for both directions.
+        // npm login / adduser carry the credentials in the request body
+        // (they are how a client without credentials obtains a token) and
+        // validate them downstream, so they pass the gate without an
+        // Authorization header; npm's web login is declined downstream.
+        final com.auto1.pantera.http.rt.RtRule bootstrap;
+        if (cfg.type().startsWith("npm")) {
+            bootstrap = com.auto1.pantera.npm.http.auth.OAuthLoginSlice.CREDENTIAL_BOOTSTRAP;
+        } else {
+            bootstrap = (line, headers) -> false;
+        }
         final Slice gated = new AnonymousAccessSlice(
-            withContentLength, anonymousPolicy(cfg), cfg.name()
+            withContentLength, anonymousPolicy(cfg), cfg.name(), bootstrap
         );
         // Docker clients parse OCI error bodies and the adapter advertises
         // a Basic+Bearer challenge: give the body-less 401/413 produced by
@@ -1556,6 +1568,83 @@ public class RepositorySlices {
 
     private Policy<?> securityPolicy() {
         return this.settings.authz().policy();
+    }
+
+    /**
+     * Account routes of an npm-proxy or npm-group repository. They concern
+     * the caller's Pantera identity, never a member or the upstream, so they
+     * are answered here: the legacy {@code npm login} / {@code npm adduser}
+     * PUT validates the password in its body and returns a Pantera API
+     * token; the web login is declined with a 404 (npm then falls back to
+     * the legacy login); {@code npm whoami} and {@code npm profile get}
+     * answer from the authenticated identity. Any other user-management
+     * request is refused with 403.
+     *
+     * @param cfg Repository config
+     * @param mode "proxy" or "group", for the refusal message
+     * @return Route matching every account path
+     */
+    private com.auto1.pantera.http.rt.RtRulePath npmAccountRoute(
+        final RepoConfig cfg, final String mode
+    ) {
+        final OperationControl read = new OperationControl(
+            securityPolicy(), new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+        );
+        return new com.auto1.pantera.http.rt.RtRulePath(
+            new com.auto1.pantera.http.rt.RtRule.Any(
+                new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/v1/login.*"),
+                new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/user/.*"),
+                new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/whoami.*"),
+                new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/npm/v1/user$")
+            ),
+            new com.auto1.pantera.http.rt.SliceRoute(
+                new com.auto1.pantera.http.rt.RtRulePath(
+                    com.auto1.pantera.npm.http.auth.OAuthLoginSlice.LEGACY_LOGIN,
+                    new com.auto1.pantera.npm.http.auth.OAuthLoginSlice(
+                        authentication(), this.tokens
+                    )
+                ),
+                new com.auto1.pantera.http.rt.RtRulePath(
+                    com.auto1.pantera.npm.http.auth.OAuthLoginSlice.WEB_LOGIN,
+                    new com.auto1.pantera.npm.http.DeclinedEndpointSlice(
+                        "npm web login", "repositories/npm.md#logging-in-with-npm-login"
+                    )
+                ),
+                new com.auto1.pantera.http.rt.RtRulePath(
+                    new com.auto1.pantera.http.rt.RtRule.All(
+                        com.auto1.pantera.http.rt.MethodRule.GET,
+                        new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/whoami$")
+                    ),
+                    new CombinedAuthzSliceWrap(
+                        new com.auto1.pantera.npm.http.auth.JwtWhoAmISlice(),
+                        authentication(), tokens.auth(), read
+                    )
+                ),
+                new com.auto1.pantera.http.rt.RtRulePath(
+                    new com.auto1.pantera.http.rt.RtRule.All(
+                        com.auto1.pantera.http.rt.MethodRule.GET,
+                        new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/npm/v1/user$")
+                    ),
+                    new CombinedAuthzSliceWrap(
+                        new com.auto1.pantera.npm.http.auth.ProfileSlice(),
+                        authentication(), tokens.auth(), read
+                    )
+                ),
+                new com.auto1.pantera.http.rt.RtRulePath(
+                    com.auto1.pantera.http.rt.RtRule.FALLBACK,
+                    new com.auto1.pantera.http.slice.SliceSimple(
+                        com.auto1.pantera.http.ResponseBuilder.forbidden()
+                            .textBody(
+                                String.format(
+                                    "User management not supported on %s. Use local npm repository.",
+                                    mode
+                                )
+                            )
+                            .build()
+                    )
+                )
+            )
+        );
     }
 
     /**

@@ -4,11 +4,11 @@ import type { Client, FormatSnippets, SnippetCtx, Step } from './types'
  * npm-family clients. npm, pnpm and yarn 1 read `.npmrc`; yarn 2+ (berry)
  * ignores it and reads `.yarnrc.yml`. Credentials are `_authToken` lines keyed
  * to the exact registry paths (resolve and publish), so the token is only
- * sent to this registry. `npm login` / `npm adduser` do not work against
- * Pantera: tokens come from the Credentials card.
+ * sent to this registry. Tokens come from the Credentials card; `npm login`
+ * also works (it stores a Pantera API token for the registry path).
  */
 
-const TOKEN_NOTE = 'Use an API token from the <b>Credentials</b> card. <code>npm login</code> and <code>npm adduser</code> do not work with Pantera.'
+const TOKEN_NOTE = 'Use an API token from the <b>Credentials</b> card, or run <code>npm login</code> with your Pantera username and password to have npm store a token.'
 
 const NO_PUBLISH = 'Groups and proxies do not accept uploads. Choose a local npm repository as the publish target to see the publish steps.'
 
@@ -59,8 +59,8 @@ function publishConfigStep(ctx: SnippetCtx): Step {
 
 /**
  * Verify through the resolve repository: a local repository cannot serve
- * public packages, so there the token check is `whoami` (groups answer
- * `whoami` with 403, so it is not used for them).
+ * public packages, so there the token check is `whoami`; on a group or proxy
+ * fetching a public package checks the token and upstream resolution at once.
  */
 function isLocal(ctx: SnippetCtx): boolean {
   return ctx.mode === 'local'

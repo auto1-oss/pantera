@@ -16,6 +16,8 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rt.MethodRule;
+import com.auto1.pantera.http.rt.RtRule;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Test;
@@ -182,6 +184,33 @@ class AnonymousAccessSliceTest {
             "Hosted default anon-write must be false",
             AnonymousAccessSlice.Policy.hostedDefault().anonymousWrite(),
             new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void passesSelfAuthenticatingRequestsThroughOnPrivateRepo() {
+        final Slice inner = (line, hdrs, body) ->
+            CompletableFuture.completedFuture(ResponseBuilder.created().build());
+        final AnonymousAccessSlice slice = new AnonymousAccessSlice(
+            inner, AnonymousAccessSlice.Policy.hostedDefault(), "test-repo",
+            new RtRule.All(
+                MethodRule.PUT, new RtRule.ByPath(".*/-/user/org\\.couchdb\\.user:.+")
+            )
+        );
+        MatcherAssert.assertThat(
+            "a credential-bootstrap request carrying its own credentials reaches the slice",
+            slice.response(
+                RequestLine.from("PUT /npm/-/user/org.couchdb.user:alice HTTP/1.1"),
+                Headers.EMPTY, Content.EMPTY
+            ).join().status().code(),
+            new IsEqual<>(201)
+        );
+        MatcherAssert.assertThat(
+            "every other anonymous write is still rejected",
+            slice.response(
+                RequestLine.from("PUT /npm/some-pkg HTTP/1.1"), Headers.EMPTY, Content.EMPTY
+            ).join().status().code(),
+            new IsEqual<>(401)
         );
     }
 

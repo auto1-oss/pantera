@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.auth;
 
+import com.auto1.pantera.api.AuthTokenRest;
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.auth.TokenAuthentication;
 import java.security.KeyPair;
@@ -18,6 +19,7 @@ import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
+import org.hamcrest.core.IsEqual;
 import org.hamcrest.core.IsInstanceOf;
 import org.hamcrest.core.IsNot;
 import org.junit.jupiter.api.BeforeEach;
@@ -109,6 +111,24 @@ class JwtTokensTest {
             new JwtTokens(this.privateKey, this.publicKey, null, null, null)
                 .generate(new AuthUser("Oleg", "test")),
             new IsNot<>(Matchers.emptyString())
+        );
+    }
+
+    @Test
+    void issuesAnExpiringApiTokenForClientLogins() {
+        final com.auth0.jwt.interfaces.DecodedJWT jwt = com.auth0.jwt.JWT.decode(
+            new JwtTokens(this.privateKey, this.publicKey, null, null, null)
+                .issueApiToken(new AuthUser("Oleg", "test"), "npm login")
+        );
+        MatcherAssert.assertThat(
+            "the token is an API token",
+            jwt.getClaim(AuthTokenRest.TYPE).asString(),
+            new IsEqual<>(TokenType.API.value())
+        );
+        MatcherAssert.assertThat(
+            "the token expires (never permanent)",
+            jwt.getExpiresAt() != null,
+            new IsEqual<>(true)
         );
     }
 
