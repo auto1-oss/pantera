@@ -28,6 +28,8 @@ import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
+import javax.json.Json;
+import javax.json.JsonObject;
 
 /**
  * Slice to handle `npm unpublish` command requests. Two request shapes reach it,
@@ -51,9 +53,12 @@ import java.util.regex.Pattern;
  */
 final class UnpublishForceSlice implements Slice {
     /**
-     * Endpoint request line pattern.
+     * Endpoint request line pattern: any package, tarball or {@code -rev}
+     * path outside the registry's own {@code /-/} namespace. A path without
+     * a {@code /-rev/} segment is routed here too so it is answered as a
+     * missing revision (428) rather than a bare 404.
      */
-    static final Pattern PTRN = Pattern.compile("/.*/-rev/.*$");
+    static final Pattern PTRN = Pattern.compile("^/(?!-/).+$");
 
     /**
      * Path segment that precedes the revision.
@@ -103,27 +108,31 @@ final class UnpublishForceSlice implements Slice {
         // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
         return body.asBytesFuture().thenCompose(
             ignored -> {
-                final CompletableFuture<Response> result;
-                if (UnpublishForceSlice.PTRN.matcher(uri).matches()) {
-                    final int marker = uri.indexOf(UnpublishForceSlice.REV_MARKER);
-                    final String target = uri.substring(0, marker);
-                    final String sent = uri.substring(
-                        marker + UnpublishForceSlice.REV_MARKER.length()
-                    );
-                    final int tarball = target.indexOf(UnpublishForceSlice.TARBALL_MARKER);
-                    if (tarball > 0) {
-                        result = this.deleteTarball(
-                            UnpublishForceSlice.name(line, target.substring(0, tarball)),
-                            new Key.From(UnpublishForceSlice.name(line, target)),
-                            sent
-                        );
-                    } else {
-                        result = this.deletePackage(
-                            UnpublishForceSlice.name(line, target), sent
-                        );
-                    }
+                // A path with no /-rev/ segment carries no revision at all:
+                // it is judged like an empty one (428 for an existing
+                // package, 404 for an unknown one), never deleted.
+                final int marker = uri.indexOf(UnpublishForceSlice.REV_MARKER);
+                final String target;
+                final String sent;
+                if (marker > 0) {
+                    target = uri.substring(0, marker);
+                    sent = uri.substring(marker + UnpublishForceSlice.REV_MARKER.length());
                 } else {
-                    result = ResponseBuilder.badRequest().completedFuture();
+                    target = uri;
+                    sent = "";
+                }
+                final CompletableFuture<Response> result;
+                final int tarball = target.indexOf(UnpublishForceSlice.TARBALL_MARKER);
+                if (tarball > 0) {
+                    result = this.deleteTarball(
+                        UnpublishForceSlice.name(line, target.substring(0, tarball)),
+                        new Key.From(UnpublishForceSlice.name(line, target)),
+                        sent
+                    );
+                } else {
+                    result = this.deletePackage(
+                        UnpublishForceSlice.name(line, target), sent
+                    );
                 }
                 return result;
             }
@@ -193,6 +202,12 @@ final class UnpublishForceSlice implements Slice {
         if (sent.isEmpty() || "undefined".equals(sent) || sent.indexOf('-') < 1) {
             result = ResponseBuilder.from(RsStatus.PRECONDITION_REQUIRED)
                 .header("X-Pantera-Reason", "revision_required")
+                .jsonBody(
+                    UnpublishForceSlice.error(
+                        "revision required: read _rev from the packument and send it as"
+                            + " /-rev/<rev>"
+                    )
+                )
                 .completedFuture();
         } else {
             result = new PackumentRevision(this.storage, pkg).value().thenCompose(
@@ -203,6 +218,12 @@ final class UnpublishForceSlice implements Slice {
                     } else {
                         answer = ResponseBuilder.from(RsStatus.CONFLICT)
                             .header("X-Pantera-Reason", "revision_mismatch")
+                            .jsonBody(
+                                UnpublishForceSlice.error(
+                                    "revision mismatch: the package changed since its"
+                                        + " packument was read; read _rev again"
+                                )
+                            )
                             .completedFuture();
                     }
                     return answer;
@@ -229,6 +250,15 @@ final class UnpublishForceSlice implements Slice {
             );
         }
         return res.thenApply(nothing -> ResponseBuilder.ok().build());
+    }
+
+    /**
+     * npm-style error body.
+     * @param message Reason
+     * @return JSON object
+     */
+    private static JsonObject error(final String message) {
+        return Json.createObjectBuilder().add("error", message).build();
     }
 
     /**

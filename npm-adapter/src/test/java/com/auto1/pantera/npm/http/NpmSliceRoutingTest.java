@@ -227,6 +227,21 @@ final class NpmSliceRoutingTest {
      * @return Response
      * @throws Exception If the base URL is malformed
      */
+    @Test
+    void deleteWithoutRevisionSegmentAnswersPreconditionRequired() throws Exception {
+        final Response response = this.responseFor(RqMethod.DELETE, "/@scope/scoped-pkg");
+        MatcherAssert.assertThat(
+            "a DELETE with no /-rev/ segment is a missing revision (428), not 404",
+            response.status(), new IsEqual<>(RsStatus.PRECONDITION_REQUIRED)
+        );
+        MatcherAssert.assertThat(
+            "the package survives",
+            new PerVersionLayout(this.storage)
+                .hasVersions(new Key.From("@scope/scoped-pkg")).toCompletableFuture().join(),
+            new IsEqual<>(true)
+        );
+    }
+
     private Response responseFor(final RqMethod method, final String path) throws Exception {
         final NpmSlice slice = new NpmSlice(
             NpmSliceRoutingTest.baseUrl(), this.storage, Policy.FREE,

@@ -97,6 +97,46 @@ final class UnpublishForceSliceTest {
     }
 
     @Test
+    void explainsRefusalsInAJsonBody() {
+        final Storage storage = new InMemoryStorage();
+        storage.save(new Key.From("pkg", ".versions", "1.0.0.json"),
+            new Content.From("{}".getBytes(StandardCharsets.UTF_8))).join();
+        final UnpublishForceSlice slice =
+            new UnpublishForceSlice(storage, Optional.empty(), "npm");
+        final String required = slice.response(
+            new RequestLine(RqMethod.DELETE, "/pkg/-rev/undefined"),
+            Headers.EMPTY, Content.EMPTY
+        ).join().body().asString();
+        final String mismatch = slice.response(
+            new RequestLine(RqMethod.DELETE, "/pkg/-rev/9-deadbeef"),
+            Headers.EMPTY, Content.EMPTY
+        ).join().body().asString();
+        MatcherAssert.assertThat(
+            "428 names the missing revision",
+            required.contains("\"error\"") && required.contains("revision"),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "409 names the stale revision",
+            mismatch.contains("\"error\"") && mismatch.contains("revision"),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void refusesADeleteWithoutRevisionSegment() {
+        final Storage storage = new InMemoryStorage();
+        storage.save(new Key.From("pkg", ".versions", "1.0.0.json"),
+            new Content.From("{}".getBytes(StandardCharsets.UTF_8))).join();
+        MatcherAssert.assertThat(
+            new UnpublishForceSlice(storage, Optional.empty(), "npm").response(
+                new RequestLine(RqMethod.DELETE, "/pkg"), Headers.EMPTY, Content.EMPTY
+            ).join().status(),
+            new IsEqual<>(RsStatus.PRECONDITION_REQUIRED)
+        );
+    }
+
+    @Test
     void answersNotFoundForAnUnknownPackage() {
         final Response response =
             new UnpublishForceSlice(new InMemoryStorage(), Optional.empty(), "npm")
