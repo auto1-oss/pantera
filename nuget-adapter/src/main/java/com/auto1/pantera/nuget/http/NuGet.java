@@ -173,12 +173,18 @@ public final class NuGet implements Slice {
         final PackageMetadata metadata = new PackageMetadata(this.repository, content);
         return new RoutingResource(
             path,
-            new ServiceIndex(
-                Arrays.asList(
-                    new RouteService(this.url, publish, "PackagePublish/2.0.0"),
-                    new RouteService(this.url, metadata, "RegistrationsBaseUrl/Versioned"),
-                    new RouteService(this.url, content, "PackageBaseAddress/3.0.0")
-                )
+            // The service index (and the "/" fallback route it owns) is part
+            // of the private repository: without the auth wrapper any Basic
+            // header, valid or not, got the index back.
+            this.auth(
+                new ServiceIndex(
+                    Arrays.asList(
+                        new RouteService(this.url, publish, "PackagePublish/2.0.0"),
+                        new RouteService(this.url, metadata, "RegistrationsBaseUrl/Versioned"),
+                        new RouteService(this.url, content, "PackageBaseAddress/3.0.0")
+                    )
+                ),
+                Action.Standard.READ
             ),
             this.auth(publish, Action.Standard.WRITE),
             this.auth(content, Action.Standard.READ),
