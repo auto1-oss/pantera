@@ -65,7 +65,15 @@ public final class GroupSearchSlice implements Slice {
      * @param slices Member repository slices, same order
      */
     public GroupSearchSlice(final List<String> names, final List<Slice> slices) {
-        this.members = new MemberFanout(names, slices);
+        this(new MemberFanout(names, slices));
+    }
+
+    /**
+     * Ctor.
+     * @param members Members
+     */
+    GroupSearchSlice(final MemberFanout members) {
+        this.members = members;
     }
 
     @Override
@@ -74,35 +82,44 @@ public final class GroupSearchSlice implements Slice {
     ) {
         final int size = GroupSearchSlice.size(line);
         return body.asBytesFuture().thenCompose(
-            ignored -> this.members.query(line, headers)
-        ).thenApply(
-            answers -> {
-                final JsonArrayBuilder objects = Json.createArrayBuilder();
-                final Set<String> seen = new HashSet<>();
-                long total = 0;
-                for (final JsonObject answer : answers) {
-                    total += GroupSearchSlice.total(answer);
-                    final JsonValue arr = answer.get(GroupSearchSlice.OBJECTS);
-                    if (arr == null || arr.getValueType() != JsonValue.ValueType.ARRAY) {
-                        continue;
-                    }
-                    for (final JsonValue obj : arr.asJsonArray()) {
-                        if (seen.size() < size && GroupSearchSlice.first(obj, seen)) {
-                            objects.add(obj);
-                        }
-                    }
-                }
-                return ResponseBuilder.ok()
-                    .jsonBody(
-                        Json.createObjectBuilder()
-                            .add(GroupSearchSlice.OBJECTS, objects)
-                            .add("total", total)
-                            .add("time", java.time.Instant.now().toString())
-                            .build()
-                    )
-                    .build();
-            }
+            ignored -> this.members.merge(
+                line, headers, answers -> GroupSearchSlice.merged(answers, size)
+            )
         );
+    }
+
+    /**
+     * Merge the members' search results in member order, one object per
+     * package, at most {@code size} objects.
+     * @param answers Answering members' JSON objects, in member order
+     * @param size Page size
+     * @return Response
+     */
+    private static Response merged(final List<JsonObject> answers, final int size) {
+        final JsonArrayBuilder objects = Json.createArrayBuilder();
+        final Set<String> seen = new HashSet<>();
+        long total = 0;
+        for (final JsonObject answer : answers) {
+            total += GroupSearchSlice.total(answer);
+            final JsonValue arr = answer.get(GroupSearchSlice.OBJECTS);
+            if (arr == null || arr.getValueType() != JsonValue.ValueType.ARRAY) {
+                continue;
+            }
+            for (final JsonValue obj : arr.asJsonArray()) {
+                if (seen.size() < size && GroupSearchSlice.first(obj, seen)) {
+                    objects.add(obj);
+                }
+            }
+        }
+        return ResponseBuilder.ok()
+            .jsonBody(
+                Json.createObjectBuilder()
+                    .add(GroupSearchSlice.OBJECTS, objects)
+                    .add("total", total)
+                    .add("time", java.time.Instant.now().toString())
+                    .build()
+            )
+            .build();
     }
 
     /**

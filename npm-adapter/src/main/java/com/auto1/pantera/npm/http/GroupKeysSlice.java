@@ -23,6 +23,7 @@ import java.util.concurrent.CompletableFuture;
 import javax.json.Json;
 import javax.json.JsonArrayBuilder;
 import javax.json.JsonObject;
+import javax.json.JsonString;
 import javax.json.JsonValue;
 
 /**
@@ -52,7 +53,15 @@ public final class GroupKeysSlice implements Slice {
      * @param slices Member repository slices, same order
      */
     public GroupKeysSlice(final List<String> names, final List<Slice> slices) {
-        this.members = new MemberFanout(names, slices);
+        this(new MemberFanout(names, slices));
+    }
+
+    /**
+     * Ctor.
+     * @param members Members
+     */
+    GroupKeysSlice(final MemberFanout members) {
+        this.members = members;
     }
 
     @Override
@@ -60,27 +69,49 @@ public final class GroupKeysSlice implements Slice {
         final RequestLine line, final Headers headers, final Content body
     ) {
         return body.asBytesFuture().thenCompose(
-            ignored -> this.members.query(line, headers)
-        ).thenApply(
-            answers -> {
-                final JsonArrayBuilder keys = Json.createArrayBuilder();
-                final Set<String> seen = new HashSet<>();
-                for (final JsonObject answer : answers) {
-                    final JsonValue arr = answer.get(GroupKeysSlice.KEYS);
-                    if (arr == null || arr.getValueType() != JsonValue.ValueType.ARRAY) {
-                        continue;
-                    }
-                    for (final JsonValue key : arr.asJsonArray()) {
-                        if (key.getValueType() == JsonValue.ValueType.OBJECT
-                            && seen.add(key.asJsonObject().getString("keyid", key.toString()))) {
-                            keys.add(key);
-                        }
-                    }
-                }
-                return ResponseBuilder.ok()
-                    .jsonBody(Json.createObjectBuilder().add(GroupKeysSlice.KEYS, keys).build())
-                    .build();
-            }
+            ignored -> this.members.merge(line, headers, GroupKeysSlice::union)
         );
+    }
+
+    /**
+     * Union of the members' keys, deduplicated by key id.
+     * @param answers Answering members' JSON objects, in member order
+     * @return Response
+     */
+    private static Response union(final List<JsonObject> answers) {
+        final JsonArrayBuilder keys = Json.createArrayBuilder();
+        final Set<String> seen = new HashSet<>();
+        for (final JsonObject answer : answers) {
+            final JsonValue arr = answer.get(GroupKeysSlice.KEYS);
+            if (arr == null || arr.getValueType() != JsonValue.ValueType.ARRAY) {
+                continue;
+            }
+            for (final JsonValue key : arr.asJsonArray()) {
+                if (key.getValueType() == JsonValue.ValueType.OBJECT
+                    && seen.add(GroupKeysSlice.keyid(key.asJsonObject()))) {
+                    keys.add(key);
+                }
+            }
+        }
+        return ResponseBuilder.ok()
+            .jsonBody(Json.createObjectBuilder().add(GroupKeysSlice.KEYS, keys).build())
+            .build();
+    }
+
+    /**
+     * Identity of a key: its {@code keyid} when that is a string, else the
+     * whole key object.
+     * @param key Key object
+     * @return Identity
+     */
+    private static String keyid(final JsonObject key) {
+        final JsonValue keyid = key.get("keyid");
+        final String identity;
+        if (keyid != null && keyid.getValueType() == JsonValue.ValueType.STRING) {
+            identity = ((JsonString) keyid).getString();
+        } else {
+            identity = key.toString();
+        }
+        return identity;
     }
 }

@@ -12,20 +12,30 @@ package com.auto1.pantera.npm.http;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.UpstreamCircuitOpenException;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
+import io.reactivex.Flowable;
 import java.io.StringReader;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import javax.json.Json;
 import javax.json.JsonArray;
 import javax.json.JsonObject;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 /**
  * Tests for {@link GroupKeysSlice} and {@link GroupSearchSlice}: npm group
@@ -101,6 +111,137 @@ final class GroupMergeSlicesTest {
         );
     }
 
+    @Test
+    void keysAnswerServiceUnavailableWhenEveryMemberFails() {
+        final Response response = new GroupKeysSlice(
+            List.of("npm-local", "npm-proxy", "npm-broken"),
+            List.of(
+                GroupMergeSlicesTest.member(new ArrayList<>(), 500, ""),
+                (line, headers, content) -> CompletableFuture.completedFuture(
+                    ResponseBuilder.from(RsStatus.BAD_GATEWAY)
+                        .header(UpstreamCircuitOpenException.HEADER, "true")
+                        .header("Retry-After", "42")
+                        .build()
+                ),
+                (line, headers, content) -> {
+                    throw new IllegalStateException("member broken");
+                }
+            )
+        ).response(
+            new RequestLine(RqMethod.GET, "/-/npm/v1/keys"), Headers.EMPTY, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "an outage is not an empty key set",
+            response.status(), new IsEqual<>(RsStatus.SERVICE_UNAVAILABLE)
+        );
+        MatcherAssert.assertThat(
+            "the largest member Retry-After hint is forwarded",
+            response.headers().values("Retry-After"), new IsEqual<>(List.of("42"))
+        );
+    }
+
+    @Test
+    void searchAnswersServiceUnavailableWhenEveryMemberFails() {
+        final Response response = new GroupSearchSlice(
+            List.of("npm-local", "npm-proxy"),
+            List.of(
+                GroupMergeSlicesTest.member(new ArrayList<>(), 503, ""),
+                (line, headers, content) -> CompletableFuture.failedFuture(
+                    new IllegalStateException("upstream down")
+                )
+            )
+        ).response(
+            new RequestLine(RqMethod.GET, "/-/v1/search?text=qa"), Headers.EMPTY, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "an outage is not an empty result page",
+            response.status(), new IsEqual<>(RsStatus.SERVICE_UNAVAILABLE)
+        );
+        MatcherAssert.assertThat(
+            "the client is told when to retry",
+            response.headers().values("Retry-After").isEmpty(), new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void searchIsAnEmptySuccessWhenMembersOnlyDecline() {
+        MatcherAssert.assertThat(
+            new GroupSearchSlice(
+                List.of("npm-local", "npm-proxy"),
+                List.of(
+                    GroupMergeSlicesTest.member(new ArrayList<>(), 404, ""),
+                    GroupMergeSlicesTest.member(new ArrayList<>(), 403, "")
+                )
+            ).response(
+                new RequestLine(RqMethod.GET, "/-/v1/search?text=qa"),
+                Headers.EMPTY, Content.EMPTY
+            ).join().status(),
+            new IsEqual<>(RsStatus.OK)
+        );
+    }
+
+    @Test
+    void keysToleratesANonStringKeyid() {
+        final Response response = new GroupKeysSlice(
+            List.of("npm-local", "npm-proxy"),
+            List.of(
+                GroupMergeSlicesTest.member(new ArrayList<>(), 200, "{\"keys\":[{\"keyid\":42}]}"),
+                GroupMergeSlicesTest.member(
+                    new ArrayList<>(), 200, "{\"keys\":[{\"keyid\":\"SHA256:npmjs\"}]}"
+                )
+            )
+        ).response(
+            new RequestLine(RqMethod.GET, "/-/npm/v1/keys"), Headers.EMPTY, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "a malformed key does not fail the whole answer",
+            response.status(), new IsEqual<>(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "both keys are served",
+            Json.createReader(new StringReader(response.body().asString()))
+                .readObject().getJsonArray("keys").size(),
+            new IsEqual<>(2)
+        );
+    }
+
+    @Test
+    @Timeout(30)
+    void drainsAMemberResponseThatArrivesAfterTheTimeout() throws Exception {
+        final CompletableFuture<Response> late = new CompletableFuture<>();
+        final CountDownLatch subscribed = new CountDownLatch(1);
+        final Response response = new GroupKeysSlice(
+            new MemberFanout(
+                List.of("npm-local", "npm-slow"),
+                List.of(
+                    GroupMergeSlicesTest.member(
+                        new ArrayList<>(), 200, "{\"keys\":[{\"keyid\":\"SHA256:local\"}]}"
+                    ),
+                    (line, headers, content) -> late
+                ),
+                Duration.ofMillis(10)
+            )
+        ).response(
+            new RequestLine(RqMethod.GET, "/-/npm/v1/keys"), Headers.EMPTY, Content.EMPTY
+        ).join();
+        late.complete(
+            ResponseBuilder.ok().body(
+                new Content.From(
+                    Flowable.just(ByteBuffer.wrap("{\"keys\":[]}".getBytes(StandardCharsets.UTF_8)))
+                        .doOnSubscribe(sub -> subscribed.countDown())
+                )
+            ).build()
+        );
+        MatcherAssert.assertThat(
+            "the answering member is served without waiting for the slow one",
+            response.status(), new IsEqual<>(RsStatus.OK)
+        );
+        MatcherAssert.assertThat(
+            "the late member body is still consumed",
+            subscribed.await(20, TimeUnit.SECONDS), new IsEqual<>(true)
+        );
+    }
+
     /**
      * Member answering a fixed status and body, recording the paths asked.
      * @param paths Recorded paths
@@ -114,7 +255,7 @@ final class GroupMergeSlicesTest {
                 paths.add(line.uri().getPath());
             }
             return CompletableFuture.completedFuture(
-                ResponseBuilder.from(com.auto1.pantera.http.RsStatus.byCode(status))
+                ResponseBuilder.from(RsStatus.byCode(status))
                     .textBody(body)
                     .build()
             );
