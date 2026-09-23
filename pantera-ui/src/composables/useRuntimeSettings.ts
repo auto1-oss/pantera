@@ -73,7 +73,8 @@ export function useRuntimeSettings() {
       const ax = err as { response?: { data?: { message?: string } }; message?: string }
       const detail = ax.response?.data?.message ?? ax.message ?? 'Unknown error'
       notify.error(`Failed to save ${key}`, detail)
-      edited[key] = rows[key].value
+      // Keep the rejected edit: the key stays dirty so the section stays
+      // in the save bar. Discard and resetOne are the explicit reverts.
       return false
     } finally {
       saving[key] = false
