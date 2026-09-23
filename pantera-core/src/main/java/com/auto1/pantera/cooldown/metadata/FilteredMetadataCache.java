@@ -476,15 +476,23 @@ public class FilteredMetadataCache implements Cleanable<String> {
         final CompletableFuture<CacheEntry> future = loader.get();
         this.inflight.put(key, future);
         future.whenComplete((entry, error) -> {
-            this.inflight.remove(key);
-            if (error == null && entry != null) {
+            // Write back only while this load is still the registered one.
+            // Every invalidation path (invalidate / invalidateAll / clear /
+            // L2 sweep) drops the in-flight entry, so a computation that was
+            // already running when the block state changed must not publish
+            // its pre-change result into L1/L2 — its own caller still gets it.
+            final boolean current = this.inflight.remove(key, future);
+            if (current && error == null && entry != null) {
                 // Cache in L1 with L1 TTL (skip in L2-only mode)
                 if (!this.l2OnlyMode && this.l1Cache != null) {
                     // Wrap entry with L1 TTL for proper expiration, preserving
                     // the blocked-version detail for cache-hit audit records.
+                    // The expiry is capped at l1Ttl even when a block ends days
+                    // from now, so a missed invalidation self-heals via SWR
+                    // within l1Ttl instead of pinning the envelope until then.
                     final CacheEntry l1Entry = new CacheEntry(
                         entry.data(),
-                        entry.earliestBlockedUntil(),
+                        entry.earliestBlockedUntil().map(this::capToL1Ttl),
                         this.l1Ttl,
                         entry.blockedVersions()
                     );
@@ -504,6 +512,18 @@ public class FilteredMetadataCache implements Cleanable<String> {
         });
 
         return future;
+    }
+
+    /**
+     * Earliest of {@code blockedUntil} and {@code now + l1Ttl} — the L1
+     * logical-expiry instant for an envelope that has blocked versions.
+     *
+     * @param blockedUntil Earliest block expiry of the envelope
+     * @return Capped expiry instant
+     */
+    private Instant capToL1Ttl(final Instant blockedUntil) {
+        final Instant cap = Instant.now().plus(this.l1Ttl);
+        return blockedUntil.isBefore(cap) ? blockedUntil : cap;
     }
 
     /**
