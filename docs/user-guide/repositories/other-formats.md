@@ -365,6 +365,8 @@ anaconda upload conda-bld/noarch/my-package-1.0.0-0.tar.bz2
 
 anaconda-client posts the package file without credentials, so the authenticated stage step hands it a single-use upload URL. That URL is valid for 10 minutes, for that one file only, and needs WRITE permission on the repository. It is built from the repository's configured `url`, so `url` must be the address clients use.
 
+The URL is single-use across the whole cluster when Pantera runs with Valkey. Without Valkey it is single-use per Pantera instance, which is enough for a single-instance deployment. The URL is a credential until it is used or expires: Pantera masks the `/t/<token>/` segment in its own logs, but a reverse proxy in front of Pantera logs it in full unless you configure it not to.
+
 <details>
 <summary>Server-Side Repository Configuration</summary>
 

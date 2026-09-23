@@ -25,6 +25,7 @@ import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -104,7 +105,22 @@ final class UploadAuthSlice implements Slice {
     public CompletableFuture<Response> response(
         final RequestLine line, final Headers headers, final Content body
     ) {
-        final Optional<String> user = this.ticketUser(line, headers);
+        return this.ticketUser(line, headers).thenCompose(
+            user -> this.respond(line, headers, body, user)
+        ).toCompletableFuture();
+    }
+
+    /**
+     * Respond for the ticket user, if any.
+     * @param line Request line
+     * @param headers Request headers
+     * @param body Request body
+     * @param user Ticket user, empty without a valid ticket
+     * @return Response
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    private CompletableFuture<Response> respond(final RequestLine line, final Headers headers,
+        final Content body, final Optional<String> user) {
         final CompletableFuture<Response> res;
         if (user.isEmpty()) {
             res = this.fallback.response(line, headers, body);
@@ -134,12 +150,14 @@ final class UploadAuthSlice implements Slice {
      * @param headers Request headers
      * @return User name if the request carries a ticket valid for its key
      */
-    private Optional<String> ticketUser(final RequestLine line, final Headers headers) {
+    private CompletionStage<Optional<String>> ticketUser(final RequestLine line,
+        final Headers headers) {
         final String path = line.uri().getPath();
         final Matcher pkg = UploadAuthSlice.PKG.matcher(path);
         return UploadAuthSlice.token(path, headers)
             .filter(tkn -> pkg.matches() && tkn.indexOf('.') > 0 && tkn.indexOf('.') == tkn.lastIndexOf('.'))
-            .flatMap(tkn -> this.tickets.redeem(tkn, this.repo, pkg.group(1)));
+            .map(tkn -> this.tickets.redeem(tkn, this.repo, pkg.group(1)))
+            .orElseGet(() -> CompletableFuture.completedFuture(Optional.empty()));
     }
 
     /**

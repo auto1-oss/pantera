@@ -28,9 +28,9 @@ import java.util.concurrent.CompletionStage;
 public final class ValkeyNonceStore implements NonceStore {
 
     /**
-     * Key namespace.
+     * Key namespace of download-token nonces.
      */
-    private static final String PREFIX = "pantera:download-nonce:";
+    private static final String DOWNLOAD = "pantera:download-nonce:";
 
     /**
      * Stored marker value.
@@ -48,21 +48,40 @@ public final class ValkeyNonceStore implements NonceStore {
     private final Duration ttl;
 
     /**
+     * Key namespace.
+     */
+    private final String prefix;
+
+    /**
      * Ctor.
      *
      * @param valkey Valkey connection
      * @param ttl Remember window (at least the token TTL)
      */
     public ValkeyNonceStore(final ValkeyConnection valkey, final Duration ttl) {
+        this(valkey, ttl, ValkeyNonceStore.DOWNLOAD);
+    }
+
+    /**
+     * Ctor with a key namespace, for single-use nonces other than
+     * download tokens.
+     *
+     * @param valkey Valkey connection
+     * @param ttl Remember window (at least the token TTL)
+     * @param prefix Key namespace, e.g. {@code pantera:conda-upload-nonce:}
+     */
+    public ValkeyNonceStore(final ValkeyConnection valkey, final Duration ttl,
+        final String prefix) {
         this.valkey = valkey;
         this.ttl = ttl;
+        this.prefix = prefix;
     }
 
     @Override
     public CompletionStage<Boolean> consume(final String nonce) {
         return this.valkey.async()
             .set(
-                PREFIX + nonce, USED,
+                this.prefix + nonce, USED,
                 SetArgs.Builder.nx().px(this.ttl.toMillis())
             )
             .thenApply("OK"::equals)

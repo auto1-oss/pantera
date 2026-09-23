@@ -24,7 +24,10 @@ import java.time.Duration;
 import java.util.Base64;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 import javax.json.Json;
 import javax.json.JsonObject;
 import javax.json.JsonReader;
@@ -41,7 +44,8 @@ import javax.json.JsonReader;
  * {@code post_url}. A ticket names the user, the repository and the exact
  * package key it may write, expires after {@link #TTL}, is signed with the
  * cluster-wide RS256 key pair (so any node can verify it) and is accepted
- * once per node.</p>
+ * once: its nonce is consumed through a redemption ledger, shared by all
+ * nodes when Valkey is configured and process-local otherwise.</p>
  *
  * @since 2.2.9
  */
@@ -50,7 +54,7 @@ public final class UploadTickets {
     /**
      * Ticket lifetime.
      */
-    static final Duration TTL = Duration.ofMinutes(10);
+    public static final Duration TTL = Duration.ofMinutes(10);
 
     /**
      * Signature algorithm.
@@ -83,9 +87,10 @@ public final class UploadTickets {
     private final Clock clock;
 
     /**
-     * Redeemed ticket nonces with their expiry (epoch millis).
+     * Redemption ledger: marks a ticket nonce as used and answers
+     * {@code true} exactly once per nonce.
      */
-    private final Map<String, Long> redeemed;
+    private final Function<String, CompletionStage<Boolean>> ledger;
 
     /**
      * Random source for nonces.
@@ -98,6 +103,20 @@ public final class UploadTickets {
      */
     public UploadTickets() {
         this(UploadTickets.ephemeral(), Clock.systemUTC());
+    }
+
+    /**
+     * Tickets signed with the given key pair, redeemed through the given
+     * ledger. With several nodes the ledger must be shared (e.g. Valkey
+     * {@code SET NX}), otherwise a ticket is single-use per node only.
+     * @param signing Private key
+     * @param verifying Public key
+     * @param ledger Marks a nonce as used; {@code true} on first use only.
+     *  It must remember a nonce for at least {@link #TTL}.
+     */
+    public UploadTickets(final PrivateKey signing, final PublicKey verifying,
+        final Function<String, CompletionStage<Boolean>> ledger) {
+        this(new KeyPair(verifying, signing), Clock.systemUTC(), ledger);
     }
 
     /**
@@ -115,10 +134,21 @@ public final class UploadTickets {
      * @param clock Clock
      */
     UploadTickets(final KeyPair keys, final Clock clock) {
+        this(keys, clock, new LocalLedger(clock));
+    }
+
+    /**
+     * Primary ctor.
+     * @param keys Key pair
+     * @param clock Clock
+     * @param ledger Redemption ledger
+     */
+    private UploadTickets(final KeyPair keys, final Clock clock,
+        final Function<String, CompletionStage<Boolean>> ledger) {
         this.signing = keys.getPrivate();
         this.verifying = keys.getPublic();
         this.clock = clock;
-        this.redeemed = new ConcurrentHashMap<>();
+        this.ledger = ledger;
         this.random = new SecureRandom();
     }
 
@@ -151,25 +181,28 @@ public final class UploadTickets {
      * @param repo Repository name the upload targets
      * @param key Package key the upload targets
      * @return User name when the ticket is genuine, unexpired, unused and
-     *  issued for exactly this repository and key
+     *  issued for exactly this repository and key. A ledger failure rejects
+     *  the ticket.
      */
-    public Optional<String> redeem(final String ticket, final String repo, final String key) {
-        final Optional<JsonObject> claims = this.verified(ticket);
-        Optional<String> user = Optional.empty();
+    public CompletionStage<Optional<String>> redeem(final String ticket, final String repo,
+        final String key) {
+        final Optional<JsonObject> claims = this.verified(ticket)
+            .filter(json -> repo.equals(json.getString("r", null)))
+            .filter(json -> key.equals(json.getString("k", null)))
+            .filter(json -> json.getJsonNumber("e").longValue() >= this.clock.millis());
+        final CompletionStage<Optional<String>> res;
         if (claims.isPresent()) {
             final JsonObject json = claims.get();
-            final long now = this.clock.millis();
-            this.redeemed.values().removeIf(expiry -> expiry < now);
-            if (repo.equals(json.getString("r", null))
-                && key.equals(json.getString("k", null))
-                && json.getJsonNumber("e").longValue() >= now
-                && this.redeemed.putIfAbsent(
-                    json.getString("n"), json.getJsonNumber("e").longValue()
-                ) == null) {
-                user = Optional.of(json.getString("u"));
-            }
+            res = this.ledger.apply(json.getString("n"))
+                .thenApply(
+                    first -> Optional.of(json.getString("u"))
+                        .filter(user -> Boolean.TRUE.equals(first))
+                )
+                .exceptionally(err -> Optional.empty());
+        } else {
+            res = CompletableFuture.completedFuture(Optional.empty());
         }
-        return user;
+        return res;
     }
 
     /**
@@ -229,6 +262,41 @@ public final class UploadTickets {
             return gen.generateKeyPair();
         } catch (final GeneralSecurityException ex) {
             throw new IllegalStateException("RSA is not available", ex);
+        }
+    }
+
+    /**
+     * Process-local ledger: single use on this node only.
+     * @since 2.2.9
+     */
+    private static final class LocalLedger implements Function<String, CompletionStage<Boolean>> {
+
+        /**
+         * Used nonces with the time they may be forgotten (epoch millis).
+         */
+        private final Map<String, Long> used;
+
+        /**
+         * Clock.
+         */
+        private final Clock clock;
+
+        /**
+         * Ctor.
+         * @param clock Clock
+         */
+        LocalLedger(final Clock clock) {
+            this.used = new ConcurrentHashMap<>();
+            this.clock = clock;
+        }
+
+        @Override
+        public CompletionStage<Boolean> apply(final String nonce) {
+            final long now = this.clock.millis();
+            this.used.values().removeIf(expiry -> expiry < now);
+            return CompletableFuture.completedFuture(
+                this.used.putIfAbsent(nonce, now + UploadTickets.TTL.toMillis()) == null
+            );
         }
     }
 }

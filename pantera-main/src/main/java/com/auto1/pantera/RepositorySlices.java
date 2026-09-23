@@ -1819,14 +1819,26 @@ public class RepositorySlices {
 
     /**
      * Upload tickets for the anaconda-client form upload, signed with the
-     * cluster-wide RS256 key pair so every node accepts them.
+     * cluster-wide RS256 key pair so every node accepts them. With Valkey the
+     * ticket nonce is consumed with {@code SET NX}, so a ticket is single-use
+     * across the cluster; without Valkey (single instance) the ledger is
+     * process-local.
      *
      * @return Upload tickets
      */
     private UploadTickets condaUploadTickets() {
         final UploadTickets res;
         if (this.tokens instanceof com.auto1.pantera.auth.JwtTokens jwt) {
-            res = new UploadTickets(jwt.privateKey(), jwt.publicKey());
+            res = this.settings.valkeyConnection()
+                .map(
+                    valkey -> new UploadTickets(
+                        jwt.privateKey(), jwt.publicKey(),
+                        new com.auto1.pantera.api.v1.download.ValkeyNonceStore(
+                            valkey, UploadTickets.TTL, "pantera:conda-upload-nonce:"
+                        )::consume
+                    )
+                )
+                .orElseGet(() -> new UploadTickets(jwt.privateKey(), jwt.publicKey()));
         } else {
             res = new UploadTickets();
         }

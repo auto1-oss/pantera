@@ -72,6 +72,15 @@ public final class LogSanitizer {
     );
 
     /**
+     * Pattern for a credential carried as a {@code /t/<token>/} path segment:
+     * conda's token-in-URL form and the conda upload tickets. Only long
+     * segments are masked so an ordinary {@code /t/} directory stays legible.
+     */
+    private static final Pattern URL_PATH_TOKEN_PATTERN = Pattern.compile(
+        "(/t/)[A-Za-z0-9._~+=-]{20,}(?=/|$|\\?)"
+    );
+
+    /**
      * Mask to use for sensitive data.
      */
     private static final String MASK = "***REDACTED***";
@@ -105,7 +114,8 @@ public final class LogSanitizer {
     }
 
     /**
-     * Sanitize a URL for logging by masking query parameters with sensitive names.
+     * Sanitize a URL for logging by masking query parameters with sensitive names
+     * and {@code /t/<token>/} path credentials.
      * 
      * @param url Original URL
      * @return Sanitized URL safe for logging
@@ -114,7 +124,9 @@ public final class LogSanitizer {
         if (url == null || url.isEmpty()) {
             return url;
         }
-        return URL_API_KEY_PATTERN.matcher(url).replaceAll("$1" + MASK);
+        return URL_PATH_TOKEN_PATTERN.matcher(
+            URL_API_KEY_PATTERN.matcher(url).replaceAll("$1" + MASK)
+        ).replaceAll("$1" + MASK);
     }
 
     /**
