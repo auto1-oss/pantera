@@ -16,6 +16,7 @@ import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.helm.ChartYaml;
 import com.auto1.pantera.helm.metadata.IndexYamlMapping;
+import com.auto1.pantera.helm.misc.EmptyIndex;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
@@ -45,6 +46,11 @@ final class DownloadIndexSlice implements Slice {
      * Endpoint request line pattern.
      */
     static final Pattern PTRN = Pattern.compile(".*index.yaml$");
+
+    /**
+     * Repository index key.
+     */
+    private static final Key ROOT_INDEX = new Key.From("index.yaml");
 
     /**
      * Base URL.
@@ -81,6 +87,13 @@ final class DownloadIndexSlice implements Slice {
                         return this.storage.value(path)
                             .thenCompose(content -> new UpdateIndexUrls(content, this.base).value())
                             .thenApply(content -> ResponseBuilder.ok().body(content).build());
+                    }
+                    if (DownloadIndexSlice.ROOT_INDEX.equals(path)) {
+                        // A repository without charts still has a (empty)
+                        // index: `helm repo add` fails on a 404 here.
+                        return ResponseBuilder.ok()
+                            .body(new EmptyIndex().asContent())
+                            .completedFuture();
                     }
                     return ResponseBuilder.notFound().completedFuture();
                 }
@@ -143,7 +156,9 @@ final class DownloadIndexSlice implements Slice {
                 .thenApply(bytes -> new String(bytes, StandardCharsets.UTF_8))
                 .thenApply(IndexYamlMapping::new)
                 .thenApply(this::update)
-                .thenApply(idx -> idx.toContent().orElseThrow());
+                // An index whose last chart was deleted has no entries:
+                // serve it as the empty index instead of failing.
+                .thenApply(idx -> idx.toContent().orElseGet(() -> new EmptyIndex().asContent()));
         }
 
         /**
