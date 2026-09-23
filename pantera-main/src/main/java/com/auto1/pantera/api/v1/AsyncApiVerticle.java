@@ -46,6 +46,8 @@ import io.vertx.core.json.JsonObject;
 import io.vertx.ext.auth.jwt.JWTAuth;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.handler.BodyHandler;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import javax.sql.DataSource;
 
@@ -503,10 +505,7 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             this.security.policy()
         ).register(router);
         new SearchHandler(this.artifactIndex, this.security.policy(), crs::listAll).register(router);
-        new PypiHandler(
-            crs, new RepoData(this.configsStorage, this.caches.storagesCache()),
-            this.security.policy()
-        ).register(router);
+        this.pypiHandler(crs).register(router);
         if (this.dataSource != null) {
             new AdminAuthHandler(
                 new AuthSettingsDao(this.dataSource),
@@ -581,5 +580,39 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                     .field("log.source", "application")
                     .log()
             );
+    }
+
+    /**
+     * PyPI yank/unyank handler. With a database, repositories live in the DB
+     * and may name their storage by alias, so the repo storage is resolved
+     * alias-aware like the serving path ({@link DbRepoStorage}); otherwise
+     * the YAML config (which resolves aliases itself) is used.
+     * @param crs Repository settings
+     * @return Handler
+     */
+    private PypiHandler pypiHandler(final CrudRepoSettings crs) {
+        final PypiHandler handler;
+        if (this.dataSource == null) {
+            handler = new PypiHandler(
+                crs, new RepoData(this.configsStorage, this.caches.storagesCache()),
+                this.security.policy()
+            );
+        } else {
+            final StorageAliasDao aliases = new StorageAliasDao(this.dataSource);
+            handler = new PypiHandler(
+                this.security.policy(),
+                new DbRepoStorage(
+                    crs,
+                    repo -> {
+                        final List<javax.json.JsonObject> merged =
+                            new ArrayList<>(aliases.listGlobal());
+                        merged.addAll(aliases.listForRepo(repo));
+                        return merged;
+                    },
+                    this.caches.storagesCache()
+                )
+            );
+        }
+        return handler;
     }
 }
