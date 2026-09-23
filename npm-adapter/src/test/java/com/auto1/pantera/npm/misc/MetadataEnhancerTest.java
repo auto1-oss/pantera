@@ -47,4 +47,42 @@ final class MetadataEnhancerTest {
             new IsEqual<>(false)
         );
     }
+
+    @Test
+    void timeIsDerivedFromPublishTimesAndStableAcrossReads() {
+        final JsonObject original = Json.createObjectBuilder()
+            .add("name", "pkg")
+            .add(
+                "versions",
+                Json.createObjectBuilder()
+                    .add(
+                        "1.0.0",
+                        Json.createObjectBuilder()
+                            .add("_publishTime", "2026-01-01T00:00:00Z")
+                    )
+                    .add(
+                        "1.1.0",
+                        Json.createObjectBuilder()
+                            .add("_publishTime", "2026-02-01T00:00:00Z")
+                    )
+                    .add("0.9.0", Json.createObjectBuilder())
+            )
+            .build();
+        final JsonObject first = new MetadataEnhancer(original).enhance();
+        MatcherAssert.assertThat(
+            "modified is the newest publish time, not the request time",
+            first.getJsonObject("time").getString("modified"),
+            new IsEqual<>("2026-02-01T00:00:00Z")
+        );
+        MatcherAssert.assertThat(
+            "created is the oldest publish time",
+            first.getJsonObject("time").getString("created"),
+            new IsEqual<>("2026-01-01T00:00:00Z")
+        );
+        MatcherAssert.assertThat(
+            "two reads without a write produce the same body",
+            new MetadataEnhancer(original).enhance(),
+            new IsEqual<>(first)
+        );
+    }
 }
