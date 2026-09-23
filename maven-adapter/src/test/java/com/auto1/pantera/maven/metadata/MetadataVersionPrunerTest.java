@@ -127,6 +127,18 @@ final class MetadataVersionPrunerTest {
     }
 
     @Test
+    void removesTheChecksumSidecarsOfADeletedFile() {
+        final Key jar = new Key.From(DIR, "0.0.1", "lib-0.0.1.jar");
+        this.blocking.save(new Key.From(jar.string() + ".sha1"), new byte[]{1});
+        this.blocking.delete(jar);
+        new MetadataVersionPruner(this.storage).afterDelete(jar.string()).join();
+        MatcherAssert.assertThat(
+            this.blocking.exists(new Key.From(jar.string() + ".sha1")),
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
     void leavesMetadataAloneWhenEveryVersionStillExists() {
         final List<String> changed = new MetadataVersionPruner(this.storage)
             .afterDelete(DIR + "/0.0.2/lib-0.0.2-sources.jar").join();

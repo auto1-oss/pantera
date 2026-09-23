@@ -84,7 +84,23 @@ public final class MetadataVersionPruner {
      */
     public CompletableFuture<List<String>> afterDelete(final String deleted) {
         final List<String> dirs = MetadataVersionPruner.candidateDirs(deleted);
-        CompletableFuture<List<String>> res = CompletableFuture.completedFuture(new ArrayList<>(2));
+        // A deleted file's checksum sidecars would otherwise keep answering
+        // 200 for a file that is gone.
+        CompletableFuture<Void> sidecars = CompletableFuture.completedFuture(null);
+        final String file = MetadataVersionPruner.trim(deleted);
+        for (final String alg : CHECKSUMS) {
+            if (file.isEmpty()) {
+                break;
+            }
+            final Key sidecar = new Key.From(file + "." + alg);
+            sidecars = sidecars.thenCompose(
+                nothing -> this.storage.exists(sidecar).thenCompose(
+                    exists -> exists ? this.storage.delete(sidecar)
+                        : CompletableFuture.completedFuture(null)
+                )
+            );
+        }
+        CompletableFuture<List<String>> res = sidecars.thenApply(nothing -> new ArrayList<>(2));
         for (final String dir : dirs) {
             res = res.thenCompose(
                 changed -> this.reconcile(dir).thenApply(name -> {
@@ -277,13 +293,7 @@ public final class MetadataVersionPruner {
      * @return Parent and grand-parent directories
      */
     private static List<String> candidateDirs(final String deleted) {
-        String clean = deleted.trim();
-        while (clean.startsWith("/")) {
-            clean = clean.substring(1);
-        }
-        while (clean.endsWith("/")) {
-            clean = clean.substring(0, clean.length() - 1);
-        }
+        final String clean = MetadataVersionPruner.trim(deleted);
         final List<String> dirs = new ArrayList<>(2);
         final int last = clean.lastIndexOf('/');
         if (last > 0) {
@@ -295,6 +305,22 @@ public final class MetadataVersionPruner {
             }
         }
         return dirs;
+    }
+
+    /**
+     * Strip surrounding whitespace and slashes.
+     * @param path Path
+     * @return Clean path
+     */
+    private static String trim(final String path) {
+        String clean = path.trim();
+        while (clean.startsWith("/")) {
+            clean = clean.substring(1);
+        }
+        while (clean.endsWith("/")) {
+            clean = clean.substring(0, clean.length() - 1);
+        }
+        return clean;
     }
 
     /**
