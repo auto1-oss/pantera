@@ -19,9 +19,12 @@ import com.auto1.pantera.http.slice.KeyFromPath;
 
 import java.net.URI;
 import java.util.Collection;
-import java.util.Comparator;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Go mod slice: this slice returns json-formatted metadata about go module as
@@ -29,6 +32,11 @@ import java.util.concurrent.CompletableFuture;
  * section of readme.
  */
 public final class LatestSlice implements Slice {
+
+    /**
+     * {@code .info} file directly under an {@code @v} directory; group 1 is the version.
+     */
+    private static final Pattern INFO = Pattern.compile("^.*/@v/([^/]+)\\.info$");
 
     private final Storage storage;
 
@@ -62,17 +70,24 @@ public final class LatestSlice implements Slice {
     }
 
     /**
-     * Composes response. It filters .info files from module directory, chooses the greatest
-     * version and returns content from the .info file.
+     * Composes response. It takes the {@code .info} files directly under the
+     * module's {@code @v} directory, chooses the latest version by Go version
+     * ordering (highest release, else highest prerelease, else highest
+     * pseudo-version) and returns content from its {@code .info} file.
      * @param module Module file names list from repository
      * @return Response
      */
     private CompletableFuture<Response> resp(final Collection<Key> module) {
-        final Optional<String> info = module.stream().map(Key::string)
-            .filter(item -> item.endsWith("info"))
-            .max(Comparator.naturalOrder());
-        if (info.isPresent()) {
-            return this.storage.value(new KeyFromPath(info.get()))
+        final Map<String, Key> infos = new HashMap<>();
+        for (final Key key : module) {
+            final Matcher matcher = LatestSlice.INFO.matcher(key.string());
+            if (matcher.matches()) {
+                infos.put(matcher.group(1), key);
+            }
+        }
+        final Optional<String> latest = new GoVersionOrder().latest(infos.keySet());
+        if (latest.isPresent()) {
+            return this.storage.value(infos.get(latest.get()))
                 .thenApply(c -> ResponseBuilder.ok()
                     .header(ContentType.json())
                     .body(c)
