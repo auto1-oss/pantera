@@ -48,6 +48,18 @@ public class ItemTokenizer {
     private static final String PATH = "path";
 
     /**
+     * Field name for the repository the item token was issued for.
+     */
+    private static final String REPOSITORY = "repo";
+
+    /**
+     * Lifetime of an item token, in seconds. The token is checked when an
+     * upload starts, so it only has to outlive the gap between the
+     * {@code upload_urls} call and the last file PUT of that upload.
+     */
+    static final int TTL_SECONDS = 3600;
+
+    /**
      * Basic interface for creating JWT objects.
      */
     private final JWTAuth provider;
@@ -103,45 +115,62 @@ public class ItemTokenizer {
 
     /**
      * Generates string token for repository item info provided.
+     *
+     * <p>The token names the repository it was issued for and expires after
+     * {@link #TTL_SECONDS}: every Conan repository shares one key pair (and,
+     * on the main port, one host), so without the repository claim a token
+     * issued by one repository would be redeemable against another.</p>
+     *
      * @param path Path value property of the repository item.
      * @param hostname Host name property of the repository item.
+     * @param repository Name of the repository the item belongs to.
      * @return Java String token in JWT format.
      */
-    public String generateToken(final String path, final String hostname) {
+    public String generateToken(final String path, final String hostname,
+        final String repository) {
         return this.provider.generateToken(
             new JsonObject()
                 .put(ItemTokenizer.PATH, path)
-                .put(ItemTokenizer.HOSTNAME, hostname),
+                .put(ItemTokenizer.HOSTNAME, hostname)
+                .put(ItemTokenizer.REPOSITORY, repository),
             // Explicit RS256 — Vert.x's generateToken defaults to HS256
             // which is no keys we configured on the provider.
             new JWTOptions().setAlgorithm("RS256")
+                .setExpiresInSeconds(ItemTokenizer.TTL_SECONDS)
         );
     }
 
     /**
      * Authenticate by token and decode item data.
      * @param token Item token string.
-     * @return Decoded item data.
+     * @return Decoded item data; empty for a token that is invalid, expired
+     *  or lacks any of the item claims.
      */
     public CompletionStage<Optional<ItemInfo>> authenticateToken(final String token) {
         return this.provider.authenticate(
             new TokenCredentials(token)
         ).map(
             user -> {
+                // Vert.x keeps the registered claims (exp, iat) in the user's
+                // attributes, not in the principal; it has already refused an
+                // expired token, this only refuses a token issued without exp.
                 final JsonObject principal = user.principal();
                 Optional<ItemInfo> res = Optional.empty();
                 if (principal.containsKey(ItemTokenizer.PATH)
-                    && user.containsKey(ItemTokenizer.HOSTNAME)) {
+                    && principal.containsKey(ItemTokenizer.HOSTNAME)
+                    && principal.containsKey(ItemTokenizer.REPOSITORY)
+                    && user.containsKey("exp")) {
                     res = Optional.of(
                         new ItemInfo(
                             principal.getString(ItemTokenizer.PATH),
-                            principal.getString(ItemTokenizer.HOSTNAME)
+                            principal.getString(ItemTokenizer.HOSTNAME),
+                            principal.getString(ItemTokenizer.REPOSITORY)
                         )
                     );
                 }
                 return res;
             }
-        ).toCompletionStage();
+        ).otherwise(Optional.empty()).toCompletionStage();
     }
 
     /**
@@ -161,13 +190,20 @@ public class ItemTokenizer {
         private final String hostname;
 
         /**
+         * Repository the token was issued for.
+         */
+        private final String repository;
+
+        /**
          * Ctor.
          * @param path Path to the item.
          * @param hostname Host name of the client.
+         * @param repository Repository the token was issued for.
          */
-        public ItemInfo(final String path, final String hostname) {
+        public ItemInfo(final String path, final String hostname, final String repository) {
             this.path = path;
             this.hostname = hostname;
+            this.repository = repository;
         }
 
         /**
@@ -184,6 +220,14 @@ public class ItemTokenizer {
          */
         public String getHostname() {
             return this.hostname;
+        }
+
+        /**
+         * Repository the token was issued for.
+         * @return Repository name.
+         */
+        public String getRepository() {
+            return this.repository;
         }
     }
 }

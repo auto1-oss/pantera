@@ -11,6 +11,7 @@
 package com.auto1.pantera.conan.http;
 
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.headers.ClientBaseUrl;
 
 /**
@@ -20,7 +21,12 @@ import com.auto1.pantera.http.headers.ClientBaseUrl;
  * {@code <origin>[/<prefix>][/api]/<repo>}; the base stamped by the
  * routing layer ({@link ClientBaseUrl#HEADER}) carries all of that. A
  * dedicated port has no stamp (the header is scrubbed there) and serves the
- * repository at its root, so the request origin is the base.</p>
+ * repository at its root, so the base is {@code http://<Host>}, echoing the
+ * address the client used. The main-port origin settings (canonical base
+ * URL, host allowlist) are deliberately not applied there: they describe the
+ * main port, and Conan only sends its credentials to URLs under the remote's
+ * own URL, so a URL on any other origin fails the authenticated download
+ * and upload.</p>
  *
  * @since 2.2.9
  */
@@ -36,8 +42,15 @@ final class RepoFileUrl {
      * @param headers Request headers
      */
     RepoFileUrl(final Headers headers) {
-        final ClientBaseUrl client = new ClientBaseUrl(headers);
-        this.base = RepoFileUrl.trimmed(client.stamped().orElseGet(client::origin));
+        this.base = RepoFileUrl.trimmed(
+            new ClientBaseUrl(headers).stamped().orElseGet(
+                () -> String.join(
+                    "", "http://",
+                    headers.find("Host").stream().findFirst()
+                        .map(Header::getValue).orElse("localhost")
+                )
+            )
+        );
     }
 
     /**

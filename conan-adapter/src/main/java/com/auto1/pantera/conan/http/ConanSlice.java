@@ -349,18 +349,27 @@ public final class ConanSlice extends Slice.Wrap {
                         MethodRule.POST
                     ),
                     new BearerAuthzSlice(
-                        new ConanUpload.UploadUrls(storage, tokenizer),
+                        new ConanUpload.UploadUrls(storage, tokenizer, name),
                         tokens.auth(),
                         new OperationControl(
                             policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
                         )
                     )
                 ),
+                // The signed URL alone is not authority to write: the PUT
+                // also needs an authenticated user with WRITE here. Conan
+                // sends its token to every URL under the remote's URL.
                 new RtRulePath(
                     MethodRule.PUT,
-                    new ConanUpload.PutFile(
-                        storage, tokenizer,
-                        events.map(queue -> new RepositoryEvents("conan", name, queue))
+                    new BearerAuthzSlice(
+                        new ConanUpload.PutFile(
+                            storage, tokenizer, name,
+                            events.map(queue -> new RepositoryEvents("conan", name, queue))
+                        ),
+                        tokens.auth(),
+                        new OperationControl(
+                            policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
+                        )
                     )
                 )
             )

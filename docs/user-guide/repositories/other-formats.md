@@ -388,7 +388,7 @@ repo:
 
 Pantera speaks the Conan 1.x protocol; these commands are for Conan 1.60 with revisions disabled (the default). Conan 2 clients are not supported: Conan 2 always uses package revisions, and Pantera only serves numeric revisions.
 
-A Conan repository is served on the main registry address under its name. If the repository has a dedicated `port`, it is served at the root of that port instead. The download and upload URLs Pantera returns to the client point back at the address the remote was added with, including any path prefix.
+A Conan repository is served on the main registry address under its name. If the repository has a dedicated `port`, it is served at the root of that port instead. The download and upload URLs Pantera returns to the client point back at the address the remote was added with: on the main port including any path prefix, on a dedicated port `http://` plus the host and port the client connected to.
 
 ### Add Remote
 
@@ -413,6 +413,8 @@ conan install my_package/1.0@ -r pantera
 conan create .
 conan upload my_package/1.0@ -r pantera --all --confirm
 ```
+
+Uploading needs write permission on the repository. The upload URLs Pantera returns are signed for that one repository and expire after one hour, and Conan sends your token with each file it uploads to them. If an upload answers 401, check that the remote URL uses the same scheme, host and port as the URLs in the `upload_urls` response: Conan only sends the token to URLs under the remote's URL.
 
 <details>
 <summary>Server-Side Repository Configuration</summary>

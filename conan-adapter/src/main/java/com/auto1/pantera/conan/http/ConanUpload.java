@@ -131,12 +131,20 @@ public final class ConanUpload {
         private final ItemTokenizer tokenizer;
 
         /**
+         * Name of the repository the upload URLs are issued for.
+         */
+        private final String repository;
+
+        /**
          * @param storage Current Pantera storage instance.
          * @param tokenizer Tokenizer for repository items.
+         * @param repository Name of the repository the upload URLs are issued for.
          */
-        public UploadUrls(final Storage storage, final ItemTokenizer tokenizer) {
+        public UploadUrls(final Storage storage, final ItemTokenizer tokenizer,
+            final String repository) {
             this.storage = storage;
             this.tokenizer = tokenizer;
+            this.repository = repository;
         }
 
         @Override
@@ -184,7 +192,9 @@ public final class ConanUpload {
                             );
                             final String url = String.join(
                                 "", urls.of(filepath), "?signature=",
-                                this.tokenizer.generateToken(filepath, hostname)
+                                this.tokenizer.generateToken(
+                                    filepath, hostname, this.repository
+                                )
                             );
                             result.add(key, url);
                         }
@@ -199,6 +209,11 @@ public final class ConanUpload {
 
     /**
      * Conan HTTP PUT /{path/to/file}?signature={signature} REST API.
+     *
+     * <p>The signature is only redeemable against the repository that issued
+     * it, for the exact path and host it was issued for, and until it
+     * expires. It is a second factor, not the authorisation: {@link ConanSlice}
+     * also requires an authenticated user with WRITE on this repository.</p>
      */
     public static final class PutFile implements Slice {
 
@@ -221,25 +236,34 @@ public final class ConanUpload {
         private final Optional<RepositoryEvents> events;
 
         /**
+         * Name of this repository; a signature issued for another one is refused.
+         */
+        private final String repository;
+
+        /**
          * Legacy ctor retained for callers that cannot supply an events
          * queue (tests, tools). Uploads are not indexed in this mode.
          * @param storage Current Pantera storage instance.
          * @param tokenizer Tokenize repository items via JWT tokens.
+         * @param repository Name of this repository.
          */
-        public PutFile(final Storage storage, final ItemTokenizer tokenizer) {
-            this(storage, tokenizer, Optional.empty());
+        public PutFile(final Storage storage, final ItemTokenizer tokenizer,
+            final String repository) {
+            this(storage, tokenizer, repository, Optional.empty());
         }
 
         /**
          * Ctor.
          * @param storage Current Pantera storage instance.
          * @param tokenizer Tokenize repository items via JWT tokens.
+         * @param repository Name of this repository.
          * @param events Optional repository events sink for DB indexing.
          */
         public PutFile(final Storage storage, final ItemTokenizer tokenizer,
-            final Optional<RepositoryEvents> events) {
+            final String repository, final Optional<RepositoryEvents> events) {
             this.storage = storage;
             this.tokenizer = tokenizer;
+            this.repository = repository;
             this.events = events;
         }
 
@@ -253,7 +277,9 @@ public final class ConanUpload {
                     .toCompletableFuture()
                     .thenApply(
                         item -> {
-                            if (item.isPresent() && item.get().getHostname().equals(hostname)
+                            if (item.isPresent()
+                                && item.get().getRepository().equals(this.repository)
+                                && item.get().getHostname().equals(hostname)
                                 && item.get().getPath().equals(path)) {
                                 return new SliceUpload(
                                     this.storage,

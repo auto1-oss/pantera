@@ -21,6 +21,9 @@ import com.auto1.pantera.http.headers.Authorization;
 import com.auto1.pantera.http.headers.ClientBaseUrlSettingsRegistry;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.security.perms.Action;
+import com.auto1.pantera.security.perms.AdapterBasicPermission;
+import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.PrefixesConfig;
 import com.auto1.pantera.settings.StorageByAlias;
 import com.auto1.pantera.settings.repo.RepoConfig;
@@ -33,6 +36,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
+import java.security.PermissionCollection;
+import java.security.Permissions;
 import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
 import java.util.Collection;
@@ -94,29 +99,14 @@ final class ConanMainPortUrlsTest {
             null, null, null
         );
         this.jwt = tokens.generate(new AuthUser("alice", "test"));
-        final Repositories repos = new SingleRepo(
-            RepoConfig.from(
-                Yaml.createYamlMappingBuilder().add(
-                    "repo",
-                    Yaml.createYamlMappingBuilder()
-                        .add("type", "conan")
-                        .add(
-                            "storage",
-                            Yaml.createYamlMappingBuilder()
-                                .add("type", "fs")
-                                .add("path", this.tmp.toString())
-                                .build()
-                        ).build()
-                ).build(),
-                new StorageByAlias(Yaml.createYamlMappingBuilder().build()),
-                new Key.From("my-conan"),
-                new TestStoragesCache(),
-                false
-            )
+        final Repositories repos = new Repos(
+            this.conan("my-conan"), this.conan("other-conan"), this.conan("shared-conan")
         );
         this.pipeline = new ApiRoutingSlice(
             new SliceByPath(
-                new RepositorySlices(new TestSettings(), repos, tokens),
+                new RepositorySlices(
+                    new TestSettings(ConanMainPortUrlsTest.policy()), repos, tokens
+                ),
                 new PrefixesConfig(List.of("test_prefix"))
             ),
             repos
@@ -203,6 +193,105 @@ final class ConanMainPortUrlsTest {
         );
     }
 
+    @Test
+    void uploadUrlCannotWriteIntoRepositoryWithoutWrite() throws Exception {
+        final URI uri = this.uploadUrl();
+        final Response put = this.send(
+            RqMethod.PUT,
+            String.format(
+                "%s?%s",
+                uri.getRawPath().replace("/my-conan/", "/other-conan/"), uri.getRawQuery()
+            ),
+            new Content.From("evil".getBytes(StandardCharsets.UTF_8))
+        );
+        MatcherAssert.assertThat(
+            "refused in the repository without WRITE",
+            put.status(), new IsEqual<>(RsStatus.FORBIDDEN)
+        );
+        MatcherAssert.assertThat(
+            "nothing written",
+            new FileStorage(this.tmp).exists(
+                new Key.From("other-conan", ConanMainPortUrlsTest.RECIPE, "0/export/conanfile.py")
+            ).join(),
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
+    void uploadUrlOfOneRepositoryIsRefusedByAnother() throws Exception {
+        final URI uri = this.uploadUrl();
+        final Response put = this.send(
+            RqMethod.PUT,
+            String.format(
+                "%s?%s",
+                uri.getRawPath().replace("/my-conan/", "/shared-conan/"), uri.getRawQuery()
+            ),
+            new Content.From("evil".getBytes(StandardCharsets.UTF_8))
+        );
+        MatcherAssert.assertThat(
+            "signature of another repository refused even with WRITE",
+            put.status(), new IsEqual<>(RsStatus.UNAUTHORIZED)
+        );
+        MatcherAssert.assertThat(
+            "nothing written",
+            new FileStorage(this.tmp).exists(
+                new Key.From("shared-conan", ConanMainPortUrlsTest.RECIPE, "0/export/conanfile.py")
+            ).join(),
+            new IsEqual<>(false)
+        );
+    }
+
+    private URI uploadUrl() throws Exception {
+        final Response urls = this.send(
+            RqMethod.POST,
+            String.format(
+                "/test_prefix/api/my-conan/v1/conans/%s/upload_urls",
+                ConanMainPortUrlsTest.RECIPE
+            ),
+            new Content.From("{\"conanfile.py\": 4}".getBytes(StandardCharsets.UTF_8))
+        );
+        return URI.create(
+            Json.createReader(new StringReader(urls.body().asString()))
+                .readObject().getString("conanfile.py")
+        );
+    }
+
+    private RepoConfig conan(final String name) {
+        return RepoConfig.from(
+            Yaml.createYamlMappingBuilder().add(
+                "repo",
+                Yaml.createYamlMappingBuilder()
+                    .add("type", "conan")
+                    .add(
+                        "storage",
+                        Yaml.createYamlMappingBuilder()
+                            .add("type", "fs")
+                            .add("path", this.tmp.toString())
+                            .build()
+                    ).build()
+            ).build(),
+            new StorageByAlias(Yaml.createYamlMappingBuilder().build()),
+            new Key.From(name),
+            new TestStoragesCache(),
+            false
+        );
+    }
+
+    /**
+     * Alice may read and write my-conan and shared-conan, and only read
+     * other-conan.
+     * @return Policy
+     */
+    private static Policy<PermissionCollection> policy() {
+        return user -> {
+            final Permissions perms = new Permissions();
+            perms.add(new AdapterBasicPermission("my-conan", "read,write"));
+            perms.add(new AdapterBasicPermission("shared-conan", "read,write"));
+            perms.add(new AdapterBasicPermission("other-conan", Action.Standard.READ));
+            return perms;
+        };
+    }
+
     private Response send(final RqMethod method, final String path, final Content body)
         throws Exception {
         return this.pipeline.response(
@@ -214,24 +303,24 @@ final class ConanMainPortUrlsTest {
     }
 
     /**
-     * Repositories holding exactly one config.
+     * Fixed set of repository configs.
      */
-    private static final class SingleRepo implements Repositories {
+    private static final class Repos implements Repositories {
 
-        private final RepoConfig cfg;
+        private final List<RepoConfig> cfgs;
 
-        SingleRepo(final RepoConfig cfg) {
-            this.cfg = cfg;
+        Repos(final RepoConfig... cfgs) {
+            this.cfgs = List.of(cfgs);
         }
 
         @Override
         public Optional<RepoConfig> config(final String name) {
-            return this.cfg.name().equals(name) ? Optional.of(this.cfg) : Optional.empty();
+            return this.cfgs.stream().filter(cfg -> cfg.name().equals(name)).findFirst();
         }
 
         @Override
         public Collection<RepoConfig> configs() {
-            return List.of(this.cfg);
+            return this.cfgs;
         }
     }
 }

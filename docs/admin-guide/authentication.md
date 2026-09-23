@@ -306,7 +306,7 @@ meta:
 | `access-token-expiry-seconds` | int | No | `3600` | Access token lifetime (1 hour default) |
 | `refresh-token-expiry-seconds` | int | No | `604800` | Refresh token lifetime (7 days default) |
 
-The same key pair also signs the Hex registry (clients pin its public key from `<hex-repo-url>/public_key`) and the short-lived conda upload URLs. Rotating the key pair invalidates every issued token and makes existing `mix hex.repo add --public-key` registrations fail signature checks until clients fetch the new key and re-add the repository.
+The same key pair also signs the Hex registry (clients pin its public key from `<hex-repo-url>/public_key`), the short-lived conda upload URLs, and the Conan upload URLs. Rotating the key pair invalidates every issued token and makes existing `mix hex.repo add --public-key` registrations fail signature checks until clients fetch the new key and re-add the repository.
 
 ### Token Architecture
 
