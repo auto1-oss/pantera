@@ -11,13 +11,18 @@
 package com.auto1.pantera.npm.http.search;
 
 import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.index.ArtifactDocument;
+import com.auto1.pantera.npm.PerVersionLayout;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import javax.json.Json;
 import javax.json.JsonObject;
 import org.hamcrest.MatcherAssert;
@@ -105,6 +110,88 @@ final class SearchSliceTest {
             "Package version is mapped",
             pkg.getString("version"),
             new IsEqual<>("4.17.21")
+        );
+    }
+
+    @Test
+    void collapsesVersionsIntoOnePackageWithTheFieldsNpmReads() {
+        final Storage storage = new InMemoryStorage();
+        new PerVersionLayout(storage).addVersion(
+            new Key.From("qa-pkg"), "2.0.0",
+            Json.createObjectBuilder()
+                .add("name", "qa-pkg")
+                .add("version", "2.0.0")
+                .add("description", "verifier pkg")
+                .add("keywords", Json.createArrayBuilder().add("qa"))
+                .build()
+        ).toCompletableFuture().join();
+        final FakeArtifactIndex versions = new FakeArtifactIndex(
+            List.of(
+                SearchSliceTest.doc("qa-pkg", "1.0.0"),
+                SearchSliceTest.doc("qa-pkg", "2.0.0"),
+                SearchSliceTest.doc("qa-pkg", "2.1.0-beta.1"),
+                SearchSliceTest.doc("qa-other", "0.1.0")
+            )
+        );
+        final JsonObject body = SearchSliceTest.jsonBody(
+            new SearchSlice(versions, SearchSliceTest.REPO, Optional.of(storage)).response(
+                RequestLine.from("GET /-/v1/search?text=qa HTTP/1.1"),
+                Headers.EMPTY, Content.EMPTY
+            ).join()
+        );
+        final JsonObject pkg = body.getJsonArray("objects").getJsonObject(0)
+            .getJsonObject("package");
+        MatcherAssert.assertThat(
+            "One object per package, not per version",
+            body.getJsonArray("objects").size(),
+            new IsEqual<>(2)
+        );
+        MatcherAssert.assertThat(
+            "total counts packages",
+            body.getInt("total"),
+            new IsEqual<>(2)
+        );
+        MatcherAssert.assertThat(
+            "The highest stable version represents the package",
+            pkg.getString("version"),
+            new IsEqual<>("2.0.0")
+        );
+        MatcherAssert.assertThat(
+            "maintainers is always an array (npm search maps over it)",
+            pkg.getJsonArray("maintainers").getJsonObject(0).getString("username"),
+            new IsEqual<>("tester")
+        );
+        MatcherAssert.assertThat(
+            "date is emitted",
+            pkg.containsKey("date") && pkg.containsKey("links"),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "The stored description is emitted",
+            pkg.getString("description"),
+            new IsEqual<>("verifier pkg")
+        );
+    }
+
+    @Test
+    void emitsEmptyMaintainersWithoutOwnerOrStorage() {
+        final FakeArtifactIndex anon = new FakeArtifactIndex(
+            List.of(
+                new ArtifactDocument(
+                    "npm", SearchSliceTest.REPO, "anon", "anon", "1.0.0", 1L,
+                    Instant.EPOCH, null
+                )
+            )
+        );
+        MatcherAssert.assertThat(
+            SearchSliceTest.jsonBody(
+                new SearchSlice(anon, SearchSliceTest.REPO).response(
+                    RequestLine.from("GET /-/v1/search?text=anon HTTP/1.1"),
+                    Headers.EMPTY, Content.EMPTY
+                ).join()
+            ).getJsonArray("objects").getJsonObject(0).getJsonObject("package")
+                .getJsonArray("maintainers").size(),
+            new IsEqual<>(0)
         );
     }
 

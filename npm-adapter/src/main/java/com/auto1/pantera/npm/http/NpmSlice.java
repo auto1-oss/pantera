@@ -513,7 +513,7 @@ public final class NpmSlice implements Slice {
                     new RtRule.ByPath(".*/-/v1/search")
                 ),
                 NpmSlice.createAuthSlice(
-                    new SearchSlice(artifactIndex, name),
+                    new SearchSlice(artifactIndex, name, Optional.of(storage)),
                     basicAuth,
                     npmTokenAuth,
                     new OperationControl(

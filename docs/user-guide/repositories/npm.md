@@ -191,6 +191,8 @@ corepack.
 npm search my-package --registry http://pantera-host:8080/npm-local
 ```
 
+Results list each package once, at its highest stable version (its highest prerelease if it has no stable version), with the description and keywords from that version's `package.json`.
+
 ---
 
 ## Audit
