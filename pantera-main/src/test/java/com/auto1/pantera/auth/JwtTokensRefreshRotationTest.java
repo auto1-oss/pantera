@@ -66,14 +66,16 @@ final class JwtTokensRefreshRotationTest {
             "rotation must issue a new refresh token",
             rotated.refreshToken().equals(first.refreshToken()), new IsEqual<>(false)
         );
-        final Optional<AuthUser> replay = this.tokens.auth()
-            .user(first.refreshToken()).toCompletableFuture().join();
+        // Refresh tokens are validated as on /auth/refresh: user() is the
+        // repository credential check, which never accepts them (B46).
+        final Optional<AuthUser> replay = ((UnifiedJwtAuthHandler) this.tokens.auth())
+            .validated(first.refreshToken()).map(UnifiedJwtAuthHandler.ValidatedToken::user);
         MatcherAssert.assertThat(
             "the presented (old) refresh token must be REJECTED after rotation — replay closed",
             replay.isPresent(), new IsEqual<>(false)
         );
-        final Optional<AuthUser> fresh = this.tokens.auth()
-            .user(rotated.refreshToken()).toCompletableFuture().join();
+        final Optional<AuthUser> fresh = ((UnifiedJwtAuthHandler) this.tokens.auth())
+            .validated(rotated.refreshToken()).map(UnifiedJwtAuthHandler.ValidatedToken::user);
         MatcherAssert.assertThat(
             "the successor refresh token must be valid",
             fresh.isPresent(), new IsEqual<>(true)
