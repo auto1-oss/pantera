@@ -265,9 +265,12 @@ final class CachedProxySlice implements Slice {
         final RequestLine line,
         final String name
     ) {
-        // Check storage cache FIRST before any network calls
+        // Check storage cache FIRST before any network calls. Metadata is
+        // written as <name>.json (ComposerStorageCache and fetchThroughCache),
+        // so the lookup and the freshness check must use that same key.
+        final Key cachedKey = new Key.From(name + ".json");
         return new FromStorageCache(this.repo.storage()).load(
-            new Key.From(name),
+            cachedKey,
             Remote.EMPTY,
             CacheControl.Standard.ALWAYS
         ).thenCompose(cached -> {
@@ -283,7 +286,7 @@ final class CachedProxySlice implements Slice {
                 return cached.get().asBytesFuture().thenCompose(bytes -> {
                     // Stale-while-revalidate: check freshness, trigger background refresh if stale
                     return new CacheTimeControl(this.repo.storage()).validate(
-                        new Key.From(name), Remote.EMPTY
+                        cachedKey, Remote.EMPTY
                     ).thenCompose(fresh -> {
                         if (!fresh) {
                             this.backgroundRefresh(line, name);

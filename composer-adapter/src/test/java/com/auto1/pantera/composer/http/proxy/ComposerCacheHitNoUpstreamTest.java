@@ -50,7 +50,8 @@ final class ComposerCacheHitNoUpstreamTest {
             ("{\"packages\":{\"" + pkg + "\":{\"1.0\":{\"version\":\"1.0\","
                 + "\"time\":\"2024-01-01T00:00:00+00:00\"}}}}").getBytes(StandardCharsets.UTF_8);
         final Storage storage = new InMemoryStorage();
-        storage.save(new Key.From(pkg), new Content.From(cachedJson)).join();
+        // Metadata is cached as <vendor>/<pkg>.json (ComposerStorageCache).
+        storage.save(new Key.From(pkg + ".json"), new Content.From(cachedJson)).join();
 
         final AtomicInteger upstreamCalls = new AtomicInteger();
         final Slice upstream = (line, headers, body) -> {
