@@ -111,6 +111,44 @@ final class MergePackageWithRemoteTest {
         );
     }
 
+    @Test
+    void expandsMinifiedRemoteVersions() {
+        // merge/remote.json is packagist's composer/2.0 minified form: 1.1.2
+        // carries only what changed, so it inherits name and description.
+        final JsonObject versions = this.packagesFromMerged(
+            "{}".getBytes(), new TestResource("merge/remote.json").asBytes()
+        ).getJsonObject("psr/log");
+        MatcherAssert.assertThat(
+            "1.1.2 inherits the description of 1.1.3",
+            versions.getJsonObject("1.1.2").getString("description", ""),
+            new IsEqual<>("Common interface for logging libraries")
+        );
+        MatcherAssert.assertThat(
+            "1.1.2 keeps its own dist",
+            versions.getJsonObject("1.1.2").getJsonObject("dist").getString("reference"),
+            new IsEqual<>("446d54b4cb6bf489fc9d75f55843658e6f25d801")
+        );
+    }
+
+    @Test
+    void honoursUnsetInMinifiedRemote() {
+        final byte[] remote = (
+            "{\"minified\":\"composer/2.0\",\"packages\":{\"psr/log\":["
+                + "{\"name\":\"psr/log\",\"version\":\"2.0.0\",\"require\":{\"php\":\">=8\"}},"
+                + "{\"version\":\"1.0.0\",\"require\":\"__unset\"}]}}"
+        ).getBytes();
+        final JsonObject versions = this.packagesFromMerged("{}".getBytes(), remote)
+            .getJsonObject("psr/log");
+        MatcherAssert.assertThat(
+            "__unset removes the inherited require",
+            versions.getJsonObject("1.0.0").containsKey("require"), new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "the newest entry keeps its require",
+            versions.getJsonObject("2.0.0").containsKey("require"), new IsEqual<>(true)
+        );
+    }
+
     private Optional<Content> mergedContent(
         final String name, final byte[] local, final byte[] remote
     ) {

@@ -11,6 +11,8 @@
 package com.auto1.pantera.composer.cooldown;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -271,5 +273,45 @@ final class ComposerMetadataFilterTest {
             }
             return stream.readAllBytes();
         }
+    }
+
+    @Test
+    void removingAMinifiedEntryKeepsWhatLaterEntriesInherit() throws Exception {
+        final String json = """
+            {"minified":"composer/2.0","packages":{"acme/foo":[
+              {"name":"acme/foo","version":"2.0.0","require":{"php":">=8.1"},
+               "dist":{"type":"zip","url":"https://example.org/2.0.0.zip","reference":"c200"}},
+              {"version":"1.1.0",
+               "dist":{"type":"zip","url":"https://example.org/1.1.0.zip","reference":"c110"}},
+              {"version":"1.0.0","require":"__unset"}
+            ]}}
+            """;
+        final JsonNode filtered = this.filter.filter(
+            this.parser.parse(json.getBytes(StandardCharsets.UTF_8)), Set.of("2.0.0")
+        );
+        final JsonNode versions = filtered.get("packages").get("acme/foo");
+        MatcherAssert.assertThat(
+            "blocked entry removed", this.parser.extractVersions(filtered),
+            new IsEqual<>(List.of("1.1.0", "1.0.0"))
+        );
+        MatcherAssert.assertThat(
+            "1.1.0 keeps the inherited name",
+            versions.get(0).path("name").asText(), new IsEqual<>("acme/foo")
+        );
+        MatcherAssert.assertThat(
+            "1.1.0 keeps the inherited require",
+            versions.get(0).path("require").path("php").asText(), new IsEqual<>(">=8.1")
+        );
+        MatcherAssert.assertThat(
+            "1.0.0 inherits the 1.1.0 dist",
+            versions.get(1).path("dist").path("reference").asText(), new IsEqual<>("c110")
+        );
+        MatcherAssert.assertThat(
+            "1.0.0 drops the unset require", versions.get(1).has("require"), new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "expanded document no longer claims to be minified",
+            filtered.has("minified"), new IsEqual<>(false)
+        );
     }
 }
