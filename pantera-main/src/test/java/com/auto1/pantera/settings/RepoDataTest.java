@@ -237,6 +237,62 @@ class RepoDataTest {
     }
 
     @Test
+    void databaseLookupsRunOnTheGivenExecutor() {
+        // The DB fallback and the alias records are JDBC: they must run on
+        // the executor handed in, never the JVM-wide common pool.
+        final Storage aliased = new InMemoryStorage();
+        final BlockingStorage blocking = new BlockingStorage(aliased);
+        blocking.save(new Key.From(RepoDataTest.REPO, "a.txt"), new byte[]{1});
+        final javax.json.JsonObject alias = javax.json.Json.createObjectBuilder()
+            .add("name", "default")
+            .add(
+                "config",
+                javax.json.Json.createObjectBuilder().add("type", "fs").add("path", "/db-alias")
+            ).build();
+        final java.util.concurrent.atomic.AtomicInteger tasks =
+            new java.util.concurrent.atomic.AtomicInteger();
+        final java.util.Set<String> threads = java.util.concurrent.ConcurrentHashMap.newKeySet();
+        final java.util.concurrent.ExecutorService pool =
+            java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            new RepoData(
+                this.storage,
+                new PathStoragesCache("/db-alias", aliased),
+                repo -> {
+                    threads.add(Thread.currentThread().getName());
+                    return List.of(alias);
+                },
+                task -> {
+                    tasks.incrementAndGet();
+                    pool.execute(task);
+                }
+            ).remove(
+                new RepositoryName.Simple(RepoDataTest.REPO),
+                new SingleRepoSettings(
+                    RepoDataTest.REPO,
+                    javax.json.Json.createObjectBuilder().add(
+                        "repo", javax.json.Json.createObjectBuilder()
+                            .add("type", "file")
+                            .add("storage", "default")
+                    ).build()
+                )
+            ).toCompletableFuture().join();
+        } finally {
+            pool.shutdownNow();
+        }
+        MatcherAssert.assertThat(
+            "Settings and alias lookups went through the executor",
+            tasks.get(),
+            new IsEqual<>(2)
+        );
+        MatcherAssert.assertThat(
+            "Alias lookup never ran on the common pool",
+            threads.stream().anyMatch(name -> name.contains("ForkJoinPool")),
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
     void removesNothingForRepositoryWithoutStorage() {
         final Storage shared = new InMemoryStorage();
         final BlockingStorage blocking = new BlockingStorage(shared);

@@ -22,6 +22,7 @@ import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.SubStorage;
 import com.auto1.pantera.cache.StoragesCache;
+import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
 
 import com.auto1.pantera.misc.Json2Yaml;
@@ -34,6 +35,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Executor;
 import java.util.function.Function;
 import javax.json.JsonObject;
 import javax.json.JsonStructure;
@@ -77,6 +79,12 @@ public final class RepoData {
     private final Function<String, List<JsonObject>> dbAliases;
 
     /**
+     * Executor for the blocking lookups (JDBC): the settings DB fallback
+     * and the database alias records. Never the common pool.
+     */
+    private final Executor blocking;
+
+    /**
      * Ctor for deployments without a database: aliases come from the
      * {@code _storages.yaml} files only.
      *
@@ -99,9 +107,26 @@ public final class RepoData {
         final Storage configStorage, final StoragesCache storagesCache,
         final Function<String, List<JsonObject>> dbAliases
     ) {
+        this(configStorage, storagesCache, dbAliases, HandlerExecutor.get());
+    }
+
+    /**
+     * Ctor.
+     *
+     * @param configStorage Repository settings storage
+     * @param storagesCache Storages cache
+     * @param dbAliases Database storage aliases (global and per-repository)
+     *  visible to a repository, resolved like the serving path does
+     * @param blocking Executor for the blocking (JDBC) lookups
+     */
+    public RepoData(
+        final Storage configStorage, final StoragesCache storagesCache,
+        final Function<String, List<JsonObject>> dbAliases, final Executor blocking
+    ) {
         this.configStorage = configStorage;
         this.storagesCache = storagesCache;
         this.dbAliases = dbAliases;
+        this.blocking = blocking;
     }
 
     /**
@@ -398,10 +423,13 @@ public final class RepoData {
         final RepositoryName rname, final CrudRepoSettings crs
     ) {
         return this.repoStorage(rname).exceptionallyCompose(err -> {
-            if (crs == null || !crs.exists(rname)) {
+            if (crs == null) {
                 return CompletableFuture.failedFuture(err);
             }
             return CompletableFuture.supplyAsync(() -> {
+                if (!crs.exists(rname)) {
+                    throw new CompletionException(err);
+                }
                 final JsonStructure config = crs.value(rname);
                 if (config == null) {
                     throw new IllegalStateException("Repository not found: " + rname);
@@ -413,7 +441,7 @@ public final class RepoData {
                     throw new NoStorageConfigured(rname.toString());
                 }
                 return repo.get(RepoData.STORAGE);
-            }).thenCompose(storage -> {
+            }, this.blocking).thenCompose(storage -> {
                 if (storage.getValueType() == JsonValue.ValueType.STRING) {
                     return this.aliasStorage(
                         rname, ((javax.json.JsonString) storage).getString()
@@ -439,7 +467,9 @@ public final class RepoData {
     private CompletionStage<Storage> aliasStorage(
         final RepositoryName rname, final String alias
     ) {
-        return CompletableFuture.supplyAsync(() -> this.dbAliases.apply(rname.toString()))
+        return CompletableFuture.supplyAsync(
+            () -> this.dbAliases.apply(rname.toString()), this.blocking
+        )
             .thenCompose(records -> {
                 final boolean known = records.stream().anyMatch(
                     rec -> alias.equals(rec.getString("name", null))
