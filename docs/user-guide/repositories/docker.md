@@ -101,6 +101,8 @@ docker push pantera-host:8080/docker-local/myapp:latest
 docker push pantera-host:8080/docker-local/myapp:1.0.0
 ```
 
+Blob uploads may be monolithic or chunked (several `PATCH` requests with `Content-Range: <start>-<end>`, then the committing `PUT`), so resumable pushes from tools such as `crane`, `oras` or `skopeo` work. A chunk whose start is not the end of the data already uploaded is refused with `416` and a `Range: 0-<last byte held>` header; resume from there.
+
 ---
 
 ## Multi-Registry Proxy

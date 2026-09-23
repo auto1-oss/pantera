@@ -106,17 +106,65 @@ class UploadTest {
     }
 
     @Test
-    void shouldFailAppendedSecondChunk() {
+    void shouldAppendOrderedChunks() {
         this.upload.start().toCompletableFuture().join();
-        this.upload.append(new Content.From("one".getBytes()))
-            .join();
+        final long first = this.upload.append(new Content.From("one".getBytes())).join();
+        final long second = this.upload.append(new Content.From("two".getBytes())).join();
+        MatcherAssert.assertThat(
+            "first chunk ends at offset 2",
+            first, new IsEqual<>(2L)
+        );
+        MatcherAssert.assertThat(
+            "second chunk ends at offset 5",
+            second, new IsEqual<>(5L)
+        );
+        MatcherAssert.assertThat(
+            "offset reports the total uploaded so far",
+            this.upload.offset().join(), new IsEqual<>(5L)
+        );
+        MatcherAssert.assertThat(
+            "the blob is the concatenation of the chunks",
+            this.upload, new IsUploadWithContent("onetwo".getBytes())
+        );
+    }
+
+    @Test
+    void shouldRejectOutOfOrderChunk() {
+        this.upload.start().toCompletableFuture().join();
+        this.upload.append(new Content.From("one".getBytes()), Optional.of(0L)).join();
         MatcherAssert.assertThat(
             Assertions.assertThrows(
                 CompletionException.class,
-                () -> this.upload.append(new Content.From("two".getBytes()))
+                () -> this.upload.append(new Content.From("two".getBytes()), Optional.of(7L))
                     .join()
             ).getCause(),
-            new IsInstanceOf(UnsupportedOperationException.class)
+            new IsInstanceOf(UploadRangeException.class)
+        );
+    }
+
+    @Test
+    void shouldAcceptChunkStartingAtCurrentOffset() {
+        this.upload.start().toCompletableFuture().join();
+        this.upload.append(new Content.From("one".getBytes()), Optional.of(0L)).join();
+        this.upload.append(new Content.From("two".getBytes()), Optional.of(3L)).join();
+        MatcherAssert.assertThat(
+            this.upload, new IsUploadWithContent("onetwo".getBytes())
+        );
+    }
+
+    @Test
+    void shouldFailPutWhenConcatenationMismatchesDigest() {
+        this.upload.start().toCompletableFuture().join();
+        this.upload.append(new Content.From("one".getBytes())).join();
+        this.upload.append(new Content.From("two".getBytes())).join();
+        MatcherAssert.assertThat(
+            Assertions.assertThrows(
+                CompletionException.class,
+                () -> this.upload.putTo(
+                    new CapturePutLayers(), new Digest.Sha256("twoone".getBytes())
+                ).join()
+            ).getCause(),
+            new IsInstanceOf(com.auto1.pantera.docker.error.InvalidDigestException.class)
         );
     }
 
