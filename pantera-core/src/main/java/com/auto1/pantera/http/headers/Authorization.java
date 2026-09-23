@@ -78,11 +78,6 @@ public final class Authorization extends Header {
     }
 
     /**
-     * Creates matcher for header value.
-     *
-     * @return Matcher for header value.
-     */
-    /**
      * Whether the value has the {@code <scheme> <credentials>} shape. A
      * scheme-less value (a raw token or key) is not parseable; callers treat
      * it as "no credentials" instead of letting {@link #scheme()} throw.
@@ -93,6 +88,11 @@ public final class Authorization extends Header {
         return VALUE.matcher(this.getValue()).matches();
     }
 
+    /**
+     * Creates matcher for header value.
+     *
+     * @return Matcher for header value.
+     */
     private Matcher matcher() {
         final String value = this.getValue();
         final Matcher matcher = VALUE.matcher(value);
