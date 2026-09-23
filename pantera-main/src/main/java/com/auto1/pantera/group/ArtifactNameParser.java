@@ -174,6 +174,15 @@ public final class ArtifactNameParser {
         if (clean.isEmpty()) {
             return Optional.empty();
         }
+        // Registry endpoints live under "-/" (dist-tags, attestations,
+        // keys, search, ...). "-" is never a package name: answering empty
+        // makes the group walk its members hosted-first instead of running
+        // a proxy-only fanout keyed on the bogus name "-", which never
+        // reached a hosted member. No name also means no negative-cache
+        // entry for an endpoint answer.
+        if (clean.startsWith("-/")) {
+            return Optional.empty();
+        }
         // Tarball URLs contain /-/ separator
         final int sep = clean.indexOf("/-/");
         if (sep > 0) {

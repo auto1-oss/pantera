@@ -23,6 +23,7 @@ import com.auto1.pantera.http.auth.Tokens;
 import com.auto1.pantera.http.headers.Authorization;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.npm.PerVersionLayout;
 import com.auto1.pantera.settings.StorageByAlias;
 import com.auto1.pantera.settings.repo.RepoConfig;
 import com.auto1.pantera.settings.repo.Repositories;
@@ -35,6 +36,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import javax.json.Json;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.hamcrest.core.StringContains;
@@ -42,9 +44,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * npm account endpoints through the REAL {@link RepositorySlices} wiring,
- * including the outer anonymous-access gate: {@code npm login} (legacy and
- * web), {@code npm whoami}, {@code npm profile get}, and writes to a proxy.
+ * npm account and registry endpoints through the REAL {@link RepositorySlices}
+ * wiring, including the outer anonymous-access gate: {@code npm login}
+ * (legacy and web), {@code npm whoami}, {@code npm profile get}, writes to a
+ * proxy, and group {@code /-/} endpoints reaching hosted members.
  *
  * @since 2.2.9
  */
@@ -128,6 +131,26 @@ final class NpmAccountRoutingTest {
                 new Content.From("{}".getBytes(StandardCharsets.UTF_8))
             ).get(30, TimeUnit.SECONDS).status().code(),
             new IsEqual<>(405)
+        );
+    }
+
+    @Test
+    void groupDistTagsReachTheHostedMember(@TempDir final Path tmp) throws Exception {
+        new PerVersionLayout(
+            NpmAccountRoutingTest.repo(
+                "npm-local", NpmAccountRoutingTest.base("npm", tmp.resolve("local"))
+            ).storage()
+        ).addVersion(
+            new Key.From("@qa-npm/pkg"), "1.0.0",
+            Json.createObjectBuilder()
+                .add("name", "@qa-npm/pkg")
+                .add("version", "1.0.0")
+                .build()
+        ).toCompletableFuture().join();
+        MatcherAssert.assertThat(
+            "npm dist-tag ls through the group answers from the hosted member",
+            NpmAccountRoutingTest.get(tmp, "npm-group", "/-/package/@qa-npm%2fpkg/dist-tags"),
+            new StringContains("\"latest\":\"1.0.0\"")
         );
     }
 

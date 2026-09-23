@@ -96,6 +96,7 @@ section_endpoints() {
   expect_status "group packument"  GET "$GROUP/$UPSTREAM_PKG" 200
   expect_status "group local pkg"  GET "$GROUP/$PKG" 200
   expect_status "local dist-tags"  GET "$LOCAL/-/package/$PKG_ENC/dist-tags" 200
+  expect_status "group dist-tags"  GET "$GROUP/-/package/$PKG_ENC/dist-tags" 200
 
   # Abbreviated (corgi) packument must be honoured in every mode.
   for base in "$LOCAL/$PKG" "$PROXY/$UPSTREAM_PKG" "$GROUP/$UPSTREAM_PKG"; do

@@ -1040,6 +1040,7 @@ public class RepositorySlices {
                 // This is critical for vulnerability scanning - local repos return {},
                 // but proxy repos return actual vulnerabilities from upstream
                 // CRITICAL: Pass member NAMES so GroupAuditSlice can rewrite paths!
+                // The same member list backs the merged keys and search routes.
                 final java.util.List<String> auditMemberNames = cfg.members();
                 final java.util.List<Slice> auditMemberSlices = auditMemberNames.stream()
                     .map(name -> this.slice(new Key.From(name), port, 0))
@@ -1106,6 +1107,43 @@ public class RepositorySlices {
                             ),
                             new CombinedAuthzSliceWrap(
                                 new PingSlice(),
+                                authentication(),
+                                tokens.auth(),
+                                new OperationControl(
+                                    securityPolicy(),
+                                    new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                                )
+                            )
+                        ),
+                        // Signing keys and search are the UNION of every
+                        // member's answer (hosted keys + upstream keys, hosted
+                        // hits + upstream hits), not the first member's.
+                        new com.auto1.pantera.http.rt.RtRulePath(
+                            new com.auto1.pantera.http.rt.RtRule.All(
+                                com.auto1.pantera.http.rt.MethodRule.GET,
+                                new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/npm/v1/keys$")
+                            ),
+                            new CombinedAuthzSliceWrap(
+                                new com.auto1.pantera.npm.http.GroupKeysSlice(
+                                    auditMemberNames, auditMemberSlices
+                                ),
+                                authentication(),
+                                tokens.auth(),
+                                new OperationControl(
+                                    securityPolicy(),
+                                    new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                                )
+                            )
+                        ),
+                        new com.auto1.pantera.http.rt.RtRulePath(
+                            new com.auto1.pantera.http.rt.RtRule.All(
+                                com.auto1.pantera.http.rt.MethodRule.GET,
+                                new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/v1/search$")
+                            ),
+                            new CombinedAuthzSliceWrap(
+                                new com.auto1.pantera.npm.http.GroupSearchSlice(
+                                    auditMemberNames, auditMemberSlices
+                                ),
                                 authentication(),
                                 tokens.auth(),
                                 new OperationControl(

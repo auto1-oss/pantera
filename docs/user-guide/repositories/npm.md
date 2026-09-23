@@ -256,7 +256,7 @@ A typical npm group combines:
 1. A **local** repository for your organization's private packages
 2. A **proxy** repository that caches packages from npmjs.org
 
-Point your `.npmrc` registry at the group, and Pantera handles resolution order automatically.
+Point your `.npmrc` registry at the group, and Pantera handles resolution order automatically. Registry endpoints work through the group as well: `npm dist-tag ls` and attestations are answered by the first member that has the package (local members first), `npm search` merges the results of every member (local packages first), and `GET /-/npm/v1/keys` returns every member's signing keys, so `npm audit signatures` verifies both locally published and upstream packages.
 
 ---
 

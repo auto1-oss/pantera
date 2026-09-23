@@ -197,6 +197,20 @@ final class ArtifactNameParserTest {
         );
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "/-/package/lodash/dist-tags", "/-/package/@qa-npm/pkg/dist-tags",
+        "/-/package/@qa-npm%2fpkg/dist-tags/beta",
+        "/-/npm/v1/keys", "/-/v1/search", "/-/npm/v1/attestations/lodash@4.17.21", "/-/all"
+    })
+    void npmRegistryEndpointsAreNotPackageNames(final String url) {
+        MatcherAssert.assertThat(
+            "a /-/ registry endpoint is not the package '-': " + url,
+            ArtifactNameParser.parse("npm-group", url),
+            new IsEqual<>(Optional.empty())
+        );
+    }
+
     // ---- Docker: manifest and blob requests ----
 
     @ParameterizedTest
