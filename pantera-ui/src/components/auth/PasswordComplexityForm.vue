@@ -15,6 +15,7 @@ import InputText from 'primevue/inputtext'
  * Use in:
  *   - ForcePasswordChangeView (admin first-login flow)
  *   - ProfileView (self-service password change)
+ *   - UserListView (Create User dialog) and UserDetailView (admin reset)
  */
 
 const props = defineProps<{
