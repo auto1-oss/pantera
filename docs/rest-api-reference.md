@@ -637,7 +637,7 @@ curl -X PUT http://localhost:8086/api/v1/repositories/maven-central/move \
 
 ### GET /api/v1/repositories/:name/members
 
-List members of a group repository. Returns the configured remote URLs.
+List members of a group repository: the member repository names from the group's `members` list, in the declared (resolution) order.
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_repository_permissions:read`
@@ -648,8 +648,8 @@ List members of a group repository. Returns the configured remote URLs.
 {
   "type": "maven-group",
   "members": [
-    "http://localhost:8080/maven-local",
-    "http://localhost:8080/maven-central"
+    "maven-local",
+    "maven-central"
   ]
 }
 ```

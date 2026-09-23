@@ -106,6 +106,38 @@ public final class RepositoryHandlerTest extends AsyncApiTestBase {
     }
 
     @Test
+    void groupMembersAreListedInOrder(final Vertx vertx, final VertxTestContext ctx)
+        throws Exception {
+        // B96: the endpoint read "remotes" (a proxy's upstreams), so every
+        // group answered an empty member list.
+        final WebClient client = WebClient.create(vertx);
+        final HttpResponse<Buffer> put = client
+            .put(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/members-grp")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .sendJsonObject(new JsonObject().put(
+                "repo",
+                new JsonObject()
+                    .put("type", "maven-group")
+                    .put("members", new JsonArray().add("maven-local").add("maven-central"))
+            ))
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(200, put.statusCode(), "group must be created");
+        final HttpResponse<Buffer> get = client
+            .get(this.port(), AsyncApiTestBase.HOST, "/api/v1/repositories/members-grp/members")
+            .bearerTokenAuthentication(AsyncApiTestBase.TEST_TOKEN)
+            .send()
+            .toCompletionStage().toCompletableFuture()
+            .get(AsyncApiTestBase.TEST_TIMEOUT, TimeUnit.SECONDS);
+        Assertions.assertEquals(
+            new JsonArray().add("maven-local").add("maven-central"),
+            get.bodyAsJsonObject().getJsonArray("members"),
+            "members must be the group's member repositories in declared order"
+        );
+        ctx.completeNow();
+    }
+
+    @Test
     void unsupportedRepositoryTypeIsRefused(final Vertx vertx, final VertxTestContext ctx)
         throws Exception {
         // B57: type "binary" was stored with 200 and then every request to

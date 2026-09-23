@@ -740,12 +740,16 @@ public final class RepositoryHandler {
             if (!repoType.endsWith("-group")) {
                 return new JsonObject().put("members", new JsonArray()).put("type", "not-a-group");
             }
+            // A group lists its member repositories under "members" (the
+            // key the PUT validation requires); "remotes" is a proxy's
+            // upstream list and never holds a group's members.
             final JsonArray members = new JsonArray();
-            if (repoSection.containsKey("remotes")) {
-                final javax.json.JsonArray remotes = repoSection.getJsonArray("remotes");
-                for (int idx = 0; idx < remotes.size(); idx++) {
-                    final javax.json.JsonObject remote = remotes.getJsonObject(idx);
-                    members.add(remote.getString("url", remote.toString()));
+            final javax.json.JsonValue listed = repoSection.get("members");
+            if (listed != null && listed.getValueType() == javax.json.JsonValue.ValueType.ARRAY) {
+                for (final javax.json.JsonValue member : listed.asJsonArray()) {
+                    if (member.getValueType() == javax.json.JsonValue.ValueType.STRING) {
+                        members.add(((javax.json.JsonString) member).getString());
+                    }
                 }
             }
             return new JsonObject().put("members", members).put("type", repoType);
