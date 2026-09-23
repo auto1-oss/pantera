@@ -23,18 +23,22 @@ function render(over: Partial<CtxInput> = {}): Client {
 }
 
 describe('hexpmSnippets', () => {
-  it('registers the repository as pantera with a Basic auth key', () => {
+  it('downloads the registry key and registers the repository under its own name', () => {
     const cfg = code(render().configure)
-    expect(cfg).toContain('mix hex.repo add pantera https://reg.example.com/artifactory/hex')
+    expect(cfg).toContain('-o pantera-hex.pem')
+    expect(cfg).toContain('https://reg.example.com/artifactory/hex/public_key')
+    expect(cfg).toContain('mix hex.repo add hex https://reg.example.com/artifactory/hex')
+    expect(cfg).toContain('--public-key pantera-hex.pem')
     expect(cfg).toContain(`--auth-key 'Basic ${B64}'`)
-    expect(cfg).not.toContain('tok-123')
+    expect(code([render().configure[1]])).not.toContain('tok-123')
   })
 
-  it('declares the dependency against the pantera repo and skips the registry signature check', () => {
+  it('declares the dependency against the repository and keeps the registry signature check', () => {
     const mix = render()
-    expect(mix.resolve[0].code).toContain('repo: "pantera"')
+    expect(mix.resolve[0].code).toContain('repo: "hex"')
     expect(mix.resolve[0].lang).toBe('elixir')
-    expect(mix.resolve[1].code).toBe('HEX_UNSAFE_REGISTRY=1 mix deps.get')
+    expect(mix.resolve[1].code).toBe('mix deps.get')
+    expect(all(mix)).not.toContain('HEX_UNSAFE_REGISTRY')
   })
 
   it('builds with mix and uploads the tarball with curl to the publish URL', () => {
@@ -59,7 +63,7 @@ describe('hexpmSnippets', () => {
 
   it('adds no insecure switches for either scheme', () => {
     const http = render({ repoUrl: 'http://localhost:8081/test_prefix/hex', pubUrl: 'http://localhost:8081/test_prefix/hex' })
-    expect(all(http)).toContain('mix hex.repo add pantera http://localhost:8081/test_prefix/hex')
+    expect(all(http)).toContain('mix hex.repo add hex http://localhost:8081/test_prefix/hex')
     expect(all(http)).not.toMatch(/unsafe_https|HEX_UNSAFE_HTTPS/)
     expect(all(render())).not.toMatch(/unsafe_https|HEX_UNSAFE_HTTPS/)
   })
@@ -67,9 +71,9 @@ describe('hexpmSnippets', () => {
   it('encodes the placeholder and says so when there is no token', () => {
     const mix = render({ token: '' })
     expect(code(mix.configure)).toContain(`Basic ${btoa(`jane@corp.com:${TOKEN_PLACEHOLDER}`)}`)
-    expect(mix.configure[0].description).toContain(TOKEN_PLACEHOLDER)
+    expect(mix.configure[1].description).toContain(TOKEN_PLACEHOLDER)
     expect(code(mix.publish)).toContain(`'jane@corp.com:${TOKEN_PLACEHOLDER}'`)
-    expect(render().configure[0].description).not.toContain(TOKEN_PLACEHOLDER)
+    expect(render().configure[1].description).not.toContain(TOKEN_PLACEHOLDER)
   })
 
   it('has no publish steps without a publish repository', () => {

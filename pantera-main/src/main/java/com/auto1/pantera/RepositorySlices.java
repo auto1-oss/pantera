@@ -46,6 +46,7 @@ import com.auto1.pantera.gem.http.GemSlice;
 
 import com.auto1.pantera.helm.http.HelmSlice;
 import com.auto1.pantera.hex.http.HexSlice;
+import com.auto1.pantera.hex.http.RegistrySigner;
 import com.auto1.pantera.http.ContentLengthRestriction;
 import com.auto1.pantera.http.DockerRoutingSlice;
 import com.auto1.pantera.http.GoSlice;
@@ -1443,7 +1444,7 @@ public class RepositorySlices {
                 slice = trimPathSlice(
                     new HexSlice(cfg.storage(), securityPolicy(), authentication(),
                         artifactEvents(), cfg.name(),
-                        this.settings.syncArtifactIndexer())
+                        this.settings.syncArtifactIndexer(), this.hexRegistrySigner())
                 );
                 break;
             case "pypi":
@@ -1796,6 +1797,22 @@ public class RepositorySlices {
             res = new NuGetApiKeySlice(gated);
         } else {
             res = gated;
+        }
+        return res;
+    }
+
+    /**
+     * Hex registry signer using the cluster-wide RSA key pair, so every node
+     * signs the registry with the key it serves at {@code /public_key}.
+     *
+     * @return Registry signer
+     */
+    private RegistrySigner hexRegistrySigner() {
+        final RegistrySigner res;
+        if (this.tokens instanceof com.auto1.pantera.auth.JwtTokens jwt) {
+            res = new RegistrySigner(jwt.privateKey(), jwt.publicKey());
+        } else {
+            res = new RegistrySigner();
         }
         return res;
     }

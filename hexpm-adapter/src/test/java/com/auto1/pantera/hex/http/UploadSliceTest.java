@@ -104,9 +104,15 @@ class UploadSliceTest {
             )
         );
         MatcherAssert.assertThat(
-            "Package was not saved in storage",
-            this.storage.value(new Key.From("packages/decimal")).join(),
-            new ContentIs(Files.readAllBytes(new ResourceUtil("packages/decimal").asPath()))
+            "Package record does not name the repository",
+            PackageOuterClass.Package.parseFrom(
+                SignedOuterClass.Signed.parseFrom(
+                    new Gzip(
+                        this.storage.value(new Key.From("packages/decimal")).join().asBytes()
+                    ).decompress()
+                ).getPayload()
+            ).getRepository(),
+            new IsEqual<>("my-hexpm-test")
         );
         MatcherAssert.assertThat(
             "Tarball was not saved in storage",
@@ -201,7 +207,17 @@ class UploadSliceTest {
             this.slice,
             new SliceHasResponse(
                 new RsHasStatus(RsStatus.BAD_REQUEST),
-                new RequestLine(RqMethod.POST, "/publish")
+                new RequestLine(RqMethod.POST, "/unknown")
+            )
+        );
+        MatcherAssert.assertThat(
+            "Wrong response status for a body that is not a Hex tarball, BAD_REQUEST is expected",
+            this.slice,
+            new SliceHasResponse(
+                new RsHasStatus(RsStatus.BAD_REQUEST),
+                new RequestLine(RqMethod.POST, "/publish?replace=false"),
+                Headers.EMPTY,
+                new Content.From("not a tarball".getBytes())
             )
         );
         MatcherAssert.assertThat("Events queue is empty", this.events.isEmpty());

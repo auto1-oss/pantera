@@ -434,10 +434,13 @@ Add `port: 9300` (and `url: http://pantera-host:9300`) to serve the repository o
 
 ### Register the Repository
 
-Mix sends `--auth-key` verbatim as the `Authorization` header, so the key is a Basic credential built from your username and token. The repository name **must** be `pantera`: Hex checks that registry records come from a repository of that name.
+Pantera signs its Hex registry. Download the repository's public key, then register the repository under the **same name as the Pantera repository** (Hex checks that registry records come from a repository of that name). Mix sends `--auth-key` verbatim as the `Authorization` header, so the key is a Basic credential built from your username and token:
 
 ```bash
-mix hex.repo add pantera http://pantera-host:8080/my-hex \
+curl -fsS -u 'your-username:your-api-token' -o pantera-hex.pem \
+  http://pantera-host:8080/my-hex/public_key
+mix hex.repo add my-hex http://pantera-host:8080/my-hex \
+  --public-key pantera-hex.pem \
   --auth-key "Basic $(printf %s 'your-username:your-api-token' | base64 | tr -d '\n')"
 ```
 
@@ -448,22 +451,20 @@ In your `mix.exs`:
 ```elixir
 defp deps do
   [
-    {:my_dep, "~> 1.0", repo: "pantera"}
+    {:my_dep, "~> 1.0", repo: "my-hex"}
   ]
 end
 ```
 
 ### Fetch Dependencies
 
-Pantera does not sign its Hex registry, so switch off the registry signature check for this command (package checksums are still verified). Prefer the variable over `mix hex.config unsafe_registry true`, which also turns the check off for hex.pm:
-
 ```bash
-HEX_UNSAFE_REGISTRY=1 mix deps.get
+mix deps.get
 ```
 
 ### Publish a Package
 
-`mix hex.publish` does not work against Pantera; build the tarball and upload it with curl (answers `201`; use `replace=true` to overwrite an existing version):
+Build the tarball and upload it with curl (answers `201`; use `replace=true` to overwrite an existing version):
 
 ```bash
 mix hex.build
@@ -472,6 +473,8 @@ curl -fsS -u 'your-username:your-api-token' \
   --data-binary @my_package-0.1.0.tar \
   'http://pantera-host:8080/my-hex/publish?replace=false'
 ```
+
+The release endpoint `POST /my-hex/packages/<name>/releases` (used by `mix hex.publish`) accepts the same tarball.
 
 <details>
 <summary>Server-Side Repository Configuration</summary>

@@ -58,14 +58,17 @@ import java.util.regex.Pattern;
  */
 public final class UploadSlice implements Slice {
     /**
-     * Path to publish.
+     * Path to publish: the legacy {@code /publish} endpoint and the release
+     * endpoint {@code mix hex.publish} uses ({@code /packages/<name>/releases}).
      */
-    static final Pattern PUBLISH = Pattern.compile("(/repos/)?(?<org>.+)?/publish");
+    static final Pattern PUBLISH = Pattern.compile(
+        "(/repos/)?(?<org>.+)?/publish|/packages/[^/]+/releases"
+    );
 
     /**
-     * Query to publish.
+     * Query to publish; {@code replace} defaults to false when absent.
      */
-    static final Pattern QUERY = Pattern.compile("replace=(?<replace>true|false)");
+    static final Pattern QUERY = Pattern.compile("(?:^|&)replace=(?<replace>true|false)(?:&|$)");
 
     /**
      * Repository type.
@@ -130,8 +133,9 @@ public final class UploadSlice implements Slice {
         final String query = Objects.nonNull(uri.getQuery()) ? uri.getQuery() : "";
         final Matcher querymatcher = UploadSlice.QUERY.matcher(query);
         final CompletableFuture<Response> res;
-        if (pathmatcher.matches() && querymatcher.matches()) {
-            final boolean replace = Boolean.parseBoolean(querymatcher.group("replace"));
+        if (pathmatcher.matches()) {
+            final boolean replace = querymatcher.find()
+                && Boolean.parseBoolean(querymatcher.group("replace"));
             final AtomicReference<String> name = new AtomicReference<>();
             final AtomicReference<String> version = new AtomicReference<>();
             final AtomicReference<String> innerchcksum = new AtomicReference<>();
@@ -142,10 +146,16 @@ public final class UploadSlice implements Slice {
             final AtomicReference<Key> packagekey = new AtomicReference<>();
             res = UploadSlice.asBytes(body)
                 .thenAccept(
-                    bytes -> UploadSlice.readVarsFromTar(
-                        bytes, name, version, innerchcksum,
-                        outerchcksum, tarcontent, packagekey
-                    )
+                    bytes -> {
+                        try {
+                            UploadSlice.readVarsFromTar(
+                                bytes, name, version, innerchcksum,
+                                outerchcksum, tarcontent, packagekey
+                            );
+                        } catch (final RuntimeException ex) {
+                            throw new IllegalArgumentException("Not a Hex package tarball", ex);
+                        }
+                    }
                 ).thenCompose(
                     nothing -> this.storage.exists(packagekey.get())
                 ).thenCompose(
@@ -157,7 +167,7 @@ public final class UploadSlice implements Slice {
                         nothing -> UploadSlice.handleReleases(releases, replace, version)
                     ).thenApply(
                         nothing -> UploadSlice.constructSignedPackage(
-                            name, version, innerchcksum, outerchcksum, releases
+                            name, version, innerchcksum, outerchcksum, releases, this.rname
                         )
                     ).thenCompose(
                         signedPackage -> this.saveSignedPackageToStorage(
@@ -204,6 +214,13 @@ public final class UploadSlice implements Slice {
                         );
                     }
                 ).exceptionally(throwable -> {
+                    final Throwable cause = throwable instanceof java.util.concurrent.CompletionException
+                        && throwable.getCause() != null ? throwable.getCause() : throwable;
+                    if (cause instanceof IllegalArgumentException) {
+                        return ResponseBuilder.badRequest()
+                            .textBody(cause.getMessage())
+                            .build();
+                    }
                     com.auto1.pantera.http.log.EcsLogger.error("com.auto1.pantera.hex")
                         .message("Failed to upload package")
                         .eventCategory("web")
@@ -343,14 +360,17 @@ public final class UploadSlice implements Slice {
      * @param innerchecksum Ref on package innerChecksum
      * @param outerchecksum Ref on package outerChecksum
      * @param releases Ref on list of releases
-     * @return Package wrapped in Signed
+     * @param repo Repository name the record names
+     * @return Package wrapped in Signed (signed when served, see DownloadSlice)
+     * @checkstyle ParameterNumberCheck (10 lines)
      */
     private static SignedOuterClass.Signed constructSignedPackage(
         final AtomicReference<String> name,
         final AtomicReference<String> version,
         final AtomicReference<String> innerchecksum,
         final AtomicReference<String> outerchecksum,
-        final AtomicReference<List<PackageOuterClass.Release>> releases
+        final AtomicReference<List<PackageOuterClass.Release>> releases,
+        final String repo
     ) {
         final PackageOuterClass.Release release;
         try {
@@ -364,7 +384,7 @@ public final class UploadSlice implements Slice {
         }
         final PackageOuterClass.Package pckg = PackageOuterClass.Package.newBuilder()
             .setName(name.get())
-            .setRepository("pantera")
+            .setRepository(repo)
             .addAllReleases(releases.get())
             .addReleases(release)
             .build();
