@@ -19,6 +19,7 @@ import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.http.headers.Authorization;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
@@ -46,7 +47,8 @@ import org.junit.jupiter.api.io.TempDir;
 /**
  * Client requests through the real {@link RepositorySlices} wiring on the
  * main port (repository name in the path, anonymous-access gate in front):
- * NuGet's API key must count as a credential.
+ * conan must trim the repository name and NuGet's API key must count as a
+ * credential.
  *
  * @since 2.2.9
  */
@@ -78,6 +80,18 @@ final class FormatClientWiringTest {
             null, null, null
         );
         this.jwt = this.tokens.generate(new AuthUser("alice", "test"));
+    }
+
+    @Test
+    void conanRoutesOnMainPort() throws Exception {
+        MatcherAssert.assertThat(
+            this.slices("my-conan", this.repo("conan")).slice(new Key.From("my-conan"), 8080)
+                .response(
+                    new RequestLine(RqMethod.GET, "/my-conan/v1/ping"),
+                    Headers.from(new Authorization.Bearer(this.jwt)), Content.EMPTY
+                ).get(30, TimeUnit.SECONDS).status(),
+            new IsEqual<>(RsStatus.ACCEPTED)
+        );
     }
 
     @Test

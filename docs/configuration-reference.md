@@ -1027,13 +1027,11 @@ repo:
 
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
-| `url` | string | Yes | -- | Public URL |
-| `port` | int | No | -- | Dedicated Conan server port |
+| `port` | int | No | -- | Dedicated Conan server port. Without it the repository is served on the main port under its name |
 
 ```yaml
 repo:
   type: conan
-  url: http://pantera:9300/my-conan
   port: 9300
   storage:
     type: fs

@@ -1416,12 +1416,18 @@ public class RepositorySlices {
                 // always wires a JwtTokens here (see VertxMain).
                 final com.auto1.pantera.auth.JwtTokens jwtTokens =
                     (com.auto1.pantera.auth.JwtTokens) tokens;
-                slice = new ConanSlice(
-                    cfg.storage(), securityPolicy(), authentication(), tokens,
-                    new ItemTokenizer(
-                        Vertx.vertx(), jwtTokens.publicKey(), jwtTokens.privateKey()
-                    ),
-                    cfg.name(), artifactEvents()
+                // Conan routes (/v1/ping, /v1/conans/...) are anchored at the
+                // repository root: trim the repository name on the main port,
+                // otherwise no route ever matched there.
+                slice = trimUnlessDedicatedPort(
+                    cfg,
+                    new ConanSlice(
+                        cfg.storage(), securityPolicy(), authentication(), tokens,
+                        new ItemTokenizer(
+                            Vertx.vertx(), jwtTokens.publicKey(), jwtTokens.privateKey()
+                        ),
+                        cfg.name(), artifactEvents()
+                    )
                 );
                 break;
             case "hexpm":
@@ -1741,6 +1747,24 @@ public class RepositorySlices {
 
     private static Slice trimPathSlice(final Slice original) {
         return new TrimPathSlice(original, RepositorySlices.PATTERN);
+    }
+
+    /**
+     * Trim the repository name from the path unless the repository is served
+     * on its own port, where requests arrive at the root.
+     *
+     * @param cfg Repository config
+     * @param original Adapter slice with repository-relative routes
+     * @return Slice
+     */
+    private static Slice trimUnlessDedicatedPort(final RepoConfig cfg, final Slice original) {
+        final Slice res;
+        if (cfg.port().isPresent()) {
+            res = original;
+        } else {
+            res = trimPathSlice(original);
+        }
+        return res;
     }
 
     /**

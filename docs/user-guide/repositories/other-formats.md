@@ -374,14 +374,18 @@ repo:
 
 ## Conan
 
-Pantera speaks the Conan 1.x protocol; these commands are for Conan 1.60. Conan repositories are served on a **dedicated port** (typically 9300), at the root of that port — use the repository's own `url`, not the main registry address.
+Pantera speaks the Conan 1.x protocol; these commands are for Conan 1.60 with revisions disabled (the default). Conan 2 clients are not supported: Conan 2 always uses package revisions, and Pantera only serves numeric revisions.
+
+A Conan repository is served on the main registry address under its name. If the repository has a dedicated `port`, it is served at the root of that port instead.
 
 ### Add Remote
 
 ```bash
-conan remote add pantera http://pantera-host:9300
+conan remote add pantera http://pantera-host:8080/my-conan
 conan user 'your-username' -r pantera -p 'your-api-token'
 ```
+
+For a repository with a dedicated port, use `http://pantera-host:9300` as the remote URL.
 
 In CI, set `CONAN_LOGIN_USERNAME_PANTERA` and `CONAN_PASSWORD_PANTERA` instead of running `conan user`.
 
@@ -405,12 +409,12 @@ conan upload my_package/1.0@ -r pantera --all --confirm
 # my-conan.yaml
 repo:
   type: conan
-  url: http://pantera-host:9300
-  port: 9300
   storage:
     type: fs
     path: /var/pantera/data
 ```
+
+Add `port: 9300` (and `url: http://pantera-host:9300`) to serve the repository on its own port.
 
 </details>
 
