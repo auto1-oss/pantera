@@ -217,6 +217,32 @@ final class CondaSliceClientFlowTest {
         );
     }
 
+    @Test
+    void spoofedLoginHeaderDoesNotYieldAnotherUsersTicket() throws IOException {
+        final Storage storage = new InMemoryStorage();
+        final CondaUrlTokenSlice slice = new CondaUrlTokenSlice(
+            CondaSliceClientFlowTest.slice(storage, new ReadOnlyForBob()), false
+        );
+        // Read-only bob authenticates with his own token and claims to be
+        // alice (who can write) through the internal login header.
+        final String path = CondaSliceClientFlowTest.stage(
+            slice,
+            Headers.from(
+                new Header(Authorization.NAME, String.format("token %s", CondaSliceClientFlowTest.BOB)),
+                new Header("pantera_login", "alice")
+            )
+        );
+        MatcherAssert.assertThat(
+            "the ticket is bob's, so the upload is forbidden",
+            CondaSliceClientFlowTest.formPost(slice, path).status(),
+            new IsEqual<>(RsStatus.FORBIDDEN)
+        );
+        MatcherAssert.assertThat(
+            "nothing stored",
+            storage.list(Key.ROOT).join().isEmpty(), new IsEqual<>(true)
+        );
+    }
+
     /**
      * Run the authenticated stage step.
      * @param slice Slice
@@ -224,6 +250,18 @@ final class CondaSliceClientFlowTest {
      * @return Repository-relative path of the returned post_url
      */
     private static String stage(final CondaUrlTokenSlice slice, final String token) {
+        return CondaSliceClientFlowTest.stage(
+            slice, Headers.from(new Header(Authorization.NAME, String.format("token %s", token)))
+        );
+    }
+
+    /**
+     * Run the stage step with the given headers.
+     * @param slice Slice
+     * @param headers Request headers
+     * @return Repository-relative path of the returned post_url
+     */
+    private static String stage(final CondaUrlTokenSlice slice, final Headers headers) {
         final Response rsp = slice.response(
             new RequestLine(
                 RqMethod.POST,
@@ -232,7 +270,7 @@ final class CondaSliceClientFlowTest {
                     CondaSliceClientFlowTest.PKG
                 )
             ),
-            Headers.from(new Header(Authorization.NAME, String.format("token %s", token))),
+            headers,
             Content.EMPTY
         ).join();
         final String url = Json.createReader(new StringReader(rsp.body().asString()))

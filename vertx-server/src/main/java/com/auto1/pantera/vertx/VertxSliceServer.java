@@ -12,6 +12,7 @@ package com.auto1.pantera.vertx;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.auth.AuthzSlice;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
@@ -973,11 +974,25 @@ public final class VertxSliceServer implements Closeable {
      * matches what the same client would have put in an HTTP/1.1 {@code Host}
      * header — host-allowlist comparisons are exact, including any port.</p>
      *
+     * <p>The internal login header ({@link AuthzSlice#LOGIN_HDR}) is dropped:
+     * it names the authenticated user and is stamped by the authorization
+     * slices only. Accepted from the wire it would let a client claim to be
+     * someone else wherever a slice reads the login.</p>
+     *
      * @param req Inbound request
      * @return Headers, with {@code Host} present whenever an authority is known
      */
     private static Headers requestHeaders(final HttpServerRequest req) {
         Headers result = Headers.from(req.headers());
+        if (!result.find(AuthzSlice.LOGIN_HDR).isEmpty()) {
+            final Headers clean = new Headers();
+            for (final Header hdr : result) {
+                if (!AuthzSlice.LOGIN_HDR.equalsIgnoreCase(hdr.getKey())) {
+                    clean.add(hdr);
+                }
+            }
+            result = clean;
+        }
         if (result.values("Host").isEmpty()) {
             final io.vertx.reactivex.core.net.HostAndPort authority = req.authority();
             if (authority != null && authority.host() != null && !authority.host().isEmpty()) {
