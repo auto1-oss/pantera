@@ -122,7 +122,7 @@ public final class RpmSlice extends Slice.Wrap {
             new RtRulePath(
                 MethodRule.GET,
                 RpmSlice.createAuthSlice(
-                    new StorageArtifactSlice(storage),
+                    new EmptyRepodataSlice(new StorageArtifactSlice(storage), storage, config),
                     basicAuth,
                     tokenAuth,
                     new OperationControl(
