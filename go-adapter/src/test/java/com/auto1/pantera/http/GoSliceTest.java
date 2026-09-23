@@ -151,6 +151,65 @@ class GoSliceTest {
         );
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "example.com/head/mod/@v/v1.0.0.info",
+        "example.com/head/mod/@v/v1.0.0.mod",
+        "example.com/head/mod/@v/v1.0.0.zip",
+        "example.com/head/mod/@v/list"
+    })
+    void answersHeadForStoredFile(final String path) throws Exception {
+        final String body = "stored-bytes";
+        MatcherAssert.assertThat(
+            this.slice(GoSliceTest.storage(path, body), false),
+            new SliceHasResponse(
+                new AllOf<>(
+                    new RsHasStatus(RsStatus.OK),
+                    new RsHasHeaders(new Header("Content-Length", String.valueOf(body.length())))
+                ),
+                new RequestLine("HEAD", path), this.headers(false), Content.EMPTY
+            )
+        );
+    }
+
+    @Test
+    void answersHeadNotFoundForMissingFile() throws Exception {
+        MatcherAssert.assertThat(
+            this.slice(GoSliceTest.storage("example.com/head/mod/@v/v1.0.0.zip", "x"), false),
+            new SliceHasResponse(
+                new RsHasStatus(RsStatus.NOT_FOUND),
+                new RequestLine("HEAD", "example.com/head/mod/@v/v2.0.0.zip"),
+                this.headers(false), Content.EMPTY
+            )
+        );
+    }
+
+    @Test
+    void answersHeadForLatest() throws Exception {
+        MatcherAssert.assertThat(
+            this.slice(
+                GoSliceTest.storage("example.com/head/mod/@v/v1.1.0.info", "{}"), false
+            ),
+            new SliceHasResponse(
+                new RsHasStatus(RsStatus.OK),
+                new RequestLine("HEAD", "example.com/head/mod/@latest"),
+                this.headers(false), Content.EMPTY
+            )
+        );
+    }
+
+    @Test
+    void headRequiresAuthentication() throws Exception {
+        MatcherAssert.assertThat(
+            this.slice(GoSliceTest.storage("example.com/head/mod/@v/v1.0.0.zip", "x"), true),
+            new SliceHasResponse(
+                unauthorized(),
+                new RequestLine("HEAD", "example.com/head/mod/@v/v1.0.0.zip"),
+                Headers.EMPTY, Content.EMPTY
+            )
+        );
+    }
+
     @Test
     void uploadOfAMixedCaseModuleIsRecordedUnderItsRealPath() throws Exception {
         // B84: the upload event carried the '!'-escaped module path.

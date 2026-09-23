@@ -24,6 +24,7 @@ import com.auto1.pantera.http.rt.MethodRule;
 import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
+import com.auto1.pantera.http.slice.HeadSlice;
 import com.auto1.pantera.http.slice.LoggingSlice;
 import com.auto1.pantera.http.slice.StorageArtifactSlice;
 import com.auto1.pantera.http.slice.SliceSimple;
@@ -137,6 +138,17 @@ public final class GoSlice implements Slice {
         final com.auto1.pantera.index.SyncArtifactIndexer syncIndex
     ) {
         this.origin = new SliceRoute(
+            GoSlice.pathHead(
+                ".+/@v/(v.*\\.(info|mod|zip)|list)",
+                GoSlice.createAuthSlice(
+                    new HeadSlice(storage),
+                    basicAuth,
+                    tokenAuth,
+                    new OperationControl(
+                        policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    )
+                )
+            ),
             GoSlice.pathGet(
                 ".+/@v/v.*\\.info",
                 GoSlice.createSlice(storage, ContentType.json(), policy, basicAuth, tokenAuth, name)
@@ -152,14 +164,19 @@ public final class GoSlice implements Slice {
             GoSlice.pathGet(
                 ".+/@v/list", GoSlice.createSlice(storage, ContentType.text(), policy, basicAuth, tokenAuth, name)
             ),
-            GoSlice.pathGet(
-                ".+/@latest",
-                GoSlice.createAuthSlice(
-                    new LatestSlice(storage),
-                    basicAuth,
-                    tokenAuth,
-                    new OperationControl(
-                        policy, new AdapterBasicPermission(name, Action.Standard.READ)
+            new RtRulePath(
+                new RtRule.All(
+                    new RtRule.ByPath(Pattern.compile(".+/@latest")),
+                    new RtRule.Any(MethodRule.GET, MethodRule.HEAD)
+                ),
+                new LoggingSlice(
+                    GoSlice.createAuthSlice(
+                        new LatestSlice(storage),
+                        basicAuth,
+                        tokenAuth,
+                        new OperationControl(
+                            policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                        )
                     )
                 )
             ),
@@ -237,6 +254,24 @@ public final class GoSlice implements Slice {
             return new CombinedAuthzSliceWrap(origin, basicAuth, tokenAuth, control);
         }
         return new BasicAuthzSlice(origin, basicAuth, control);
+    }
+
+    /**
+     * Route for HEAD requests on stored module files: answers from storage
+     * metadata without reading the file, so existence probes (curl -I,
+     * mirrors, monitoring and group members) agree with GET.
+     * @param pattern Route pattern
+     * @param slice Slice implementation
+     * @return Path route slice
+     */
+    private static RtRulePath pathHead(final String pattern, final Slice slice) {
+        return new RtRulePath(
+            new RtRule.All(
+                new RtRule.ByPath(Pattern.compile(pattern)),
+                MethodRule.HEAD
+            ),
+            new LoggingSlice(slice)
+        );
     }
 
     /**
