@@ -220,4 +220,66 @@ final class EgressPolicyTest {
             new IsEqual<>(false)
         );
     }
+
+    @Test
+    void malformedNumericHostsNeverReachTheSystemResolver() throws Exception {
+        MatcherAssert.assertThat(
+            "the recording resolver provider must be installed for this test to mean anything",
+            InetAddress.getByName(RecordingResolverProvider.PROBE).isLoopbackAddress(),
+            new IsEqual<>(true)
+        );
+        final EgressPolicy policy = new EgressPolicy(false, Set.of());
+        final String[] hosts = {
+            "1.2.3.4.5", "999.1.1.1", "1.2.3", "1..2.3", "1.2.3.4.", "01.2.3.4",
+            "\u0661\u0666\u0669.\u0662\u0665\u0664.\u0661\u0666\u0669.\u0662\u0665\u0664",
+            "fe80::zz", "::1%eth0", "1:2:3:4:5:6:7:8:9",
+        };
+        for (final String host : hosts) {
+            MatcherAssert.assertThat(
+                "hostRejection must not deny " + host,
+                policy.hostRejection(host), new IsEqual<>(Optional.empty())
+            );
+            MatcherAssert.assertThat(
+                "literalRejection must not deny " + host,
+                policy.literalRejection(host), new IsEqual<>(Optional.empty())
+            );
+        }
+        for (final String host : hosts) {
+            MatcherAssert.assertThat(
+                "no DNS lookup may be made for " + host,
+                RecordingResolverProvider.LOOKUPS.contains(EgressPolicyTest.lower(host))
+                    || RecordingResolverProvider.LOOKUPS.contains(host),
+                new IsEqual<>(false)
+            );
+        }
+    }
+
+    @Test
+    void literalRejectionJudgesStrictLiteralsOnly() {
+        final EgressPolicy policy = new EgressPolicy(true, Set.of());
+        MatcherAssert.assertThat(
+            "an IPv4 metadata literal is denied",
+            policy.literalRejection("169.254.169.254"),
+            new IsEqual<>(Optional.of("cloud metadata service"))
+        );
+        MatcherAssert.assertThat(
+            "a bracketed link-local IPv6 literal is denied",
+            policy.literalRejection("[fe80::1]"),
+            new IsEqual<>(Optional.of("link-local address"))
+        );
+        MatcherAssert.assertThat(
+            "a private IPv4 literal is denied in strict mode",
+            policy.literalRejection("10.0.0.1"),
+            new IsEqual<>(Optional.of("private address (strict egress policy)"))
+        );
+        MatcherAssert.assertThat(
+            "a hostname is not a literal and is left to the resolver",
+            policy.literalRejection("repo.example.com"),
+            new IsEqual<>(Optional.empty())
+        );
+    }
+
+    private static String lower(final String host) {
+        return host.toLowerCase(java.util.Locale.ROOT);
+    }
 }

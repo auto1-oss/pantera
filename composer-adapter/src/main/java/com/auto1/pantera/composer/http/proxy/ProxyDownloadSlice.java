@@ -510,21 +510,9 @@ public final class ProxyDownloadSlice implements Slice {
         if (byName.isPresent()) {
             return byName;
         }
-        if (host == null) {
-            return java.util.Optional.of("missing host");
-        }
-        final String bare = host.startsWith("[") && host.endsWith("]")
-            ? host.substring(1, host.length() - 1) : host;
-        final boolean literal = bare.indexOf(':') >= 0
-            || bare.chars().allMatch(c -> Character.isDigit(c) || c == '.');
-        if (!literal) {
-            return java.util.Optional.empty();
-        }
-        try {
-            return policy.rejection(host, java.net.InetAddress.getByName(bare));
-        } catch (final java.net.UnknownHostException ex) {
-            return java.util.Optional.empty();
-        }
+        // DNS-free: only a strictly valid IP literal is parsed; a hostname
+        // (or a malformed numeric host) is left to the egress resolver.
+        return policy.literalRejection(host);
     }
 
     private static URI baseOf(final URI uri) {

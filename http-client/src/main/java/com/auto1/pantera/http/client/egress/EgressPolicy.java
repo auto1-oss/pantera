@@ -170,6 +170,26 @@ public final class EgressPolicy {
     }
 
     /**
+     * DNS-free address check for a host that is an IP literal: the literal
+     * is parsed locally (never resolved) and judged like a resolved address.
+     * A hostname or an invalid literal yields empty; the resolver path
+     * judges it after DNS.
+     *
+     * @param host Hostname or IP literal from the URI (brackets allowed)
+     * @return Reason the literal is denied, or empty
+     */
+    public Optional<String> literalRejection(final String host) {
+        final Optional<String> result;
+        if (host == null) {
+            result = Optional.empty();
+        } else {
+            result = EgressPolicy.literal(EgressPolicy.normalize(host))
+                .flatMap(addr -> this.rejection(host, addr));
+        }
+        return result;
+    }
+
+    /**
      * Address-level check without a host name (literal or already
      * resolved).
      *
@@ -233,27 +253,86 @@ public final class EgressPolicy {
     }
 
     /**
-     * Parse an IP literal WITHOUT any DNS lookup: only strings made of hex
-     * characters, dots and colons are handed to {@link InetAddress#getByName},
-     * which parses such literals locally.
+     * Parse an IP literal WITHOUT any DNS lookup. Only a strictly valid
+     * literal is recognised: dotted-quad IPv4 (exactly four ASCII decimal
+     * octets 0-255, no leading zeros) is built from its bytes directly, and
+     * an IPv6 literal (ASCII hex digits, colons and dots only) is handed to
+     * {@link InetAddress#getByName} in bracketed form, which the JDK parses
+     * locally and rejects instead of resolving. Anything else (hostnames,
+     * {@code 1.2.3.4.5}, {@code 999.1.1.1}, non-ASCII digits) is not a
+     * literal and is left to the resolver path.
      *
-     * @param host Normalised host
-     * @return Parsed address, or empty for a hostname / unparsable literal
+     * @param host Normalised host (no brackets)
+     * @return Parsed address, or empty for a hostname / invalid literal
      */
     private static Optional<InetAddress> literal(final String host) {
-        final boolean ipv6 = host.indexOf(':') >= 0
-            && host.chars().allMatch(c -> Character.digit(c, 16) >= 0 || c == ':' || c == '.');
-        final boolean ipv4 = !host.isEmpty()
-            && host.chars().allMatch(c -> Character.isDigit(c) || c == '.');
         Optional<InetAddress> result = Optional.empty();
-        if (ipv6 || ipv4) {
-            try {
-                result = Optional.of(InetAddress.getByName(host));
-            } catch (final UnknownHostException ex) {
-                result = Optional.empty();
+        try {
+            final Optional<byte[]> quad = EgressPolicy.dottedQuad(host);
+            if (quad.isPresent()) {
+                result = Optional.of(InetAddress.getByAddress(quad.get()));
+            } else if (host.indexOf(':') >= 0 && host.chars().allMatch(EgressPolicy::ipv6Char)) {
+                result = Optional.of(InetAddress.getByName('[' + host + ']'));
+            }
+        } catch (final UnknownHostException ex) {
+            result = Optional.empty();
+        }
+        return result;
+    }
+
+    /**
+     * Strict dotted-quad IPv4 parser.
+     *
+     * @param host Candidate
+     * @return Four address bytes, or empty when not a strict dotted quad
+     */
+    private static Optional<byte[]> dottedQuad(final String host) {
+        final String[] parts = host.split("\\.", -1);
+        Optional<byte[]> result = Optional.empty();
+        if (parts.length == 4) {
+            final byte[] raw = new byte[4];
+            boolean valid = true;
+            for (int idx = 0; idx < 4 && valid; idx += 1) {
+                final int octet = EgressPolicy.octet(parts[idx]);
+                valid = octet >= 0;
+                raw[idx] = (byte) octet;
+            }
+            if (valid) {
+                result = Optional.of(raw);
             }
         }
         return result;
+    }
+
+    /**
+     * Parse one decimal octet: 1-3 ASCII digits, no leading zero, 0-255.
+     *
+     * @param part Octet text
+     * @return Octet value, or -1 when invalid
+     */
+    private static int octet(final String part) {
+        final boolean digits = !part.isEmpty() && part.length() <= 3
+            && part.chars().allMatch(c -> c >= '0' && c <= '9')
+            && (part.length() == 1 || part.charAt(0) != '0');
+        int value = -1;
+        if (digits) {
+            value = Integer.parseInt(part);
+            if (value > 255) {
+                value = -1;
+            }
+        }
+        return value;
+    }
+
+    /**
+     * Whether a character may appear in an IPv6 literal (ASCII only).
+     *
+     * @param chr Character
+     * @return True for ASCII hex digits, colon and dot
+     */
+    private static boolean ipv6Char(final int chr) {
+        return chr >= '0' && chr <= '9' || chr >= 'a' && chr <= 'f'
+            || chr >= 'A' && chr <= 'F' || chr == ':' || chr == '.';
     }
 
     /**

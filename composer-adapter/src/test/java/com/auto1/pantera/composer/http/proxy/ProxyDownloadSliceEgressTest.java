@@ -33,8 +33,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * Exploit-regression test for the Composer {@code dist.url} SSRF: package
@@ -49,15 +50,20 @@ final class ProxyDownloadSliceEgressTest {
 
     private static final URI UPSTREAM = URI.create("https://packagist.example");
 
-    @Test
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "http://169.254.169.254/latest/meta-data/",
+        "http://[fe80::1]/latest/meta-data/",
+        "http://[::ffff:169.254.169.254]/latest/meta-data/",
+    })
     @Timeout(20)
-    void distUrlOnCloudMetadataIsNeverDialed() throws Exception {
+    void deniedLiteralDistUrlIsNeverDialed(final String dist) throws Exception {
         final InMemoryStorage storage = new InMemoryStorage();
         storage.save(
             new Key.From("acme/widget.json"),
             new Content.From((
                 "{\"packages\":{\"acme/widget\":{\"1.0.0\":{\"version\":\"1.0.0\","
-                    + "\"dist\":{\"url\":\"http://169.254.169.254/latest/meta-data/\"}}}}}"
+                    + "\"dist\":{\"url\":\"" + dist + "\"}}}}}"
             ).getBytes(StandardCharsets.UTF_8))
         ).join();
         final AtomicBoolean dialed = new AtomicBoolean();
@@ -101,7 +107,7 @@ final class ProxyDownloadSliceEgressTest {
             Headers.EMPTY, Content.EMPTY
         ).get(5, TimeUnit.SECONDS);
         MatcherAssert.assertThat(
-            "a dist.url on the cloud metadata address must never be dialed",
+            "a dist.url on a denied literal address must never be dialed",
             dialed.get(), new IsEqual<>(false)
         );
         MatcherAssert.assertThat(
